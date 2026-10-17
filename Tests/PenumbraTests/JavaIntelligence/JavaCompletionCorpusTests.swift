@@ -7,7 +7,7 @@ import EditorIntelligence
 ///
 /// Each case file marks the caret with `/*|*/` and states its expectations in `//! key: value`
 /// lines. Hard checks (`site`, `receiver`, `receiverKind`, `expected`, `excludes`, `excludes_top5`,
-/// `count`, `import`, `qualifiedInsert`) fail the test outright. Scored checks (`contains`, `top1`,
+/// `count`, `import`, `appliedImport`, `chooser`, `qualifiedInsert`) fail the test outright. Scored checks (`contains`, `top1`,
 /// `top5`) are ratcheted: a case listed as passing in `baseline.json` must keep passing. A case
 /// tagged `gap: Gn` is a known failure tied to a plan gap; it never fails the test, and the
 /// scorecard reports it when it starts passing so the tag can be removed.
@@ -142,9 +142,38 @@ final class JavaCompletionCorpusTests: XCTestCase {
                 result.hardFailures.append("no items to check import")
             }
         }
+        if let spec = directives["chooser"] {
+            let parts = spec.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count == 2 {
+                let expected = parts[1].split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+                let actual = ranked.filter { $0.label == parts[0] }.map { $0.labelDetail ?? "" }
+                if actual != expected {
+                    result.hardFailures.append("chooser \(parts[0]) is \(actual), expected \(expected)")
+                }
+            }
+        }
+        if let wantedImport = directives["appliedImport"] {
+            let label = directives["applies"]
+            let wantSnippet = directives["applyKind"] == "snippet"
+            let item = label.flatMap { name in
+                ranked.first { $0.label == name && (!wantSnippet || $0.isSnippet) }
+            }
+            if let item {
+                let edits = item.additionalEdits.map(\.replacement).joined()
+                if wantedImport == "none" {
+                    if edits.contains("import ") { result.hardFailures.append("applied item adds \(edits.trimmingCharacters(in: .whitespacesAndNewlines))") }
+                } else if !edits.contains("import \(wantedImport);") {
+                    result.hardFailures.append("applied item does not import \(wantedImport) (edits: \(edits.trimmingCharacters(in: .whitespacesAndNewlines)))")
+                }
+            } else {
+                result.hardFailures.append("no applied item to check import")
+            }
+        }
         if let label = directives["applies"] {
             // `applies: if` + `yields: if (flag) {`: accept the item and check the edited text.
-            if let item = ranked.first(where: { $0.label == label }) {
+            // `applyKind: snippet` picks the template when a member has the same label (`format`).
+            let wantSnippet = directives["applyKind"] == "snippet"
+            if let item = ranked.first(where: { $0.label == label && (!wantSnippet || $0.isSnippet) }) {
                 // Directive lines are left out, or `yields:` would always find itself.
                 let body = Self.apply(item, to: corpusCase.text)
                     .components(separatedBy: "\n").filter { !$0.hasPrefix("//!") }.joined(separator: "\n")
@@ -199,10 +228,14 @@ final class JavaCompletionCorpusTests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// The document after accepting `item` the way the controller does: its text over its range,
-    /// then its additional edits (all ranges refer to the original text, applied back to front).
+    /// The document after accepting `item` the way the controller does: a snippet expands to its
+    /// placeholder defaults, then that text and the additional edits (all ranges refer to the
+    /// original text) are applied back to front.
     static func apply(_ item: CompletionItem, to text: String) -> String {
-        var edits = [(item.range.start.utf16Offset, item.range.end.utf16Offset, item.insertText)]
+        let insert = item.isSnippet
+            ? SnippetEngine().expand(body: item.insertText, context: SnippetExpansionContext()).text
+            : item.insertText
+        var edits = [(item.range.start.utf16Offset, item.range.end.utf16Offset, insert)]
         edits += item.additionalEdits.map { ($0.range.start.utf16Offset, $0.range.end.utf16Offset, $0.replacement) }
         let result = NSMutableString(string: text)
         for (start, end, replacement) in edits.sorted(by: { $0.0 > $1.0 }) {

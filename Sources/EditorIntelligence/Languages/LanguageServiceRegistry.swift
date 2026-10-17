@@ -78,6 +78,7 @@ public struct LanguageServiceRegistry: Sendable {
         case .typeHierarchy: return providers.typeHierarchy != nil
         case .callHierarchy: return providers.callHierarchy != nil
         case .codeGeneration: return providers.codeGeneration != nil
+        case .symbolReference: return providers.symbolReference != nil
         }
     }
 
@@ -200,6 +201,7 @@ public struct LanguageServiceRegistry: Sendable {
     public var breadcrumbs: any BreadcrumbProviding { RoutedBreadcrumbs(registry: self) }
     public var inlayHints: any InlayHintProviding { RoutedInlayHints(registry: self) }
     public var codeVision: any CodeVisionProviding { RoutedCodeVision(registry: self) }
+    public var symbolReference: any SymbolReferenceProviding { RoutedSymbolReference(registry: self) }
 
     // MARK: Per-language lookups for features the host drives itself
 

@@ -48,6 +48,18 @@ public enum TextEditApplicator {
         }
     }
 
+    /// `range` after `edits`, which are in the text's original UTF-16 coordinates and do not overlap.
+    /// An edit moves the range when its end is at or before the range's start. The delta is the
+    /// sum of those edits, so the order they are applied in does not matter.
+    public static func shifted(_ range: NSRange, by edits: [EditorIntelligence.TextEdit]) -> NSRange {
+        var delta = 0
+        for edit in edits where edit.range.end.utf16Offset <= range.location {
+            let oldLength = edit.range.end.utf16Offset - edit.range.start.utf16Offset
+            delta += (edit.replacement as NSString).length - oldLength
+        }
+        return NSRange(location: range.location + delta, length: range.length)
+    }
+
     public static func nsRange(for textRange: EditorIntelligence.TextRange, in textView: TextView) -> NSRange {
         let start = position(for: textRange.start, in: textView)
         let end = position(for: textRange.end, in: textView)

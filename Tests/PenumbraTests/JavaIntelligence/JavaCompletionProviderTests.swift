@@ -131,7 +131,7 @@ final class JavaCompletionProviderTests: XCTestCase {
     func testMemberAccessFiltersByPrefix() async throws {
         let index = try await makeIndex(withStubs: [stringStub()])
         let items = await complete("class Foo { void m(String s) { s.tr€ } }", index: index)
-        XCTAssertEqual(ranked(items, prefix: "tr"), ["trim"])
+        XCTAssertEqual(ranked(items, prefix: "tr"), ["trim", "try"])
     }
 
     func testMemberAccessOnRealChainedMethodCall() async throws {
@@ -461,6 +461,68 @@ final class JavaCompletionProviderTests: XCTestCase {
             kind: kind, modifiers: kind == .interfaceKind ? [.publicFlag, .abstractFlag] : [.publicFlag],
             interfaces: interfaces, methods: methods, origin: .jdkModule("test")
         )
+    }
+
+    // MARK: - Import policy
+
+    func testExcludedClassStaysOutOfCompletionOnTheSecondInvocation() async throws {
+        let index = try await makeIndex(withStubs: [
+            classStub("java.util.ArrayList"),
+            classStub("java.util.ArrayDeque")
+        ])
+        let provider = JavaCompletionProvider(index: index)
+        await provider.setImportPolicy(JavaImportPolicy(excluded: ["java.util.ArrayList"]))
+        let items = await complete("class T { void m() { Arr€ } }", index: index, provider: provider, invocationCount: 2)
+        XCTAssertFalse(names(items).contains("ArrayList"))
+        XCTAssertTrue(names(items).contains("ArrayDeque"))
+    }
+
+    func testStaticMemberClassInsertsAStaticImport() async throws {
+        let objects = classStub("java.util.Objects", methods: [
+            JavaMethodStub(
+                name: "requireNonNull",
+                parameters: [JavaParameterStub(name: "obj", type: classType("java.lang.Object"))],
+                returnType: classType("java.lang.Object"),
+                modifiers: [.publicFlag, .staticFlag]
+            ),
+            JavaMethodStub(name: "secret", parameters: [], returnType: .void, modifiers: [.privateFlag, .staticFlag])
+        ])
+        let index = try await makeIndex(withStubs: [objects])
+        let provider = JavaCompletionProvider(index: index)
+        await provider.setImportPolicy(JavaImportPolicy(staticMemberClasses: ["java.util.Objects"]))
+        let items = await complete("class T { void m() { req€ } }", index: index, provider: provider)
+        let item = try XCTUnwrap(items.first { $0.label == "requireNonNull" })
+        XCTAssertEqual(item.insertText, "requireNonNull()")
+        XCTAssertTrue(item.additionalEdits.contains { $0.replacement.contains("import static java.util.Objects.requireNonNull;") })
+        XCTAssertFalse(names(items).contains("secret"))
+    }
+
+    func testAnExcludedStaticMemberIsNotOffered() async throws {
+        let objects = classStub("java.util.Objects", methods: [
+            JavaMethodStub(
+                name: "requireNonNull", parameters: [], returnType: classType("java.lang.Object"),
+                modifiers: [.publicFlag, .staticFlag]
+            )
+        ])
+        let index = try await makeIndex(withStubs: [objects])
+        let provider = JavaCompletionProvider(index: index)
+        await provider.setImportPolicy(JavaImportPolicy(
+            staticMemberClasses: ["java.util.Objects", "-java.util.Objects.requireNonNull"]
+        ))
+        let items = await complete("class T { void m() { req€ } }", index: index, provider: provider)
+        XCTAssertFalse(names(items).contains("requireNonNull"))
+    }
+
+    func testTheDefaultPolicyDoesNotOfferStaticMembers() async throws {
+        let objects = classStub("java.util.Objects", methods: [
+            JavaMethodStub(
+                name: "requireNonNull", parameters: [], returnType: classType("java.lang.Object"),
+                modifiers: [.publicFlag, .staticFlag]
+            )
+        ])
+        let index = try await makeIndex(withStubs: [objects])
+        let items = await complete("class T { void m() { req€ } }", index: index)
+        XCTAssertFalse(names(items).contains("requireNonNull"))
     }
 
     // MARK: - Real JDK, end-to-end (opt-in)

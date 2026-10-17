@@ -81,6 +81,17 @@ public extension EditorActionID {
     /// starts a new line (⇧⌘↵ in the IntelliJ keymap). Languages without C-style structure just
     /// start a new line.
     static let completeStatement = EditorActionID("completeStatement")
+    /// Lists postfix templates when a receiver precedes the caret, and live templates otherwise.
+    /// ⌘J in the IntelliJ keymap.
+    static let insertLiveTemplate = EditorActionID("insertLiveTemplate")
+    /// Accepts the whole inline (full line) suggestion.
+    static let acceptInlineProposal = EditorActionID("acceptInlineProposal")
+    /// Accepts the next word of the inline suggestion.
+    static let acceptInlineProposalWord = EditorActionID("acceptInlineProposalWord")
+    /// Accepts the current line of the inline suggestion.
+    static let acceptInlineProposalLine = EditorActionID("acceptInlineProposalLine")
+    /// Dismisses the inline suggestion.
+    static let dismissInlineProposal = EditorActionID("dismissInlineProposal")
     static let sortLinesAscending = EditorActionID("sortLinesAscending")
     static let sortLinesDescending = EditorActionID("sortLinesDescending")
     /// Cycles selected text (or the word at each caret) lower → UPPER → Title. Bound to ⌘⇧U.
@@ -129,6 +140,9 @@ public extension EditorActionID {
     /// class, a method's return type, an expression's type (⌃⇧B in the IntelliJ keymap).
     static let goToTypeDefinition = EditorActionID("goToTypeDefinition")
     static let findUsages = EditorActionID("findUsages")
+    /// Copies a reference to the symbol at the caret (`pkg.Class#method(params)`), from
+    /// command completion in read-only files.
+    static let copyReference = EditorActionID("copyReference")
     /// Jumps to the next / previous error or warning, across files (F2 / ⇧F2 in the IntelliJ
     /// keymap). The host owns the problem list, so it handles these through
     /// ``TextView/editorActionHandler``.
@@ -218,6 +232,11 @@ public extension EditorActionID {
         .insertLineBelow: "Insert Line Below",
         .startNewLine: "Start New Line",
         .completeStatement: "Complete Current Statement",
+        .insertLiveTemplate: "Insert Live Template",
+        .acceptInlineProposal: "Insert Inline Proposal",
+        .acceptInlineProposalWord: "Insert Inline Proposal Word",
+        .acceptInlineProposalLine: "Insert Inline Proposal Line",
+        .dismissInlineProposal: "Dismiss Inline Proposal",
         .sortLinesAscending: "Sort Lines Ascending",
         .sortLinesDescending: "Sort Lines Descending",
         .toggleCase: "Toggle Case",
@@ -249,6 +268,7 @@ public extension EditorActionID {
         .goToSuperMethod: "Go to Super Method",
         .goToTypeDefinition: "Go to Type Declaration",
         .findUsages: "Find Usages",
+        .copyReference: "Copy Reference",
         .goToNextProblem: "Go to Next Problem",
         .goToPreviousProblem: "Go to Previous Problem",
         .navigateBack: "Back",

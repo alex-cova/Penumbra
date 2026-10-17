@@ -17,6 +17,9 @@ final class IDEJavaRunProvider: IDERunProvider {
 
     let java: IDEJavaSupport
     var gradle: IDEGradleProjectSystem { java.gradle }
+    var maven: IDEMavenProjectSystem { java.maven }
+    /// Maven owns the folder when it is a Maven project and Gradle is not.
+    var usesMaven: Bool { maven.isActive && !gradle.isActive }
     weak var host: (any IDEJavaRunHost)?
     /// Bumped by Stop. A launch that is still building (a run, a debug) notices and gives up.
     private(set) var launchEpoch = 0
@@ -41,17 +44,21 @@ final class IDEJavaRunProvider: IDERunProvider {
         return hasMain && (canPlainRun || canGradleRun)
     }
 
-    /// Only Gradle launches can be debugged from the toolbar; a lone `java File.java` can't.
+    /// Gradle and Maven launches can be debugged from the toolbar; a lone `java File.java` can't.
     func canDebug(fileURL: URL?) -> Bool {
-        gradle.isActive && host?.projectRootURL != nil
+        (gradle.isActive || maven.isActive) && host?.projectRootURL != nil
     }
 
     func runHelp(fileURL: URL?) -> String {
+        if usesMaven { return "Run with Maven" }
         guard gradle.isActive else { return "Run Java file" }
         return activeGradleRunTaskName(for: fileURL).map { "Run Gradle \($0)" } ?? "Run Gradle task…"
     }
 
     func debugHelp(fileURL: URL?, canRun: Bool) -> String {
+        if usesMaven {
+            return canRun && canDebug(fileURL: fileURL) ? "Debug with Maven" : "Debugging needs a Maven project"
+        }
         guard canRun, canDebug(fileURL: fileURL) else { return "Debugging needs a Gradle project" }
         return activeGradleRunTaskName(for: fileURL).map { "Debug Gradle \($0)" } ?? "Debug Gradle task…"
     }
@@ -264,9 +271,10 @@ final class IDEJavaRunProvider: IDERunProvider {
     func stop() {
         launchEpoch += 1
         gradle.cancelTasks()
+        maven.cancelTasks()
     }
 
-    var hasActiveWork: Bool { gradle.isRunningTasks }
+    var hasActiveWork: Bool { gradle.isRunningTasks || maven.isRunningGoals }
 
 
 
@@ -287,6 +295,18 @@ final class IDEJavaRunProvider: IDERunProvider {
             }
             return
         }
+        if case .mavenGoals(let module, let goals) = configuration.target {
+            runBeforeLaunchSteps(for: configuration) { [self] in
+                launchMavenGoals(configuration, module: module, goals: goals)
+            }
+            return
+        }
+        if let scope = configuration.mavenTestScope {
+            runBeforeLaunchSteps(for: configuration) { [self] in
+                runTests(scope: scope, title: configuration.displayName, recording: configuration)
+            }
+            return
+        }
         if let scope = configuration.testScope {
             runBeforeLaunchSteps(for: configuration) { [self] in
                 runTests(scope: scope, title: configuration.displayName, recording: configuration)
@@ -294,6 +314,53 @@ final class IDEJavaRunProvider: IDERunProvider {
             return
         }
         startRunSession(configuration)
+    }
+
+    /// A Maven goal goes through the Maven runner. `module` is a module path (`:` or `:services:api`);
+    /// the runner receives that module's `group:artifact` selector.
+    private func launchMavenGoals(_ configuration: JavaRunConfiguration, module: String?, goals: [String], debug: Bool = false) {
+        guard let host else { return }
+        guard host.projectRootURL != nil else {
+            host.reportRunProblem("“\(configuration.displayName)” needs an open project folder.")
+            return
+        }
+        guard !maven.isBusy else {
+            host.reportRunProblem("Maven is busy. Stop the running goal first, then run “\(configuration.displayName)” again.")
+            return
+        }
+        let selector: String?
+        if let module {
+            guard let found = mavenSelector(modulePath: module) else {
+                host.reportRunProblem("There is no Maven module “\(module)”.")
+                return
+            }
+            selector = found
+        } else {
+            selector = nil
+        }
+        host.runConfigurationStore.setLast(configuration, forProject: host.projectRootURL)
+        host.refreshLastRunConfiguration()
+        host.showMavenConsole()
+        maven.runGoals(goals, module: selector, extraArguments: mavenGoalArguments(configuration, goals: goals, debug: debug))
+    }
+
+    /// Extra Maven CLI arguments: the configuration's program arguments, plus a JDWP agent for a
+    /// Spring Boot or exec debug launch.
+    func mavenGoalArguments(_ configuration: JavaRunConfiguration, goals: [String], debug: Bool) -> [String] {
+        var extra = JavaCommandLine.split(configuration.programArguments)
+        guard debug else { return extra }
+        let agent = JavaLaunchCommand.jdwpAgent(port: JavaLaunchCommand.gradleDebugJdwpPort, suspend: true)
+        if goals.contains(where: { $0.contains("spring-boot") }) {
+            extra.append("-Dspring-boot.run.jvmArguments=\(agent)")
+        } else if goals.contains(where: { $0 == "exec:java" || $0.hasSuffix(":exec:java") }) {
+            extra.append("-Dexec.jvmArgs=\(agent)")
+        }
+        return extra
+    }
+
+    /// `group:artifact` for a module path, or nil when the model has no such module.
+    func mavenSelector(modulePath: String) -> String? {
+        maven.model?.modules.first { $0.path == modulePath }?.selector
     }
 
     /// A Gradle run task goes through the Gradle runner, not the terminal, so Stop can end it
@@ -441,7 +508,7 @@ final class IDEJavaRunProvider: IDERunProvider {
         // A `main` outside the file's own class can't be told apart by a file-based launch.
         let fileClass = url.deletingPathExtension().lastPathComponent
         let fresh = context.typeName == fileClass
-            ? JavaRunConfiguration.makeClasspathLaunch(file: url, source: text, model: gradle.model)
+            ? JavaRunConfiguration.makeClasspathLaunch(file: url, source: text, model: java.projectModel)
             : nil
         guard let configuration = fresh ?? activeRunConfiguration() else { return nil }
         return .configuration(inheritingSavedSettings(configuration))
@@ -456,14 +523,18 @@ final class IDEJavaRunProvider: IDERunProvider {
         guard let host else { return nil }
         // Reuse what was saved for the same target, whichever configuration ran last.
         let saved = host.runConfigurationStore.configurations(forProject: host.projectRootURL)
+        if usesMaven, let file = host.runFileURL, let source = host.openBufferText(for: file),
+           let classpath = JavaRunConfiguration.makeClasspathLaunch(file: file, source: source, model: java.projectModel) {
+            return classpath.inheritingSettings(from: saved.last { $0.target == classpath.target })
+        }
         guard let fresh = JavaRunConfiguration.makeDefault(
             file: host.runFileURL,
             projectRoot: host.projectRootURL,
             isGradleProject: gradle.isActive,
-            model: gradle.model
+            model: java.projectModel
         ) else {
             guard gradle.isActive else { return nil }
-            let path = JavaRunConfiguration.gradleProjectPath(for: host.runFileURL, model: gradle.model)
+            let path = JavaRunConfiguration.gradleProjectPath(for: host.runFileURL, model: java.projectModel)
             return saved.last {
                 if case .gradleRun(path, _) = $0.target { return true }
                 return false
@@ -477,13 +548,13 @@ final class IDEJavaRunProvider: IDERunProvider {
     /// for the same target is kept.
     func mainRunConfiguration(for location: JavaMainMethodLocation, file: URL, source: String) -> JavaRunConfiguration? {
         let classpathLaunch = JavaRunConfiguration.makeClasspathLaunch(
-            file: file, className: location.binaryClassName, model: gradle.model
+            file: file, className: location.binaryClassName, model: java.projectModel
         )
         let fallback = JavaRunConfiguration.makeDefault(
             file: file,
             projectRoot: host?.projectRootURL,
             isGradleProject: gradle.isActive,
-            model: gradle.model
+            model: java.projectModel
         )
         guard let configuration = classpathLaunch ?? fallback else { return nil }
         return inheritingSavedSettings(configuration)
@@ -498,6 +569,7 @@ final class IDEJavaRunProvider: IDERunProvider {
         case .javaFile: return .singleFile(path: file)
         case .gradle: return .gradleRun(projectPath: JavaRunConfiguration.gradleProjectPath(for: host?.runFileURL, model: gradle.model))
         case .junit: return .gradleTest(taskPath: ":test", filters: [], sourceFile: nil)
+        case .maven: return .mavenGoals(module: nil, goals: ["package"])
         }
     }
 
@@ -507,11 +579,11 @@ final class IDEJavaRunProvider: IDERunProvider {
         guard let host else { return nil }
         var draft: JavaRunConfiguration?
         if let file = host.runFileURL, let source = host.openBufferText(for: file) {
-            draft = JavaRunConfiguration.makeClasspathLaunch(file: file, source: source, model: gradle.model)
+            draft = JavaRunConfiguration.makeClasspathLaunch(file: file, source: source, model: java.projectModel)
         }
         return draft ?? JavaRunConfiguration.makeDefault(
             file: host.runFileURL, projectRoot: host.projectRootURL,
-            isGradleProject: gradle.isActive, model: gradle.model
+            isGradleProject: gradle.isActive, model: java.projectModel
         )
     }
 
@@ -526,16 +598,16 @@ final class IDEJavaRunProvider: IDERunProvider {
     /// The runtime classpath of `file`'s source set, in `java -cp` order; `nil` before a sync or
     /// outside any source set.
     func runtimeClasspath(forFile file: URL) -> [URL]? {
-        gradle.model?.runtimeClasspath(forFile: file)
+        java.projectModel?.runtimeClasspath(forFile: file)
     }
 
-    var maxLanguageLevel: Int? { gradle.model?.maxLanguageLevel }
+    var maxLanguageLevel: Int? { java.projectModel?.maxLanguageLevel }
 
     /// Directories the debugged program's sources live in: every Gradle source set, then the
     /// project folder.
     func debugSourceRoots() -> [URL] {
         var roots: [URL] = []
-        for subproject in gradle.model?.subprojects ?? [] {
+        for subproject in java.projectModel?.subprojects ?? [] {
             for sourceSet in subproject.sourceSets {
                 roots.append(contentsOf: sourceSet.sourceDirs)
                 roots.append(contentsOf: sourceSet.generatedSourceDirs)
@@ -553,14 +625,14 @@ final class IDEJavaRunProvider: IDERunProvider {
         if let home = configuration.jdkHome, !home.isEmpty {
             return JDKLocator().installation(atUserSelected: URL(fileURLWithPath: home))
         }
-        return await java.jdk.resolve(minimumFeatureVersion: gradle.model?.maxLanguageLevel)?.installation
+        return await java.jdk.resolve(minimumFeatureVersion: java.projectModel?.maxLanguageLevel)?.installation
     }
 
     /// What the checks of a run configuration need to know about this window.
     func validationContext() -> JavaRunConfigurationValidator.Context {
         JavaRunConfigurationValidator.Context(
             projectRoot: host?.projectRootURL,
-            gradleModel: gradle.model,
+            gradleModel: java.projectModel,
             configurations: host?.runConfigurations ?? [],
             jdkFeatureVersion: java.jdk.current?.installation.featureVersion
         )

@@ -5,6 +5,7 @@ import Observation
 /// model stays free of UI types.
 enum IDENotificationAction: Equatable {
     case showGradleOutput
+    case showMavenOutput
     case showSourceControl
     case showProblems
     /// Show the Coverage tab.
@@ -30,6 +31,7 @@ extension IDENotificationAction {
 
 enum IDENotificationCategory: String, CaseIterable, Identifiable {
     case gradle
+    case maven
     case git
     case agent
     case general
@@ -39,6 +41,7 @@ enum IDENotificationCategory: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .gradle: "Gradle"
+        case .maven: "Maven"
         case .git: "Git"
         case .agent: "Agent"
         case .general: "General"

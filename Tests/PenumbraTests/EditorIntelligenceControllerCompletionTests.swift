@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import TestTreeSitterLanguages
 @testable import Penumbra
 import EditorIntelligence
 
@@ -96,7 +97,11 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         try await waitUntil { controller.isShowingCompletion }
 
         XCTAssertEqual(textView.text, "foo.")
-        XCTAssertEqual(labels(controller), ["bar", "baz"])
+        // Phase 3: a single dot also carries the command section, always last.
+        XCTAssertEqual(Array(labels(controller).prefix(2)), ["bar", "baz"])
+        let rest = Array(controller.visibleCompletionItems.dropFirst(2))
+        XCTAssertFalse(rest.isEmpty)
+        XCTAssertTrue(rest.allSatisfy { $0.kind == .command && $0.section == .commands })
     }
 
     func testPopupIsVisibleInViewportWhenScrolledFarDown() async throws {
@@ -184,6 +189,65 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         try await waitUntil { controller.isShowingCompletion }
         send(keyEvent(keyCode: 0x24, characters: "\r", flags: .command), to: textView)
         XCTAssertFalse(textView.text.contains("hello") || textView.text.contains("help;"))
+    }
+
+    /// ⇧⌘↵ in the lookup accepts the row, then completes the statement. A method with parameters
+    /// keeps the caret between the parentheses: `println(|);`.
+    func testCommandShiftReturnAcceptsThenCompletesInsideParentheses() async throws {
+        let textView = makeTextView("System.out.", caret: 11)
+        textView.keymap = .intelliJ
+        textView.indentStrategy = .space(length: 4)
+        textView.setState(TextViewState(text: "System.out.", theme: DefaultTheme(),
+                                         language: TreeSitterLanguage(tree_sitter_javascript(), enterBehavior: .java)))
+        textView.selectedRange = NSRange(location: 11, length: 0)
+        window?.makeKeyAndOrderFront(nil)
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.focusTextInput())
+        let provider = StubProvider(items: { range in
+            [
+                CompletionItem(label: "println", insertText: "println()", kind: .method, range: range, source: "Stub",
+                               labelDetail: "(String x)", priority: 10, caretOffset: 8, statementCaretInsideParens: true,
+                               allowsAutoInsert: false),
+                CompletionItem(label: "print", insertText: "print()", kind: .method, range: range, source: "Stub",
+                               allowsAutoInsert: false)
+            ]
+        })
+        let controller = try await makeController(textView, provider: provider)
+
+        controller.triggerCompletion()
+        try await waitUntil { controller.isShowingCompletion }
+        send(keyEvent(keyCode: 0x24, characters: "\r", flags: [.command, .shift]), to: textView)
+
+        XCTAssertEqual(textView.text, "System.out.println();")
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 19, length: 0))
+        XCTAssertFalse(controller.isShowingCompletion)
+    }
+
+    func testCommandShiftReturnOnAParameterlessMethodStillStartsANewLine() async throws {
+        let textView = makeTextView("System.out.", caret: 11)
+        textView.keymap = .intelliJ
+        textView.setState(TextViewState(text: "System.out.", theme: DefaultTheme(),
+                                         language: TreeSitterLanguage(tree_sitter_javascript(), enterBehavior: .java)))
+        textView.selectedRange = NSRange(location: 11, length: 0)
+        window?.makeKeyAndOrderFront(nil)
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.focusTextInput())
+        let provider = StubProvider(items: { range in
+            [
+                CompletionItem(label: "flush", insertText: "flush()", kind: .method, range: range, source: "Stub",
+                               priority: 10, allowsAutoInsert: false),
+                CompletionItem(label: "close", insertText: "close()", kind: .method, range: range, source: "Stub",
+                               allowsAutoInsert: false)
+            ]
+        })
+        let controller = try await makeController(textView, provider: provider)
+
+        controller.triggerCompletion()
+        try await waitUntil { controller.isShowingCompletion }
+        send(keyEvent(keyCode: 0x24, characters: "\r", flags: [.command, .shift]), to: textView)
+
+        XCTAssertEqual(textView.text, "System.out.flush();\n")
+        XCTAssertFalse(controller.isShowingCompletion)
     }
 
     func testLoneExplicitSuggestionIsInsertedWithCaretInsideParentheses() async throws {

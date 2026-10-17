@@ -94,7 +94,7 @@ extension JavaLaunchCommand {
         case .singleFile(let path):
             arguments = vmOptions + [path] + programArguments
             sourceFolder = URL(fileURLWithPath: path).deletingLastPathComponent()
-        case .gradleRun, .gradleTest:
+        case .gradleRun, .gradleTest, .mavenGoals, .mavenTest:
             return nil
         }
 

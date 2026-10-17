@@ -40,6 +40,10 @@ public actor JavaCompletionProvider: CompletionProvider {
     private var lastParseURL: URL?
     /// Owned by this actor, so never used by two parses at once.
     private let parser = JavaSyntaxParser()
+    /// Excluded classes and the classes whose static members completion may import.
+    private var importPolicy = JavaImportPolicy.intellij
+    /// Which postfix templates are offered. The default matches a fresh settings snapshot.
+    private var postfixConfiguration = JavaPostfixConfiguration.standard
 
     public init(index: JavaIndex, classNameCompletionLimit: Int = 100) {
         self.index = index
@@ -50,6 +54,16 @@ public actor JavaCompletionProvider: CompletionProvider {
     public func setSourceSetClasspath(_ model: JavaGradleProjectModel?, indexPaths: JavaIndexPaths) {
         classpathModel = model
         classpathPaths = model == nil ? nil : indexPaths
+    }
+
+    /// The auto-import settings. An empty static-member list adds nothing to the corpus.
+    public func setImportPolicy(_ policy: JavaImportPolicy) {
+        importPolicy = policy
+    }
+
+    /// Postfix templates, their per-key toggles, and custom templates.
+    public func setPostfixConfiguration(_ configuration: JavaPostfixConfiguration) {
+        postfixConfiguration = configuration
     }
 
     public nonisolated func isPrimary(for context: CompletionContext) -> Bool {
@@ -101,14 +115,19 @@ public actor JavaCompletionProvider: CompletionProvider {
         index
     }
 
-    func parse(_ text: String, url: URL) -> (tree: JavaSyntaxTree, stubs: JavaSourceFileStubs)? {
+    /// Parses `text`, reusing the previous tree for `url` when one exists so only the changed
+    /// region is reparsed. `caching` is false for a speculative buffer (an inline suggestion
+    /// spliced in) that must not replace the document's cached tree.
+    func parse(_ text: String, url: URL, caching: Bool = true) -> (tree: JavaSyntaxTree, stubs: JavaSourceFileStubs)? {
         if let cachedParse, cachedParse.text == text {
             return (cachedParse.tree, cachedParse.stubs)
         }
         guard let tree = incrementalParse(text, url: url) ?? parser.parse(text) else { return nil }
         let stubs = JavaSourceStubBuilder.build(tree: tree, url: url)
-        cachedParse = (text, tree, stubs)
-        lastParseURL = url
+        if caching {
+            cachedParse = (text, tree, stubs)
+            lastParseURL = url
+        }
         return (tree, stubs)
     }
 
@@ -142,6 +161,10 @@ public actor JavaCompletionProvider: CompletionProvider {
         let invocationCount: Int
         let mode: CompletionMode
         let isManual: Bool
+        let filter: CompletionContext.Filter
+        let commandMode: CompletionContext.CommandMode?
+        let range: EditorIntelligence.TextRange
+        let fileURL: URL
 
         var semantic: JavaSemanticRequest {
             JavaSemanticRequest(source: text, bytes: bytes, tree: tree, locals: [], context: context, index: index)
@@ -223,10 +246,8 @@ public actor JavaCompletionProvider: CompletionProvider {
     private func makeRequest(context: CompletionContext) -> Request? {
         // Open project files are file-backed: the snapshot keeps the bytes behind a range reader
         // and `text` is nil. Completion still has to parse the buffer the caret is in.
-        let text = Self.repairedText(
-            JavaNavigationText.fullText(of: context.document),
-            insertingDummyAt: context.cursor.position.utf16Offset
-        )
+        let originalText = JavaNavigationText.fullText(of: context.document)
+        let text = Self.repairedText(originalText, insertingDummyAt: context.cursor.position.utf16Offset)
         let fileURL = context.document.url ?? URL(fileURLWithPath: "/unsaved/\(context.document.id).java")
         guard let (tree, fileStubs) = parse(text, url: fileURL) else { return nil }
 
@@ -238,10 +259,14 @@ public actor JavaCompletionProvider: CompletionProvider {
             text: text, bytes: bytes, tree: tree, fileStubs: fileStubs, prefix: context.prefix,
             prefixStart: prefixStart, cursor: cursor, context: resolutionContext,
             factory: JavaCompletionItemFactory(range: context.range, source: name),
-            importer: JavaImportInserter(text: text, bytes: bytes, tree: tree, fileStubs: fileStubs),
+            importer: JavaImportInserter(text: text, bytes: bytes, tree: tree, fileStubs: fileStubs, policy: importPolicy),
             invocationCount: context.invocationCount,
             mode: context.mode,
             isManual: context.trigger == .manual,
+            filter: context.filter,
+            commandMode: context.commandMode,
+            range: context.range,
+            fileURL: fileURL,
             index: index
         )
     }
@@ -305,13 +330,32 @@ public actor JavaCompletionProvider: CompletionProvider {
         let prefixStart = request.prefixStart
         let resolutionContext = request.context
 
+        if request.commandMode == .dotDot {
+            return finished(await commandItems(request: request))
+        }
         let site = JavaCompletionContextClassifier.classify(bytes: bytes, tree: tree, prefixStart: prefixStart)
         javaCompletionLog.debug("java site=\(String(describing: site), privacy: .public) enclosing=\(resolutionContext.enclosingTypeQualifiedNames, privacy: .public)")
+        if request.filter == .templates {
+            switch site {
+            case .memberAccess(let dotOffset):
+                return finished(await postfixItems(dotOffset: dotOffset, source: text, request: request, knownReceiver: nil))
+            case .statement, .caseLabel:
+                return finished(liveTemplates(site: .statement, request: request, includeWhenPrefixEmpty: true))
+            case .classBody:
+                return finished(liveTemplates(site: .classBody, request: request, includeWhenPrefixEmpty: true))
+            default:
+                return finished([])
+            }
+        }
         switch site {
         case .stringOrComment:
             return finished([])
         case .memberAccess(let dotOffset):
-            return finished(await memberAccessItems(dotOffset: dotOffset, source: text, request: request))
+            var items = await memberAccessItems(dotOffset: dotOffset, source: text, request: request)
+            if request.commandMode == .singleDot {
+                items += await commandItems(request: request)
+            }
+            return finished(items)
         case .methodReference(let colonOffset):
             return finished(await methodReferenceItems(colonOffset: colonOffset, request: request))
         case .importPath(let qualifier, let isStatic):
@@ -416,16 +460,8 @@ public actor JavaCompletionProvider: CompletionProvider {
                     - (!receiver.isTypeReference && member.modifiers.contains(.staticFlag) ? 1 : 0)
             ))
         }
-        if !receiver.isTypeReference, !request.prefix.isEmpty,
-           let expression = JavaExpressionTyper.treeReceiverRange(in: request.tree, dotOffset: dotOffset)
-               ?? JavaReceiverScanner.receiverRange(in: request.bytes, dotOffset: dotOffset) {
-            let element = await JavaExpressionTyper.iteratedElementType(of: receiver.type, context: request.context, index: index)
-            let postfix = JavaPostfixTemplates(
-                text: request.text, bytes: request.bytes, expression: expression, dotOffset: dotOffset,
-                factory: request.factory, source: name,
-                takenNames: Set(JavaLocalScope.locals(in: request.tree, atByteOffset: request.cursor).map(\.name))
-            )
-            items += postfix.items(receiverType: receiver.type, elementType: element, isIterable: element != nil)
+        if receiver.packageName == nil {
+            items += await postfixItems(dotOffset: dotOffset, source: source, request: request, knownReceiver: receiver)
         }
         if receiver.isTypeReference, let receiverName, let stub = await index.classStub(qualifiedName: receiverName) {
             for inner in stub.innerTypeNames {
@@ -445,6 +481,260 @@ public actor JavaCompletionProvider: CompletionProvider {
     /// (`String s = foo.|` expects a `String` from the member).
     private static func expressionStart(beforeDot dotOffset: Int, bytes: [UInt8], source: String) -> Int {
         JavaReceiverScanner.receiverRange(in: bytes, dotOffset: dotOffset)?.lowerBound ?? dotOffset
+    }
+
+    private func liveTemplates(site: JavaLiveTemplates.Site, request: Request, includeWhenPrefixEmpty: Bool) -> [CompletionItem] {
+        JavaLiveTemplates.items(
+            site: site, prefix: request.prefix, includeWhenPrefixEmpty: includeWhenPrefixEmpty,
+            bytes: request.bytes, prefixStart: request.prefixStart, tree: request.tree,
+            factory: request.factory, source: name
+        )
+    }
+
+    /// Postfix templates for the expressions that end at `dotOffset`. Empty unless postfix is on
+    /// and either a prefix was typed or the request asked for templates only.
+    private func postfixItems(
+        dotOffset: Int, source: String, request: Request, knownReceiver: JavaReceiverInfo?
+    ) async -> [CompletionItem] {
+        guard postfixConfiguration.isEnabled else { return [] }
+        guard request.filter == .templates || !request.prefix.isEmpty else { return [] }
+        let receiver: JavaReceiverInfo?
+        if let knownReceiver {
+            receiver = knownReceiver
+        } else {
+            receiver = await JavaExpressionTyper.receiverInfo(
+                source: source, realTree: request.tree, dotOffset: dotOffset, context: request.context, index: index
+            )
+        }
+        guard let receiver, receiver.packageName == nil else { return [] }
+        let candidates = await postfixCandidates(dotOffset: dotOffset, receiver: receiver, request: request)
+        guard !candidates.isEmpty else { return [] }
+        let imports = await postfixImports(request)
+        let templates = JavaPostfixTemplates(
+            bytes: request.bytes, dotOffset: dotOffset, factory: request.factory, source: name,
+            takenNames: Set(JavaLocalScope.locals(in: request.tree, atByteOffset: request.cursor).map(\.name)),
+            configuration: postfixConfiguration, prefix: request.prefix, importer: request.importer
+        )
+        var items = templates.items(candidates: candidates, imports: imports)
+        items += await templates.fieldItems(
+            candidates: candidates, source: source, fileURL: request.fileURL, index: index
+        )
+        return items
+    }
+
+    private func postfixImports(_ request: Request) async -> JavaPostfixImports {
+        var imports = JavaPostfixImports()
+        (imports.optionalName, imports.optionalEdit) = await postfixImport("java.util.Optional", simple: "Optional", request: request)
+        (imports.objectsName, imports.objectsEdit) = await postfixImport("java.util.Objects", simple: "Objects", request: request)
+        (imports.arraysName, imports.arraysEdit) = await postfixImport("java.util.Arrays", simple: "Arrays", request: request)
+        return imports
+    }
+
+    private func postfixImport(_ qualified: String, simple: String, request: Request) async -> (String, TextEdit?) {
+        guard let stub = await index.classStub(qualifiedName: qualified) else { return (simple, nil) }
+        switch request.importer.decision(for: stub) {
+        case .none: return (simple, nil)
+        case .addImport(let edit): return (simple, edit)
+        case .useQualifiedName: return (qualified, nil)
+        }
+    }
+
+    private func postfixCandidates(
+        dotOffset: Int, receiver: JavaReceiverInfo, request: Request
+    ) async -> [JavaPostfixCandidate] {
+        let ranges = JavaPostfixExpressions.ranges(in: request.tree, dotOffset: dotOffset, bytes: request.bytes)
+        guard !ranges.isEmpty else { return [] }
+        let primary = JavaExpressionTyper.treeReceiverRange(in: request.tree, dotOffset: dotOffset)
+            ?? JavaReceiverScanner.receiverRange(in: request.bytes, dotOffset: dotOffset)
+        let locals = JavaLocalScope.locals(in: request.tree, atByteOffset: dotOffset)
+        let assignability = JavaAssignability(index: index, context: request.context)
+        let throwable = JavaTypeRef.classType(qualifiedName: "java.lang.Throwable", arguments: [], outer: nil)
+        let closeable = JavaTypeRef.classType(qualifiedName: "java.lang.AutoCloseable", arguments: [], outer: nil)
+        let listType = JavaTypeRef.classType(qualifiedName: "java.util.List", arguments: [], outer: nil)
+        var candidates: [JavaPostfixCandidate] = []
+        for (position, range) in ranges.enumerated() {
+            let text = JavaPostfixExpressions.text(bytes: request.bytes, range: range)
+            let info: JavaReceiverInfo?
+            if position == 0, let primary, range == primary {
+                info = receiver
+            } else {
+                info = await JavaExpressionTyper.typeOfExpression(text, locals: locals, context: request.context, index: index)
+            }
+            guard let info else { continue }
+            let element = await JavaExpressionTyper.iteratedElementType(of: info.type, context: request.context, index: index)
+            var isEnum = false
+            var hasTypeParameters = false
+            if let qualified = info.type.erasedQualifiedName, let stub = await index.classStub(qualifiedName: qualified) {
+                isEnum = stub.kind == .enumKind
+                hasTypeParameters = !stub.typeParameters.isEmpty
+            }
+            let matching: [JavaPostfixCustomTemplate]
+            if info.isTypeReference {
+                matching = []
+            } else {
+                matching = await matchingCustomTemplates(info.type, isIterable: element != nil, assignability: assignability)
+            }
+            candidates.append(JavaPostfixCandidate(
+                range: range, text: text, type: info.type, elementType: element, isIterable: element != nil,
+                isTypeReference: info.isTypeReference, isEnum: isEnum,
+                isThrowable: await assignability.isAssignable(info.type, to: throwable),
+                isAutoCloseable: await assignability.isAssignable(info.type, to: closeable),
+                isList: await assignability.isAssignable(info.type, to: listType),
+                hasTypeParameters: hasTypeParameters, matchingCustom: matching
+            ))
+        }
+        return candidates
+    }
+
+    private func matchingCustomTemplates(
+        _ type: JavaTypeRef, isIterable: Bool, assignability: JavaAssignability
+    ) async -> [JavaPostfixCustomTemplate] {
+        var matched: [JavaPostfixCustomTemplate] = []
+        for template in postfixConfiguration.customTemplates where !template.key.isEmpty {
+            if await template.applicable.matches(type, isIterable: isIterable, assignability: assignability) {
+                matched.append(template)
+            }
+        }
+        return matched
+    }
+
+    // MARK: - Command completion
+
+    /// Java's command items for `..` (and the command section of a single `.`): Introduce
+    /// Variable/Field/Constant and Surround With on the receiver expression, and Extract
+    /// Method / Surround With on a preceding `for`/`while`/`if` block.
+    private func commandItems(request: Request) async -> [CompletionItem] {
+        let bytes = request.bytes
+        var firstDot = request.prefixStart
+        while firstDot > 0, bytes[firstDot - 1] == UInt8(ascii: ".") { firstDot -= 1 }
+        guard firstDot < request.prefixStart else { return [] }
+
+        func position(ofByte offset: Int) -> TextPosition {
+            let prefix = String(decoding: bytes[0..<min(max(0, offset), bytes.count)], as: UTF8.self)
+            let ns = prefix as NSString
+            let line = prefix.reduce(0) { $1 == "\n" ? $0 + 1 : $0 }
+            let lineStart = (ns.range(of: "\n", options: .backwards).location)
+            let column = lineStart == NSNotFound ? ns.length : ns.length - (lineStart + 1)
+            return TextPosition(line: line, column: column, utf16Offset: ns.length)
+        }
+        func range(_ bytes: Range<Int>) -> EditorIntelligence.TextRange {
+            TextRange(start: position(ofByte: bytes.lowerBound), end: position(ofByte: bytes.upperBound))
+        }
+        func item(_ label: String, _ action: String, selecting: EditorIntelligence.TextRange) -> CompletionItem {
+            CompletionItem(
+                label: label, insertText: "", kind: .command, range: request.range,
+                source: name, allowsAutoInsert: false,
+                command: .editorAction(id: action, selecting: selecting), section: .commands
+            )
+        }
+
+        var items: [CompletionItem] = []
+        if let receiver = JavaExpressionTyper.treeReceiverRange(in: request.tree, dotOffset: firstDot)
+            ?? JavaReceiverScanner.receiverRange(in: bytes, dotOffset: firstDot) {
+            let selecting = range(receiver)
+            items.append(item("Extract Variable…", "extractVariable", selecting: selecting))
+            items.append(item("Extract Field…", "extractField", selecting: selecting))
+            items.append(item("Extract Constant…", "extractConstant", selecting: selecting))
+            items.append(item("Surround With…", "surroundWith", selecting: selecting))
+        }
+        if let block = Self.statementBlockRange(beforeDotAt: firstDot, bytes: bytes, tree: request.tree) {
+            let selecting = range(block)
+            items.append(item("Extract Method…", "extractMethod", selecting: selecting))
+            if !items.contains(where: { $0.label == "Surround With…" }) {
+                items.append(item("Surround With…", "surroundWith", selecting: selecting))
+            }
+        }
+        return items
+    }
+
+    /// Statements whose closing `}` `..` can target, read from the parse tree.
+    private static let blockStatementTypes: Set<String> = [
+        "if_statement", "while_statement", "for_statement", "enhanced_for_statement"
+    ]
+
+    /// The byte range of the `for`/`while`/`if` statement whose block closes right before
+    /// `dotOffset` (`}..`, whitespace and newlines allowed), header included. The parse tree
+    /// decides, so a `}` inside a string does not move the match. The byte scan is the fallback
+    /// when that part of the tree is an error, and it also covers `switch`, `catch`,
+    /// `synchronized`, `else`, `do` and `try`. `nil` for a method or class body.
+    static func statementBlockRange(beforeDotAt dotOffset: Int, bytes: [UInt8], tree: JavaSyntaxTree? = nil) -> Range<Int>? {
+        if let tree, let range = treeStatementBlockRange(beforeDotAt: dotOffset, tree: tree, bytes: bytes) {
+            return range
+        }
+        return textualStatementBlockRange(beforeDotAt: dotOffset, bytes: bytes)
+    }
+
+    /// The `for`/`while`/`if` node whose last byte is the `}` immediately before the dots.
+    private static func treeStatementBlockRange(beforeDotAt dotOffset: Int, tree: JavaSyntaxTree, bytes: [UInt8]) -> Range<Int>? {
+        let close = lastNonSpace(before: dotOffset, bytes: bytes)
+        guard close >= 0, bytes[close] == UInt8(ascii: "}") else { return nil }
+        var node: SyntaxNode? = tree.node(atByteOffset: close)
+        while let current = node {
+            if blockStatementTypes.contains(current.type), current.endByte == close + 1 {
+                return current.byteRange
+            }
+            node = current.parent
+        }
+        return nil
+    }
+
+    private static func textualStatementBlockRange(beforeDotAt dotOffset: Int, bytes: [UInt8]) -> Range<Int>? {
+        let close = lastNonSpace(before: dotOffset, bytes: bytes)
+        guard close >= 0, bytes[close] == UInt8(ascii: "}") else { return nil }
+        guard let open = matching(brace: UInt8(ascii: "{"), closing: UInt8(ascii: "}"), at: close, bytes: bytes) else { return nil }
+        // Walk back over a `(...)` header and its keyword.
+        var start = open
+        var index = lastNonSpace(before: open, bytes: bytes)
+        if index >= 0, bytes[index] == UInt8(ascii: ")"),
+           let paren = matching(brace: UInt8(ascii: "("), closing: UInt8(ascii: ")"), at: index, bytes: bytes) {
+            start = paren
+            index = lastNonSpace(before: paren, bytes: bytes)
+            let wordEnd = index + 1
+            while index >= 0, isIdentifierByte(bytes[index]) { index -= 1 }
+            let keyword = String(decoding: bytes[(index + 1)..<wordEnd], as: UTF8.self)
+            guard ["for", "while", "if", "switch", "catch", "synchronized"].contains(keyword) else { return nil }
+            start = index + 1
+        } else {
+            let wordEnd = index + 1
+            while index >= 0, isIdentifierByte(bytes[index]) { index -= 1 }
+            let keyword = String(decoding: bytes[(index + 1)..<wordEnd], as: UTF8.self)
+            guard ["else", "do", "try"].contains(keyword) else { return nil }
+            start = index + 1
+        }
+        return start..<(close + 1)
+    }
+
+    /// Index of the last byte before `offset` that is not space, tab, or a newline. `-1` at the start.
+    private static func lastNonSpace(before offset: Int, bytes: [UInt8]) -> Int {
+        var index = min(offset, bytes.count) - 1
+        while index >= 0, isSpaceByte(bytes[index]) { index -= 1 }
+        return index
+    }
+
+    private static func isSpaceByte(_ byte: UInt8) -> Bool {
+        byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\t")
+            || byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r")
+    }
+
+    private static func matching(brace open: UInt8, closing: UInt8, at closeIndex: Int, bytes: [UInt8]) -> Int? {
+        var depth = 0
+        var index = closeIndex
+        while index >= 0 {
+            if bytes[index] == closing { depth += 1 }
+            if bytes[index] == open {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+            index -= 1
+        }
+        return nil
+    }
+
+    private static func isIdentifierByte(_ byte: UInt8) -> Bool {
+        byte == UInt8(ascii: "_") || byte == UInt8(ascii: "$")
+            || (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte)
+            || (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains(byte)
+            || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
     }
 
     private func packageMemberItems(packageName: String, request: Request) async -> [CompletionItem] {
@@ -762,6 +1052,7 @@ public actor JavaCompletionProvider: CompletionProvider {
             items.append(CompletionItem(label: typeParameter, insertText: typeParameter, kind: .type, range: request.factory.range, source: name, priority: JavaCompletionPriority.local))
         }
         items += await overrideItems(request: request)
+        items += liveTemplates(site: .classBody, request: request, includeWhenPrefixEmpty: false)
         return items
     }
 
@@ -909,6 +1200,7 @@ public actor JavaCompletionProvider: CompletionProvider {
                 items.append(request.factory.keywordItem(keyword, priority: priority))
             }
         }
+        items += liveTemplates(site: .statement, request: request, includeWhenPrefixEmpty: false)
         return StatementDraft(items: items, expected: expected, locals: locals, members: members)
     }
 
@@ -928,7 +1220,76 @@ public actor JavaCompletionProvider: CompletionProvider {
         items += await JavaCompletionSuggestions.functionalTemplates(
             expected: draft.expected, members: draft.members, factory: request.factory, context: request.context, index: index
         )
+        items += await staticMemberClassItems(request: request, existing: draft.items + items, expected: draft.expected)
         return items
+    }
+
+    /// Public static members of the classes named in the import policy, imported on accept.
+    /// The list is empty by default, so this adds nothing until the user names a class.
+    private func staticMemberClassItems(
+        request: Request, existing: [CompletionItem], expected: [JavaTypeRef]
+    ) async -> [CompletionItem] {
+        let owners = importPolicy.staticMemberOwners
+        guard !owners.isEmpty, !request.prefix.isEmpty else { return [] }
+        let assignability = JavaAssignability(index: index, context: request.context)
+        var present = Set(existing.map { "\($0.label)|\($0.labelDetail ?? "")" })
+        var items: [CompletionItem] = []
+        for owner in owners {
+            guard let stub = await index.classStub(qualifiedName: owner) else { continue }
+            for field in stub.fields where Self.isPublicStatic(field.modifiers) {
+                guard JavaCompletionSuggestions.prefixMatches(request.prefix, field.name),
+                      !importPolicy.excludesStaticMember(owner: owner, name: field.name),
+                      present.insert("\(field.name)|").inserted else { continue }
+                let member = JavaResolvedMember.field(field, declaringClass: stub.qualifiedName)
+                items.append(await staticMemberItem(
+                    member, owner: stub.qualifiedName, request: request, expected: expected, assignability: assignability
+                ))
+            }
+            for method in stub.methods where !method.isConstructor && Self.isPublicStatic(method.modifiers) {
+                guard JavaCompletionSuggestions.prefixMatches(request.prefix, method.name),
+                      !importPolicy.excludesStaticMember(owner: owner, name: method.name) else { continue }
+                let key = "\(method.name)|\(JavaCompletionItemFactory.parameterList(method))"
+                guard present.insert(key).inserted else { continue }
+                let member = JavaResolvedMember.method(method, declaringClass: stub.qualifiedName)
+                items.append(await staticMemberItem(
+                    member, owner: stub.qualifiedName, request: request, expected: expected, assignability: assignability
+                ))
+            }
+        }
+        return items
+    }
+
+    private func staticMemberItem(
+        _ member: JavaResolvedMember, owner: String, request: Request, expected: [JavaTypeRef],
+        assignability: JavaAssignability
+    ) async -> CompletionItem {
+        let edits: [TextEdit]
+        let override: String?
+        switch request.importer.decisionForStaticMember(owner: owner, member: member.name) {
+        case .none:
+            edits = []
+            override = nil
+        case .addImport(let edit):
+            edits = [edit]
+            override = nil
+        case .useQualifiedName:
+            edits = []
+            switch member {
+            case .field:
+                override = "\(owner).\(member.name)"
+            case .method:
+                override = "\(owner).\(member.name)()"
+            }
+        }
+        let matches = await Self.matchesExpected(member.valueType, expected: expected, assignability: assignability)
+        return request.factory.memberItem(
+            member, receiverQualifiedName: nil, basePriority: JavaCompletionPriority.staticImport,
+            expectedMatch: matches, additionalEdits: edits, insertTextOverride: override
+        )
+    }
+
+    private static func isPublicStatic(_ modifiers: JavaModifiers) -> Bool {
+        modifiers.contains(.publicFlag) && modifiers.contains(.staticFlag)
     }
 
     /// Classes matching the typed prefix (none for an empty prefix -- like IntelliJ, class names
@@ -1080,6 +1441,7 @@ public actor JavaCompletionProvider: CompletionProvider {
     /// protected nested) types in the same package, private nested types inside the same
     /// top-level type. A second Ctrl+Space shows them all, like IntelliJ.
     private func isAccessibleClass(_ stub: JavaClassStub, request: Request) -> Bool {
+        if importPolicy.excludesClass(stub) { return false }
         guard request.invocationCount <= 1, !stub.modifiers.contains(.publicFlag) else { return true }
         if stub.modifiers.contains(.privateFlag) {
             guard let topLevel = request.context.topLevelTypeQualifiedName else { return false }

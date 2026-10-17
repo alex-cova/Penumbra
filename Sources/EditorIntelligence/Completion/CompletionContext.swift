@@ -18,6 +18,29 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
     /// members) once the popup has been noticeable.
     public let invocationCount: Int
     public let mode: CompletionMode
+    /// `.templates` asks for postfix or live templates only (⌘J, and the postfix expansion key).
+    public let filter: Filter
+    /// Set when the request is a command-completion request, or a regular one that should
+    /// carry a command section.
+    public let commandMode: CommandMode?
+
+    /// How command completion was triggered.
+    public enum CommandMode: Hashable, Sendable {
+        /// `..` after an expression or block: commands only.
+        case dotDot
+        /// A single `.`: regular items, with a command section last.
+        case singleDot
+        /// A `.` typed in a read-only file: navigation commands only, filtered virtually.
+        case readOnly
+    }
+
+    /// Which suggestions a provider should return.
+    public enum Filter: Hashable, Sendable {
+        /// The site's ordinary suggestions.
+        case all
+        /// Postfix templates when a receiver precedes the caret, live templates otherwise.
+        case templates
+    }
 
     public init(
         document: Document,
@@ -26,7 +49,9 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
         prefix: String,
         range: TextRange,
         invocationCount: Int = 1,
-        mode: CompletionMode = .basic
+        mode: CompletionMode = .basic,
+        filter: Filter = .all,
+        commandMode: CommandMode? = nil
     ) {
         self.document = document
         self.cursor = cursor
@@ -35,6 +60,8 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
         self.range = range
         self.invocationCount = invocationCount
         self.mode = mode
+        self.filter = filter
+        self.commandMode = commandMode
     }
 
     /// The character just before the prefix is a member-access `.` (or `::`).

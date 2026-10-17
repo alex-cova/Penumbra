@@ -120,6 +120,8 @@ let package = Package(
         ], exclude: [
             "CLAUDE.md",
             "Documentation.docc",
+            "TextView/Gutter/CLAUDE.md",
+            "TextView/Keymap/CLAUDE.md",
             "Workbench/CLAUDE.md"
         ], resources: [
             .copy("PrivacyInfo.xcprivacy"),
@@ -146,7 +148,11 @@ let package = Package(
                 .product(name: "FernflowerKit", package: "sunflower"),
                 "SubprocessKit"
             ],
-            exclude: ["CLAUDE.md"],
+            exclude: [
+                "CLAUDE.md",
+                "Inspections/CLAUDE.md",
+                "Profiling/CLAUDE.md"
+            ],
             swiftSettings: swift6
         ),
         // Syntactic Swift and TypeScript engines. They still parse through JavaIntelligence's
@@ -248,6 +254,23 @@ let package = Package(
             path: "Example/Umbra",
             exclude: [
                 "CLAUDE.md",
+                "Agent/CLAUDE.md",
+                "Coverage/CLAUDE.md",
+                "Diagrams/CLAUDE.md",
+                "Diff/CLAUDE.md",
+                "Git/CLAUDE.md",
+                "HTTP/CLAUDE.md",
+                "Inspections/CLAUDE.md",
+                "Languages/CLAUDE.md",
+                "LocalHistory/CLAUDE.md",
+                "Profiler/CLAUDE.md",
+                "Projects/CLAUDE.md",
+                "ProjectWizard/CLAUDE.md",
+                "Run/CLAUDE.md",
+                "Saving/CLAUDE.md",
+                "Swift/CLAUDE.md",
+                "SwiftUIPreview/CLAUDE.md",
+                "TextTools/CLAUDE.md",
                 "SplitView/LICENSE",
                 "SplitView/README.md",
                 "Tools/JavaDebugAdapter/build.sh",
@@ -256,10 +279,15 @@ let package = Package(
                 "Tools/JavaDebugAdapter/build/test-sources.txt",
                 "Tools/JavaDebugAdapter/build/sources.txt",
                 "Tools/JavaDebugAdapter/src",
+                "Tools/JavaAnalysisServer/build.sh",
+                "Tools/JavaAnalysisServer/build/classes",
+                "Tools/JavaAnalysisServer/build/sources.txt",
+                "Tools/JavaAnalysisServer/src",
                 "Tools/JaCoCo/fetch.sh"
             ],
             resources: [
                 .copy("Tools/JavaDebugAdapter/build/java-debug-adapter.jar"),
+                .copy("Tools/JavaAnalysisServer/build/java-analysis-server.jar"),
                 .copy("../umbra.png")
             ] + umbraJaCoCoResources,
             swiftSettings: swift6
@@ -482,6 +510,7 @@ let package = Package(
         .testTarget(name: "PenumbraTests", dependencies: [
             "Penumbra",
             "EditorIntelligence",
+            "LanguageSyntax",
             "EditorIntelligenceLSP",
             "TestTreeSitterLanguages",
             "PenumbraGraphQLLanguage",
@@ -499,6 +528,6 @@ let package = Package(
             .product(name: "AgentKitMLX", package: "AgentKitMLX"),
             .product(name: "LocalModelStore", package: "AgentKitMLX"),
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
-        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling")], swiftSettings: swift6)
+        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus")], swiftSettings: swift6)
     ]
 )

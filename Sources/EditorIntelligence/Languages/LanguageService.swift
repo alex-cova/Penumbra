@@ -53,6 +53,7 @@ public struct LanguageProviders: Sendable {
     public var structure: (any StructureProviding)?
     public var typeHierarchy: (any TypeHierarchyProviding)?
     public var callHierarchy: (any CallHierarchyProviding)?
+    public var symbolReference: (any SymbolReferenceProviding)?
 
     public init(
         completion: [any CompletionProvider] = [],
@@ -72,7 +73,8 @@ public struct LanguageProviders: Sendable {
         lineMarkers: (any LineMarkerProviding)? = nil,
         structure: (any StructureProviding)? = nil,
         typeHierarchy: (any TypeHierarchyProviding)? = nil,
-        callHierarchy: (any CallHierarchyProviding)? = nil
+        callHierarchy: (any CallHierarchyProviding)? = nil,
+        symbolReference: (any SymbolReferenceProviding)? = nil
     ) {
         self.completion = completion
         self.hover = hover
@@ -92,6 +94,7 @@ public struct LanguageProviders: Sendable {
         self.structure = structure
         self.typeHierarchy = typeHierarchy
         self.callHierarchy = callHierarchy
+        self.symbolReference = symbolReference
     }
 }
 
@@ -164,7 +167,7 @@ public enum LanguageFeature: String, CaseIterable, Sendable {
     case completion, hover, signatureHelp, definition, implementation, typeDefinition, references
     case superMethod, rename, refactoring, codeActions, formatting, diagnostics, semanticTokens
     case inlayHints, codeVision, structure, breadcrumbs, lineMarkers, typeHierarchy, callHierarchy
-    case codeGeneration
+    case codeGeneration, symbolReference
 }
 
 /// How accurate a feature's answer is. `nil` from ``LanguageService/fidelity(of:)`` means the

@@ -10,6 +10,8 @@ public struct InlayHint: Sendable, Hashable {
         case parameter
         /// The type of a variable declared without one (`var`, an implicit lambda parameter): `: List<String>`.
         case type
+        /// An inline (ghost text) completion suggestion, drawn in the editor font with no chip.
+        case inlineCompletion
         case other
     }
 

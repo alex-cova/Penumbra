@@ -1,9 +1,41 @@
+import AgentKitMLX
 import EditorIntelligence
+import LocalModelStore
 import Penumbra
 import SwiftUI
 
 struct IDEPreferencesEditorPane: View {
     @Bindable var preferences: IDEPreferences
+    @State private var modelsStore = IDELocalModelsStore.shared
+    @State private var inlineModelStatus = "Not loaded"
+    @State private var inlineModelStatusIsError = false
+    @State private var isLoadingInlineModel = false
+    @State private var inlineLoadGeneration = 0
+    /// Set when a download is started from this pane, so the finished model becomes the completion model.
+    @State private var selectModelWhenInstalled: String?
+    @State private var inlineModelSearchAttempted = false
+    @State private var inlineTokenDraft = ""
+
+    private var commandCompletionEnabled: Binding<Bool> {
+        Binding(
+            get: { preferences.commandCompletion.isEnabled },
+            set: { preferences.commandCompletion.isEnabled = $0 }
+        )
+    }
+
+    private var commandCompletionSeparateGroup: Binding<Bool> {
+        Binding(
+            get: { preferences.commandCompletion.showsSeparateGroup },
+            set: { preferences.commandCompletion.showsSeparateGroup = $0 }
+        )
+    }
+
+    private var commandCompletionReadOnly: Binding<Bool> {
+        Binding(
+            get: { preferences.commandCompletion.readOnlyEnabled },
+            set: { preferences.commandCompletion.readOnlyEnabled = $0 }
+        )
+    }
     @AppStorage(IDEInspectionWidget.defaultsKey) private var showsInspectionWidget = true
 
     var body: some View {
@@ -262,6 +294,31 @@ struct IDEPreferencesEditorPane: View {
         }
 
         IDESettingsSection(
+            "Code Completion",
+            footer: "Command completion offers refactorings and editor actions after .., and as a separate group after a single dot. In a read-only file, a dot opens navigation commands instead of editing."
+        ) {
+            IDESettingsToggle("Command Completion", isOn: commandCompletionEnabled)
+            IDESettingsToggle(
+                "Show Commands as a Separate Group", isOn: commandCompletionSeparateGroup,
+                detail: "Commands appear in their own section at the end of the list after a single dot."
+            )
+            .disabled(!preferences.commandCompletion.isEnabled)
+            IDESettingsToggle(
+                "Command Completion in Read-Only Files", isOn: commandCompletionReadOnly,
+                detail: "Typing a dot in a read-only file (such as attached JDK sources) filters navigation commands without editing the file."
+            )
+            .disabled(!preferences.commandCompletion.isEnabled)
+
+            IDESettingsToggle(
+                "Full Line Completion (Local Model)", isOn: $preferences.inlineCompletionEnabled,
+                detail: "Gray inline suggestions from a model running on this Mac. Nothing is sent anywhere; the model loads only when this is on."
+            )
+            if preferences.inlineCompletionEnabled {
+                inlineModelRows
+            }
+        }
+
+        IDESettingsSection(
             "Refactoring",
             footer: "In-place mode marks the code a rename or extract will change and applies it without a preview when nothing is ambiguous. Turn it off to always review the changes first."
         ) {
@@ -293,5 +350,315 @@ struct IDEPreferencesEditorPane: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder private var inlineModelRows: some View {
+        let installed = modelsStore.installed
+        let recommendedID = IDEInlineCompletionService.recommendedModelID
+        Group {
+            IDESettingsPicker("Model", selection: $preferences.inlineCompletionModelID) {
+                Text("None").tag(String?.none)
+                ForEach(installed) { model in
+                    Text(inlineModelMenuTitle(model, among: installed)).tag(String?.some(model.id))
+                }
+            }
+            inlineMemoryRow(installed: installed)
+            if let download = modelsStore.download {
+                inlineDownloadRow(download)
+            }
+            if let error = modelsStore.downloadError {
+                Text(error)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !installed.contains(where: { $0.id == recommendedID }), modelsStore.download?.id != recommendedID {
+                IDESettingsRow("Recommended Model") {
+                    Button("Download Qwen2.5-Coder 1.5B (≈0.9 GB)") {
+                        beginInlineModelDownload(recommendedID)
+                    }
+                    .controlSize(.small)
+                    .disabled(!modelsStore.canStartDownload)
+                }
+            }
+            inlineModelSearch
+            IDESettingsToggle("Java", isOn: .constant(true), detail: "Validated against the Java index: unknown references are cut, and a missing import is added on accept.")
+                .disabled(true)
+            IDESettingsToggle("Other Languages", isOn: $preferences.inlineCompletionOtherLanguages, detail: "Unvalidated suggestions in other languages.")
+            IDESettingsToggle("Multi-Line Suggestions", isOn: $preferences.inlineCompletionMultiLine)
+            IDESettingsToggle(
+                "Synchronize Inline and Popup Completions", isOn: $preferences.inlineCompletionSyncWithPopup,
+                detail: "The current suggestion also appears as the popup's first item."
+            )
+            IDESettingsPicker("Accept With", selection: $preferences.inlineCompletionAcceptKey) {
+                ForEach(InlineAcceptKey.allCases, id: \.self) { key in
+                    Text(key.title).tag(key)
+                }
+            }
+        }
+        .task {
+            modelsStore.prepareIfNeeded()
+            let generation = inlineLoadGeneration
+            let text = await IDEInlineCompletionService.shared.statusText()
+            guard generation == inlineLoadGeneration else { return }
+            inlineModelStatus = text
+            inlineModelStatusIsError = false
+        }
+        .onChange(of: modelsStore.installed.map(\.id)) { _, ids in
+            guard let pending = selectModelWhenInstalled, ids.contains(pending) else { return }
+            preferences.inlineCompletionModelID = pending
+            selectModelWhenInstalled = nil
+        }
+        .onChange(of: modelsStore.download?.id) { previous, next in
+            guard let pending = selectModelWhenInstalled, previous == pending, next != pending else { return }
+            if !modelsStore.installed.contains(where: { $0.id == pending }) {
+                selectModelWhenInstalled = nil
+            }
+        }
+    }
+
+    private func inlineMemoryRow(installed: [InstalledLocalModel]) -> some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            if modelsStore.availability != .available {
+                Text(MLXAvailability.message(for: modelsStore.availability))
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            IDESettingsRow("In Memory") {
+                HStack(spacing: IDEAppearance.Spacing.sm) {
+                    if isLoadingInlineModel {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(inlineModelStatus)
+                        .font(IDEAppearance.Typography.monoCaption)
+                        .foregroundStyle(inlineStatusColor)
+                        .lineLimit(2)
+                    Button("Load", action: loadInlineModel)
+                        .controlSize(.small)
+                        .disabled(!canLoadInlineModel(installed: installed))
+                        .help(inlineLoadHelp(installed: installed))
+                    Button("Unload", action: unloadInlineModel)
+                        .controlSize(.small)
+                        .disabled(!inlineModelStatus.hasPrefix("Loaded") && !isLoadingInlineModel)
+                        .help("Free the memory. The next suggestion loads the model again.")
+                }
+            }
+        }
+    }
+
+    private var inlineStatusColor: Color {
+        if inlineModelStatusIsError { return IDEAppearance.ColorToken.error }
+        if inlineModelStatus.hasPrefix("Loaded") { return IDEAppearance.ColorToken.run }
+        return IDEAppearance.ColorToken.muted
+    }
+
+    private func canLoadInlineModel(installed: [InstalledLocalModel]) -> Bool {
+        guard !isLoadingInlineModel, modelsStore.availability == .available else { return false }
+        guard let id = preferences.inlineCompletionModelID else { return false }
+        return installed.contains { $0.id == id }
+    }
+
+    private func inlineLoadHelp(installed: [InstalledLocalModel]) -> String {
+        if modelsStore.availability != .available {
+            return MLXAvailability.message(for: modelsStore.availability)
+        }
+        guard let id = preferences.inlineCompletionModelID else { return "Choose a model first." }
+        guard installed.contains(where: { $0.id == id }) else { return "Download the model before loading it." }
+        return "Load the model into memory now. Leaving it unloaded waits until the first suggestion."
+    }
+
+    private func loadInlineModel() {
+        inlineLoadGeneration += 1
+        let generation = inlineLoadGeneration
+        isLoadingInlineModel = true
+        inlineModelStatus = "Loading…"
+        inlineModelStatusIsError = false
+        Task {
+            let status = await IDEInlineCompletionService.shared.loadChosenModel()
+            guard generation == inlineLoadGeneration else { return }
+            inlineModelStatus = status.text
+            inlineModelStatusIsError = status.isError
+            isLoadingInlineModel = false
+        }
+    }
+
+    private func unloadInlineModel() {
+        inlineLoadGeneration += 1
+        isLoadingInlineModel = false
+        IDEInlineCompletionService.shared.unload()
+        inlineModelStatus = "Not loaded"
+        inlineModelStatusIsError = false
+    }
+
+    private func inlineDownloadRow(_ download: IDELocalModelsStore.Download) -> some View {
+        IDESettingsRow(download.isPaused ? "Paused" : "Downloading") {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+                Text(download.id)
+                    .font(IDEAppearance.Typography.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let fraction = download.progress.fractionCompleted {
+                    ProgressView(value: fraction).frame(width: 220)
+                } else {
+                    ProgressView().progressViewStyle(.linear).frame(width: 220)
+                }
+                Text(download.progress.detailText)
+                    .font(IDEAppearance.Typography.monoCaption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                HStack(spacing: IDEAppearance.Spacing.sm) {
+                    if download.isPaused {
+                        Button("Resume") { modelsStore.resumeDownload() }.controlSize(.small)
+                    } else {
+                        Button("Pause") { modelsStore.pauseDownload() }.controlSize(.small)
+                    }
+                    Button("Cancel") { modelsStore.cancelDownload() }.controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private var inlineModelSearch: some View {
+        @Bindable var modelsStore = modelsStore
+        return VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            Text("Find a Model")
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            HStack(spacing: IDEAppearance.Spacing.sm) {
+                TextField("Search Hugging Face for an MLX model", text: $modelsStore.query)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(searchInlineModels)
+                Button("Search", action: searchInlineModels)
+                    .controlSize(.small)
+                    .disabled(modelsStore.isSearching || modelsStore.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if modelsStore.isSearching { ProgressView().controlSize(.small) }
+            }
+            Text("Search and download use the network only when you ask. Running the model does not.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            if let error = modelsStore.searchError {
+                Text(error)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if inlineModelSearchAttempted, !modelsStore.isSearching, modelsStore.searchError == nil, modelsStore.results.isEmpty {
+                Text("No MLX text models match.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            ForEach(modelsStore.results) { result in
+                inlineSearchResultRow(result)
+            }
+            if modelsStore.results.contains(where: \.isGated), !modelsStore.hasToken {
+                inlineGatedTokenRow
+            }
+        }
+    }
+
+    private func searchInlineModels() {
+        inlineModelSearchAttempted = true
+        Task { await modelsStore.search() }
+    }
+
+    private func inlineSearchResultRow(_ result: HFModelSummary) -> some View {
+        let installed = modelsStore.installed.contains { $0.id == result.id }
+        let isSelected = preferences.inlineCompletionModelID == result.id
+        return HStack(alignment: .center, spacing: IDEAppearance.Spacing.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(LocalModelFormat.shortName(result.id))
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .lineLimit(1)
+                Text(inlineSearchSubtitle(result))
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(result.isGated ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: IDEAppearance.Spacing.sm)
+            inlineSearchAction(result, installed: installed, isSelected: isSelected)
+        }
+        .padding(IDEAppearance.Spacing.sm)
+        .background(
+            isSelected ? IDEAppearance.ColorToken.controlHover : IDEAppearance.ColorToken.card,
+            in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous)
+        )
+    }
+
+    @ViewBuilder
+    private func inlineSearchAction(_ result: HFModelSummary, installed: Bool, isSelected: Bool) -> some View {
+        if installed {
+            if isSelected {
+                Label("Selected", systemImage: "checkmark")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.run)
+            } else {
+                Button("Use") { preferences.inlineCompletionModelID = result.id }
+                    .controlSize(.small)
+                    .help("Use this model for full line completion")
+            }
+        } else if modelsStore.download?.id == result.id {
+            Text(modelsStore.download?.isPaused == true ? "Paused" : "Downloading")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        } else {
+            Button("Download") { beginInlineModelDownload(result.id) }
+                .controlSize(.small)
+                .disabled(inlineDownloadDisabled(result))
+                .help(inlineDownloadHelp(result))
+        }
+    }
+
+    private var inlineGatedTokenRow: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            HStack(spacing: IDEAppearance.Spacing.sm) {
+                SecureField("Hugging Face read token", text: $inlineTokenDraft)
+                    .textFieldStyle(.roundedBorder)
+                Button("Save") {
+                    modelsStore.saveToken(inlineTokenDraft)
+                    inlineTokenDraft = ""
+                }
+                .controlSize(.small)
+                .disabled(inlineTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            Text("A gated model needs a read token after you accept its license on huggingface.co. The token stays in the Keychain.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func inlineSearchSubtitle(_ result: HFModelSummary) -> String {
+        var parts: [String] = []
+        let owner = LocalModelFormat.owner(result.id)
+        if !owner.isEmpty { parts.append(owner) }
+        if let count = result.parameterCount { parts.append(LocalModelFormat.parameters(count)) }
+        if let quantization = result.quantization { parts.append(quantization) }
+        parts.append("\(LocalModelFormat.compactCount(result.downloads)) downloads")
+        if result.isGated { parts.append("gated") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func inlineDownloadDisabled(_ result: HFModelSummary) -> Bool {
+        !modelsStore.canStartDownload || (result.isGated && !modelsStore.hasToken)
+    }
+
+    private func inlineDownloadHelp(_ result: HFModelSummary) -> String {
+        if result.isGated, !modelsStore.hasToken {
+            return "Accept the license on huggingface.co and save a read token below."
+        }
+        if !modelsStore.canStartDownload { return "One download at a time." }
+        return "Download this model and select it for full line completion."
+    }
+
+    private func beginInlineModelDownload(_ id: String) {
+        guard modelsStore.canStartDownload else { return }
+        selectModelWhenInstalled = id
+        modelsStore.startDownload(id)
+    }
+
+    private func inlineModelMenuTitle(_ model: InstalledLocalModel, among installed: [InstalledLocalModel]) -> String {
+        let name = LocalModelFormat.shortName(model.id)
+        let collision = installed.contains { $0.id != model.id && LocalModelFormat.shortName($0.id) == name }
+        return collision ? model.id : name
     }
 }

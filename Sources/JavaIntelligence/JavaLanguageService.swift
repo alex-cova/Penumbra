@@ -48,7 +48,8 @@ public struct JavaLanguageService: LanguageService {
         lineMarkers: JavaLineMarkerProvider,
         structure: JavaStructureProvider,
         typeHierarchy: JavaTypeHierarchyProvider,
-        callHierarchy: JavaCallHierarchyProvider
+        callHierarchy: JavaCallHierarchyProvider,
+        symbolReference: JavaSymbolReferenceProvider? = nil
     ) {
         self.hover = hover
         self.navigation = navigation
@@ -60,10 +61,11 @@ public struct JavaLanguageService: LanguageService {
         self.lineMarkers = lineMarkers
         self.typeHierarchy = typeHierarchy
         self.callHierarchy = callHierarchy
+        let syntax = JavaSyntaxDiagnostics.provider(cache: inspections.documentParseCache)
         providers = LanguageProviders(
             completion: [completion],
             hover: [hover],
-            diagnostics: [compilerDiagnostics, inspections],
+            diagnostics: [JavaSyntaxAwareDiagnostics(syntax: syntax, compiler: compilerDiagnostics, inspections: inspections)],
             navigation: [navigation, findUsages],
             formatting: formatting,
             // `JavaCompletionProvider` doubles as parameter info.
@@ -79,7 +81,8 @@ public struct JavaLanguageService: LanguageService {
             lineMarkers: lineMarkers,
             structure: structure,
             typeHierarchy: typeHierarchy,
-            callHierarchy: callHierarchy
+            callHierarchy: callHierarchy,
+            symbolReference: symbolReference
         )
     }
 

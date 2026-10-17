@@ -24,39 +24,41 @@ public struct JavacInvocation: Sendable {
 /// producing usable output and without running annotation processors -- except Lombok, which the
 /// project's own classpath ships and which would otherwise turn every generated getter into a
 /// false error.
+/// The project's classpath truth for one file, shared by the cold CLI `javac` invocation and
+/// the warm analysis-server module: same jars, same source path, same language level.
+public struct JavacResolvedSettings: Sendable, Equatable {
+    /// Stable server module id (`"plain"`, or the Gradle subproject plus source-set name).
+    public let moduleId: String
+    public let classpath: [URL]
+    public let sourcepath: [URL]
+    public let processorJars: [URL]
+    public let languageLevel: Int?
+    public let packageName: String?
+
+    public init(moduleId: String, classpath: [URL], sourcepath: [URL], processorJars: [URL], languageLevel: Int?, packageName: String?) {
+        self.moduleId = moduleId
+        self.classpath = classpath
+        self.sourcepath = sourcepath
+        self.processorJars = processorJars
+        self.languageLevel = languageLevel
+        self.packageName = packageName
+    }
+}
+
 public enum JavacInvocationBuilder {
-    /// - Returns: `nil` when the file can't be checked meaningfully: the JDK has no `javac`, or a
-    ///   Gradle file lies outside every source set (so compiling it would only produce noise).
-    public static func build(
-        file: URL,
-        text: String,
-        kind: JavacProjectKind,
-        jdk: JDKInstallation,
-        workDirectory: URL
-    ) -> JavacInvocation? {
-        guard let javac = jdk.javac else { return nil }
-
+    /// - Returns: `nil` when the file can't be checked meaningfully: a Gradle file outside every
+    ///   source set (compiling it would only produce noise).
+    public static func resolve(file: URL, text: String, kind: JavacProjectKind) -> JavacResolvedSettings? {
         let packageName = packageDeclaration(in: text)
-        let packagePath = packageName?.replacingOccurrences(of: ".", with: "/") ?? ""
-        let bufferFile = workDirectory
-            .appendingPathComponent("src", isDirectory: true)
-            .appendingPathComponent(packagePath, isDirectory: true)
-            .appendingPathComponent(file.lastPathComponent)
-
-        var classpath: [URL] = []
-        var sourcepath: [URL] = []
-        var processorJars: [URL] = []
-        var languageLevel: Int?
-
         switch kind {
         case .plainFolder:
-            sourcepath = [sourceRoot(for: file, packageName: packageName)]
+            return JavacResolvedSettings(
+                moduleId: "plain", classpath: [], sourcepath: [sourceRoot(for: file, packageName: packageName)],
+                processorJars: [], languageLevel: nil, packageName: packageName
+            )
         case .gradle(let model):
             guard let match = model.sourceSet(containing: file) else { return nil }
-            classpath = match.sourceSet.compileClasspathJars
-            languageLevel = match.subproject.languageLevel
-            sourcepath = match.sourceSet.sourceDirs + match.sourceSet.generatedSourceDirs
-            processorJars = match.sourceSet.annotationProcessorJars
+            var sourcepath = match.sourceSet.sourceDirs + match.sourceSet.generatedSourceDirs
             // Test (and other) source sets see their module's main classes.
             if match.sourceSet.name != "main",
                let main = match.subproject.sourceSets.first(where: { $0.name == "main" }) {
@@ -68,7 +70,56 @@ public enum JavacInvocationBuilder {
                     ?? target.sourceSets.first { $0.name == "main" }
                 if let set { sourcepath += set.sourceDirs + set.generatedSourceDirs }
             }
+            return JavacResolvedSettings(
+                moduleId: "\(match.subproject.path):\(match.sourceSet.name)",
+                classpath: match.sourceSet.compileClasspathJars, sourcepath: sourcepath,
+                processorJars: match.sourceSet.annotationProcessorJars,
+                languageLevel: match.subproject.languageLevel, packageName: packageName
+            )
         }
+    }
+
+    /// The analysis-server module for a file: the resolved jars and dirs, `--release` capped at
+    /// the JDK like the CLI path, and Lombok as the only processor path (else `-proc:none`).
+    /// `nil` under the same conditions as ``build(file:text:kind:jdk:workDirectory:)``.
+    public static func serverModule(file: URL, text: String, kind: JavacProjectKind, jdk: JDKInstallation) -> JavaAnalysisServerModule? {
+        guard let settings = resolve(file: file, text: text, kind: kind) else { return nil }
+        let classpath = unique(settings.classpath)
+        let processorPath: [URL]
+        if case .gradle = kind, let lombok = settings.processorJars.first(where: isLombok) ?? classpath.first(where: isLombok) {
+            processorPath = [lombok]
+        } else {
+            processorPath = []
+        }
+        return JavaAnalysisServerModule(
+            moduleId: settings.moduleId, classpath: classpath, sourcepath: unique(settings.sourcepath),
+            release: release(languageLevel: settings.languageLevel, jdkFeatureVersion: jdk.featureVersion),
+            processorPath: processorPath
+        )
+    }
+
+    /// - Returns: `nil` when the file can't be checked meaningfully: the JDK has no `javac`, or a
+    ///   Gradle file lies outside every source set (so compiling it would only produce noise).
+    public static func build(
+        file: URL,
+        text: String,
+        kind: JavacProjectKind,
+        jdk: JDKInstallation,
+        workDirectory: URL
+    ) -> JavacInvocation? {
+        guard let javac = jdk.javac else { return nil }
+        guard let settings = resolve(file: file, text: text, kind: kind) else { return nil }
+
+        let packagePath = settings.packageName?.replacingOccurrences(of: ".", with: "/") ?? ""
+        let bufferFile = workDirectory
+            .appendingPathComponent("src", isDirectory: true)
+            .appendingPathComponent(packagePath, isDirectory: true)
+            .appendingPathComponent(file.lastPathComponent)
+
+        let languageLevel = settings.languageLevel
+        let classpath = settings.classpath
+        let sourcepath = settings.sourcepath
+        let processorJars = settings.processorJars
 
         var arguments = [
             // Compiler messages are localized; the parser reads the English ones.

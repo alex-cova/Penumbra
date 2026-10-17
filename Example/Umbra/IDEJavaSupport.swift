@@ -10,9 +10,9 @@ import Observation
 /// `IDEWorkspace` drives it (connect on bootstrap, retarget through the language registry's
 /// `projectDidChange`).
 ///
-/// The Gradle project model is not here: `IDEGradleProjectSystem` syncs it and hands every model it
-/// produces to this class (`IDEGradleModelConsumer`), which indexes it. The JDK choice is
-/// `IDEJDKSelection`, shared with the Gradle system.
+/// The Java build model is not here: `IDEGradleProjectSystem` or `IDEMavenProjectSystem` produces it
+/// and hands every model to this class (`IDEJavaModelConsumer`), which indexes it. Gradle wins when
+/// both markers are present. The JDK choice is `IDEJDKSelection`, shared with both.
 ///
 /// Indexing runs in three independent, recombined pieces so opening/closing a project folder never
 /// has to touch the (potentially large, slow-to-rebuild) JDK shard: the JDK is indexed once at
@@ -67,8 +67,37 @@ final class IDEJavaSupport {
     /// Which JDK the project uses (its own choice, the default, or Automatic) and the list to choose
     /// from. Everything that needs a JDK asks it.
     let jdk: IDEJDKSelection
-    /// The Gradle project whose model this indexes.
+    /// The Gradle project whose model this indexes. When it is active, it wins over Maven.
     let gradle: IDEGradleProjectSystem
+    /// The Maven project whose model this indexes when the folder is not a Gradle project.
+    let maven: IDEMavenProjectSystem
+
+    /// The Java build that owns the open folder: Gradle when it is one, otherwise Maven.
+    var buildSystem: (any IDEProjectSystem)? {
+        if gradle.isActive { return gradle }
+        if maven.isActive { return maven }
+        return nil
+    }
+
+    /// The model indexing, completion and `javac` read. Gradle's own model when Gradle is active,
+    /// otherwise Maven's projection of the same shape.
+    var projectModel: JavaGradleProjectModel? {
+        if gradle.isActive { return gradle.model }
+        if maven.isActive { return maven.model?.javaProjectModel }
+        return nil
+    }
+
+    var isJavaBuildActive: Bool { gradle.isActive || maven.isActive }
+
+    /// A model is about to replace the whole-tree index, so that index can wait.
+    var isLoadingJavaModel: Bool { gradle.isLoadingCachedModel || maven.isLoadingModel }
+
+    /// A synced Gradle or Maven model has already replaced the whole-tree readers.
+    var hasSyncedJavaModel: Bool {
+        if case .synced = gradle.syncState { return true }
+        if case .synced = maven.syncState { return true }
+        return false
+    }
 
     private let status: IDEProjectStatus
     private let paths = JavaIndexPaths.default()
@@ -132,16 +161,21 @@ final class IDEJavaSupport {
     init(
         jdk: IDEJDKSelection,
         gradle: IDEGradleProjectSystem,
+        maven: IDEMavenProjectSystem,
         status: IDEProjectStatus,
         shardHub: JavaSharedShardHub = IDESharedServices.shared.shards
     ) {
         self.shardHub = shardHub
         self.jdk = jdk
         self.gradle = gradle
+        self.maven = maven
         self.status = status
         let sharedParseCache = JavaDocumentParseCache()
         overlayService = JavaOverlayService(index: javaIndex, parseCache: sharedParseCache)
-        completionProvider = JavaCompletionProvider(index: javaIndex)
+        let completionProvider = JavaCompletionProvider(index: javaIndex)
+        self.completionProvider = completionProvider
+        let initialPostfix = IDEPreferences.shared.javaPostfix
+        Task { await completionProvider.setPostfixConfiguration(initialPostfix) }
         navigationProvider = JavaGoToDefinitionProvider(index: javaIndex, indexPaths: paths)
         findUsagesProvider = JavaFindUsagesProvider(index: javaIndex, indexPaths: paths, nameIndex: nameIndex)
         codeActionProvider = JavaCodeActionProvider(index: javaIndex)
@@ -161,7 +195,12 @@ final class IDEJavaSupport {
         renameProvider = JavaRenameProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
         refactoringProvider = JavaRefactoringProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
         gradle.consumer = self
-        jdk.languageLevel = { [weak gradle] in gradle?.model?.maxLanguageLevel }
+        maven.consumer = self
+        maven.onNeedsWholeTreeIndex = { [weak self] in
+            guard let self, let root = self.projectRootURL else { return }
+            self.indexWholeTree(at: root, generation: self.projectGeneration)
+        }
+        jdk.languageLevel = { [weak self] in self?.projectModel?.maxLanguageLevel }
         jdk.onSelectionChanged = { [weak self] in self?.jdkSelectionChanged() }
         Task { [weak self] in await self?.installCompilerResultHandler() }
         Task { [weak self] in await self?.installInspectionResultHandler() }
@@ -195,7 +234,8 @@ final class IDEJavaSupport {
                 lineMarkers: lineMarkerProvider,
                 structure: structureProvider,
                 typeHierarchy: hierarchyProvider,
-                callHierarchy: callHierarchyProvider
+                callHierarchy: callHierarchyProvider,
+                symbolReference: JavaSymbolReferenceProvider(index: javaIndex)
             ),
             support: self
         )
@@ -245,8 +285,8 @@ final class IDEJavaSupport {
 
     /// Applies the code-insight settings the Java services own: which inspection profile applies
     /// (with the project root and test source directories its per-scope exceptions are judged
-    /// against), the `javac` idle wait, and what a Suppress quick fix writes. Inspections run
-    /// on every refreshed document with no extra wait: the adapter's content debounce
+    /// against), the `javac` idle wait, and what a Suppress quick fix writes. Inspections
+    /// run on every refreshed document with no extra wait: the adapter's content debounce
     /// (`autoreparseDelay`, applied to `contentRefreshDebounce` by the workspace) is the only
     /// Autoreparse Delay. The cold CLI `javac` keeps `autoreparseDelay` as its wait because a
     /// cold compile costs seconds.
@@ -255,16 +295,21 @@ final class IDEJavaSupport {
         suppressionStyle: JavaSuppressionStyle,
         inspectionProfile: JavaInspectionProfile,
         projectRoot: URL?,
-        testRoots: [URL]
+        testRoots: [URL],
+        importPolicy: JavaImportPolicy,
+        postfix: JavaPostfixConfiguration
     ) {
         let configuration = InspectionConfiguration(profile: inspectionProfile, projectRoot: projectRoot, testRoots: testRoots)
         let previous = appliedInspectionConfiguration
         appliedInspectionConfiguration = configuration
         let changed = previous != configuration
-        Task { [inspectionService, compilerDiagnostics, codeActionProvider] in
+        Task { [inspectionService, compilerDiagnostics, codeActionProvider, completionProvider] in
             await inspectionService.setIdleDelay(.zero)
             await compilerDiagnostics.setIdleDelay(autoreparseDelay)
             await codeActionProvider.setSuppressionStyle(suppressionStyle)
+            await codeActionProvider.setImportPolicy(importPolicy)
+            await completionProvider.setImportPolicy(importPolicy)
+            await completionProvider.setPostfixConfiguration(postfix)
             await codeActionProvider.setQuietFindingsSource { url in await inspectionService.quietFindings(for: url) }
             guard changed else { return }
             await inspectionService.setProfile(inspectionProfile, projectRoot: projectRoot, testRoots: testRoots)
@@ -273,10 +318,32 @@ final class IDEJavaSupport {
         }
     }
 
+    /// Import edits for unresolved types in `source`. `caretUTF16` skips the name the caret is still in.
+    func importEdits(in source: String, caretUTF16: Int?, file: URL?, policy: JavaImportPolicy) async -> [TextEdit] {
+        await withImportScope(for: file) {
+            await JavaAutoImport.edits(in: source, index: self.javaIndex, policy: policy, caretUTF16: caretUTF16)
+        }
+    }
+
+    /// Import edits for unresolved types that occur in `pasted`, and only those.
+    func importEdits(forPastedText pasted: String, in source: String, file: URL?, policy: JavaImportPolicy) async -> [TextEdit] {
+        await withImportScope(for: file) {
+            await JavaAutoImport.edits(forPastedText: pasted, in: source, index: self.javaIndex, policy: policy)
+        }
+    }
+
+    private func withImportScope<T: Sendable>(for file: URL?, _ body: () async -> T) async -> T {
+        guard let file, let model = projectModel else { return await body() }
+        let scope = model.visibleShardPaths(forFile: file, paths: paths)
+        return await JavaIndex.$queryScope.withValue(scope) {
+            await body()
+        }
+    }
+
     /// Reads the project's language levels and the JDK's feature version again (a sync finished or
     /// the JDK changed) and tells the inspections; open files are analysed again when it changed.
     func refreshInspectionLanguageLevel() {
-        let model = gradle.model
+        let model = projectModel
         Task { [weak self] in
             guard let self else { return }
             let fallback = await self.jdk.resolve(minimumFeatureVersion: nil)?.installation.featureVersion
@@ -295,7 +362,7 @@ final class IDEJavaSupport {
     /// A batch runner (Inspect Code, Run Inspection by Name, the commit check) over this window's
     /// index, with each file seeing the shards of its Gradle source set.
     func makeBatchInspector() -> JavaBatchInspector {
-        let model = gradle.model
+        let model = projectModel
         let paths = paths
         return JavaBatchInspector(
             index: javaIndex, usageProvider: findUsagesProvider,
@@ -325,12 +392,25 @@ final class IDEJavaSupport {
         compilerConfigurationTask?.cancel()
         let generation = projectGeneration
         let root = projectRootURL
-        let model = gradle.model
-        let waitingOnGradle = gradle.isActive && model == nil
+        let model = projectModel
+        let waitingOnGradle = isJavaBuildActive && model == nil
         let enabled = IDEPreferences.shared.javaCompilerDiagnostics
-        compilerConfigurationTask = Task { [compilerDiagnostics] in
+        compilerConfigurationTask = Task { [compilerDiagnostics, self] in
+            // Every open Java buffer shadows the disk in a server check; the checked file itself
+            // is never duplicated into the overlays. Same file in two panes is one overlay.
+            // The provider outlives this task, so it holds the window weakly.
+            await compilerDiagnostics.setOpenBufferProvider { [weak self] in
+                await MainActor.run {
+                    guard let documents = self?.openJavaDocuments?() else { return [:] }
+                    return Dictionary(documents.compactMap { document in
+                        guard let url = document.url, document.languageIdentifier == "java" else { return nil }
+                        return (url, document.text)
+                    }, uniquingKeysWith: { first, _ in first })
+                }
+            }
             guard enabled, !waitingOnGradle else {
                 await compilerDiagnostics.configure(nil)
+                await compilerDiagnostics.setServerBackend(nil)
                 guard isCurrent(generation), !Task.isCancelled else { return }
                 onCompilerConfigured?()
                 return
@@ -339,6 +419,7 @@ final class IDEJavaSupport {
             guard isCurrent(generation), !Task.isCancelled else { return }
             guard let jdk, jdk.javac != nil else {
                 await compilerDiagnostics.configure(nil)
+                await compilerDiagnostics.setServerBackend(nil)
                 return
             }
             await compilerDiagnostics.configure(.init(
@@ -347,9 +428,27 @@ final class IDEJavaSupport {
                 projectRoot: root ?? FileManager.default.temporaryDirectory,
                 workDirectory: Self.compilerWorkDirectory
             ))
+            // The warm path, when the project JDK can run the server (class version 61): one
+            // server per JDK home, shared across windows. Older JDKs stay on the cold CLI.
+            if jdk.featureVersion >= 17, let jar = Self.analysisServerJarURL() {
+                let client = await JavaAnalysisServerHub.shared.client(jarURL: jar, javaHome: jdk.home)
+                await compilerDiagnostics.setServerBackend(.init(client: client))
+            } else {
+                await compilerDiagnostics.setServerBackend(nil)
+            }
             guard isCurrent(generation), !Task.isCancelled else { return }
             onCompilerConfigured?()
         }
+    }
+
+    /// The bundled `java-analysis-server.jar`, falling back to the repo-built one in development.
+    static func analysisServerJarURL() -> URL? {
+        let bundled = Bundle.main.url(forResource: "java-analysis-server", withExtension: "jar")
+        if let bundled, FileManager.default.fileExists(atPath: bundled.path) { return bundled }
+        let dev = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Tools/JavaAnalysisServer/build/java-analysis-server.jar")
+        return FileManager.default.fileExists(atPath: dev.path) ? dev : nil
     }
 
     /// The window's open Java documents, read when a save asks for a fresh compile. The closure
@@ -416,7 +515,7 @@ final class IDEJavaSupport {
             return
         }
 
-        guard gradle.isActive else {
+        guard isJavaBuildActive else {
             indexWholeTree(at: url, generation: generation)
             if hadJars {
                 Task { await publishSources() }
@@ -426,12 +525,17 @@ final class IDEJavaSupport {
         }
 
         // Off until a sync produces a model: a failed or declined sync must not flood files with
-        // false "cannot find symbol" errors.
+        // false "cannot find symbol" errors. Maven's read is free and arrives within moments, so
+        // the whole tree waits for it; a read that never produces a model indexes the tree then.
         refreshCompilerDiagnostics()
         if hadJars {
             Task { await publishSources() }
         }
-        if !gradle.isLoadingCachedModel {
+        if gradle.isActive {
+            if !gradle.isLoadingCachedModel {
+                indexWholeTree(at: url, generation: generation)
+            }
+        } else if !maven.isLoadingModel && maven.model == nil {
             indexWholeTree(at: url, generation: generation)
         }
     }
@@ -533,8 +637,7 @@ final class IDEJavaSupport {
                 guard isCurrent(generation) else { break }
                 let refreshed = Set(targets.map(\.shardURL.path))
                 let wholeTreeShard = projectRootURL.map { paths.projectSourcesShard(for: $0).path }
-                var isSynced = false
-                if case .synced = gradle.syncState { isSynced = true }
+                let isSynced = hasSyncedJavaModel
                 projectSources = projectSources.map { source in
                     let shardPath = source.shardPath.isEmpty && !isSynced ? wholeTreeShard : source.shardPath
                     guard let shardPath, refreshed.contains(shardPath),
@@ -560,7 +663,7 @@ final class IDEJavaSupport {
             for await _ in await scheduler.index([(root: root, shardURL: shardURL)]) {}
             guard isCurrent(generation) else { return }
             // A finished Gradle sync has already replaced these readers with per-module sources.
-            if case .synced = gradle.syncState {
+            if hasSyncedJavaModel {
                 status.clear(Self.indexingSourcesMessage)
                 return
             }
@@ -650,7 +753,7 @@ final class IDEJavaSupport {
     ) async {
         let totalTargets = targets.count
         if logToConsole {
-            gradle.appendConsoleNote("Indexing \(model.classpathJars.count) dependencies…")
+            appendBuildNote("Indexing \(model.classpathJars.count) dependencies…")
         }
         var completedTargets = 0
         // A dependency-heavy project reports two events per JAR, sometimes hundreds a second.
@@ -660,7 +763,7 @@ final class IDEJavaSupport {
         var pendingStatus: String?
         var lastFlush = ContinuousClock.now
         func flush() {
-            gradle.appendConsoleNotes(pendingNotes)
+            appendBuildNotes(pendingNotes)
             pendingNotes.removeAll(keepingCapacity: true)
             if let message = pendingStatus {
                 status.message = message
@@ -746,7 +849,7 @@ final class IDEJavaSupport {
     /// model's generated directories. A root's stamp is its directory's own mtime, which misses
     /// nested changes, so the generated shards are dropped and rebuilt.
     func reindexGeneratedSources() {
-        guard let model = gradle.model else { return }
+        guard let model = projectModel else { return }
         let generation = projectGeneration
         Task { [paths, scheduler] in
             let all = model.sourceIndexTargets(paths: paths)
@@ -789,7 +892,7 @@ final class IDEJavaSupport {
     /// different JDK.
     private func jdkSelectionChanged() {
         let generation = projectGeneration
-        let level = gradle.model?.maxLanguageLevel
+        let level = projectModel?.maxLanguageLevel
         Task {
             await jdk.refreshCurrent()
             guard isCurrent(generation) else { return }
@@ -797,7 +900,18 @@ final class IDEJavaSupport {
             guard isCurrent(generation) else { return }
             refreshCompilerDiagnostics()
             await gradle.jdkSelectionChanged()
+            await maven.jdkSelectionChanged()
         }
+    }
+
+    private func appendBuildNote(_ text: String) {
+        if gradle.isActive { gradle.appendConsoleNote(text) }
+        else if maven.isActive { maven.appendConsoleNote(text) }
+    }
+
+    private func appendBuildNotes(_ notes: [String]) {
+        if gradle.isActive { gradle.appendConsoleNotes(notes) }
+        else if maven.isActive { maven.appendConsoleNotes(notes) }
     }
 
     private func indexJDK(minimumFeatureVersion: Int?) {
@@ -806,7 +920,7 @@ final class IDEJavaSupport {
         // Only when JDK indexing is triggered mid-sync (a Gradle project's language level needing a
         // different installation than the one already indexed) is it meaningful to narrate into
         // *this* sync's console; the independent bootstrap-time index has no sync to narrate into.
-        let noteToConsole = gradle.syncState.isSyncing
+        let noteToConsole = gradle.syncState.isSyncing || maven.syncState.isSyncing
         jdkIndexingTask = Task { [paths, shardHub] in
             // Resolving does synchronous filesystem/process work (java_home -X, walking
             // ~/Library/Java/JavaVirtualMachines); `IDEJDKSelection` hops it off the main actor so
@@ -825,7 +939,7 @@ final class IDEJavaSupport {
                 status.set(message)
             }
             if noteToConsole {
-                gradle.appendConsoleNote(message)
+                appendBuildNote(message)
             }
             // Shared with every other window: one indexing run and one parsed shard per JDK. Only
             // the window that starts the run hears its progress.
@@ -833,11 +947,11 @@ final class IDEJavaSupport {
                 guard let self, noteToConsole, !Task.isCancelled else { return }
                 switch progress {
                 case .rootFinished(let id, let classCount):
-                    gradle.appendConsoleNote("Indexed \(Self.shortRootName(id)) (\(classCount) classes)")
+                    self.appendBuildNote("Indexed \(Self.shortRootName(id)) (\(classCount) classes)")
                 case .rootSkipped(let id, let reason):
-                    gradle.appendConsoleNote("Skipped \(Self.shortRootName(id)) (\(reason))")
+                    self.appendBuildNote("Skipped \(Self.shortRootName(id)) (\(reason))")
                 case .rootFailed(let id, let failureMessage):
-                    gradle.appendConsoleNote("Failed to index \(Self.shortRootName(id)): \(failureMessage)")
+                    self.appendBuildNote("Failed to index \(Self.shortRootName(id)): \(failureMessage)")
                 case .rootStarted, .allFinished:
                     break
                 }
@@ -899,23 +1013,27 @@ final class IDEJavaSupport {
 
 // MARK: - Gradle model consumer
 
-extension IDEJavaSupport: IDEGradleModelConsumer {
-    func gradleModelDidChange(_ model: JavaGradleProjectModel?) {
-        Task { [renameProvider, refactoringProvider] in
-            await renameProvider.setGradleModel(model)
-            await refactoringProvider.setGradleModel(model)
+extension IDEJavaSupport: IDEJavaModelConsumer {
+    func javaModelDidChange(_: JavaGradleProjectModel?) {
+        // The active build's model, not the argument: a Maven clear while Gradle owns the folder
+        // must not wipe Gradle's model.
+        let published = projectModel
+        Task { [renameProvider, refactoringProvider, testIndex] in
+            await renameProvider.setGradleModel(published)
+            await refactoringProvider.setGradleModel(published)
+            await testIndex.setGradleModel(published)
         }
     }
 
-    func gradleModelApplied(_ model: JavaGradleProjectModel, previous: JavaGradleProjectModel?, logToConsole: Bool) async {
+    func javaModelApplied(_ model: JavaGradleProjectModel, previous: JavaGradleProjectModel?, logToConsole: Bool) async {
         await applyGradleModel(model, previousModel: previous, generation: projectGeneration, logToConsole: logToConsole)
     }
 
-    func gradleModelRemoved() {
+    func javaModelRemoved() {
         clearSourceSetClasspath()
     }
 
-    func gradleTasksSucceeded() {
+    func buildSucceeded() {
         reindexGeneratedSources()
     }
 }

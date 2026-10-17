@@ -323,10 +323,22 @@ enum JavaExtractExpression {
             text: source, bytes: tree.sourceBytes, tree: tree, fileStubs: fileStubs
         )
         guard case .addImport(let edit) = inserter.decision(for: stub) else { return nil }
-        let byteRange = JavaNavigationText.utf8ByteOffset(forUTF16Offset: edit.range.start.utf16Offset, in: source)
-            ..< JavaNavigationText.utf8ByteOffset(forUTF16Offset: edit.range.end.utf16Offset, in: source)
+        let startUTF16 = edit.range.start.utf16Offset
+        let endUTF16 = edit.range.end.utf16Offset
+        let byteRange = JavaNavigationText.utf8ByteOffset(forUTF16Offset: startUTF16, in: source)
+            ..< JavaNavigationText.utf8ByteOffset(forUTF16Offset: endUTF16, in: source)
+        // A star collapse replaces existing import lines. The preview checks this text against them.
+        let oldText: String
+        if startUTF16 == endUTF16 {
+            oldText = ""
+        } else {
+            let ns = source as NSString
+            let start = min(max(0, startUTF16), ns.length)
+            let end = min(max(start, endUTF16), ns.length)
+            oldText = ns.substring(with: NSRange(location: start, length: end - start))
+        }
         return JavaRefactoringText.planEntry(
-            url: url, byteRange: byteRange, oldText: "", newText: edit.replacement, source: source,
+            url: url, byteRange: byteRange, oldText: oldText, newText: edit.replacement, source: source,
             description: "Add import"
         )
     }

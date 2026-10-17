@@ -200,6 +200,15 @@ final class TextInputView: EditorView {
             }
         }
     }
+    /// The inline completion ghost, kept apart from the provider hints so setting or
+    /// clearing it re-typesets only the caret's line.
+    var inlineCompletion: InlineCompletionPresentation? {
+        didSet {
+            if inlineCompletion != oldValue {
+                inlayHintsDidChange()
+            }
+        }
+    }
 
     /// The caret sits at an inlay hint's offset but is drawn in front of the hint's chip instead of
     /// after it. Plain ←/→ step over a chip in two moves (before it, then after it) without changing
@@ -258,7 +267,21 @@ final class TextInputView: EditorView {
     }
 
     private func inlayHintsDidChange() {
-        layoutManager.inlayHints = InlayHintIndex.normalized(supplementaryInlayHints.isEmpty ? inlayHints : inlayHints + supplementaryInlayHints)
+        var merged = InlayHintIndex.normalized(supplementaryInlayHints.isEmpty ? inlayHints : inlayHints + supplementaryInlayHints)
+        if let inlineCompletion, !inlineCompletion.firstLine.isEmpty {
+            let hint = InlayHint(utf16Offset: inlineCompletion.utf16Offset, label: inlineCompletion.firstLine, kind: .inlineCompletion)
+            let index = merged.firstIndex { $0.utf16Offset > hint.utf16Offset } ?? merged.endIndex
+            merged.insert(hint, at: index)
+        }
+        layoutManager.inlayHints = merged
+        // Reserve room under the caret's row for the ghost's extra lines (multi-line
+        // suggestions); only that row ever gets it, and clearing restores the layout.
+        if let inlineCompletion, !inlineCompletion.extraLines.isEmpty,
+           let row = lineManager.row(containingCharacterAt: inlineCompletion.utf16Offset) {
+            layoutManager.setInlineCompletionInset(row: row, extraLineCount: inlineCompletion.extraLines.count)
+        } else {
+            layoutManager.setInlineCompletionInset(row: nil, extraLineCount: 0)
+        }
         layoutManager.setNeedsLayout()
         setNeedsLayout()
     }
@@ -4102,38 +4125,56 @@ extension TextInputView {
 
 // MARK: - Complete Current Statement
 extension TextInputView {
-    /// IntelliJ's Complete Current Statement (⇧⌘⏎). Each caret's line is finished by
+    /// IntelliJ's Complete Current Statement (⇧⌘⏎). Each caret's statement is finished by
     /// ``StatementCompletionService`` (brackets closed, `;` or a `{}` body added), then a line
     /// break is inserted the way Enter would, so a `{|}` body is split and indented. One undo step.
-    func completeStatement() {
+    ///
+    /// `preservingCaretInsideParens` is the popup path: the completion was just accepted with the
+    /// caret already between a method's parentheses, so `;` is appended and the caret stays there.
+    func completeStatement(preservingCaretInsideParens: Bool = false) {
         guard let behavior = languageMode.enterBehavior, behavior.cStyleIndent else {
-            startNewLine()
+            if !preservingCaretInsideParens {
+                startNewLine()
+            }
             return
         }
         let originalSelections = selectedRanges
         guard !originalSelections.isEmpty else {
             return
         }
+        var caretByRow: [Int: Int] = [:]
         var rows = Set<Int>()
         for range in originalSelections {
-            rows.insert(lineManager.row(containingCharacterAt: range.upperBound) ?? max(lineManager.lineCount - 1, 0))
+            let row = lineManager.row(containingCharacterAt: range.upperBound) ?? max(lineManager.lineCount - 1, 0)
+            rows.insert(row)
+            if caretByRow[row] == nil {
+                caretByRow[row] = range.upperBound
+            }
         }
         struct Job {
             let location: Int
             let text: String
-            let caretInside: Int?
+            /// Offset from `location`. Nil puts the caret at the end of the line.
+            let caretFromInsertion: Int?
+            /// Offset from `location` where the line break goes, when that isn't the caret.
+            let lineBreakFromInsertion: Int?
             let lineEnd: Int
+            let originalCaret: Int
         }
         var jobs: [Job] = []
         for row in rows.sorted() {
             let line = lineManager.lineInfo(atRow: row)
             let content = stringView.substring(in: NSRange(location: line.location, length: line.length)) ?? ""
+            let preceding = precedingStatementLines(before: row, caretLine: content)
             let completion = StatementCompletionService.complete(line: content,
+                                                                 precedingLines: preceding,
                                                                  extraControlKeywords: behavior.controlKeywords)
             jobs.append(Job(location: line.location + (completion?.insertionOffset ?? line.length),
                             text: completion?.appended ?? "",
-                            caretInside: completion?.caretOffsetInAppended,
-                            lineEnd: line.location + line.length))
+                            caretFromInsertion: completion?.caretOffsetInAppended,
+                            lineBreakFromInsertion: completion?.lineBreakOffsetInAppended,
+                            lineEnd: line.location + line.length,
+                            originalCaret: caretByRow[row] ?? line.location))
         }
         let edits = jobs.filter { !$0.text.isEmpty }
         guard edits.allSatisfy({ shouldChangeText(in: NSRange(location: $0.location, length: 0), replacementText: $0.text) }) else {
@@ -4150,20 +4191,83 @@ extension TextInputView {
                         undoActionName: "Complete Statement",
                         updateSelection: false)
         }
-        var carets: [NSRange] = []
+        if preservingCaretInsideParens {
+            var carets: [NSRange] = []
+            var shift = 0
+            for job in jobs {
+                let appended = (job.text as NSString).length
+                let movedByThisLine = job.location <= job.originalCaret ? appended : 0
+                carets.append(NSRange(location: job.originalCaret + shift + movedByThisLine, length: 0))
+                shift += appended
+            }
+            applySelectedRanges(carets, notifyDelegate: false)
+            if let primary = selection {
+                selectionAnchor = primary.location
+            }
+            timedUndoManager.endUndoGrouping()
+            return
+        }
+        var placed: [(caret: Int, lineBreak: Int, separates: Bool)] = []
         var shift = 0
         for job in jobs {
             let appended = (job.text as NSString).length
-            let location = job.caretInside.map { job.location + shift + $0 } ?? job.lineEnd + shift + appended
-            carets.append(NSRange(location: location, length: 0))
+            let caret = job.caretFromInsertion.map { max(0, job.location + shift + $0) } ?? job.lineEnd + shift + appended
+            let lineBreak = job.lineBreakFromInsertion.map { max(0, job.location + shift + $0) } ?? caret
+            placed.append((caret, lineBreak, lineBreak != caret))
             shift += appended
         }
-        applySelectedRanges(carets, notifyDelegate: false)
+        if placed.allSatisfy({ !$0.separates }) {
+            applySelectedRanges(placed.map { NSRange(location: $0.caret, length: 0) }, notifyDelegate: false)
+            if let primary = selection {
+                selectionAnchor = primary.location
+            }
+            insertText(lineEndings.symbol)
+            timedUndoManager.endUndoGrouping()
+            return
+        }
+        // The caret stays in an empty `()` while the `{}` still splits on its own line break.
+        var delta = 0
+        var finalCarets: [NSRange] = []
+        for item in placed {
+            let breakAt = item.lineBreak + delta
+            let caretAt = item.caret + delta
+            let lengthBefore = stringView.length
+            selection = NSRange(location: breakAt, length: 0)
+            insertText(lineEndings.symbol)
+            if item.separates {
+                finalCarets.append(NSRange(location: caretAt, length: 0))
+            } else {
+                finalCarets.append(selection ?? NSRange(location: breakAt, length: 0))
+            }
+            delta += stringView.length - lengthBefore
+        }
+        applySelectedRanges(finalCarets, notifyDelegate: false)
         if let primary = selection {
             selectionAnchor = primary.location
         }
-        insertText(lineEndings.symbol)
         timedUndoManager.endUndoGrouping()
+    }
+
+    /// Lines above `row` that still belong to the caret line's statement, oldest first.
+    /// At most ``StatementCompletionService/maximumLookbehindLines`` lines, read by row, so a
+    /// keystroke never walks the document.
+    private func precedingStatementLines(before row: Int, caretLine: String) -> [String] {
+        var preceding: [String] = []
+        var fragment = caretLine
+        var current = row - 1
+        var looked = 0
+        while current >= 0, looked < StatementCompletionService.maximumLookbehindLines {
+            let info = lineManager.lineInfo(atRow: current)
+            let text = stringView.substring(in: NSRange(location: info.location, length: info.length)) ?? ""
+            guard StatementCompletionService.attaches(previousLine: text, toFragment: fragment) else {
+                break
+            }
+            preceding.insert(text, at: 0)
+            fragment = text + "\n" + fragment
+            current -= 1
+            looked += 1
+        }
+        return preceding
     }
 }
 

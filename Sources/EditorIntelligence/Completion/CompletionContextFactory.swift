@@ -7,7 +7,8 @@ import Foundation
 /// also includes `.`, so `$random.uuid` is one token. The returned `range` is the document range
 /// that should be replaced by the chosen completion.
 public func makeCompletionContext(
-    document: Document, trigger: RequestTrigger, invocationCount: Int = 1, mode: CompletionMode = .basic
+    document: Document, trigger: RequestTrigger, invocationCount: Int = 1, mode: CompletionMode = .basic,
+    filter: CompletionContext.Filter = .all, commandMode: CompletionContext.CommandMode? = nil
 ) -> CompletionContext {
     let cursor = document.cursor
     let offset = cursor.position.utf16Offset
@@ -28,7 +29,9 @@ public func makeCompletionContext(
         prefix: prefix,
         range: range,
         invocationCount: invocationCount,
-        mode: mode
+        mode: mode,
+        filter: filter,
+        commandMode: commandMode
     )
 }
 

@@ -25,7 +25,9 @@ final class IDEIntelligenceServices {
     let projectStatus = IDEProjectStatus()
     /// Gradle as a project system: syncs the model Java indexes, runs tasks, keeps the console.
     let gradle: IDEGradleProjectSystem
-    /// npm, registered after Gradle. A folder with both keeps Gradle first.
+    /// Maven, registered after Gradle. A folder with both keeps Gradle; reading a POM does not run Maven.
+    let maven: IDEMavenProjectSystem
+    /// npm, registered after Maven. A folder with Gradle or Maven keeps those first.
     let npm: IDENpmProjectSystem
     /// SwiftPM, registered after npm: a folder with a `gradlew` or a package.json keeps those first.
     let swiftPM: IDESwiftPMProjectSystem
@@ -56,7 +58,9 @@ final class IDEIntelligenceServices {
         let jdk = IDEJDKSelection()
         let gradle = IDEGradleProjectSystem(jdk: jdk, status: projectStatus)
         self.gradle = gradle
-        javaSupport = IDEJavaSupport(jdk: jdk, gradle: gradle, status: projectStatus)
+        let maven = IDEMavenProjectSystem(jdk: jdk, status: projectStatus)
+        self.maven = maven
+        javaSupport = IDEJavaSupport(jdk: jdk, gradle: gradle, maven: maven, status: projectStatus)
         typescriptSupport = IDETypeScriptSupport()
         swiftSupport = IDESwiftSupport()
         let npm = IDENpmProjectSystem(status: projectStatus)
@@ -65,7 +69,7 @@ final class IDEIntelligenceServices {
         self.swiftPM = swiftPM
         let xcode = IDEXcodeProjectSystem(status: projectStatus)
         self.xcode = xcode
-        projectSystems = IDEProjectSystems([gradle, npm, swiftPM, xcode])
+        projectSystems = IDEProjectSystems([gradle, maven, npm, swiftPM, xcode])
         let parser = IDEWorkbenchLanguageParser()
         indexingService = IndexingService(parser: parser, index: symbolIndex)
         let sourceKit = LSPLanguageService(
@@ -130,7 +134,12 @@ final class IDEIntelligenceServices {
         adapter: PenumbraWorkbenchEditorAdapter,
         workspace: Workspace
     ) -> EditorIntelligenceController {
-        let services = EditorIntelligenceServices(languages: languages, symbolIndex: symbolIndex, workspace: workspace)
+        let services = EditorIntelligenceServices(
+            languages: languages, symbolIndex: symbolIndex, workspace: workspace,
+            inlineCompletionEngine: InlineCompletionEngine(
+                model: IDEInlineCompletionService.shared, validator: javaSupport.completionProvider
+            )
+        )
         let controller = EditorIntelligenceController(
             textView: textView,
             adapter: adapter,

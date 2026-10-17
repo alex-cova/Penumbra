@@ -31,6 +31,18 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
 
     public nonisolated let name = "javac"
 
+    /// The warm-`javac` path: when set and a module resolves for the file, compiles go to the
+    /// analysis server (with every open buffer as an overlay) and the cold CLI `javac` stays as
+    /// the fallback. The client (and its process) is host-owned, typically shared per JDK home
+    /// through `JavaAnalysisServerHub`; the service never shuts it down.
+    public struct ServerBackend: Sendable {
+        public let client: JavaAnalysisServerClient
+
+        public init(client: JavaAnalysisServerClient) {
+            self.client = client
+        }
+    }
+
     private let launcher: GradleProcessLaunching
     /// How long a file rests before a recheck. The host sets it from the Autoreparse Delay
     /// (a cold `javac` costs seconds, so transient states don't start one); the content
@@ -41,6 +53,12 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
     private let maxConcurrentCompiles: Int
 
     private var configuration: Configuration?
+    private var serverBackend: ServerBackend?
+    private var openBufferProvider: (@Sendable () async -> [URL: String])?
+    /// Module ids the server already holds this configuration for: `configure` on the server
+    /// recreates its cached file manager, so it is only re-sent when the module changes. The
+    /// client itself replays these after a server restart.
+    private var serverConfiguredModules: [String: JavaAnalysisServerModule] = [:]
     /// Bumped by ``configure(_:)`` and ``reset()`` so a compile that outlives its project never
     /// stores or delivers anything.
     private var generation = 0
@@ -63,7 +81,7 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
 
     public init(
         launcher: GradleProcessLaunching = SystemGradleProcessLauncher(),
-        idleDelay: Duration = .milliseconds(600),
+        idleDelay: Duration = .milliseconds(250),
         timeout: Duration = .seconds(30),
         maxConcurrentCompiles: Int = 2
     ) {
@@ -93,6 +111,23 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         pending = [:]
         cache = [:]
         configuration = nil
+        serverConfiguredModules = [:]
+    }
+
+    /// Points compiles at the warm analysis server when one is available; `nil` (the default)
+    /// always uses the cold CLI `javac`. The server stays the preferred path and the CLI the
+    /// fallback: a failed server compile transparently recompiles through the CLI.
+    public func setServerBackend(_ backend: ServerBackend?) {
+        serverBackend = backend
+        serverConfiguredModules = [:]
+    }
+
+    /// Where the server backend reads the other open buffers from, so a check sees every
+    /// unsaved buffer instead of only the checked file. Async because hosts usually snapshot
+    /// open documents on the main actor; it is called once per server compile. The checked file
+    /// itself is passed as the check text and never duplicated into the overlays.
+    public func setOpenBufferProvider(_ provider: (@Sendable () async -> [URL: String])?) {
+        openBufferProvider = provider
     }
 
     public var isEnabled: Bool { configuration != nil }
@@ -118,13 +153,6 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         return (diagnostics, isFresh(document) ? [] : ["javac"])
     }
 
-    /// Whether the cached result is for exactly this text, hashed the same way the
-    /// compile is keyed.
-    public func isFresh(_ document: Document) -> Bool {
-        guard let url = compilableURL(for: document) else { return false }
-        return cache[url]?.textHash == document.text.hashValue
-    }
-
     /// Compiles now, skipping the idle wait -- for a save, or right after a sync -- unless the
     /// result for this exact text is already cached. `force` recompiles regardless: a file that
     /// didn't change can still break when a file it depends on does.
@@ -133,6 +161,13 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         let hash = document.text.hashValue
         if !force, let cached = cache[url], cached.textHash == hash { return }
         schedule(url: url, text: document.text, textHash: hash, delay: .zero, force: force)
+    }
+
+    /// Whether the cached result is for exactly this text. Only a fresh `javac` result may
+    /// suppress inspection findings in the merger: a stale error must never hide a current one.
+    public func isFresh(_ document: Document) -> Bool {
+        guard let url = compilableURL(for: document) else { return false }
+        return cache[url]?.textHash == document.text.hashValue
     }
 
     /// The compiler's result for exactly this text, awaited: the cached one when the text is
@@ -150,6 +185,11 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         }
         return await compile(url: url, text: document.text, textHash: hash, generation: generation)
     }
+
+    /// Whether a compile will run for this file: configured, Java, addressable, not elided.
+    /// Without this, `isFresh` can't tell "stale result" from "never compiles", and callers
+    /// would mark `javac` stale forever on files the compiler will never touch.
+    public func covers(_ document: Document) -> Bool { compilableURL(for: document) != nil }
 
     private func compilableURL(for document: Document) -> URL? {
         guard configuration != nil,
@@ -191,13 +231,17 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         defer { try? FileManager.default.removeItem(at: workDirectory) }
 
         var result: [Diagnostic]?
-        if let invocation = JavacInvocationBuilder.build(
-            file: url, text: text, kind: configuration.kind, jdk: configuration.jdk, workDirectory: workDirectory
-        ) {
-            result = await run(invocation, url: url, text: text, in: configuration)
+        if let backend = serverBackend,
+           let module = JavacInvocationBuilder.serverModule(
+               file: url, text: text, kind: configuration.kind, jdk: configuration.jdk
+           ) {
+            result = await runOnServer(backend, module: module, url: url, text: text)
+            if result == nil, !Task.isCancelled {
+                // The server failed this compile (or never ran): the cold CLI stays the fallback.
+                result = await runCLI(url: url, text: text, in: configuration, workDirectory: workDirectory)
+            }
         } else {
-            // Nothing meaningful to check (file outside every source set, JDK without javac).
-            result = []
+            result = await runCLI(url: url, text: text, in: configuration, workDirectory: workDirectory)
         }
 
         guard !Task.isCancelled, compileGeneration == generation else { return nil }
@@ -207,6 +251,53 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         cache[url] = CachedResult(textHash: textHash, diagnostics: result)
         resultHandler?(url, result)
         return result
+    }
+
+    /// The cold CLI path. A file that can't be checked meaningfully (outside every source set,
+    /// JDK without `javac`) answers `[]`; a failed run answers `nil`.
+    private func runCLI(url: URL, text: String, in configuration: Configuration, workDirectory: URL) async -> [Diagnostic]? {
+        guard let invocation = JavacInvocationBuilder.build(
+            file: url, text: text, kind: configuration.kind, jdk: configuration.jdk, workDirectory: workDirectory
+        ) else {
+            // Nothing meaningful to check (file outside every source set, JDK without javac).
+            return []
+        }
+        return await run(invocation, url: url, text: text, in: configuration)
+    }
+
+    /// The warm path: one `check` with every other open buffer as an overlay. `nil` when the
+    /// server failed (the caller falls back to the CLI) or the wait was superseded; `[]` is a
+    /// genuinely clean file. Only diagnostics about the checked file are kept: the rest belong
+    /// to the files they are about and are reported when those files compile.
+    private func runOnServer(
+        _ backend: ServerBackend, module: JavaAnalysisServerModule, url: URL, text: String
+    ) async -> [Diagnostic]? {
+        do {
+            if serverConfiguredModules[module.moduleId] != module {
+                try await backend.client.configure(module)
+                serverConfiguredModules[module.moduleId] = module
+            }
+            let checked = url.standardizedFileURL
+            let overlays = (await openBufferProvider?() ?? [:])
+                .filter { $0.key.standardizedFileURL != checked }
+                .map { JavaAnalysisServerOverlay(file: $0.key.standardizedFileURL, text: $0.value) }
+            let found = try await backend.client.check(moduleId: module.moduleId, file: checked, text: text, overlays: overlays)
+            let lines = LineTable(text)
+            return found.compactMap { diagnostic in
+                if let file = diagnostic.file, !Self.isSameFile(file, checked) { return nil }
+                if let mapped = diagnostic.diagnostic(in: text) { return mapped }
+                // A position-less error about this file pins to its top, like the CLI path.
+                guard diagnostic.severity == .error else { return nil }
+                let (start, end) = lines.range(line: 0, column: nil)
+                return Diagnostic(
+                    severity: .error, message: diagnostic.message,
+                    range: TextRange(start: lines.position(atOffset: start), end: lines.position(atOffset: end)),
+                    source: "javac", code: diagnostic.diagnosticCode
+                )
+            }
+        } catch {
+            return nil
+        }
     }
 
     /// `nil` when the run produced nothing usable (couldn't launch, timed out, killed): the last

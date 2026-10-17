@@ -76,7 +76,7 @@ final class LineController: @unchecked Sendable {
         if let lineHeight = _lineHeight {
             return lineHeight
         } else if typesetter.lineFragments.isEmpty {
-            let lineHeight = topInset + estimatedLineFragmentHeight * lineFragmentHeightMultiplier
+            let lineHeight = topInset + estimatedLineFragmentHeight * lineFragmentHeightMultiplier + bottomInset
             _lineHeight = lineHeight
             return lineHeight
         } else {
@@ -84,9 +84,18 @@ final class LineController: @unchecked Sendable {
             let remainingNumberOfLineFragments = typesetter.bestGuessNumberOfLineFragments - typesetter.lineFragments.count
             let lineFragmentHeight = estimatedLineFragmentHeight * lineFragmentHeightMultiplier
             let remainingLineFragmentHeight = CGFloat(remainingNumberOfLineFragments) * lineFragmentHeight
-            let lineHeight = topInset + knownLineFragmentHeight + remainingLineFragmentHeight
+            let lineHeight = topInset + knownLineFragmentHeight + remainingLineFragmentHeight + bottomInset
             _lineHeight = lineHeight
             return lineHeight
+        }
+    }
+    /// Room below the fragments, for an inline completion's extra lines drawn there. Only
+    /// one row ever has it (the caret's), and clearing it restores the layout.
+    var bottomInset: CGFloat = 0 {
+        didSet {
+            if bottomInset != oldValue {
+                _lineHeight = nil
+            }
         }
     }
     /// Room above the first line fragment, for a code vision lens drawn there. The line is that much
@@ -752,6 +761,8 @@ extension LineController {
             return CTLineGetOffsetForStringIndex(fragment.line, offset, nil)
         }
         let end = InlayChipGeometry.chipEnd(forLocalOffset: offset, in: fragment.line)
+        // The caret always sits in front of ghost text.
+        if hint.kind == .inlineCompletion { return end - hint.width }
         return beforeInlayHint ? end - hint.width : end
     }
 

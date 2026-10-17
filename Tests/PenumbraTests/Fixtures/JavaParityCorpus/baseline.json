@@ -1,0 +1,55 @@
+{
+  "jdkVersion" : 27,
+  "keys" : {
+    "compiler.err.cant.apply.symbol" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "compiler.err.cant.resolve.location" : {
+      "native" : 2,
+      "nativeMatched" : 2,
+      "oracle" : 6,
+      "oracleMatched" : 1
+    },
+    "compiler.err.cant.resolve.location.args" : {
+      "native" : 2,
+      "nativeMatched" : 2,
+      "oracle" : 1,
+      "oracleMatched" : 1
+    },
+    "compiler.err.missing.ret.stmt" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "compiler.err.prob.found.req" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 2,
+      "oracleMatched" : 0
+    },
+    "compiler.err.unreported.exception.need.to.catch.or.throw" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    }
+  },
+  "mutations" : [
+    "change-declared-type",
+    "drop-arg",
+    "drop-import",
+    "drop-return",
+    "drop-throws",
+    "enum-case",
+    "static-typo",
+    "swap-args",
+    "typo-member",
+    "typo-name",
+    "typo-type"
+  ],
+  "validFalsePositives" : 0
+}

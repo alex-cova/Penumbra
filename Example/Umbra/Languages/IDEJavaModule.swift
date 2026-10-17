@@ -41,6 +41,10 @@ struct IDEJavaModule: IDELanguageModule {
                           action: { [weak workspace] in workspace?.reloadProject() }),
             EditorCommand(id: "app.java.showGradleOutput", title: "Java: Show Gradle Output", group: "Java",
                           action: { [weak workspace] in workspace?.showGradleOutput() }),
+            EditorCommand(id: "app.java.reloadMavenProject", title: "Java: Reload Maven Project", group: "Java",
+                          action: { [weak workspace] in workspace?.maven.reload() }),
+            EditorCommand(id: "app.java.showMavenOutput", title: "Java: Show Maven Output", group: "Java",
+                          action: { [weak workspace] in workspace?.showMavenOutput() }),
             EditorCommand(id: "app.java.showClassDiagram", title: "Java: Show Class Diagram", group: "Java",
                           action: { [weak workspace] in workspace?.showClassDiagramForActiveFile() }),
             EditorCommand(id: "app.java.showPackageDiagram", title: "Java: Show Package Class Diagram", group: "Java",
@@ -50,7 +54,11 @@ struct IDEJavaModule: IDELanguageModule {
             EditorCommand(id: "app.java.showGradleModuleDiagram", title: "Gradle: Show Module Diagram", group: "Java",
                           action: { [weak workspace] in workspace?.showGradleModuleDiagram() }),
             EditorCommand(id: "app.java.showGradleDependencyDiagram", title: "Gradle: Show Dependency Diagram", group: "Java",
-                          action: { [weak workspace] in workspace?.showGradleDependencyDiagram() })
+                          action: { [weak workspace] in workspace?.showGradleDependencyDiagram() }),
+            EditorCommand(id: "app.java.showMavenModuleDiagram", title: "Maven: Show Module Diagram", group: "Java",
+                          action: { [weak workspace] in workspace?.showMavenModuleDiagram() }),
+            EditorCommand(id: "app.java.showMavenDependencyDiagram", title: "Maven: Show Dependency Diagram", group: "Java",
+                          action: { [weak workspace] in workspace?.showMavenDependencyDiagram() })
         ]
     }
 
@@ -292,6 +300,10 @@ private struct IDEJavaCommands: View {
                 .disabled(!(workspace?.gradle.isActive ?? false))
             Button("Show Gradle Dependency Diagram") { workspace?.showGradleDependencyDiagram() }
                 .disabled(!(workspace?.gradle.isActive ?? false))
+            Button("Show Maven Module Diagram") { workspace?.showMavenModuleDiagram() }
+                .disabled(!(workspace?.maven.isActive ?? false) || (workspace?.gradle.isActive ?? false))
+            Button("Show Maven Dependency Diagram") { workspace?.showMavenDependencyDiagram() }
+                .disabled(!(workspace?.maven.isActive ?? false) || (workspace?.gradle.isActive ?? false))
         }
         Divider()
         Button("Optimize Imports", action: { workspace?.optimizeImports() })
@@ -300,11 +312,15 @@ private struct IDEJavaCommands: View {
             IDEJDKMenuFromRef(ref: ref)
         }
         Button("Build Project", systemImage: "hammer", action: { workspace?.buildGradleProject() })
-            .disabled(!(workspace?.gradle.isActive ?? false))
+            .disabled(!(workspace?.javaSupport.isJavaBuildActive ?? false))
         Button("Reload Gradle Project", action: { workspace?.reloadProject() })
             .disabled(!(workspace?.gradle.isActive ?? false))
         Button("Show Gradle Output", action: { workspace?.showGradleOutput() })
             .disabled(workspace?.gradle.console.lines.isEmpty ?? true)
+        Button("Reload Maven Project", action: { workspace?.maven.reload() })
+            .disabled(!(workspace?.maven.isActive ?? false) || (workspace?.gradle.isActive ?? false))
+        Button("Show Maven Output", action: { workspace?.showMavenOutput() })
+            .disabled(workspace?.maven.console.lines.isEmpty ?? true)
     }
 }
 
@@ -328,7 +344,7 @@ extension IDEBottomPanelTab {
 extension IDEPreferencesDomain {
     static let java = IDEPreferencesDomain(
         id: "java", title: "Java", symbol: "cup.and.saucer",
-        searchTerms: ["jdk", "gradle", "sync", "timeout", "diagnostics", "compiler", "semantic highlighting", "parameter hints", "inlay", "gutter icons", "imports", "optimize imports", "run", "run configuration", "temporary"]
+        searchTerms: ["jdk", "gradle", "maven", "sync", "timeout", "diagnostics", "compiler", "semantic highlighting", "parameter hints", "inlay", "gutter icons", "imports", "optimize imports", "run", "run configuration", "temporary"]
     )
 
     static let inspections = IDEPreferencesDomain(

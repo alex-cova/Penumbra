@@ -13,6 +13,10 @@ public enum JavaSymbolID: Hashable, Sendable {
     case field(declaringClass: String, name: String)
     /// A local variable or parameter; `declarationRange` is the UTF-8 byte range of the declaring name.
     case local(file: URL, declarationRange: Range<Int>)
+    /// A class declared inside a body, or an anonymous class body (empty name); `declarationRange`
+    /// is the UTF-8 byte range of the declaring name, or of the `new` expression for anonymous
+    /// classes. Local types have no qualified name, so usages and rename name them by site.
+    case localType(file: URL, declarationRange: Range<Int>)
 
     /// The identifier text usages of this symbol are written with (empty for a local).
     public var simpleName: String {
@@ -21,7 +25,7 @@ public enum JavaSymbolID: Hashable, Sendable {
         case .method(_, let name, _): return name
         case .constructor(let declaringClass, _): return Self.lastComponent(declaringClass)
         case .field(_, let name): return name
-        case .local: return ""
+        case .local, .localType: return ""
         }
     }
 
@@ -31,7 +35,7 @@ public enum JavaSymbolID: Hashable, Sendable {
         case .type(let qualifiedName): return qualifiedName
         case .method(let declaringClass, _, _), .constructor(let declaringClass, _), .field(let declaringClass, _):
             return declaringClass
-        case .local: return nil
+        case .local, .localType: return nil
         }
     }
 

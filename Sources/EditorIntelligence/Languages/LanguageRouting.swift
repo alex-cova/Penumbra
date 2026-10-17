@@ -102,6 +102,15 @@ struct RoutedCodeGeneration: CodeGenerationProviding {
     }
 }
 
+struct RoutedSymbolReference: SymbolReferenceProviding {
+    let registry: LanguageServiceRegistry
+
+    func symbolReference(for document: Document, at position: TextPosition) async -> String? {
+        await registry.owner(of: document.languageIdentifier, feature: .symbolReference, \.symbolReference)?
+            .symbolReference(for: document, at: position)
+    }
+}
+
 struct RoutedBreadcrumbs: BreadcrumbProviding {
     let registry: LanguageServiceRegistry
 

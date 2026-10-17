@@ -15,6 +15,19 @@ extension IDEDiagramRequest {
         IDEDiagramRequest(id: "gradle:modules", title: "Gradle Modules", symbolName: "shippingbox", presentation: .dependencies)
     }
 
+    static var mavenModules: IDEDiagramRequest {
+        IDEDiagramRequest(id: "maven:modules", title: "Maven Modules", symbolName: "shippingbox", presentation: .dependencies)
+    }
+
+    static func mavenLibraries(modulePath: String) -> IDEDiagramRequest {
+        IDEDiagramRequest(
+            id: "maven:libraries:" + modulePath,
+            title: "Dependencies: " + modulePath,
+            symbolName: "cube.transparent",
+            presentation: .dependencies
+        )
+    }
+
     static func gradleLibraries(projectPath: String, configuration: String) -> IDEDiagramRequest {
         IDEDiagramRequest(
             id: "gradle:libraries:" + projectPath,
@@ -39,6 +52,11 @@ extension IDEDiagramRequest {
     /// The Gradle project path of a library diagram (`:` for the root). Nil otherwise.
     var gradleProjectPath: String? {
         id.removingPrefix("gradle:libraries:")
+    }
+
+    /// The Maven module path of a library diagram (`:` for the root). Nil otherwise.
+    var mavenModulePath: String? {
+        id.removingPrefix("maven:libraries:")
     }
 
     private static func classID(_ scope: JavaClassGraphScope) -> String {

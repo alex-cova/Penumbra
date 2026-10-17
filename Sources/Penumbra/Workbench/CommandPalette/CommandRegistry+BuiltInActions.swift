@@ -12,7 +12,7 @@ public extension CommandRegistry {
         .duplicateLines, .deleteLines, .moveLineUp, .moveLineDown,
         .moveStatementUp, .moveStatementDown, .joinLines, .surroundWith,
         .indentLines, .outdentLines, .reformatCode,
-        .toggleComment, .toggleBlockComment, .insertLineAbove, .insertLineBelow, .startNewLine, .completeStatement,
+        .toggleComment, .toggleBlockComment, .insertLineAbove, .insertLineBelow, .startNewLine, .completeStatement, .insertLiveTemplate,
         .sortLinesAscending, .sortLinesDescending, .toggleCase,
         .toggleMethodSeparators, .toggleOccurrenceHighlighting,
         .collapseRegion, .expandRegion, .collapseAllRegions, .expandAllRegions,

@@ -36,6 +36,14 @@ public final class IDEPreferences {
         static let showMinimap = "com.umbra.editor.showMinimap"
         static let showScrollbars = "com.umbra.editor.showScrollbars"
         static let flattenJavaPackages = "com.umbra.editor.flattenJavaPackages"
+        static let javaPostfix = "com.umbra.editor.javaPostfix"
+        static let commandCompletion = "com.umbra.editor.commandCompletion"
+        static let inlineCompletionEnabled = "com.umbra.editor.inlineCompletionEnabled"
+        static let inlineCompletionModel = "com.umbra.editor.inlineCompletionModel"
+        static let inlineCompletionMultiLine = "com.umbra.editor.inlineCompletionMultiLine"
+        static let inlineCompletionSync = "com.umbra.editor.inlineCompletionSync"
+        static let inlineCompletionOtherLanguages = "com.umbra.editor.inlineCompletionOtherLanguages"
+        static let inlineCompletionAcceptKey = "com.umbra.editor.inlineCompletionAcceptKey"
         static let explorerAutoReveal = "com.umbra.editor.explorerAutoReveal"
         static let explorerSortOrder = "com.umbra.editor.explorerSortOrder"
         static let explorerFoldersOnTop = "com.umbra.editor.explorerFoldersOnTop"
@@ -71,6 +79,10 @@ public final class IDEPreferences {
         static let isFocusModeEnabled = "com.umbra.editor.isFocusModeEnabled"
         static let hasCompletedFirstRunGuide = "com.umbra.editor.hasCompletedFirstRunGuide"
         static let javaGradleAutoSync = "com.umbra.editor.javaGradleAutoSync"
+        static let javaMavenAutoRead = "com.umbra.editor.javaMavenAutoRead"
+        static let javaMavenDownloadDependencies = "com.umbra.editor.javaMavenDownloadDependencies"
+        static let javaMavenExecutable = "com.umbra.editor.javaMavenExecutable"
+        static let javaMavenSettingsFile = "com.umbra.editor.javaMavenSettingsFile"
         static let javaCompilerDiagnostics = "com.umbra.editor.javaCompilerDiagnostics"
         static let semanticHighlighting = "com.umbra.editor.semanticHighlighting"
         static let javaInlayHints = "com.umbra.editor.javaInlayHints"
@@ -100,7 +112,15 @@ public final class IDEPreferences {
         static let javaInspectionLimits = "com.umbra.editor.javaInspectionLimits"
         static let javaTreatsPublicApiAsUsed = "com.umbra.editor.javaTreatsPublicApiAsUsed"
         static let javaOptimizeImportsOnSave = "com.umbra.editor.javaOptimizeImportsOnSave"
+        static let javaAddUnambiguousImports = "com.umbra.editor.javaAddUnambiguousImports"
+        static let javaInsertImportsOnPaste = "com.umbra.editor.javaInsertImportsOnPaste"
+        static let javaUseSingleClassImports = "com.umbra.editor.javaUseSingleClassImports"
+        static let javaClassCountToUseStarImport = "com.umbra.editor.javaClassCountToUseStarImport"
+        static let javaStaticCountToUseStarImport = "com.umbra.editor.javaStaticCountToUseStarImport"
+        static let javaImportExclusions = "com.umbra.editor.javaImportExclusions"
+        static let javaStaticMemberClasses = "com.umbra.editor.javaStaticMemberClasses"
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
+        static let javaMavenGoalTimeoutSeconds = "com.umbra.editor.javaMavenGoalTimeoutSeconds"
         static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
         static let showsErrorStripe = "com.umbra.editor.showsErrorStripe"
         static let errorStripeMarkMinHeight = "com.umbra.editor.errorStripeMarkMinHeight"
@@ -253,6 +273,43 @@ public final class IDEPreferences {
     /// "Flatten Packages") instead of nested folders.
     var flattenJavaPackages: Bool {
         didSet { UserDefaults.standard.set(flattenJavaPackages, forKey: Keys.flattenJavaPackages) }
+    }
+
+    /// Command completion (`..`, the command section of `.`, read-only files).
+    var commandCompletion: CommandCompletionSettings {
+        didSet {
+            guard let data = try? JSONEncoder().encode(commandCompletion) else { return }
+            UserDefaults.standard.set(data, forKey: Keys.commandCompletion)
+        }
+    }
+
+    /// Full-line (inline) completion with a local model. Machine-local, like the model
+    /// choice itself; not part of the synced snapshot.
+    var inlineCompletionEnabled: Bool {
+        didSet { UserDefaults.standard.set(inlineCompletionEnabled, forKey: Keys.inlineCompletionEnabled) }
+    }
+    var inlineCompletionModelID: String? {
+        didSet { UserDefaults.standard.set(inlineCompletionModelID, forKey: Keys.inlineCompletionModel) }
+    }
+    var inlineCompletionMultiLine: Bool {
+        didSet { UserDefaults.standard.set(inlineCompletionMultiLine, forKey: Keys.inlineCompletionMultiLine) }
+    }
+    var inlineCompletionSyncWithPopup: Bool {
+        didSet { UserDefaults.standard.set(inlineCompletionSyncWithPopup, forKey: Keys.inlineCompletionSync) }
+    }
+    var inlineCompletionOtherLanguages: Bool {
+        didSet { UserDefaults.standard.set(inlineCompletionOtherLanguages, forKey: Keys.inlineCompletionOtherLanguages) }
+    }
+    var inlineCompletionAcceptKey: InlineAcceptKey {
+        didSet { UserDefaults.standard.set(inlineCompletionAcceptKey.rawValue, forKey: Keys.inlineCompletionAcceptKey) }
+    }
+
+    /// Postfix templates, the key that expands one, and user-written templates.
+    var javaPostfix: JavaPostfixConfiguration {
+        didSet {
+            guard let data = try? JSONEncoder().encode(javaPostfix) else { return }
+            UserDefaults.standard.set(data, forKey: Keys.javaPostfix)
+        }
     }
 
     /// Explorer selects and scrolls to the active editor tab's file whenever the tab changes.
@@ -526,6 +583,27 @@ public final class IDEPreferences {
     /// the trust prompt. Machine-local: not part of `IDEPreferencesSnapshot`.
     var javaGradleAutoSync: Bool {
         didSet { UserDefaults.standard.set(javaGradleAutoSync, forKey: Keys.javaGradleAutoSync) }
+    }
+
+    /// Read `pom.xml` when a Maven project opens. Reading does not run Maven. Machine-local.
+    var javaMavenAutoRead: Bool {
+        didSet { UserDefaults.standard.set(javaMavenAutoRead, forKey: Keys.javaMavenAutoRead) }
+    }
+
+    /// After a read, download dependencies that are not in the local repository. Runs Maven, so it
+    /// still asks for trust. Machine-local.
+    var javaMavenDownloadDependencies: Bool {
+        didSet { UserDefaults.standard.set(javaMavenDownloadDependencies, forKey: Keys.javaMavenDownloadDependencies) }
+    }
+
+    /// A Maven executable to use when the project has no `mvnw`. Empty uses `mvn` on `PATH`.
+    var javaMavenExecutable: String {
+        didSet { UserDefaults.standard.set(javaMavenExecutable, forKey: Keys.javaMavenExecutable) }
+    }
+
+    /// A `settings.xml` to pass as `mvn -s`. Empty uses Maven's own lookup. Machine-local.
+    var javaMavenSettingsFile: String {
+        didSet { UserDefaults.standard.set(javaMavenSettingsFile, forKey: Keys.javaMavenSettingsFile) }
     }
 
     /// Check open Java files with the JDK's `javac` and list the errors as Problems. Runs only in
@@ -808,10 +886,69 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaOptimizeImportsOnSave, forKey: Keys.javaOptimizeImportsOnSave) }
     }
 
+    /// Import the one class that can resolve an unresolved simple name once typing pauses.
+    /// Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaAddUnambiguousImports: Bool {
+        didSet { UserDefaults.standard.set(javaAddUnambiguousImports, forKey: Keys.javaAddUnambiguousImports) }
+    }
+
+    /// Insert imports for unresolved types in pasted code. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaInsertImportsOnPaste: Bool {
+        didSet { UserDefaults.standard.set(javaInsertImportsOnPaste, forKey: Keys.javaInsertImportsOnPaste) }
+    }
+
+    /// Off writes `import pkg.*` as soon as a second class from that package is imported.
+    /// Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaUseSingleClassImports: Bool {
+        didSet { UserDefaults.standard.set(javaUseSingleClassImports, forKey: Keys.javaUseSingleClassImports) }
+    }
+
+    /// Single-class imports from one package become `import pkg.*` at this count. `999` never does.
+    /// Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaClassCountToUseStarImport: Int {
+        didSet { UserDefaults.standard.set(javaClassCountToUseStarImport, forKey: Keys.javaClassCountToUseStarImport) }
+    }
+
+    /// Static imports from one class become `import static Owner.*` at this count. `999` never does.
+    /// Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaStaticCountToUseStarImport: Int {
+        didSet { UserDefaults.standard.set(javaStaticCountToUseStarImport, forKey: Keys.javaStaticCountToUseStarImport) }
+    }
+
+    /// Classes and packages completion and auto-import will not add, separated by commas or newlines.
+    /// Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaImportExclusions: String {
+        didSet { UserDefaults.standard.set(javaImportExclusions, forKey: Keys.javaImportExclusions) }
+    }
+
+    /// Classes whose public static members completion may import. A leading `-` drops one member.
+    /// Machine-local: not part of `IDEPreferencesSnapshot`.
+    var javaStaticMemberClasses: String {
+        didSet { UserDefaults.standard.set(javaStaticMemberClasses, forKey: Keys.javaStaticMemberClasses) }
+    }
+
+    /// The import settings Java completion, quick fixes and on-the-fly insertion share.
+    var javaImportPolicy: JavaImportPolicy {
+        JavaImportPolicy(
+            addUnambiguousImportsOnTheFly: javaAddUnambiguousImports,
+            insertImportsOnPaste: javaInsertImportsOnPaste ? .always : .never,
+            useSingleClassImports: javaUseSingleClassImports,
+            classCountToUseStarImport: javaClassCountToUseStarImport,
+            staticCountToUseStarImport: javaStaticCountToUseStarImport,
+            excluded: JavaImportPolicy.names(in: javaImportExclusions),
+            staticMemberClasses: JavaImportPolicy.names(in: javaStaticMemberClasses)
+        )
+    }
+
     /// How long one Gradle project-model sync may run before it is killed. A first sync may
     /// download a Gradle distribution, so this sits above `GradleCommandRunner`'s 120s default.
     var javaGradleSyncTimeoutSeconds: Int {
         didSet { UserDefaults.standard.set(javaGradleSyncTimeoutSeconds, forKey: Keys.javaGradleSyncTimeoutSeconds) }
+    }
+
+    /// How long one Maven goal may run before it is killed. A `run` goal is not subject to this.
+    var javaMavenGoalTimeoutSeconds: Int {
+        didSet { UserDefaults.standard.set(javaMavenGoalTimeoutSeconds, forKey: Keys.javaMavenGoalTimeoutSeconds) }
     }
 
     /// Standing consent for decompiling `.class` files with no attached source using Sunflower
@@ -883,6 +1020,24 @@ public final class IDEPreferences {
         showMinimap = defaults.object(forKey: Keys.showMinimap) as? Bool ?? true
         showScrollbars = defaults.object(forKey: Keys.showScrollbars) as? Bool ?? true
         flattenJavaPackages = defaults.object(forKey: Keys.flattenJavaPackages) as? Bool ?? false
+        if let data = defaults.data(forKey: Keys.javaPostfix),
+           let stored = try? JSONDecoder().decode(JavaPostfixConfiguration.self, from: data) {
+            javaPostfix = stored
+        } else {
+            javaPostfix = .standard
+        }
+        if let data = defaults.data(forKey: Keys.commandCompletion),
+           let stored = try? JSONDecoder().decode(CommandCompletionSettings.self, from: data) {
+            commandCompletion = stored
+        } else {
+            commandCompletion = .standard
+        }
+        inlineCompletionEnabled = defaults.object(forKey: Keys.inlineCompletionEnabled) as? Bool ?? false
+        inlineCompletionModelID = defaults.string(forKey: Keys.inlineCompletionModel)
+        inlineCompletionMultiLine = defaults.object(forKey: Keys.inlineCompletionMultiLine) as? Bool ?? false
+        inlineCompletionSyncWithPopup = defaults.object(forKey: Keys.inlineCompletionSync) as? Bool ?? false
+        inlineCompletionOtherLanguages = defaults.object(forKey: Keys.inlineCompletionOtherLanguages) as? Bool ?? false
+        inlineCompletionAcceptKey = defaults.string(forKey: Keys.inlineCompletionAcceptKey).flatMap(InlineAcceptKey.init(rawValue:)) ?? .tab
         explorerAutoReveal = defaults.object(forKey: Keys.explorerAutoReveal) as? Bool ?? true
         explorerSortOrder = defaults.string(forKey: Keys.explorerSortOrder).flatMap(IDEExplorerSortOrder.init(rawValue:)) ?? .name
         explorerFoldersOnTop = defaults.object(forKey: Keys.explorerFoldersOnTop) as? Bool ?? true
@@ -945,6 +1100,10 @@ public final class IDEPreferences {
         isFocusModeEnabled = defaults.object(forKey: Keys.isFocusModeEnabled) as? Bool ?? false
         hasCompletedFirstRunGuide = defaults.bool(forKey: Keys.hasCompletedFirstRunGuide)
         javaGradleAutoSync = defaults.object(forKey: Keys.javaGradleAutoSync) as? Bool ?? true
+        javaMavenAutoRead = defaults.object(forKey: Keys.javaMavenAutoRead) as? Bool ?? true
+        javaMavenDownloadDependencies = defaults.object(forKey: Keys.javaMavenDownloadDependencies) as? Bool ?? true
+        javaMavenExecutable = defaults.string(forKey: Keys.javaMavenExecutable) ?? ""
+        javaMavenSettingsFile = defaults.string(forKey: Keys.javaMavenSettingsFile) ?? ""
         javaCompilerDiagnostics = defaults.object(forKey: Keys.javaCompilerDiagnostics) as? Bool ?? true
         semanticHighlighting = defaults.object(forKey: Keys.semanticHighlighting) as? Bool ?? true
         javaInlayHints = defaults.bool(forKey: Keys.javaInlayHints)
@@ -974,7 +1133,15 @@ public final class IDEPreferences {
         javaInspectionLimits = defaults.dictionary(forKey: Keys.javaInspectionLimits) as? [String: Int] ?? [:]
         javaTreatsPublicApiAsUsed = defaults.object(forKey: Keys.javaTreatsPublicApiAsUsed) as? Bool ?? true
         javaOptimizeImportsOnSave = defaults.bool(forKey: Keys.javaOptimizeImportsOnSave)
+        javaAddUnambiguousImports = defaults.object(forKey: Keys.javaAddUnambiguousImports) as? Bool ?? true
+        javaInsertImportsOnPaste = defaults.object(forKey: Keys.javaInsertImportsOnPaste) as? Bool ?? true
+        javaUseSingleClassImports = defaults.object(forKey: Keys.javaUseSingleClassImports) as? Bool ?? true
+        javaClassCountToUseStarImport = defaults.object(forKey: Keys.javaClassCountToUseStarImport) as? Int ?? 5
+        javaStaticCountToUseStarImport = defaults.object(forKey: Keys.javaStaticCountToUseStarImport) as? Int ?? 3
+        javaImportExclusions = defaults.string(forKey: Keys.javaImportExclusions) ?? ""
+        javaStaticMemberClasses = defaults.string(forKey: Keys.javaStaticMemberClasses) ?? ""
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
+        javaMavenGoalTimeoutSeconds = defaults.object(forKey: Keys.javaMavenGoalTimeoutSeconds) as? Int ?? 300
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
         localHistoryDays = min(max((defaults.object(forKey: Keys.localHistoryDays) as? NSNumber)?.intValue ?? 7, 1), 365)
         localHistoryMegabytes = min(max((defaults.object(forKey: Keys.localHistoryMegabytes) as? NSNumber)?.intValue ?? 500, 50), 10_000)
@@ -1100,6 +1267,18 @@ public final class IDEPreferences {
         controller.codeVisionEnabled = areCodeVisionLensesEnabled
         controller.appliesRefactoringsInPlace = inPlaceRefactoring
         controller.confirmsInlineVariable = confirmsInlineVariable
+        controller.postfixExpansionSettings = javaPostfix.expansionSettings
+        controller.commandCompletionSettings = commandCompletion
+        var inline = InlineCompletionSettings()
+        inline.isEnabled = inlineCompletionEnabled
+        inline.multiLineEnabled = inlineCompletionMultiLine
+        inline.syncWithPopup = inlineCompletionSyncWithPopup
+        inline.otherLanguagesEnabled = inlineCompletionOtherLanguages
+        inline.acceptKey = inlineCompletionAcceptKey
+        controller.inlineCompletionSettings = inline
+        controller.onInlineCompletionSettingsChanged = { [weak self] settings in
+            self?.inlineCompletionAcceptKey = settings.acceptKey
+        }
     }
 
     /// Editor zoom, in percent of ``fontSize``. Lives for the session only: the size chosen in
@@ -1176,7 +1355,8 @@ public final class IDEPreferences {
             isDistractionFreeModeEnabled: isDistractionFreeModeEnabled,
             isFocusModeEnabled: isFocusModeEnabled,
             showScrollbars: showScrollbars,
-            flattenJavaPackages: flattenJavaPackages
+            flattenJavaPackages: flattenJavaPackages,
+            javaPostfix: javaPostfix
         )
     }
 
@@ -1231,6 +1411,7 @@ public final class IDEPreferences {
         isFocusModeEnabled = snapshot.isFocusModeEnabled
         showScrollbars = snapshot.showScrollbars
         flattenJavaPackages = snapshot.flattenJavaPackages
+        javaPostfix = snapshot.javaPostfix
     }
 }
 
@@ -1283,6 +1464,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var isFocusModeEnabled: Bool
     var showScrollbars: Bool
     var flattenJavaPackages: Bool
+    var javaPostfix: JavaPostfixConfiguration
 
     init(
         fontSize: Double,
@@ -1332,7 +1514,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         isDistractionFreeModeEnabled: Bool = false,
         isFocusModeEnabled: Bool = false,
         showScrollbars: Bool = true,
-        flattenJavaPackages: Bool = false
+        flattenJavaPackages: Bool = false,
+        javaPostfix: JavaPostfixConfiguration = .standard
     ) {
         self.fontSize = fontSize
         self.fontName = fontName
@@ -1382,6 +1565,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.isFocusModeEnabled = isFocusModeEnabled
         self.showScrollbars = showScrollbars
         self.flattenJavaPackages = flattenJavaPackages
+        self.javaPostfix = javaPostfix
     }
 
     init(from decoder: Decoder) throws {
@@ -1438,6 +1622,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         isFocusModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isFocusModeEnabled) ?? false
         showScrollbars = try container.decodeIfPresent(Bool.self, forKey: .showScrollbars) ?? true
         flattenJavaPackages = try container.decodeIfPresent(Bool.self, forKey: .flattenJavaPackages) ?? false
+        javaPostfix = try container.decodeIfPresent(JavaPostfixConfiguration.self, forKey: .javaPostfix) ?? .standard
     }
 }
 

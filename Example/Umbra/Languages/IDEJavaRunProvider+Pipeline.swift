@@ -151,6 +151,17 @@ extension IDEJavaRunProvider {
                     progress.fail("Before-launch step “gradle \(names.joined(separator: " "))” failed: \(failure)")
                     return false
                 }
+            case .mavenGoals(let goals):
+                let names = goals.flatMap { $0.split(whereSeparator: \.isWhitespace).map(String.init) }
+                guard !names.isEmpty else { continue }
+                progress.note("Before launch: mvn \(names.joined(separator: " "))")
+                let outcome = await runMavenAndWait(names, module: nil)
+                guard progress.isActive() else { return false }
+                if let failure = Self.failureDescription(of: outcome) {
+                    host.showMavenConsole()
+                    progress.fail("Before-launch step “mvn \(names.joined(separator: " "))” failed: \(failure)")
+                    return false
+                }
             case .runConfiguration(let id):
                 guard let other = host.runConfigurations.first(where: { $0.id == id }) else {
                     progress.fail("A configuration it runs first was deleted.")
@@ -174,19 +185,36 @@ extension IDEJavaRunProvider {
 
         if includesBuild, case .classpathMain(_, let sourceFile) = configuration.target {
             guard progress.isActive() else { return false }
-            guard let classpath = runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile)) else {
-                progress.fail("It needs a synced Gradle project that contains \((sourceFile as NSString).lastPathComponent).")
+            let fileName = (sourceFile as NSString).lastPathComponent
+            guard runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile)) != nil else {
+                let build = usesMaven ? "Maven" : "Gradle"
+                progress.fail("It needs a synced \(build) project that contains \(fileName).")
                 return false
             }
-            let missing = !JavaRunConfiguration.missingClassDirectories(in: classpath).isEmpty
-            if configuration.buildBeforeRun || missing, let task = classesTaskPath(forSourceFile: sourceFile) {
-                progress.note("Building \(task) — output is in the Gradle tab")
-                let outcome = await runGradleAndWait([task])
-                guard progress.isActive() else { return false }
-                if let failure = Self.failureDescription(of: outcome) {
-                    host.showGradleConsole()
-                    progress.fail("Build failed, so it was not started: \(failure). Errors are listed under Problems.")
-                    return false
+            if usesMaven {
+                guard let compile = mavenCompile(forSourceFile: sourceFile) else { return true }
+                let missing = !FileManager.default.fileExists(atPath: compile.output.path)
+                if configuration.buildBeforeRun || missing {
+                    progress.note("Building \(compile.selector) \(compile.goal) — output is in the Maven tab")
+                    let outcome = await runMavenAndWait([compile.goal], module: compile.modulePath)
+                    guard progress.isActive() else { return false }
+                    if let failure = Self.failureDescription(of: outcome) {
+                        host.showMavenConsole()
+                        progress.fail("Build failed, so it was not started: \(failure). Errors are listed under Problems.")
+                        return false
+                    }
+                }
+            } else if let classpath = runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile)) {
+                let missing = !JavaRunConfiguration.missingClassDirectories(in: classpath).isEmpty
+                if configuration.buildBeforeRun || missing, let task = classesTaskPath(forSourceFile: sourceFile) {
+                    progress.note("Building \(task) — output is in the Gradle tab")
+                    let outcome = await runGradleAndWait([task])
+                    guard progress.isActive() else { return false }
+                    if let failure = Self.failureDescription(of: outcome) {
+                        host.showGradleConsole()
+                        progress.fail("Build failed, so it was not started: \(failure). Errors are listed under Problems.")
+                        return false
+                    }
                 }
             }
         }
@@ -237,6 +265,13 @@ extension IDEJavaRunProvider {
             var extra = ["--no-configuration-cache"]
             for filter in filters { extra += ["--tests", filter] }
             return Self.failureDescription(of: await runGradleAndWait([taskPath], extra: extra)) == nil
+        case .mavenGoals(let module, let goals):
+            let extra = JavaCommandLine.split(configuration.programArguments)
+            return Self.failureDescription(of: await runMavenAndWait(goals, module: module, extra: extra)) == nil
+        case .mavenTest:
+            guard let scope = configuration.mavenTestScope, let model = maven.model,
+                  let command = MavenTestRunner.command(scope: scope, model: model) else { return false }
+            return Self.failureDescription(of: await runMavenAndWait(command.goals, module: nil, extra: command.arguments)) == nil
         }
     }
 
@@ -251,11 +286,61 @@ extension IDEJavaRunProvider {
         }
     }
 
+    /// Runs Maven goals and waits. `module` is a module path; `nil` is the reactor. The selector is
+    /// resolved here so a test command that already carries `-pl` is not given it twice.
+    private func runMavenAndWait(
+        _ goals: [String], module: String?, extra: [String] = []
+    ) async -> IDEMavenRunOutcome {
+        let selector: String?
+        if let module {
+            guard let found = mavenSelector(modulePath: module) else {
+                return .notStarted("There is no Maven module “\(module)”.")
+            }
+            selector = found
+        } else {
+            selector = nil
+        }
+        return await withCheckedContinuation { continuation in
+            maven.runGoals(goals, module: selector, extraArguments: extra) { outcome in
+                continuation.resume(returning: outcome)
+            }
+        }
+    }
+
+    /// `compile` or `test-compile` for the Maven module that contains `sourceFile`.
+    private func mavenCompile(forSourceFile sourceFile: String) -> (modulePath: String, selector: String, goal: String, output: URL)? {
+        guard let modules = maven.model?.modules else { return nil }
+        let path = URL(fileURLWithPath: sourceFile).standardizedFileURL.path
+        for module in modules {
+            let inDirectory: (URL) -> Bool = { directory in
+                let root = directory.standardizedFileURL.path
+                return path == root || path.hasPrefix(root + "/")
+            }
+            if module.testSourceDirectories.contains(where: inDirectory) {
+                return (module.path, module.selector, "test-compile", module.testOutputDirectory)
+            }
+            if module.sourceDirectories.contains(where: inDirectory) || module.generatedSourceDirectories.contains(where: inDirectory) {
+                return (module.path, module.selector, "compile", module.outputDirectory)
+            }
+        }
+        return nil
+    }
+
     /// Why a Gradle run counts as failed, or `nil` when it succeeded.
     private static func failureDescription(of outcome: IDEGradleRunOutcome) -> String? {
         switch outcome {
         case .finished(let result): return result.exitCode == 0 ? nil : "Gradle exited with \(result.exitCode)"
         case .timedOut: return "Gradle timed out"
+        case .cancelled: return "it was cancelled"
+        case .notStarted(let reason), .failed(let reason): return reason
+        }
+    }
+
+    /// Why a Maven goal counts as failed, or `nil` when it succeeded.
+    private static func failureDescription(of outcome: IDEMavenRunOutcome) -> String? {
+        switch outcome {
+        case .finished(let result): return result.exitCode == 0 ? nil : "Maven exited with \(result.exitCode)"
+        case .timedOut: return "Maven timed out"
         case .cancelled: return "it was cancelled"
         case .notStarted(let reason), .failed(let reason): return reason
         }
@@ -276,7 +361,7 @@ extension IDEJavaRunProvider {
         switch configuration.target {
         case .classpathMain(let name, let sourceFile): (path, className) = (sourceFile, name)
         case .singleFile(let file): (path, className) = (file, nil)
-        case .gradleRun, .gradleTest: return false
+        case .gradleRun, .gradleTest, .mavenGoals, .mavenTest: return false
         }
         let url = URL(fileURLWithPath: path)
         guard let source = host?.openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8)) else { return false }

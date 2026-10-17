@@ -57,6 +57,11 @@ public enum JavaCompletionContextClassifier {
             return path
         }
         if previousByte == UInt8(ascii: ".") && before == prefixStart {
+            // `foo..` is command completion. A second dot is not a member access, so turning
+            // commands off does not offer the members of `foo.`.
+            if before >= 2, bytes[before - 2] == UInt8(ascii: ".") {
+                return structuralSite(tree: tree, bytes: bytes, offset: prefixStart)
+            }
             return .memberAccess(dotOffset: prefixStart - 1)
         }
         if previousByte == UInt8(ascii: ":"), before >= 2, bytes[before - 2] == UInt8(ascii: ":") {

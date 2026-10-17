@@ -37,6 +37,7 @@ final class GradleHarness {
     private let gradle: IDEGradleProjectSystem
     private let java: IDEJavaSupport
     private let trustStore: GradleTrustStore
+    private let mavenTrust: GradleTrustStore
     private let cacheRoot: URL
     /// The window's one watcher, feeding the system as `IDEWorkspace` does.
     private let watcher = IDEProjectWatcher()
@@ -66,7 +67,13 @@ final class GradleHarness {
         let jdk = IDEJDKSelection(store: JDKSelectionStore(storeURL: base.appendingPathComponent("jdk-\(UUID().uuidString).json")))
         let status = IDEProjectStatus()
         gradle = IDEGradleProjectSystem(jdk: jdk, status: status, trustStore: trustStore, modelCacheRoot: cacheRoot)
-        java = IDEJavaSupport(jdk: jdk, gradle: gradle, status: status, shardHub: JavaSharedShardHub())
+        let mavenTrust = other?.mavenTrust ?? GradleTrustStore(storeURL: base.appendingPathComponent("maven-trust.json"))
+        self.mavenTrust = mavenTrust
+        let maven = IDEMavenProjectSystem(
+            jdk: jdk, status: status, trustStore: mavenTrust, environment: [:],
+            profileStoreURL: base.appendingPathComponent("maven-profiles.json")
+        )
+        java = IDEJavaSupport(jdk: jdk, gradle: gradle, maven: maven, status: status, shardHub: JavaSharedShardHub())
         gradle.environment.syncFinished = { [weak self] outcome in
             switch outcome {
             case .synced(let modules, let dependencies): self?.outcomes.append(.synced(subprojects: modules, jars: dependencies))

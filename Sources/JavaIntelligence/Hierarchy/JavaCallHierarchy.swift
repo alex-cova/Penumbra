@@ -272,6 +272,7 @@ public actor JavaCallHierarchyProvider {
         case .type(let name): return "type:\(name)"
         case .field(let declaringClass, let name): return "\(declaringClass)#\(name)"
         case .local(let file, let range): return "local:\(file.path):\(range.lowerBound)"
+        case .localType(let file, let range): return "local-type:\(file.path):\(range.lowerBound)"
         case .constructor(let declaringClass, let keys): return "\(declaringClass)#<init>(\(keys.joined(separator: ",")))"
         }
     }

@@ -159,6 +159,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("d", .command)), to: .duplicateLines)
         map.bind(KeyStroke(KeyChord("o", [.control, .option])), to: .optimizeImports)
         map.bind(KeyStroke(KeyChord("j", .control)), to: .quickDocumentation)
+        map.bind(KeyStroke(KeyChord("j", .command)), to: .insertLiveTemplate)
         map.bind(KeyStroke(KeyChord("p", .command)), to: .showParameterInfo)
         map.bind(KeyStroke(KeyChord("h", .control)), to: .typeHierarchy)
         map.bind(KeyStroke(KeyChord(code: 0x61 /* F6 */, .shift)), to: .rename)

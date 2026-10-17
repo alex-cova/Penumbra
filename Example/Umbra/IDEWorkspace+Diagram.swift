@@ -72,7 +72,7 @@ extension IDEWorkspace {
             return
         }
         let path = url.standardizedFileURL.path
-        let isSourceRoot = gradle.sourceRootPaths.contains { URL(fileURLWithPath: $0).standardizedFileURL.path == path }
+        let isSourceRoot = (javaSupport.buildSystem?.sourceRootPaths ?? []).contains { URL(fileURLWithPath: $0).standardizedFileURL.path == path }
         if isSourceRoot || project.rootURL?.standardizedFileURL.path == path {
             showClassDiagramForProject()
         } else {
@@ -90,6 +90,24 @@ extension IDEWorkspace {
             return
         }
         openDiagram(.gradleModules)
+    }
+
+    func showMavenModuleDiagram() {
+        guard maven.isActive, !gradle.isActive else {
+            notifications.post("This is not a Maven project.", category: .maven)
+            return
+        }
+        openDiagram(.mavenModules)
+    }
+
+    /// The libraries of a Maven module: the one given, else the module of the active file, else the root.
+    func showMavenDependencyDiagram(modulePath: String? = nil) {
+        guard maven.isActive, !gradle.isActive else {
+            notifications.post("This is not a Maven project.", category: .maven)
+            return
+        }
+        let path = modulePath ?? gradleProjectPath(containing: workbench.activePane.selectedDocument?.url) ?? ":"
+        openDiagram(.mavenLibraries(modulePath: path))
     }
 
     /// The libraries of a Gradle project: the one given, else the module of the active file, else the root.
@@ -116,7 +134,7 @@ extension IDEWorkspace {
     // MARK: - Names
 
     func gradleProjectPath(containing url: URL?) -> String? {
-        guard let url, let model = gradle.model else { return nil }
+        guard let url, let model = javaSupport.projectModel else { return nil }
         let path = url.standardizedFileURL.path
         return model.subprojects
             .filter { path == $0.directory.standardizedFileURL.path || path.hasPrefix($0.directory.standardizedFileURL.path + "/") }
@@ -135,7 +153,7 @@ extension IDEWorkspace {
 
     func javaPackageName(ofDirectory url: URL) -> String? {
         let path = url.standardizedFileURL.path
-        for root in gradle.sourceRootPaths {
+        for root in javaSupport.buildSystem?.sourceRootPaths ?? [] {
             let rootPath = URL(fileURLWithPath: root).standardizedFileURL.path
             guard path.hasPrefix(rootPath + "/") else { continue }
             let relative = path.dropFirst(rootPath.count + 1)
@@ -201,9 +219,12 @@ extension IDEWorkspace {
             guard node.kind.isType, session?.request.id.hasPrefix("classes:") == true else { return nil }
             return (IDEDiagramRequest.classes(.types([node.key])), 1)
         }
-        session.relatedDependencyDiagram = { node, configuration in
+        session.relatedDependencyDiagram = { [weak self] node, configuration in
             guard node.kind == .project, node.key.hasPrefix("project:") else { return nil }
             let path = String(node.key.dropFirst("project:".count))
+            if self?.javaSupport.maven.isActive == true, self?.javaSupport.gradle.isActive != true {
+                return IDEDiagramRequest.mavenLibraries(modulePath: path)
+            }
             return IDEDiagramRequest.gradleLibraries(projectPath: path, configuration: configuration)
         }
         session.invalidateCaches = { gradle.invalidateDependencyGraphs() }
@@ -229,7 +250,9 @@ extension IDEWorkspace {
 
     /// After the project's sources were re-indexed or Gradle re-synced, open diagrams of that kind redraw.
     func reloadDiagramSessions(classes: Bool) {
-        for session in diagramSessions.values where classes ? session.request.isClassDiagram : session.request.id == IDEDiagramRequest.gradleModules.id {
+        for session in diagramSessions.values where classes
+            ? session.request.isClassDiagram
+            : (session.request.id == IDEDiagramRequest.gradleModules.id || session.request.id == IDEDiagramRequest.mavenModules.id) {
             session.reload()
         }
     }

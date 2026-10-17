@@ -301,9 +301,18 @@ final class JavaCompletionProviderContextTests: XCTestCase {
         let items = await complete(source, index: index)
         let item = try XCTUnwrap(items.first { $0.label == "ArrayList" })
         let edit = try XCTUnwrap(item.additionalEdits.first)
-        XCTAssertEqual(edit.replacement, "import java.util.ArrayList;\n")
+        // Adding an import rewrites a clean import block in sorted layout (see
+        // `JavaImportOrganizer.editsAdding`), so the edit covers the block and the
+        // applied file carries both imports, sorted.
+        XCTAssertEqual(edit.replacement, "import java.util.ArrayList;\nimport java.util.List;")
         XCTAssertEqual(edit.range.start.line, 2)
         XCTAssertEqual(edit.range.start.column, 0)
+        let range = NSRange(
+            location: edit.range.start.utf16Offset,
+            length: edit.range.end.utf16Offset - edit.range.start.utf16Offset
+        )
+        let applied = (source as NSString).replacingCharacters(in: range, with: edit.replacement)
+        XCTAssertTrue(applied.contains("import java.util.ArrayList;\nimport java.util.List;\n"), applied)
     }
 
     func testAlreadyImportedOrJavaLangNeedsNoImport() async throws {
@@ -412,5 +421,21 @@ final class JavaCompletionProviderContextTests: XCTestCase {
     func testPrimaryForJavaOnly() {
         let provider = JavaCompletionProvider(index: JavaIndex())
         XCTAssertTrue(provider.isPrimary(for: context("class Foo { €}")))
+    }
+
+    func testMethodsWithParametersKeepTheCaretInsideParensForStatementCompletion() {
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        let factory = JavaCompletionItemFactory(range: TextRange(start: position, end: position), source: "java")
+        let println = method("println", [("x", classType("java.lang.String"))])
+        let withParameters = factory.memberItem(.method(println, declaringClass: "java.io.PrintStream"), receiverQualifiedName: "java.io.PrintStream")
+        XCTAssertTrue(withParameters.statementCaretInsideParens)
+        XCTAssertEqual(withParameters.caretOffset, (withParameters.insertText as NSString).length - 1)
+
+        let flush = factory.memberItem(.method(method("flush"), declaringClass: "java.io.PrintStream"), receiverQualifiedName: "java.io.PrintStream")
+        XCTAssertFalse(flush.statementCaretInsideParens)
+
+        let reference = factory.memberItem(.method(println, declaringClass: "java.io.PrintStream"), receiverQualifiedName: "java.io.PrintStream", asMethodReference: true)
+        XCTAssertFalse(reference.statementCaretInsideParens)
+        XCTAssertNil(reference.caretOffset)
     }
 }

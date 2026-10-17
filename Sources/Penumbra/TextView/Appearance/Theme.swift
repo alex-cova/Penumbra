@@ -78,6 +78,8 @@ public protocol Theme: AnyObject {
     var inlayHintTextColor: NSColor? { get }
     /// Background of an inlay hint's rounded chip. `nil` uses a faint shade of ``textColor``.
     var inlayHintBackgroundColor: NSColor? { get }
+    /// Color of inline completion ghost text. `nil` uses the theme's comment color.
+    var inlineCompletionTextColor: NSColor? { get }
     /// Background of the sticky lines pinned to the top of the editor (``TextView/showsStickyLines``).
     /// `nil` uses the editor's background.
     var stickyLinesBackgroundColor: NSColor? { get }
@@ -119,6 +121,10 @@ public extension Theme {
     }
 
     var inlayHintBackgroundColor: NSColor? {
+        nil
+    }
+
+    var inlineCompletionTextColor: NSColor? {
         nil
     }
 

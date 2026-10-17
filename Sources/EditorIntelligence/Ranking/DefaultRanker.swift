@@ -74,7 +74,7 @@ public struct DefaultRanker: Ranker {
             return 0.3
         case .keyword:
             return 0.2
-        case .snippet, .module, .package, .file:
+        case .snippet, .module, .package, .file, .command:
             return 0.1
         case .text:
             return 0.0

@@ -15,6 +15,17 @@ extension IDEJavaRunProvider {
         guard let host else { return }
         let instrumentation = requested != .none ? requested : (recording?.instrumentation ?? .none)
         recordTestRun(scope: scope, debug: false, from: recording, instrumentation: instrumentation)
+        if usesMaven {
+            guard let reason = mavenTestBlockReason() else {
+                let suffix = instrumentation == .coverage ? " with coverage" : (instrumentation == .profile ? " with profiling" : "")
+                host.testResults.beginRun(label: "Running \(title)\(suffix)…", scope: scope, instrumentation: instrumentation)
+                host.showTestResults()
+                startMavenTests(scope: scope, instrumentation: instrumentation)
+                return
+            }
+            host.reportRunProblem(reason)
+            return
+        }
         guard let reason = gradleTestBlockReason() else {
             let suffix = instrumentation == .coverage ? " with coverage" : (instrumentation == .profile ? " with profiling" : "")
             host.testResults.beginRun(label: "Running \(title)\(suffix)…", scope: scope, instrumentation: instrumentation)
@@ -32,6 +43,10 @@ extension IDEJavaRunProvider {
     func runActiveTests(instrumentation: JavaRunInstrumentation = .none) {
         if let testClass = host?.activeJavaTestClass, !testClass.methods.isEmpty {
             runTests(scope: .testClass(testClass), title: Self.simpleName(testClass.qualifiedName), instrumentation: instrumentation)
+            return
+        }
+        if usesMaven, maven.rootURL != nil {
+            runTests(scope: .allInModule(gradleTaskPath: "test"), title: "all tests", instrumentation: instrumentation)
             return
         }
         guard gradle.isActive, gradle.rootURL != nil else {
@@ -52,6 +67,17 @@ extension IDEJavaRunProvider {
         return nil
     }
 
+    /// Why a Maven test goal cannot start, or nil when it can.
+    private func mavenTestBlockReason() -> String? {
+        guard maven.isActive, maven.rootURL != nil else {
+            return "Running tests needs a Maven project."
+        }
+        guard !maven.isBusy else {
+            return "Maven is busy. Stop the running goal first, then run tests again."
+        }
+        return nil
+    }
+
     func runTestMethod(_ method: JavaTestMethod, taskPath: String) {
         runTests(scope: .testMethod(method, taskPath: taskPath), title: "\(method.methodName)()")
     }
@@ -66,6 +92,10 @@ extension IDEJavaRunProvider {
         var recorded: JavaRunConfiguration
         if let configuration {
             recorded = configuration
+        } else if usesMaven {
+            let fresh = makeMavenTestLaunch(scope: scope)
+            let saved = host.runConfigurationStore.configurations(forProject: host.projectRootURL)
+            recorded = fresh.inheritingSettings(from: saved.last { $0.target == fresh.target })
         } else {
             let fresh = JavaRunConfiguration.makeTestLaunch(scope: scope)
             let saved = host.runConfigurationStore.configurations(forProject: host.projectRootURL)
@@ -121,6 +151,103 @@ extension IDEJavaRunProvider {
         }
     }
 
+    /// A configuration that repeats `scope` through Maven. `makeTestLaunch` stays a Gradle test.
+    private func makeMavenTestLaunch(scope: JavaTestRunScope) -> JavaRunConfiguration {
+        switch scope {
+        case .allInModule(let taskPath):
+            return JavaRunConfiguration(target: .mavenTest(module: mavenModulePath(forTask: taskPath), filters: [], sourceFile: nil))
+        case .testClass(let testClass):
+            return JavaRunConfiguration(target: .mavenTest(
+                module: mavenModulePath(forTask: testClass.gradleTaskPath),
+                filters: [testClass.qualifiedName],
+                sourceFile: testClass.sourceFile.path
+            ))
+        case .testMethod(let method, let taskPath):
+            return JavaRunConfiguration(target: .mavenTest(
+                module: mavenModulePath(forTask: taskPath),
+                filters: [method.gradleTestFilter(includeMethod: true)],
+                sourceFile: method.sourceFile.path
+            ))
+        case .tests(let taskPath, let filters):
+            return JavaRunConfiguration(target: .mavenTest(module: mavenModulePath(forTask: taskPath), filters: filters, sourceFile: nil))
+        }
+    }
+
+    /// `:services:api:test` is `:services:api`. `:test` is the root. An unqualified `test` is the reactor.
+    func mavenModulePath(forTask taskPath: String) -> String? {
+        if taskPath == "test" { return nil }
+        if taskPath == ":test" { return ":" }
+        if taskPath.hasSuffix(":test") {
+            let head = String(taskPath.dropLast(":test".count))
+            return head.isEmpty ? ":" : head
+        }
+        return taskPath
+    }
+
+    /// Starts Maven's `test` goal for `scope`. `module` stays nil because the command already carries `-pl`.
+    func startMavenTests(scope: JavaTestRunScope, debug: Bool = false, instrumentation: JavaRunInstrumentation = .none) {
+        guard let host, let url = maven.rootURL, let model = maven.model else { return }
+        guard let command = MavenTestRunner.command(scope: scope, model: model, debug: debug) else {
+            host.testResults.stopRun(message: "The tests were not started.")
+            return
+        }
+        let taskPath = mavenTaskPath(scope)
+        pendingTestRunRequest = JavaTestRunRequest(
+            gradleTaskPath: taskPath,
+            testFilter: MavenTestRunner.testPattern(scope),
+            projectRoot: url,
+            reportDirectories: command.reportDirectories
+        )
+        let tasks = command.goals
+        guard instrumentation != .none, !debug else {
+            runMavenTestGoals(command.goals, arguments: command.arguments)
+            return
+        }
+        var configuration = makeMavenTestLaunch(scope: scope)
+        configuration.instrumentation = instrumentation
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let plan = await self.instrumentationPlan(for: configuration, tasks: tasks) else {
+                self.pendingTestRunRequest = nil
+                self.host?.testResults.stopRun(message: "The tests were not started.")
+                return
+            }
+            switch self.mavenTestArguments(for: plan, scope: scope) {
+            case .failure(let failure):
+                self.pendingTestRunRequest = nil
+                self.host?.testResults.stopRun(message: failure.message)
+                self.host?.reportRunProblem(failure.message)
+            case .success(let extra):
+                self.pendingInstrumentation = (plan, tasks)
+                self.runMavenTestGoals(command.goals, arguments: command.arguments + extra)
+                if case .profile(let profile) = plan { self.beginLiveProfile(profile, processID: nil) }
+            }
+        }
+    }
+
+    func mavenTaskPath(_ scope: JavaTestRunScope) -> String {
+        switch scope {
+        case .allInModule(let taskPath): return taskPath
+        case .testClass(let testClass): return testClass.gradleTaskPath
+        case .testMethod(_, let taskPath): return taskPath
+        case .tests(let taskPath, _): return taskPath
+        }
+    }
+
+    private func runMavenTestGoals(_ goals: [String], arguments: [String]) {
+        maven.runGoals(goals, module: nil, extraArguments: arguments) { [weak self] outcome in
+            guard let self, let host = self.host else { return }
+            switch outcome {
+            case .notStarted(let reason), .failed(let reason):
+                self.pendingInstrumentation = nil
+                host.testResults.stopRun(message: reason)
+                host.reportRunProblem(reason)
+            case .finished, .timedOut, .cancelled:
+                break
+            }
+        }
+    }
+
     private func runTestTasks(_ taskPaths: [String], arguments args: [String], debug: Bool) {
         gradle.runGradleTasks(taskPaths, extraArguments: args, runsApplication: debug) { [weak self] outcome in
             guard let self, let host = self.host else { return }
@@ -163,15 +290,19 @@ extension IDEJavaRunProvider {
         }
         guard !report.tasks.contains(where: { JavaTestRunner.isTestTask($0) || isRunTask($0) }) else { return }
         let label = report.tasks.joined(separator: " ")
+        let mavenRun = usesMaven
+        let title = mavenRun ? "Maven" : "Gradle"
+        let category: IDENotificationCategory = mavenRun ? .maven : .gradle
+        let output: IDENotificationAction = mavenRun ? .showMavenOutput : .showGradleOutput
         if report.exitCode == 0 {
-            host.notifications.post("Gradle \(label) finished", category: .gradle, severity: .success, action: .showGradleOutput)
+            host.notifications.post("\(title) \(label) finished", category: category, severity: .success, action: output)
         } else {
             host.notifications.post(
-                "Gradle \(label) failed",
+                "\(title) \(label) failed",
                 detail: "Exit code \(report.exitCode)",
-                category: .gradle,
+                category: category,
                 severity: .error,
-                action: host.problems.errorCount > 0 ? .showProblems : .showGradleOutput
+                action: host.problems.errorCount > 0 ? .showProblems : output
             )
         }
     }
@@ -180,6 +311,22 @@ extension IDEJavaRunProvider {
         guard let host else { return }
         let projectRoot = result.root
         let command = GradleCommandResult(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr)
+        if usesMaven {
+            let matches = MavenProblemMatcher.match(
+                command,
+                source: IDEProblemsStore.mavenBuildSource,
+                baseDirectory: projectRoot
+            ) { [weak host] url in
+                host?.openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8))
+            }
+            host.problems.setBuildDiagnostics(matches.diagnostics, source: IDEProblemsStore.mavenBuildSource)
+            host.problems.setBuildMessages(matches.problems)
+            if matches.diagnostics.values.contains(where: { $0.contains { $0.severity == .error } })
+                || matches.problems.contains(where: { $0.severity == .error }) {
+                host.showProblems()
+            }
+            return
+        }
         let matches = GradleProblemMatcher.match(
             command,
             source: IDEProblemsStore.gradleBuildSource,

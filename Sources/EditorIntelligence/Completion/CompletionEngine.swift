@@ -7,7 +7,14 @@ import Foundation
 /// in-flight request. Providers are run concurrently. Each provider may yield more than once;
 /// every merged snapshot is ranked and published. The returned items are deduplicated.
 public actor CompletionEngine {
-    public let providers: [CompletionProvider]
+    public private(set) var providers: [CompletionProvider]
+
+    /// Adds a provider unless one with the same name is already registered (a shared engine
+    /// serves several controllers, which each try to register the command provider).
+    public func registerProvider(_ provider: any CompletionProvider) {
+        guard !providers.contains(where: { $0.name == provider.name }) else { return }
+        providers.append(provider)
+    }
     public nonisolated let ranker: Ranker
     public let debounceInterval: TimeInterval
     private var currentTask: Task<Void, Never>?
@@ -156,13 +163,17 @@ private final class CompletionMergeState: @unchecked Sendable {
         if !primaryNames.isEmpty {
             let primaryItems = combined.filter { primaryNames.contains($0.source) }
             if !primaryItems.isEmpty || context.isMemberAccess {
-                combined = primaryItems
+                // Command-section items survive primary filtering: they are an editor
+                // feature layered over the language's own list, not a fallback provider.
+                combined = primaryItems + combined.filter { $0.section == .commands && !primaryNames.contains($0.source) }
             }
         }
         var seen = Set<String>()
         let unique = combined.filter { seen.insert($0.identityKey).inserted }
         let ranked = await ranker.rank(items: unique, context: context)
-        let merged = ranked.filter { $0.score > 0 }.map(\.item)
+        // Rank within a section; the command section always comes last.
+        let ordered = ranked.filter { $0.item.section != .commands } + ranked.filter { $0.item.section == .commands }
+        let merged = ordered.filter { $0.score > 0 }.map(\.item)
         return CompletionUpdate(items: merged, isFinished: done, advertisement: ad, emptyText: empty)
     }
 

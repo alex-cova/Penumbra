@@ -257,6 +257,47 @@ final class LayoutManager {
         }
     }
 
+    /// The caret row's inline completion room: extra ghost lines drawn under it.
+    private var inlineCompletionInset: (row: Int, height: CGFloat)?
+
+    /// Reserves (or, with `row == nil`, releases) room under one row for an inline
+    /// completion's extra lines. The following rows shift through the normal
+    /// height-change layout path.
+    func setInlineCompletionInset(row: Int?, extraLineCount: Int) {
+        guard let row, extraLineCount > 0 else {
+            if inlineCompletionInset != nil {
+                inlineCompletionInset = nil
+                refreshInlineInsetsOnLoadedLines()
+            }
+            return
+        }
+        // One extra line is as tall as the caret line's own fragments.
+        var fragmentHeight = lineManager.estimatedLineHeight
+        for lineController in lineControllerStorage where lineController.line.index == row {
+            fragmentHeight = lineController.lineHeight - lineController.topInset - lineController.bottomInset
+        }
+        let next = (row: row, height: fragmentHeight * CGFloat(extraLineCount))
+        if inlineCompletionInset?.row != next.row || inlineCompletionInset?.height != next.height {
+            inlineCompletionInset = next
+            refreshInlineInsetsOnLoadedLines()
+        }
+    }
+
+    private func refreshInlineInsetsOnLoadedLines() {
+        var changedLineIDs: Set<DocumentLineNodeID> = []
+        for lineController in lineControllerStorage {
+            let line = lineController.line
+            let inset = inlineCompletionInset?.row == line.index ? (inlineCompletionInset?.height ?? 0) : 0
+            if inset != lineController.bottomInset {
+                lineController.bottomInset = inset
+                changedLineIDs.insert(line.id)
+            }
+        }
+        if !changedLineIDs.isEmpty { redisplayLines(withIDs: changedLineIDs) }
+        setNeedsLayout()
+        textInputView?.setNeedsLayout()
+    }
+
     /// Gives every loaded line the room its row needs: lines that gained a lens grow, lines that lost
     /// one shrink, and each is laid out again.
     private func refreshCodeVisionInsetsOnLoadedLines() {
@@ -289,6 +330,8 @@ final class LayoutManager {
               lineManager.location(ofRow: row) != location else {
             return 0
         }
+        // Ghost text takes no caret room: any caret move dismisses it, so ←/→ never step over it.
+        if inlayHints[low].kind == .inlineCompletion { return 0 }
         return inlayHintAppearance.width(of: inlayHints[low].label)
     }
 

@@ -161,8 +161,8 @@ public enum JavaExpressionTyper {
                         result[position] = JavaLocalVariable(name: local.name, type: element)
                         progressed = true
                     }
-                } else {
-                    result[position] = JavaLocalVariable(name: local.name, type: info.type)
+                } else if let varType = JavaTypeSystem.inferredVarType(initializerType: info.type) {
+                    result[position] = JavaLocalVariable(name: local.name, type: varType)
                     progressed = true
                 }
             }

@@ -82,7 +82,7 @@ public enum JavaRunConfigurationValidator {
             } else if !context.fileExists(sourceFile) {
                 add(.sourceFile, "\((sourceFile as NSString).lastPathComponent) does not exist.")
             } else if let model = context.gradleModel, model.runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile)) == nil {
-                add(.sourceFile, "\((sourceFile as NSString).lastPathComponent) is not in a Gradle source set.")
+                add(.sourceFile, "\((sourceFile as NSString).lastPathComponent) is not in a project source set.")
             }
         case .gradleTest(let taskPath, _, let sourceFile):
             if context.projectRoot == nil { add(.target, "Tests run through Gradle and need an open project folder.") }
@@ -97,6 +97,30 @@ public enum JavaRunConfigurationValidator {
                     }
                 } else {
                     add(.target, "There is no Gradle project “\(projectPath.isEmpty ? ":" : projectPath)”.")
+                }
+            }
+            if let sourceFile, !context.fileExists(sourceFile) {
+                add(.target, "\((sourceFile as NSString).lastPathComponent) does not exist.")
+            }
+        case .mavenGoals(let module, let goals):
+            if context.projectRoot == nil { add(.target, "A Maven run needs an open project folder.") }
+            if goals.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+                add(.target, "Choose a Maven goal.")
+            }
+            if let module, context.gradleModel != nil, subproject(module, in: context) == nil {
+                add(.target, "There is no Maven module “\(module)”.")
+            }
+        case .mavenTest(let module, _, let sourceFile):
+            if context.projectRoot == nil { add(.target, "Tests run through Maven and need an open project folder.") }
+            if let module, context.gradleModel != nil {
+                let taskPath = module == ":" ? ":test" : "\(module):test"
+                if let subproject = subproject(module, in: context) {
+                    let known = subproject.testTasks.contains { $0.path == taskPath } || subproject.tasks.contains { $0.path == taskPath }
+                    if !subproject.tasks.isEmpty, !known {
+                        add(.target, "There is no task “\(taskPath)”.")
+                    }
+                } else {
+                    add(.target, "There is no Maven module “\(module)”.")
                 }
             }
             if let sourceFile, !context.fileExists(sourceFile) {
@@ -140,6 +164,10 @@ public enum JavaRunConfigurationValidator {
             case .gradleTasks(let tasks):
                 if tasks.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) {
                     add(.beforeLaunch, "A Gradle step has no task.")
+                }
+            case .mavenGoals(let goals):
+                if goals.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+                    add(.beforeLaunch, "A Maven step has no goal.")
                 }
             case .runConfiguration(let id):
                 if id == configuration.id {

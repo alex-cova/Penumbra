@@ -33,6 +33,11 @@ enum JavaUnusedImports {
         let removable: [JavaImportEntry]
     }
 
+    /// Simple names used outside `package` and `import`, including Javadoc references.
+    static func referencedSimpleNames(in tree: JavaSyntaxTree) -> Set<String> {
+        usedNames(in: tree)
+    }
+
     static func analyze(_ source: String) -> Analysis? {
         guard let tree = JavaSyntaxParser().parse(source), !tree.rootNode.hasError else { return nil }
         return analyze(source: source, tree: tree)

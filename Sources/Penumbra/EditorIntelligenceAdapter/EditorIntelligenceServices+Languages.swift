@@ -14,7 +14,8 @@ public extension EditorIntelligenceServices {
         foldingProvider: (any FoldingProviding)? = nil,
         symbolIndex: SymbolIndex? = nil,
         workspace: Workspace? = nil,
-        projectSearchEngine: ProjectSearchEngine? = nil
+        projectSearchEngine: ProjectSearchEngine? = nil,
+        inlineCompletionEngine: InlineCompletionEngine? = nil
     ) {
         self.init(
             formattingProvider: languages.formatting,
@@ -29,7 +30,9 @@ public extension EditorIntelligenceServices {
             codeVisionProvider: languages.codeVision,
             symbolIndex: symbolIndex,
             workspace: workspace,
-            projectSearchEngine: projectSearchEngine
+            projectSearchEngine: projectSearchEngine,
+            symbolReferenceProvider: languages.symbolReference,
+            inlineCompletionEngine: inlineCompletionEngine
         )
     }
 }

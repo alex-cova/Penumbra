@@ -38,9 +38,10 @@ func printUsageAndExit() -> Never {
       java-completion synthetic [--jars N]
       java-name-index <java-source-directory|synthetic> [--files N]
       java-members <java-source-directory>
-      java-inspections <path|synthetic> [--lines N] [--samples N]
+      java-inspections <path|synthetic> [--lines N] [--samples N] [--jdk]
       java-diagnostics (survival|latency|typing) <path|synthetic> [--lines N] [--samples N]
-      java-diagnostics (survival|latency|typing) <path|synthetic> [--lines N] [--samples N]
+      java-analysis-server <path|synthetic> [--lines N] [--samples N]
+      java-scope-tree <path|synthetic> [--lines N] [--samples N]
       java-profile-import synthetic [--samples N] [--depth N] [--stacks N]
       java-coverage-bands synthetic [--lines N]
       swift-index <path|synthetic> [--files N]
@@ -92,7 +93,7 @@ let options = Commands.Options(
     language: flagValue("--lang", in: rest)
 )
 
-let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections"
+let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree"
     || command == "java-profile-import" || command == "java-coverage-bands"
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
@@ -120,11 +121,11 @@ do {
         try JavaInspectionsProfile.run(
             pathOrSynthetic: path,
             lines: Int(flagValue("--lines", in: rest) ?? "") ?? 20_000,
-            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 5
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 5,
+            jdk: hasFlag("--jdk", in: rest)
         )
     case "java-diagnostics":
         // Mode-first shape: `java-diagnostics survival synthetic --lines 2000`.
-        // `latency` and `typing` land with Phase 2.
         let mode = path
         let target = rest.first ?? "synthetic"
         let modeRest = Array(rest.dropFirst())
@@ -150,6 +151,18 @@ do {
                 "java-diagnostics modes: survival, latency, typing\n".data(using: .utf8)!)
             exit(1)
         }
+    case "java-analysis-server":
+        try JavaAnalysisServerProfile.run(
+            pathOrSynthetic: path,
+            lines: Int(flagValue("--lines", in: rest) ?? "") ?? 2_000,
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 5
+        )
+    case "java-scope-tree":
+        try JavaScopeTreeProfile.run(
+            pathOrSynthetic: path,
+            lines: Int(flagValue("--lines", in: rest) ?? "") ?? 2_000,
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 5
+        )
     case "java-profile-import":
         JavaInstrumentationProfile.runProfileImport(
             samples: Int(flagValue("--samples", in: rest) ?? "") ?? 60_000,

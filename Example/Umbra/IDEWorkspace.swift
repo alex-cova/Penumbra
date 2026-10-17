@@ -119,6 +119,12 @@ public final class IDEWorkspace {
     /// Ranged edits an editor reported since its last `textViewDidChange`, kept only while another
     /// pane shows the same document so they can be replayed there.
     @ObservationIgnored private var pendingMirrorChanges: [ObjectIdentifier: [TextContentChange]] = [:]
+    /// Idle unambiguous-import insertion. A keystroke only cancels this; the buffer is read after the pause.
+    @ObservationIgnored private var javaAutoImportTask: Task<Void, Never>?
+    /// Set while the import edit itself is applied, so that edit does not schedule another pass.
+    @ObservationIgnored private var javaAutoImportApplying = false
+    /// The pasted text of the edit that is about to be reported, when it matches the pasteboard.
+    @ObservationIgnored private var javaAutoImportPaste: String?
     private var hasPresentedMetalFailure = false
     /// The recent lists are shared by every window (`IDEAppState`), so what one window opens shows
     /// in all of them.
@@ -207,7 +213,9 @@ public final class IDEWorkspace {
     /// Gradle. The Java run and test code asks it for the synced model; everything generic asks
     /// `projectSystems`.
     var gradle: IDEGradleProjectSystem { intelligenceServices.gradle }
-    /// npm, registered after Gradle. A folder with both keeps Gradle as `projectSystems.active`.
+    /// Maven, registered after Gradle. A folder with both keeps Gradle.
+    var maven: IDEMavenProjectSystem { intelligenceServices.maven }
+    /// npm, registered after Maven. A folder with Gradle or Maven keeps those as `projectSystems.active`.
     var npm: IDENpmProjectSystem { intelligenceServices.npm }
     /// SwiftPM, registered after npm.
     var swiftPM: IDESwiftPMProjectSystem { intelligenceServices.swiftPM }
@@ -570,6 +578,11 @@ public final class IDEWorkspace {
     var showsGradleConsoleTab: Bool {
         gradle.showsConsole
     }
+    /// Whether the "Maven" tab should appear: while a read or a goal is running, or once one has
+    /// produced output worth revisiting.
+    var showsMavenConsoleTab: Bool {
+        maven.showsConsole
+    }
     /// Whether the "HTTP" tab should appear for the active `.http` file or after a request runs.
     var showsHTTPTab: Bool {
         statusLanguage == "http" || httpSupport.isSending || !httpSupport.responseLog.lines.isEmpty
@@ -733,6 +746,25 @@ public final class IDEWorkspace {
             guard let preferences = self?.preferences else { return .init(isEnabled: false) }
             return .init(isEnabled: preferences.saveWhenIdle, idleDelay: .seconds(preferences.idleSaveSeconds))
         }
+        // Maven ignores `environment.requestTrust` too: that closure is worded for Gradle, and
+        // reading a POM does not run Maven. Goals and downloads ask with Maven's own words.
+        maven.trustPrompt = { [weak self] url in
+            guard let self else { return false }
+            let name = url.lastPathComponent
+            return await self.promptProjectTrust(
+                message: "Trust and run Maven for “\(name)”?",
+                detail: "Maven plugins and goals can run arbitrary code. Trust this folder only if you trust its contents."
+            )
+        }
+        maven.environment.syncFailed = { [weak self] in
+            self?.showMavenOutput()
+        }
+        maven.environment.syncFinished = { [weak self] outcome in
+            self?.notifyMavenSync(outcome)
+        }
+        maven.environment.tasksFinished = { [weak self] report in
+            self?.runProviders.projectTasksDidFinish(report)
+        }
         // npm ignores `environment.requestTrust`: that closure is worded for Gradle build scripts,
         // and agreeing to Gradle does not agree to npm.
         npm.trustPrompt = { [weak self] url in
@@ -811,9 +843,17 @@ public final class IDEWorkspace {
                 action: .showSourceControl
             )
         }
-        gradle.onModelChanged = { [weak self] model in
-            self?.fileIndexer.setGradleModel(model)
-            if model != nil { self?.reloadDiagramSessions(classes: false) }
+        gradle.onModelChanged = { [weak self] _ in
+            guard let self else { return }
+            let model = self.javaSupport.projectModel
+            self.fileIndexer.setGradleModel(model)
+            if model != nil { self.reloadDiagramSessions(classes: false) }
+        }
+        maven.onModelChanged = { [weak self] _ in
+            guard let self else { return }
+            let model = self.javaSupport.projectModel
+            self.fileIndexer.setGradleModel(model)
+            if model != nil { self.reloadDiagramSessions(classes: false) }
         }
         intelligenceServices.javaSupport.openJavaDocuments = { [weak self] in
             self?.openJavaDocuments() ?? []
@@ -1617,6 +1657,9 @@ public final class IDEWorkspace {
         if showsGradleConsoleTab {
             add("gradleConsole", "Gradle Output") { [weak self] in self?.showBottomTab(.gradle) }
         }
+        if showsMavenConsoleTab {
+            add("mavenConsole", "Maven Output") { [weak self] in self?.showBottomTab(.maven) }
+        }
         if showsHTTPTab {
             add("http", "HTTP Response") { [weak self] in self?.showBottomTab(.http) }
         }
@@ -1749,7 +1792,9 @@ public final class IDEWorkspace {
 
     public func buildGradleProject() {
         guard let system = projectSystems.active, project.rootURL != nil else { return }
-        showGradleOutput()
+        if let tab = system.consoleTab {
+            showBottomTab(tab)
+        }
         system.build()
     }
 
@@ -2042,8 +2087,13 @@ public final class IDEWorkspace {
     }
 
     func reportRunProblem(_ message: String) {
-        gradle.appendConsoleNote(message)
-        showGradleOutput()
+        if javaSupport.maven.isActive, !javaSupport.gradle.isActive {
+            maven.appendConsoleNote(message)
+            showMavenOutput()
+        } else {
+            gradle.appendConsoleNote(message)
+            showGradleOutput()
+        }
     }
 
     func refreshLastRunConfiguration() {
@@ -3639,7 +3689,7 @@ public final class IDEWorkspace {
     /// Directories of the synced Gradle test source sets; files in them are tests for scoped
     /// inspection settings (without a model, a `src/test` path still counts).
     var javaTestSourceRoots: [URL] {
-        (javaSupport.gradle.model?.subprojects ?? []).flatMap(\.testSourceDirs)
+        (javaSupport.projectModel?.subprojects ?? []).flatMap(\.testSourceDirs)
     }
 
     func applyCodeInsightPreferences() {
@@ -3649,7 +3699,9 @@ public final class IDEWorkspace {
             suppressionStyle: preferences.javaSuppressWithComment ? .comment : .annotation,
             inspectionProfile: inspections.activeProfile,
             projectRoot: project.rootURL,
-            testRoots: javaTestSourceRoots
+            testRoots: javaTestSourceRoots,
+            importPolicy: preferences.javaImportPolicy,
+            postfix: preferences.javaPostfix
         )
     }
 
@@ -4038,6 +4090,9 @@ public final class IDEWorkspace {
             workspace: workspaceBridge.workspace
         )
         host.intelligenceController?.inlayHintsEnabled = preferences.areInlayHintsEnabled
+        host.intelligenceController?.onOpenInlineCompletionSettings = { [weak self] in
+            self?.showSettings()
+        }
         host.intelligenceController?.onOpenLocationInOtherDocument = { [weak self] location in
             self?.openNavigationLocation(location) ?? false
         }
@@ -4473,6 +4528,7 @@ public final class IDEWorkspace {
         notifications.dismissToast()
         switch notification.action {
         case .showGradleOutput: showGradleOutput()
+        case .showMavenOutput: showMavenOutput()
         case .showSourceControl: showSourceControl()
         case .showProblems: showProblems()
         case .showCoverage: showCoverageTab()
@@ -4489,6 +4545,23 @@ public final class IDEWorkspace {
 
     func showNotifications() {
         notifications.setPanelPresented(true)
+    }
+
+    private func notifyMavenSync(_ outcome: IDEProjectSyncOutcome) {
+        switch outcome {
+        case .synced(let modules, let jars):
+            notifications.post(
+                "Maven read finished",
+                detail: "\(modules) module\(modules == 1 ? "" : "s"), \(jars) dependenc\(jars == 1 ? "y" : "ies")",
+                category: .maven,
+                severity: .success,
+                action: .showMavenOutput
+            )
+        case .failed(let summary):
+            notifications.post("Maven read failed", detail: summary, category: .maven, severity: .error, action: .showMavenOutput)
+        case .cancelled:
+            notifications.post("Maven read cancelled", category: .maven, severity: .info, action: .showMavenOutput)
+        }
     }
 
     private func notifyGradleSync(_ outcome: IDEProjectSyncOutcome) {
@@ -5149,6 +5222,10 @@ public final class IDEWorkspace {
 
     func showGradleOutput() {
         showBottomTab(.gradle)
+    }
+
+    func showMavenOutput() {
+        showBottomTab(.maven)
     }
 
     func dismissProjectReloadBanner() {
@@ -6523,11 +6600,13 @@ extension IDEWorkspace: TextViewDelegate {
     }
 
     public func textView(_ textView: TextView, didChangeContent change: TextContentChange) {
+        noteJavaAutoImportPaste(change)
         guard hostedPaneIDs.count > 1 else { return }
         pendingMirrorChanges[ObjectIdentifier(textView), default: []].append(change)
     }
 
     public func textViewDidChange(_ textView: TextView) {
+        scheduleJavaAutoImport(for: textView)
         mirrorEdits(from: textView)
         if let pane = workbench.panes.first(where: { hostCache.peek($0.id)?.textView === textView }) {
             hostCache.peek(pane.id)?.noteJSONDiagramEdited()
@@ -6544,6 +6623,57 @@ extension IDEWorkspace: TextViewDelegate {
         noteActiveDocumentEdited()
         autosave.noteEdit()
         changeMarkers.refresh(textView: textView, url: textView.documentURL, git: gitStatus)
+    }
+
+    /// A multi-character replacement that equals the pasteboard is a paste. One character never
+    /// reads the pasteboard. The planner runs later, from ``textViewDidChange(_:)``.
+    private func noteJavaAutoImportPaste(_ change: TextContentChange) {
+        guard change.replacementText.utf16.count > 1,
+              change.replacementText == NSPasteboard.general.string(forType: .string) else { return }
+        javaAutoImportPaste = change.replacementText
+    }
+
+    /// After a pause, import the one class that resolves a name in this Java buffer. The keystroke
+    /// itself only cancels the previous pause. Parsing and `textView.text` happen once it has elapsed.
+    private func scheduleJavaAutoImport(for textView: TextView) {
+        if javaAutoImportApplying {
+            javaAutoImportPaste = nil
+            return
+        }
+        let paste = javaAutoImportPaste
+        javaAutoImportPaste = nil
+        guard textView.languageIdentifier == "java" else { return }
+        let policy = preferences.javaImportPolicy
+        let pasting = paste != nil && policy.insertImportsOnPaste == .always
+        guard policy.addUnambiguousImportsOnTheFly || pasting else { return }
+        javaAutoImportTask?.cancel()
+        let delay = preferences.autoreparseDelayMilliseconds
+        let documentID = textView.documentIdentifier
+        let url = textView.documentURL
+        javaAutoImportTask = Task { @MainActor [weak self, weak textView] in
+            do {
+                try await Task.sleep(for: .milliseconds(delay))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self, let textView else { return }
+            guard textView.languageIdentifier == "java",
+                  textView.documentIdentifier == documentID,
+                  textView.documentURL == url else { return }
+            let text = textView.text
+            let edits: [TextEdit]
+            if pasting, let paste {
+                edits = await self.javaSupport.importEdits(forPastedText: paste, in: text, file: url, policy: policy)
+            } else {
+                edits = await self.javaSupport.importEdits(
+                    in: text, caretUTF16: textView.selectedRange.location, file: url, policy: policy
+                )
+            }
+            guard !Task.isCancelled, textView.text == text, textView.documentURL == url, !edits.isEmpty else { return }
+            self.javaAutoImportApplying = true
+            TextEditApplicator.apply(edits, in: textView)
+            self.javaAutoImportApplying = false
+        }
     }
 
     public func textView(

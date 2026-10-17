@@ -253,6 +253,7 @@ enum JavaInspectionRegistry {
         JavaDeprecatedFieldUsageInspection.self,
         JavaSuspiciousCollectionArgumentInspection.self,
         JavaFieldHidesSuperclassFieldInspection.self,
+        JavaUnresolvedMemberInspection.self,
         JavaRedundantArrayCreationInspection.self,
         JavaSizeComparisonWithZeroInspection.self,
         JavaDeprecatedApiInspection.self,

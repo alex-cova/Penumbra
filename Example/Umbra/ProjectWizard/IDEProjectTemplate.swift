@@ -96,7 +96,7 @@ protocol IDEProjectTemplate: Sendable {
 
 enum IDEProjectTemplates {
     static let all: [any IDEProjectTemplate] =
-        IDEXcodeProjectTemplates.all + IDESwiftPackageTemplates.all
+        IDEXcodeProjectTemplates.all + IDESwiftPackageTemplates.all + IDEMavenTemplates.all
 
     static func template(id: String) -> (any IDEProjectTemplate)? {
         all.first { $0.id == id }

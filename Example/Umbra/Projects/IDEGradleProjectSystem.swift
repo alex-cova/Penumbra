@@ -7,16 +7,17 @@ import SwiftUI
 /// changes. `IDEJavaSupport` implements it; the Gradle system holds it weakly. It is the one place the
 /// two know each other: Gradle produces the module and dependency model, Java indexes it.
 @MainActor
-protocol IDEGradleModelConsumer: AnyObject {
-    /// The model was set or cleared (a new folder, a sync, a failed sync).
-    func gradleModelDidChange(_ model: JavaGradleProjectModel?)
+protocol IDEJavaModelConsumer: AnyObject {
+    /// The model was set or cleared (a new folder, a sync, a failed sync). The argument is the
+    /// model that just changed. The consumer publishes whichever Java build is active.
+    func javaModelDidChange(_ model: JavaGradleProjectModel?)
     /// A sync (or the cached model) produced `model`: index its source sets and dependencies. Called
     /// before the sync state becomes `.synced`.
-    func gradleModelApplied(_ model: JavaGradleProjectModel, previous: JavaGradleProjectModel?, logToConsole: Bool) async
+    func javaModelApplied(_ model: JavaGradleProjectModel, previous: JavaGradleProjectModel?, logToConsole: Bool) async
     /// A sync failed or the folder changed: drop what was derived from the model.
-    func gradleModelRemoved()
-    /// A task run ended with exit code 0; annotation processors may have written generated sources.
-    func gradleTasksSucceeded()
+    func javaModelRemoved()
+    /// A build ended with exit code 0; annotation processors may have written generated sources.
+    func buildSucceeded()
 }
 
 /// How a Gradle task run ended, for a caller that awaits it. Every path of
@@ -47,7 +48,7 @@ extension IDEProjectConsoleLog {
 /// Gradle as a project system: detects a Gradle folder, syncs its module and dependency model through
 /// `GradleCommandRunner` (after the trust prompt), keeps the Gradle console, runs tasks, watches the
 /// build files and shows the Gradle tool window. Split out of `IDEJavaSupport`, which indexes the
-/// model it produces (`IDEGradleModelConsumer`).
+/// model it produces (`IDEJavaModelConsumer`).
 ///
 /// A sync is silent when it only refreshes a cached model (nothing is announced, the console says so),
 /// and every other sync tells the host how it ended (`environment.syncFinished`). A reload of the same
@@ -67,7 +68,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         didSet {
             if oldValue == nil, model == nil { return }
             onModelChanged?(model)
-            consumer?.gradleModelDidChange(model)
+            consumer?.javaModelDidChange(model)
         }
     }
     /// Called whenever a sync sets or clears ``model`` (the Go to File index labels files with their module).
@@ -88,7 +89,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     /// auto-sync is on, so the sources come from its modules.
     @ObservationIgnored private(set) var isLoadingCachedModel = false
 
-    @ObservationIgnored weak var consumer: (any IDEGradleModelConsumer)?
+    @ObservationIgnored weak var consumer: (any IDEJavaModelConsumer)?
 
     private let jdk: IDEJDKSelection
     private let status: IDEProjectStatus
@@ -396,7 +397,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                     modules: bootstrapModel.subprojects.count,
                     dependencies: bootstrapModel.classpathJars.count
                 )
-                await consumer?.gradleModelApplied(bootstrapModel, previous: nil, logToConsole: false)
+                await consumer?.javaModelApplied(bootstrapModel, previous: nil, logToConsole: false)
                 guard isCurrent(generation) else { return }
             }
 
@@ -456,7 +457,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                 }
 
                 self.model = model
-                await consumer?.gradleModelApplied(model, previous: previousModel, logToConsole: !silent)
+                await consumer?.javaModelApplied(model, previous: previousModel, logToConsole: !silent)
                 guard isCurrent(generation) else { return }
 
                 syncState = .synced(modules: model.subprojects.count, dependencies: model.classpathJars.count)
@@ -476,7 +477,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                     console.markFinished()
                     return
                 }
-                consumer?.gradleModelRemoved()
+                consumer?.javaModelRemoved()
                 model = nil
                 // Only clear the message this task set. JDK indexing and the whole-tree fallback
                 // publish their own status and must not be blanked by a Gradle failure.
@@ -630,7 +631,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                 let elapsed = Date().timeIntervalSince(startedAt)
                 console.appendNote(String(format: "Gradle exited %d in %.1fs", result.exitCode, elapsed))
                 console.markFinished()
-                if result.exitCode == 0 { consumer?.gradleTasksSucceeded() }
+                if result.exitCode == 0 { consumer?.buildSucceeded() }
                 tasksFinished(taskPaths, url, result)
                 completion?(.finished(result))
             } catch is CancellationError {

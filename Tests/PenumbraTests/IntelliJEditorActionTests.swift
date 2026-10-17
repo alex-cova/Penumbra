@@ -16,6 +16,7 @@ final class IntelliJEditorActionTests: XCTestCase {
         XCTAssertEqual(map.action(for: KeyStroke(KeyChord("g", [.control, .shift]))), .unselectLastOccurrence)
         XCTAssertEqual(map.action(for: KeyStroke(KeyChord(code: 0x24, [.command, .option]))), .insertLineAbove)
         XCTAssertEqual(map.action(for: KeyStroke(KeyChord(code: 0x24, .shift))), .startNewLine)
+        XCTAssertEqual(map.action(for: KeyStroke(KeyChord("j", .command))), .insertLiveTemplate)
     }
 
     func testIntelliJKeymapFreesTheDefaultLineInsertKeys() {

@@ -119,12 +119,13 @@ struct IDEProjectClaim: Equatable, Sendable {
 
 /// One kind of project Umbra understands: it recognizes a folder, syncs the project model (asking for
 /// trust first), keeps a console log, runs the project's tasks and shows a tool window. Gradle is the
-/// first (`IDEGradleProjectSystem`); npm is the second (`IDENpmProjectSystem`). SwiftPM or Cargo would
-/// be others. See `docs/LANGUAGE_SUPPORT_PLAN.md` (phase 5 and its follow-up).
+/// first (`IDEGradleProjectSystem`); Maven is the second (`IDEMavenProjectSystem`); npm is the third
+/// (`IDENpmProjectSystem`). SwiftPM or Cargo would be others. See `docs/LANGUAGE_SUPPORT_PLAN.md`
+/// (phase 5 and its follow-up).
 ///
 /// One instance per window, made with the window's other services (`IDEIntelligenceServices`). A
-/// project system is not a language service: a language that wants the model (Java reads Gradle's)
-/// is handed it by whoever builds both.
+/// project system is not a language service: a language that wants the model (Java reads the active
+/// build's) is handed it by whoever builds both.
 @MainActor
 protocol IDEProjectSystem: AnyObject {
     var id: String { get }

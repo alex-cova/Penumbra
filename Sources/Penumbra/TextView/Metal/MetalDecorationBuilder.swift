@@ -328,6 +328,20 @@ private extension MetalDecorationBuilder {
         }
         for hint in decorations.inlayHints {
             let appearance = hint.appearance
+            if hint.kind == .inlineCompletion {
+                // Ghost text: no pill, editor font, starting where the caret is.
+                let end = InlayChipGeometry.chipEnd(forLocalOffset: hint.localOffset, in: context.line)
+                geometry.overlayGlyphs.append(contentsOf: textGlyphs(
+                    hint.label,
+                    font: appearance.editorFont,
+                    color: appearance.inlineTextColor,
+                    atX: context.originX + (hint.localOffset == 0 ? 0 : end - hint.width),
+                    context: context,
+                    atlas: atlas,
+                    budget: &budget
+                ))
+                continue
+            }
             let font = appearance.font
             let attributes: [NSAttributedString.Key: Any] = [.font: font]
             let size = (hint.label as NSString).size(withAttributes: attributes)

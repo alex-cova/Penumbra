@@ -26,6 +26,10 @@ struct InlayHintAppearance: Equatable {
     var font: NSFont
     var textColor: NSColor
     var backgroundColor: NSColor
+    /// Editor font at full size, for inline completion ghost text.
+    var editorFont: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)
+    /// Ghost text color: the theme's inline completion color, or its comment color.
+    var inlineTextColor: NSColor = .secondaryLabelColor
 
     /// The look before a theme is applied: system UI font, system label colors.
     /// Main-actor only: `NSFont` and `NSColor` are not `Sendable`, and this value only seeds UI state.
@@ -50,7 +54,11 @@ struct InlayHintAppearance: Equatable {
         return InlayHintAppearance(
             font: font,
             textColor: theme.inlayHintTextColor ?? theme.textColor.withAlphaComponent(0.55),
-            backgroundColor: theme.inlayHintBackgroundColor ?? theme.textColor.withAlphaComponent(0.09)
+            backgroundColor: theme.inlayHintBackgroundColor ?? theme.textColor.withAlphaComponent(0.09),
+            editorFont: editorFont,
+            inlineTextColor: theme.inlineCompletionTextColor
+                ?? theme.textColor(for: "comment")
+                ?? theme.textColor.withAlphaComponent(0.45)
         )
     }
 
@@ -58,9 +66,18 @@ struct InlayHintAppearance: Equatable {
         ceil((label as NSString).size(withAttributes: [.font: font]).width)
     }
 
+    func inlineTextWidth(of label: String) -> CGFloat {
+        ceil((label as NSString).size(withAttributes: [.font: editorFont]).width)
+    }
+
     /// The horizontal room a hint needs.
     func width(of label: String) -> CGFloat {
         textWidth(of: label) + Self.horizontalPadding * 2 + Self.trailingGap
+    }
+
+    /// The horizontal room a hint of `kind` needs: ghost text has no padding or gap.
+    func width(of label: String, kind: InlayHint.Kind) -> CGFloat {
+        kind == .inlineCompletion ? inlineTextWidth(of: label) : width(of: label)
     }
 }
 
@@ -101,7 +118,8 @@ enum InlayHintIndex {
         var result: [InlayHint] = []
         let usable = hints.filter { $0.utf16Offset >= 0 && !$0.label.isEmpty }
         for hint in usable.sorted(by: { $0.utf16Offset < $1.utf16Offset }) {
-            if let last = result.last, last.utf16Offset == hint.utf16Offset {
+            if let last = result.last, last.utf16Offset == hint.utf16Offset,
+               last.kind != .inlineCompletion, hint.kind != .inlineCompletion {
                 result[result.count - 1] = InlayHint(
                     utf16Offset: last.utf16Offset, label: last.label + " " + hint.label, kind: last.kind
                 )
@@ -130,6 +148,15 @@ enum InlayHintIndex {
             if hints[mid].utf16Offset <= location { low = mid + 1 } else { high = mid }
         }
         var result: [LineInlayHint] = []
+        // An inline completion at the very start of an (empty) line has no character before
+        // it to widen; it is drawn at the line start with no kern.
+        if low > 0, hints[low - 1].utf16Offset == location, hints[low - 1].kind == .inlineCompletion {
+            let hint = hints[low - 1]
+            result.append(LineInlayHint(
+                localOffset: 0, label: hint.label, kind: hint.kind,
+                width: appearance.width(of: hint.label, kind: hint.kind), appearance: appearance
+            ))
+        }
         var index = low
         while index < hints.count, hints[index].utf16Offset <= location + length {
             let hint = hints[index]
@@ -137,7 +164,7 @@ enum InlayHintIndex {
                 localOffset: hint.utf16Offset - location,
                 label: hint.label,
                 kind: hint.kind,
-                width: appearance.width(of: hint.label),
+                width: appearance.width(of: hint.label, kind: hint.kind),
                 appearance: appearance
             ))
             index += 1

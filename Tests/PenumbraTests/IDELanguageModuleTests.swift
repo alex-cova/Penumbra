@@ -28,8 +28,10 @@ final class IDELanguageModuleTests: XCTestCase {
             "app.java.runWithCoverage", "app.java.runTestsWithCoverage", "app.java.clearCoverage",
             "app.java.profile", "app.java.profileTests", "app.java.openProfilerRecording",
             "app.java.editRunConfiguration", "app.java.reloadGradleProject", "app.java.showGradleOutput",
+            "app.java.reloadMavenProject", "app.java.showMavenOutput",
             "app.java.showClassDiagram", "app.java.showPackageDiagram", "app.java.showProjectDiagram",
-            "app.java.showGradleModuleDiagram", "app.java.showGradleDependencyDiagram"
+            "app.java.showGradleModuleDiagram", "app.java.showGradleDependencyDiagram",
+            "app.java.showMavenModuleDiagram", "app.java.showMavenDependencyDiagram"
         ])
         XCTAssertEqual(Set(commands.map(\.group)), ["Java"])
         XCTAssertEqual(commands.first?.title, "Java: Build Project")

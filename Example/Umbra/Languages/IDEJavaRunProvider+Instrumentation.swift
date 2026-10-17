@@ -113,7 +113,7 @@ extension IDEJavaRunProvider {
             }
             // The class files a run reports on are compiled for the project's own level; a JDK newer
             // than the pinned JaCoCo reads them fine, so what is checked is the level they were built for.
-            let level = gradle.model?.maxLanguageLevel
+            let level = java.projectModel?.maxLanguageLevel
             if let message = JavaCoverageToolchain.unsupportedLanguageLevel(level ?? jdk.featureVersion) {
                 return .failure(IDEInstrumentationFailure(message: message))
             }
@@ -123,7 +123,7 @@ extension IDEJavaRunProvider {
             let execution = run.directory.appendingPathComponent("exec", isDirectory: true)
             try? FileManager.default.createDirectory(at: execution, withIntermediateDirectories: true)
             // Reading the packages walks the source folders, which is not for the main actor.
-            let model = gradle.model
+            let model = java.projectModel
             let includeTests = IDEPreferences.shared.javaCoverageIncludesTests
             let scope: JavaCoverageScope = await Task.detached(priority: .userInitiated) {
                 model.map { JavaCoverageScope.make(model: $0, includeTests: includeTests) } ?? JavaCoverageScope()
@@ -255,7 +255,57 @@ extension IDEJavaRunProvider {
         }
     }
 
-    /// A Gradle task run measured by `plan` ended.
+    /// Maven test-run arguments for `plan`. A module that already runs JaCoCo's prepare-agent keeps
+    /// that agent. A Surefire `argLine` that drops `@{argLine}` blocks an injected agent.
+    func mavenTestArguments(for plan: InstrumentationPlan, scope: JavaTestRunScope) -> Result<[String], IDEInstrumentationFailure> {
+        guard let model = maven.model else {
+            return .failure(IDEInstrumentationFailure(message: "Read the Maven project before measuring tests."))
+        }
+        let taskPath = mavenTaskPath(scope)
+        let modules = taskPath == "test" ? model.modules : model.modules.filter { $0.path == mavenModulePath(forTask: taskPath) }
+        guard !modules.isEmpty else {
+            return .failure(IDEInstrumentationFailure(message: "There is no Maven module for these tests."))
+        }
+        switch plan {
+        case .coverage(let coverage):
+            let exec = coverage.executionDirectory.appendingPathComponent("tests.exec")
+            return injectedMavenArguments(modules, honorPrepareAgent: true) { module in
+                MavenCoverageArguments.coverage(
+                    module: module, agentJar: coverage.toolchain.agentJar, execFile: exec, includes: coverage.scope.includes
+                )
+            }
+        case .profile(let profile):
+            let file = profile.recordingDirectory.appendingPathComponent("recording.jfr")
+            return injectedMavenArguments(modules, honorPrepareAgent: false) { module in
+                MavenCoverageArguments.profiling(
+                    module: module, recordingFile: file.path, jdkFeatureVersion: profile.jdkFeatureVersion
+                )
+            }
+        }
+    }
+
+    /// `honorPrepareAgent` leaves a JaCoCo prepare-agent module alone (coverage). Profiling still
+    /// asks for an agent on a module that does not already own the test JVM that way.
+    private func injectedMavenArguments(
+        _ modules: [MavenModule],
+        honorPrepareAgent: Bool,
+        make: (MavenModule) -> MavenCoverageArguments.Result
+    ) -> Result<[String], IDEInstrumentationFailure> {
+        let candidates = honorPrepareAgent ? modules.filter { !$0.usesJacocoPrepareAgent } : modules
+        guard let module = candidates.first else { return .success([]) }
+        let result = make(module)
+        if let explanation = result.explanation {
+            return .failure(IDEInstrumentationFailure(message: explanation))
+        }
+        for other in candidates.dropFirst() {
+            if let explanation = make(other).explanation {
+                return .failure(IDEInstrumentationFailure(message: explanation))
+            }
+        }
+        return .success(result.arguments)
+    }
+
+    /// A Gradle or Maven task run measured by `plan` ended.
     func finishGradleRun(plan: InstrumentationPlan, report: IDEProjectTaskReport) {
         switch plan {
         case .coverage(let plan):
@@ -263,6 +313,15 @@ extension IDEJavaRunProvider {
             if files.isEmpty {
                 files = (try? FileManager.default.contentsOfDirectory(at: plan.executionDirectory, includingPropertiesForKeys: nil))?
                     .filter { $0.pathExtension == "exec" } ?? []
+            }
+            if let modules = maven.model?.modules {
+                for module in modules where module.usesJacocoPrepareAgent {
+                    let exec = module.directory.appendingPathComponent("target/jacoco.exec")
+                    if FileManager.default.fileExists(atPath: exec.path),
+                       !files.contains(where: { $0.standardizedFileURL == exec.standardizedFileURL }) {
+                        files.append(exec)
+                    }
+                }
             }
             finishCoverage(plan, executionFiles: files, note: { [weak self] in self?.host?.reportInstrumentationNote($0) })
         case .profile(let plan):

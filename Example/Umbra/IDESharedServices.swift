@@ -17,6 +17,9 @@ final class IDESharedServices {
     /// Which Gradle projects the user trusted to run build scripts. A decision in one window counts
     /// in all of them immediately.
     let gradleTrust: GradleTrustStore
+    /// Which folders the user trusted to run Maven. Separate from Gradle: agreeing to one does not
+    /// agree to the other. Reading a POM does not consult it.
+    let mavenTrust: GradleTrustStore
     /// Which folders the user trusted to run npm scripts. Separate from Gradle trust: agreeing to
     /// one does not agree to the other.
     let npmTrust: GradleTrustStore
@@ -37,6 +40,7 @@ final class IDESharedServices {
 
     private init() {
         gradleTrust = GradleTrustStore(storeURL: IDEGradleProjectSystem.defaultTrustStoreURL)
+        mavenTrust = GradleTrustStore(storeURL: IDEMavenProjectSystem.defaultTrustStoreURL)
         npmTrust = GradleTrustStore(storeURL: IDENpmProjectSystem.defaultTrustStoreURL)
         swiftPMTrust = GradleTrustStore(storeURL: IDESwiftPMProjectSystem.defaultTrustStoreURL)
         xcodeTrust = GradleTrustStore(storeURL: IDEXcodeProjectSystem.defaultTrustStoreURL)

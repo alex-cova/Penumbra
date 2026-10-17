@@ -8,23 +8,48 @@ import JavaIntelligence
 ///
 ///   swift run -c release PerfHarness java-inspections synthetic --lines 20000
 ///   swift run -c release PerfHarness java-inspections /path/to/Big.java
+///   swift run -c release PerfHarness java-inspections synthetic --lines 20000 --jdk
+///
+/// `--jdk` indexes the JDK's ct.sym classes first. Without it the index is empty, so
+/// every typed rule (including `unresolved-member`) measures as free.
 enum JavaInspectionsProfile {
-    static func run(pathOrSynthetic: String, lines: Int, samples: Int) throws {
+    static func run(pathOrSynthetic: String, lines: Int, samples: Int, jdk: Bool = false) throws {
         let isSynthetic = pathOrSynthetic == "synthetic" || pathOrSynthetic == "-"
         let source = isSynthetic
             ? syntheticJava(lines: lines)
             : String(decoding: try Data(contentsOf: URL(fileURLWithPath: pathOrSynthetic)), as: UTF8.self)
         let lineCount = source.utf8.reduce(1) { $0 + ($1 == 10 ? 1 : 0) }
-        let timings = try runBlocking { try await measure(source: source, samples: samples) }
+        let timings = try runBlocking {
+            let index = try await jdk ? jdkIndex() : JavaIndex()
+            return try await measure(source: source, samples: samples, index: index)
+        }
         let sorted = timings.sorted()
         let median = sorted[sorted.count / 2]
         print("stage java_inspections lines=\(lineCount) count=\(sorted.count) median_s=\(format(median)) worst_s=\(format(sorted.last ?? 0))")
         print("stage java_inspections_per_1k_lines lines=\(lineCount) median_s=\(format(median / Double(max(1, lineCount)) * 1000))")
     }
 
-    private static func measure(source: String, samples: Int) async throws -> [Double] {
+    /// The JDK's ct.sym classes as an index shard, the way `JavaCompletionProfile` builds
+    /// its own: typed rules only do real work when their receivers resolve.
+    private static func jdkIndex() async throws -> JavaIndex {
+        guard let jdk = JDKLocator().select() else {
+            throw InspectionsProfileFailure(message: "java-inspections --jdk needs an installed JDK")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "perf-java-inspections-\(UUID().uuidString)", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let shard = directory.appendingPathComponent("jdk.idx")
+        try JavaIndexShardWriter().write(try JDKCtSymRoot(installation: jdk).readStubs(), stamp: JavaStamp(size: 0, modificationDate: 0), to: shard)
+        let index = JavaIndex()
+        await index.setSources([.init(precedence: 3, reader: try JavaIndexShardReader(url: shard), shardPath: shard.path)])
+        return index
+    }
+
+    private static func measure(source: String, samples: Int, index: JavaIndex) async throws -> [Double] {
         let url = URL(fileURLWithPath: "/perf/Perf.java")
-        let service = JavaInspectionService(index: JavaIndex(), idleDelay: .milliseconds(1))
+        let service = JavaInspectionService(index: index, idleDelay: .milliseconds(1))
         let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
         let document = Document(
             url: url, displayName: "Perf.java",
@@ -93,4 +118,9 @@ enum JavaInspectionsProfile {
 
 private final class InspectionsBlockingBox<T: Sendable>: @unchecked Sendable {
     var result: Result<T, Error>?
+}
+
+private struct InspectionsProfileFailure: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
 }

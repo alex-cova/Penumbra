@@ -15,11 +15,16 @@ public struct GradleBuildFileSnapshot: Sendable, Equatable {
         self.contents = contents
     }
 
-    /// Reads every build input under `projectRoot`. Synchronous file I/O: call it off the main actor.
+    /// Reads every Gradle build input under `projectRoot`. Synchronous file I/O: call it off the main actor.
     public static func capture(projectRoot: URL) -> GradleBuildFileSnapshot {
+        capture(projectRoot: projectRoot, inputPaths: GradleBuildFiles.inputPaths(under:))
+    }
+
+    /// Reads the files `inputPaths` names. Maven passes its own list and shares the byte comparison.
+    public static func capture(projectRoot: URL, inputPaths: (URL) -> [String]) -> GradleBuildFileSnapshot {
         let root = projectRoot.standardizedFileURL.resolvingSymlinksInPath()
         var contents: [String: Data] = [:]
-        for relative in GradleBuildFiles.inputPaths(under: root) {
+        for relative in inputPaths(root) {
             if let data = try? Data(contentsOf: root.appendingPathComponent(relative)) {
                 contents[relative] = data
             }

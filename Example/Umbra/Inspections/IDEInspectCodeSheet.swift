@@ -25,7 +25,7 @@ struct IDEInspectCodeSheet: View {
     private var inspections: IDEWorkspaceInspections { workspace.inspections }
 
     private var modules: [(path: String, directory: URL)] {
-        (workspace.javaSupport.gradle.model?.subprojects ?? [])
+        (workspace.javaSupport.projectModel?.subprojects ?? [])
             .filter { !$0.sourceSets.isEmpty }
             .map { ($0.path, $0.directory) }
     }

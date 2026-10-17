@@ -269,6 +269,16 @@ enum EnterSessionProfile {
             textView.codeVisionLenses = lenses
             warn("  Code vision lenses: \(lenses.count)")
         }
+        if ProcessInfo.processInfo.environment["PENUMBRA_INLINE_GHOST"] != nil {
+            // A multi-line ghost on the first line, as full-line completion would show:
+            // layout then carries the first line's inline hint and the reserved room.
+            let firstLineEnd = (text as NSString).range(of: "\n").location
+            textView.inlineCompletion = InlineCompletionPresentation(
+                utf16Offset: firstLineEnd == NSNotFound ? (text as NSString).length : firstLineEnd,
+                text: "  ghost();\n    more();\n    evenMore();"
+            )
+            textView.layoutIfNeeded()
+        }
         textView.layoutIfNeeded()
         return (window, textView)
     }

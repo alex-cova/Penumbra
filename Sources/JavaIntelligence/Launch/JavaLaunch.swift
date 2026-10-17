@@ -299,6 +299,8 @@ public struct JavaLaunchCommand: Equatable, Sendable {
                 task: task, projectRoot: projectRoot, gradleWrapperExists: gradleWrapperExists,
                 environment: jdkEnvironment
             ))
+        case .mavenGoals, .mavenTest:
+            return nil
         case .singleFile(let path):
             var parts = [environment.trimmingCharacters(in: .whitespaces), java]
             parts.append(configuration.vmArguments.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -345,7 +347,7 @@ public struct JavaLaunchCommand: Equatable, Sendable {
     }
 
     /// JDWP agent flag for a debug launch.
-    static func jdwpAgent(port: Int, suspend: Bool) -> String {
+    public static func jdwpAgent(port: Int, suspend: Bool) -> String {
         "-agentlib:jdwp=transport=dt_socket,server=y,suspend=\(suspend ? "y" : "n"),address=*:\(port)"
     }
 

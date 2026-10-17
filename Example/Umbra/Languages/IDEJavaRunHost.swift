@@ -27,6 +27,7 @@ protocol IDEJavaRunHost: AnyObject {
     func refreshLastRunConfiguration()
     func showRunTab()
     func showGradleConsole()
+    func showMavenConsole()
     func showTestResults()
     func showProblems()
     /// Tells the user why a launch did not start (a line in the Gradle console, which is shown).

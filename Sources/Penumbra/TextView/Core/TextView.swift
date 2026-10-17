@@ -542,6 +542,14 @@ public struct DocumentTextExport: Sendable {
         set { textInputView.supplementaryInlayHints = newValue }
     }
 
+    /// The inline completion ghost text at the caret, drawn in the editor font with no
+    /// chip. Kept separate from ``inlayHints``: setting or clearing it re-typesets only
+    /// the caret's line. Display-only, like the hints.
+    public var inlineCompletion: InlineCompletionPresentation? {
+        get { textInputView.inlineCompletion }
+        set { textInputView.inlineCompletion = newValue }
+    }
+
     /// Re-syncs gutter visibility and line-number layout after wholesale state changes.
     public func refreshGutterChrome() {
         textInputView.refreshGutterChrome()
@@ -2402,8 +2410,11 @@ public struct DocumentTextExport: Sendable {
     /// (`if`, `for`, a method, a class, …). Only C-style languages (those whose
     /// ``TreeSitterLanguage/enterBehavior`` sets `cStyleIndent`) get this; elsewhere it is Start
     /// New Line. One undo step. Bound to ⇧⌘↵ in the IntelliJ keymap.
-    public func completeStatement() {
-        textInputView.completeStatement()
+    ///
+    /// `preservingCaretInsideParens` appends the terminator but leaves the caret where it is, for
+    /// a method completion that was just accepted inside `()`.
+    public func completeStatement(preservingCaretInsideParens: Bool = false) {
+        textInputView.completeStatement(preservingCaretInsideParens: preservingCaretInsideParens)
     }
 
     /// Wraps the selection, or the caret's line when nothing is selected, in the language's

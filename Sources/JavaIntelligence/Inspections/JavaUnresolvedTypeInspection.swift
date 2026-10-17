@@ -3,11 +3,13 @@ import Foundation
 
 enum JavaUnresolvedTypeInspection {
     static func inspect(source: String, url: URL?, index: JavaIndex, walker: JavaSemanticWalker) async -> [JavaInspection] {
-        let file = JavaSourceStubBuilder.build(tree: walker.syntaxTree, url: url ?? JavaNavigationSession.placeholderURL)
         var inspections: [JavaInspection] = []
         for name in walker.undeclaredTypeNames.sorted() {
+            // A name some known type bears resolves without an import (`java.lang`, the file's
+            // own package) or is one import away (auto-import and the import fix own those, so
+            // this rule stays silent). Only a name no known type bears is reported.
             let candidates = await index.classes(simpleName: name, limit: 50)
-            guard candidates.isEmpty || candidates.allSatisfy({ !isImportable($0, from: file.packageName) }) else { continue }
+            guard candidates.isEmpty else { continue }
             guard let range = firstTypeReference(to: name, in: walker.syntaxTree) else { continue }
             let start = JavaImportInserter.textPosition(forByteOffset: range.lowerBound, in: walker.syntaxTree.sourceBytes)
             let end = JavaImportInserter.textPosition(forByteOffset: range.upperBound, in: walker.syntaxTree.sourceBytes)
@@ -15,22 +17,21 @@ enum JavaUnresolvedTypeInspection {
                 id: "unresolved-type",
                 message: "Cannot resolve type '\(name)'",
                 severity: .warning,
-                range: EditorIntelligence.TextRange(start: start, end: end),
-                fixTitle: candidates.count == 1 ? "Import '\(candidates[0].qualifiedName)'" : nil
+                range: EditorIntelligence.TextRange(start: start, end: end)
             ))
         }
         return inspections
     }
 
-    private static func isImportable(_ stub: JavaClassStub, from packageName: String) -> Bool {
-        stub.packageName != packageName && !stub.qualifiedName.hasPrefix("java.lang.")
-    }
-
+    /// The first reference to `name` in type position: a plain `type_identifier` with exactly
+    /// that text that is not a qualifier segment. That covers simple names and the last segment
+    /// of qualified names; qualifier segments (`io` and `java` in `java.io.OutputStream`) are
+    /// packages, not types, so a name that only ever qualifies never reports. Resolving the
+    /// qualifier itself (`unknown` in `unknown.Known`) is name resolution's job, not this rule's.
     private static func firstTypeReference(to name: String, in tree: JavaSyntaxTree) -> Range<Int>? {
         var stack = [tree.rootNode]
         while let node = stack.popLast() {
-            if node.type == "type_identifier", node.text == name { return node.byteRange }
-            if node.type == "scoped_type_identifier", node.text.hasSuffix(name), node.text.hasSuffix("." + name) || node.text == name {
+            if node.type == "type_identifier", node.text == name, !isQualifierSegment(node) {
                 return node.byteRange
             }
             for index in (0..<node.namedChildCount).reversed() {
@@ -38,5 +39,16 @@ enum JavaUnresolvedTypeInspection {
             }
         }
         return nil
+    }
+
+    /// Whether `node` sits on the scope (left-hand) side of a qualified name: the scope is
+    /// always followed by `.name`, so a scope segment ends strictly before the outermost
+    /// qualified name does, while the trailing segment ends exactly where it does.
+    private static func isQualifierSegment(_ node: SyntaxNode) -> Bool {
+        var top = node
+        while let parent = top.parent, parent.type == "scoped_type_identifier" {
+            top = parent
+        }
+        return top.byteRange.upperBound > node.byteRange.upperBound
     }
 }

@@ -20,6 +20,7 @@ public enum CompletionItemKind: Hashable, Sendable, CustomStringConvertible {
     case module
     case package
     case file
+    case command
 
     public var description: String {
         switch self {
@@ -41,6 +42,7 @@ public enum CompletionItemKind: Hashable, Sendable, CustomStringConvertible {
         case .module: return "module"
         case .package: return "package"
         case .file: return "file"
+        case .command: return "command"
         }
     }
 
@@ -51,6 +53,21 @@ public enum CompletionItemKind: Hashable, Sendable, CustomStringConvertible {
         default: return false
         }
     }
+}
+
+/// What accepting a command completion item does.
+public enum CompletionCommand: Hashable, Sendable {
+    /// Runs an editor action by its `EditorActionID` raw value, first selecting `selecting` when set.
+    case editorAction(id: String, selecting: TextRange?)
+    /// Applies a code action's edits (and its host command, if any).
+    case codeAction(CodeAction)
+}
+
+/// A section of the completion list. Only commands use one today; they always sort last.
+public enum CompletionSection: Hashable, Sendable {
+    case commands
+
+    public var title: String { "Commands" }
 }
 
 /// A single completion suggestion produced by a provider and later ranked by the completion engine.
@@ -80,6 +97,9 @@ public struct CompletionItem: Hashable, Sendable, Identifiable, CustomStringConv
     public let caretOffset: Int?
     /// Accepting this item should open parameter info (a method with parameters).
     public let triggersSignatureHelp: Bool
+    /// Complete Current Statement, after accepting this item, appends `;` but leaves the caret
+    /// between the parentheses. Set for a method or constructor that inserted `()` around parameters.
+    public let statementCaretInsideParens: Bool
     /// Selected by default when the popup opens, e.g. an expected-type match.
     public let preselect: Bool
     /// A lone explicit completion may insert this item immediately. Class names, chains, and
@@ -88,6 +108,10 @@ public struct CompletionItem: Hashable, Sendable, Identifiable, CustomStringConv
     /// The type a member is inherited from, drawn dimmed after the label (`getSpecies() Animal`);
     /// `nil` for members of the receiver's own type and for everything that isn't a member.
     public let origin: String?
+    /// Set for `kind == .command` items: the action to run instead of inserting text.
+    public let command: CompletionCommand?
+    /// The list section this item belongs to, if any.
+    public let section: CompletionSection?
 
     public init(
         id: UUID = UUID(),
@@ -107,9 +131,12 @@ public struct CompletionItem: Hashable, Sendable, Identifiable, CustomStringConv
         priority: Double = 0,
         caretOffset: Int? = nil,
         triggersSignatureHelp: Bool = false,
+        statementCaretInsideParens: Bool = false,
         preselect: Bool = false,
         allowsAutoInsert: Bool = true,
-        origin: String? = nil
+        origin: String? = nil,
+        command: CompletionCommand? = nil,
+        section: CompletionSection? = nil
     ) {
         self.id = id
         self.label = label
@@ -128,9 +155,12 @@ public struct CompletionItem: Hashable, Sendable, Identifiable, CustomStringConv
         self.priority = priority
         self.caretOffset = caretOffset
         self.triggersSignatureHelp = triggersSignatureHelp
+        self.statementCaretInsideParens = statementCaretInsideParens
         self.preselect = preselect
         self.allowsAutoInsert = allowsAutoInsert
         self.origin = origin
+        self.command = command
+        self.section = section
     }
 
     /// Whether `insertText` must be expanded as a snippet.

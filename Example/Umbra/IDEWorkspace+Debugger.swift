@@ -452,14 +452,22 @@ extension IDEWorkspace {
     /// the JDWP port until the adapter attaches, then the breakpoints stop in the tests. The
     /// results still arrive in the Test Results tab.
     func debugTests(scope: JavaTestRunScope, title: String, recording: JavaRunConfiguration? = nil) {
-        guard project.rootURL != nil, gradle.isActive else {
+        let mavenRun = javaSupport.maven.isActive && !gradle.isActive
+        guard project.rootURL != nil, gradle.isActive || mavenRun else {
             reportRunProblem("Debugging tests needs a Gradle project.")
             return
         }
         javaRun.recordTestRun(scope: scope, debug: true, from: recording)
-        guard !gradle.isBusy else {
-            reportRunProblem("Gradle is busy. Stop the running task first, then debug ‘\(title)’ again.")
-            return
+        if mavenRun {
+            guard !maven.isBusy else {
+                reportRunProblem("Maven is busy. Stop the running goal first, then debug ‘\(title)’ again.")
+                return
+            }
+        } else {
+            guard !gradle.isBusy else {
+                reportRunProblem("Gradle is busy. Stop the running task first, then debug ‘\(title)’ again.")
+                return
+            }
         }
         let sourceFile: URL? = switch scope {
         case .testClass(let testClass): testClass.sourceFile
@@ -494,10 +502,16 @@ extension IDEWorkspace {
                     muted: muted,
                     sourceRoots: roots,
                     classpath: classpath,
-                    gradleIsRunning: { [weak self] in self?.gradle.isRunningTasks ?? false }
+                    gradleIsRunning: { [weak self] in
+                        mavenRun ? (self?.maven.isRunningGoals ?? false) : (self?.gradle.isRunningTasks ?? false)
+                    }
                 )
             }
-            javaRun.startGradleTests(scope: scope, debug: true)
+            if mavenRun {
+                javaRun.startMavenTests(scope: scope, debug: true)
+            } else {
+                javaRun.startGradleTests(scope: scope, debug: true)
+            }
         }
     }
 
@@ -877,7 +891,8 @@ extension IDEWorkspace {
             return
         }
         // Gradle launches have no run session to carry the before-launch steps; do them here first.
-        if !skippingBeforeLaunch, configuration.kind == .gradle || configuration.kind == .junit,
+        if !skippingBeforeLaunch,
+           configuration.kind == .gradle || configuration.kind == .junit || configuration.kind == .maven,
            !configuration.beforeLaunch.isEmpty {
             javaRun.runBeforeLaunchSteps(for: configuration) { [self] in
                 debugLaunch(configuration, skippingBeforeLaunch: true)
@@ -955,7 +970,8 @@ extension IDEWorkspace {
                     return
                 }
                 guard let classpath = javaRun.runtimeClasspath(forFile: URL(fileURLWithPath: sourceFile)) else {
-                    reportRunProblem("“\(configuration.displayName)” needs a synced Gradle project.")
+                    let build = javaSupport.maven.isActive && !gradle.isActive ? "Maven" : "Gradle"
+                    reportRunProblem("“\(configuration.displayName)” needs a synced \(build) project.")
                     return
                 }
                 let newProtocol = javaRun.usesNewLaunchProtocol(configuration)
@@ -987,6 +1003,61 @@ extension IDEWorkspace {
             }
         case .gradleTest:
             guard let scope = configuration.testScope else { return }
+            debugTests(scope: scope, title: configuration.displayName, recording: configuration)
+        case .mavenGoals(let module, let goals):
+            guard root != nil else {
+                reportRunProblem("“\(configuration.displayName)” needs an open project folder.")
+                return
+            }
+            guard !maven.isBusy else {
+                reportRunProblem("Maven is busy. Stop the running goal first, then debug “\(configuration.displayName)” again.")
+                return
+            }
+            let selector = module.flatMap { javaRun.mavenSelector(modulePath: $0) }
+            if let module, selector == nil {
+                reportRunProblem("There is no Maven module “\(module)”.")
+                return
+            }
+            let maxLanguageLevel = javaRun.maxLanguageLevel
+            Task { [self] in
+                let jdk = await javaSupport.jdk.resolve(minimumFeatureVersion: maxLanguageLevel)?.installation
+                guard let jdk else {
+                    reportRunProblem("No JDK found for debugging.")
+                    return
+                }
+                runConfigurationStore.setLast(configuration, forProject: root)
+                refreshLastRunConfiguration()
+                let breakpoints = breakpointStore.breakpoints(forProject: root)
+                let muted = breakpointsMuted
+                showBottomTab(.debug)
+                do {
+                    try await debugSession.prepareAdapter(javaHome: jdk.home)
+                } catch {
+                    reportRunProblem("Could not start the debug adapter: \(error.localizedDescription)")
+                    return
+                }
+                gradleDebugActive = true
+                dapDebugSession.retire()
+                configureDebugSession()
+                let roots = debugSourceRoots()
+                Task {
+                    await debugSession.attachForGradle(
+                        suspendOnStart: configuration.suspendOnStart,
+                        breakpoints: breakpoints,
+                        muted: muted,
+                        sourceRoots: roots,
+                        gradleIsRunning: { [weak self] in self?.maven.isRunningGoals ?? false }
+                    )
+                }
+                showMavenOutput()
+                maven.runGoals(
+                    goals,
+                    module: selector,
+                    extraArguments: javaRun.mavenGoalArguments(configuration, goals: goals, debug: true)
+                )
+            }
+        case .mavenTest:
+            guard let scope = configuration.mavenTestScope else { return }
             debugTests(scope: scope, title: configuration.displayName, recording: configuration)
         default:
             reportRunProblem("“\(configuration.displayName)” can't be debugged yet.")

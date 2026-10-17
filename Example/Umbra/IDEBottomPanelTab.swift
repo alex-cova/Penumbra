@@ -49,6 +49,7 @@ extension IDEBottomPanelTab {
     enum Order {
         static let run = 10
         static let gradle = 20
+        static let maven = 22
         static let npm = 25
         static let swiftPM = 27
         static let xcode = 28

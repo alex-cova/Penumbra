@@ -38,7 +38,9 @@ struct IDEToolWindow: Identifiable {
         static let problems = 360
         static let terminal = 370
         static let gradleSidebar = 400
+        static let mavenSidebar = 405
         static let gradleConsole = 410
+        static let mavenConsole = 412
         static let npmConsole = 415
         static let swiftPMConsole = 416
         static let xcodeConsole = 417

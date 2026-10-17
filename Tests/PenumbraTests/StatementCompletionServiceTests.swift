@@ -4,8 +4,10 @@ import XCTest
 final class StatementCompletionServiceTests: XCTestCase {
     /// The line after the completion is applied, with `|` marking the caret when the completion
     /// puts it somewhere other than the end of the line.
-    private func complete(_ line: String) -> String? {
-        guard let completion = StatementCompletionService.complete(line: line) else {
+    private func complete(_ line: String, preceding: [String] = [], extra: Set<String> = []) -> String? {
+        guard let completion = StatementCompletionService.complete(
+            line: line, precedingLines: preceding, extraControlKeywords: extra
+        ) else {
             return nil
         }
         let text = NSMutableString(string: line)
@@ -13,7 +15,10 @@ final class StatementCompletionServiceTests: XCTestCase {
         if let caret = completion.caretOffsetInAppended {
             text.insert("|", at: completion.insertionOffset + caret)
         }
-        return text as String
+        guard !preceding.isEmpty else {
+            return text as String
+        }
+        return (preceding + [text as String]).joined(separator: "\n")
     }
 
     // MARK: Statements
@@ -102,7 +107,7 @@ final class StatementCompletionServiceTests: XCTestCase {
         XCTAssertEqual(complete("else"), "else {|}")
         XCTAssertEqual(complete("} else"), "} else {|}")
         XCTAssertEqual(complete("} finally"), "} finally {|}")
-        XCTAssertEqual(complete("do"), "do {|}")
+        XCTAssertEqual(complete("do"), "do {|} while ();")
     }
 
     func testCatchAfterABraceGetsABody() {
@@ -165,5 +170,71 @@ final class StatementCompletionServiceTests: XCTestCase {
 
     func testAnOpenBraceLeavesTheOuterBracketsAlone() {
         XCTAssertEqual(complete("executor.submit(() -> {"), "executor.submit(() -> {")
+        XCTAssertEqual(complete("x -> {"), "x -> {")
+    }
+
+    // MARK: Empty headers, do, switch expressions, initializers
+
+    func testAnEmptyConditionLeavesTheCaretInTheParentheses() {
+        XCTAssertEqual(complete("if ("), "if (|) {}")
+        XCTAssertEqual(complete("while ("), "while (|) {}")
+        XCTAssertEqual(complete("for ("), "for (|) {}")
+        XCTAssertEqual(complete("if ()"), "if (|) {}")
+        XCTAssertEqual(complete("if ( )"), "if ( |) {}")
+        XCTAssertEqual(complete("if (x > 0)"), "if (x > 0) {|}")
+    }
+
+    func testElseIfTakesACondition() {
+        XCTAssertEqual(complete("else if"), "else if (|) {}")
+        XCTAssertEqual(complete("else if ("), "else if (|) {}")
+        XCTAssertEqual(complete("else if (x)"), "else if (x) {|}")
+        XCTAssertEqual(complete("} else if (x > 0"), "} else if (x > 0) {|}")
+        XCTAssertEqual(complete("else"), "else {|}")
+    }
+
+    func testElseStaysABodyWhenItIsAlsoAnExtraControlKeyword() {
+        let java: Set<String> = ["if", "else", "for", "while", "do"]
+        XCTAssertEqual(complete("else", extra: java), "else {|}")
+        XCTAssertEqual(complete("do", extra: java), "do {|} while ();")
+        XCTAssertEqual(complete("if", extra: java), "if")
+    }
+
+    func testASwitchExpressionGetsABodyAndASemicolon() {
+        XCTAssertEqual(complete("switch (kind)"), "switch (kind) {|}")
+        XCTAssertEqual(complete("switch (a = b)"), "switch (a = b) {|}")
+        XCTAssertEqual(complete("int x = switch (n)"), "int x = switch (n) {|};")
+        XCTAssertEqual(complete("= switch (x)"), "= switch (x) {|};")
+        XCTAssertEqual(complete("return switch (x)"), "return switch (x) {|};")
+    }
+
+    func testArrayInitializersCloseWithABraceAndASemicolon() {
+        XCTAssertEqual(complete("new int[]{1, 2"), "new int[]{1, 2};")
+        XCTAssertEqual(complete("int[] a = {1, 2"), "int[] a = {1, 2};")
+        XCTAssertEqual(complete("foo(new int[]{1, 2"), "foo(new int[]{1, 2});")
+        XCTAssertEqual(complete("new int[]{1, 2,"), "new int[]{1, 2,")
+    }
+
+    func testAnUnclosedRecordHeaderGetsABody() {
+        XCTAssertEqual(complete("record R(int a"), "record R(int a) {|}")
+    }
+
+    func testAStatementSpansLinesUntilABoundary() {
+        XCTAssertEqual(complete(" b", preceding: ["foo(a,"]), "foo(a,\n b);")
+        XCTAssertEqual(complete("    baz", preceding: ["foo(bar("]), "foo(bar(\n    baz));")
+        XCTAssertEqual(complete("    > 0", preceding: ["if (x"]), "if (x\n    > 0) {|}")
+        XCTAssertEqual(complete("    1, 2", preceding: ["int[] a = {"]), "int[] a = {\n    1, 2};")
+        XCTAssertEqual(complete(" b", preceding: ["foo(\"(\","]), "foo(\"(\",\n b);")
+        XCTAssertNil(complete("]", preceding: ["foo("]))
+    }
+
+    func testLookbehindStopsAtAFinishedLineAndASeparateCall() {
+        XCTAssertFalse(StatementCompletionService.attaches(previousLine: "int x = 1;", toFragment: "foo("))
+        XCTAssertFalse(StatementCompletionService.attaches(previousLine: "if (x) {", toFragment: "foo("))
+        XCTAssertFalse(StatementCompletionService.attaches(previousLine: "foo(a", toFragment: "bar(b"))
+        XCTAssertFalse(StatementCompletionService.attaches(previousLine: "x -> {", toFragment: "run();"))
+        XCTAssertTrue(StatementCompletionService.attaches(previousLine: "foo(a,", toFragment: " b"))
+        XCTAssertTrue(StatementCompletionService.attaches(previousLine: "foo(", toFragment: "bar"))
+        XCTAssertTrue(StatementCompletionService.attaches(previousLine: "if (x", toFragment: "    > 0"))
+        XCTAssertEqual(StatementCompletionService.maximumLookbehindLines, 30)
     }
 }

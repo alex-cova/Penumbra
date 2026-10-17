@@ -179,7 +179,10 @@ public actor JavaInspectionService: DiagnosticProvider {
         await analyzeNow(document, force: true)
     }
 
-    public var documentParseCache: JavaDocumentParseCache { parseCache }
+    /// The shared incremental tree, also read by the syntax-error provider built in
+    /// `JavaLanguageService`. This only wraps the immutable `parseCache` let (an actor, whose
+    /// references are safe to share), so it can be read synchronously from `init`.
+    public nonisolated var documentParseCache: JavaDocumentParseCache { parseCache }
 
     public func setResultHandler(_ handler: (@Sendable (URL, [Diagnostic]) -> Void)?) {
         resultHandler = handler

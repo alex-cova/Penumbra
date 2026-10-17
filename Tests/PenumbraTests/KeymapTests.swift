@@ -94,6 +94,7 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(Keymap.sublime.action(for: f1), .quickDocumentation)
         XCTAssertEqual(Keymap.intelliJ.action(for: f1), .quickDocumentation)
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("j", .control))), .quickDocumentation)
+        XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("j", .command))), .insertLiveTemplate)
     }
 
     func testTypeHierarchyShortcutOnTheIntelliJKeymapOnly() {

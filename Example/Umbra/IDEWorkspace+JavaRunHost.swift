@@ -16,6 +16,10 @@ extension IDEWorkspace: IDEJavaRunHost {
         showGradleOutput()
     }
 
+    func showMavenConsole() {
+        showMavenOutput()
+    }
+
     func openRunConfigurationDraft(_ configuration: JavaRunConfiguration) {
         runConfigurationDraft = configuration
     }
@@ -33,6 +37,10 @@ extension IDEWorkspace: IDEJavaRunHost {
     }
 
     func reportInstrumentationNote(_ message: String) {
-        gradle.appendConsoleNote(message)
+        if javaSupport.maven.isActive, !javaSupport.gradle.isActive {
+            maven.appendConsoleNote(message)
+        } else {
+            gradle.appendConsoleNote(message)
+        }
     }
 }

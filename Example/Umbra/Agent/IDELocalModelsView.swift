@@ -114,6 +114,17 @@ struct IDELocalModelsView: View {
                 .disabled(info.hasChatTemplate && !info.supportsTools)
                 .help(info.hasChatTemplate && !info.supportsTools ? "This model's chat template does not take tools." : "Run the agent with this model")
             }
+            if IDEPreferences.shared.inlineCompletionModelID == model.id {
+                Label("Code completion", systemImage: "checkmark.circle.fill")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.run)
+            } else {
+                Button("Use for Code Completion") {
+                    IDEPreferences.shared.inlineCompletionModelID = model.id
+                    IDEPreferences.shared.inlineCompletionEnabled = true
+                }
+                .controlSize(.small)
+            }
             Button(isLoaded ? "Unload" : "Load") {
                 if isLoaded { store.unload() } else { Task { await store.load(model) } }
             }
@@ -228,7 +239,6 @@ struct IDELocalModelsView: View {
     private func detailsPane(_ result: HFModelSummary) -> some View {
         let detail = store.details[result.id]
         let installed = store.installed.contains { $0.id == result.id }
-        let blocked = detail?.supportsTools == false
         return VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
             Text(result.id).font(IDEAppearance.Typography.sectionHeader)
             if let size = detail?.sizeBytes {
@@ -238,7 +248,7 @@ struct IDELocalModelsView: View {
             }
             if let supportsTools = detail?.supportsTools {
                 Label(
-                    supportsTools ? "The chat template takes tools, so the agent can use this model." : "The chat template does not take tools, so the agent cannot use this model.",
+                    supportsTools ? "The chat template takes tools, so the agent can use this model." : "The chat template does not take tools, so the agent cannot use this model. Code completion can still use it.",
                     systemImage: supportsTools ? "checkmark.seal" : "xmark.seal")
                     .foregroundStyle(supportsTools ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.error)
             } else if detail != nil {
@@ -254,7 +264,7 @@ struct IDELocalModelsView: View {
                 Button(installed ? "Installed" : "Download") { store.startDownload(result.id) }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .disabled(installed || blocked || !store.canStartDownload || (result.isGated && !store.hasToken))
+                    .disabled(installed || !store.canStartDownload || (result.isGated && !store.hasToken))
                 if store.download != nil && !installed {
                     Text("One download at a time.").foregroundStyle(IDEAppearance.ColorToken.muted)
                 }

@@ -22,6 +22,7 @@ public final class CompletionPanelView: NSView {
     public var onAcceptRow: ((Int) -> Void)?
 
     public static let rowHeight: CGFloat = 22
+    public static let headerHeight: CGFloat = 18
     public static let footerHeight: CGFloat = 18
     public static let maxVisibleRows = 12
     public static let minimumWidth: CGFloat = 280
@@ -89,7 +90,11 @@ public final class CompletionPanelView: NSView {
     public static func preferredSize(for model: CompletionPanelModel, width: CGFloat? = nil) -> NSSize {
         let rows = max(1, min(model.items.count, maxVisibleRows))
         let footer: CGFloat = model.showsFooter ? footerHeight : 0
-        let height = CGFloat(rows) * rowHeight + 2 + footer
+        var headers: CGFloat = 0
+        for index in 0..<min(model.items.count, maxVisibleRows) where headerBefore(model.items, at: index) {
+            headers += 1
+        }
+        let height = CGFloat(rows) * rowHeight + headers * headerHeight + 2 + footer
         if let width {
             return NSSize(width: width, height: height)
         }
@@ -183,17 +188,48 @@ public final class CompletionPanelView: NSView {
         }
     }
 
+    /// Whether a non-selectable section header is drawn above the item at `index`.
+    private static func headerBefore(_ items: [CompletionItem], at index: Int) -> Bool {
+        guard items.indices.contains(index), let section = items[index].section else { return false }
+        if index == 0 { return true }
+        return items[index - 1].section != section
+    }
+
     private func rowIndex(at point: NSPoint) -> Int? {
         guard bounds.contains(point) else { return nil }
         if model.showsFooter, point.y >= bounds.height - Self.footerHeight { return nil }
-        let row = Int((point.y - 1) / Self.rowHeight)
-        let index = firstVisibleIndex + row
-        guard row >= 0, row < visibleRowCount, model.items.indices.contains(index) else { return nil }
-        return index
+        var y: CGFloat = 1
+        for row in 0..<visibleRowCount {
+            let index = firstVisibleIndex + row
+            guard model.items.indices.contains(index) else { return nil }
+            if Self.headerBefore(model.items, at: index) {
+                if point.y >= y, point.y < y + Self.headerHeight { return nil }
+                y += Self.headerHeight
+            }
+            if point.y >= y, point.y < y + Self.rowHeight { return index }
+            y += Self.rowHeight
+        }
+        return nil
     }
 
     private func rowRect(forVisibleRow row: Int) -> NSRect {
-        NSRect(x: 0, y: 1 + CGFloat(row) * Self.rowHeight, width: bounds.width, height: Self.rowHeight)
+        var y: CGFloat = 1
+        for visible in 0...row {
+            let index = firstVisibleIndex + visible
+            if model.items.indices.contains(index), Self.headerBefore(model.items, at: index) {
+                y += Self.headerHeight
+            }
+            if visible == row { break }
+            y += Self.rowHeight
+        }
+        return NSRect(x: 0, y: y, width: bounds.width, height: Self.rowHeight)
+    }
+
+    private func headerRect(forVisibleRow row: Int) -> NSRect? {
+        let index = firstVisibleIndex + row
+        guard model.items.indices.contains(index), Self.headerBefore(model.items, at: index) else { return nil }
+        let itemRect = rowRect(forVisibleRow: row)
+        return NSRect(x: 0, y: itemRect.minY - Self.headerHeight, width: bounds.width, height: Self.headerHeight)
     }
 
     // MARK: - Drawing
@@ -215,6 +251,14 @@ public final class CompletionPanelView: NSView {
         for row in 0..<visibleRowCount {
             let index = firstVisibleIndex + row
             guard model.items.indices.contains(index) else { break }
+            if let header = headerRect(forVisibleRow: row), let section = model.items[index].section {
+                NSColor.separatorColor.withAlphaComponent(0.4).setFill()
+                header.fill()
+                let attributes: [NSAttributedString.Key: Any] = [.font: Self.detailFont, .foregroundColor: NSColor.secondaryLabelColor]
+                (section.title as NSString).draw(
+                    at: NSPoint(x: Self.horizontalPadding, y: header.minY + 2), withAttributes: attributes
+                )
+            }
             draw(item: model.items[index], in: rowRect(forVisibleRow: row), isSelected: index == model.selectedIndex, isHovered: index == hoveredIndex)
         }
 
@@ -266,7 +310,7 @@ public final class CompletionPanelView: NSView {
             width: Self.iconSize,
             height: Self.iconSize
         )
-        Self.drawIcon(for: item.kind, in: iconRect)
+        Self.drawIcon(for: item, in: iconRect)
 
         let textX = iconRect.maxX + Self.iconGap
         let rightEdge = rect.maxX - Self.horizontalPadding - (model.items.count > Self.maxVisibleRows ? 6 : 0)
@@ -309,7 +353,16 @@ public final class CompletionPanelView: NSView {
     }
 
     /// IntelliJ-style kind icon: a colored disc with a one-letter glyph.
-    private static func drawIcon(for kind: CompletionItemKind, in rect: NSRect) {
+    private static func drawIcon(for item: CompletionItem, in rect: NSRect) {
+        if item.origin == "Full Line" {
+            // The synced inline suggestion: a sparkle instead of a kind glyph.
+            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.systemIndigo]
+            let glyph = "✦" as NSString
+            let size = glyph.size(withAttributes: attributes)
+            glyph.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), withAttributes: attributes)
+            return
+        }
+        let kind = item.kind
         guard let (letter, color) = iconStyle(for: kind) else { return }
         color.setFill()
         let disc: NSBezierPath
@@ -344,6 +397,7 @@ public final class CompletionPanelView: NSView {
         case .module, .package: return ("p", NSColor.systemBrown)
         case .file: return ("•", NSColor.systemGray)
         case .text: return ("a", NSColor.systemGray.withAlphaComponent(0.6))
+        case .command: return (">", NSColor.systemIndigo)
         }
     }
 }

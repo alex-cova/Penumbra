@@ -436,51 +436,11 @@ public enum JavaMemberLookup {
     }
 
     private static func substitute(_ type: JavaTypeRef, using map: [String: JavaTypeRef]) -> JavaTypeRef {
-        guard !map.isEmpty else { return type }
-        switch type {
-        case .primitive, .void:
-            return type
-        case .typeVariable(let name):
-            return map[name] ?? type
-        case .array(let element):
-            return .array(element: substitute(element, using: map))
-        case .classType(let qualifiedName, let arguments, let outer):
-            return .classType(
-                qualifiedName: qualifiedName,
-                arguments: arguments.map { substituteArgument($0, using: map) },
-                outer: outer.map { substitute($0, using: map) }
-            )
-        case .wildcard(let bound):
-            return .wildcard(bound: bound.map { substituteBound($0, using: map) })
-        case .unresolved(let simpleName, let arguments):
-            return .unresolved(simpleName: simpleName, arguments: arguments.map { substituteArgument($0, using: map) })
-        }
-    }
-
-    private static func substituteArgument(_ argument: JavaTypeArgument, using map: [String: JavaTypeRef]) -> JavaTypeArgument {
-        switch argument {
-        case .type(let t): return .type(substitute(t, using: map))
-        case .wildcard(let bound): return .wildcard(bound.map { substituteBound($0, using: map) })
-        }
-    }
-
-    private static func substituteBound(_ bound: JavaWildcardBound, using map: [String: JavaTypeRef]) -> JavaWildcardBound {
-        switch bound {
-        case .extends(let t): return .extends(substitute(t, using: map))
-        case .superBound(let t): return .superBound(substitute(t, using: map))
-        }
+        JavaTypeSystem.substitute(type, using: map)
     }
 
     private static func erasedKey(_ type: JavaTypeRef) -> String {
-        switch type {
-        case .primitive(let p): return p.rawValue
-        case .void: return "void"
-        case .classType(let qualifiedName, _, _): return qualifiedName
-        case .array(let element): return "\(erasedKey(element))[]"
-        case .typeVariable: return "Object" // erasure of an unbounded/still-generic type variable
-        case .wildcard: return "Object"
-        case .unresolved(let simpleName, _): return simpleName
-        }
+        JavaTypeSystem.erasedName(of: type)
     }
 }
 
@@ -523,6 +483,56 @@ extension JavaMemberLookup {
             }
         }
         return nil
+    }
+
+    /// The simple names of every nested type declared anywhere in `qualifiedName`'s
+    /// superclass/interface chain, or nil when the hierarchy is open: a reached class with no
+    /// stub, a supertype that does not resolve to a class type, a source class in the chain
+    /// whose file imports from `lombok` (generated members never appear in source stubs;
+    /// compiled classes are fine), an unreadable source declaring file, or a missing
+    /// `java.lang.Object`/`java.lang.annotation.Annotation`.
+    ///
+    /// The member walk silently drops a supertype it cannot resolve, which is harmless for
+    /// completion but would make an "unresolved member" verdict report every inherited member
+    /// of a class extending an unindexed jar, Kotlin or generated class.
+    static func closedHierarchy(of qualifiedName: String, context: JavaResolutionContext, index: JavaIndex) async -> Set<String>? {
+        let cache = DeclaringFileCache()
+        var nested = Set<String>()
+        var visited = Set<String>()
+        var queue = [qualifiedName]
+        while let name = queue.popLast() {
+            guard visited.insert(name).inserted else { continue }
+            guard let stub = await index.classStub(qualifiedName: name) else { return nil }
+            if case .source = stub.origin {
+                guard let fileContext = await contextOfDeclaringFile(stub, cache: cache),
+                      !fileContext.imports.contains(where: { $0.qualifiedName == "lombok" || $0.qualifiedName.hasPrefix("lombok.") })
+                else { return nil }
+            }
+            for inner in stub.innerTypeNames {
+                nested.insert(String(inner.split(separator: ".").last ?? Substring(inner)))
+            }
+            if stub.kind != .interfaceKind, let superclass = stub.superclass {
+                let resolved = await resolveSupertype(superclass, declaredOn: stub, context: context, index: index, cache: cache)
+                guard case .classType(let superName, _, _) = resolved else { return nil }
+                queue.append(superName)
+            } else if name != "java.lang.Object" {
+                switch stub.kind {
+                case .classKind, .enumKind, .recordKind:
+                    queue.append("java.lang.Object")
+                case .interfaceKind:
+                    // JLS 9.2 gives interfaces `Object`'s public methods.
+                    queue.append("java.lang.Object")
+                case .annotationKind:
+                    queue.append("java.lang.annotation.Annotation")
+                }
+            }
+            for iface in stub.interfaces {
+                let resolved = await resolveSupertype(iface, declaredOn: stub, context: context, index: index, cache: cache)
+                guard case .classType(let ifaceName, _, _) = resolved else { return nil }
+                queue.append(ifaceName)
+            }
+        }
+        return nested
     }
 
     /// The types `qualifiedName` directly extends or implements, superclass first, each resolved

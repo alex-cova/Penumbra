@@ -31,6 +31,11 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         /// patterns (none runs the whole task). `sourceFile` is the test file the run was made from,
         /// when there is one.
         case gradleTest(taskPath: String, filters: [String], sourceFile: String?)
+        /// Maven goals. `module` is `groupId:artifactId` for `-pl`, or nil for the reactor.
+        /// ``JavaRunConfiguration/programArguments`` are extra Maven arguments (`-Pdev -DskipTests`).
+        case mavenGoals(module: String?, goals: [String])
+        /// Tests run through Surefire. `module` is the module path (`:` or `:services:api`); nil is the reactor.
+        case mavenTest(module: String?, filters: [String], sourceFile: String?)
     }
 
     /// The groups of the Edit Configurations list, and what a template is keyed by.
@@ -39,6 +44,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         case javaFile
         case gradle
         case junit
+        case maven
 
         public var title: String {
             switch self {
@@ -46,6 +52,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
             case .javaFile: return "Java File"
             case .gradle: return "Gradle"
             case .junit: return "JUnit"
+            case .maven: return "Maven"
             }
         }
     }
@@ -54,6 +61,8 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     public enum BeforeLaunchTask: Codable, Equatable, Sendable {
         /// Gradle tasks, by path or name, run in one Gradle invocation.
         case gradleTasks([String])
+        /// Maven goals, run in one Maven invocation.
+        case mavenGoals([String])
         /// Another configuration of the project, run to its end first.
         case runConfiguration(UUID)
     }
@@ -206,6 +215,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         case .singleFile: return .javaFile
         case .classpathMain: return .application
         case .gradleTest: return .junit
+        case .mavenGoals, .mavenTest: return .maven
         }
     }
 
@@ -225,6 +235,17 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
                 return "All tests (\(project.isEmpty ? ":" : project))"
             }
             // `app.FooTest` or `app.FooTest.testAdds`: the class, and the method when a filter names one.
+            let parts = filter.split(separator: ".").map(String.init)
+            let simple = filters.count == 1 ? Self.testFilterLabel(parts) : "\(Self.testFilterLabel(parts)) +\(filters.count - 1)"
+            return simple
+        case .mavenGoals(let module, let goals):
+            let label = goals.isEmpty ? "Maven" : "Maven \(goals.joined(separator: " "))"
+            guard let module, !module.isEmpty else { return label }
+            return "\(label) (\(module))"
+        case .mavenTest(let module, let filters, _):
+            guard let filter = filters.first else {
+                return "All tests (\(module ?? "reactor"))"
+            }
             let parts = filter.split(separator: ".").map(String.init)
             let simple = filters.count == 1 ? Self.testFilterLabel(parts) : "\(Self.testFilterLabel(parts)) +\(filters.count - 1)"
             return simple
@@ -265,6 +286,18 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         return filters.isEmpty ? .allInModule(gradleTaskPath: taskPath) : .tests(taskPath: taskPath, filters: filters)
     }
 
+    /// The scope a ``Target/mavenTest(module:filters:sourceFile:)`` target runs; `nil` for the others.
+    public var mavenTestScope: JavaTestRunScope? {
+        guard case .mavenTest(let module, let filters, _) = target else { return nil }
+        let taskPath: String
+        if let module {
+            taskPath = module == ":" ? ":test" : "\(module):test"
+        } else {
+            taskPath = "test"
+        }
+        return filters.isEmpty ? .allInModule(gradleTaskPath: taskPath) : .tests(taskPath: taskPath, filters: filters)
+    }
+
     /// `path` with `transform` applied to every file path the configuration holds.
     public func mappingPaths(_ transform: (String) -> String) -> JavaRunConfiguration {
         var result = self
@@ -275,6 +308,10 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
             result.target = .classpathMain(className: className, sourceFile: transform(sourceFile))
         case .gradleTest(let taskPath, let filters, let sourceFile):
             result.target = .gradleTest(taskPath: taskPath, filters: filters, sourceFile: sourceFile.map(transform))
+        case .mavenGoals:
+            break
+        case .mavenTest(let module, let filters, let sourceFile):
+            result.target = .mavenTest(module: module, filters: filters, sourceFile: sourceFile.map(transform))
         }
         result.workingDirectory = workingDirectory.map(transform)
         result.redirectInputPath = redirectInputPath.map(transform)
@@ -291,7 +328,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     /// Whether ``vmArguments`` can be passed to this target.
     public var supportsVMArguments: Bool {
         switch target {
-        case .gradleRun, .gradleTest: return false
+        case .gradleRun, .gradleTest, .mavenGoals, .mavenTest: return false
         case .singleFile, .classpathMain: return true
         }
     }
@@ -301,7 +338,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     public var supportsEnvironment: Bool {
         switch target {
         case .singleFile, .classpathMain: return true
-        case .gradleRun, .gradleTest: return false
+        case .gradleRun, .gradleTest, .mavenGoals, .mavenTest: return false
         }
     }
 
@@ -317,7 +354,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
     /// Whether Umbra can launch this configuration under the debugger.
     public var supportsDebugLaunch: Bool {
         switch target {
-        case .classpathMain, .gradleRun, .gradleTest: return true
+        case .classpathMain, .gradleRun, .gradleTest, .mavenGoals, .mavenTest: return true
         case .singleFile: return false
         }
     }
@@ -345,6 +382,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         case .javaFile: target = .singleFile(path: "")
         case .gradle: target = .gradleRun(projectPath: ":")
         case .junit: target = .gradleTest(taskPath: ":test", filters: [], sourceFile: nil)
+        case .maven: target = .mavenGoals(module: nil, goals: ["package"])
         }
         // A fixed identity per kind, so two defaults compare equal and "unchanged" can be told from "edited".
         let identity = UUID(uuidString: "00000000-0000-0000-0000-00000000000\(Kind.allCases.firstIndex(of: kind) ?? 0)") ?? UUID()

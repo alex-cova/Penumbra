@@ -30,4 +30,11 @@ extension JavaSyntaxTree {
     var declarationCache: JavaDeclarationCache {
         attachment.object(JavaDeclarationCache.self, create: JavaDeclarationCache.init)
     }
+
+    /// The memoized lexical scope tree (JLS 6.3) for a file: built once per parse, then queried
+    /// by byte offset. The URL rides along because a parse doesn't know its file.
+    func scopeTree(for url: URL) -> JavaScopeTree {
+        attachment.object(JavaScopeTreeCache.self, create: JavaScopeTreeCache.init)
+            .tree(for: url, build: { JavaScopeTree(tree: self, url: url) })
+    }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import JavaIntelligence
 import XCTest
 import XcodeProjectFormat
 @testable import Umbra
@@ -47,12 +48,13 @@ final class IDEProjectTemplateTests: XCTestCase {
     func testRegistryListsSwiftTemplatesWithUniqueIDs() {
         let ids = IDEProjectTemplates.all.map(\.id)
         XCTAssertEqual(Set(ids).count, ids.count)
-        XCTAssertEqual(IDEProjectTemplates.families, [.swift])
+        XCTAssertEqual(IDEProjectTemplates.families, [.swift, .java])
         XCTAssertEqual(
             Set(ids),
             [
                 "swift.xcode.macos-app", "swift.xcode.command-line-tool",
                 "swift.package.executable", "swift.package.library",
+                "java.maven.application",
             ]
         )
     }
@@ -183,6 +185,58 @@ final class IDEProjectTemplateTests: XCTestCase {
         )
         let issues = IDENewProjectValidator.issues(for: options("Taken"), template: package)
         XCTAssertEqual(issues, [.alreadyExists(directory.appendingPathComponent("Taken", isDirectory: true))])
+    }
+
+    // MARK: - Maven
+
+    func testMavenApplicationIsAReadableProject() async throws {
+        let template = try template("java.maven.application")
+        XCTAssertEqual(template.fields, [.organizationIdentifier])
+        XCTAssertEqual(template.title, "Java Application (Maven)")
+        let app = options("My App")
+        let files = try template.files(for: app)
+        XCTAssertEqual(
+            Set(files.map(\.path)),
+            [
+                "pom.xml", ".gitignore",
+                "src/main/java/com/example/my_app/Main.java",
+                "src/test/java/com/example/my_app/MainTest.java",
+            ]
+        )
+        XCTAssertEqual(template.primaryFile(for: app), "src/main/java/com/example/my_app/Main.java")
+        XCTAssertFalse(files.contains { $0.path.contains("mvnw") || $0.path.contains(".mvn") })
+        let pom = try text(of: "pom.xml", in: files)
+        XCTAssertTrue(pom.contains("<groupId>com.example</groupId>"))
+        XCTAssertTrue(pom.contains("<artifactId>my_app</artifactId>"))
+        XCTAssertTrue(pom.contains("<artifactId>junit-jupiter</artifactId>"))
+        XCTAssertTrue(pom.contains("<version>\(IDEMavenApplicationTemplate.junitVersion)</version>"))
+        XCTAssertTrue(pom.contains("<artifactId>maven-surefire-plugin</artifactId>"))
+        XCTAssertTrue(pom.contains("<version>\(IDEMavenApplicationTemplate.surefireVersion)</version>"))
+        let release = JDKLocator().discoverAll().map(\.featureVersion).max() ?? 17
+        XCTAssertTrue(pom.contains("<maven.compiler.release>\(release)</maven.compiler.release>"))
+        XCTAssertTrue(try text(of: ".gitignore", in: files).contains("target/"))
+        var hyphenated = options("Widget")
+        hyphenated.organizationIdentifier = "com.example-org"
+        XCTAssertEqual(
+            template.primaryFile(for: hyphenated),
+            "src/main/java/com/example_org/widget/Main.java"
+        )
+
+        let root = try IDEProjectWriter.create(template, options: app)
+        let home = directory.appendingPathComponent("m2-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let model = try await MavenProjectReader.read(
+            root: root,
+            options: MavenReadOptions(userHome: home, environment: [:]),
+            store: MavenPOMStore()
+        )
+        let module = try XCTUnwrap(model.modules.first)
+        XCTAssertEqual(model.modules.map(\.path), [":"])
+        XCTAssertEqual(module.groupId, "com.example")
+        XCTAssertEqual(module.artifactId, "my_app")
+        XCTAssertEqual(module.languageLevel, release)
+        XCTAssertEqual(model.javaProjectModel.gradleVersion, "maven")
+        XCTAssertEqual(model.javaProjectModel.subprojects.first?.testTasks.first?.path, ":test")
     }
 
     // MARK: - Writer

@@ -110,6 +110,20 @@ struct IDERunConfigurationForm: View {
             field("Test filters", caption: "One --tests pattern per line, such as app.FooTest or app.FooTest.testAdds. Empty runs every test.", problems: []) {
                 monoEditor(text: testFilters, height: 56)
             }
+        case .mavenGoals:
+            field("Module", caption: "The module path, such as : or :services:api. Empty runs the reactor.", problems: targetProblems) {
+                monoField(":", text: mavenModule)
+            }
+            field("Goals", caption: "Space-separated goals, such as package or spring-boot:run.", problems: []) {
+                monoField("package", text: mavenGoals)
+            }
+        case .mavenTest:
+            field("Module", caption: "The module path, such as : or :services:api. Empty runs every module's tests.", problems: targetProblems) {
+                monoField(":", text: mavenModule)
+            }
+            field("Test filters", caption: "One class or class.method per line. Empty runs every test.", problems: []) {
+                monoEditor(text: mavenTestFilters, height: 56)
+            }
         }
     }
 
@@ -152,10 +166,17 @@ struct IDERunConfigurationForm: View {
             Text("A Gradle run takes JVM options from the build script (applicationDefaultJvmArgs, jvmArgs), not from here.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
+        } else if case .mavenGoals = configuration.target {
+            Text("A Maven goal takes JVM options from the POM, not from here.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
-        if configuration.testScope == nil {
-            field("Program arguments", caption: "Passed to main(String[]). Quote an argument that contains spaces.", problems: []) {
-                monoField("--port 8080", text: $configuration.programArguments)
+        if configuration.testScope == nil, configuration.mavenTestScope == nil {
+            let caption = configuration.kind == .maven
+                ? "Extra arguments, such as -Pdev -DskipTests."
+                : "Passed to main(String[]). Quote an argument that contains spaces."
+            field("Program arguments", caption: caption, problems: []) {
+                monoField(configuration.kind == .maven ? "-Pdev" : "--port 8080", text: $configuration.programArguments)
             }
         }
         if configuration.supportsWorkingDirectory {
@@ -220,6 +241,14 @@ struct IDERunConfigurationForm: View {
                             ))
                             .textFieldStyle(.roundedBorder)
                             .font(IDEAppearance.Typography.monoSmall)
+                        case .mavenGoals(let goals):
+                            Image(systemName: "shippingbox").foregroundStyle(IDEAppearance.ColorToken.muted)
+                            TextField("Maven goals, such as test-compile", text: Binding(
+                                get: { goals.joined(separator: " ") },
+                                set: { configuration.beforeLaunch[index] = .mavenGoals($0.split(whereSeparator: \.isWhitespace).map(String.init)) }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .font(IDEAppearance.Typography.monoSmall)
                         case .runConfiguration(let id):
                             Image(systemName: "play").foregroundStyle(IDEAppearance.ColorToken.muted)
                             Text("Run “\(otherConfigurations.first { $0.id == id }?.displayName ?? "deleted configuration")”")
@@ -242,6 +271,7 @@ struct IDERunConfigurationForm: View {
                 }
                 Menu {
                     Button("Run Gradle Task") { configuration.beforeLaunch.append(.gradleTasks([])) }
+                    Button("Run Maven Goal") { configuration.beforeLaunch.append(.mavenGoals([])) }
                     Menu("Run Another Configuration") {
                         ForEach(otherConfigurations.filter { $0.id != configuration.id }, id: \.id) { other in
                             Button(other.displayName) { configuration.beforeLaunch.append(.runConfiguration(other.id)) }
@@ -390,6 +420,55 @@ struct IDERunConfigurationForm: View {
         Binding(
             get: { if case .gradleTest(let path, _, _) = configuration.target { path } else { "" } },
             set: { if case .gradleTest(_, let filters, let source) = configuration.target { configuration.target = .gradleTest(taskPath: $0, filters: filters, sourceFile: source) } }
+        )
+    }
+
+    private var mavenModule: Binding<String> {
+        Binding(
+            get: {
+                switch configuration.target {
+                case .mavenGoals(let module, _), .mavenTest(let module, _, _):
+                    return module ?? ""
+                default:
+                    return ""
+                }
+            },
+            set: { text in
+                let module = text.trimmingCharacters(in: .whitespaces)
+                let stored = module.isEmpty ? nil : module
+                switch configuration.target {
+                case .mavenGoals(_, let goals):
+                    configuration.target = .mavenGoals(module: stored, goals: goals)
+                case .mavenTest(_, let filters, let source):
+                    configuration.target = .mavenTest(module: stored, filters: filters, sourceFile: source)
+                default:
+                    break
+                }
+            }
+        )
+    }
+
+    private var mavenGoals: Binding<String> {
+        Binding(
+            get: { if case .mavenGoals(_, let goals) = configuration.target { goals.joined(separator: " ") } else { "" } },
+            set: { text in
+                let goals = text.split(whereSeparator: \.isWhitespace).map(String.init)
+                if case .mavenGoals(let module, _) = configuration.target {
+                    configuration.target = .mavenGoals(module: module, goals: goals)
+                }
+            }
+        )
+    }
+
+    private var mavenTestFilters: Binding<String> {
+        Binding(
+            get: { if case .mavenTest(_, let filters, _) = configuration.target { filters.joined(separator: "\n") } else { "" } },
+            set: { text in
+                if case .mavenTest(let module, _, let source) = configuration.target {
+                    let filters = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                    configuration.target = .mavenTest(module: module, filters: filters, sourceFile: source)
+                }
+            }
         )
     }
 

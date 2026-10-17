@@ -194,6 +194,7 @@ struct IDERunConfigurationsWindow: View {
         case .javaFile: return "doc.text"
         case .gradle: return "hammer"
         case .junit: return "flask"
+        case .maven: return "shippingbox"
         }
     }
 

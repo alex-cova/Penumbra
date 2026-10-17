@@ -29,7 +29,7 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
     )
     static let editor = IDEPreferencesDomain(
         id: "editor", title: "Editor", symbol: "chevron.left.forwardslash.chevron.right",
-        searchTerms: ["theme", "color", "font", "font size", "line height", "typography", "markdown headings", "tab width", "indent", "spaces", "line numbers", "folding", "word wrap", "minimap", "scrollbars", "right margin", "page guide", "method separators", "occurrences", "invisible characters", "metal", "renderer", "keymap", "keyboard", "sublime", "intellij", "shortcuts"],
+        searchTerms: ["theme", "color", "font", "font size", "line height", "typography", "markdown headings", "tab width", "indent", "spaces", "line numbers", "folding", "word wrap", "minimap", "scrollbars", "right margin", "page guide", "method separators", "occurrences", "invisible characters", "metal", "renderer", "keymap", "keyboard", "sublime", "intellij", "shortcuts", "command completion", "full line", "inline", "postfix", "hugging face", "model", "download"],
         showsTypePreview: true
     )
     static let saving = IDEPreferencesDomain(

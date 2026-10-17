@@ -28,10 +28,14 @@ public struct EditorIntelligenceServices {
     public var codeVisionProvider: (any CodeVisionProviding)?
     public var symbolIndex: SymbolIndex?
     public var workspace: Workspace?
+    /// Full-line inline completion (a local model), when the host provides one.
+    public var inlineCompletionEngine: InlineCompletionEngine?
     /// Backs ``EditorIntelligenceController/searchProject(_:in:matchWholeWord:useRegularExpression:)``.
     /// Defaults to a private instance when unset; inject a shared one to dedupe concurrent scans
     /// of the same root across multiple controllers.
     public var projectSearchEngine: ProjectSearchEngine?
+    /// Backs Copy Reference in read-only command completion.
+    public var symbolReferenceProvider: (any SymbolReferenceProviding)?
 
     public init(
         formattingProvider: (any FormattingProviding)? = nil,
@@ -46,7 +50,9 @@ public struct EditorIntelligenceServices {
         codeVisionProvider: (any CodeVisionProviding)? = nil,
         symbolIndex: SymbolIndex? = nil,
         workspace: Workspace? = nil,
-        projectSearchEngine: ProjectSearchEngine? = nil
+        projectSearchEngine: ProjectSearchEngine? = nil,
+        symbolReferenceProvider: (any SymbolReferenceProviding)? = nil,
+        inlineCompletionEngine: InlineCompletionEngine? = nil
     ) {
         self.formattingProvider = formattingProvider
         self.signatureHelpProvider = signatureHelpProvider
@@ -61,6 +67,8 @@ public struct EditorIntelligenceServices {
         self.symbolIndex = symbolIndex
         self.workspace = workspace
         self.projectSearchEngine = projectSearchEngine
+        self.symbolReferenceProvider = symbolReferenceProvider
+        self.inlineCompletionEngine = inlineCompletionEngine
     }
 }
 
@@ -148,6 +156,7 @@ public final class EditorIntelligenceController {
         }
     }
     private let symbolIndex: SymbolIndex?
+    private let symbolReferenceProvider: (any SymbolReferenceProviding)?
     private let workspace: Workspace?
     private let workspaceSearchEngine = WorkspaceSearchEngine()
     private let projectSearchEngine: ProjectSearchEngine
@@ -159,7 +168,14 @@ public final class EditorIntelligenceController {
     private let completionDocumentationView: HoverWindowView
     private var completionDocumentationTask: Task<Void, Never>?
     private var completionDocumentationKey: String?
-    private let ghostTextView: GhostTextView
+    private let inlineChipView = InlineCompletionChipView()
+    private let inlineLinesView = InlineCompletionLinesView()
+    private var inlineChipTask: Task<Void, Never>?
+    /// Full-line inline completion, owned here and driven from typing/key events.
+    /// Assigned at the end of `init`, once `self` can be captured by its host closures.
+    private(set) var inlineController: InlineCompletionController!
+    /// The popup item that mirrors the current inline suggestion (sync mode), if any.
+    private var syncedInlineItemID: UUID?
     private let parameterHintsView: ParameterHintsView
 
     /// Items currently shown, filtered and ranked for the live prefix.
@@ -192,8 +208,26 @@ public final class EditorIntelligenceController {
     private var isCompletionSelectionExplicit = false
     private var liveDocumentVersion = 0
     private var emptyCompletionHintTask: Task<Void, Never>?
+    /// Command completion settings, shared with the registered command provider.
+    public let commandCompletionSettingsBox = CommandCompletionSettingsBox()
+    public var commandCompletionSettings: CommandCompletionSettings {
+        get { commandCompletionSettingsBox.settings }
+        set { commandCompletionSettingsBox.settings = newValue }
+    }
+    /// The active command session: where the trigger dots start, and how it was opened.
+    private var commandSession: (triggerStart: Int, mode: CompletionContext.CommandMode)?
+    /// Filter text typed virtually in a read-only file (the buffer never changes).
+    private var readOnlyFilter: String?
+    /// Tab, Space, or Enter was pressed on `expr.key` and completion was asked for templates only.
+    private var postfixExpansionRequest: PostfixExpansionRequest?
+
+    private struct PostfixExpansionRequest {
+        var generation: Int
+        var key: PostfixExpansionKey
+        var word: String
+        var caret: Int
+    }
     private var windowObserver: NSObjectProtocol?
-    private var ghostTextModel: GhostTextModel?
     private var latestDiagnostics: [Diagnostic] = []
     private var mouseHoverTask: Task<Void, Never>?
     /// What the mouse is over (an identifier or a diagnostic's range) while a tooltip is pending
@@ -237,6 +271,7 @@ public final class EditorIntelligenceController {
         self.inlayHintProvider = services.inlayHintProvider
         self.codeVisionProvider = services.codeVisionProvider
         self.symbolIndex = services.symbolIndex
+        self.symbolReferenceProvider = services.symbolReferenceProvider
         self.workspace = services.workspace
         self.projectSearchEngine = services.projectSearchEngine ?? ProjectSearchEngine()
 
@@ -253,9 +288,6 @@ public final class EditorIntelligenceController {
         completionDocumentationView = HoverWindowView(
             model: HoverWindowModel(contents: "", anchorRange: placeholderRange)
         )
-        ghostTextView = GhostTextView(
-            model: GhostTextModel(text: "", anchorPosition: placeholderRange.start)
-        )
         parameterHintsView = ParameterHintsView(
             model: ParameterHintsModel(signatures: [])
         )
@@ -268,6 +300,23 @@ public final class EditorIntelligenceController {
             let penumbraAdapter = PenumbraEditorAdapter(textView: textView, context: context)
             penumbraAdapter.forwardingDelegate = forwarding
             self.adapter = penumbraAdapter
+        }
+
+        inlineController = InlineCompletionController(host: InlineCompletionController.Host(
+            textView: { [weak self] in self?.textView },
+            document: { [weak self] in self?.makeLiveDocument() },
+            popupVisible: { [weak self] in self?.isCompletionVisible ?? false }
+        ))
+        inlineController.engine = services.inlineCompletionEngine
+        inlineController.onPresentationChanged = { [weak self] in
+            self?.updateInlineLinesView()
+        }
+        inlineChipView.onChooseAcceptKey = { [weak self] key in
+            self?.inlineController.settings.acceptKey = key
+            self?.inlineSettingsChanged()
+        }
+        inlineChipView.onOpenSettings = { [weak self] in
+            self?.onOpenInlineCompletionSettings?()
         }
 
         installOverlayViews(on: textView)
@@ -296,6 +345,9 @@ public final class EditorIntelligenceController {
                       resignedWindowID == self.textView?.window.map(ObjectIdentifier.init) else { return }
                 if self.isCompletionVisible {
                     self.dismissCompletion()
+                }
+                if self.inlineController.isVisible {
+                    self.inlineController.dismiss(recordSuppression: false)
                 }
             }
         }
@@ -342,6 +394,14 @@ public final class EditorIntelligenceController {
             }
             jumpToDefinitionController = jump
         }
+
+        let commandProvider = EditorCommandCompletionProvider(
+            refactoringProvider: services.refactoringProvider,
+            codeActionProvider: services.codeActionProvider,
+            codeGenerationProvider: services.codeGenerationProvider,
+            settingsBox: commandCompletionSettingsBox
+        )
+        Task { await completionEngine.registerProvider(commandProvider) }
 
         completionPanelView.onSelectRow = { [weak self] index in
             self?.selectCompletionRow(index)
@@ -390,6 +450,25 @@ public final class EditorIntelligenceController {
     /// Show the documentation of the symbol under the pointer once it rests (IntelliJ's "Show
     /// quick documentation on hover"). Off by default.
     public var showsDocumentationOnMouseHover = false
+    /// Postfix expansion when the completion popup is closed. The language host fills the key set.
+    public var postfixExpansionSettings = PostfixExpansionSettings.standard
+    /// Full-line inline completion settings. The host flips these from its preferences.
+    public var inlineCompletionSettings: InlineCompletionSettings {
+        get { inlineController.settings }
+        set { inlineController.settings = newValue }
+    }
+    /// Called when the inline settings change through the hover chip (the accept key).
+    public var onInlineCompletionSettingsChanged: ((InlineCompletionSettings) -> Void)?
+    /// Opens the host's Full Line settings (the hover chip's ⋯ button).
+    public var onOpenInlineCompletionSettings: (() -> Void)?
+    /// Whether a ghost suggestion is on screen (tests).
+    public var hasInlineSuggestion: Bool { inlineController.isVisible }
+    /// The first ghost line on screen (tests).
+    public var inlineSuggestionFirstLine: String? { inlineController.visibleFirstLine }
+
+    private func inlineSettingsChanged() {
+        onInlineCompletionSettingsChanged?(inlineController.settings)
+    }
     /// Show the message of a diagnostic when the pointer rests on its squiggle.
     public var showsDiagnosticTooltips = true
 
@@ -695,6 +774,28 @@ public final class EditorIntelligenceController {
         }
     }
 
+    /// Copies a reference to the symbol at the caret to the pasteboard.
+    @discardableResult
+    public func copyReference() -> Bool {
+        guard let symbolReferenceProvider, let document = liveDocument() else {
+            showTransientHint("Copy Reference isn't available for this file")
+            return true
+        }
+        let position = document.cursor.position
+        Task { [weak self] in
+            guard let reference = await symbolReferenceProvider.symbolReference(for: document, at: position) else {
+                self?.showTransientHint("No symbol to copy a reference to")
+                return
+            }
+            await MainActor.run {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(reference, forType: .string)
+                self?.showTransientHint("Copied \(reference)")
+            }
+        }
+        return true
+    }
+
     /// Runs rename at the caret: `prepareRename` → name prompt → `rename(to:)` → plan preview.
     /// Returns `false` when there is no document to rename in.
     @discardableResult
@@ -802,8 +903,27 @@ public final class EditorIntelligenceController {
             return navigate(kind: .typeDefinition)
         case .findUsages:
             return navigate(kind: .references)
+        case .acceptInlineProposal:
+            guard inlineController.isVisible else { return false }
+            inlineController.acceptWhole()
+            return true
+        case .acceptInlineProposalWord:
+            guard inlineController.isVisible else { return false }
+            inlineController.acceptWord()
+            return true
+        case .acceptInlineProposalLine:
+            guard inlineController.isVisible else { return false }
+            inlineController.acceptLine()
+            return true
+        case .dismissInlineProposal:
+            guard inlineController.isVisible else { return false }
+            inlineController.dismiss(recordSuppression: true)
+            return true
         case .triggerCompletion:
             triggerCompletion()
+            return true
+        case .insertLiveTemplate:
+            beginExplicitCompletion(mode: .basic, filter: .templates)
             return true
         case .triggerSmartCompletion:
             triggerSmartCompletion()
@@ -830,6 +950,8 @@ public final class EditorIntelligenceController {
                 }
             }
             return true
+        case .copyReference:
+            return copyReference()
         case .rename:
             return rename()
         case .extractVariable:
@@ -966,7 +1088,10 @@ public final class EditorIntelligenceController {
         beginExplicitCompletion(mode: .smart)
     }
 
-    private func beginExplicitCompletion(mode: CompletionMode) {
+    private func beginExplicitCompletion(mode: CompletionMode, filter: CompletionContext.Filter = .all) {
+        // Normal completion never opens in a read-only view; only the read-only command
+        // mode (typing `.`) is available there.
+        if let textView, !textView.isEditable { return }
         let noticeable = isCompletionVisible && completionMode == mode
             && completionShownAt.map { Date().timeIntervalSince($0) >= 0.3 } == true
         if completionMode != mode {
@@ -976,7 +1101,7 @@ public final class EditorIntelligenceController {
         completionMode = mode
         completionInvocationCount = noticeable ? max(completionInvocationCount + 1, 2) : 1
         isCompletionSelectionExplicit = true
-        requestCompletion(trigger: .manual)
+        requestCompletion(trigger: .manual, filter: filter)
     }
 
     /// Whether the completion popup is showing.
@@ -1025,6 +1150,14 @@ public final class EditorIntelligenceController {
         }
         let item = completionItems[selectedCompletionIndex]
         hideCompletionPanel()
+        if item.id == syncedInlineItemID {
+            syncedInlineItemID = nil
+            inlineController.acceptWhole()
+            return
+        }
+        if inlineController.isVisible {
+            inlineController.dismiss(recordSuppression: false)
+        }
         applyCompletion(item, replacingIdentifier: replacingIdentifier)
     }
 
@@ -1687,7 +1820,7 @@ public final class EditorIntelligenceController {
         overlayContainer.isHidden = true
         textView.addFixedOverlaySubview(overlayContainer)
 
-        for view in [completionPanelView, hoverWindowView, completionDocumentationView, ghostTextView, parameterHintsView, codeActionView, navigationChoicesView, workspaceSearchPanelView] {
+        for view in [completionPanelView, hoverWindowView, completionDocumentationView, inlineChipView, inlineLinesView, parameterHintsView, codeActionView, navigationChoicesView, workspaceSearchPanelView] {
             view.translatesAutoresizingMaskIntoConstraints = true
             view.isHidden = true
             overlayContainer.addSubview(view)
@@ -1718,9 +1851,11 @@ public final class EditorIntelligenceController {
             positionPanel(completionPanelView, near: range.start.utf16Offset, in: textView, size: completionPanelView.frame.size)
         }
         let caret = textView.selectedRange.location
-        if !ghostTextView.isHidden {
-            positionGhostText(at: caret, in: textView)
+        if !inlineChipView.isHidden {
+            inlineChipView.isHidden = true
+            updateOverlayVisibility()
         }
+        updateInlineLinesView()
         if !parameterHintsView.isHidden {
             positionPanel(parameterHintsView, near: caret, in: textView, size: parameterHintsView.frame.size, preferAbove: true)
         }
@@ -1746,6 +1881,7 @@ public final class EditorIntelligenceController {
             refreshInlayHints()
             refreshCodeVision()
         case .cursorMoved, .selectionChanged:
+            inlineController.noteCaretMoved()
             dismissCompletionIfCaretLeftIdentifier()
             scheduleHoverRequest()
             refreshBreadcrumbs()
@@ -1811,7 +1947,11 @@ public final class EditorIntelligenceController {
         return TextPosition(line: location?.lineNumber ?? 0, column: location?.column ?? offset, utf16Offset: offset)
     }
 
-    private func requestCompletion(trigger: RequestTrigger) {
+    private func requestCompletion(
+        trigger: RequestTrigger, filter: CompletionContext.Filter = .all,
+        commandMode: CompletionContext.CommandMode? = nil,
+        expansion: (key: PostfixExpansionKey, word: String, caret: Int)? = nil
+    ) {
         guard let document = makeLiveDocument() else {
             completionLog.debug("request skipped: adapter has no current document")
             return
@@ -1824,13 +1964,34 @@ public final class EditorIntelligenceController {
         }
         completionGeneration += 1
         let generation = completionGeneration
+        if let expansion {
+            postfixExpansionRequest = PostfixExpansionRequest(
+                generation: generation, key: expansion.key, word: expansion.word, caret: expansion.caret
+            )
+        } else {
+            postfixExpansionRequest = nil
+        }
         pendingCompletionUpdate = nil
         completionHoldTask?.cancel()
         completionHoldTask = nil
         completionIsComputing = true
-        let context = makeCompletionContext(
-            document: document, trigger: trigger, invocationCount: completionInvocationCount, mode: completionMode
-        )
+        let context: CompletionContext
+        if commandMode == .readOnly {
+            // The buffer never changes in a read-only file, so the typed filter cannot be
+            // read from it: the context carries an empty prefix at the caret.
+            let caret = document.cursor.position
+            context = CompletionContext(
+                document: document, cursor: document.cursor, trigger: trigger, prefix: "",
+                range: EditorIntelligence.TextRange(start: caret, end: caret),
+                invocationCount: completionInvocationCount, mode: completionMode,
+                filter: filter, commandMode: commandMode
+            )
+        } else {
+            context = makeCompletionContext(
+                document: document, trigger: trigger, invocationCount: completionInvocationCount, mode: completionMode,
+                filter: filter, commandMode: commandMode
+            )
+        }
         completionLog.debug("request \(String(describing: trigger), privacy: .public) language=\(document.languageIdentifier ?? "nil", privacy: .public) prefix='\(context.prefix, privacy: .public)' memberAccess=\(context.isMemberAccess)")
         completionTask?.cancel()
         emptyCompletionHintTask?.cancel()
@@ -1852,9 +2013,33 @@ public final class EditorIntelligenceController {
 
     private func ingestCompletion(_ update: CompletionUpdate, context: CompletionContext, generation: Int, elapsed: TimeInterval) {
         guard generation == completionGeneration else { return }
-        guard let textView, let live = liveIdentifierRange(), live.location == context.range.start.utf16Offset,
-              textView.selectedRange.length == 0 else {
+        if let pending = postfixExpansionRequest, pending.generation == generation {
+            guard let textView, textView.selectedRange == NSRange(location: pending.caret, length: 0) else {
+                postfixExpansionRequest = nil
+                return
+            }
+            // The expansion key already happened. Wait for the finished list, then apply the one
+            // exact template, show a chooser, or insert the key itself. No empty-popup hint.
+            guard update.isFinished else { return }
+            postfixExpansionRequest = nil
+            let exact = update.items.filter { $0.label == pending.word && $0.kind == .snippet }
+            if exact.count == 1 {
+                hideCompletionPanel()
+                applyCompletion(exact[0], replacingIdentifier: true)
+                return
+            }
+            if exact.isEmpty {
+                textView.insertText(pending.key.insertedText)
+                return
+            }
+            presentCompletion(CompletionUpdate(items: exact, isFinished: true), context: context)
             return
+        }
+        if commandSession?.mode != .readOnly {
+            guard let textView, let live = liveIdentifierRange(), live.location == context.range.start.utf16Offset,
+                  textView.selectedRange.length == 0 else {
+                return
+            }
         }
         if let advertisement = update.advertisement { completionAdvertisement = advertisement }
         if let emptyText = update.emptyText { completionEmptyText = emptyText }
@@ -1883,7 +2068,18 @@ public final class EditorIntelligenceController {
 
     private func presentCompletion(_ update: CompletionUpdate, context: CompletionContext) {
         let isManual = context.trigger == .manual
-        let items = update.items
+        var items = update.items
+        // Sync mode: the current inline suggestion is also the popup's first item.
+        if inlineController.settings.syncWithPopup, let current = inlineController.current,
+           !current.suggestion.text.isEmpty {
+            let synced = CompletionItem(
+                label: current.suggestion.lines.first ?? current.suggestion.text,
+                insertText: current.suggestion.text, kind: .text, range: context.range,
+                source: "Full Line", allowsAutoInsert: false, origin: "Full Line"
+            )
+            syncedInlineItemID = synced.id
+            items.insert(synced, at: 0)
+        }
         if items.isEmpty {
             guard update.isFinished else { return }
             completionPainted = true
@@ -1932,6 +2128,11 @@ public final class EditorIntelligenceController {
             ranked = ranker.rankSynchronously(items: unfilteredCompletionItems, prefix: prefix).map(\.item)
         } else {
             ranked = unfilteredCompletionItems.filter { CompletionMatcher.matches(prefix, $0.matchText) }
+        }
+        // The synced inline suggestion stays first, whatever the prefix does to its label.
+        if let syncedInlineItemID, let synced = unfilteredCompletionItems.first(where: { $0.id == syncedInlineItemID }) {
+            ranked.removeAll { $0.id == syncedInlineItemID }
+            ranked.insert(synced, at: 0)
         }
         if !frozenCompletionKeys.isEmpty {
             ranked = freezeCompletion(ranked)
@@ -2070,6 +2271,8 @@ public final class EditorIntelligenceController {
             completionEmptyText = nil
             completionHoldTask?.cancel()
             completionHoldTask = nil
+            commandSession = nil
+            readOnlyFilter = nil
         }
         completionPanelView.isHidden = true
         hideCompletionDocumentation()
@@ -2121,6 +2324,10 @@ public final class EditorIntelligenceController {
         guard let textView else {
             return
         }
+        if let command = item.command {
+            applyCommandCompletion(command, item: item)
+            return
+        }
         completionEngine.recordAcceptance(of: item)
         let caret = textView.selectedRange.location
         let anchor = liveIdentifierRange()?.location ?? caret
@@ -2137,19 +2344,24 @@ public final class EditorIntelligenceController {
                 context: SnippetExpansionContext(selectedText: textView.text(in: nsRange) ?? "")
             )
             let expansion = expander.expand()
+            // Imports and the deleted receiver sit before the snippet. Apply them first, then
+            // insert at the range those edits moved, so one undo puts the whole template back.
+            let shifted = TextEditApplicator.shifted(nsRange, by: item.additionalEdits)
+            textView.undoManager?.beginUndoGrouping()
+            applyAdditionalEdits(item.additionalEdits, in: textView)
             if textView.isMultiCursorActive {
                 // Multi-caret completion still collapses placeholders: there is no per-caret
                 // tab-stop session, so every site gets the default snippet text.
-                let relativeStartOffset = nsRange.location - caret
+                let relativeStartOffset = shifted.location - textView.selectedRange.location
                 textView.replaceAtAllSelections(
                     relativeStartOffset: relativeStartOffset,
-                    length: nsRange.length,
+                    length: shifted.length,
                     with: expansion.text
                 )
             } else {
-                textView.insertSnippet(expansion, replacing: nsRange)
+                textView.insertSnippet(expansion, replacing: shifted)
             }
-            applyAdditionalEdits(item.additionalEdits, in: textView)
+            textView.undoManager?.endUndoGrouping()
             return
         }
 
@@ -2180,6 +2392,61 @@ public final class EditorIntelligenceController {
         if item.triggersSignatureHelp {
             requestSignatureHelp()
         }
+    }
+
+    /// Accepts a command item: deletes the trigger dots and typed filter in one undo group,
+    /// selects the item's target range if it has one, then runs the action or code action.
+    private func applyCommandCompletion(_ command: CompletionCommand, item: CompletionItem) {
+        guard let textView else { return }
+        completionEngine.recordAcceptance(of: item)
+        let session = commandSession
+        commandSession = nil
+        readOnlyFilter = nil
+        if session?.mode != .readOnly {
+            let caret = textView.selectedRange.location
+            // `acceptSelectedCompletion` hides the panel first, which clears the session:
+            // fall back to the dots (and filter text) right before the caret.
+            var triggerStart = session?.triggerStart ?? caret
+            if session == nil {
+                triggerStart = liveIdentifierRange()?.location ?? caret
+                while triggerStart > 0, textView.text(in: NSRange(location: triggerStart - 1, length: 1)) == "." {
+                    triggerStart -= 1
+                }
+            }
+            let range = NSRange(location: triggerStart, length: max(0, caret - triggerStart))
+            if range.length > 0, range.upperBound <= textView.documentLength {
+                textView.undoManager?.beginUndoGrouping()
+                textView.replace(range, withText: "")
+                textView.undoManager?.endUndoGrouping()
+            }
+        }
+        switch command {
+        case .editorAction(let id, let selecting):
+            if let selecting {
+                let nsRange = TextEditApplicator.nsRange(for: selecting, in: textView)
+                textView.selectedRange = nsRange
+            }
+            _ = textView.perform(EditorActionID(id))
+        case .codeAction(let action):
+            applyCodeAction(action)
+        }
+    }
+
+    /// Re-filters the read-only command list against the virtual filter text.
+    private func refilterReadOnlyCommands() {
+        guard let filter = readOnlyFilter else { return }
+        let ranked = unfilteredCompletionItems.filter {
+            filter.isEmpty || CompletionMatcher.matches(filter, $0.matchText)
+        }
+        guard !ranked.isEmpty else {
+            hideCompletionPanel(keepingSession: true)
+            readOnlyFilter = filter
+            return
+        }
+        completionItems = ranked
+        selectedCompletionIndex = 0
+        isCompletionVisible = true
+        updateCompletionPanel(prefix: filter)
     }
 
     private func applyAdditionalEdits(_ edits: [EditorIntelligence.TextEdit], in textView: TextView) {
@@ -2274,7 +2541,11 @@ public final class EditorIntelligenceController {
     }
 
     private func handleMouseMoved(_ event: NSEvent) {
-        guard event.type == .mouseMoved, let textView, showsDiagnosticTooltips || showsDocumentationOnMouseHover else {
+        guard event.type == .mouseMoved, let textView else {
+            return
+        }
+        updateInlineHover(at: textView.convert(event.locationInWindow, from: nil), in: textView)
+        guard showsDiagnosticTooltips || showsDocumentationOnMouseHover else {
             return
         }
         // Command-hover underlines a symbol for navigation (`JumpToDefinitionController`).
@@ -2456,6 +2727,18 @@ public final class EditorIntelligenceController {
             hideCompletionDocumentation()
             return
         }
+        // Command items show their own preview (a code action's changed lines) instead of hover.
+        if item.command != nil {
+            completionDocumentationKey = item.identityKey
+            if let documentation = item.documentation, !documentation.isEmpty {
+                showCompletionDocumentation(documentation)
+            } else {
+                completionDocumentation = nil
+                completionDocumentationView.isHidden = true
+                updateOverlayVisibility()
+            }
+            return
+        }
         // Checked before touching the buffer: re-filtering keeps the selection on most keystrokes.
         let key = item.identityKey
         guard key != completionDocumentationKey else { return }
@@ -2523,35 +2806,89 @@ public final class EditorIntelligenceController {
         completionDocumentationView.isHidden = true
     }
 
+    /// Positions (or hides) the multi-line ghost's extra lines in the reserved room
+    /// under the caret line. Called when the suggestion changes, and on scroll through
+    /// `repositionAnchoredPanels`.
+    private func updateInlineLinesView() {
+        guard let current = inlineController.current, let textView,
+              current.suggestion.lines.count > 1 else {
+            if !inlineLinesView.isHidden {
+                inlineLinesView.isHidden = true
+                updateOverlayVisibility()
+            }
+            return
+        }
+        let extra = Array(current.suggestion.lines.dropFirst())
+        let font = textView.theme.font
+        let color = textView.theme.inlineCompletionTextColor
+            ?? textView.theme.textColor(for: "comment")
+            ?? NSColor.secondaryLabelColor
+        inlineLinesView.update(lines: extra, font: font, textColor: color)
+        // The extra lines start at the caret line's first character, just below it.
+        let ns = textView.text as NSString
+        var lineStart = current.anchor
+        while lineStart > 0, ns.character(at: lineStart - 1) != 0x0A { lineStart -= 1 }
+        overlayContainer.frame = textView.bounds
+        raiseOverlayContainer(in: textView)
+        let caret = overlayContainer.convert(textView.caretRectInViewport(at: current.anchor), from: textView)
+        let start = overlayContainer.convert(textView.caretRectInViewport(at: lineStart), from: textView)
+        let size = InlineCompletionLinesView.size(of: extra, font: font)
+        inlineLinesView.frame = CGRect(x: start.minX, y: caret.maxY, width: size.width, height: size.height)
+        inlineLinesView.isHidden = false
+        overlayContainer.isHidden = false
+    }
+
+    /// Shows the accept-keys chip when the pointer rests on the ghost text.
+    private func updateInlineHover(at point: CGPoint, in textView: TextView) {
+        guard let current = inlineController.current, let firstLine = current.suggestion.lines.first else {
+            inlineChipTask?.cancel()
+            if !inlineChipView.isHidden { inlineChipView.isHidden = true; updateOverlayVisibility() }
+            return
+        }
+        let caret = textView.caretRectInViewport(at: current.anchor)
+        let width = (firstLine as NSString).size(withAttributes: [.font: textView.theme.font]).width
+        let ghost = CGRect(x: caret.maxX, y: caret.minY, width: width, height: caret.height).insetBy(dx: -2, dy: -2)
+        guard ghost.contains(point) else {
+            inlineChipTask?.cancel()
+            if !inlineChipView.isHidden { inlineChipView.isHidden = true; updateOverlayVisibility() }
+            return
+        }
+        guard inlineChipView.isHidden else { return }
+        inlineChipTask?.cancel()
+        inlineChipTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled, let self, self.inlineController.isVisible else { return }
+            self.inlineChipView.configure(acceptKey: self.inlineController.settings.acceptKey)
+            self.positionPanel(
+                self.inlineChipView, near: current.anchor, in: textView,
+                size: self.inlineChipView.frame.size, preferAbove: true
+            )
+            self.inlineChipView.isHidden = false
+            self.overlayContainer.isHidden = false
+        }
+    }
+
     // MARK: - Ghost Text
 
-    /// Previews the rest of the selected item after the caret, when it extends what was typed.
+    /// Previews the rest of the selected item after the caret, when it extends what was
+    /// typed. Uses the inline completion presentation, so the popup preview and a model
+    /// suggestion look (and measure) the same.
     private func updateGhostText(prefix: String) {
+        guard inlineController.current == nil else { return }
         guard let item = selectedCompletionItem, !item.isSnippet, let textView,
               item.insertText.hasPrefix(prefix), item.insertText.count > prefix.count else {
             hideGhostText()
             return
         }
         let suffix = String(item.insertText.dropFirst(prefix.count))
-        showGhostText(suffix, at: livePosition(at: textView.selectedRange.location, in: textView))
-    }
-
-    private func showGhostText(_ text: String, at position: TextPosition) {
-        guard let textView else {
-            return
-        }
-        let model = GhostTextModel(text: text, anchorPosition: position)
-        ghostTextModel = model
-        ghostTextView.update(model: model)
-        positionGhostText(at: position.utf16Offset, in: textView)
-        ghostTextView.isHidden = false
-        overlayContainer.isHidden = false
+        textView.inlineCompletion = InlineCompletionPresentation(
+            utf16Offset: textView.selectedRange.location, text: suffix
+        )
     }
 
     private func hideGhostText() {
-        ghostTextModel = nil
-        ghostTextView.isHidden = true
-        updateOverlayVisibility()
+        guard inlineController.current == nil, let textView else { return }
+        textView.inlineCompletion = nil
     }
 
     // MARK: - Parameter Hints
@@ -2713,6 +3050,63 @@ public final class EditorIntelligenceController {
 
     // MARK: - Keyboard
 
+    /// The caret line ends in `.key` and `key` is an enabled postfix template. Bounded to the
+    /// caret line, at most 400 UTF-16 units, so it can run on the key itself.
+    private func postfixTemplateWord(beforeCaretIn textView: TextView, keys: Set<String>) -> String? {
+        let caret = textView.selectedRange
+        guard caret.length == 0, caret.location > 0 else { return nil }
+        let length = min(caret.location, 400)
+        guard let chunk = textView.text(in: NSRange(location: caret.location - length, length: length)) else { return nil }
+        let ns = chunk as NSString
+        var lineStart = 0
+        if ns.length > 0 {
+            var index = ns.length - 1
+            while index >= 0 {
+                let unit = ns.character(at: index)
+                if unit == 10 || unit == 13 {
+                    lineStart = index + 1
+                    break
+                }
+                if index == 0 { break }
+                index -= 1
+            }
+        }
+        let line = ns.substring(from: lineStart)
+        let lineRange = NSRange(location: 0, length: (line as NSString).length)
+        guard let expression = Self.postfixKeyExpression,
+              let match = expression.firstMatch(in: line, range: lineRange), match.numberOfRanges >= 2 else { return nil }
+        let word = (line as NSString).substring(with: match.range(at: 1))
+        return keys.contains(word) ? word : nil
+    }
+
+    private static let postfixKeyExpression: NSRegularExpression? = try? NSRegularExpression(
+        pattern: #"\.([A-Za-z_][A-Za-z0-9_]*)$"#
+    )
+
+    /// Consumes Tab, Space, or Enter when it expands a postfix template. Otherwise the text view
+    /// keeps the key.
+    private func handlePostfixExpansionKey(_ event: NSEvent) -> Bool {
+        let settings = postfixExpansionSettings
+        guard settings.isEnabled, !settings.templateKeys.isEmpty else { return false }
+        guard event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
+        let matches: Bool
+        switch settings.key {
+        case .tab: matches = event.keyCode == 0x30
+        case .space: matches = event.keyCode == 0x31
+        case .enter: matches = event.keyCode == 0x24 || event.keyCode == 0x4C
+        }
+        guard matches, let textView, !textView.hasActiveSnippetSession else { return false }
+        guard let word = postfixTemplateWord(beforeCaretIn: textView, keys: settings.templateKeys) else { return false }
+        completionMode = .basic
+        completionInvocationCount = 1
+        isCompletionSelectionExplicit = true
+        requestCompletion(
+            trigger: .manual, filter: .templates,
+            expansion: (key: settings.key, word: word, caret: textView.selectedRange.location)
+        )
+        return true
+    }
+
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         if !navigationChoicesView.isHidden {
             let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
@@ -2746,6 +3140,10 @@ public final class EditorIntelligenceController {
                 dismissCompletion()
                 return true
             }
+            if inlineController.isVisible {
+                inlineController.dismiss(recordSuppression: true)
+                return true
+            }
         }
 
         if !codeActionView.isHidden, event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
@@ -2766,7 +3164,36 @@ public final class EditorIntelligenceController {
             }
         }
 
+        if let textView, !textView.isEditable, commandCompletionSettings.isEnabled,
+           commandCompletionSettings.readOnlyEnabled {
+            if readOnlyFilter != nil, isCompletionVisible {
+                if event.keyCode == 0x33 { // Backspace edits the virtual filter.
+                    if readOnlyFilter?.isEmpty == false {
+                        readOnlyFilter?.removeLast()
+                        refilterReadOnlyCommands()
+                    }
+                    return true
+                }
+                if let characters = event.characters, characters.count == 1,
+                   let scalar = characters.unicodeScalars.first,
+                   isCompletionIdentifierScalar(scalar) {
+                    readOnlyFilter = (readOnlyFilter ?? "") + characters
+                    refilterReadOnlyCommands()
+                    return true
+                }
+            } else if event.characters == "." {
+                readOnlyFilter = ""
+                commandSession = (triggerStart: textView.selectedRange.location, mode: .readOnly)
+                isCompletionSelectionExplicit = true
+                requestCompletion(trigger: .manual, commandMode: .readOnly)
+                return true
+            }
+        }
+
         guard isCompletionVisible else {
+            // The popup takes precedence; only with it closed do inline keys apply.
+            if inlineController.handleKeyDown(event) { return true }
+            if handlePostfixExpansionKey(event) { return true }
             return false
         }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
@@ -2786,6 +3213,13 @@ public final class EditorIntelligenceController {
             return true
         case 0x24 where modifiers.isEmpty, 0x4C where modifiers.isEmpty:
             acceptSelectedCompletion(replacingIdentifier: false)
+            return true
+        case 0x24 where modifiers == [.command, .shift], 0x4C where modifiers == [.command, .shift]:
+            // Complete Current Statement from the lookup: accept the row, then finish the
+            // statement. A method with parameters keeps the caret between the parentheses.
+            let preserveCaret = selectedCompletionItem?.statementCaretInsideParens == true
+            acceptSelectedCompletion(replacingIdentifier: false)
+            textView?.completeStatement(preservingCaretInsideParens: preserveCaret)
             return true
         case 0x24 where modifiers == .shift, 0x4C where modifiers == .shift:
             // IntelliJ's Start New Line in the lookup: keep what was typed, close the popup and
@@ -2833,6 +3267,8 @@ public final class EditorIntelligenceController {
         case .inserted(let text):
             handleTextInsertion(text)
         case .deletedBackward:
+            if inlineController.isVisible { inlineController.dismiss(recordSuppression: false) }
+            inlineController.scheduleAfterTyping()
             guard let textView, let anchor = completionAnchor else { return }
             let caret = textView.selectedRange.location
             guard caret >= anchor, let live = liveIdentifierRange(), live.location == anchor else {
@@ -2877,6 +3313,14 @@ public final class EditorIntelligenceController {
     }
 
     func handleTextInsertion(_ text: String) {
+        if inlineController.isVisible {
+            inlineController.noteInserted(text)
+        }
+        defer {
+            if !inlineController.isVisible {
+                inlineController.scheduleAfterTyping()
+            }
+        }
         if shouldTriggerSignatureHelp(for: text) {
             requestSignatureHelp()
         } else if text == ")" {
@@ -2887,7 +3331,7 @@ public final class EditorIntelligenceController {
             guard let live = liveIdentifierRange() else { return }
             if completionAnchor != nil, live.location == completionAnchor {
                 refilterCompletion()
-                requestCompletion(trigger: .keystroke(text))
+                requestCompletion(trigger: .keystroke(text), commandMode: commandSession?.mode)
                 return
             }
             // A new identifier: auto-popup unless it's a number literal.
@@ -2907,6 +3351,23 @@ public final class EditorIntelligenceController {
             completionMode = .basic
             completionInvocationCount = 0
             isCompletionSelectionExplicit = false
+            if text == ".", commandCompletionSettings.isEnabled, let textView, textView.isEditable {
+                let caret = textView.selectedRange.location
+                // A second dot right after an identifier, `)`, `]` or `}` opens command-only
+                // completion; a first dot carries commands as a section when enabled.
+                if caret >= 2, textView.text(in: NSRange(location: caret - 2, length: 1)) == ".",
+                   caret >= 3, let before = textView.text(in: NSRange(location: caret - 3, length: 1)),
+                   before.rangeOfCharacter(from: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_$)]}"))) != nil {
+                    commandSession = (triggerStart: caret - 2, mode: .dotDot)
+                    requestCompletion(trigger: .keystroke(text), commandMode: .dotDot)
+                    return
+                }
+                if commandCompletionSettings.showsSeparateGroup {
+                    commandSession = (triggerStart: caret - 1, mode: .singleDot)
+                    requestCompletion(trigger: .keystroke(text), commandMode: .singleDot)
+                    return
+                }
+            }
             requestCompletion(trigger: .keystroke(text))
         } else if isCompletionVisible || completionAnchor != nil {
             dismissCompletion()
@@ -2933,16 +3394,11 @@ public final class EditorIntelligenceController {
         } else if !preferAbove, below + size.height > bounds.maxY, above >= bounds.minY {
             y = above
         }
+        // A tall panel (a command section can add a dozen rows) must stay inside the viewport
+        // even when neither side has room for all of it.
+        y = min(max(y, bounds.minY + 2), max(bounds.minY + 2, bounds.maxY - size.height - 2))
         let x = min(max(bounds.minX + 2, caret.minX), max(bounds.minX + 2, bounds.maxX - size.width - 2))
         panel.frame = CGRect(origin: CGPoint(x: x, y: y), size: size)
-    }
-
-    /// Ghost text sits on the caret's own line, right after it.
-    private func positionGhostText(at location: Int, in textView: TextView) {
-        overlayContainer.frame = textView.bounds
-        raiseOverlayContainer(in: textView)
-        let caret = overlayContainer.convert(textView.caretRectInViewport(at: location), from: textView)
-        ghostTextView.frame = CGRect(x: caret.maxX, y: caret.minY, width: 300, height: max(16, caret.height))
     }
 
     /// Re-inserting a subview makes AppKit rebuild the parent's sublayer order, which can drop the
@@ -2957,7 +3413,8 @@ public final class EditorIntelligenceController {
         let hasVisibleChild = !completionPanelView.isHidden
             || !hoverWindowView.isHidden
             || !completionDocumentationView.isHidden
-            || !ghostTextView.isHidden
+            || !inlineChipView.isHidden
+            || !inlineLinesView.isHidden
             || !parameterHintsView.isHidden
             || !codeActionView.isHidden
             || !navigationChoicesView.isHidden

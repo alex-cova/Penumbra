@@ -15,21 +15,21 @@ struct JavaImportInserter {
     }
 
     private let bytes: [UInt8]
-    private let text: String
     private let packageName: String
     private let imports: [(qualifiedName: String, isStatic: Bool, isOnDemand: Bool, range: Range<Int>)]
-    private let packageDeclarationEnd: Int?
     private let declaredSimpleNames: Set<String>
+    private let list: JavaImportList
+    private let policy: JavaImportPolicy
 
-    init(text: String, bytes: [UInt8], tree: JavaSyntaxTree, fileStubs: JavaSourceFileStubs) {
-        self.text = text
-        self.bytes = bytes
+    init(text: String, bytes: [UInt8], tree: JavaSyntaxTree, fileStubs: JavaSourceFileStubs, policy: JavaImportPolicy = .intellij) {
+        self.bytes = bytes.isEmpty ? Array(text.utf8) : bytes
         self.packageName = fileStubs.packageName
         let list = JavaImportList(tree: tree)
+        self.list = list
+        self.policy = policy
         self.imports = list.entries.map {
             (qualifiedName: $0.qualifiedName, isStatic: $0.isStatic, isOnDemand: $0.isOnDemand, range: $0.range)
         }
-        self.packageDeclarationEnd = list.packageDeclarationEnd
         self.declaredSimpleNames = Set(fileStubs.classes.map(\.simpleName))
     }
 
@@ -53,33 +53,36 @@ struct JavaImportInserter {
                 return .useQualifiedName
             }
         }
-        return .addImport(importEdit(for: importName))
+        return add(qualifiedName: importName, isStatic: false)
+    }
+
+    /// `import static owner.member`, or the qualified name when that simple name is already taken.
+    func decisionForStaticMember(owner: String, member: String) -> Decision {
+        let qualified = "\(owner).\(member)"
+        for existing in imports where existing.isStatic {
+            if existing.isOnDemand, existing.qualifiedName == owner { return .none }
+            if !existing.isOnDemand, existing.qualifiedName == qualified { return .none }
+            if !existing.isOnDemand, existing.qualifiedName.hasSuffix(".\(member)") { return .useQualifiedName }
+        }
+        if declaredSimpleNames.contains(member) { return .useQualifiedName }
+        for existing in imports where !existing.isStatic && !existing.isOnDemand {
+            if existing.qualifiedName.split(separator: ".").last.map(String.init) == member {
+                return .useQualifiedName
+            }
+        }
+        return add(qualifiedName: qualified, isStatic: true)
     }
 
     private func fileDeclares(_ stub: JavaClassStub) -> Bool {
         stub.packageName == packageName && declaredSimpleNames.contains(stub.simpleName)
     }
 
-    /// `import name;` placed among the regular imports in lexicographic order, after the package
-    /// declaration when there are none, or at the top of the file.
-    private func importEdit(for name: String) -> TextEdit {
-        let line = "import \(name);"
-        let regular = imports.filter { !$0.isStatic }
-        if let next = regular.first(where: { $0.qualifiedName > name }) {
-            return insertion("\(line)\n", atByte: next.range.lowerBound)
-        }
-        if let last = regular.last ?? imports.last {
-            return insertion("\n\(line)", atByte: last.range.upperBound)
-        }
-        if let packageDeclarationEnd {
-            return insertion("\n\n\(line)", atByte: packageDeclarationEnd)
-        }
-        return insertion("\(line)\n\n", atByte: 0)
-    }
-
-    private func insertion(_ replacement: String, atByte byteOffset: Int) -> TextEdit {
-        let position = Self.textPosition(forByteOffset: byteOffset, in: bytes)
-        return TextEdit(range: EditorIntelligence.TextRange(start: position, end: position), replacement: replacement)
+    private func add(qualifiedName: String, isStatic: Bool) -> Decision {
+        let edits = JavaImportOrganizer.editsAdding(
+            [(qualifiedName, isStatic)], list: list, bytes: bytes, policy: policy
+        )
+        guard let edit = edits.first else { return .none }
+        return .addImport(edit)
     }
 
     /// Line, UTF-16 column and UTF-16 offset for a UTF-8 byte offset.

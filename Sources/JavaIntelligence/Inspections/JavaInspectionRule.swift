@@ -51,6 +51,7 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case unresolvedImport
     case missingOverride
     case unresolvedType
+    case unresolvedMember
     case classFileNameMismatch
     case stringComparisonIdentity
     case numberComparisonIdentity
@@ -272,6 +273,7 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .unresolvedImport: Info(code: "unresolved-import", title: "Unresolved import", group: .imports, severity: .warning, summary: "Reports imports that resolve to no known class."),
         .missingOverride: Info(code: "missing-override", title: "Missing '@Override' annotation", group: .inheritance, severity: .warning, summary: "Reports methods that override a supertype method without '@Override'."),
         .unresolvedType: Info(code: "unresolved-type", title: "Unresolved type", group: .compilerIssues, severity: .warning, summary: "Reports type names that are neither declared, imported nor in scope."),
+        .unresolvedMember: Info(code: "unresolved-member", title: "Unresolved method or field", group: .compilerIssues, severity: .error, summary: "Reports a method or field access on a fully indexed type that declares no member of that name."),
         .classFileNameMismatch: Info(code: "class-file-name-mismatch", title: "Class name does not match file name", group: .classStructure, severity: .warning, summary: "Reports a public top-level class whose name differs from its file name."),
         .stringComparisonIdentity: Info(code: "string-comparison-identity", title: "String comparison using '==' instead of 'equals()'", group: .probableBugs, severity: .warning, summary: "Reports '==' and '!=' used to compare strings, which compares references."),
         .numberComparisonIdentity: Info(code: "number-comparison-identity", title: "Number comparison using '==' instead of 'equals()'", group: .probableBugs, severity: .warning, summary: "Reports '==' and '!=' used to compare boxed numbers, which compares references."),

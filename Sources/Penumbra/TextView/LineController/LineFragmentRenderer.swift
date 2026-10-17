@@ -56,6 +56,25 @@ final class LineFragmentRenderer: @unchecked Sendable {
         let height = lineFragment.scaledSize.height
         for hint in inlayHints {
             let appearance = hint.appearance
+            if hint.kind == .inlineCompletion {
+                // Ghost text: editor font at full size, no chip, starting where the caret is.
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: appearance.inlineTextColor,
+                    .font: appearance.editorFont
+                ]
+                let characterX = InlayChipGeometry.chipEnd(forLocalOffset: hint.localOffset, in: lineFragment.line)
+                let size = (hint.label as NSString).size(withAttributes: attributes)
+                (hint.label as NSString).draw(
+                    in: CGRect(
+                        x: hint.localOffset == 0 ? 0 : characterX - hint.width,
+                        y: (height - size.height) / 2,
+                        width: hint.width,
+                        height: size.height
+                    ),
+                    withAttributes: attributes
+                )
+                continue
+            }
             let attributes: [NSAttributedString.Key: Any] = [
                 .foregroundColor: appearance.textColor,
                 .font: appearance.font

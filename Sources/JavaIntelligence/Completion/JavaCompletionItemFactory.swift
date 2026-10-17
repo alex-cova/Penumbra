@@ -44,7 +44,8 @@ struct JavaCompletionItemFactory {
 
     func memberItem(
         _ member: JavaResolvedMember, receiverQualifiedName: String?, basePriority: Double? = nil,
-        expectedMatch: Bool = false, asMethodReference: Bool = false, priorityAdjustment: Double = 0
+        expectedMatch: Bool = false, asMethodReference: Bool = false, priorityAdjustment: Double = 0,
+        additionalEdits: [TextEdit] = [], insertTextOverride: String? = nil
     ) -> CompletionItem {
         let declaringClass = member.declaringClass
         var priority: Double
@@ -70,20 +71,21 @@ struct JavaCompletionItemFactory {
         case .field(let field, _):
             return CompletionItem(
                 label: field.name,
-                insertText: field.name,
+                insertText: insertTextOverride ?? field.name,
                 kind: field.modifiers.contains(.enumConstant) ? .enumMember : .field,
                 range: range,
                 source: source,
                 documentation: field.javadoc,
                 detail: Self.display(field.type),
                 isDeprecated: deprecated,
+                additionalEdits: additionalEdits,
                 priority: priority,
                 preselect: expectedMatch,
                 origin: origin
             )
         case .method(let method, _):
             let hasParameters = !method.parameters.isEmpty
-            let insertText = asMethodReference ? method.name : "\(method.name)()"
+            let insertText = insertTextOverride ?? (asMethodReference ? method.name : "\(method.name)()")
             return CompletionItem(
                 label: method.name,
                 insertText: insertText,
@@ -95,9 +97,11 @@ struct JavaCompletionItemFactory {
                 detail: Self.display(method.returnType),
                 labelDetail: Self.parameterList(method),
                 isDeprecated: deprecated,
+                additionalEdits: additionalEdits,
                 priority: priority,
-                caretOffset: !asMethodReference && hasParameters ? (method.name as NSString).length + 1 : nil,
+                caretOffset: !asMethodReference && hasParameters ? (insertText as NSString).length - 1 : nil,
                 triggersSignatureHelp: !asMethodReference && hasParameters,
+                statementCaretInsideParens: !asMethodReference && hasParameters,
                 preselect: expectedMatch,
                 origin: origin
             )
@@ -197,6 +201,7 @@ struct JavaCompletionItemFactory {
             priority: finalPriority,
             caretOffset: anonymous || !takesArguments ? nil : (insertText as NSString).length - 1,
             triggersSignatureHelp: !anonymous && takesArguments,
+            statementCaretInsideParens: !anonymous && takesArguments,
             preselect: expectedMatch,
             allowsAutoInsert: false
         )

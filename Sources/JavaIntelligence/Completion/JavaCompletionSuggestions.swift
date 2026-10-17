@@ -202,6 +202,7 @@ enum JavaCompletionSuggestions {
                 labelDetail: "()", additionalEdits: edits,
                 priority: JavaCompletionPriority.classInScope + JavaCompletionPriority.expectedTypeBonus,
                 caretOffset: takesArguments ? ("Collections.\(name)" as NSString).length + 1 : nil,
+                statementCaretInsideParens: takesArguments,
                 preselect: true, allowsAutoInsert: false
             ))
         }

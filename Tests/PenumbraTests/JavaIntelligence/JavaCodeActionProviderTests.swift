@@ -116,6 +116,96 @@ final class JavaCodeActionProviderTests: XCTestCase {
         XCTAssertTrue(apply(action, to: source).contains("@Override"))
     }
 
+    func testImportIsOfferedFromTheIndexWithoutACompilerDiagnostic() async throws {
+        let provider = try await makeProvider(sources: [
+            ("java/util/ArrayList.java", "package java.util; public class ArrayList { }"),
+            ("org/acme/ArrayList.java", "package org.acme; public class ArrayList { }"),
+            ("org/hidden/ArrayList.java", "package org.hidden; class ArrayList { }")
+        ])
+        let source = "class T {\n    ArrayList<String> names;\n}\n"
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "ArrayList"), at: position(of: "ArrayList", in: source), diagnostics: []
+        )
+        XCTAssertEqual(actions.map(\.title), ["Import 'java.util.ArrayList'", "Import 'org.acme.ArrayList'"])
+    }
+
+    func testImportFixesStayWhenOnTheFlyIsOff() async throws {
+        let provider = try await makeProvider(sources: [
+            ("java/util/ArrayList.java", "package java.util; public class ArrayList { }")
+        ])
+        await provider.setImportPolicy(JavaImportPolicy(addUnambiguousImportsOnTheFly: false))
+        let source = "class T {\n    ArrayList<String> names;\n}\n"
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "ArrayList"), at: position(of: "ArrayList", in: source), diagnostics: []
+        )
+        XCTAssertEqual(actions.map(\.title), ["Import 'java.util.ArrayList'"])
+    }
+
+    func testAnExcludedClassIsOmittedFromImportFixes() async throws {
+        let provider = try await makeProvider(sources: [
+            ("java/util/ArrayList.java", "package java.util; public class ArrayList { }"),
+            ("org/acme/ArrayList.java", "package org.acme; public class ArrayList { }")
+        ])
+        await provider.setImportPolicy(JavaImportPolicy(excluded: ["java.util.ArrayList"]))
+        let source = "class T {\n    ArrayList<String> names;\n}\n"
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "ArrayList"), at: position(of: "ArrayList", in: source), diagnostics: []
+        )
+        XCTAssertEqual(actions.map(\.title), ["Import 'org.acme.ArrayList'"])
+    }
+
+    func testAnUnqualifiedCallOffersAStaticImport() async throws {
+        let provider = try await makeProvider(sources: [
+            ("demo/Helpers.java", "package demo; public class Helpers { public static int answer() { return 1; } }")
+        ])
+        let source = "class T {\n    int n = answer();\n}\n"
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "answer"), at: position(of: "answer", in: source), diagnostics: []
+        )
+        XCTAssertEqual(actions.map(\.title), ["Import static 'demo.Helpers.answer'"])
+        XCTAssertTrue(apply(actions[0], to: source).contains("import static demo.Helpers.answer;"))
+    }
+
+    func testAnExcludedStaticMemberIsOmitted() async throws {
+        let provider = try await makeProvider(sources: [
+            ("demo/Helpers.java", "package demo; public class Helpers { public static int answer() { return 1; } }")
+        ])
+        await provider.setImportPolicy(JavaImportPolicy(staticMemberClasses: ["-demo.Helpers.answer"]))
+        let source = "class T {\n    int n = answer();\n}\n"
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "answer"), at: position(of: "answer", in: source), diagnostics: []
+        )
+        XCTAssertTrue(actions.isEmpty)
+    }
+
+    func testAStarImportCanBeReplacedWithTheClassesItCovers() async throws {
+        let provider = try await makeProvider(sources: [
+            ("java/util/List.java", "package java.util; public class List { }"),
+            ("java/util/Map.java", "package java.util; public class Map { }")
+        ])
+        let source = "import java.util.*;\n\nclass T { List<String> a; Map<String, String> b; }\n"
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "java.util.*"), at: position(of: "java.util.*", in: source), diagnostics: []
+        )
+        let action = try XCTUnwrap(actions.first { $0.title == "Replace with single class imports" })
+        XCTAssertEqual(
+            apply(action, to: source),
+            "import java.util.List;\nimport java.util.Map;\n\nclass T { List<String> a; Map<String, String> b; }\n"
+        )
+    }
+
+    func testAnAmbiguousStarImportIsNotExpanded() async throws {
+        let provider = try await makeProvider(sources: [
+            ("java/util/List.java", "package java.util; public class List { }"),
+            ("java/awt/List.java", "package java.awt; public class List { }")
+        ])
+        let source = "import java.util.*;\n\nclass T { List names; }\n"
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "java.util.*"), at: position(of: "java.util.*", in: source), diagnostics: []
+        )
+        XCTAssertFalse(actions.contains { $0.title == "Replace with single class imports" })
+    }
+
     func testSymbolClassNameParsing() {
         XCTAssertEqual(JavaCodeActionProvider.symbolClassName(in: cannotFind), "ArrayList")
         XCTAssertNil(JavaCodeActionProvider.symbolClassName(in: "cannot find symbol\n  symbol:   variable foo"))
@@ -159,6 +249,102 @@ final class JavaCodeActionProviderTests: XCTestCase {
         let start = TextPosition(line: line, column: column, utf16Offset: column)
         let end = TextPosition(line: line, column: column + 9, utf16Offset: column + 9)
         return Diagnostic(severity: .error, message: message, range: TextRange(start: start, end: end), source: "javac")
+    }
+
+    private func keyedDiagnostic(
+        _ message: String, code: String, covering name: String, through endAnchor: String? = nil, in source: String
+    ) -> Diagnostic {
+        let offset = (source as NSString).range(of: name).location
+        XCTAssertGreaterThanOrEqual(offset, 0, "anchor \(name) missing")
+        let start = JavaNavigationText.position(utf16Offset: offset, in: source)
+        let endOffset: Int
+        if let endAnchor {
+            let endStart = (source as NSString).range(of: endAnchor).location
+            XCTAssertGreaterThanOrEqual(endStart, 0, "anchor \(endAnchor) missing")
+            endOffset = endStart + endAnchor.utf16.count
+        } else {
+            endOffset = offset + name.utf16.count
+        }
+        let end = JavaNavigationText.position(utf16Offset: endOffset, in: source)
+        return Diagnostic(severity: .error, message: message, range: TextRange(start: start, end: end), source: "javac", code: code)
+    }
+
+    // MARK: - Key-driven compiler fixes
+
+    func testImportIsOfferedForAKeyedDiagnostic() async throws {
+        let provider = try await makeProvider(sources: [
+            ("java/util/ArrayList.java", "package java.util; public class ArrayList { }"),
+        ])
+        let source = "class T {\n    ArrayList<String> names;\n}\n"
+        // IntelliJ phrasing, no "cannot find symbol": the code carries the meaning.
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "ArrayList"), at: position(of: "ArrayList", in: source),
+            diagnostics: [keyedDiagnostic(
+                "Cannot resolve symbol 'ArrayList'", code: "javac:compiler.err.cant.resolve",
+                covering: "ArrayList", in: source
+            )]
+        )
+        XCTAssertEqual(actions.map(\.title), ["Import 'java.util.ArrayList'"])
+        XCTAssertEqual(apply(actions[0], to: source), "import java.util.ArrayList;\n\nclass T {\n    ArrayList<String> names;\n}\n")
+    }
+
+    func testUnreportedExceptionOffersThrowsAndSurround() async throws {
+        let provider = try await makeProvider(sources: [])
+        let source = "import java.io.OutputStream;\n\nclass T {\n    void save(OutputStream out) {\n        out.write(1);\n    }\n}\n"
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "out.write"), at: position(of: "out.write", in: source),
+            diagnostics: [keyedDiagnostic(
+                "unreported exception java.io.IOException; must be caught or declared to be thrown",
+                code: "javac:compiler.err.unreported.exception.need.to.catch.or.throw",
+                covering: "out.write(1)", in: source
+            )]
+        )
+        XCTAssertEqual(actions.map(\.title), ["Add throws java.io.IOException to 'save'", "Surround with try/catch"])
+        XCTAssertEqual(
+            apply(actions[0], to: source),
+            "import java.io.OutputStream;\n\nclass T {\n    void save(OutputStream out) throws java.io.IOException {\n        out.write(1);\n    }\n}\n"
+        )
+        XCTAssertEqual(
+            apply(actions[1], to: source),
+            "import java.io.OutputStream;\n\nclass T {\n    void save(OutputStream out) {\n        try {\n            out.write(1);\n        } catch (java.io.IOException e) {\n            e.printStackTrace();\n        }\n    }\n}\n"
+        )
+    }
+
+    func testImplementMethodsOfferedForAbstractClass() async throws {
+        let provider = try await makeProvider(sources: [
+            ("D.java", "public interface D {\n    String convert(int value);\n}\n"),
+        ])
+        let source = "class C implements D {\n}\n"
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "C implements"), at: position(of: "C implements", in: source),
+            diagnostics: [keyedDiagnostic(
+                "C is not abstract and does not override abstract method convert(int) in D",
+                code: "javac:compiler.err.does.not.override.abstract",
+                covering: "class C implements D {", in: source
+            )]
+        )
+        XCTAssertEqual(actions.map(\.title), ["Implement methods"])
+        XCTAssertEqual(
+            apply(actions[0], to: source),
+            "class C implements D {\n    @Override\n    public String convert(int value) {\n        return null;\n    }\n}\n"
+        )
+    }
+
+    func testAddReturnOfferedForMissingReturn() async throws {
+        let provider = try await makeProvider(sources: [])
+        let source = "class T {\n    int get() {\n        int x = 1;\n    }\n}\n"
+        let actions = await provider.codeActions(
+            for: document(source, caretAt: "int x"), at: position(of: "int x", in: source),
+            diagnostics: [keyedDiagnostic(
+                "missing return statement", code: "javac:compiler.err.missing.ret.stmt",
+                covering: "int get() {", through: "    }", in: source
+            )]
+        )
+        XCTAssertEqual(actions.map(\.title), ["Add return statement"])
+        XCTAssertEqual(
+            apply(actions[0], to: source),
+            "class T {\n    int get() {\n        int x = 1;\n        return 0;\n    }\n}\n"
+        )
     }
 
     private func apply(_ action: CodeAction, to source: String) -> String {

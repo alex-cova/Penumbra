@@ -433,6 +433,15 @@ final class IDEProjectAndRunProviderTests: XCTestCase {
         XCTAssertNil(workspace.javaSupport.jdk.projectRoot)
     }
 
+    func testProjectSystemsRegisterMavenAfterGradle() {
+        let services = IDEIntelligenceServices()
+        defer { services.javaSupport.teardown() }
+        XCTAssertEqual(
+            services.projectSystems.systems.map(\.id),
+            ["gradle", "maven", "npm", "swiftpm", "xcode"]
+        )
+    }
+
     // MARK: - Nothing keeps the window alive
 
     func testProjectSystemsAndRunProvidersDoNotRetainTheWorkspace() async throws {
@@ -444,6 +453,10 @@ final class IDEProjectAndRunProviderTests: XCTestCase {
             // Make the providers, wire the window to them, and use them the way a session does.
             _ = workspace.javaRun
             _ = workspace.projectSystems.active
+            _ = workspace.maven.toolWindows(for: workspace)
+            _ = workspace.maven.bottomTabs(for: workspace)
+            _ = workspace.maven.toolbarItems(for: workspace)
+            _ = workspace.maven.makeSidebar()
             workspace.languages.projectDidChange(root: nil)
             workspace.projectSystems.projectDidChange(root: nil)
             workspace.stopRunning()

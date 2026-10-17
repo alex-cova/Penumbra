@@ -106,4 +106,73 @@ final class CompleteStatementTextViewTests: XCTestCase {
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord(code: 0x24, [.command, .shift]))), .completeStatement)
         XCTAssertEqual(Keymap.default_.action(for: KeyStroke(KeyChord(code: 0x24, [.command, .shift]))), .insertLineAbove)
     }
+
+    func testAnEmptyConditionKeepsTheCaretInTheParentheses() {
+        let textView = makeTextView("if (")
+        textView.selectedRange = NSRange(location: 4, length: 0)
+
+        textView.completeStatement()
+
+        XCTAssertEqual(textView.text, "if () {\n    \n}")
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 4, length: 0))
+    }
+
+    func testDoGrowsAWhileAndSplitsTheBody() {
+        let textView = makeTextView("do")
+        textView.selectedRange = NSRange(location: 2, length: 0)
+
+        textView.completeStatement()
+
+        XCTAssertEqual(textView.text, "do {\n    \n} while ();")
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 9, length: 0))
+    }
+
+    func testASwitchExpressionKeepsTheSemicolonOnTheClosingLine() {
+        let textView = makeTextView("int x = switch (n)")
+        textView.selectedRange = NSRange(location: 18, length: 0)
+
+        textView.completeStatement()
+
+        XCTAssertEqual(textView.text, "int x = switch (n) {\n    \n};")
+    }
+
+    func testACallSplitAcrossLinesClosesEveryParen() {
+        let textView = makeTextView("foo(a,\n b")
+        textView.selectedRange = NSRange(location: (textView.text as NSString).length, length: 0)
+
+        textView.completeStatement()
+
+        XCTAssertEqual(textView.text, "foo(a,\n b);\n")
+    }
+
+    func testAnArrayInitializerClosesAndEndsTheStatement() {
+        let textView = makeTextView("new int[]{1, 2")
+        textView.selectedRange = NSRange(location: 14, length: 0)
+
+        textView.completeStatement()
+
+        XCTAssertEqual(textView.text, "new int[]{1, 2};\n")
+    }
+
+    func testLookbehindStopsAfterThirtyLines() {
+        let above = Array(repeating: "foo(", count: 31).joined(separator: "\n")
+        let textView = makeTextView(above + "\nx")
+        textView.selectedRange = NSRange(location: (textView.text as NSString).length, length: 0)
+
+        textView.completeStatement()
+
+        let lines = textView.text.components(separatedBy: "\n")
+        XCTAssertEqual(lines.first, "foo(")
+        XCTAssertEqual(lines[lines.count - 2], "x" + String(repeating: ")", count: 30) + ";")
+    }
+
+    func testPreservingTheCaretAppendsTheSemicolonWithoutANewLine() {
+        let textView = makeTextView("println()")
+        textView.selectedRange = NSRange(location: 8, length: 0)
+
+        textView.completeStatement(preservingCaretInsideParens: true)
+
+        XCTAssertEqual(textView.text, "println();")
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 8, length: 0))
+    }
 }

@@ -43,6 +43,11 @@ public final class SyntaxTree: @unchecked Sendable {
         SyntaxNode(raw: ts_tree_root_node(tree), tree: self)
     }
 
+    /// The grammar this tree was parsed with, for lookahead queries.
+    package var language: OpaquePointer? {
+        ts_tree_language(tree)
+    }
+
     /// The smallest node spanning a single byte offset (tree-sitter's own
     /// `ts_node_descendant_for_byte_range` with a zero-length range) -- the standard way to find
     /// "what's at the cursor" including inside `ERROR` subtrees, which is where a lot of
@@ -133,6 +138,17 @@ public struct SyntaxNode {
         ts_node_is_missing(raw)
     }
 
+    /// Whether this node is an `ERROR` node (as opposed to merely containing one).
+    public var isError: Bool {
+        ts_node_is_error(raw)
+    }
+
+    /// Whether this node is an extra (a comment or other out-of-grammar token the parser
+    /// skipped over). Extras are ignored when picking the unexpected token of an `ERROR` node.
+    public var isExtra: Bool {
+        ts_node_is_extra(raw)
+    }
+
     /// Whether this subtree contains a syntax error or a missing node.
     public var hasError: Bool {
         ts_node_has_error(raw)
@@ -160,9 +176,27 @@ public struct SyntaxNode {
     }
 
     public var parent: SyntaxNode? {
-        let raw = ts_node_parent(raw)
-        guard !ts_node_is_null(raw) else { return nil }
-        return SyntaxNode(raw: raw, tree: tree)
+        let parent = ts_node_parent(raw)
+        guard !ts_node_is_null(parent) else { return nil }
+        return SyntaxNode(raw: parent, tree: tree)
+    }
+
+    public var previousSibling: SyntaxNode? {
+        let sibling = ts_node_prev_sibling(raw)
+        guard !ts_node_is_null(sibling) else { return nil }
+        return SyntaxNode(raw: sibling, tree: tree)
+    }
+
+    /// The first terminal below this node, following first children down.
+    public var firstLeaf: SyntaxNode {
+        var node = self
+        while let first = node.child(at: 0) { node = first }
+        return node
+    }
+
+    /// The parse state after this node, for lookahead queries on the leaf before an error.
+    package var nextParseState: TSStateId {
+        ts_node_next_parse_state(raw)
     }
 
     public var children: [SyntaxNode] {
