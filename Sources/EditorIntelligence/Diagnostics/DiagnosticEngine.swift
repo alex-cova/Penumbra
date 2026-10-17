@@ -17,16 +17,22 @@ public actor DiagnosticEngine {
         return report
     }
 
+    /// One provider's answer. A named alias because the inline tuple type in
+    /// `withTaskGroup(of:)` trips the repository's `SwiftAnalysis` grammar.
+    private typealias CollectedDiagnostics = (diagnostics: [Diagnostic], staleSources: Set<String>)
+
     private func collect(_ document: Document) async -> DiagnosticReport {
         var all: [Diagnostic] = []
-        await withTaskGroup(of: [Diagnostic].self) { group in
+        var stale: Set<String> = []
+        await withTaskGroup(of: CollectedDiagnostics.self) { group in
             for provider in providers {
                 group.addTask {
-                    await provider.diagnostics(for: document)
+                    await provider.diagnosticsWithFreshness(for: document)
                 }
             }
-            for await diagnostics in group {
-                all.append(contentsOf: diagnostics)
+            for await result in group {
+                all.append(contentsOf: result.diagnostics)
+                stale.formUnion(result.staleSources)
             }
         }
         let unique = Dictionary(grouping: all) { "\($0.severity)|\($0.message)|\($0.range)" }
@@ -38,6 +44,6 @@ public actor DiagnosticEngine {
             }
             return $0.range.start.utf16Offset < $1.range.start.utf16Offset
         }
-        return DiagnosticReport(documentID: document.id, diagnostics: sorted)
+        return DiagnosticReport(documentID: document.id, diagnostics: sorted, staleSources: stale)
     }
 }

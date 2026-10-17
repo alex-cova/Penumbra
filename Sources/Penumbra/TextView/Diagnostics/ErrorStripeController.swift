@@ -12,6 +12,9 @@ final class ErrorStripeController {
     var fractionForOffset: ((Int) -> CGFloat?)?
     /// Most diagnostics ticked; the most severe win when there are more.
     static let maxMarks = 2_000
+    /// Reads the live diagnostics, so the stripe never keeps its own stale copy across edits.
+    /// Falls back to the last `setDiagnostics` set when no provider is installed.
+    var diagnosticsSource: (() -> [TextViewDiagnostic])?
     var debounceInterval: TimeInterval = 0.2
 
     var isEnabled = false {
@@ -46,9 +49,10 @@ final class ErrorStripeController {
             view.setMarks([])
             return
         }
-        let chosen = diagnostics.count > Self.maxMarks
-            ? Array(diagnostics.sorted { $0.severity.stripeRank > $1.severity.stripeRank }.prefix(Self.maxMarks))
-            : diagnostics
+        let current = diagnosticsSource?() ?? diagnostics
+        let chosen = current.count > Self.maxMarks
+            ? Array(current.sorted { $0.severity.stripeRank > $1.severity.stripeRank }.prefix(Self.maxMarks))
+            : current
         view.setMarks(chosen.compactMap { diagnostic in
             fractionForOffset(diagnostic.range.location).map { ErrorStripeMark(fraction: $0, severity: diagnostic.severity) }
         })

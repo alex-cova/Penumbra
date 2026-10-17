@@ -3422,6 +3422,7 @@ extension TextInputView {
             }
         }
         semanticHighlights.applyEdit(range: range, newLength: nsNewString.length)
+        diagnosticEmphasisController.applyEdit(range: range, newLength: nsNewString.length)
         let languageModeLineChangeSet = EditorPerformanceTrace.shared.measure(.incrementalParse) {
             languageMode.textDidChange(textChange)
         }

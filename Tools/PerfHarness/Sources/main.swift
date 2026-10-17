@@ -47,7 +47,7 @@ func printUsageAndExit() -> Never {
       swift-completion <path|synthetic> [--files N] [--lines N]
       ts-index <path|synthetic> [--files N]
       ts-completion <path|synthetic> [--files N] [--lines N]
-      enter-session <path|synthetic> [--lines N] [--samples N] [--hold-seconds S] [--enter-only]
+      enter-session <path|synthetic> [--lines N] [--samples N] [--hold-seconds S] [--enter-only] [--diagnostics N]
       markdown-preview <path|synthetic> [--sections N] [--samples N]
 
     scroll-frames and snapshot-metal host an NSWindow and drive the Metal path; they are
@@ -147,7 +147,7 @@ do {
             )
         default:
             FileHandle.standardError.write(
-                "java-diagnostics modes: survival (latency and typing land in Phase 2)\n".data(using: .utf8)!)
+                "java-diagnostics modes: survival, latency, typing\n".data(using: .utf8)!)
             exit(1)
         }
     case "java-profile-import":
@@ -176,7 +176,8 @@ do {
         MainActor.assumeIsolated {
             EnterSessionProfile.run(pathOrSynthetic: path, lines: lines, samples: samples,
                                     holdSeconds: Double(flagValue("--hold-seconds", in: rest) ?? "") ?? 0,
-                                    enterOnly: rest.contains("--enter-only"))
+                                    enterOnly: rest.contains("--enter-only"),
+                                    diagnostics: Int(flagValue("--diagnostics", in: rest) ?? "") ?? 0)
         }
     case "markdown-preview":
         let sections = Int(flagValue("--sections", in: rest) ?? "") ?? 200

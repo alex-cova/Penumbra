@@ -1055,17 +1055,74 @@ public final class EditorIntelligenceController {
 
     /// Refresh diagnostics and apply squiggles to the text view.
     public func refreshDiagnostics() {
-        guard let document = adapter.currentDocument, textView != nil else {
+        guard let document = adapter.currentDocument, let textView else {
             return
         }
+        let generation = textView.contentGeneration
         diagnosticsTask?.cancel()
         diagnosticsTask = Task { [weak self, diagnosticEngine] in
             let report = await diagnosticEngine.diagnostics(for: document)
             guard !Task.isCancelled, let self, let textView = self.textView else { return }
+            // The text moved while the providers worked: drop the report and keep the
+            // edit-shifted markers, which still cover their original text.
+            guard textView.contentGeneration == generation else { return }
+            let merged = Self.mergedDiagnostics(report: report, current: textView.diagnostics, in: textView)
             self.latestDiagnostics = report.diagnostics
-            textView.diagnostics = report.diagnostics.map { TextViewDiagnostic($0, in: textView) }
-            self.onDiagnosticsUpdated?(report)
+            if merged.markers != textView.diagnostics {
+                textView.diagnostics = merged.markers
+            }
+            // Problems gets the merged set: fresh diagnostics only, so the editor bucket
+            // stops receiving stale positions. Stale sources keep their shifted squiggles
+            // in the text view until their fresh results land.
+            self.onDiagnosticsUpdated?(DiagnosticReport(
+                documentID: report.documentID,
+                diagnostics: merged.diagnostics,
+                staleSources: report.staleSources
+            ))
         }
+    }
+
+    /// Merge one report into the text view's (already edit-shifted) markers. Diagnostics of
+    /// stale sources are the previous text's results, so the shifted markers win for those
+    /// sources; every other source is taken from the report, reusing the current marker when
+    /// the same problem covers the same range (a fresh result for unchanged text lands
+    /// exactly on its shifted range). Order follows the current markers, so an identical
+    /// report merges to an equal set and assigns nothing.
+    private static func mergedDiagnostics(
+        report: DiagnosticReport,
+        current: [TextViewDiagnostic],
+        in textView: TextView
+    ) -> (diagnostics: [Diagnostic], markers: [TextViewDiagnostic]) {
+        let fresh = report.diagnostics.filter { !report.staleSources.contains($0.source) }
+        let converted = fresh.map { TextViewDiagnostic($0, in: textView) }
+        var markers: [TextViewDiagnostic] = []
+        markers.reserveCapacity(current.count + converted.count)
+        var consumed = Set<Int>()
+        for marker in current {
+            if let source = marker.source, report.staleSources.contains(source) {
+                markers.append(marker)
+                continue
+            }
+            if let match = converted.indices.first(where: {
+                !consumed.contains($0) && Self.sameProblem(current: marker, fresh: converted[$0])
+            }) {
+                markers.append(marker)
+                consumed.insert(match)
+            }
+        }
+        for (index, marker) in converted.enumerated() where !consumed.contains(index) {
+            markers.append(marker)
+        }
+        return (fresh, markers)
+    }
+
+    /// Identity for churn: a pure range shift of the same problem is not a change.
+    private static func sameProblem(current: TextViewDiagnostic, fresh: TextViewDiagnostic) -> Bool {
+        current.source == fresh.source
+            && current.code == fresh.code
+            && current.message == fresh.message
+            && current.severity == fresh.severity
+            && current.range == fresh.range
     }
 
     /// Format the entire document using the configured LSP formatting provider.

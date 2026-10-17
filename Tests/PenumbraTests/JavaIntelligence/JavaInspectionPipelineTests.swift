@@ -201,6 +201,23 @@ final class JavaInspectionPipelineTests: XCTestCase {
         XCTAssertEqual(calls.count, 2, "a changed text still supersedes the pass")
     }
 
+    func testSupersededPassNeverPublishes() async throws {
+        // A is still waiting out its idle delay when B supersedes it: only B's result
+        // may reach the cache and the result handler, never A's.
+        let service = JavaInspectionService(index: JavaIndex(), enabledRules: [.unusedImport], idleDelay: .milliseconds(200))
+        let calls = PassCounter()
+        let box = DiagnosticBox()
+        await service.setResultHandler { _, diagnostics in
+            calls.increment()
+            box.set(diagnostics)
+        }
+        _ = await service.diagnostics(for: document("import java.util.List;\nclass T {}\n"))
+        _ = await service.diagnostics(for: document("class T {}\n"))
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(box.value.map(\.code), [])
+    }
+
     func testImportWarningsSurviveASyntaxErrorElsewhereInTheFile() async {
         // Half-typed statement while typing: the tree has an ERROR node, but the import
         // list is unaffected, so the unused imports must still be reported.

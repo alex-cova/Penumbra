@@ -305,6 +305,109 @@ final class EditorIntelligenceControllerTests: XCTestCase {
         XCTAssertEqual(reports.first?.diagnostics.map(\.message), ["Careful"])
     }
 
+    func testStaleSourcesKeepShiftedMarkersAndLeaveTheHostReport() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "error here"
+
+        let finding = Diagnostic(
+            severity: .warning, message: "Careful", range: makeRange(start: 0, end: 5), source: "Test")
+        let provider = StaleScriptProvider()
+        await provider.set(result: ([finding], []))
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: [provider])
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        controller.refreshDiagnostics()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(textView.diagnostics.count, 1)
+
+        // Typing shifts the marker; the next report still carries the old text's result.
+        textView.replace(NSRange(location: 0, length: 0), withText: "xy")
+        await provider.set(result: ([finding], ["Test"]))
+        var reports: [DiagnosticReport] = []
+        controller.onDiagnosticsUpdated = { reports.append($0) }
+        controller.refreshDiagnostics()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        // The shifted marker stays on its original text…
+        XCTAssertEqual(textView.diagnostics.map(\.range.location), [2])
+        XCTAssertEqual((textView.text as NSString).substring(with: textView.diagnostics[0].range), "error")
+        // …while Problems stops receiving the stale positions.
+        XCTAssertEqual(reports.last?.diagnostics.count, 0)
+        XCTAssertEqual(reports.last?.staleSources, ["Test"])
+    }
+
+    func testFreshReportReplacesShiftedMarkers() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "error here"
+
+        let provider = StaleScriptProvider()
+        await provider.set(result: ([
+            Diagnostic(severity: .warning, message: "Careful", range: makeRange(start: 0, end: 5), source: "Test")
+        ], []))
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: [provider])
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        controller.refreshDiagnostics()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(textView.diagnostics.count, 1)
+
+        // The fresh pass reports a genuinely different problem: it replaces the marker…
+        await provider.set(result: ([
+            Diagnostic(severity: .error, message: "Broken", range: makeRange(start: 0, end: 5), source: "Test")
+        ], []))
+        var reports: [DiagnosticReport] = []
+        controller.onDiagnosticsUpdated = { reports.append($0) }
+        controller.refreshDiagnostics()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(textView.diagnostics.map(\.message), ["Broken"])
+        // …and a provider that clears its problems by returning nothing clears them.
+        await provider.set(result: ([], []))
+        controller.refreshDiagnostics()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(textView.diagnostics.count, 0)
+        XCTAssertEqual(reports.last?.diagnostics.count, 0)
+    }
+
+    func testReportForSupersededGenerationIsDropped() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = "error"
+
+        let provider = ScriptedDiagnosticProvider()
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: [provider])
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        var messages: [String] = []
+        controller.onDiagnosticsUpdated = { messages.append(contentsOf: $0.diagnostics.map(\.message)) }
+        // Two identical slow steps: the manual refresh's report belongs to older text once
+        // the edit lands, while the adapter's own refresh after the edit is current.
+        await provider.enqueue([(delayMilliseconds: 300, message: "old"), (delayMilliseconds: 300, message: "old")])
+        controller.refreshDiagnostics()
+        // The text moves while the provider works: the first report belongs to older text.
+        try await Task.sleep(nanoseconds: 50_000_000)
+        textView.replace(NSRange(location: 0, length: 0), withText: "xy")
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+
+        // Only the current generation's report draws: one delivery, not two.
+        XCTAssertEqual(textView.diagnostics.map(\.message), ["old"])
+        XCTAssertEqual(messages, ["old"])
+    }
+
     func testSupersededDiagnosticsRefreshIsNeverReported() async throws {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         textView.theme = DefaultTheme()
@@ -329,6 +432,22 @@ final class EditorIntelligenceControllerTests: XCTestCase {
 
         XCTAssertEqual(messages, ["new"])
         XCTAssertEqual(textView.diagnostics.count, 1)
+    }
+}
+
+/// A provider whose whole answer, including staleness, the test scripts.
+private actor StaleScriptProvider: DiagnosticProvider {
+    let name = "StaleScript"
+    private var result: (diagnostics: [Diagnostic], staleSources: Set<String>) = ([], [])
+
+    func set(result: (diagnostics: [Diagnostic], staleSources: Set<String>)) {
+        self.result = result
+    }
+
+    func diagnostics(for document: Document) async -> [Diagnostic] { result.diagnostics }
+
+    func diagnosticsWithFreshness(for document: Document) async -> (diagnostics: [Diagnostic], staleSources: Set<String>) {
+        result
     }
 }
 

@@ -113,6 +113,18 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         return cache[url]?.diagnostics ?? []
     }
 
+    public func diagnosticsWithFreshness(for document: Document) async -> (diagnostics: [Diagnostic], staleSources: Set<String>) {
+        let diagnostics = await diagnostics(for: document)
+        return (diagnostics, isFresh(document) ? [] : ["javac"])
+    }
+
+    /// Whether the cached result is for exactly this text, hashed the same way the
+    /// compile is keyed.
+    public func isFresh(_ document: Document) -> Bool {
+        guard let url = compilableURL(for: document) else { return false }
+        return cache[url]?.textHash == document.text.hashValue
+    }
+
     /// Compiles now, skipping the idle wait -- for a save, or right after a sync -- unless the
     /// result for this exact text is already cached. `force` recompiles regardless: a file that
     /// didn't change can still break when a file it depends on does.

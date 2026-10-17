@@ -142,8 +142,11 @@ enum JavaDiagnosticsProfile {
     /// A scripted half-typed burst: type `foo(\n1);` one key at a time into the first method,
     /// and after each keystroke measure the idle-to-fresh-squiggle time (the idle
     /// `diagnostics(for:)` path with a zero delay, as Umbra configures it — the adapter
-    /// debounce above it is a host constant). A cold CLI `javac` per keystroke would cost
-    /// minutes, so `javac` is checked once on the final text when a JDK is available.
+    /// debounce above it is a host constant). Surviving findings must still cover the same
+    /// text after each keystroke (anchoring). A second burst types inside a line comment —
+    /// no real problem changes at any keystroke — and must not change the finding set at
+    /// all (churn). A cold CLI `javac` per keystroke would cost minutes, so `javac` is
+    /// checked once on the final text when a JDK is available.
     static func runTyping(pathOrSynthetic: String, lines: Int) throws {
         let (name, text) = try singleSource(pathOrSynthetic: pathOrSynthetic, lines: lines)
         guard let tree = JavaSyntaxParser().parse(text),
@@ -151,23 +154,29 @@ enum JavaDiagnosticsProfile {
         else {
             throw DiagnosticsProfileFailure(message: "typing needs a file with one method body")
         }
+        let url = DiagnosticsProbe.url(for: name)
         let keys = ["f", "o", "o", "(", "\n", "1", ")", ";"]
         let counter = DeliveryCounter()
-        let timings = try DiagnosticsProbe.runAsync {
+        let latest = DiagnosticsBlockingBox<[Diagnostic]>()
+        let burst: (timings: [Double], texts: [String], snapshots: [[Diagnostic]]) = try DiagnosticsProbe.runAsync {
             let service = JavaInspectionService(
                 index: JavaIndex(), enabledRules: DiagnosticsProbe.indexFreeRules, idleDelay: .zero)
-            await service.setResultHandler { _, _ in counter.increment() }
+            await service.setResultHandler { _, diagnostics in
+                counter.increment()
+                latest.value = diagnostics
+            }
             var bytes = Array(text.utf8)
             var caret = member.insertionByte
-            await service.analyzeNow(DiagnosticsProbe.document(text: text, url: DiagnosticsProbe.url(for: name), version: 0), force: true)
+            await service.analyzeNow(DiagnosticsProbe.document(text: text, url: url, version: 0), force: true)
             var timings: [Double] = []
+            var texts = [text]
+            var snapshots = [latest.value ?? []]
             for (index, key) in keys.enumerated() {
                 let insertion = Array(key.utf8)
                 bytes.insert(contentsOf: insertion, at: caret)
                 caret += insertion.count
                 let edited = String(decoding: bytes, as: UTF8.self)
-                let document = DiagnosticsProbe.document(
-                    text: edited, url: DiagnosticsProbe.url(for: name), version: index + 1)
+                let document = DiagnosticsProbe.document(text: edited, url: url, version: index + 1)
                 let start = DispatchTime.now().uptimeNanoseconds
                 _ = await service.diagnostics(for: document)
                 // Same-hash refreshes never duplicate a pass, so deliveries map 1:1 onto
@@ -177,28 +186,84 @@ enum JavaDiagnosticsProfile {
                     try await Task.sleep(nanoseconds: 5_000_000)
                 }
                 timings.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9)
+                texts.append(edited)
+                snapshots.append(latest.value ?? [])
             }
-            return timings
+            return (timings, texts, snapshots)
         }
-        for (index, elapsed) in timings.enumerated() {
+        for (index, elapsed) in burst.timings.enumerated() {
             print("stage java_diagnostics_typing file=\(name) edit=\(index) inspection_s=\(formatSeconds(elapsed))")
         }
+        let (anchored, checked) = anchorRate(texts: burst.texts, snapshots: burst.snapshots)
+        print(
+            "stage java_diagnostics_anchor file=\(name) edits=\(burst.timings.count) "
+                + "checked=\(checked) anchored=\(anchored) rate=\(formatRate(anchored, of: checked))"
+        )
+        let churn = try commentBurstChanges(name: name, baseText: burst.texts.last ?? text)
+        print("stage java_diagnostics_churn file=\(name) script=comment edits=8 changes=\(churn)")
         var javacSummary = "skipped(no-jdk)"
-        let finalText = finalTextAfterTyping(text: text, memberInsertionByte: member.insertionByte)
+        let finalText = burst.texts.last ?? text
         if let final = try timeJavacCheck(text: finalText, name: name) {
             javacSummary = "check_s=\(formatSeconds(final))"
         }
         print(
-            "stage java_diagnostics_typing_total file=\(name) edits=\(timings.count) "
-                + "inspection_median_s=\(formatSeconds(median(timings))) "
-                + "inspection_worst_s=\(formatSeconds(timings.max() ?? 0)) javac_\(javacSummary)"
+            "stage java_diagnostics_typing_total file=\(name) edits=\(burst.timings.count) "
+                + "inspection_median_s=\(formatSeconds(median(burst.timings))) "
+                + "inspection_worst_s=\(formatSeconds(burst.timings.max() ?? 0)) javac_\(javacSummary)"
         )
     }
 
-    private static func finalTextAfterTyping(text: String, memberInsertionByte: Int) -> String {
-        var bytes = Array(text.utf8)
-        bytes.insert(contentsOf: Array("foo(\n1);".utf8), at: memberInsertionByte)
-        return String(decoding: bytes, as: UTF8.self)
+    /// Share of findings that survive a keystroke still covering the same text. A pure
+    /// range shift of the same problem is not churn; covering different text is unanchored.
+    /// Same-identity findings at different ranges match as multisets of covered texts.
+    private static func anchorRate(texts: [String], snapshots: [[Diagnostic]]) -> (anchored: Int, checked: Int) {
+        func coveredByIdentity(_ diagnostics: [Diagnostic], in text: String) -> [String: [String]] {
+            Dictionary(grouping: diagnostics.compactMap { diagnostic in
+                DiagnosticsProbe.coveredText(diagnostic, in: text).map { (DiagnosticsProbe.identity(diagnostic), $0) }
+            }, by: \.0).mapValues { $0.map(\.1) }
+        }
+        var anchored = 0
+        var checked = 0
+        for index in 1..<snapshots.count {
+            let before = coveredByIdentity(snapshots[index - 1], in: texts[index - 1])
+            let after = coveredByIdentity(snapshots[index], in: texts[index])
+            for (identity, beforeTexts) in before {
+                guard let afterTexts = after[identity] else { continue }
+                checked += beforeTexts.count
+                var remaining = afterTexts
+                for covered in beforeTexts {
+                    if let match = remaining.firstIndex(of: covered) {
+                        anchored += 1
+                        remaining.remove(at: match)
+                    }
+                }
+            }
+        }
+        return (anchored, checked)
+    }
+
+    /// Types inside a trailing line comment, one key at a time: the tree never breaks, so
+    /// no finding may appear, disappear or change identity across the burst. Returns the
+    /// total identity changes between consecutive keystrokes.
+    private static func commentBurstChanges(name: String, baseText: String) throws -> Int {
+        let url = DiagnosticsProbe.url(for: name)
+        let keys = ["y", " ", "m", "o", "r", "e", "!", "!"]
+        let snapshots = try DiagnosticsProbe.runAsync {
+            let service = JavaInspectionService(
+                index: JavaIndex(), enabledRules: DiagnosticsProbe.indexFreeRules, idleDelay: .milliseconds(1))
+            let box = DiagnosticsBlockingBox<[Diagnostic]>()
+            await service.setResultHandler { _, diagnostics in box.value = diagnostics }
+            var text = baseText + "\n// x"
+            await service.analyzeNow(DiagnosticsProbe.document(text: text, url: url, version: 0), force: true)
+            var snapshots = [Set((box.value ?? []).map(DiagnosticsProbe.identity))]
+            for (index, key) in keys.enumerated() {
+                text += key
+                await service.analyzeNow(DiagnosticsProbe.document(text: text, url: url, version: index + 1), force: true)
+                snapshots.append(Set((box.value ?? []).map(DiagnosticsProbe.identity)))
+            }
+            return snapshots
+        }
+        return zip(snapshots, snapshots.dropFirst()).map { $0.symmetricDifference($1).count }.reduce(0, +)
     }
 
     private static func javaSources(under directory: String, lines: Int) throws -> [(name: String, text: String)] {
@@ -286,6 +351,20 @@ private enum DiagnosticsProbe {
         semaphore.wait()
         return try box.value!.get()
     }
+
+    /// Identity for survival, anchoring and churn: a pure range shift of the same problem
+    /// is not a change.
+    static func identity(_ diagnostic: Diagnostic) -> String {
+        "\(diagnostic.source)|\(diagnostic.code ?? "")|\(diagnostic.message)|\(diagnostic.severity)"
+    }
+
+    static func coveredText(_ diagnostic: Diagnostic, in text: String) -> String? {
+        let start = diagnostic.range.start.utf16Offset
+        let end = diagnostic.range.end.utf16Offset
+        let ns = text as NSString
+        guard start >= 0, end >= start, end <= ns.length else { return nil }
+        return ns.substring(with: NSRange(location: start, length: end - start))
+    }
 }
 
 /// One file's survival run: baseline findings, then findings after injecting `foo(` into
@@ -315,12 +394,12 @@ private struct SurvivalResult {
         let outsideBaseline = baselineDiagnostics.filter { !memberLines.contains($0.range.start.line) }
         let brokenBytes = bytes[..<member.insertionByte] + Array("\n                foo(".utf8) + bytes[member.insertionByte...]
         let broken = String(decoding: brokenBytes, as: UTF8.self)
-        let brokenIdentities = Set(try DiagnosticsProbe.analyzeInspections(text: broken, url: url).map(Self.identity))
+        let brokenIdentities = Set(try DiagnosticsProbe.analyzeInspections(text: broken, url: url).map(DiagnosticsProbe.identity))
         outside = outsideBaseline.count
-        survived = outsideBaseline.filter { brokenIdentities.contains(Self.identity($0)) }.count
+        survived = outsideBaseline.filter { brokenIdentities.contains(DiagnosticsProbe.identity($0)) }.count
         let importBaseline = outsideBaseline.filter { $0.code == "unused-import" || $0.code == "duplicate-import" }
         importsOutside = importBaseline.count
-        importsSurvived = importBaseline.filter { brokenIdentities.contains(Self.identity($0)) }.count
+        importsSurvived = importBaseline.filter { brokenIdentities.contains(DiagnosticsProbe.identity($0)) }.count
     }
 
     private static func lineRange(of bytes: Range<Int>, in utf8: [UInt8]) -> Range<Int> {
@@ -328,11 +407,6 @@ private struct SurvivalResult {
             utf8.prefix(offset).reduce(0) { $0 + ($1 == 10 ? 1 : 0) }
         }
         return line(atByteOffset: bytes.lowerBound)..<line(atByteOffset: min(bytes.upperBound, utf8.count)) + 1
-    }
-
-    /// Identity for survival and churn: a pure range shift of the same problem is not churn.
-    private static func identity(_ diagnostic: Diagnostic) -> String {
-        "\(diagnostic.source)|\(diagnostic.code ?? "")|\(diagnostic.message)|\(diagnostic.severity)"
     }
 }
 

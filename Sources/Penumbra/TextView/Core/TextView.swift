@@ -1674,6 +1674,8 @@ public struct DocumentTextExport: Sendable {
             let total = input.contentSize.height
             return total > 0 ? (input.textContainerInset.top + input.lineManager.yPosition(ofRow: row)) / total : 0
         }
+        // The stripe reads the shifted markers, never its own copy: edits move the ticks.
+        errorStripeController.diagnosticsSource = { [weak self] in self?.textInputView.diagnostics ?? [] }
         addFixedOverlaySubview(errorStripeController.view)
         scrollerOverlay.install(in: self, themeSource: textInputView) { [weak self] in
             self?.suspendTypewriterScrollingForUserInteraction()

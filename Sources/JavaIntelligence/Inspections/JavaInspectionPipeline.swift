@@ -33,6 +33,9 @@ enum JavaInspectionPipeline {
             return isolated
         }
         var found: [JavaInspection] = []
+        // A superseded pass stops between stages instead of racing the fresh one to the
+        // cache; `runAnalysis` also refuses to publish a cancelled pass.
+        if Task.isCancelled { return found }
         if enabled.contains(.unusedImport) {
             found.append(contentsOf: JavaUnusedImportInspection.inspect(source: text, tree: tree))
         }
@@ -52,10 +55,12 @@ enum JavaInspectionPipeline {
             found.append(contentsOf: JavaClassFileNameInspection.inspect(context: context))
         }
         found.append(contentsOf: JavaInspectionRunner.run(context: context, enabled: enabled))
+        if Task.isCancelled { return found }
         found.append(contentsOf: JavaInspectionRunner.runFlow(context: context, enabled: enabled))
         found.append(contentsOf: projectFindings.filter { inspection in
             JavaInspectionRule(code: inspection.id).map(enabled.contains) == true
         })
+        if Task.isCancelled { return found }
         found.append(contentsOf: await JavaInspectionRunner.runTyped(context: context, enabled: enabled))
         return found
     }

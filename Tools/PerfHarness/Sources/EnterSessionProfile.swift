@@ -17,7 +17,7 @@ import PenumbraLanguages
 /// Backspace so every position is measured on the same text.
 @MainActor
 enum EnterSessionProfile {
-    static func run(pathOrSynthetic: String, lines: Int, samples: Int, holdSeconds: Double = 0, enterOnly: Bool = false) {
+    static func run(pathOrSynthetic: String, lines: Int, samples: Int, holdSeconds: Double = 0, enterOnly: Bool = false, diagnostics: Int = 0) {
         let text = pathOrSynthetic == "synthetic" || pathOrSynthetic == "-"
             ? syntheticJava(lines: lines)
             : ((try? String(contentsOfFile: pathOrSynthetic, encoding: .utf8)) ?? syntheticJava(lines: lines))
@@ -25,6 +25,17 @@ enum EnterSessionProfile {
         let sizeBytes = UInt64(text.utf8.count)
         let (window, textView) = makeTextView(text: text)
         defer { window.close() }
+        if diagnostics > 0 {
+            // Evenly spread zero-length warnings: stresses the per-edit marker shift and
+            // the emphasis re-sync without depending on any intelligence service.
+            let length = (text as NSString).length
+            let step = max(length / diagnostics, 1)
+            textView.diagnostics = (0..<diagnostics).map { index in
+                TextViewDiagnostic(
+                    range: NSRange(location: min(index * step, length), length: 0),
+                    severity: .warning, message: "perf", source: "perf")
+            }
+        }
         let lineCount = textView.lineHandleStatistics.lineCount
         warn("=== enter-session \(file): \(lineCount) lines, metal=\(textView.isMetalRenderingActive) ===")
 

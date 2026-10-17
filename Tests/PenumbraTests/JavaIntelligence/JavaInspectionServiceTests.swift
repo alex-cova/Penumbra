@@ -78,6 +78,38 @@ final class JavaInspectionServiceTests: XCTestCase {
         XCTAssertEqual(inspections.first?.message, "Cannot resolve type 'UnknownType'")
     }
 
+    func testEditedTextIsMarkedStaleUntilThePassLands() async throws {
+        let index = try await makeIndex()
+        let service = JavaInspectionService(
+            index: index,
+            enabledRules: [.unusedImport],
+            idleDelay: .milliseconds(1)
+        )
+        let url = scratch.appendingPathComponent("T.java")
+        let valid = "import java.util.Map;\n\nclass T { int x; }\n"
+        let box = ResultBox()
+        await service.setResultHandler { url, diagnostics in box.append(url, diagnostics) }
+        await service.analyzeNow(document(valid, url: url), force: true)
+
+        let (freshDiagnostics, freshStale) = await service.diagnosticsWithFreshness(for: document(valid, url: url))
+        XCTAssertEqual(freshStale, [])
+        XCTAssertEqual(freshDiagnostics.map(\.code), ["unused-import"])
+
+        // The edit schedules a new pass; until it lands the previous text's findings
+        // are reported stale instead of drawn at dead positions.
+        let edited = valid + "// typed\n"
+        let (staleDiagnostics, stale) = await service.diagnosticsWithFreshness(for: document(edited, url: url))
+        XCTAssertEqual(stale, ["java-inspection"])
+        XCTAssertEqual(staleDiagnostics.map(\.code), ["unused-import"])
+
+        let deadline = Date().addingTimeInterval(5)
+        while await !service.isFresh(document(edited, url: url)), Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let (_, landedStale) = await service.diagnosticsWithFreshness(for: document(edited, url: url))
+        XCTAssertEqual(landedStale, [])
+    }
+
     func testInspectionServiceAnalyzeNowPublishesDiagnostics() async throws {
         let index = try await makeIndex()
         let service = JavaInspectionService(

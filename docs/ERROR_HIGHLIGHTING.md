@@ -18,8 +18,8 @@ awake (`caffeinate`). Report p50 and max. Identity for churn and survival is
 | Open → first squiggle, per source (syntax, inspection, javac) | `PerfHarness java-diagnostics latency` | ≤ pass/check time + 50 ms | Phase 2 recorded below (warm-`javac` idle half unmeasured here) |
 | Idle → squiggle, per source | same, typing script then idle | ≤ autoreparse delay + pass/check + 50 ms | Phase 2 recorded below (warm-`javac` idle half unmeasured here) |
 | Warning survival on half-typed files | `PerfHarness java-diagnostics survival <dir\|synthetic>`: inspections on valid text, then inject `foo(` as the first statement of one method, then count findings *outside that member* that survive (shifted) | imports 100% after Phase 1; the rest after Phase 5 | Phase 1 recorded below |
-| Squiggle anchoring | Enter-above-warnings script: share of squiggles still covering their original text after each keystroke | 100% outside the edited range | harness lands in Phase 3 |
-| Churn | Comment-typing script (no real problem changes): squiggle set changes per burst | 0 | harness lands in Phase 3 |
+| Squiggle anchoring | Enter-above-warnings script: share of squiggles still covering their original text after each keystroke | 100% outside the edited range | Phase 3 recorded below |
+| Churn | Comment-typing script (no real problem changes): squiggle set changes per burst | 0 | Phase 3 recorded below |
 
 ## Phase 1: error isolation v1
 
@@ -77,3 +77,45 @@ Focused suites (133 tests: pipeline, compiler diagnostics, syntax diagnostics,
 controller, merger, server, unused imports, rules) — all green, including the
 two new same-hash tests (repeated idle refresh starts one pass; same-hash
 refresh doesn't restart a running compile, `force` does).
+
+## Phase 3: marker preservation
+
+Squiggles follow edits: `DiagnosticEmphasisController.applyEdit` (same
+drop-on-overlap as semantic highlights) runs on every `replaceText`, and the
+error stripe reads the live shifted markers instead of its own copy. The
+controller merges instead of replacing: reports computed for older text are
+dropped by a `contentGeneration` guard, stale sources keep their shifted
+markers, fresh results reuse the current marker on content-plus-shifted-range
+equality, and an identical report assigns nothing. Freshness rides
+`diagnosticsWithFreshness` (default: nothing stale) with unioning in the
+engine and the tiered provider; the two Java services override it
+(`java-inspection` / `javac` go stale until their pass/compile lands), and a
+cancelled inspection pass publishes nothing. Problems receives fresh
+diagnostics only, with `staleSources` attached.
+
+Harness (`typing`, Release, synthetic 2026 lines), parent (`afeceab`) vs change:
+
+| Check | Parent | Phase 3 | Gate |
+|---|---|---|---|
+| Anchoring (survivors covering same text) | 16/16 (1.00) | 16/16 (1.00) | 100% |
+| Churn (comment burst, 8 keys) | 0 changes | 0 changes | 0 |
+| Typing inspection median / worst | 0.0063 / 0.0817 s | 0.0063 / 0.0814 s | unchanged |
+
+Survivors pre-Phase-5 are the import findings (semantic rules still gate on a
+clean tree); per-keystroke shift anchoring is additionally locked by
+`TextViewDiagnosticShiftTests` (Enter above warnings shifts squiggles and
+stripe ticks; overlapping edits drop; ids survive).
+
+`enter-session` with 500 seeded diagnostics (new `--diagnostics N`), mid-file Enter:
+
+| Lines | Parent | Phase 3 |
+|---|---|---|
+| 20k | 0.011514 s (live 697) | 0.011901 s (live 697) |
+| 120k | 0.011556 s (live 699) | 0.011835 s (live 699) |
+
+Focused suites — controller (16, incl. stale-merge, fresh-replace, clear-by-[],
+superseded-generation), shift (3), emphasis unit, both freshness tests, the
+superseded-pass test, engine/duplicate-symbol/registry (32), LSP published +
+language service, grouping — all green. Each provider keeps its behavior when
+fresh (the default freshness path is bit-for-bit the old collection), and a
+provider clearing by `[]` still clears, covered by test.

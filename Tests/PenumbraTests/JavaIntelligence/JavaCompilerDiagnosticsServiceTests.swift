@@ -302,6 +302,30 @@ final class JavaCompilerDiagnosticsServiceTests: XCTestCase {
         try await waitUntil { await launcher.launchCount == 2 }
     }
 
+    func testEditedTextIsMarkedJavacStaleUntilTheCompileLands() async throws {
+        let launcher = FakeJavacLauncher { path, _, _ in
+            .init(exitCode: 1, stdout: "", stderr: "\(path):1: error: boom\nx\n^\n1 error\n")
+        }
+        let service = JavaCompilerDiagnosticsService(launcher: launcher, idleDelay: .milliseconds(10))
+        await service.configure(try makeConfiguration())
+        let document = makeDocument(text: "class Foo {}")
+        await service.compileNow(document)
+        try await waitUntil { await service.isFresh(document) }
+
+        let (freshDiagnostics, freshStale) = await service.diagnosticsWithFreshness(for: document)
+        XCTAssertEqual(freshStale, [])
+        XCTAssertEqual(freshDiagnostics.map(\.message), ["boom"])
+
+        let edited = makeDocument(text: "class Foo { /* typed */ }", version: 1)
+        let (staleDiagnostics, stale) = await service.diagnosticsWithFreshness(for: edited)
+        XCTAssertEqual(stale, ["javac"])
+        XCTAssertEqual(staleDiagnostics.map(\.message), ["boom"])
+
+        try await waitUntil { await service.isFresh(edited) }
+        let (_, landedStale) = await service.diagnosticsWithFreshness(for: edited)
+        XCTAssertEqual(landedStale, [])
+    }
+
     func testResetDropsInFlightResults() async throws {
         let launcher = FakeJavacLauncher { _, _, _ in
             try await Task.sleep(for: .milliseconds(150))

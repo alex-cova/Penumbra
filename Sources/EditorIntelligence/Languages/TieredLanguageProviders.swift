@@ -113,6 +113,23 @@ struct TieredDiagnosticProvider: DiagnosticProvider {
         }
         return collected
     }
+
+    func diagnosticsWithFreshness(for document: Document) async -> (diagnostics: [Diagnostic], staleSources: Set<String>) {
+        guard document.languageIdentifier == languageIdentifier else { return ([], []) }
+        let groups = TieredGroups.ascending(services, feature: .diagnostics) { !$0.diagnostics.isEmpty }
+        var collected: [Diagnostic] = []
+        var stale: Set<String> = []
+        for group in groups {
+            for service in group {
+                for provider in service.providers.diagnostics {
+                    let result = await provider.diagnosticsWithFreshness(for: document)
+                    collected.append(contentsOf: result.diagnostics)
+                    stale.formUnion(result.staleSources)
+                }
+            }
+        }
+        return (collected, stale)
+    }
 }
 
 /// Navigation for one language. The kind selects the feature whose readiness is checked. The top

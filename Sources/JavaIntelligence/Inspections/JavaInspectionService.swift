@@ -194,6 +194,18 @@ public actor JavaInspectionService: DiagnosticProvider {
         return cache[url]?.diagnostics ?? []
     }
 
+    /// Whether the cached result is for exactly this text. `document.text` is empty for
+    /// elided file-backed documents, so this hashes the full text like the analysis does.
+    public func isFresh(_ document: Document) -> Bool {
+        guard document.languageIdentifier == "java", let url = document.url else { return false }
+        return cache[url]?.textHash == JavaNavigationText.fullText(of: document).hashValue
+    }
+
+    public func diagnosticsWithFreshness(for document: Document) async -> (diagnostics: [Diagnostic], staleSources: Set<String>) {
+        let diagnostics = await diagnostics(for: document)
+        return (diagnostics, isFresh(document) ? [] : ["java-inspection"])
+    }
+
     /// The findings of `url` set to "No highlighting (fix available)". They are not published as
     /// diagnostics; the code-action provider asks for them so their fixes stay on ⌥↩.
     public func quietFindings(for url: URL) -> [Diagnostic] {
@@ -247,6 +259,13 @@ public actor JavaInspectionService: DiagnosticProvider {
                 text: text, url: url, tree: tree, index: index,
                 enabled: enabled, thresholds: thresholds, projectFindings: stored, languageLevel: level
             )
+        }
+        // A cancelled pass never overwrites fresher results: publish nothing, but release
+        // the pending registration so the next refresh schedules instead of joining a corpse.
+        if Task.isCancelled {
+            pending[url] = nil
+            if pendingHash[url] == hash { pendingHash[url] = nil }
+            return
         }
         let outcome = JavaInspectionPipeline.finalize(inspections, text: text, profile: profile, file: file)
         let diagnostics = outcome.visible.map { $0.asDiagnostic() }
