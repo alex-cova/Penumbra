@@ -80,7 +80,7 @@ struct IDEAgentComposerField: NSViewRepresentable {
         if coordinator.lastFocusRequest != focusRequest {
             coordinator.lastFocusRequest = focusRequest
             // The window may not exist yet on the first pass.
-            DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+            Task { @MainActor in textView.window?.makeFirstResponder(textView) }
         }
     }
 
@@ -167,7 +167,7 @@ struct IDEAgentComposerField: NSViewRepresentable {
             if abs(parent.height - height) > 0.5 {
                 // Not inside a view update: this runs from text changes and from updateNSView's
                 // own text sync, which SwiftUI would flag as a state change during a view update.
-                DispatchQueue.main.async { [weak self] in self?.parent.height = height }
+                Task { @MainActor [weak self] in self?.parent.height = height }
             }
         }
 

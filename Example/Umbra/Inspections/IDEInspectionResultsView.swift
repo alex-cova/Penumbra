@@ -208,6 +208,7 @@ struct IDEInspectionResultsView: View {
         .onTapGesture(count: 2) {
             if node.kind == .problem { select(node) } else { toggle(node) }
         }
+        .accessibilityAddTraits(.isButton)
         .onTapGesture {
             if node.kind == .problem { select(node) } else {
                 selection = node.id

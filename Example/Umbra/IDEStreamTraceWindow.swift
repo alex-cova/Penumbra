@@ -211,6 +211,7 @@ private struct IDEStreamTraceView: View {
                                 .background(isRelated ? Color.accentColor.opacity(0.25) : IDEAppearance.ColorToken.card,
                                             in: RoundedRectangle(cornerRadius: 4))
                                 .padding(.vertical, 1)
+                                .accessibilityAddTraits(.isButton)
                                 .onTapGesture { model.selection = (stage, index) }
                                 .help(element.value)
                         }

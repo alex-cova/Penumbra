@@ -50,6 +50,7 @@ struct IDEProblemsPanel: View {
                 .background(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.tabActive : .clear)
                 .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
                 .contentShape(Rectangle())
+                .accessibilityAddTraits(.isButton)
                 .onTapGesture { runs.selection = .run(run.id) }
             }
             Spacer(minLength: 0)

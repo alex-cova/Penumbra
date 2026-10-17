@@ -85,7 +85,8 @@ private struct IDERenamePromptView: View {
             isFocused = true
             guard IDEPreferences.shared.preselectsRenamedName else { return }
             // The field editor takes focus a moment after `isFocused` flips; select once it has.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(50))
                 NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
             }
         }

@@ -275,6 +275,7 @@ private struct IDEBreakpointRow: View {
         .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear))
         .contentShape(Rectangle())
         .onTapGesture(count: 2, perform: onOpen)
+        .accessibilityAddTraits(.isButton)
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
         .contextMenu {

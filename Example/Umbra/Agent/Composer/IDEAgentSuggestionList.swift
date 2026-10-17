@@ -16,6 +16,7 @@ struct IDEAgentSuggestionList: View {
                         row(suggestion, isSelected: index == state.selectedIndex)
                             .id(suggestion.id)
                             .contentShape(Rectangle())
+                            .accessibilityAddTraits(.isButton)
                             .onTapGesture { accept(index) }
                     }
                 }

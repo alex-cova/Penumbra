@@ -146,10 +146,9 @@ private struct IDEBreakpointPopoverView: View {
                     .font(IDEAppearance.Typography.body.weight(.semibold))
                     .lineLimit(1)
                 Spacer(minLength: IDEAppearance.Spacing.sm)
-                Button(action: onRemove) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.plain)
+                Button("Remove Breakpoint", systemImage: "trash", action: onRemove)
+                    .buttonStyle(.plain)
+                    .labelStyle(.iconOnly)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .help("Remove Breakpoint")
             }

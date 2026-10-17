@@ -161,6 +161,7 @@ struct IDERunConfigurationsWindow: View {
         .padding(.vertical, 4)
         .background(isSelected ? IDEAppearance.ColorToken.accent.opacity(0.22) : Color.clear)
         .contentShape(Rectangle())
+        .accessibilityAddTraits(.isButton)
         .onTapGesture { editor.selection = .configuration(configuration.id) }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(configuration.displayName)\(configuration.isTemporary ? ", temporary" : "")\(broken ? ", has errors" : "")")
@@ -184,6 +185,7 @@ struct IDERunConfigurationsWindow: View {
         .padding(.vertical, 4)
         .background(isSelected ? IDEAppearance.ColorToken.accent.opacity(0.22) : Color.clear)
         .contentShape(Rectangle())
+        .accessibilityAddTraits(.isButton)
         .onTapGesture { editor.selection = .template(kind) }
         .accessibilityLabel("\(kind.title) template")
     }

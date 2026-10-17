@@ -286,6 +286,7 @@ private struct IDEMavenTreeRow: View {
         .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture(count: 2, perform: onActivate)
+        .accessibilityAddTraits(.isButton)
         .onTapGesture(count: 1, perform: onSelect)
     }
 

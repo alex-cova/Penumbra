@@ -140,6 +140,7 @@ struct IDESourceControlPanel: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(history.selectedHash == entry.commit.hash ? IDEAppearance.ColorToken.selection : Color.clear)
                     .contentShape(Rectangle())
+                    .accessibilityAddTraits(.isButton)
                     .onTapGesture { gitStatus.lineHistory?.selectedHash = entry.commit.hash }
                 }
             }
@@ -1021,6 +1022,7 @@ private struct IDECommitFileRow: View {
         .frame(height: 22)
         .background(isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
         .contentShape(Rectangle())
+        .accessibilityAddTraits(.isButton)
         .onTapGesture(perform: onOpen)
         .onHover { isHovering = $0 }
         .help("Show Diff")
@@ -1116,6 +1118,7 @@ private struct IDESourceControlCommitRow: View {
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
         .contentShape(Rectangle())
+        .accessibilityAddTraits(.isButton)
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
     }
@@ -1174,6 +1177,7 @@ private struct IDESourceControlChangeRow: View {
         // Double-tap first: the earlier modifier wins, so a single tap declared before it would
         // consume the click and the double never fired.
         .onTapGesture(count: 2, perform: onOpen)
+        .accessibilityAddTraits(.isButton)
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
         .contextMenu {

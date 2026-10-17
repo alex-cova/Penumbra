@@ -646,10 +646,10 @@ private struct IDEAgentApprovalView: View {
                     .textSelection(.enabled)
                 IDEAgentDiffView(diff: diff)
             } else if isEditing {
-                TextEditor(text: $command)
+                TextField("Command", text: $command, axis: .vertical)
                     .font(IDEAppearance.Typography.monoSmall)
+                    .lineLimit(3...8)
                     .frame(minHeight: 54, maxHeight: 140)
-                    .scrollContentBackground(.hidden)
                     .padding(IDEAppearance.Spacing.xs)
                     .background(IDEAppearance.ColorToken.editor)
                     .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))

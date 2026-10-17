@@ -637,6 +637,7 @@ private struct IDEProfilerHotMethods: View {
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
                 .contentShape(Rectangle())
+                .accessibilityAddTraits(.isButton)
                 .onTapGesture { session.selectedMethod = neighbour.method }
             }
         }
@@ -920,6 +921,7 @@ private struct IDEProfilerTreeNodeView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { openSource(frame: frame) }
+        .accessibilityAddTraits(.isButton)
         .onTapGesture {
             if frame >= 0, comparison == nil { session.selectedMethod = symbols.frame(frame).method }
         }

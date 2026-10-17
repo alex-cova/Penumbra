@@ -90,6 +90,7 @@ private struct IDEGeneratePromptView: View {
                         .foregroundStyle(IDEAppearance.ColorToken.foreground)
                     Spacer()
                 }
+                .accessibilityAddTraits(.isButton)
                 .onTapGesture { pick(option) }
             }
         }
@@ -122,6 +123,7 @@ private struct IDEGeneratePromptView: View {
                                 .lineLimit(1)
                             Spacer()
                         }
+                        .accessibilityAddTraits(.isButton)
                         .onTapGesture {
                             cursor = position
                             toggle(field)

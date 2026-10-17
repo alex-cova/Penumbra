@@ -210,6 +210,8 @@ public struct IDERootView: View {
                     // Any click outside the card closes it.
                     Color.clear
                         .contentShape(Rectangle())
+                        .accessibilityLabel("Dismiss notifications")
+                        .accessibilityAddTraits(.isButton)
                         .onTapGesture { workspace.notifications.setPanelPresented(false) }
                     IDENotificationPanel()
                         .padding(.top, topChromeHeight + IDEAppearance.Spacing.xs)

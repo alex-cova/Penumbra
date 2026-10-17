@@ -66,14 +66,17 @@ struct IDESwiftUIPreviewPanel: View {
 
             environmentMenu
 
-            Button { isLogVisible.toggle() } label: { Image(systemName: "text.alignleft") }
+            Button("Show the build log", systemImage: "text.alignleft") { isLogVisible.toggle() }
                 .buttonStyle(.borderless)
+                .labelStyle(.iconOnly)
                 .help("Show the build log")
-            Button { session.rebuild() } label: { Image(systemName: "arrow.clockwise") }
+            Button("Rebuild the preview", systemImage: "arrow.clockwise") { session.rebuild() }
                 .buttonStyle(.borderless)
+                .labelStyle(.iconOnly)
                 .help("Rebuild the preview")
-            Button(action: onClose) { Image(systemName: "xmark") }
+            Button("Close the preview", systemImage: "xmark", action: onClose)
                 .buttonStyle(.borderless)
+                .labelStyle(.iconOnly)
                 .help("Close the preview")
         }
         .padding(.horizontal, 10)

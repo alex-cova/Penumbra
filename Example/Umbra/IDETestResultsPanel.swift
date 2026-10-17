@@ -282,6 +282,7 @@ struct IDETestResultsPanel: View {
                     durationText(group.duration)
                 }
                 .contentShape(Rectangle())
+                .accessibilityAddTraits(.isButton)
                 .onTapGesture {
                     if collapsed { store.collapsedClasses.remove(group.className) } else { store.collapsedClasses.insert(group.className) }
                 }

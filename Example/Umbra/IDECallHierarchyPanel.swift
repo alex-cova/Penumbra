@@ -187,6 +187,7 @@ struct IDECallHierarchyPanel: View {
                     .contentShape(Rectangle())
                     // Double-tap first, or the single tap consumes the click.
                     .onTapGesture(count: 2) { workspace.openCallHierarchyNode(row.node) }
+                    .accessibilityAddTraits(.isButton)
                     .onTapGesture { store.selectedID = row.node.id }
                 }
             }

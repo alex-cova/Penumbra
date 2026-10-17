@@ -239,6 +239,7 @@ struct IDELocalHistoryPanel: View {
         .background(isSelected ? IDEAppearance.ColorToken.controlHover : .clear)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { workspace.localHistoryOpenDiff(event, against: .current) }
+        .accessibilityAddTraits(.isButton)
         .onTapGesture { selection = event.id }
         .contextMenu { menu(for: event) }
         .accessibilityElement(children: .combine)

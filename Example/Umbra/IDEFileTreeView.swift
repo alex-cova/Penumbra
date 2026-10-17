@@ -88,7 +88,7 @@ struct IDEFileTreeView: View {
                     .onChange(of: project.revealRequest) { _, request in
                         guard let request else { return }
                         // Let the ancestors' expansion land in the row list before scrolling.
-                        DispatchQueue.main.async {
+                        Task { @MainActor in
                             scroller.scrollTo(request.path, anchor: request.centered ? .center : nil)
                         }
                     }
@@ -377,6 +377,7 @@ private struct IDEFileTreeRow: View {
                         .frame(width: 12)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(isExpanded ? "Collapse \(displayName)" : "Expand \(displayName)")
             } else {
                 Spacer().frame(width: 12)
             }
@@ -414,6 +415,7 @@ private struct IDEFileTreeRow: View {
         .padding(.vertical, 4)
         .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
         .contentShape(Rectangle())
+        .accessibilityAddTraits(.isButton)
         .onTapGesture {
             onSelect()
             if canDisclose {
@@ -558,7 +560,7 @@ private struct IDEInlineRenameField: NSViewRepresentable {
         field.lineBreakMode = .byClipping
         field.delegate = context.coordinator
         let stemLength = selectsStemOnly ? (initialText as NSString).deletingPathExtension.count : initialText.count
-        DispatchQueue.main.async {
+        Task { @MainActor in
             guard let window = field.window else { return }
             window.makeFirstResponder(field)
             field.currentEditor()?.selectedRange = NSRange(location: 0, length: stemLength > 0 ? stemLength : initialText.count)

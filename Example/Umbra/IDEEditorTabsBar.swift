@@ -77,6 +77,7 @@ private struct IDEEditorTabItem: View {
             }
         }
         .contentShape(Rectangle())
+        .accessibilityAddTraits(.isButton)
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
         .contextMenu {
