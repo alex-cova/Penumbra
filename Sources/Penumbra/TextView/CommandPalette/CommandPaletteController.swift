@@ -61,6 +61,8 @@ public final class CommandPaletteController {
     public var symbolsExcludedDocuments: (@Sendable () async -> Set<DocumentID>)?
     /// Supplies the Classes tab. When `nil` the tab falls back to type symbols from ``symbolIndex``.
     public var classesProvider: SearchEverywhereProvider?
+    /// Supplies the Packages tab and the Packages section of Search Everywhere.
+    public var packagesProvider: SearchEverywhereProvider?
     /// Opens a file beside the current editor (⇧↩ / "Open In Right Split"). File rows only offer
     /// the alternate action when this is set.
     public var onOpenFileInSplit: ((URL) -> Void)? {
@@ -136,6 +138,7 @@ public final class CommandPaletteController {
             switch tab {
             case .all, .actions: true
             case .classes: classesProvider != nil || symbolIndex != nil
+            case .packages: packagesProvider != nil
             case .files: fileIndex != nil || fileEntriesProvider != nil
             case .symbols: symbolIndex != nil
             case .text: projectSearchEngine != nil && workspaceRoot != nil
@@ -257,6 +260,10 @@ public final class CommandPaletteController {
 
     public func presentClasses() {
         present(mode: .classes, placeholder: "Go to Class")
+    }
+
+    public func presentPackages() {
+        present(mode: .packages, placeholder: "Go to Package")
     }
 
     public func presentSymbols() {
@@ -613,6 +620,8 @@ public final class CommandPaletteController {
             return [makeSymbolsProvider()].compactMap { $0 }
         case .classes:
             return [makeClassesProvider()].compactMap { $0 }
+        case .packages:
+            return [packagesProvider].compactMap { $0 }
         case .fileSymbols:
             return [makeFileSymbolsProvider()].compactMap { $0 }
         case .toolWindows:
@@ -622,7 +631,7 @@ public final class CommandPaletteController {
         case .recentLocations:
             return [makeRecentLocationsProvider()].compactMap { $0 }
         case .searchEverywhere:
-            return ([makeClassesProvider(), makeRecentProvider(), makeFilesProvider(), makeSymbolsProvider()] as [SearchEverywhereProvider?])
+            return ([makeClassesProvider(), packagesProvider, makeRecentProvider(), makeFilesProvider(), makeSymbolsProvider()] as [SearchEverywhereProvider?])
                 .compactMap { $0 } + toolWindowsAndCommandsProviders() + extraProviders
         case .goToLine:
             return [makeGoToLineProvider()]
@@ -754,6 +763,7 @@ public final class CommandPaletteController {
         switch paletteModel.mode {
         case .recentFiles: return "No recent files"
         case .recentLocations: return "No recent locations"
+        case .packages: return "No packages"
         case .goToLine: return "Type a line number"
         case .findInFiles: return "Type to search"
         default: return "No results"

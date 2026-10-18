@@ -254,6 +254,7 @@ private struct IDEGoCommands: View {
             .menuShortcut(.goToFile, in: preset)
         Button("Go to Symbol…", action: { workspace?.showGoToSymbol() })
             .menuShortcut(.goToSymbol, in: preset)
+        Button("Go to Package…", action: { workspace?.showGoToPackage() })
         Button("Tool Window…", action: { workspace?.showToolWindows() })
         Button("File Structure…", action: { workspace?.showFileStructure() })
             .menuShortcut(.fileStructure, in: preset)

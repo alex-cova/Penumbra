@@ -50,11 +50,14 @@ extension IDETerminalTab: Codable {
 }
 
 /// One segment in the status bar breadcrumb. A folder lists its contents and a file its
-/// siblings, to switch files; a symbol lists the enclosing type's members (Java) or jumps in-file.
+/// siblings, to switch files; a package lists the classes and subpackages inside it; a symbol
+/// lists the enclosing type's members (Java) or jumps in-file.
 struct IDEBreadcrumbItem: Equatable, Identifiable {
     enum Target: Equatable {
         case folder(URL)
         case file(URL)
+        /// A Java or Kotlin package directory. The title may be a dotted name covering several folders.
+        case package(URL)
         case symbol(EditorIntelligence.TextRange)
     }
 
@@ -1680,6 +1683,10 @@ public final class IDEWorkspace {
 
     public func showGoToSymbol() {
         sharedPalette(for: host(for: workbench.activePaneID)).presentSymbols()
+    }
+
+    public func showGoToPackage() {
+        sharedPalette(for: host(for: workbench.activePaneID)).presentPackages()
     }
 
     public func showGoToLine() {
@@ -5092,6 +5099,10 @@ public final class IDEWorkspace {
                 self?.openClassDeclaration(in: url, utf8NameRange: nameRange, inRightSplit: inSplit)
             }
         )
+        palette.packagesProvider = IDEJavaPackagesPaletteProvider(
+            packages: { [weak self] in self?.fileIndexer.packageIndex ?? IDEJavaPackageIndex.empty },
+            onReveal: { [weak self] url in self?.revealPackage(url) }
+        )
         palette.symbolIndex = intelligenceServices.symbolIndex
         let membersSource = IDEJavaMembersPaletteSource(
             javaIndex: intelligenceServices.javaSupport.javaIndex,
@@ -5131,6 +5142,8 @@ public final class IDEWorkspace {
         }
         palette.commandRegistry.register(textToolsPaletteCommands())
         palette.commandRegistry.register([
+            EditorCommand(id: "go.package", title: "Go to Package…", group: "Go",
+                          action: { [weak self] in self?.showGoToPackage() }),
             EditorCommand(id: "file.newProject", title: "New Project…", group: "File",
                           action: { [weak self] in self?.showNewProject() }),
             EditorCommand(id: "file.saveAll", title: "Save All", group: "File",
@@ -5510,6 +5523,14 @@ public final class IDEWorkspace {
                 onOpen: open,
                 onReveal: { [weak self] in self?.revealInSidebar(url) }
             )
+        case .package(let url):
+            return IDEBreadcrumbMenu.packageMenu(
+                url,
+                current: workbench.activePane.selectedDocument?.url,
+                node: project.node(at: url.path),
+                onOpen: open,
+                onReveal: { [weak self] directory in self?.revealInSidebar(directory) }
+            )
         case .symbol(let range):
             return await structureBreadcrumbMenu(for: range)
         }
@@ -5517,7 +5538,7 @@ public final class IDEWorkspace {
 
     func selectBreadcrumb(_ item: IDEBreadcrumbItem) {
         switch item.target {
-        case .folder(let url), .file(let url):
+        case .folder(let url), .file(let url), .package(let url):
             revealInSidebar(url)
         case .symbol(let range):
             jumpToSymbol(range)
@@ -5827,6 +5848,12 @@ public final class IDEWorkspace {
         project.revealAndSelect(url: url, centered: false)
     }
 
+    /// Go to Package lands here: the Explorer selects the directory, including a flattened package row.
+    private func revealPackage(_ url: URL) {
+        showExplorer()
+        project.revealAndSelect(url: url, centered: true)
+    }
+
     private func revealInSidebar(_ url: URL) {
         if project.rootURL != nil {
             showExplorer()
@@ -5848,32 +5875,27 @@ public final class IDEWorkspace {
         _ = textView.focusTextInput()
     }
 
-    /// Folder crumbs leading to the active file, then the file itself. Project-relative when a
-    /// folder is open; otherwise the last few parent directories.
+    /// Folder crumbs leading to the active file, then the file itself. Under a Java or Kotlin
+    /// source root the directories below that root collapse into dotted package crumbs.
+    /// Project-relative when a folder is open; otherwise the last few parent directories.
     private func pathBreadcrumbItems(for document: WorkbenchDocument) -> [IDEBreadcrumbItem] {
         guard let url = document.url?.standardizedFileURL else { return [] }
-        let fileItem = IDEBreadcrumbItem(id: "file:\(url.path)", title: url.lastPathComponent, target: .file(url))
-        return folderBreadcrumbItems(leadingTo: url.deletingLastPathComponent()) + [fileItem]
-    }
-
-    private func folderBreadcrumbItems(leadingTo directory: URL) -> [IDEBreadcrumbItem] {
+        let directory = url.deletingLastPathComponent()
         if let rootURL = project.rootURL {
             let root = rootURL.standardizedFileURL
             let directoryPath = directory.path
             let rootPath = root.path
-            guard directoryPath == rootPath || directoryPath.hasPrefix(rootPath + "/") else {
-                return ancestorFolderItems(from: directory)
+            if directoryPath == rootPath || directoryPath.hasPrefix(rootPath + "/") {
+                return IDEJavaPackages.pathItems(
+                    file: url,
+                    projectRoot: root,
+                    knownSourceRoots: gradle.sourceRootPaths.union(maven.sourceRootPaths),
+                    tree: project.rootNode
+                )
             }
-            var items = [folderItem(root)]
-            var current = root
-            let relative = directoryPath.dropFirst(rootPath.count)
-            for component in relative.split(separator: "/") where !component.isEmpty {
-                current.appendPathComponent(String(component))
-                items.append(folderItem(current))
-            }
-            return items
         }
-        return ancestorFolderItems(from: directory)
+        let fileItem = IDEBreadcrumbItem(id: "file:\(url.path)", title: url.lastPathComponent, target: .file(url))
+        return ancestorFolderItems(from: directory) + [fileItem]
     }
 
     private func ancestorFolderItems(from directory: URL, limit: Int = 3) -> [IDEBreadcrumbItem] {

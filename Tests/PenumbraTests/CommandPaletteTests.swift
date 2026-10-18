@@ -72,6 +72,8 @@ final class PaletteQueryScopeTests: XCTestCase {
         XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .commands), .commands("json"))
         XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .quickOpen), .files("json"))
         XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .symbols), .symbols("json"))
+        XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .packages), .symbols("json"))
+        XCTAssertEqual(PaletteQueryScope.resolve(query: ">save", mode: .packages), .commands("save"))
         // Modes added for the IntelliJ palette.
         XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .recentFiles), .files("json"))
         XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .searchEverywhere), .textActions("json"))

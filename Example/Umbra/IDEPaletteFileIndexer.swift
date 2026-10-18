@@ -2,15 +2,18 @@ import Foundation
 import JavaIntelligence
 import Penumbra
 
-/// Owns the Go to File index: walks the project off the main thread, labels each file with its
-/// Gradle module, and republishes a fresh immutable `PaletteFileIndex` when files are added,
-/// removed or the module layout changes. The previous snapshot keeps answering queries while a
-/// rebuild runs, so typing in the palette never waits on the disk.
+/// Owns the Go to File index and the Go to Package index: walks the project off the main thread,
+/// labels each file with its Gradle module, records directories under Java and Kotlin source
+/// roots, and republishes both snapshots when files are added, removed or the module layout
+/// changes. The previous snapshots keep answering queries while a rebuild runs, so typing in the
+/// palette never waits on the disk.
 @MainActor
 final class IDEPaletteFileIndexer {
-    /// The current snapshot. Empty (never `nil`) before the first build so the palette's Files
+    /// The current file snapshot. Empty (never `nil`) before the first build so the palette's Files
     /// tab exists from the start.
     private(set) var index = PaletteFileIndex(entries: [])
+    /// Project packages from the same walk. Empty before the first build.
+    private(set) var packageIndex = IDEJavaPackageIndex.empty
     /// Called whenever ``index`` is replaced.
     var onIndexChanged: (@MainActor (PaletteFileIndex) -> Void)?
 
@@ -30,6 +33,7 @@ final class IDEPaletteFileIndexer {
         gradleModel = nil
         // Drop the previous project's files immediately instead of serving them until the walk ends.
         index = PaletteFileIndex(entries: [])
+        packageIndex = IDEJavaPackageIndex.empty
         onIndexChanged?(index)
         scheduleRebuild(after: .zero)
     }
@@ -48,7 +52,7 @@ final class IDEPaletteFileIndexer {
             scheduleRebuild(after: Self.rebuildDebounce)
             return
         }
-        if batch.paths.count > Self.batchRebuildThreshold || Self.filesChanged(in: batch, root: root, index: index) {
+        if batch.paths.count > Self.batchRebuildThreshold || Self.filesChanged(in: batch, root: root, index: index, packages: packageIndex) {
             scheduleRebuild(after: Self.rebuildDebounce)
         }
     }
@@ -77,18 +81,24 @@ final class IDEPaletteFileIndexer {
         }
     }
 
-    private func publish(_ built: PaletteFileIndex, generation: Int) {
+    private func publish(_ built: BuiltIndex, generation: Int) {
         guard generation == self.generation else { return }
-        index = built
+        index = built.files
+        packageIndex = built.packages
         isBuilding = false
-        onIndexChanged?(built)
+        onIndexChanged?(built.files)
     }
 
     // MARK: - Change detection
 
     /// Whether `batch` added or removed an indexed file. Runs on the main actor, but touches the
     /// disk only for paths the index can't already explain.
-    private static func filesChanged(in batch: IDEProjectWatcher.Batch, root: URL, index: PaletteFileIndex) -> Bool {
+    private static func filesChanged(
+        in batch: IDEProjectWatcher.Batch,
+        root: URL,
+        index: PaletteFileIndex,
+        packages: IDEJavaPackageIndex
+    ) -> Bool {
         let rootPrefix = root.path + "/"
         var outputCache: [String: Bool] = [:]
         for path in batch.paths {
@@ -104,7 +114,7 @@ final class IDEPaletteFileIndexer {
             if exists {
                 // A directory's files report their own events; only a new file matters.
                 if !isDirectory.boolValue, !known { return true }
-            } else if known || index.hasEntries(underRelativeDirectory: relative) {
+            } else if known || index.hasEntries(underRelativeDirectory: relative) || packages.contains(path: path) {
                 return true
             }
         }
@@ -137,22 +147,37 @@ final class IDEPaletteFileIndexer {
         IDEProjectModel.isBuildOutput(name: name, parentPath: parentPath)
     }
 
-    nonisolated private static func buildIndex(root: URL, model: JavaGradleProjectModel?) -> PaletteFileIndex? {
+    private struct BuiltIndex: Sendable {
+        var files: PaletteFileIndex
+        var packages: IDEJavaPackageIndex
+    }
+
+    nonisolated private static func buildIndex(root: URL, model: JavaGradleProjectModel?) -> BuiltIndex? {
         let rootPath = root.path
         let resolver = ModuleResolver(rootPath: rootPath, model: model)
         var entries: [PaletteFileIndex.Entry] = []
+        var packages: [IDEJavaPackageIndex.Entry] = []
+        var defaultPackages: Set<String> = []
         walk(
             directory: root,
             path: rootPath,
             context: resolver.context(forDirectory: rootPath),
             rootPath: rootPath,
             resolver: resolver,
-            entries: &entries
+            entries: &entries,
+            packages: &packages,
+            defaultPackages: &defaultPackages
         )
         guard !Task.isCancelled else { return nil }
         entries.sort { $0.relativePath < $1.relativePath }
-        return PaletteFileIndex(entries: entries)
+        packages.sort { lhs, rhs in
+            if lhs.name != rhs.name { return lhs.name < rhs.name }
+            return lhs.relativePath < rhs.relativePath
+        }
+        return BuiltIndex(files: PaletteFileIndex(entries: entries), packages: IDEJavaPackageIndex(entries: packages))
     }
+
+    nonisolated private static let packageSourceExtensions: Set<String> = ["java", "kt", "kts"]
 
     nonisolated private static func walk(
         directory: URL,
@@ -160,14 +185,20 @@ final class IDEPaletteFileIndexer {
         context: ModuleResolver.Context?,
         rootPath: String,
         resolver: ModuleResolver,
-        entries: inout [PaletteFileIndex.Entry]
+        entries: inout [PaletteFileIndex.Entry],
+        packages: inout [IDEJavaPackageIndex.Entry],
+        defaultPackages: inout Set<String>
     ) {
-        guard !Task.isCancelled,
-              let children = try? FileManager.default.contentsOfDirectory(
-                at: directory,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-              ) else { return }
+        guard !Task.isCancelled else { return }
+        if let sourceRoot = resolver.packageSourceRoot(forDirectory: path, projectRoot: rootPath),
+           let entry = IDEJavaPackageIndex.packageEntry(directoryPath: path, projectRoot: rootPath, sourceRoot: sourceRoot) {
+            packages.append(entry)
+        }
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
         for child in children {
             let name = child.lastPathComponent
             if name.hasPrefix(".") { continue }
@@ -182,10 +213,18 @@ final class IDEPaletteFileIndexer {
                     context: resolver.context(forDirectory: childPath) ?? context,
                     rootPath: rootPath,
                     resolver: resolver,
-                    entries: &entries
+                    entries: &entries,
+                    packages: &packages,
+                    defaultPackages: &defaultPackages
                 )
             } else {
                 entries.append(makeEntry(url: child, name: name, directoryPath: path, rootPath: rootPath, context: context))
+                if packageSourceExtensions.contains((name as NSString).pathExtension.lowercased()),
+                   let sourceRoot = resolver.packageSourceRoot(forDirectory: path, projectRoot: rootPath),
+                   path == sourceRoot.path,
+                   defaultPackages.insert(sourceRoot.path).inserted {
+                    packages.append(IDEJavaPackageIndex.defaultPackage(sourceRoot: sourceRoot, projectRoot: rootPath))
+                }
             }
         }
     }
@@ -280,6 +319,30 @@ final class IDEPaletteFileIndexer {
                 )
             }
             .sorted { $0.directory.count > $1.directory.count }
+        }
+
+        /// The Java/Kotlin source root containing `path`. A synced model wins; without one, the
+        /// `src/<set>/java|kotlin` convention still counts so packages exist before the first sync.
+        func packageSourceRoot(forDirectory path: String, projectRoot: String) -> IDEJavaPackageIndex.SourceRoot? {
+            if !modules.isEmpty {
+                guard let module = modules.first(where: { path == $0.directory || path.hasPrefix($0.directory + "/") }) else {
+                    return nil
+                }
+                var best: (path: String, sourceSet: String)?
+                var bestLength = -1
+                for source in module.sourceDirectories
+                where (path == source.path || path.hasPrefix(source.path + "/")) && source.path.count > bestLength {
+                    best = (source.path, source.sourceSet)
+                    bestLength = source.path.count
+                }
+                guard let best else { return nil }
+                return IDEJavaPackageIndex.SourceRoot(
+                    path: best.path,
+                    module: module.name + "." + best.sourceSet,
+                    isTest: best.sourceSet.lowercased().contains("test")
+                )
+            }
+            return IDEJavaPackageIndex.conventionalSourceRoot(path: path, projectRoot: projectRoot)
         }
 
         func context(forDirectory path: String) -> Context? {

@@ -5,7 +5,8 @@ import SwiftUI
 
 /// The dropdowns the status bar breadcrumb opens: a folder or file segment lists that folder
 /// (subfolders open lazily as submenus, so a click never walks more than one directory level),
-/// and a symbol segment lists the enclosing type and its members.
+/// a package segment lists the classes and compacted subpackages inside it, and a symbol
+/// segment lists the enclosing type and its members.
 @MainActor
 enum IDEBreadcrumbMenu {
     /// The entries of `directory`, with `currentURL` checked. `onReveal` adds a trailing
@@ -24,6 +25,27 @@ enum IDEBreadcrumbMenu {
             reveal.image = image(systemName: "sidebar.left", tint: .secondaryLabelColor)
             menu.addItem(reveal)
         }
+        return menu
+    }
+
+    /// Classes and compacted subpackages inside `directory`. Subpackages open as further package
+    /// menus. `node` is that directory in the project tree; without it the menu lists one disk
+    /// level and does not collapse single-child chains.
+    static func packageMenu(
+        _ directory: URL,
+        current currentURL: URL?,
+        node: IDEFileNode?,
+        onOpen: @escaping (URL) -> Void,
+        onReveal: @escaping (URL) -> Void
+    ) -> NSMenu {
+        let menu = IDEPackageMenu(
+            directory: directory,
+            node: node,
+            currentPath: currentURL?.standardizedFileURL.path,
+            onOpen: onOpen,
+            onReveal: onReveal
+        )
+        menu.populate()
         return menu
     }
 
@@ -150,6 +172,130 @@ private final class IDEDirectoryMenu: NSMenu, NSMenuDelegate {
         if entries.count > Self.entryLimit {
             addItem(Self.disabledItem("\(entries.count - Self.entryLimit) more…"))
         }
+    }
+
+    private static func disabledItem(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+}
+
+/// One package, listed the first time AppKit is about to show it. Subpackages are compacted
+/// the same way the status-bar crumbs are when the project tree is in memory.
+@MainActor
+private final class IDEPackageMenu: NSMenu, NSMenuDelegate {
+    private static let entryLimit = 500
+
+    private let directory: URL
+    private let node: IDEFileNode?
+    private let currentPath: String?
+    private let onOpen: (URL) -> Void
+    private let onReveal: (URL) -> Void
+    private var isPopulated = false
+
+    init(
+        directory: URL,
+        node: IDEFileNode?,
+        currentPath: String?,
+        onOpen: @escaping (URL) -> Void,
+        onReveal: @escaping (URL) -> Void
+    ) {
+        self.directory = directory
+        self.node = node
+        self.currentPath = currentPath
+        self.onOpen = onOpen
+        self.onReveal = onReveal
+        super.init(title: directory.lastPathComponent)
+        autoenablesItems = false
+        delegate = self
+        addItem(Self.disabledItem("Loading…"))
+    }
+
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        populate()
+    }
+
+    func populate() {
+        guard !isPopulated else { return }
+        isPopulated = true
+        removeAllItems()
+        let items = menuItems()
+        if items.isEmpty {
+            addItem(Self.disabledItem("Empty"))
+        } else {
+            for item in items.prefix(Self.entryLimit) {
+                addItem(item)
+            }
+            if items.count > Self.entryLimit {
+                addItem(Self.disabledItem("\(items.count - Self.entryLimit) more…"))
+            }
+        }
+        addItem(.separator())
+        let directory = directory
+        let onReveal = onReveal
+        let reveal = IDEClosureMenuItem(title: "Reveal in Explorer") { onReveal(directory) }
+        reveal.image = IDEBreadcrumbMenu.image(systemName: "sidebar.left", tint: .secondaryLabelColor)
+        addItem(reveal)
+    }
+
+    private func menuItems() -> [NSMenuItem] {
+        if let node {
+            let children = IDEExplorerPresentation.ordered(
+                (node.children ?? []).filter { !$0.isExcluded },
+                options: IDEExplorerPresentation.Options()
+            )
+            return children.map(item(for:))
+        }
+        let entries = IDEProjectModel.visibleEntries(of: directory) ?? []
+        return entries.map { entry in
+            if entry.isDirectory {
+                return packageItem(title: entry.url.lastPathComponent, directory: entry.url, node: nil, holdsCurrentFile: false)
+            }
+            return fileItem(url: entry.url)
+        }
+    }
+
+    private func item(for child: IDEFileNode) -> NSMenuItem {
+        if child.isDirectory {
+            let compacted = IDEExplorerPresentation.compacted(child) { node in
+                (node.children ?? []).filter { !$0.isExcluded }
+            }
+            let holdsCurrent = currentPath.map { $0.hasPrefix(compacted.url.path + "/") } ?? false
+            return packageItem(
+                title: compacted.displayName ?? compacted.name,
+                directory: compacted.url,
+                node: compacted,
+                holdsCurrentFile: holdsCurrent
+            )
+        }
+        return fileItem(url: child.url)
+    }
+
+    private func packageItem(title: String, directory: URL, node: IDEFileNode?, holdsCurrentFile: Bool) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.image = IDEBreadcrumbMenu.image(systemName: "folder", tint: .secondaryLabelColor)
+        item.submenu = IDEPackageMenu(
+            directory: directory,
+            node: node,
+            currentPath: currentPath,
+            onOpen: onOpen,
+            onReveal: onReveal
+        )
+        item.state = holdsCurrentFile ? .mixed : .off
+        return item
+    }
+
+    private func fileItem(url: URL) -> NSMenuItem {
+        let onOpen = onOpen
+        let item = IDEClosureMenuItem(title: url.lastPathComponent) { onOpen(url) }
+        item.image = IDEBreadcrumbMenu.fileImage(forFilename: url.lastPathComponent)
+        item.state = url.standardizedFileURL.path == currentPath ? .on : .off
+        return item
     }
 
     private static func disabledItem(_ title: String) -> NSMenuItem {

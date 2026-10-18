@@ -296,6 +296,8 @@ private struct IDEStatusBarBreadcrumbSegment: View {
         switch item.target {
         case .folder:
             "Show the contents of \(item.title)"
+        case .package:
+            "Show the packages and classes in \(item.title)"
         case .file:
             "Switch to another file in this folder"
         case .symbol:

@@ -386,6 +386,23 @@ final class CommandPaletteControllerTests: XCTestCase {
         XCTAssertEqual(controller.currentTab, .actions, "A tab without a source is ignored")
     }
 
+    func testPackagesTabAppearsOnlyWhenAProviderIsSet() async {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        XCTAssertFalse(controller.availableTabs.contains(.packages))
+
+        controller.packagesProvider = FixedPaletteSection(title: "Packages", order: 16, titles: ["com.example.app"])
+        XCTAssertEqual(controller.availableTabs, [.all, .packages, .actions])
+
+        controller.presentPackages()
+        XCTAssertEqual(controller.currentTab, .packages)
+
+        controller.paletteModel.query = "example"
+        controller.selectTab(.all)
+        await waitForRows(controller)
+        XCTAssertTrue(controller.flatItems.contains { $0.sectionTitle == "Packages" && $0.title == "com.example.app" })
+    }
+
     func testGoToLineHasNoTab() {
         let textView = makeFocusedTextView(text: "a\nb\n")
         let controller = CommandPaletteController(textView: textView)
@@ -539,5 +556,24 @@ final class CommandPaletteControllerTests: XCTestCase {
             wheel3: 0
         )!
         return NSEvent(cgEvent: cgEvent)!
+    }
+}
+
+private final class FixedPaletteSection: SearchEverywhereProvider {
+    let sectionTitle: String
+    let sectionOrder: Int
+    let titles: [String]
+
+    init(title: String, order: Int, titles: [String]) {
+        sectionTitle = title
+        sectionOrder = order
+        self.titles = titles
+    }
+
+    func items(matching query: String, limit: Int) async -> [PaletteItem] {
+        let matches = query.isEmpty ? titles : titles.filter { $0.localizedCaseInsensitiveContains(query) }
+        return matches.prefix(limit).map { title in
+            PaletteItem(id: "\(sectionTitle):\(title)", title: title, sectionTitle: sectionTitle, action: {})
+        }
     }
 }

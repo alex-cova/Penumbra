@@ -22,7 +22,7 @@ public enum PaletteQueryScope: Equatable {
         switch mode {
         case .commands: return .commands(query)
         case .quickOpen, .recentFiles: return .files(query)
-        case .symbols, .classes, .fileSymbols: return .symbols(query)
+        case .symbols, .classes, .packages, .fileSymbols: return .symbols(query)
         case .toolWindows: return .textActions(query)
         case .textActions: return .textActions(query)
         case .goToLine: return .line(query)

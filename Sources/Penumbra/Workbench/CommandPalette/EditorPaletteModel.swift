@@ -7,6 +7,8 @@ public enum EditorPaletteMode: Hashable {
     case symbols
     /// Types only (the Classes tab).
     case classes
+    /// Project packages (the Packages tab).
+    case packages
     /// The declarations of the file in the focused editor, all listed as soon as it opens
     /// (IntelliJ's File Structure popup).
     case fileSymbols
@@ -29,16 +31,17 @@ public enum EditorPaletteMode: Hashable {
     case findInFiles
 }
 
-/// The tabs of the tabbed palette (IntelliJ's All / Classes / Files / Symbols / Actions / Text).
+/// The tabs of the tabbed palette (IntelliJ's All / Classes / Packages / Files / Symbols / Actions / Text).
 /// Each maps to one ``EditorPaletteMode``; the tab-less modes (go to line, recent files, fixed
 /// lists) have no tab, and the palette hides its tab strip for them.
 public enum PaletteTab: CaseIterable, Sendable {
-    case all, classes, files, symbols, actions, text
+    case all, classes, packages, files, symbols, actions, text
 
     public var title: String {
         switch self {
         case .all: "All"
         case .classes: "Classes"
+        case .packages: "Packages"
         case .files: "Files"
         case .symbols: "Symbols"
         case .actions: "Actions"
@@ -50,6 +53,7 @@ public enum PaletteTab: CaseIterable, Sendable {
         switch self {
         case .all: .searchEverywhere
         case .classes: .classes
+        case .packages: .packages
         case .files: .quickOpen
         case .symbols: .symbols
         case .actions: .commands
@@ -66,6 +70,7 @@ public enum PaletteTab: CaseIterable, Sendable {
         switch self {
         case .all: "Search Everywhere"
         case .classes: "Go to Class"
+        case .packages: "Go to Package"
         case .files: "Go to File"
         case .symbols: "Go to Symbol"
         case .actions: "Find Action"
