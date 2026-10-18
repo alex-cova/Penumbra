@@ -100,7 +100,11 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     /// there was no previous tree to compare with.
     private var pendingRootSyntaxRows: [ClosedRange<Int>]?
 
-    init(language: TreeSitterInternalLanguage, languageProvider: TreeSitterLanguageProvider?, stringView: StringView, lineManager: LineManager) {
+    init(language: TreeSitterInternalLanguage,
+         languageProvider: TreeSitterLanguageProvider?,
+         stringView: StringView,
+         lineManager: LineManager,
+         manualInjectionProvider: ManualInjectionProviding? = nil) {
         self.stringView = stringView
         self.lineManager = lineManager
         self.syncedContentGeneration = stringView.contentGenerationSnapshot
@@ -116,7 +120,8 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             languageProvider: languageProvider,
             parser: parser,
             stringView: stringView,
-            lineManager: lineManager)
+            lineManager: lineManager,
+            manualInjectionProvider: manualInjectionProvider)
         parser.delegate = self
     }
 
@@ -340,6 +345,9 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
                 if rootLanguageLayer.tree == nil {
                     parsedUTF16Range = nil
                 }
+                // No layer method runs on this path, so shift the cached temporary ranges here —
+                // otherwise the next full parse re-asks the provider with pre-edit coordinates.
+                rootLanguageLayer.shiftManualRanges(edit)
                 return LineChangeSet()
             }
             if var range = parsedUTF16Range {

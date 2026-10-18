@@ -25,6 +25,16 @@ final class TreeSitterLanguageLayer {
     }
     private weak var parentLanguageLayer: TreeSitterLanguageLayer?
     private let languageProvider: TreeSitterLanguageProvider?
+    /// Temporary (Inject-language) injections. Asked on a full parse; shifted across edits between
+    /// parses and written back so the provider's store never goes stale.
+    private let manualInjectionProvider: ManualInjectionProviding?
+    /// Last-known temporaries: provider values (shifted per edit, pushed back) and their carved
+    /// parse ranges (shifted per edit, reused by the incremental path without re-asking).
+    private var temporarySources: [ManualLanguageInjection] = []
+    private var temporaryContents: [ManualInjectionContent] = []
+    /// Manual child layers by record key, with their last-parsed ranges for edit shifting and
+    /// overlap reconciliation. Separate from the node-keyed store, which query pruning owns.
+    private var manualRecords: [String: ManualRecord] = [:]
     /// Included ranges for the root language layer under ``SyntaxParsePolicy/viewport``.
     /// Empty means parse the whole document. Child layers ignore this and use injection ranges.
     private var rootIncludedRanges: [TreeSitterTextRange] = []
@@ -44,12 +54,37 @@ final class TreeSitterLanguageLayer {
          languageProvider: TreeSitterLanguageProvider?,
          parser: TreeSitterParser,
          stringView: StringView,
-         lineManager: LineManager) {
+         lineManager: LineManager,
+         manualInjectionProvider: ManualInjectionProviding? = nil) {
         self.language = language
         self.languageProvider = languageProvider
         self.parser = parser
         self.stringView = stringView
         self.lineManager = lineManager
+        self.manualInjectionProvider = manualInjectionProvider
+    }
+
+    /// Shifts cached temporary ranges across `edit` (keystroke and large-edit paths). Only the
+    /// root layer holds temporaries; child layers share the parser and never own manual state.
+    func shiftManualRanges(_ edit: TreeSitterInputEdit) {
+        guard parentLanguageLayer == nil else {
+            return
+        }
+        guard !temporarySources.isEmpty || !manualRecords.isEmpty else {
+            return
+        }
+        temporarySources = temporarySources.map { source in
+            ManualLanguageInjection(utf16Range: Self.shiftedUTF16Range(source.utf16Range, by: edit),
+                                    languageIdentifier: source.languageIdentifier,
+                                    source: source.source)
+        }
+        temporaryContents = temporaryContents.map { $0.shifted(by: edit) }
+        for key in manualRecords.keys {
+            manualRecords[key]?.shift(by: edit)
+        }
+        if !temporarySources.isEmpty {
+            manualInjectionProvider?.manualInjectionsDidShift(temporarySources)
+        }
     }
 }
 
@@ -65,19 +100,37 @@ extension TreeSitterLanguageLayer {
             return
         }
         childLanguageLayerStore.removeAll()
-        guard let injectionsQuery = language.injectionsQuery, let node = tree?.rootNode else {
+        removeAllManualLayers()
+        guard let node = tree?.rootNode else {
             return
         }
-        let queryCursor = TreeSitterQueryCursor(query: injectionsQuery, node: node)
-        queryCursor.execute()
-        let captures = queryCursor.validCaptures(in: stringView)
-        let injectedLanguages = injectedLanguages(from: captures)
+        var injectedLanguages: [TreeSitterInjectedLanguage] = []
+        if let injectionsQuery = language.injectionsQuery {
+            let queryCursor = TreeSitterQueryCursor(query: injectionsQuery, node: node)
+            queryCursor.execute()
+            let captures = queryCursor.validCaptures(in: stringView)
+            injectedLanguages = self.injectedLanguages(from: captures)
+        }
+        // Manual wins on overlap: an automatic fragment intersecting a manual range is dropped
+        // whole — splitting an automatic fragment around a manual one is out of scope.
+        // Manual state lives on the root layer only; child layers recurse into their own
+        // `injections.scm` without it.
+        let manuals = parentLanguageLayer == nil
+            ? currentManualContents(rootNode: node, window: nil, refreshingTemporary: true)
+            : []
+        if !manuals.isEmpty {
+            injectedLanguages.removeAll { automatic in
+                let automaticRange = ByteRange(from: automatic.textRange.startByte, to: automatic.textRange.endByte)
+                return manuals.contains { $0.byteRange.overlaps(automaticRange) }
+            }
+        }
         for injectedLanguage in injectedLanguages {
             if let childLanguageLayer = childLanguageLayer(withID: injectedLanguage.id, forLanguageNamed: injectedLanguage.languageName) {
                 childLanguageLayer.excludedIncludedRanges = injectedLanguage.hasExcludedText ? injectedLanguage.textRanges : nil
                 childLanguageLayer.parseUsingReader(ranges: injectedLanguage.textRanges)
             }
         }
+        materializeManualLayers(manuals)
     }
 
     func restoreTree(_ tree: TreeSitterTree?) {
@@ -112,6 +165,11 @@ extension TreeSitterLanguageLayer {
         tree = nil
         rootIncludedRanges = []
         childLanguageLayerStore.removeAll()
+        // Manual layers hold trees over the discarded buffer too. The temporary cache survives:
+        // its ranges are still in valid coordinates and the next parse re-carves from them.
+        if parentLanguageLayer == nil {
+            removeAllManualLayers()
+        }
     }
 
     func apply(_ edit: TreeSitterInputEdit) -> LineChangeSet {
@@ -124,6 +182,10 @@ extension TreeSitterLanguageLayer {
     /// wait on an incremental parse; a background parse consumes the edited tree afterwards.
     func applyEditWithoutParsing(_ edit: TreeSitterInputEdit) {
         tree?.apply(edit)
+        // The trees below shift with the edit but no reparse follows on this path, so the cached
+        // temporary ranges (and the provider's store, via write-back) must shift here too — the
+        // next background full parse re-asks the provider and would otherwise read stale ranges.
+        shiftManualRanges(edit)
         applyEditWithoutParsingToChildren(edit)
     }
 
@@ -302,8 +364,14 @@ private extension TreeSitterLanguageLayer {
     }
 
     private func updateChildLayers(applying edit: TreeSitterInputEdit) -> LineChangeSet {
-        guard let injectionsQuery = language.injectionsQuery, let node = tree?.rootNode else {
+        if parentLanguageLayer == nil {
+            shiftManualRanges(edit)
+        }
+        guard let node = tree?.rootNode else {
             childLanguageLayerStore.removeAll()
+            if parentLanguageLayer == nil {
+                removeAllManualLayers()
+            }
             return LineChangeSet()
         }
         let documentRange = node.byteRange
@@ -319,11 +387,25 @@ private extension TreeSitterLanguageLayer {
         guard !queryRange.isEmpty else {
             return shiftChildrenAfterEdit(edit)
         }
-        let injectionsQueryCursor = TreeSitterQueryCursor(query: injectionsQuery, node: node)
-        injectionsQueryCursor.setQueryRange(queryRange)
-        injectionsQueryCursor.execute()
-        let captures = injectionsQueryCursor.validCaptures(in: stringView)
-        let injectedLanguages = injectedLanguages(from: captures)
+        var injectedLanguages: [TreeSitterInjectedLanguage] = []
+        if let injectionsQuery = language.injectionsQuery {
+            let injectionsQueryCursor = TreeSitterQueryCursor(query: injectionsQuery, node: node)
+            injectionsQueryCursor.setQueryRange(queryRange)
+            injectionsQueryCursor.execute()
+            let captures = injectionsQueryCursor.validCaptures(in: stringView)
+            injectedLanguages = self.injectedLanguages(from: captures)
+        }
+        // Manual injections on the incremental path use the shifted temporary cache plus comment
+        // discovery inside this edit's window — never a document walk per keystroke.
+        let manuals = parentLanguageLayer == nil
+            ? currentManualContents(rootNode: node, window: queryRange, refreshingTemporary: false)
+            : []
+        if !manuals.isEmpty {
+            injectedLanguages.removeAll { automatic in
+                let automaticRange = ByteRange(from: automatic.textRange.startByte, to: automatic.textRange.endByte)
+                return manuals.contains { $0.byteRange.overlaps(automaticRange) }
+            }
+        }
         let capturedIDs = Set(injectedLanguages.map(\.id))
         let currentIDs = childLanguageLayerStore.allIDs
         let lineChangeSet = LineChangeSet()
@@ -356,6 +438,9 @@ private extension TreeSitterLanguageLayer {
                 lineChangeSet.union(with: childLineChangeSet)
             }
         }
+        if parentLanguageLayer == nil {
+            lineChangeSet.union(with: reconcileManualLayers(manuals, edit: edit, queryWindow: queryRange))
+        }
         return lineChangeSet
     }
 
@@ -374,6 +459,269 @@ private extension TreeSitterLanguageLayer {
         let mapper = TreeSitterInjectedLanguageMapper(captures: captures)
         mapper.delegate = self
         return mapper.map()
+    }
+}
+
+// MARK: - Manual language injections
+
+/// Last-parsed state of one manual child layer. Ranges (not keys) are the reconcile identity:
+/// comment anchors and temporary ranges both shift with edits.
+private struct ManualRecord {
+    var languageName: String
+    var byteRange: ByteRange
+    var textRanges: [TreeSitterTextRange]
+
+    mutating func shift(by edit: TreeSitterInputEdit) {
+        byteRange = TreeSitterLanguageLayer.shiftedByteRange(byteRange, by: edit)
+        textRanges = textRanges.map { $0.applying(edit) }
+    }
+}
+
+private extension ManualInjectionContent {
+    func shifted(by edit: TreeSitterInputEdit) -> ManualInjectionContent {
+        ManualInjectionContent(
+            key: key,
+            languageName: languageName,
+            byteRange: TreeSitterLanguageLayer.shiftedByteRange(byteRange, by: edit),
+            textRanges: textRanges.map { $0.applying(edit) })
+    }
+}
+
+private extension TreeSitterLanguageLayer {
+    /// Desired manual contents: shifted temporaries plus fresh comment discovery. Temporary wins
+    /// over comment on overlap. Unknown languages are filtered at materialize time (the provider
+    /// resolves them), so they stay visible here for overlap suppression.
+    func currentManualContents(rootNode: TreeSitterNode, window: ByteRange?, refreshingTemporary: Bool) -> [ManualInjectionContent] {
+        if refreshingTemporary {
+            refreshTemporaryContents(rootNode: rootNode)
+        }
+        // Comment discovery needs no provider, so it always runs; temporaries win on overlap.
+        var contents = temporaryContents
+        for comment in commentContents(rootNode: rootNode, window: window) {
+            guard !temporaryContents.contains(where: { $0.byteRange.overlaps(comment.byteRange) }) else {
+                continue
+            }
+            contents.append(comment)
+        }
+        return contents
+    }
+
+    func removeAllManualLayers() {
+        childLanguageLayerStore.removeAllManual()
+        manualRecords.removeAll()
+    }
+
+    /// Full-parse materialize: every desired injection gets a fresh layer and parse.
+    func materializeManualLayers(_ manuals: [ManualInjectionContent]) {
+        for manual in manuals {
+            guard let layer = makeManualChildLayer(forLanguageNamed: manual.languageName, key: manual.key) else {
+                continue
+            }
+            manualRecords[manual.key] = ManualRecord(languageName: manual.languageName,
+                                                     byteRange: manual.byteRange,
+                                                     textRanges: manual.textRanges)
+            layer.excludedIncludedRanges = manual.textRanges
+            layer.parseUsingReader(ranges: manual.textRanges)
+        }
+    }
+
+    /// Incremental reconcile against `manuals` (already shifted to post-edit coordinates):
+    /// reparse records overlapping the query window, shift the rest, drop the unmatched.
+    func reconcileManualLayers(_ manuals: [ManualInjectionContent],
+                               edit: TreeSitterInputEdit,
+                               queryWindow: ByteRange) -> LineChangeSet {
+        let lineChangeSet = LineChangeSet()
+        var matchedKeys = Set<String>()
+        for manual in manuals {
+            if let key = manualRecords.first(where: {
+                $0.value.languageName == manual.languageName && $0.value.byteRange.overlaps(manual.byteRange)
+            })?.key,
+               let layer = childLanguageLayerStore.manualLayer(forKey: key) {
+                if key != manual.key {
+                    childLanguageLayerStore.removeManualLayer(forKey: key)
+                    childLanguageLayerStore.storeManualLayer(layer, forKey: manual.key)
+                    manualRecords.removeValue(forKey: key)
+                }
+                manualRecords[manual.key] = ManualRecord(languageName: manual.languageName,
+                                                         byteRange: manual.byteRange,
+                                                         textRanges: manual.textRanges)
+                matchedKeys.insert(manual.key)
+                layer.excludedIncludedRanges = manual.textRanges
+                lineChangeSet.union(with: layer.apply(edit, parsing: manual.textRanges))
+            } else if let layer = makeManualChildLayer(forLanguageNamed: manual.languageName, key: manual.key) {
+                manualRecords[manual.key] = ManualRecord(languageName: manual.languageName,
+                                                         byteRange: manual.byteRange,
+                                                         textRanges: manual.textRanges)
+                matchedKeys.insert(manual.key)
+                layer.excludedIncludedRanges = manual.textRanges
+                lineChangeSet.union(with: layer.apply(edit, parsing: manual.textRanges))
+            }
+        }
+        for key in manualRecords.keys where !matchedKeys.contains(key) {
+            guard let record = manualRecords[key] else {
+                continue
+            }
+            if record.byteRange.overlaps(queryWindow) {
+                childLanguageLayerStore.removeManualLayer(forKey: key)
+                manualRecords.removeValue(forKey: key)
+            } else if let layer = childLanguageLayerStore.manualLayer(forKey: key) {
+                // Outside the window: keep the layer, its record ranges were already shifted with
+                // the edit at the top of `updateChildLayers`.
+                lineChangeSet.union(with: layer.applyEditPreservingIncludedRange(edit))
+            }
+        }
+        return lineChangeSet
+    }
+
+    /// Creates (but does not parse) a manual child layer. `nil` for unknown language names —
+    /// they are ignored, never errors.
+    func makeManualChildLayer(forLanguageNamed languageName: String, key: String) -> TreeSitterLanguageLayer? {
+        guard let language = languageProvider?.treeSitterLanguage(named: languageName) else {
+            return nil
+        }
+        let layer = TreeSitterLanguageLayer(
+            language: language.internalLanguage,
+            languageProvider: languageProvider,
+            parser: parser,
+            stringView: stringView,
+            lineManager: lineManager)
+        layer.parentLanguageLayer = self
+        childLanguageLayerStore.storeManualLayer(layer, forKey: key)
+        return layer
+    }
+
+    func commentContents(rootNode: TreeSitterNode, window: ByteRange?) -> [ManualInjectionContent] {
+        let discovery = ManualLanguageInjectionDiscovery()
+        discovery.lineCommentPrefix = language.lineCommentPrefix
+        discovery.blockCommentDelimiters = language.blockCommentDelimiters
+        discovery.readText = { [stringView] range in stringView.substring(in: range) }
+        return discovery.commentInjections(under: rootNode, window: window) { [stringView] in
+            stringView.substring(in: NSRange(location: 0, length: stringView.length))
+        }
+    }
+
+    /// Re-reads the temporary provider and carves fresh contents. Only on a full parse; the
+    /// incremental path reuses the shifted cache without re-asking.
+    func refreshTemporaryContents(rootNode: TreeSitterNode) {
+        guard let provider = manualInjectionProvider else {
+            temporarySources = []
+            temporaryContents = []
+            return
+        }
+        var sources: [ManualLanguageInjection] = []
+        var contents: [ManualInjectionContent] = []
+        for injection in provider.manualInjections() {
+            guard let content = convertTemporary(injection, rootNode: rootNode) else {
+                continue
+            }
+            sources.append(injection)
+            contents.append(content)
+        }
+        temporarySources = sources
+        temporaryContents = contents
+    }
+
+    /// Snaps a provider range to the string literal covering it (carving quotes and host
+    /// interpolation spans), falling back to the raw range when no string node covers it.
+    func convertTemporary(_ injection: ManualLanguageInjection, rootNode: TreeSitterNode) -> ManualInjectionContent? {
+        let documentBytes = ByteCount(utf16Length: stringView.length)
+        var byteRange = ByteRange(utf16Range: injection.utf16Range)
+        byteRange = ByteRange(from: max(byteRange.lowerBound, ByteCount(0)),
+                              to: min(byteRange.upperBound, documentBytes))
+        guard !byteRange.isEmpty, byteRange.lowerBound < documentBytes else {
+            return nil
+        }
+        let languageName = FenceLanguageName.normalize(injection.languageIdentifier)
+            ?? injection.languageIdentifier
+        let key = "temporary:\(languageName):\(byteRange.lowerBound.value)-\(byteRange.upperBound.value)"
+        let read: (NSRange) -> String? = { [stringView] range in stringView.substring(in: range) }
+        if let stringNode = ManualLanguageInjectionDiscovery.stringNode(containing: byteRange, under: rootNode),
+           let nodeText = read(NSRange(stringNode.byteRange)) {
+            let carved = ManualLanguageInjectionDiscovery.contentTextRanges(of: stringNode, readText: read)
+            let carvedBytes = carved.map { ByteRange(from: $0.startByte, to: $0.endByte) }
+            let kept = carvedBytes.filter { byteRange.contains($0) }
+            if !kept.isEmpty {
+                let pieces = kept
+                let range = ByteRange(from: pieces.map(\.lowerBound).min()!, to: pieces.map(\.upperBound).max()!)
+                let converted = ManualLanguageInjectionDiscovery.textRanges(
+                    for: pieces,
+                    scanning: Array(nodeText.utf16),
+                    baseByte: stringNode.byteRange.lowerBound.value,
+                    basePoint: stringNode.startPoint)
+                guard !converted.isEmpty else {
+                    return nil
+                }
+                return ManualInjectionContent(key: key, languageName: languageName, byteRange: range, textRanges: converted)
+            }
+            let intersected = carvedBytes.compactMap { piece -> ByteRange? in
+                let lower = max(piece.lowerBound, byteRange.lowerBound)
+                let upper = min(piece.upperBound, byteRange.upperBound)
+                guard upper > lower else {
+                    return nil
+                }
+                return ByteRange(from: lower, to: upper)
+            }
+            if !intersected.isEmpty {
+                let converted = ManualLanguageInjectionDiscovery.textRanges(
+                    for: intersected,
+                    scanning: Array(nodeText.utf16),
+                    baseByte: stringNode.byteRange.lowerBound.value,
+                    basePoint: stringNode.startPoint)
+                guard !converted.isEmpty else {
+                    return nil
+                }
+                let range = ByteRange(from: intersected.map(\.lowerBound).min()!,
+                                      to: intersected.map(\.upperBound).max()!)
+                return ManualInjectionContent(key: key, languageName: languageName, byteRange: range, textRanges: converted)
+            }
+        }
+        // No covering string literal (or nothing usable in it): parse the raw range.
+        guard let prefix = read(NSRange(location: 0, length: min(byteRange.upperBound.value / 2, stringView.length))),
+              !prefix.isEmpty else {
+            return nil
+        }
+        let converted = ManualLanguageInjectionDiscovery.textRanges(
+            for: [byteRange],
+            scanning: Array(prefix.utf16),
+            baseByte: 0,
+            basePoint: TreeSitterTextPoint(row: 0, column: 0))
+        guard !converted.isEmpty else {
+            return nil
+        }
+        return ManualInjectionContent(key: key, languageName: languageName, byteRange: byteRange, textRanges: converted)
+    }
+
+    static func shiftedByteRange(_ range: ByteRange, by edit: TreeSitterInputEdit) -> ByteRange {
+        func moved(_ byte: ByteCount) -> ByteCount {
+            if byte >= edit.oldEndByte {
+                return ByteCount(byte.value - edit.oldEndByte.value + edit.newEndByte.value)
+            }
+            if byte > edit.startByte {
+                return edit.newEndByte
+            }
+            return byte
+        }
+        let lower = moved(range.lowerBound)
+        let upper = moved(range.upperBound)
+        guard upper > lower else {
+            return ByteRange(from: lower, to: lower)
+        }
+        return ByteRange(from: lower, to: upper)
+    }
+
+    static func shiftedUTF16Range(_ range: NSRange, by edit: TreeSitterInputEdit) -> NSRange {
+        func moved(_ byteValue: Int) -> Int {
+            if byteValue >= edit.oldEndByte.value {
+                return (byteValue - edit.oldEndByte.value + edit.newEndByte.value) / 2
+            }
+            if byteValue > edit.startByte.value {
+                return edit.newEndByte.value / 2
+            }
+            return byteValue / 2
+        }
+        let start = max(0, moved(range.location * 2))
+        let end = max(start, moved(range.upperBound * 2))
+        return NSRange(location: start, length: end - start)
     }
 }
 

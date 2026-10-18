@@ -83,6 +83,7 @@ public final class TextViewState: @unchecked Sendable {
         lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier,
         language: TreeSitterLanguage,
         languageProvider: TreeSitterLanguageProvider? = nil,
+        manualInjectionProvider: ManualInjectionProviding? = nil,
         parsePolicy: SyntaxParsePolicy = .eager
     ) {
         self.init(
@@ -91,6 +92,7 @@ public final class TextViewState: @unchecked Sendable {
             lineHeightMultiplier: lineHeightMultiplier,
             language: language,
             languageProvider: languageProvider,
+            manualInjectionProvider: manualInjectionProvider,
             parsePolicy: parsePolicy,
             lineMetrics: nil,
             packedIndex: nil
@@ -116,6 +118,7 @@ public final class TextViewState: @unchecked Sendable {
             lineHeightMultiplier: lineHeightMultiplier,
             language: nil,
             languageProvider: nil,
+            manualInjectionProvider: nil,
             parsePolicy: .eager,
             lineMetrics: nil,
             packedIndex: nil
@@ -160,6 +163,7 @@ public final class TextViewState: @unchecked Sendable {
             lineHeightMultiplier: lineHeightMultiplier,
             language: language,
             languageProvider: languageProvider,
+            manualInjectionProvider: nil,
             parsePolicy: parsePolicy,
             lineMetrics: nil,
             packedIndex: loaded.packedIndex
@@ -209,6 +213,7 @@ public final class TextViewState: @unchecked Sendable {
         lineHeightMultiplier: CGFloat,
         language: TreeSitterLanguage?,
         languageProvider: TreeSitterLanguageProvider?,
+        manualInjectionProvider: ManualInjectionProviding?,
         parsePolicy: SyntaxParsePolicy,
         lineMetrics: [LineMetric]?,
         packedIndex: PackedLineIndex?
@@ -228,7 +233,8 @@ public final class TextViewState: @unchecked Sendable {
                 language: language.internalLanguage,
                 languageProvider: languageProvider,
                 stringView: stringView,
-                lineManager: lineManager
+                lineManager: lineManager,
+                manualInjectionProvider: manualInjectionProvider
             )
         } else {
             self.languageMode = PlainTextInternalLanguageMode()

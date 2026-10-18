@@ -37,6 +37,10 @@ final class IDEIntelligenceServices {
     let projectSystems: IDEProjectSystems
     /// `@file` references in Markdown. The window sets its file source (`setSource`).
     let markdownFileMentions = MarkdownFileMentionCompletionProvider()
+    /// Temporary `Inject language…` highlights. The workspace reads and writes the same instance
+    /// (per-document providers, mode construction, tab-close clearing); the code-action provider
+    /// below only reads it to hide the action over an already-injected range.
+    let manualInjectionStore = IDEManualInjectionStore()
     /// `{{ }}`, methods, headers, and `# @` flags in `.http` files. The window sets the global store.
     let httpCompletion = HTTPCompletionProvider()
     /// Hover on a `###@scheme:` line: whether its schema is loaded. Configured with `httpCompletion`.
@@ -104,6 +108,11 @@ final class IDEIntelligenceServices {
             BasicLanguageService(
                 name: "umbra.json", languageIdentifiers: ["json"],
                 providers: LanguageProviders(formatting: IDEJSONFormattingProvider(indentUnit: { await IDEPreferences.currentIndentUnit() }))
+            ),
+            BasicLanguageService(
+                name: "umbra.language-injection",
+                languageIdentifiers: Set(LanguageDefinitionRegistry.shared.selectableDefinitions.map(\.id)),
+                providers: LanguageProviders(codeActions: IDEManualInjectionCodeActionProvider(store: manualInjectionStore))
             )
         ])
         self.languages = languages

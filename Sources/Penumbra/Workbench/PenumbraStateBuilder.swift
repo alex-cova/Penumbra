@@ -63,6 +63,7 @@ public enum PenumbraStateBuilder {
         lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier,
         language: TreeSitterLanguage? = nil,
         languageProvider: TreeSitterLanguageProvider? = nil,
+        manualInjectionProvider: ManualInjectionProviding? = nil,
         parsePolicy: SyntaxParsePolicy = .viewport
     ) -> PreparedState {
         let state: TextViewState
@@ -73,6 +74,7 @@ public enum PenumbraStateBuilder {
                 lineHeightMultiplier: lineHeightMultiplier,
                 language: language,
                 languageProvider: languageProvider,
+                manualInjectionProvider: manualInjectionProvider,
                 parsePolicy: parsePolicy
             )
         } else {
@@ -121,6 +123,7 @@ public enum PenumbraStateBuilder {
         lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier,
         language: TreeSitterLanguage?,
         languageProvider: TreeSitterLanguageProvider? = nil,
+        manualInjectionProvider: ManualInjectionProviding? = nil,
         parsePolicy: SyntaxParsePolicy = .viewport,
         generation: Int,
         isCurrent: @escaping (Int) -> Bool,
@@ -131,6 +134,7 @@ public enum PenumbraStateBuilder {
         let themeBox = UncheckedBox(theme)
         let languageBox = UncheckedBox(language)
         let languageProviderBox = UncheckedBox(languageProvider)
+        let manualInjectionProviderBox = UncheckedBox(manualInjectionProvider)
         DispatchQueue.global(qos: .userInitiated).async {
             let prepared = makeState(
                 text: text,
@@ -138,6 +142,7 @@ public enum PenumbraStateBuilder {
                 lineHeightMultiplier: lineHeightMultiplier,
                 language: languageBox.value,
                 languageProvider: languageProviderBox.value,
+                manualInjectionProvider: manualInjectionProviderBox.value,
                 parsePolicy: parsePolicy
             )
             DispatchQueue.main.async {

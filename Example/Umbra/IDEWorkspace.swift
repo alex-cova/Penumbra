@@ -88,7 +88,7 @@ public final class IDEWorkspace {
     static let languageProvider = BundledLanguageProvider()
 
     let workbench = EditorWorkbench()
-    private let workspaceBridge = PenumbraWorkbenchWorkspaceBridge()
+    let workspaceBridge = PenumbraWorkbenchWorkspaceBridge()
     let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
     /// Each diff tab's session, by its document's id (see `IDEWorkspace+Diff.swift`).
     @ObservationIgnored
@@ -98,6 +98,24 @@ public final class IDEWorkspace {
     /// Each hex tab's session, by its document's id (see `IDEWorkspace+Hex.swift`).
     @ObservationIgnored
     var hexSessions: [UUID: IDEHexSession] = [:]
+    /// Temporary `Inject language…` highlights, cleared when the document closes. Owned by
+    /// `IDEIntelligenceServices` (which also feeds the ⌥↩ provider); providers are cached per
+    /// document here so mode reconstructions keep feeding the same instance.
+    var manualInjectionStore: IDEManualInjectionStore { intelligenceServices.manualInjectionStore }
+    @ObservationIgnored
+    var manualInjectionProviders: [UUID: IDEManualInjectionProvider] = [:]
+
+    /// Per-document temporary-injection provider, stable across mode reconstructions.
+    func manualInjectionProvider(for document: WorkbenchDocument) -> IDEManualInjectionProvider {
+        if let provider = manualInjectionProviders[document.id] {
+            return provider
+        }
+        let provider = IDEManualInjectionProvider(
+            store: manualInjectionStore,
+            key: IDEManualInjectionStore.key(url: document.url, displayName: document.displayName))
+        manualInjectionProviders[document.id] = provider
+        return provider
+    }
     /// Paths opened as hex because the first 8 KB did not look like text. Consumed when the session starts.
     @ObservationIgnored
     var hexSniffedPaths: Set<String> = []
@@ -1094,7 +1112,9 @@ public final class IDEWorkspace {
 
         let languageMode: LanguageMode
         if let language = document.language {
-            languageMode = TreeSitterLanguageMode(language: language, languageProvider: Self.languageProvider)
+            languageMode = TreeSitterLanguageMode(language: language,
+                                                  languageProvider: Self.languageProvider,
+                                                  manualInjectionProvider: manualInjectionProvider(for: document))
         } else {
             languageMode = PlainTextLanguageMode()
         }
@@ -1130,7 +1150,9 @@ public final class IDEWorkspace {
 
         let languageMode: LanguageMode
         if let language = document.language {
-            languageMode = TreeSitterLanguageMode(language: language, languageProvider: Self.languageProvider)
+            languageMode = TreeSitterLanguageMode(language: language,
+                                                  languageProvider: Self.languageProvider,
+                                                  manualInjectionProvider: manualInjectionProvider(for: document))
         } else {
             languageMode = PlainTextLanguageMode()
         }
@@ -4916,11 +4938,18 @@ public final class IDEWorkspace {
         closeDiffSession(documentID, in: pane)
         closeDiagramSession(documentID, in: pane)
         closeProfileSession(documentID, in: pane)
-        let closingURL = pane.documents.first(where: { $0.id == documentID })?.url
+        let closingDocument = pane.documents.first(where: { $0.id == documentID })
+        let closingURL = closingDocument?.url
         pane.closeDocument(documentID)
         let stillOpen = workbench.panes.contains { $0.documents.contains { $0.id == documentID } }
         if !stillOpen {
             closeHexSession(documentID)
+            // Temporary injections die with the tab; comment injections need no cleanup.
+            if let closingDocument {
+                manualInjectionStore.clear(forKey: IDEManualInjectionStore.key(
+                    url: closingDocument.url, displayName: closingDocument.displayName))
+            }
+            manualInjectionProviders.removeValue(forKey: documentID)
         }
         if let closingURL, paneAndDocument(matching: closingURL) == nil {
             problems.clearEditorDiagnostics(for: closingURL)
@@ -6301,6 +6330,7 @@ public final class IDEWorkspace {
             lineHeightMultiplier: CGFloat(preferences.lineHeightMultiplier),
             language: document.language,
             languageProvider: Self.languageProvider,
+            manualInjectionProvider: manualInjectionProvider(for: document),
             generation: generation,
             isCurrent: { [host] gen in host.applyGate.matches(gen) },
             apply: { [weak self, weak host] state in
