@@ -110,10 +110,27 @@ public struct PermissionRule: Sendable, Hashable, Codable, CustomStringConvertib
     /// Commands: `prefix:*` matches a command that is the prefix or starts with it plus a space; `*`
     /// elsewhere is a wildcard; anything else must match exactly. Paths: a glob.
     public var pattern: String?
+    /// Example calls this rule should touch. Inline unit tests, Codex-style: `checkExamples()`
+    /// reports the ones that do not hold. Never consulted when deciding a call.
+    public var match: [String]
+    /// Example calls this rule should not touch.
+    public var noMatch: [String]
 
-    public init(tool: String, pattern: String? = nil) {
+    public init(tool: String, pattern: String? = nil, match: [String] = [], noMatch: [String] = []) {
         self.tool = tool
         self.pattern = pattern
+        self.match = match
+        self.noMatch = noMatch
+    }
+
+    /// Identity is the rule text: two spellings of one rule are one rule, whatever examples each carries.
+    public static func == (lhs: PermissionRule, rhs: PermissionRule) -> Bool {
+        lhs.tool == rhs.tool && lhs.pattern == rhs.pattern
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(tool)
+        hasher.combine(pattern)
     }
 
     /// `nil` for text that is not a rule (empty, or unbalanced parentheses).
@@ -133,7 +150,20 @@ public struct PermissionRule: Sendable, Hashable, Codable, CustomStringConvertib
         self.init(tool: tool, pattern: pattern.isEmpty ? nil : String(pattern))
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case rule, match
+        case noMatch = "not_match"
+    }
+
     public init(from decoder: any Decoder) throws {
+        if let keyed = try? decoder.container(keyedBy: CodingKeys.self),
+           let text = try? keyed.decode(String.self, forKey: .rule),
+           var rule = PermissionRule(parsing: text) {
+            rule.match = (try? keyed.decodeIfPresent([String].self, forKey: .match)) ?? []
+            rule.noMatch = (try? keyed.decodeIfPresent([String].self, forKey: .noMatch)) ?? []
+            self = rule
+            return
+        }
         let text = try decoder.singleValueContainer().decode(String.self)
         guard let rule = PermissionRule(parsing: text) else {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Not a permission rule: \"\(text)\"."))
@@ -142,8 +172,15 @@ public struct PermissionRule: Sendable, Hashable, Codable, CustomStringConvertib
     }
 
     public func encode(to encoder: any Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(description)
+        guard !match.isEmpty || !noMatch.isEmpty else {
+            var container = encoder.singleValueContainer()
+            try container.encode(description)
+            return
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(description, forKey: .rule)
+        if !match.isEmpty { try container.encode(match, forKey: .match) }
+        if !noMatch.isEmpty { try container.encode(noMatch, forKey: .noMatch) }
     }
 
     public var description: String { pattern.map { "\(tool)(\($0))" } ?? tool }
@@ -172,6 +209,24 @@ public struct PermissionRule: Sendable, Hashable, Codable, CustomStringConvertib
         let normalized = pattern.hasPrefix("/") ? String(pattern.dropFirst()) : pattern
         guard let glob = try? GlobPattern(normalized) else { return false }
         return glob.matches(path.hasPrefix("./") ? String(path.dropFirst(2)) : path)
+    }
+
+    /// Whether `example` names a call this rule touches, checked the way the policy checks real
+    /// calls: a command example reads as command segments, a path example as a path. A patternless
+    /// rule touches everything, so only `match` examples hold for it.
+    func exampleMatches(_ example: String) -> Bool {
+        let trimmed = example.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch tool {
+        case "Bash":
+            let parsed = CommandSegments.parse(trimmed)
+            return matches(command: trimmed) || parsed.segments.contains { matches(command: $0) }
+        case "Edit", "Write", "MultiEdit":
+            return matches(path: trimmed)
+        default:
+            let parsed = CommandSegments.parse(trimmed)
+            if matches(command: trimmed) || parsed.segments.contains(where: { matches(command: $0) }) { return true }
+            return matches(path: trimmed)
+        }
     }
 
     /// `*` stands for any run of characters, including none.
@@ -235,19 +290,58 @@ public struct PermissionRules: Sendable, Equatable, Codable {
     }
 
     /// Reads the `permissions` object of a Claude Code or Umbra settings file (`allow`, `ask`, `deny`
-    /// lists of rule strings). Entries that are not rules are skipped, and so is anything that is not
-    /// a settings file: a broken file loses its rules, it does not stop the agent.
+    /// lists). An entry is a rule string (`"Bash(git status:*)"`) or an object with the rule and its
+    /// inline tests (`{"rule": "Bash(git status:*)", "match": ["git status -sb"], "not_match": ["git push"]}`).
+    /// Entries that are not rules are skipped, and so is anything that is not a settings file:
+    /// a broken file loses its rules, it does not stop the agent.
     public static func fromSettings(_ data: Data) -> PermissionRules {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let permissions = root["permissions"] as? [String: Any]
         else { return PermissionRules() }
         func rules(_ key: String) -> [PermissionRule] {
-            (permissions[key] as? [Any] ?? []).compactMap { ($0 as? String).flatMap(PermissionRule.init(parsing:)) }
+            (permissions[key] as? [Any] ?? []).compactMap(Self.rule(from:))
         }
         return PermissionRules(allow: rules("allow"), ask: rules("ask"), deny: rules("deny"))
     }
 
-    public enum Kind: Sendable { case allow, ask, deny }
+    private static func rule(from entry: Any) -> PermissionRule? {
+        if let text = entry as? String { return PermissionRule(parsing: text) }
+        guard let object = entry as? [String: Any],
+              let text = object["rule"] as? String,
+              var rule = PermissionRule(parsing: text)
+        else { return nil }
+        func strings(_ key: String) -> [String] {
+            ((object[key] as? [Any]) ?? []).compactMap { $0 as? String }
+        }
+        rule.match = strings("match")
+        rule.noMatch = strings("not_match")
+        return rule
+    }
+
+    /// A rule example that does not hold: the rule touches a `not_match` example, or misses a `match`
+    /// one. The rule still applies; this only names a likely mistake in it.
+    public struct ExampleFailure: Sendable, Equatable {
+        public var kind: Kind
+        public var rule: PermissionRule
+        public var example: String
+        /// What the example claimed: `true` from `match`, `false` from `not_match`.
+        public var expectedMatch: Bool
+    }
+
+    /// Every example that does not hold, in list order. Empty means the rules say what their
+    /// authors meant — or that no rule carries examples.
+    public func checkExamples() -> [ExampleFailure] {
+        [(allow, Kind.allow), (ask, Kind.ask), (deny, Kind.deny)].flatMap { list, kind in
+            list.flatMap { rule in
+                (rule.match.map { ($0, true) } + rule.noMatch.map { ($0, false) }).compactMap { example, expected in
+                    rule.exampleMatches(example) == expected ? nil : ExampleFailure(
+                        kind: kind, rule: rule, example: example, expectedMatch: expected)
+                }
+            }
+        }
+    }
+
+    public enum Kind: Sendable, Equatable { case allow, ask, deny }
 
     public mutating func add(_ rule: PermissionRule, to kind: Kind) {
         switch kind {

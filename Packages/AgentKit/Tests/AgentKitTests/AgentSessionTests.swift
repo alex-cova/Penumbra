@@ -196,6 +196,28 @@ private func ending(_ events: [AgentEvent]) -> RunEnding? {
         #expect(toolOutputs(await session.items)["c"] == "Error: slow timed out after 0.05 seconds.")
     }
 
+    @Test func aToolTimeoutBoundsAToolThatIgnoresCancellation() async throws {
+        struct UncooperativeTool: AgentTool {
+            var risk: ToolRisk = .read
+            var definition: ToolDefinition { ToolDefinition(name: "stuck", description: "probe") }
+            func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
+                usleep(5_000_000)
+                return "late"
+            }
+        }
+        let client = MockLLMClient(turns: [.toolCalls((id: "c", name: "stuck", arguments: "{}")), .text("done")])
+        let session = try makeSession(
+            client, tools: [UncooperativeTool()],
+            configuration: AgentConfiguration(model: "m", toolTimeout: 0.05))
+        let started = Date()
+        let events = await runToEnd(session)
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(ending(events) == .completed)
+        #expect(toolOutputs(await session.items)["c"] == "Error: stuck timed out after 0.05 seconds.")
+        #expect(elapsed < 4, "the timeout must bound the run, took \(elapsed)s")
+        expectEveryCallAnswered(await session.items)
+    }
+
     @Test func iterationCapPausesInsteadOfFailing() async throws {
         let probe = Probe()
         let client = MockLLMClient(turns: (0..<5).map {

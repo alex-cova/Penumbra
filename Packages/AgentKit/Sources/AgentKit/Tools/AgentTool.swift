@@ -176,7 +176,8 @@ public actor ReadLedger {
 }
 
 /// A tool the model can call. A thrown error becomes an output the model can act on, never an error
-/// that ends the run. Tools must honor task cancellation: Stop and timeouts rely on it.
+/// that ends the run. Tools should honor task cancellation: Stop and the tool timeout stop waiting
+/// for a tool that does not, and its late result is dropped.
 public protocol AgentTool: Sendable {
     var definition: ToolDefinition { get }
     var risk: ToolRisk { get }

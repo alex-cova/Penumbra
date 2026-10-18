@@ -232,6 +232,63 @@ private struct FixedGate: PermissionGate {
         #expect(try JSONDecoder().decode(PermissionRules.self, from: data) == original)
     }
 
+    @Test func settingsEntriesMayCarryInlineTests() throws {
+        let json = """
+        {"permissions": {"allow": [
+            {"rule": "Bash(git status:*)", "match": ["git status -sb"], "not_match": ["git push"]},
+            "Edit(src/**)",
+            {"rule": "Bash(", "match": ["x"]},
+            {"match": ["x"]},
+            42
+        ]}}
+        """
+        let loaded = PermissionRules.fromSettings(Data(json.utf8))
+        #expect(loaded.allow.map(\.description) == ["Bash(git status:*)", "Edit(src/**)"])
+        let tested = try #require(loaded.allow.first)
+        #expect(tested.match == ["git status -sb"])
+        #expect(tested.noMatch == ["git push"])
+        #expect(loaded.allow[1].match.isEmpty && loaded.allow[1].noMatch.isEmpty, "a plain string carries no tests")
+    }
+
+    @Test func examplesAreCheckedTheWayRealCallsAre() {
+        let allow = PermissionRule(tool: "Bash", pattern: "git status:*", match: ["git status -sb", "cd x && git status"], noMatch: ["git push"])
+        #expect(PermissionRules(allow: [allow]).checkExamples().isEmpty)
+
+        let typo = PermissionRule(tool: "Bash", pattern: "gitstats:*", match: ["git status"])
+        let failures = PermissionRules(deny: [typo]).checkExamples()
+        #expect(failures.count == 1)
+        #expect(failures[0].kind == .deny && failures[0].example == "git status" && failures[0].expectedMatch)
+
+        let paths = PermissionRule(tool: "Edit", pattern: "src/**", match: ["src/A.java"], noMatch: ["docs/A.md"])
+        #expect(PermissionRules(allow: [paths]).checkExamples().isEmpty)
+
+        let loose = PermissionRule(tool: "Edit", pattern: "src/**", noMatch: ["src/secret.java"])
+        #expect(PermissionRules(allow: [loose]).checkExamples().count == 1, "a not_match the rule touches fails")
+
+        let patternless = PermissionRule(tool: "Edit", match: ["anything.java"], noMatch: ["other.java"])
+        #expect(PermissionRules(allow: [patternless]).checkExamples().count == 1, "a rule with no pattern touches every call")
+    }
+
+    @Test func rulesWithTestsRoundTripThroughJSONAsObjects() throws {
+        let original = PermissionRules(allow: [
+            PermissionRule(tool: "Bash", pattern: "git status:*", match: ["git status"], noMatch: ["git push"]),
+        ])
+        let data = try JSONEncoder().encode(original)
+        #expect(String(decoding: data, as: UTF8.self).contains("\"not_match\""))
+        let decoded = try JSONDecoder().decode(PermissionRules.self, from: data)
+        #expect(decoded == original)
+        #expect(decoded.allow.first?.match == ["git status"])
+        #expect(decoded.allow.first?.noMatch == ["git push"])
+        #expect(decoded.checkExamples().isEmpty)
+    }
+
+    @Test func examplesDoNotChangeARulesIdentity() {
+        #expect(PermissionRule(tool: "Bash", pattern: "x:*") == PermissionRule(tool: "Bash", pattern: "x:*", match: ["x"]))
+        let merged = PermissionRules(allow: [PermissionRule(tool: "a", match: ["a"])]).merged(
+            with: PermissionRules(allow: [PermissionRule(tool: "a", noMatch: ["b"])]))
+        #expect(merged.allow.count == 1, "examples do not make one rule two")
+    }
+
     @Test func mergingKeepsOrderAndDropsRepeats() {
         let merged = rules(allow: ["a", "b"]).merged(with: rules(allow: ["b", "c"], deny: ["d"]))
         #expect(merged.allow.map(\.description) == ["a", "b", "c"])

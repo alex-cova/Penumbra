@@ -990,22 +990,20 @@ public actor AgentSession {
         }
     }
 
-    /// Races the tool against its timeout. A tool that ignores cancellation delays the result past
-    /// the timeout, which is why `AgentTool` documents that tools must honor it.
+    /// Races the tool against its timeout. The timeout bounds the run even when the tool ignores
+    /// cancellation: a tool that is still working after its time is cancelled (best effort) and its
+    /// late result is dropped, so one hung tool cannot stall the run or a Stop. Tools should still
+    /// honor cancellation, so they do not keep working — or change files — after the run moved on.
     private static func run(_ tool: any AgentTool, arguments: String, context: ToolContext, timeout: TimeInterval) async -> ToolOutput {
         // A person's answer takes as long as it takes; Stop is what ends the wait.
         if tool.waitsForUser { return await tool.execute(argumentsJSON: arguments, context: context) }
-        return await withTaskGroup(of: ToolOutput?.self) { group in
-            group.addTask { await tool.execute(argumentsJSON: arguments, context: context) }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(timeout))
-                return nil
+        let race = ToolTimeoutRace()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                race.start(continuation: continuation, tool: tool, arguments: arguments, context: context, timeout: timeout)
             }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            if Task.isCancelled { return .error("Cancelled by user.") }
-            let seconds = timeout < 1 ? String(format: "%.2f", timeout) : String(Int(timeout))
-            return first ?? .error("\(tool.name) timed out after \(seconds) seconds.")
+        } onCancel: {
+            race.cancelled()
         }
     }
 
@@ -1020,6 +1018,67 @@ public actor AgentSession {
     /// Argument text with keys sorted, so `{"a":1,"b":2}` and `{"b":2,"a":1}` count as one call.
     private static func canonical(_ arguments: String) -> String {
         (try? JSONValue(parsing: arguments).serialized()) ?? arguments
+    }
+}
+
+/// First result wins between a tool call, its timeout, and the run's cancellation. The losers are
+/// cancelled best-effort and never waited on, so a tool that ignores cancellation cannot hold the
+/// run past its timeout or a Stop; its late output is dropped.
+private final class ToolTimeoutRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<ToolOutput, Never>?
+    private var toolTask: Task<Void, Never>?
+    private var timerTask: Task<Void, Never>?
+    private var finished = false
+
+    func start(
+        continuation: CheckedContinuation<ToolOutput, Never>, tool: any AgentTool, arguments: String,
+        context: ToolContext, timeout: TimeInterval
+    ) {
+        lock.withLock { self.continuation = continuation }
+        if Task.isCancelled {
+            cancelled()
+            return
+        }
+        let toolTask = Task {
+            let output = await tool.execute(argumentsJSON: arguments, context: context)
+            finish(with: output)
+        }
+        let timerTask = Task {
+            try? await Task.sleep(for: .seconds(timeout))
+            if Task.isCancelled { return }
+            finish(with: .error(Self.timeoutText(tool: tool.name, timeout: timeout)))
+        }
+        lock.withLock {
+            self.toolTask = toolTask
+            self.timerTask = timerTask
+        }
+        Task {
+            _ = await toolTask.result
+            lock.withLock { timerTask.cancel() }
+        }
+    }
+
+    func cancelled() {
+        finish(with: .error("Cancelled by user."))
+    }
+
+    private func finish(with output: ToolOutput) {
+        let continuation: CheckedContinuation<ToolOutput, Never>? = lock.withLock {
+            guard !finished else { return nil }
+            finished = true
+            let continuation = self.continuation
+            self.continuation = nil
+            toolTask?.cancel()
+            timerTask?.cancel()
+            return continuation
+        }
+        continuation?.resume(returning: output)
+    }
+
+    private static func timeoutText(tool name: String, timeout: TimeInterval) -> String {
+        let seconds = timeout < 1 ? String(format: "%.2f", timeout) : String(Int(timeout))
+        return "\(name) timed out after \(seconds) seconds."
     }
 }
 
