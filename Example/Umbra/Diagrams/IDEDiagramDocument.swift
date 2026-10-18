@@ -13,6 +13,7 @@ nonisolated enum IDEDiagramNodeKind: String, Codable, Sendable, Equatable {
     case annotationType
     /// A type that comes from the JDK or a dependency jar: drawn as a name only.
     case externalType
+    case table
     case project
     case library
     /// A library whose version Gradle replaced while resolving.
@@ -30,7 +31,7 @@ nonisolated enum IDEDiagramNodeKind: String, Codable, Sendable, Equatable {
         switch self {
         case .classType, .abstractClass, .interfaceType, .enumType, .recordType, .annotationType, .externalType:
             true
-        case .project, .library, .replacedLibrary, .unresolvedLibrary, .jsonObject, .jsonArray, .jsonValue:
+        case .table, .project, .library, .replacedLibrary, .unresolvedLibrary, .jsonObject, .jsonArray, .jsonValue:
             false
         }
     }

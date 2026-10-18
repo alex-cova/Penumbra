@@ -93,6 +93,10 @@ struct IDEAppCommands: Commands {
             CommandMenu(menu.title) { menu.content(focused) }
         }
 
+        if let focused, let menu = workspace?.languageModuleMenu(for: IDEDatabaseModule.id) {
+            CommandMenu(menu.title) { menu.content(focused) }
+        }
+
         CommandMenu("View") {
             if let focused { IDEViewCommands(ref: focused) } else { IDENoWindowCommand() }
         }

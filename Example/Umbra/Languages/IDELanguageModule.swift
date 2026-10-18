@@ -166,7 +166,7 @@ extension IDELanguageModule {
 @MainActor
 enum IDELanguageModules {
     static let shipped: [any IDELanguageModule] = [
-        IDEJavaModule(), IDEHTTPModule(), IDEMarkdownModule(), IDEJSONModule(), IDECSVModule(),
+        IDEJavaModule(), IDEHTTPModule(), IDEDatabaseModule(), IDEMarkdownModule(), IDEJSONModule(), IDECSVModule(),
         IDETypeScriptModule(), IDESwiftModule(), IDEHexModule()
     ]
 

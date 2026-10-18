@@ -58,6 +58,7 @@ enum IDESidebarTabs {
         static let changes = 20
         static let breakpoints = 30
         static let history = 40
+        static let database = 50
     }
 
     static var builtIn: [IDESidebarTabDescriptor] {

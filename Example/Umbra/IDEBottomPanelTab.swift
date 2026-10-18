@@ -54,6 +54,7 @@ extension IDEBottomPanelTab {
         static let swiftPM = 27
         static let xcode = 28
         static let http = 30
+        static let databaseResults = 32
         static let problems = 40
         static let typeHierarchy = 50
         static let usages = 60

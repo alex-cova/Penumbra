@@ -32,6 +32,8 @@ final class IDESharedServices {
     /// The run configurations kept on this Mac and the ones a project shares in `.umbra/runConfigurations`.
     let runConfigurations: JavaRunConfigurationCatalog
     let breakpoints: JavaBreakpointStore
+    /// Data sources for the Database tool. Passwords stay in the Keychain.
+    let databases: IDEDatabaseCatalog
     /// One indexing run and one parsed shard per JDK and per dependency jar, for all windows.
     let shards: JavaSharedShardHub
     /// Gives back the parsed jar and JDK shards nobody is using when the system asks for memory;
@@ -49,6 +51,7 @@ final class IDESharedServices {
             store: JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
         )
         breakpoints = JavaBreakpointStore(storeURL: JavaBreakpointStore.defaultStoreURL)
+        databases = IDEDatabaseCatalog(storeURL: IDEDatabaseCatalog.defaultStoreURL)
         let hub = JavaSharedShardHub()
         shards = hub
         memoryPressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)

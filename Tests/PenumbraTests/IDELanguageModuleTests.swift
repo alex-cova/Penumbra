@@ -13,7 +13,7 @@ final class IDELanguageModuleTests: XCTestCase {
 
     func testTheShippedModulesAreJavaHTTPThePreviewLanguagesTypeScriptAndSwift() {
         XCTAssertEqual(
-            IDELanguageModules.all.map(\.id), ["java", "http", "markdown", "json", "csv", "typescript", "swift", "hex"]
+            IDELanguageModules.all.map(\.id), ["java", "http", "database", "markdown", "json", "csv", "typescript", "swift", "hex"]
         )
         XCTAssertNotNil(IDELanguageModules.module(id: "http"))
         XCTAssertNotNil(IDELanguageModules.module(id: "swift"))
@@ -184,12 +184,15 @@ final class IDELanguageModuleTests: XCTestCase {
 
     // MARK: Sidebar tabs
 
-    func testTheSidebarKeepsItsFiveTabsInOrder() {
+    func testTheSidebarKeepsItsTabsInOrder() {
         XCTAssertEqual(
             IDESidebarTabs.all.map(\.tab.rawValue),
-            ["explorer", "structure", "changes", "breakpoints", "history"]
+            ["explorer", "structure", "changes", "breakpoints", "history", "database"]
         )
-        XCTAssertEqual(IDESidebarTabs.all.map(\.title), ["Explorer", "Structure", "Changes", "Breakpoints", "History"])
+        XCTAssertEqual(
+            IDESidebarTabs.all.map(\.title),
+            ["Explorer", "Structure", "Changes", "Breakpoints", "History", "Database"]
+        )
         XCTAssertEqual(IDESidebarTab.breakpoints.systemImage, "circle.fill")
         XCTAssertEqual(IDESidebarTabs.descriptor(for: .breakpoints)?.iconSize, 8)
         XCTAssertEqual(IDESidebarTabs.descriptor(for: .explorer)?.shortcut, "⌘0")
@@ -207,7 +210,7 @@ final class IDELanguageModuleTests: XCTestCase {
 
     func testAFreshWindowOffersEveryTabButChangesWithoutARepository() {
         let workspace = makeWorkspace()
-        XCTAssertEqual(workspace.sidebarTabs.map(\.rawValue), ["explorer", "structure", "breakpoints", "history"])
+        XCTAssertEqual(workspace.sidebarTabs.map(\.rawValue), ["explorer", "structure", "breakpoints", "history", "database"])
         XCTAssertFalse(workspace.isSidebarTabAvailable(.changes))
         XCTAssertFalse(workspace.isSidebarTabAvailable(IDESidebarTab(rawValue: "mystery")))
         XCTAssertEqual(workspace.activeSidebarTab, .explorer)

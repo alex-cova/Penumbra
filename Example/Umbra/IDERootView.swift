@@ -297,6 +297,18 @@ public struct IDERootView: View {
                 .environment(workspace)
                 .preferredColorScheme(IDEAppearance.preferredColorScheme)
         }
+        .sheet(item: Binding(
+            get: { workspace.databaseSupport.editor },
+            set: { workspace.databaseSupport.editor = $0 }
+        )) { editor in
+            IDEDatabaseConnectionSheet(
+                editor: editor,
+                support: workspace.databaseSupport,
+                onCancel: { workspace.databaseSupport.editor = nil }
+            )
+            .environment(workspace)
+            .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        }
         .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
         .onChange(of: workspace.preferences.uiColorSchemeID) { _, _ in

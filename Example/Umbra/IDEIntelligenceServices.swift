@@ -43,6 +43,9 @@ final class IDEIntelligenceServices {
     let manualInjectionStore = IDEManualInjectionStore()
     /// `{{ }}`, methods, headers, and `# @` flags in `.http` files. The window sets the global store.
     let httpCompletion = HTTPCompletionProvider()
+    /// Keywords, tables and columns of MySQL/PostgreSQL consoles. The window pushes one snapshot
+    /// per console; `sql` files without a console keep ordinary completion.
+    let sqlCompletion = SQLCompletionProvider()
     /// Hover on a `###@scheme:` line: whether its schema is loaded. Configured with `httpCompletion`.
     let httpSchemaHover = HTTPSchemaHoverProvider()
 
@@ -95,6 +98,10 @@ final class IDEIntelligenceServices {
             BasicLanguageService(
                 name: "umbra.markdown-mentions", languageIdentifiers: ["markdown"],
                 providers: LanguageProviders(completion: [markdownFileMentions])
+            ),
+            BasicLanguageService(
+                name: "umbra.sql", languageIdentifiers: ["sql"],
+                providers: LanguageProviders(completion: [sqlCompletion])
             ),
             BasicLanguageService(
                 name: "umbra.http", languageIdentifiers: ["http"],

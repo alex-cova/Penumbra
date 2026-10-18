@@ -45,6 +45,7 @@ struct IDEToolWindow: Identifiable {
         static let swiftPMConsole = 416
         static let xcodeConsole = 417
         static let httpResponse = 420
+        static let databaseResults = 425
     }
 }
 

@@ -48,6 +48,7 @@ let package = Package(
     dependencies: [
         .package(path: "Packages/AgentKit"),
         .package(path: "Packages/AgentKitMLX"),
+        .package(path: "Packages/DatabaseKit"),
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
         .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
         .package(url: "https://github.com/ChimeHQ/JSONRPC", from: "0.9.0"),
@@ -262,6 +263,7 @@ let package = Package(
                 .product(name: "DiagramKit", package: "DiagramKit"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "XcodeProjectFormat", package: "xcode-project-format"),
+                .product(name: "DatabaseKit", package: "DatabaseKit"),
                 "HexKit"
             ],
             path: "Example/Umbra",
@@ -540,7 +542,8 @@ let package = Package(
             .product(name: "AgentKit", package: "AgentKit"),
             .product(name: "AgentKitMLX", package: "AgentKitMLX"),
             .product(name: "LocalModelStore", package: "AgentKitMLX"),
-            .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
+            .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol"),
+            .product(name: "DatabaseKit", package: "DatabaseKit")
         ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus"), .copy("Fixtures/JavaCommandCorpus")], swiftSettings: swift6)
     ]
 )

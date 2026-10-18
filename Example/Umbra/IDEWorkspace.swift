@@ -501,6 +501,12 @@ public final class IDEWorkspace {
         let generation: UInt64
     }
     @ObservationIgnored private var httpGutterStamp: HTTPGutterStamp?
+    struct DatabaseGutterStamp: Equatable {
+        let view: ObjectIdentifier
+        let documentID: UUID?
+        let generation: UInt64
+    }
+    @ObservationIgnored var databaseGutterStamp: DatabaseGutterStamp?
     /// The `main` methods last found in a text view's buffer, so a caret move doesn't parse the
     /// file again for the gutter's run buttons.
     private struct JavaMainLocations {
@@ -510,6 +516,8 @@ public final class IDEWorkspace {
     }
     @ObservationIgnored private var javaMainLocations: JavaMainLocations?
     let httpSupport = IDEHTTPSupport()
+    /// Connections, schema and query results for this window. The connection list is shared.
+    let databaseSupport = IDEDatabaseSupport()
     var isMarkdownPreviewVisible = false
     /// The SwiftUI canvas is docked beside the editor (`IDEWorkspace+SwiftUIPreview.swift`).
     var isSwiftUIPreviewVisible = false
@@ -738,6 +746,7 @@ public final class IDEWorkspace {
         intelligenceServices.markdownFileMentions.setSource { [weak self] query, limit in
             await MainActor.run { self?.agentFileSuggestions(query: query, limit: limit) ?? [] }
         }
+        databaseSupport.sqlCompletionProvider = intelligenceServices.sqlCompletion
         let httpGlobals = httpSupport.globals
         intelligenceServices.httpCompletion.setGlobals { httpGlobals.snapshot() }
         intelligenceServices.httpCompletion.setSchemaStore(httpSupport.graphQLSchemas)
@@ -1006,6 +1015,7 @@ public final class IDEWorkspace {
         blame.cancelAll()
         changeMarkers.cancelAll()
         agent.teardown()
+        databaseSupport.closeAll()
         closeAllDiffSessions()
         closeAllDiagramSessions()
         closeAllProfileSessions()
@@ -4945,6 +4955,9 @@ public final class IDEWorkspace {
         pane.closeDocument(documentID)
         let stillOpen = workbench.panes.contains { $0.documents.contains { $0.id == documentID } }
         if !stillOpen {
+            if let closingDocument {
+                databaseSupport.closeConsole(workbenchID: documentID, documentID: closingDocument.documentID)
+            }
             closeHexSession(documentID)
             // Temporary injections die with the tab; comment injections need no cleanup.
             if let closingDocument {
@@ -6077,12 +6090,18 @@ public final class IDEWorkspace {
             runFileCanRun = false
         }
         runFileURL = fileURL
-        // One owner per editor for the gutter icons: HTTP files get send buttons, everything else
-        // goes through the Java path, which also clears the gutter for non-Java files.
-        if document?.languageIdentifier == "http" {
+        // One owner per editor for the gutter icons: query consoles get execute buttons, HTTP
+        // files get send buttons, everything else goes through the Java path, which also clears
+        // the gutter for non-Java files.
+        if let document, databaseSupport.consoles[document.id] != nil {
+            httpGutterStamp = nil
+            refreshDatabaseGutter(from: textView)
+        } else if document?.languageIdentifier == "http" {
+            databaseGutterStamp = nil
             refreshHTTPGutter(from: textView, fileURL: fileURL)
         } else {
             httpGutterStamp = nil
+            databaseGutterStamp = nil
             Task { await refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: isJava) }
         }
     }

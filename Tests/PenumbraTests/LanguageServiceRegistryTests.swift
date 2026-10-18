@@ -379,7 +379,7 @@ final class LanguageServiceRegistryTests: XCTestCase {
     func testUmbraRegistryKeepsTheEngineProviderOrder() {
         let languages = IDEIntelligenceServices().languages
         XCTAssertEqual(
-            languages.completionProviders.map(\.name), ["java", "javascript", "typescript", "swift", "markdown", "http"],
+            languages.completionProviders.map(\.name), ["java", "javascript", "typescript", "swift", "markdown", "sql", "http"],
             "one tiered completion provider per language, in registration order"
         )
         XCTAssertEqual(

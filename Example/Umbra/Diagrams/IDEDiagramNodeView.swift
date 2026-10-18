@@ -36,7 +36,7 @@ struct IDEDiagramNodeView: View {
     }
 
     private var showsCompartments: Bool {
-        node.kind.isType && node.kind != .externalType
+        (node.kind.isType && node.kind != .externalType) || node.kind == .table
     }
 
     private var headerHeight: CGFloat {
@@ -118,6 +118,7 @@ struct IDEDiagramNodeView: View {
         case .recordType: "R"
         case .annotationType: "@"
         case .externalType: "C"
+        case .table: "T"
         case .jsonObject: "{}"
         case .jsonArray: "[]"
         case .project, .library, .replacedLibrary, .unresolvedLibrary, .jsonValue: nil
