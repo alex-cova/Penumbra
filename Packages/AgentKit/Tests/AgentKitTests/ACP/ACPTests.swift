@@ -272,6 +272,19 @@ func acpPair() -> (ACPInMemoryTransport, ACPInMemoryTransport) { ACPInMemoryTran
         let caps = agent.lastInitializeParams.get()?["clientCapabilities"]?["fs"]
         #expect(caps?["readTextFile"]?.boolValue == false)
         #expect(caps?["writeTextFile"]?.boolValue == false)
+        #expect(agent.lastInitializeParams.get()?["clientCapabilities"]?["elicitation"] == nil)
+    }
+
+    @Test func elicitationAdvertisedOnlyWithAskText() async throws {
+        let (clientTransport, agentTransport) = acpPair()
+        let agent = await FakeACPAgent.make(transport: agentTransport)
+        let session = ACPClientSession(
+            transport: clientTransport,
+            hostServices: ACPHostServices(askText: { _ in nil }),
+            cwd: "/tmp/project")
+        _ = try? await session.newSession()
+        let caps = agent.lastInitializeParams.get()?["clientCapabilities"]
+        #expect(caps?["elicitation"]?["form"] != nil && caps?["elicitation"]?["form"] != .null)
     }
 
     @Test func handshakeRejectsNewerProtocol() async throws {

@@ -13,6 +13,10 @@ public struct ACPHostServices: Sendable {
     public var waitForTerminalExit: (@Sendable (_ terminalId: String) async throws -> ACPTerminalOutput)?
     public var killTerminal: (@Sendable (_ terminalId: String) async throws -> Void)?
     public var releaseTerminal: (@Sendable (_ terminalId: String) async throws -> Void)?
+    /// Free-text answers for agent `elicitation/create` forms. `nil` means the host cannot
+    /// elicit; the endpoint falls back to dismissing the question. Returning `nil` from the
+    /// closure declines the elicitation.
+    public var askText: (@Sendable (ACPElicitationPrompt) async -> String?)?
 
     public init(
         readTextFile: (@Sendable (ACPReadTextFileRequest) async throws -> String)? = nil,
@@ -21,7 +25,8 @@ public struct ACPHostServices: Sendable {
         terminalOutput: (@Sendable (_ terminalId: String) async throws -> ACPTerminalOutput)? = nil,
         waitForTerminalExit: (@Sendable (_ terminalId: String) async throws -> ACPTerminalOutput)? = nil,
         killTerminal: (@Sendable (_ terminalId: String) async throws -> Void)? = nil,
-        releaseTerminal: (@Sendable (_ terminalId: String) async throws -> Void)? = nil
+        releaseTerminal: (@Sendable (_ terminalId: String) async throws -> Void)? = nil,
+        askText: (@Sendable (ACPElicitationPrompt) async -> String?)? = nil
     ) {
         self.readTextFile = readTextFile
         self.writeTextFile = writeTextFile
@@ -30,12 +35,14 @@ public struct ACPHostServices: Sendable {
         self.waitForTerminalExit = waitForTerminalExit
         self.killTerminal = killTerminal
         self.releaseTerminal = releaseTerminal
+        self.askText = askText
     }
 
     public var clientCapabilities: ACPClientCapabilities {
         ACPClientCapabilities(
             fs: ACPFileSystemCapabilities(readTextFile: readTextFile != nil, writeTextFile: writeTextFile != nil),
-            terminal: createTerminal != nil)
+            terminal: createTerminal != nil,
+            elicitationForm: askText != nil)
     }
 }
 
@@ -466,6 +473,18 @@ public actor ACPClientSession {
         switch method {
         case "session/request_permission":
             return await handlePermissionRequest(params: params)
+        case "elicitation/create":
+            guard let askText = hostServices.askText else { return .failure(.methodNotFound(method)) }
+            guard let params else { return .failure(.invalidParams("Missing params.")) }
+            let prompt = ACPElicitationPrompt(
+                sessionId: params.string("sessionId"), toolCallId: params.string("toolCallId"),
+                title: params.string("title") ?? params["requestedSchema"]?.string("title") ?? "Input needed",
+                message: params.string("message") ?? "")
+            if stopRequested { return .success(.object(["action": "cancel"])) }
+            if let answer = await askText(prompt) {
+                return .success(ACPElicitationOutcome.acceptResponse(text: answer))
+            }
+            return .success(.object(["action": "decline"]))
         case "fs/read_text_file":
             guard let service = hostServices.readTextFile else { return .failure(.methodNotFound(method)) }
             guard let params else { return .failure(.invalidParams("Missing params.")) }

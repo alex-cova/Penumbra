@@ -57,16 +57,23 @@ public struct ACPFileSystemCapabilities: Sendable, Equatable {
 public struct ACPClientCapabilities: Sendable, Equatable {
     public var fs: ACPFileSystemCapabilities
     public var terminal: Bool
+    /// Whether the client renders form elicitation (`elicitation/create`).
+    public var elicitationForm: Bool
     public var meta: JSONValue?
-    public init(fs: ACPFileSystemCapabilities = .init(), terminal: Bool = false, meta: JSONValue? = nil) {
-        self.fs = fs; self.terminal = terminal; self.meta = meta
+    public init(fs: ACPFileSystemCapabilities = .init(), terminal: Bool = false, elicitationForm: Bool = false, meta: JSONValue? = nil) {
+        self.fs = fs; self.terminal = terminal; self.elicitationForm = elicitationForm; self.meta = meta
     }
     public var jsonValue: JSONValue {
-        acpObject([("fs", fs.jsonValue), ("terminal", .bool(terminal)), ("_meta", meta)])
+        acpObject([
+            ("fs", fs.jsonValue), ("terminal", .bool(terminal)),
+            ("elicitation", elicitationForm ? .object(["form": .object([:])]) : nil),
+            ("_meta", meta),
+        ])
     }
     public init(jsonValue: JSONValue?) {
         fs = ACPFileSystemCapabilities(jsonValue: jsonValue?["fs"])
         terminal = jsonValue?.bool("terminal") ?? false
+        elicitationForm = jsonValue?["elicitation"]?["form"] != nil && jsonValue?["elicitation"]?["form"] != .null
         meta = jsonValue?.meta
     }
 }
@@ -669,6 +676,57 @@ public struct ACPCreateTerminalRequest: Sendable, Equatable {
             return (name: name, value: value)
         }
         outputByteLimit = jsonValue.int("outputByteLimit")
+    }
+}
+
+/// Free-text (and structured) user input over `elicitation/create` (form mode).
+public struct ACPElicitationPrompt: Sendable, Equatable {
+    public var sessionId: String?
+    public var toolCallId: String?
+    public var title: String
+    public var message: String
+    public init(sessionId: String? = nil, toolCallId: String? = nil, title: String, message: String = "") {
+        self.sessionId = sessionId; self.toolCallId = toolCallId; self.title = title; self.message = message
+    }
+}
+
+public enum ACPElicitationOutcome: Sendable, Equatable {
+    case accept(content: [String: JSONValue]?)
+    case decline
+    case cancel
+
+    /// The accepted free-text answer under the endpoint's single-field form, if any.
+    public var acceptedText: String? {
+        guard case .accept(let content) = self else { return nil }
+        return content?["answer"]?.stringValue
+    }
+
+    public init(jsonValue: JSONValue) {
+        switch jsonValue.string("action") {
+        case "accept": self = .accept(content: jsonValue["content"]?.objectValue)
+        case "decline": self = .decline
+        default: self = .cancel
+        }
+    }
+
+    /// A single-string-field form request for `elicitation/create`.
+    public static func formRequest(prompt: ACPElicitationPrompt, field: String = "answer") -> JSONValue {
+        var object: [String: JSONValue] = [
+            "message": .string(prompt.message.isEmpty ? prompt.title : prompt.message),
+            "mode": "form",
+            "requestedSchema": .object([
+                "type": "object", "title": .string(prompt.title),
+                "properties": .object([field: .object(["type": "string", "description": .string(prompt.message)])]),
+                "required": .array([.string(field)]),
+            ]),
+        ]
+        if let sessionId = prompt.sessionId { object["sessionId"] = .string(sessionId) }
+        if let toolCallId = prompt.toolCallId { object["toolCallId"] = .string(toolCallId) }
+        return .object(object)
+    }
+
+    public static func acceptResponse(text: String, field: String = "answer") -> JSONValue {
+        .object(["action": "accept", "content": .object([field: .string(text)])])
     }
 }
 
