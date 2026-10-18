@@ -5,11 +5,29 @@ import SwiftUI
 
 struct IDEPreferencesJavaPane: View {
     @Bindable var preferences: IDEPreferences
-    @Environment(IDEWorkspace.self) private var workspace
 
+    /// One section per concern, each reading only its own preferences. With Observation,
+    /// typing in a text field re-evaluates that section alone instead of the whole page.
     var body: some View {
         IDEPreferencesJDKSection()
+        IDEJavaGradleSection(preferences: preferences)
+        IDEJavaMavenSection(preferences: preferences)
+        IDEJavaRunSection(preferences: preferences)
+        IDEJavaCoverageSection(preferences: preferences)
+        IDEJavaProfilingSection(preferences: preferences)
+        IDEJavaAnalysisSection(preferences: preferences)
+        IDEJavaPostfixSection(preferences: preferences)
+        IDEJavaImportsSection(preferences: preferences)
+        IDEJavaGutterIconsSection(preferences: preferences)
+        IDEPreferencesIntentionsPane(preferences: preferences)
+        IDEPreferencesInspectionsPane(preferences: preferences)
+    }
+}
 
+private struct IDEJavaGradleSection: View {
+    @Bindable var preferences: IDEPreferences
+
+    var body: some View {
         IDESettingsSection(
             "Gradle",
             footer: "Resolves modules and dependencies when a Gradle project opens. Build scripts still run only after you trust the project. A first sync may download a Gradle distribution."
@@ -25,7 +43,13 @@ struct IDEPreferencesJavaPane: View {
                 valueSuffix: "s"
             )
         }
+    }
+}
 
+private struct IDEJavaMavenSection: View {
+    @Bindable var preferences: IDEPreferences
+
+    var body: some View {
         IDESettingsSection(
             "Maven",
             footer: "Reading POMs needs no trust. Goals and downloads run only after you trust the project."
@@ -63,7 +87,13 @@ struct IDEPreferencesJavaPane: View {
                 valueSuffix: "s"
             )
         }
+    }
+}
 
+private struct IDEJavaRunSection: View {
+    @Bindable var preferences: IDEPreferences
+
+    var body: some View {
         IDESettingsSection(
             "Run",
             footer: "Running a class or a test from its gutter button makes a temporary run configuration. Only the newest few are kept, shown faded in the run picker; Save Configuration keeps one for good."
@@ -75,7 +105,14 @@ struct IDEPreferencesJavaPane: View {
                 valueWidth: 32
             )
         }
+    }
+}
 
+private struct IDEJavaCoverageSection: View {
+    @Bindable var preferences: IDEPreferences
+    @Environment(IDEWorkspace.self) private var workspace
+
+    var body: some View {
         IDESettingsSection(
             "Coverage",
             footer: "Run ▸ Run with Coverage starts the program or the tests with the JaCoCo agent and paints the lines the run executed. Editing a file removes its colours, since they describe the text that ran."
@@ -105,7 +142,14 @@ struct IDEPreferencesJavaPane: View {
             )
             IDESettingsToggle("Open the Coverage Tab After a Run", isOn: $preferences.javaCoverageOpensWindow)
         }
+    }
+}
 
+private struct IDEJavaProfilingSection: View {
+    @Bindable var preferences: IDEPreferences
+    @Environment(IDEWorkspace.self) private var workspace
+
+    var body: some View {
         IDESettingsSection(
             "Profiling",
             footer: "Profile uses Java Flight Recorder, which comes with the JDK (Java 11 or newer). Nothing is attached to a running program: the recording is made by the JVM Umbra starts. 0 keeps the recording settings' own value; the period, allocation rate and wait threshold need Java 17, and a custom .jfc file carries them on older JDKs."
@@ -187,7 +231,14 @@ struct IDEPreferencesJavaPane: View {
                 valueSuffix: "MB"
             )
         }
+    }
+}
 
+private struct IDEJavaAnalysisSection: View {
+    @Bindable var preferences: IDEPreferences
+    @Environment(IDEWorkspace.self) private var workspace
+
+    var body: some View {
         IDESettingsSection("Analysis") {
             IDESettingsToggle(
                 "Compiler Diagnostics",
@@ -248,7 +299,14 @@ struct IDEPreferencesJavaPane: View {
                 detail: "Draws inlay hints in the editor font, one point smaller, instead of the system font."
             )
         }
+    }
+}
 
+private struct IDEJavaPostfixSection: View {
+    @Bindable var preferences: IDEPreferences
+    @Environment(IDEWorkspace.self) private var workspace
+
+    var body: some View {
         IDESettingsSection(
             "Postfix Completion",
             footer: "The expansion key applies a template when the caret is just after .key and the popup is closed. A word that is not a template is typed normally. ⌘J in the IntelliJ keymap lists the templates that apply at the caret."
@@ -267,12 +325,178 @@ struct IDEPreferencesJavaPane: View {
                 }
             }
             .disabled(!preferences.javaPostfix.isEnabled)
-            postfixCustomTemplates
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
+                Text("Custom Templates")
+                    .font(IDEAppearance.Typography.body.weight(.semibold))
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                ForEach(preferences.javaPostfix.customTemplates) { template in
+                    IDEPostfixCustomTemplateRow(preferences: preferences, templateID: template.id)
+                }
+                Button("Add Template") {
+                    updatePostfix { $0.customTemplates.append(JavaPostfixCustomTemplate(key: "")) }
+                }
+                .disabled(!preferences.javaPostfix.isEnabled)
+            }
+            .disabled(!preferences.javaPostfix.isEnabled)
         }
         .onChange(of: preferences.javaPostfix) {
             workspace.applyPreferencesToAllHosts()
         }
+    }
 
+    private var postfixEnabled: Binding<Bool> {
+        Binding {
+            preferences.javaPostfix.isEnabled
+        } set: { isOn in
+            updatePostfix { $0.isEnabled = isOn }
+        }
+    }
+
+    private var postfixExpansionKey: Binding<PostfixExpansionKey> {
+        Binding {
+            preferences.javaPostfix.expansionKey
+        } set: { key in
+            updatePostfix { $0.expansionKey = key }
+        }
+    }
+
+    private func postfixKeyBinding(_ key: String) -> Binding<Bool> {
+        Binding {
+            !preferences.javaPostfix.disabledKeys.contains(key)
+        } set: { isOn in
+            updatePostfix { configuration in
+                if isOn {
+                    configuration.disabledKeys.removeAll { $0 == key }
+                } else if !configuration.disabledKeys.contains(key) {
+                    configuration.disabledKeys.append(key)
+                    configuration.disabledKeys.sort()
+                }
+            }
+        }
+    }
+
+    private func updatePostfix(_ change: (inout JavaPostfixConfiguration) -> Void) {
+        var configuration = preferences.javaPostfix
+        change(&configuration)
+        preferences.javaPostfix = configuration
+    }
+}
+
+/// One user-written postfix template. A stable identity per template id, so editing one
+/// template's fields does not rebuild the rows of the others.
+private struct IDEPostfixCustomTemplateRow: View {
+    @Bindable var preferences: IDEPreferences
+    let templateID: UUID
+
+    private var template: JavaPostfixCustomTemplate {
+        preferences.javaPostfix.customTemplates.first { $0.id == templateID }
+            ?? JavaPostfixCustomTemplate(key: "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            HStack {
+                TextField("Key", text: templateBinding(\.key))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 120)
+                Picker("Applies to", selection: postfixApplicableTag) {
+                    Text("Any").tag("any")
+                    Text("Boolean").tag("boolean")
+                    Text("Non-void").tag("nonVoid")
+                    Text("Iterable").tag("iterable")
+                    Text("Array").tag("array")
+                    Text("String").tag("string")
+                    Text("Number").tag("number")
+                    Text("Class").tag("class")
+                }
+                .labelsHidden()
+                .frame(width: 140)
+                Spacer()
+                Button("Remove") {
+                    updatePostfix { $0.customTemplates.removeAll { $0.id == templateID } }
+                }
+            }
+            if case .qualifiedClass = template.applicable {
+                TextField("Qualified class", text: postfixQualifiedClass)
+                    .textFieldStyle(.roundedBorder)
+            }
+            TextField("Body ($EXPR$ is the receiver)", text: templateBinding(\.body), axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...6)
+            Toggle("Apply to the topmost expression", isOn: templateBinding(\.topmost))
+                .toggleStyle(.checkbox)
+            Toggle("Use static import if possible", isOn: templateBinding(\.useStaticImport))
+                .toggleStyle(.checkbox)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func templateBinding<Value>(_ keyPath: WritableKeyPath<JavaPostfixCustomTemplate, Value>) -> Binding<Value> {
+        Binding {
+            template[keyPath: keyPath]
+        } set: { newValue in
+            updatePostfix { configuration in
+                guard let index = configuration.customTemplates.firstIndex(where: { $0.id == templateID }) else { return }
+                configuration.customTemplates[index][keyPath: keyPath] = newValue
+            }
+        }
+    }
+
+    private var postfixApplicableTag: Binding<String> {
+        Binding {
+            switch template.applicable {
+            case .any: return "any"
+            case .boolean: return "boolean"
+            case .nonVoid: return "nonVoid"
+            case .iterable: return "iterable"
+            case .array: return "array"
+            case .string: return "string"
+            case .number: return "number"
+            case .qualifiedClass: return "class"
+            }
+        } set: { tag in
+            updatePostfix { configuration in
+                guard let index = configuration.customTemplates.firstIndex(where: { $0.id == templateID }) else { return }
+                let current = configuration.customTemplates[index].applicable
+                configuration.customTemplates[index].applicable = switch tag {
+                case "boolean": .boolean
+                case "nonVoid": .nonVoid
+                case "iterable": .iterable
+                case "array": .array
+                case "string": .string
+                case "number": .number
+                case "class":
+                    if case .qualifiedClass(let name) = current { .qualifiedClass(name) } else { .qualifiedClass("") }
+                default: .any
+                }
+            }
+        }
+    }
+
+    private var postfixQualifiedClass: Binding<String> {
+        Binding {
+            guard case .qualifiedClass(let name) = template.applicable else { return "" }
+            return name
+        } set: { name in
+            updatePostfix { configuration in
+                guard let index = configuration.customTemplates.firstIndex(where: { $0.id == templateID }) else { return }
+                configuration.customTemplates[index].applicable = .qualifiedClass(name)
+            }
+        }
+    }
+
+    private func updatePostfix(_ change: (inout JavaPostfixConfiguration) -> Void) {
+        var configuration = preferences.javaPostfix
+        change(&configuration)
+        preferences.javaPostfix = configuration
+    }
+}
+
+private struct IDEJavaImportsSection: View {
+    @Bindable var preferences: IDEPreferences
+    @Environment(IDEWorkspace.self) private var workspace
+
+    var body: some View {
         IDESettingsSection(
             "Imports",
             footer: "An unresolved type is imported after a pause when only one class matches. Several matches stay for Show Context Actions. A package becomes a star import at the class count, and one class's static imports at the names count. 999 never collapses. Excluded classes and packages are never imported or offered."
@@ -349,172 +573,38 @@ struct IDEPreferencesJavaPane: View {
                 workspace.applyCodeInsightPreferences()
             }
         }
+    }
+}
 
+private struct IDEJavaGutterIconsSection: View {
+    @Bindable var preferences: IDEPreferences
+    @Environment(IDEWorkspace.self) private var workspace
+
+    /// The order never changes; sorting per body evaluation wasted a pass on every keystroke.
+    private static let sortedKinds = JavaLineMarkerKind.allCases.sorted { $0.preferenceTitle < $1.preferenceTitle }
+    /// One vector image per kind, shared by every evaluation. The glyphs resolve their colours
+    /// at draw time, so a cached image stays correct in light and dark mode.
+    private static let glyphImages: [JavaLineMarkerKind: NSImage] = Dictionary(
+        uniqueKeysWithValues: sortedKinds.map { ($0, GutterLineMarkerGlyphs.image(for: $0.gutterIcon, pointSize: 14)) }
+    )
+
+    var body: some View {
         IDESettingsSection(
             "Gutter Icons",
             footer: "Icons beside the line numbers for methods that implement or override another, types and methods that project subclasses implement or override, and recursive calls. Click an arrow to jump to the related declarations."
         ) {
-            ForEach(JavaLineMarkerKind.allCases.sorted { $0.preferenceTitle < $1.preferenceTitle }, id: \.self) { kind in
+            ForEach(Self.sortedKinds, id: \.self) { kind in
                 Toggle(isOn: gutterIconBinding(kind)) {
                     Label {
                         Text(kind.preferenceTitle)
                             .foregroundStyle(IDEAppearance.ColorToken.foreground)
                     } icon: {
-                        Image(nsImage: GutterLineMarkerGlyphs.image(for: kind.gutterIcon, pointSize: 14))
+                        if let image = Self.glyphImages[kind] {
+                            Image(nsImage: image)
+                        }
                     }
                 }
                 .toggleStyle(.checkbox)
-            }
-        }
-
-        IDEPreferencesIntentionsPane(preferences: preferences)
-
-        IDEPreferencesInspectionsPane(preferences: preferences)
-    }
-
-    private var postfixEnabled: Binding<Bool> {
-        Binding {
-            preferences.javaPostfix.isEnabled
-        } set: { isOn in
-            updatePostfix { $0.isEnabled = isOn }
-        }
-    }
-
-    private var postfixExpansionKey: Binding<PostfixExpansionKey> {
-        Binding {
-            preferences.javaPostfix.expansionKey
-        } set: { key in
-            updatePostfix { $0.expansionKey = key }
-        }
-    }
-
-    private func postfixKeyBinding(_ key: String) -> Binding<Bool> {
-        Binding {
-            !preferences.javaPostfix.disabledKeys.contains(key)
-        } set: { isOn in
-            updatePostfix { configuration in
-                if isOn {
-                    configuration.disabledKeys.removeAll { $0 == key }
-                } else if !configuration.disabledKeys.contains(key) {
-                    configuration.disabledKeys.append(key)
-                    configuration.disabledKeys.sort()
-                }
-            }
-        }
-    }
-
-    private func updatePostfix(_ change: (inout JavaPostfixConfiguration) -> Void) {
-        var configuration = preferences.javaPostfix
-        change(&configuration)
-        preferences.javaPostfix = configuration
-    }
-
-    private var postfixCustomTemplates: some View {
-        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
-            Text("Custom Templates")
-                .font(IDEAppearance.Typography.body.weight(.semibold))
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
-            ForEach(preferences.javaPostfix.customTemplates) { template in
-                postfixCustomTemplate(template)
-            }
-            Button("Add Template") {
-                updatePostfix { $0.customTemplates.append(JavaPostfixCustomTemplate(key: "")) }
-            }
-            .disabled(!preferences.javaPostfix.isEnabled)
-        }
-        .disabled(!preferences.javaPostfix.isEnabled)
-    }
-
-    private func postfixCustomTemplate(_ template: JavaPostfixCustomTemplate) -> some View {
-        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
-            HStack {
-                TextField("Key", text: postfixTemplateBinding(template.id, \.key))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 120)
-                Picker("Applies to", selection: postfixApplicableTag(template.id)) {
-                    Text("Any").tag("any")
-                    Text("Boolean").tag("boolean")
-                    Text("Non-void").tag("nonVoid")
-                    Text("Iterable").tag("iterable")
-                    Text("Array").tag("array")
-                    Text("String").tag("string")
-                    Text("Number").tag("number")
-                    Text("Class").tag("class")
-                }
-                .labelsHidden()
-                .frame(width: 140)
-                Spacer()
-                Button("Remove") {
-                    updatePostfix { $0.customTemplates.removeAll { $0.id == template.id } }
-                }
-            }
-            if case .qualifiedClass = template.applicable {
-                TextField("Qualified class", text: postfixQualifiedClass(template.id))
-                    .textFieldStyle(.roundedBorder)
-            }
-            TextField("Body ($EXPR$ is the receiver)", text: postfixTemplateBinding(template.id, \.body), axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(2...6)
-            Toggle("Apply to the topmost expression", isOn: postfixTemplateBinding(template.id, \.topmost))
-                .toggleStyle(.checkbox)
-            Toggle("Use static import if possible", isOn: postfixTemplateBinding(template.id, \.useStaticImport))
-                .toggleStyle(.checkbox)
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func postfixTemplateBinding<Value>(_ id: UUID, _ keyPath: WritableKeyPath<JavaPostfixCustomTemplate, Value>) -> Binding<Value> {
-        Binding {
-            preferences.javaPostfix.customTemplates.first { $0.id == id }?[keyPath: keyPath] ?? JavaPostfixCustomTemplate(key: "")[keyPath: keyPath]
-        } set: { newValue in
-            updatePostfix { configuration in
-                guard let index = configuration.customTemplates.firstIndex(where: { $0.id == id }) else { return }
-                configuration.customTemplates[index][keyPath: keyPath] = newValue
-            }
-        }
-    }
-
-    private func postfixApplicableTag(_ id: UUID) -> Binding<String> {
-        Binding {
-            guard let template = preferences.javaPostfix.customTemplates.first(where: { $0.id == id }) else { return "any" }
-            switch template.applicable {
-            case .any: return "any"
-            case .boolean: return "boolean"
-            case .nonVoid: return "nonVoid"
-            case .iterable: return "iterable"
-            case .array: return "array"
-            case .string: return "string"
-            case .number: return "number"
-            case .qualifiedClass: return "class"
-            }
-        } set: { tag in
-            updatePostfix { configuration in
-                guard let index = configuration.customTemplates.firstIndex(where: { $0.id == id }) else { return }
-                let current = configuration.customTemplates[index].applicable
-                configuration.customTemplates[index].applicable = switch tag {
-                case "boolean": .boolean
-                case "nonVoid": .nonVoid
-                case "iterable": .iterable
-                case "array": .array
-                case "string": .string
-                case "number": .number
-                case "class":
-                    if case .qualifiedClass(let name) = current { .qualifiedClass(name) } else { .qualifiedClass("") }
-                default: .any
-                }
-            }
-        }
-    }
-
-    private func postfixQualifiedClass(_ id: UUID) -> Binding<String> {
-        Binding {
-            guard let template = preferences.javaPostfix.customTemplates.first(where: { $0.id == id }),
-                  case .qualifiedClass(let name) = template.applicable else { return "" }
-            return name
-        } set: { name in
-            updatePostfix { configuration in
-                guard let index = configuration.customTemplates.firstIndex(where: { $0.id == id }) else { return }
-                configuration.customTemplates[index].applicable = .qualifiedClass(name)
             }
         }
     }

@@ -56,10 +56,13 @@ struct IDEPreferencesIntentionsPane: View {
                 }
             }
             let selected = intentions.filter { $0.category == selectedCategory }
-            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
+            // Lazy: rows below the fold are not realized while scrolling. The rows hold
+            // no state themselves (it lives in this pane, which stays mounted), so
+            // scrolling away and back loses nothing.
+            LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
                 groupToggle(selectedCategory, intentions: selected)
                 ForEach(selected) { intention in
-                    row(intention)
+                    IDEIntentionSettingsRow(preferences: preferences, intention: intention)
                 }
             }
         }
@@ -85,9 +88,31 @@ struct IDEPreferencesIntentionsPane: View {
         .foregroundStyle(IDEAppearance.ColorToken.muted)
     }
 
-    private func row(_ intention: JavaIntention) -> some View {
+    private func focusRequested() {
+        guard let id = workspace.focusedIntentionID, let intention = JavaIntention.named(id) else { return }
+        workspace.focusedIntentionID = nil
+        query = ""
+        selectedCategory = intention.category
+    }
+
+    private func ensureVisibleSelection() {
+        let intentions = matching
+        guard !intentions.contains(where: { $0.category == selectedCategory }) else { return }
+        if let first = JavaIntentionCategory.allCases.first(where: { category in intentions.contains { $0.category == category } }) {
+            selectedCategory = first
+        }
+    }
+}
+
+/// One intention with its description and before/after example. A stable identity per
+/// intention id, so toggling one row does not rebuild the others.
+private struct IDEIntentionSettingsRow: View {
+    @Bindable var preferences: IDEPreferences
+    let intention: JavaIntention
+
+    var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
-            Toggle(intention.title, isOn: enabled(intention))
+            Toggle(intention.title, isOn: enabled)
                 .toggleStyle(.checkbox)
             Text(intention.summary)
                 .font(IDEAppearance.Typography.caption)
@@ -113,7 +138,7 @@ struct IDEPreferencesIntentionsPane: View {
         }
     }
 
-    private func enabled(_ intention: JavaIntention) -> Binding<Bool> {
+    private var enabled: Binding<Bool> {
         Binding {
             !preferences.javaDisabledIntentions.contains(intention.id)
         } set: { isOn in
@@ -122,21 +147,6 @@ struct IDEPreferencesIntentionsPane: View {
             } else {
                 preferences.javaDisabledIntentions.insert(intention.id)
             }
-        }
-    }
-
-    private func focusRequested() {
-        guard let id = workspace.focusedIntentionID, let intention = JavaIntention.named(id) else { return }
-        workspace.focusedIntentionID = nil
-        query = ""
-        selectedCategory = intention.category
-    }
-
-    private func ensureVisibleSelection() {
-        let intentions = matching
-        guard !intentions.contains(where: { $0.category == selectedCategory }) else { return }
-        if let first = JavaIntentionCategory.allCases.first(where: { category in intentions.contains { $0.category == category } }) {
-            selectedCategory = first
         }
     }
 }

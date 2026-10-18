@@ -105,6 +105,10 @@ struct IDEPreferencesInspectionsPane: View {
     /// bar and the filters above stay shared, so they keep applying while the group changes.
     private var groupPickerAndRules: some View {
         let rules = matchingRules
+        // Read once: every per-rule lookup below reuses these instead of re-resolving the
+        // profile (and rebuilding all 257 thresholds) for each row.
+        let currentProfile = profile
+        let thresholds = currentProfile.thresholds
         let groups = JavaInspectionGroup.allCases.filter { group in rules.contains { $0.group == group } }
         return Group {
             if groups.isEmpty {
@@ -115,15 +119,24 @@ struct IDEPreferencesInspectionsPane: View {
                 Picker("Group", selection: $selectedGroup) {
                     ForEach(groups, id: \.self) { group in
                         let groupRules = rules.filter { $0.group == group }
-                        let enabled = groupRules.filter { profile.isEnabled($0) }.count
+                        let enabled = groupRules.filter { currentProfile.isEnabled($0) }.count
                         Text("\(group.title) (\(enabled)/\(groupRules.count))").tag(group)
                     }
                 }
                 let selectedRules = rules.filter { $0.group == selectedGroup }
-                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
-                    groupToggle(selectedGroup, rules: selectedRules)
+                // Lazy: rule rows below the fold are not realized while scrolling. Rows
+                // hold no state themselves (it lives in this pane, which stays mounted),
+                // so scrolling away and back loses filter, selection and scopes.
+                LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
+                    groupToggle(selectedGroup, rules: selectedRules, profile: currentProfile)
                     ForEach(selectedRules, id: \.self) { rule in
-                        row(for: rule)
+                        IDEInspectionSettingsRuleRow(
+                            rule: rule,
+                            profile: currentProfile,
+                            thresholds: thresholds,
+                            expandedScopes: $expandedScopes,
+                            edit: edit
+                        )
                     }
                 }
             }
@@ -262,8 +275,7 @@ struct IDEPreferencesInspectionsPane: View {
 
     // MARK: Groups and rules
 
-    private func groupToggle(_ group: JavaInspectionGroup, rules: [JavaInspectionRule]) -> some View {
-        let profile = profile
+    private func groupToggle(_ group: JavaInspectionGroup, rules: [JavaInspectionRule], profile: JavaInspectionProfile) -> some View {
         let enabledCount = rules.filter { profile.isEnabled($0) }.count
         let symbol = enabledCount == rules.count ? "checkmark.square.fill" : (enabledCount == 0 ? "square" : "minus.square.fill")
         return Button {
@@ -279,13 +291,50 @@ struct IDEPreferencesInspectionsPane: View {
         .foregroundStyle(IDEAppearance.ColorToken.muted)
     }
 
-    private func row(for rule: JavaInspectionRule) -> some View {
-        let profile = profile
-        let resolution = profile.resolution(of: rule)
-        let overrides = profile.scopedOverrides.filter { $0.code == rule.code }
-        return VStack(alignment: .leading, spacing: 2) {
+    // MARK: Bindings
+
+    private var publicApiBinding: Binding<Bool> {
+        Binding {
+            profile.treatsPublicApiAsUsed
+        } set: { value in
+            edit { $0.treatsPublicApiAsUsed = value }
+        }
+    }
+
+}
+
+private extension JavaInspection.Severity {
+    var settingsTitle: String {
+        switch self {
+        case .error: "Error"
+        case .warning: "Warning"
+        case .weakWarning: "Weak Warning"
+        case .info: "Consideration"
+        case .noHighlighting: "No highlighting (fix available)"
+        }
+    }
+}
+
+/// One inspection rule with its on/off switch, severity, tunable limit and per-scope
+/// exceptions. A stable identity per rule, so editing one row does not rebuild the others.
+/// `profile` and `thresholds` arrive resolved once per group from the parent instead of
+/// being re-resolved (and, for thresholds, rebuilt over all 257 rules) in every row.
+private struct IDEInspectionSettingsRuleRow: View {
+    let rule: JavaInspectionRule
+    let profile: JavaInspectionProfile
+    let thresholds: JavaInspectionThresholds
+    @Binding var expandedScopes: Set<String>
+    let edit: ((inout JavaInspectionProfile) -> Void) -> Void
+
+    private var resolution: JavaInspectionProfile.Resolution { profile.resolution(of: rule) }
+    private var overrides: [JavaInspectionProfile.ScopedOverride] {
+        profile.scopedOverrides.filter { $0.code == rule.code }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: IDEAppearance.Spacing.md) {
-                Toggle(rule.title, isOn: enabledBinding(rule))
+                Toggle(rule.title, isOn: enabledBinding)
                     .toggleStyle(.checkbox)
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 if rule.hasQuickFix {
@@ -296,7 +345,7 @@ struct IDEPreferencesInspectionsPane: View {
                         .accessibilityLabel("Has a quick fix")
                 }
                 Spacer(minLength: IDEAppearance.Spacing.md)
-                Picker("Severity", selection: severityBinding(rule)) {
+                Picker("Severity", selection: severityBinding) {
                     ForEach(JavaInspection.Severity.allCases, id: \.self) { severity in
                         Text(severity.settingsTitle).tag(severity)
                     }
@@ -312,20 +361,21 @@ struct IDEPreferencesInspectionsPane: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 20)
             if let limit = rule.limit {
-                Stepper(value: limitBinding(rule), in: limit.range, step: limit.step) {
-                    Text("\(limit.label): \(profile.thresholds.value(for: rule))")
+                Stepper(value: limitBinding, in: limit.range, step: limit.step) {
+                    Text("\(limit.label): \(thresholds.value(for: rule))")
                         .font(IDEAppearance.Typography.caption)
                         .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 }
                 .disabled(!resolution.isEnabled)
                 .padding(.leading, 20)
             }
-            scopes(for: rule, overrides: overrides)
+            scopes
         }
     }
 
-    private func scopes(for rule: JavaInspectionRule, overrides: [JavaInspectionProfile.ScopedOverride]) -> some View {
+    private var scopes: some View {
         let isOpen = expandedScopes.contains(rule.code)
+        let overrides = overrides
         return VStack(alignment: .leading, spacing: 4) {
             Button {
                 if isOpen { expandedScopes.remove(rule.code) } else { expandedScopes.insert(rule.code) }
@@ -344,8 +394,8 @@ struct IDEPreferencesInspectionsPane: View {
                     scopeRow(override)
                 }
                 Menu("Add Scope") {
-                    Button("Tests") { addScope(.tests, for: rule) }
-                    Button("Files Matching…") { addScope(.glob("**/generated/**"), for: rule) }
+                    Button("Tests") { addScope(.tests) }
+                    Button("Files Matching…") { addScope(.glob("**/generated/**")) }
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -405,7 +455,7 @@ struct IDEPreferencesInspectionsPane: View {
         .padding(.leading, 36)
     }
 
-    private func addScope(_ scope: JavaInspectionProfile.Scope, for rule: JavaInspectionRule) {
+    private func addScope(_ scope: JavaInspectionProfile.Scope) {
         edit { $0.scopedOverrides.append(.init(code: rule.code, scope: scope, isEnabled: false)) }
         expandedScopes.insert(rule.code)
     }
@@ -426,9 +476,7 @@ struct IDEPreferencesInspectionsPane: View {
         }
     }
 
-    // MARK: Bindings
-
-    private func enabledBinding(_ rule: JavaInspectionRule) -> Binding<Bool> {
+    private var enabledBinding: Binding<Bool> {
         Binding {
             profile.isEnabled(rule)
         } set: { isOn in
@@ -436,39 +484,19 @@ struct IDEPreferencesInspectionsPane: View {
         }
     }
 
-    private var publicApiBinding: Binding<Bool> {
+    private var limitBinding: Binding<Int> {
         Binding {
-            profile.treatsPublicApiAsUsed
-        } set: { value in
-            edit { $0.treatsPublicApiAsUsed = value }
-        }
-    }
-
-    private func limitBinding(_ rule: JavaInspectionRule) -> Binding<Int> {
-        Binding {
-            profile.thresholds.value(for: rule)
+            thresholds.value(for: rule)
         } set: { value in
             edit { $0.setLimit(value, for: rule) }
         }
     }
 
-    private func severityBinding(_ rule: JavaInspectionRule) -> Binding<JavaInspection.Severity> {
+    private var severityBinding: Binding<JavaInspection.Severity> {
         Binding {
             profile.resolution(of: rule).severity
         } set: { severity in
             edit { $0.setSeverity(severity, for: rule) }
-        }
-    }
-}
-
-private extension JavaInspection.Severity {
-    var settingsTitle: String {
-        switch self {
-        case .error: "Error"
-        case .warning: "Warning"
-        case .weakWarning: "Weak Warning"
-        case .info: "Consideration"
-        case .noHighlighting: "No highlighting (fix available)"
         }
     }
 }

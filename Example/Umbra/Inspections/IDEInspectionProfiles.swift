@@ -44,7 +44,7 @@ final class IDEInspectionProfiles {
         self.defaults = defaults
         self.preferences = preferences
         selectedName = defaults.string(forKey: Self.selectedKey) ?? Self.defaultName
-        reload()
+        custom = Self.loadAll(from: directory)
         if selectedName != Self.defaultName, custom[selectedName] == nil { selectedName = Self.defaultName }
     }
 
@@ -131,17 +131,36 @@ final class IDEInspectionProfiles {
         revision += 1
     }
 
-    /// Re-reads the profile files (they may have been copied in or edited).
+    /// Re-reads the profile files (they may have been copied in or edited). The directory
+    /// scan and JSON decoding run off the main thread; the publish back onto it bumps `revision`
+    /// only when something actually changed, so an unchanged reload never re-renders anyone.
     func reload() {
+        let directory = directory
+        let previous = custom
+        Task.detached(priority: .utility) {
+            let loaded = Self.loadAll(from: directory)
+            await self.applyReloaded(loaded, previous: previous)
+        }
+    }
+
+    /// The synchronous read both `init` (one folder, once) and the background `reload` share.
+    private nonisolated static func loadAll(from directory: URL) -> [String: JavaInspectionProfile] {
         var loaded: [String: JavaInspectionProfile] = [:]
         let urls = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
         for url in urls where url.pathExtension == "json" {
             guard let data = try? Data(contentsOf: url), var profile = try? JSONDecoder().decode(JavaInspectionProfile.self, from: data)
             else { continue }
-            if profile.name.isEmpty || profile.name == Self.defaultName { profile.name = url.deletingPathExtension().lastPathComponent }
-            if profile.name == Self.defaultName { continue }
+            if profile.name.isEmpty || profile.name == JavaInspectionProfile.defaultName { profile.name = url.deletingPathExtension().lastPathComponent }
+            if profile.name == JavaInspectionProfile.defaultName { continue }
             loaded[profile.name] = profile
         }
+        return loaded
+    }
+
+    private func applyReloaded(_ loaded: [String: JavaInspectionProfile], previous: [String: JavaInspectionProfile]) {
+        // A save, rename or delete landed while the scan was in flight: that change already
+        // bumped `revision`, and this snapshot is older than it, so dropping it cannot lose work.
+        guard custom == previous else { return }
         guard loaded != custom else { return }
         custom = loaded
         revision += 1

@@ -31,7 +31,7 @@ struct IDEPreferencesJDKSection: View {
                         if index > 0 {
                             Divider().overlay(IDEAppearance.ColorToken.border)
                         }
-                        row(for: installation)
+                        IDEJDKSettingsRow(installation: installation, jdk: jdk, onRemoveRequest: remove)
                             .padding(.vertical, IDEAppearance.Spacing.sm)
                     }
                 }
@@ -72,73 +72,6 @@ struct IDEPreferencesJDKSection: View {
         }
     }
 
-    private func row(for installation: JDKInstallation) -> some View {
-        let missing = jdk.isMissing(installation)
-        return HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: IDEAppearance.Spacing.xs) {
-                    Text(installation.displayName)
-                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                    ForEach(badges(for: installation, missing: missing), id: \.self) { badge in
-                        Text(badge)
-                            .font(.caption2)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(IDEAppearance.ColorToken.card, in: Capsule())
-                            .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    }
-                }
-                Text(installation.home.path)
-                    .font(IDEAppearance.Typography.monoCaption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: IDEAppearance.Spacing.sm)
-            Button {
-                NSWorkspace.shared.activateFileViewerSelecting([installation.home])
-            } label: {
-                Image(systemName: "magnifyingglass")
-            }
-            .buttonStyle(.borderless)
-            .help("Reveal in Finder")
-            .accessibilityLabel("Reveal \(installation.displayName) in Finder")
-            .disabled(missing)
-            if jdk.isUserAdded(installation) {
-                Button {
-                    remove(installation)
-                } label: {
-                    Image(systemName: "minus.circle")
-                }
-                .buttonStyle(.borderless)
-                .help("Remove from the list")
-                .accessibilityLabel("Remove \(installation.displayName)")
-            }
-        }
-        .contextMenu {
-            Button("Use as Default") { jdk.chooseAsDefault(installation) }
-                .disabled(jdk.isDefault(installation))
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([installation.home])
-            }
-            .disabled(missing)
-            if jdk.isUserAdded(installation) {
-                Divider()
-                Button("Remove…") { remove(installation) }
-            }
-        }
-    }
-
-    private func badges(for installation: JDKInstallation, missing: Bool) -> [String] {
-        var badges: [String] = []
-        if jdk.isDefault(installation) { badges.append("Default") }
-        if jdk.isInUse(installation) { badges.append("In use") }
-        if jdk.isUserAdded(installation) { badges.append("Added by you") }
-        if !installation.isFullJDK && !missing { badges.append("JRE only") }
-        if missing { badges.append("Missing") }
-        return badges
-    }
-
     private func remove(_ installation: JDKInstallation) {
         let usage = jdk.usage(of: installation)
         if usage.isDefault || !usage.projects.isEmpty {
@@ -168,5 +101,85 @@ struct IDEPreferencesJDKSection: View {
             }
             jdk.chooseAsDefault(installation)
         }
+    }
+}
+
+/// One detected JDK with its badges and actions. A stable identity per home, so a rescan
+/// or a default change re-evaluates only the rows it touches. The filesystem checks for a
+/// row (missing flag, badges) are computed once per evaluation and shared by the row,
+/// its buttons and its context menu.
+private struct IDEJDKSettingsRow: View {
+    let installation: JDKInstallation
+    let jdk: IDEJDKSelection
+    let onRemoveRequest: (JDKInstallation) -> Void
+
+    var body: some View {
+        let missing = jdk.isMissing(installation)
+        let badges = badges(missing: missing)
+        let isUserAdded = jdk.isUserAdded(installation)
+        let isDefault = jdk.isDefault(installation)
+        return HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: IDEAppearance.Spacing.xs) {
+                    Text(installation.displayName)
+                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    ForEach(badges, id: \.self) { badge in
+                        Text(badge)
+                            .font(.caption2)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(IDEAppearance.ColorToken.card, in: Capsule())
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    }
+                }
+                Text(installation.home.path)
+                    .font(IDEAppearance.Typography.monoCaption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: IDEAppearance.Spacing.sm)
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([installation.home])
+            } label: {
+                Image(systemName: "magnifyingglass")
+            }
+            .buttonStyle(.borderless)
+            .help("Reveal in Finder")
+            .accessibilityLabel("Reveal \(installation.displayName) in Finder")
+            .disabled(missing)
+            if isUserAdded {
+                Button {
+                    onRemoveRequest(installation)
+                } label: {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("Remove from the list")
+                .accessibilityLabel("Remove \(installation.displayName)")
+            }
+        }
+        .contextMenu {
+            Button("Use as Default") { jdk.chooseAsDefault(installation) }
+                .disabled(isDefault)
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([installation.home])
+            }
+            .disabled(missing)
+            if isUserAdded {
+                Divider()
+                Button("Remove…") { onRemoveRequest(installation) }
+            }
+        }
+    }
+
+    private func badges(missing: Bool) -> [String] {
+        var badges: [String] = []
+        if jdk.isDefault(installation) { badges.append("Default") }
+        if jdk.isInUse(installation) { badges.append("In use") }
+        if jdk.isUserAdded(installation) { badges.append("Added by you") }
+        if !installation.isFullJDK && !missing { badges.append("JRE only") }
+        if missing { badges.append("Missing") }
+        return badges
     }
 }

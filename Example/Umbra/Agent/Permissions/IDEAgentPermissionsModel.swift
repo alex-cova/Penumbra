@@ -32,7 +32,9 @@ final class IDEAgentPermissionsModel {
     init(projectRoot: @escaping () -> URL?, appFile: URL?) {
         self.projectRoot = projectRoot
         self.appFile = appFile
-        reload()
+        // No file read here: this init runs every time a parent body re-evaluates the
+        // section (its result is discarded after the first mount), so it must stay cheap.
+        // The section loads in a task on appearance instead.
     }
 
     var isEmpty: Bool { groups.allSatisfy { $0.entries.isEmpty } }

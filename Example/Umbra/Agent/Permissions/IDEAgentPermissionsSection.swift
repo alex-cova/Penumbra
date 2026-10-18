@@ -100,7 +100,7 @@ struct IDEAgentPermissionsSection: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
         }
-        .onAppear { model.reload() }
+        .task { model.reload() }
     }
 
     private func add() {

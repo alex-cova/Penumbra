@@ -29,8 +29,20 @@ final class IDEAgentPermissionsModelTests: XCTestCase {
 
     func testAnEmptyProjectHasNoRulesButEveryPlaceTheyCouldBe() {
         let model = makeModel()
+        model.reload()
         XCTAssertTrue(model.isEmpty)
         XCTAssertEqual(model.groups.map(\.origin), [.app, .projectShared, .projectLocal, .claudeShared, .claudeLocal])
+    }
+
+    func testInitReadsNothingAndReloadPicksUpTheFiles() throws {
+        // `init` must stay cheap: the section's `State(initialValue:)` evaluates it on every
+        // parent redraw and discards all but the first result, so a read here repeats per keystroke.
+        let model = makeModel()
+        XCTAssertTrue(model.groups.isEmpty, "nothing is read until the section's task reloads")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".claude"), withIntermediateDirectories: true)
+        try #"{"permissions":{"allow":["Bash(make:*)"]}}"#.write(to: root.appendingPathComponent(".claude/settings.json"), atomically: true, encoding: .utf8)
+        model.reload()
+        XCTAssertEqual(entries(model, .claudeShared), ["allow Bash(make:*)"])
     }
 
     func testAddingWritesToTheChosenFileAndListsItUnderThatSource() throws {
@@ -60,6 +72,7 @@ final class IDEAgentPermissionsModelTests: XCTestCase {
         try FileManager.default.createDirectory(at: root.appendingPathComponent(".claude"), withIntermediateDirectories: true)
         try #"{"permissions":{"allow":["Bash(make:*)"]}}"#.write(to: root.appendingPathComponent(".claude/settings.json"), atomically: true, encoding: .utf8)
         let model = makeModel()
+        model.reload()
         model.add("Bash(ls:*)", kind: .allow, scope: .project)
 
         let claude = try XCTUnwrap(model.groups.first { $0.origin == .claudeShared }?.entries.first)

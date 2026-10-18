@@ -80,6 +80,37 @@ final class IDEInspectionProfilesTests: XCTestCase {
         XCTAssertEqual(makeStore().names, ["Default"])
     }
 
+    func testReloadPicksUpFilesCopiedInWithoutBlocking() async throws {
+        let store = makeStore()
+        XCTAssertEqual(store.names, ["Default"])
+        // A profile copied into the folder behind the store's back, as a sync tool would leave it.
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let sidecar = JavaInspectionProfile.standard(name: "Sidecar")
+        try IDEInspectionProfiles.encoded(sidecar).write(
+            to: directory.appendingPathComponent("Sidecar").appendingPathExtension("json"), options: .atomic)
+        let revision = store.revision
+        store.reload()
+        // `reload` returns immediately; the scan lands on the main actor shortly after.
+        try await waitForProfile(named: "Sidecar", in: store)
+        XCTAssertGreaterThan(store.revision, revision)
+        // A reload with nothing new stays silent: no revision bump, no re-render.
+        let settled = store.revision
+        store.reload()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(store.revision, settled)
+    }
+
+    private func waitForProfile(named name: String, in store: IDEInspectionProfiles) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !store.names.contains(name) {
+            if Date() >= deadline {
+                XCTFail("Timed out waiting for profile \(name); have \(store.names)")
+                return
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
     func testProjectFileWinsForItsWindowAndFollowsEdits() throws {
         let store = makeStore()
         let root = directory.appendingPathComponent("proj")
