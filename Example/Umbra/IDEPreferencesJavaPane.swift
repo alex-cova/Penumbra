@@ -367,6 +367,8 @@ struct IDEPreferencesJavaPane: View {
             }
         }
 
+        IDEPreferencesIntentionsPane(preferences: preferences)
+
         IDEPreferencesInspectionsPane(preferences: preferences)
     }
 

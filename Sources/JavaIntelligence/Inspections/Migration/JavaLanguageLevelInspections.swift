@@ -242,7 +242,8 @@ enum JavaTextBlockInspection: JavaNodeInspection {
         return (result, true)
     }
 
-    private static func conversion(for node: SyntaxNode, context: JavaInspectionContext) -> String? {
+    /// The text block that replaces this concatenation, or nil when the chain is not one.
+    static func textBlockReplacement(for node: SyntaxNode) -> String? {
         guard node.operatorText == "+", let literals = operands(of: node), literals.count >= 3,
               !(node.parent?.type == "binary_expression" && node.parent?.operatorText == "+"),
               let found = lines(of: literals) else { return nil }
@@ -255,7 +256,7 @@ enum JavaTextBlockInspection: JavaNodeInspection {
     }
 
     static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
-        guard context.supports(15), conversion(for: node, context: context) != nil else { return }
+        guard context.supports(15), textBlockReplacement(for: node) != nil else { return }
         report(JavaInspectionSupport.inspection(
             rule, message: "String concatenation can be replaced with a text block", node: node, fixTitle: "Replace with text block"
         ))
@@ -264,8 +265,7 @@ enum JavaTextBlockInspection: JavaNodeInspection {
     static var providesFixes: Bool { true }
     static func fixes(for diagnostic: Diagnostic, tree: JavaSyntaxTree, source: String) -> [CodeAction] {
         guard let node = JavaInspectionSupport.node(of: "binary_expression", for: diagnostic, tree: tree, source: source),
-              let context = JavaInspectionContext(source: source, tree: tree, url: URL(fileURLWithPath: "/fix.java"), index: JavaIndex(), languageLevel: 15),
-              let text = conversion(for: node, context: context) else { return [] }
+              let text = textBlockReplacement(for: node) else { return [] }
         let edit = JavaInspectionSupport.edit(replacingBytes: node.byteRange, with: text, in: tree)
         return [CodeAction(title: "Replace with text block", kind: "quickfix", edits: [edit], isPreferred: true)]
     }

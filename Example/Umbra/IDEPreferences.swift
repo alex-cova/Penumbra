@@ -108,6 +108,9 @@ public final class IDEPreferences {
         static let javaCodeVisionImplementations = "com.umbra.editor.javaCodeVisionImplementations"
         static let inlayHintsUseEditorFont = "com.umbra.editor.inlayHintsUseEditorFont"
         static let javaDisabledGutterIcons = "com.umbra.editor.javaDisabledGutterIcons"
+        static let javaDisabledIntentions = "com.umbra.editor.javaDisabledIntentions"
+        static let javaShowIntentionBulb = "com.umbra.editor.javaShowIntentionBulb"
+        static let javaShowIntentionPreview = "com.umbra.editor.javaShowIntentionPreview"
         static let javaDisabledInspections = "com.umbra.editor.javaDisabledInspections"
         static let javaInspectionSeverities = "com.umbra.editor.javaInspectionSeverities"
         static let javaInspectionLimits = "com.umbra.editor.javaInspectionLimits"
@@ -766,6 +769,17 @@ public final class IDEPreferences {
         }
     }
 
+    /// Which Java intentions are on, read from the defaults at call time so the provider (an actor)
+    /// sees a change without waiting for the settings view.
+    nonisolated static func currentJavaIntentionOptions() -> JavaIntentionOptions {
+        let defaults = UserDefaults.standard
+        return JavaIntentionOptions.restored(
+            disabledIDs: defaults.stringArray(forKey: Keys.javaDisabledIntentions),
+            showsBulb: defaults.object(forKey: Keys.javaShowIntentionBulb) as? Bool,
+            showsPreview: defaults.object(forKey: Keys.javaShowIntentionPreview) as? Bool
+        )
+    }
+
     /// The hint kinds the Java provider produces, read from the defaults at call time so the provider
     /// (an actor, off the main thread) always sees the current settings.
     nonisolated static func currentJavaInlayHintOptions() -> JavaInlayHintOptions {
@@ -794,6 +808,21 @@ public final class IDEPreferences {
 
     var enabledJavaGutterIcons: Set<JavaLineMarkerKind> {
         Set(JavaLineMarkerKind.allCases).subtracting(javaDisabledGutterIcons)
+    }
+
+    /// Intention ids the user turned off. Every intention starts on; only the deviations are stored.
+    var javaDisabledIntentions: Set<String> {
+        didSet { UserDefaults.standard.set(javaDisabledIntentions.sorted(), forKey: Keys.javaDisabledIntentions) }
+    }
+
+    /// The yellow or red bulb beside the caret line in a Java file.
+    var javaShowIntentionBulb: Bool {
+        didSet { UserDefaults.standard.set(javaShowIntentionBulb, forKey: Keys.javaShowIntentionBulb) }
+    }
+
+    /// The lines an intention would write, beside the context-action list.
+    var javaShowIntentionPreview: Bool {
+        didSet { UserDefaults.standard.set(javaShowIntentionPreview, forKey: Keys.javaShowIntentionPreview) }
     }
 
     /// Codes of the Java inspections the user turned off (the rules that start switched off are
@@ -1135,6 +1164,9 @@ public final class IDEPreferences {
         javaCodeVisionImplementations = defaults.bool(forKey: Keys.javaCodeVisionImplementations)
         inlayHintsUseEditorFont = defaults.bool(forKey: Keys.inlayHintsUseEditorFont)
         javaDisabledGutterIcons = Set((defaults.stringArray(forKey: Keys.javaDisabledGutterIcons) ?? []).compactMap(JavaLineMarkerKind.init(rawValue:)))
+        javaDisabledIntentions = Set(defaults.stringArray(forKey: Keys.javaDisabledIntentions) ?? [])
+        javaShowIntentionBulb = defaults.object(forKey: Keys.javaShowIntentionBulb) as? Bool ?? true
+        javaShowIntentionPreview = defaults.object(forKey: Keys.javaShowIntentionPreview) as? Bool ?? true
         javaDisabledInspections = Set(defaults.stringArray(forKey: Keys.javaDisabledInspections) ?? Array(Self.defaultDisabledInspections))
         javaInspectionSeverities = defaults.dictionary(forKey: Keys.javaInspectionSeverities) as? [String: String] ?? [:]
         javaInspectionLimits = defaults.dictionary(forKey: Keys.javaInspectionLimits) as? [String: Int] ?? [:]

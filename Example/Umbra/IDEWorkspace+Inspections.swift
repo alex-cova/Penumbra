@@ -14,6 +14,10 @@ extension IDEWorkspace {
             performInjectLanguageCommand(command)
             return
         }
+        if command.id == JavaIntentionCommand.disable || command.id == JavaIntentionCommand.configure {
+            performIntentionCommand(command)
+            return
+        }
         guard let code = command.arguments.first, let rule = JavaInspectionRule(code: code) else {
             performRunCodeAction(command)
             return
@@ -28,6 +32,26 @@ extension IDEWorkspace {
         default:
             performRunCodeAction(command)
         }
+    }
+
+    /// Turns an intention off, or opens Settings › Java › Intentions on it.
+    func performIntentionCommand(_ command: CodeActionCommand) {
+        guard let id = command.arguments.first, JavaIntention.named(id) != nil else { return }
+        switch command.id {
+        case JavaIntentionCommand.disable:
+            preferences.javaDisabledIntentions.insert(id)
+        case JavaIntentionCommand.configure:
+            showIntentionSettings(id)
+        default:
+            break
+        }
+    }
+
+    /// Opens Settings › Java › Intentions with `id` selected.
+    func showIntentionSettings(_ id: String) {
+        focusedIntentionID = id
+        requestedSettingsDomain = .java
+        showSettings()
     }
 
     /// Opens Settings › Java › Inspections with `rule` found, its group selected and its scopes open.

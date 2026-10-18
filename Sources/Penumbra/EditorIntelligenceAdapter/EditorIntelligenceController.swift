@@ -92,6 +92,10 @@ public final class EditorIntelligenceController {
     public let breadcrumbBarView = BreadcrumbBarView()
     public let outlineSidebarView = OutlineSidebarView()
     public let codeActionView = CodeActionView()
+    private let intentionBulb = IntentionBulbButton()
+    private var intentionBulbTask: Task<Void, Never>?
+    private var intentionBulbKind: CodeActionBulb = .none
+    private var intentionBulbOffset = 0
     /// Targets of a ⌘-click that resolved to more than one location, shown next to the click.
     public let navigationChoicesView = NavigationChoicesView()
     private var navigationChoices: [Location] = []
@@ -1225,6 +1229,7 @@ public final class EditorIntelligenceController {
             guard textView.contentGeneration == generation else { return }
             let merged = Self.mergedDiagnostics(report: report, current: textView.diagnostics, in: textView)
             self.latestDiagnostics = report.diagnostics
+            self.scheduleIntentionBulb()
             if merged.markers != textView.diagnostics {
                 textView.diagnostics = merged.markers
             }
@@ -1825,6 +1830,13 @@ public final class EditorIntelligenceController {
         codeActionView.onSelectAction = { [weak self] action in
             self?.applyCodeAction(action)
         }
+        codeActionView.onSelectOption = { [weak self] option in
+            self?.hideCodeActions()
+            self?.onCodeActionCommand?(option.command)
+        }
+        intentionBulb.onClick = { [weak self] in
+            self?.requestCodeActions()
+        }
         navigationChoicesView.onChoose = { [weak self] index in
             self?.chooseNavigationChoice(index)
         }
@@ -1849,8 +1861,11 @@ public final class EditorIntelligenceController {
             view.isHidden = true
             overlayContainer.addSubview(view)
         }
+        intentionBulb.isHidden = true
+        textView.addFixedOverlaySubview(intentionBulb)
         textView.addScrollObserver { [weak self] in
             guard let self else { return }
+            self.repositionIntentionBulb()
             self.refreshInlayHintsIfViewportLeftRange()
             self.refreshCodeVisionIfViewportLeftRange()
             if textView.isUserInitiatedScroll {
@@ -1904,11 +1919,13 @@ public final class EditorIntelligenceController {
             refreshOutline()
             refreshInlayHints()
             refreshCodeVision()
+            scheduleIntentionBulb()
         case .cursorMoved, .selectionChanged:
             inlineController.noteCaretMoved()
             dismissCompletionIfCaretLeftIdentifier()
             scheduleHoverRequest()
             refreshBreadcrumbs()
+            scheduleIntentionBulb()
         case .documentOpened:
             refreshDiagnostics()
             refreshOutline()
@@ -2982,7 +2999,7 @@ public final class EditorIntelligenceController {
             codeActionView,
             near: anchorRange.start.utf16Offset,
             in: textView,
-            size: NSSize(width: 280, height: min(CGFloat(actions.count) * 24 + 8, 200))
+            size: codeActionView.preferredSize
         )
         codeActionView.isHidden = false
         overlayContainer.isHidden = false
@@ -2992,6 +3009,56 @@ public final class EditorIntelligenceController {
     private func hideCodeActions() {
         codeActionView.isHidden = true
         updateOverlayVisibility()
+    }
+
+    /// The bulb follows the caret after it settles. A move cancels the previous check, so typing
+    /// never waits on it.
+    private func scheduleIntentionBulb() {
+        if textView?.selectedRange.location != intentionBulbOffset {
+            intentionBulb.isHidden = true
+        }
+        intentionBulbTask?.cancel()
+        intentionBulbTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled, let self else { return }
+            await self.refreshIntentionBulb()
+        }
+    }
+
+    private func refreshIntentionBulb() async {
+        guard let codeActionProvider, let document = liveDocument(), let textView else {
+            intentionBulb.isHidden = true
+            return
+        }
+        let offset = document.cursor.position.utf16Offset
+        let kind = await codeActionProvider.bulb(for: document, at: document.cursor.position, diagnostics: latestDiagnostics)
+        guard !Task.isCancelled, textView.selectedRange.location == offset else { return }
+        intentionBulbKind = kind
+        intentionBulbOffset = offset
+        repositionIntentionBulb()
+    }
+
+    /// Draws the bulb in the gutter beside the caret line. It is not a gutter column, so breakpoints
+    /// and run buttons keep their places.
+    private func repositionIntentionBulb() {
+        guard let textView, intentionBulbKind != .none else {
+            intentionBulb.isHidden = true
+            return
+        }
+        let caret = textView.caretRectInViewport(at: intentionBulbOffset)
+        let size: CGFloat = 16
+        guard caret.height > 1, textView.bounds.intersects(caret.insetBy(dx: 0, dy: -4)) else {
+            intentionBulb.isHidden = true
+            return
+        }
+        let x = max(2, caret.minX - size - 2)
+        let y = caret.minY + max(0, (caret.height - size) / 2)
+        intentionBulb.frame = CGRect(x: x, y: y, width: size, height: size)
+        let isFix = intentionBulbKind == .quickFix
+        intentionBulb.contentTintColor = isFix ? .systemRed : .systemYellow
+        intentionBulb.toolTip = isFix ? "Show quick fixes" : "Show intention actions"
+        intentionBulb.setAccessibilityLabel(isFix ? "Quick fixes" : "Intention actions")
+        intentionBulb.isHidden = false
     }
 
     // MARK: - Navigation Choices
@@ -3463,6 +3530,33 @@ public final class EditorIntelligenceController {
             return penumbra.textView === textView
         }
         return true
+    }
+}
+
+/// The yellow or red bulb beside the caret line. A click opens the context-action list.
+@MainActor
+private final class IntentionBulbButton: NSButton {
+    var onClick: (() -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        focusRingType = .none
+        imagePosition = .imageOnly
+        imageScaling = .scaleProportionallyDown
+        let symbol = NSImage(systemSymbolName: "lightbulb.fill", accessibilityDescription: "Intention actions")
+        image = symbol?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
+        target = self
+        action = #selector(clicked)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func clicked() {
+        onClick?()
     }
 }
 

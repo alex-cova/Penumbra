@@ -342,7 +342,9 @@ extension IDEPreferencesDomain {
     static let java = IDEPreferencesDomain(
         id: "java", title: "Java", symbol: "cup.and.saucer",
         searchTerms: ["jdk", "gradle", "maven", "sync", "timeout", "diagnostics", "compiler", "semantic highlighting", "parameter hints", "inlay", "gutter icons", "imports", "optimize imports", "run", "run configuration", "temporary",
-                      "inspections", "warnings", "severity", "code analysis", "quick fix", "lint", "probable bugs", "redundant code", "unused", "suppress", "noinspection"]
+                      "inspections", "warnings", "severity", "code analysis", "quick fix", "lint", "probable bugs", "redundant code", "unused", "suppress", "noinspection",
+                      "intentions", "intention", "bulb", "context actions"]
             + JavaInspectionRule.allCases.map(\.title)
+            + JavaIntention.all.map(\.title)
     )
 }

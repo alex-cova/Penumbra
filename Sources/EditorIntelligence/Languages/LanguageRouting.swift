@@ -50,6 +50,18 @@ struct RoutedCodeActions: CodeActionProviding {
         }
         return actions
     }
+
+    func bulb(for document: Document, at position: TextPosition, diagnostics: [Diagnostic]) async -> CodeActionBulb {
+        var found = CodeActionBulb.none
+        for provider in registry.readyServices(for: document.languageIdentifier, feature: .codeActions).compactMap(\.providers.codeActions) {
+            switch await provider.bulb(for: document, at: position, diagnostics: diagnostics) {
+            case .quickFix: return .quickFix
+            case .intention: found = .intention
+            case .none: break
+            }
+        }
+        return found
+    }
 }
 
 struct RoutedRename: RenameProviding {

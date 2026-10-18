@@ -199,6 +199,11 @@ final class IDEJavaSupport {
         navigationProvider = JavaGoToDefinitionProvider(index: javaIndex, indexPaths: paths)
         findUsagesProvider = JavaFindUsagesProvider(index: javaIndex, indexPaths: paths, nameIndex: nameIndex)
         codeActionProvider = JavaCodeActionProvider(index: javaIndex)
+        let intentionsCache = sharedParseCache
+        Task { [codeActionProvider] in
+            await codeActionProvider.setParseCache(intentionsCache)
+            await codeActionProvider.setIntentionOptionsSource { IDEPreferences.currentJavaIntentionOptions() }
+        }
         hoverProvider = JavaHoverProvider(index: javaIndex, indexPaths: paths)
         hierarchyProvider = JavaTypeHierarchyProvider(index: javaIndex, indexPaths: paths)
         callHierarchyProvider = JavaCallHierarchyProvider(index: javaIndex, indexPaths: paths, findUsages: findUsagesProvider)

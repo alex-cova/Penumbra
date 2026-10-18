@@ -340,7 +340,9 @@ final class JavaCodeActionProviderTests: XCTestCase {
                 covering: "int get() {", through: "    }", in: source
             )]
         )
-        XCTAssertEqual(actions.map(\.title), ["Add return statement"])
+        XCTAssertEqual(actions.map(\.title), [
+            "Add return statement", "Split into declaration and assignment", "Replace explicit type with 'var'",
+        ])
         XCTAssertEqual(
             apply(actions[0], to: source),
             "class T {\n    int get() {\n        int x = 1;\n        return 0;\n    }\n}\n"

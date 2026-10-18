@@ -14,6 +14,9 @@ public actor JavaCodeActionProvider: CodeActionProviding {
     /// Most import candidates offered for one unresolved name.
     private static let maxImportCandidates = 8
     private var importPolicy = JavaImportPolicy.intellij
+    private var intentionOptions = JavaIntentionOptions.standard
+    private var intentionOptionsSource: (@Sendable () -> JavaIntentionOptions)?
+    private var parseCache: JavaDocumentParseCache?
 
     /// The auto-import and star-import settings. The default matches IntelliJ's Java code style.
     public func setImportPolicy(_ policy: JavaImportPolicy) {
@@ -40,6 +43,30 @@ public actor JavaCodeActionProvider: CodeActionProviding {
     /// so their fixes are still offered although nothing is drawn.
     public func setQuietFindingsSource(_ source: (@Sendable (URL) async -> [Diagnostic])?) {
         quietFindingsSource = source
+    }
+
+    /// Which intentions are offered, and whether the bulb and the preview are on. A source is read
+    /// at every request, the same way inlay hints read their options.
+    public func setIntentionOptions(_ options: JavaIntentionOptions) {
+        intentionOptions = options
+    }
+
+    public func setIntentionOptionsSource(_ source: (@Sendable () -> JavaIntentionOptions)?) {
+        intentionOptionsSource = source
+    }
+
+    /// The inspections' parse cache, so the bulb does not parse a file the editor already parsed.
+    public func setParseCache(_ cache: JavaDocumentParseCache?) {
+        parseCache = cache
+    }
+
+    private func currentIntentionOptions() -> JavaIntentionOptions {
+        intentionOptionsSource?() ?? intentionOptions
+    }
+
+    private func syntaxTree(for document: Document, source: String) async -> JavaSyntaxTree? {
+        if let parseCache, let tree = await parseCache.tree(for: document) { return tree }
+        return JavaSyntaxParser().parse(source)
     }
 
     public func codeActions(
@@ -70,8 +97,31 @@ public actor JavaCodeActionProvider: CodeActionProviding {
                     edits: organized
                 ))
             }
+            if let tree = await syntaxTree(for: document, source: text) {
+                actions.append(contentsOf: await JavaIntentionEngine.actions(
+                    tree: tree, source: text, utf16Offset: position.utf16Offset,
+                    options: currentIntentionOptions(), index: index, fileURL: document.url
+                ))
+            }
             return actions
         }
+    }
+
+    public func bulb(
+        for document: Document, at position: TextPosition, diagnostics: [Diagnostic]
+    ) async -> CodeActionBulb {
+        guard document.languageIdentifier == "java" else { return .none }
+        let options = currentIntentionOptions()
+        guard options.showsBulb else { return .none }
+        let text = JavaNavigationText.fullText(of: document)
+        guard !text.isEmpty else { return .none }
+        if JavaIntentionEngine.hasQuickFix(at: position.utf16Offset, in: text, diagnostics: diagnostics) {
+            return .quickFix
+        }
+        let tree = await syntaxTree(for: document, source: text)
+        return JavaIntentionEngine.bulb(
+            tree: tree, source: text, utf16Offset: position.utf16Offset, options: options, diagnostics: diagnostics
+        )
     }
 
     /// Fixes for the `java-inspection` findings on the caret's line (the rule's own quick fixes,

@@ -403,6 +403,8 @@ public final class IDEWorkspace {
     private(set) var isSettingsVisible = false
     /// A pane Settings should open on, set by whatever sent the user there; the settings view takes it.
     var requestedSettingsDomain: IDEPreferencesDomain?
+    /// The intention Settings › Java › Intentions should scroll to, set by Edit intention settings.
+    var focusedIntentionID: String?
 
     func showSettings() {
         guard !isSettingsVisible else { return }
