@@ -52,6 +52,8 @@ public actor ACPAgentEndpoint {
     private var connection: ACPConnection?
     private var sessions: [String: AgentSession] = [:]
     private var sessionRoots: [String: String] = [:]
+    /// Per-session `permissions` config values (`ask` or `auto-allow`).
+    private var sessionPermissions: [String: String] = [:]
     private var clientFS = ACPFileSystemCapabilities()
     private var clientElicitationForm = false
     private var closeWaiter: CheckedContinuation<Void, Never>?
@@ -114,11 +116,15 @@ public actor ACPAgentEndpoint {
         case "initialize":
             clientFS = ACPFileSystemCapabilities(jsonValue: params?["clientCapabilities"]?["fs"])
             clientElicitationForm = ACPClientCapabilities(jsonValue: params?["clientCapabilities"]).elicitationForm
+            let lifecycle: JSONValue? = sessionStore == nil ? nil : .object([
+                "resume": .object([:]), "list": .object([:]),
+                "delete": .object([:]), "close": .object([:]),
+            ])
             let capabilities: JSONValue = .object([
                 "loadSession": .bool(sessionStore != nil),
                 "promptCapabilities": .object(["image": false, "audio": false, "embeddedContext": false]),
                 "mcpCapabilities": .object(["http": false, "sse": false]),
-                "sessionCapabilities": .object([:]),
+                "sessionCapabilities": lifecycle ?? .object([:]),
             ])
             var result: [String: JSONValue] = [
                 "protocolVersion": .int(acpProtocolVersion),
@@ -162,6 +168,82 @@ public actor ACPAgentEndpoint {
             } catch {
                 return .failure(.invalidParams("Unknown session. Start with session/new."))
             }
+        case "session/resume":
+            // Resume restores without replaying history (unlike load): the conversation
+            // continues where the store left it. Nothing is emitted before the response.
+            guard let id = params?.string("sessionId") else {
+                return .failure(.invalidParams("session/resume requires a sessionId."))
+            }
+            if let session = sessions[id] {
+                return .success(await sessionResponse(session: session, id: id))
+            }
+            guard sessionStore != nil else {
+                return .failure(.invalidParams("Unknown session. Start with session/new."))
+            }
+            guard let cwd = params?.string("cwd"), !cwd.isEmpty else {
+                return .failure(.invalidParams("session/resume requires an absolute cwd."))
+            }
+            guard let uuid = UUID(uuidString: id) else { return .failure(.invalidParams("Unknown sessionId.")) }
+            do {
+                let session = try await restore(id: uuid, cwd: cwd)
+                sessions[id] = session
+                sessionRoots[id] = cwd
+                return .success(await sessionResponse(session: session, id: id))
+            } catch {
+                return .failure(.invalidParams("Unknown session. Start with session/new."))
+            }
+        case "session/list":
+            guard let store = sessionStore else { return .success(.object(["sessions": .array([])])) }
+            // Roots we can report: live sessions, plus an explicit filter (which may name a
+            // root whose sessions all live in the store from an earlier process).
+            var roots = Set(sessionRoots.values)
+            if let filter = params?.string("cwd") { roots = [filter] }
+            var infos: [JSONValue] = []
+            let formatter = ISO8601DateFormatter()
+            for root in roots.sorted() {
+                var seen = Set<String>()
+                for id in sessions.keys.filter({ sessionRoots[$0] == root }).sorted() {
+                    seen.insert(id)
+                    infos.append(.object(["sessionId": .string(id), "cwd": .string(root)]))
+                }
+                for summary in store.list(projectRoot: root) where !seen.contains(summary.id.uuidString) {
+                    infos.append(.object([
+                        "sessionId": .string(summary.id.uuidString),
+                        "cwd": .string(root),
+                        "title": .string(summary.title),
+                        "updatedAt": .string(formatter.string(from: summary.updatedAt)),
+                    ]))
+                }
+            }
+            return .success(.object(["sessions": .array(infos)]))
+        case "session/delete":
+            guard let id = params?.string("sessionId") else {
+                return .failure(.invalidParams("session/delete requires a sessionId."))
+            }
+            // Deleting an unknown id succeeds silently.
+            if let session = sessions.removeValue(forKey: id) { await session.stop() }
+            if let root = sessionRoots.removeValue(forKey: id) { sessionStore?.delete(UUID(uuidString: id) ?? UUID(), projectRoot: root) }
+            sessionPermissions.removeValue(forKey: id)
+            return .success(.object([:]))
+        case "session/close":
+            guard let id = params?.string("sessionId") else {
+                return .failure(.invalidParams("session/close requires a sessionId."))
+            }
+            // Close cancels in-flight work as if session/cancel had been called, then frees
+            // the live session. The store keeps the snapshot, so load/resume still work.
+            if let session = sessions.removeValue(forKey: id) { await session.stop() }
+            sessionRoots.removeValue(forKey: id)
+            sessionPermissions.removeValue(forKey: id)
+            return .success(.object([:]))
+        case "session/set_config_option":
+            guard let id = params?.string("sessionId"), sessions[id] != nil,
+                  let configId = params?.string("configId")
+            else { return .failure(.invalidParams("session/set_config_option requires a known sessionId and configId.")) }
+            guard configId == "permissions",
+                  let value = params?.string("value"), ["ask", "auto-allow"].contains(value)
+            else { return .failure(.invalidParams("Unknown configId or value.")) }
+            sessionPermissions[id] = value
+            return .success(.object(["configOptions": configOptions(for: id)]))
         case "session/prompt":
             guard let id = params?.string("sessionId"), let session = sessions[id] else {
                 return .failure(.invalidParams("Unknown sessionId."))
@@ -216,6 +298,22 @@ public actor ACPAgentEndpoint {
         return session
     }
 
+    /// The endpoint's one real config option: whether tool approvals ask the client or
+    /// are auto-allowed. Served and round-tripped through `session/set_config_option`.
+    private func configOptions(for id: String) -> JSONValue {
+        .array([.object([
+            "id": "permissions",
+            "name": "Permissions",
+            "description": "Ask the client before tools run, or allow them without asking.",
+            "type": "select",
+            "options": .array([
+                .object(["value": "ask", "name": "Ask every time"]),
+                .object(["value": "auto-allow", "name": "Always allow"]),
+            ]),
+            "currentValue": .string(sessionPermissions[id] ?? "ask"),
+        ])])
+    }
+
     private func sessionResponse(session: AgentSession, id: String) async -> JSONValue {
         let current = await session.currentMode
         let modes = ACPSessionModeState(
@@ -223,7 +321,7 @@ public actor ACPAgentEndpoint {
             availableModes: PermissionMode.allCases.map {
                 ACPSessionMode(id: $0.rawValue, name: $0.displayName, description: $0.editorNote)
             })
-        return .object(["sessionId": .string(id), "modes": modes.jsonValue, "configOptions": .array([])])
+        return .object(["sessionId": .string(id), "modes": modes.jsonValue, "configOptions": configOptions(for: id)])
     }
 
     private func handleNotification(method: String, params: JSONValue?) async {
@@ -337,6 +435,11 @@ public actor ACPAgentEndpoint {
     // MARK: - Permission equivalents
 
     private func answerApproval(_ request: ApprovalRequest, session: AgentSession, connection: ACPConnection) async {
+        // The `permissions` config option is real: auto-allow approves without asking.
+        if sessionPermissions[session.sessionID.uuidString] == "auto-allow" {
+            await session.resolveApproval(callID: request.callID, decision: .approve)
+            return
+        }
         let options: [JSONValue] = [
             option("allow-once", "Allow once", "allow_once"),
             option("allow-always", "Always allow", "allow_always"),

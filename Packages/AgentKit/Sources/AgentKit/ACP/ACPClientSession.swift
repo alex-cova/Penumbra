@@ -205,6 +205,60 @@ public actor ACPClientSession {
         return try await newSession()
     }
 
+    /// Resumes a session without replaying history (unlike `loadSession`).
+    @discardableResult
+    public func resumeSession(id: String) async throws -> String {
+        _ = try await connect()
+        guard let connection else { throw ACPError.notConnected }
+        let raw = try await connection.request(
+            method: "session/resume",
+            params: .object(["sessionId": .string(id), "cwd": .string(cwd)]),
+            timeout: requestTimeout)
+        let response = try ACPNewSessionResponse(jsonValue: raw)
+        sessionId = response.sessionId
+        if let modes = response.modes { modeState = modes }
+        if !response.configOptions.isEmpty { configOptions = response.configOptions }
+        return response.sessionId
+    }
+
+    public func listSessions(cwd: String? = nil) async throws -> JSONValue {
+        _ = try await connect()
+        guard let connection else { throw ACPError.notConnected }
+        var params: [String: JSONValue] = [:]
+        if let cwd { params["cwd"] = .string(cwd) }
+        return try await connection.request(method: "session/list", params: .object(params), timeout: requestTimeout)
+    }
+
+    public func deleteSession(id: String) async throws {
+        _ = try await connect()
+        guard let connection else { throw ACPError.notConnected }
+        _ = try await connection.request(
+            method: "session/delete", params: .object(["sessionId": .string(id)]), timeout: requestTimeout)
+        if sessionId == id { sessionId = nil }
+    }
+
+    public func closeSession(id: String) async throws {
+        _ = try await connect()
+        guard let connection else { throw ACPError.notConnected }
+        _ = try await connection.request(
+            method: "session/close", params: .object(["sessionId": .string(id)]), timeout: requestTimeout)
+        if sessionId == id { sessionId = nil }
+    }
+
+    /// Sets a session config option, returning the agent's complete option list.
+    @discardableResult
+    public func setConfigOption(sessionId: String, configId: String, value: String) async throws -> [ACPConfigOption] {
+        _ = try await connect()
+        guard let connection else { throw ACPError.notConnected }
+        let raw = try await connection.request(
+            method: "session/set_config_option",
+            params: .object(["sessionId": .string(sessionId), "configId": .string(configId), "value": .string(value)]),
+            timeout: requestTimeout)
+        let options = (raw["configOptions"]?.arrayValue ?? []).map(ACPConfigOption.init(jsonValue:))
+        configOptions = options
+        return options
+    }
+
     // MARK: - Prompt turns
 
     public func send(_ text: String) -> AsyncStream<AgentEvent> {

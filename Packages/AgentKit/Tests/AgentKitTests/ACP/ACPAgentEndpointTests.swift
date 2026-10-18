@@ -195,6 +195,70 @@ private struct EndpointCommandTool: AgentTool {
         await rig.endpoint.stop()
     }
 
+    @Test func lifecycleListResumeDelete() async throws {
+        let storeDir = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID().uuidString)", isDirectory: true)
+        let rig = try rig(turns: [.text("x")], endpointStore: SessionStore(directory: storeDir))
+        defer { rig.task.cancel() }
+        let id = try await rig.client.newSession()
+        let listed = try await rig.client.listSessions(cwd: rig.project.root.path)
+        let ids = (listed["sessions"]?.arrayValue ?? []).compactMap { $0.string("sessionId") }
+        #expect(ids.contains(id))
+        let elsewhere = try await rig.client.listSessions(cwd: "/nowhere")
+        #expect((elsewhere["sessions"]?.arrayValue ?? []).isEmpty)
+        #expect(try await rig.client.resumeSession(id: id) == id)
+        // Deleting an unknown id succeeds silently.
+        try await rig.client.deleteSession(id: UUID().uuidString)
+        try await rig.client.deleteSession(id: id)
+        let relisted = try await rig.client.listSessions(cwd: rig.project.root.path)
+        let relistedIDs = (relisted["sessions"]?.arrayValue ?? []).compactMap { $0.string("sessionId") }
+        #expect(relistedIDs.isEmpty)
+        await #expect(throws: (any Error).self) { try await rig.client.loadSession(id: id) }
+        await rig.endpoint.stop()
+    }
+
+    @Test func configOptionRoundTripsAndAutoAllows() async throws {
+        let ran = ACPLocked<[String]>([])
+        let rig = try rig(
+            turns: [
+                .toolCalls((id: "c1", name: "run_command", arguments: #"{"command":"git status"}"#)),
+                .text("done"),
+            ],
+            tools: [EndpointCommandTool(ran: ran)], mode: .manual,
+            endpointStore: SessionStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID().uuidString)", isDirectory: true)))
+        defer { rig.task.cancel() }
+        let id = try await rig.client.newSession()
+        let options = try await rig.client.setConfigOption(sessionId: id, configId: "permissions", value: "auto-allow")
+        #expect(options.count == 1)
+        #expect(options.first?.currentValueDescription == "auto-allow")
+        // The new value is reflected on later session responses too.
+        _ = try await rig.client.loadSession(id: id)
+        #expect(await rig.client.configOptions.first?.currentValueDescription == "auto-allow")
+        // Auto-allow approves without asking the client: no approval card appears.
+        let events = await collectACP(await rig.client.send("go"))
+        #expect(!events.contains { if case .approvalRequested = $0 { true } else { false } })
+        #expect(ran.get() == ["git status"])
+        #expect(events.last == .runEnded(.completed))
+        await #expect(throws: (any Error).self) {
+            try await rig.client.setConfigOption(sessionId: id, configId: "nope", value: "x")
+        }
+        await rig.endpoint.stop()
+    }
+
+    @Test func closeCancelsTheInflightPrompt() async throws {
+        let slow = MockTurn([.textDelta("slow"), .finished(.completed)], delayPerEvent: .seconds(10))
+        let rig = try rig(turns: [slow], endpointStore: SessionStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID().uuidString)", isDirectory: true)))
+        defer { rig.task.cancel() }
+        let id = try await rig.client.newSession()
+        let collector = Task { await collectACP(await rig.client.send("go")) }
+        try await Task.sleep(for: .milliseconds(200))
+        try await rig.client.closeSession(id: id)
+        let events = await collector.value
+        #expect(events.last == .runEnded(.stopped))
+        // The store keeps the snapshot, so the closed session still loads.
+        _ = try await rig.client.loadSession(id: id)
+        await rig.endpoint.stop()
+    }
+
     @Test func sessionsSurviveARestartThroughTheStore() async throws {
         let storeDir = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID().uuidString)", isDirectory: true)
         let store = SessionStore(directory: storeDir)
