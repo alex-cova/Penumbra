@@ -87,6 +87,11 @@ for line in sys.stdin:
             sys.stdout.flush()
             os._exit(3)
         text_chunk("Hello from ACP")
+        if "elicit" in prompt:
+            resp = request("elicitation/create", {"sessionId": "script-1", "message": "What color?", "mode": "form", "requestedSchema": {"type": "object", "title": "What color?", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}})
+            result = resp.get("result", {})
+            content = result.get("content", {})
+            text_chunk(" elicited:" + result.get("action", "none") + ":" + str(content.get("answer", "")))
         if "full" in prompt:
             read = request("fs/read_text_file", {"sessionId":"script-1","path": cwd + "/a.txt"})
             content = read.get("result",{}).get("content","missing")
@@ -182,6 +187,58 @@ final class IDEACPTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("b.txt").path))
         XCTAssertNotNil(host.agentProjectRoot)
         conversation.teardown()
+    }
+
+    func testElicitationCardAnswersAndSkips() async throws {
+        let (root, script, log, pid) = try makeProject()
+        let (conversation, host, _) = makeConversation(root: root, script: script, log: log, pid: pid)
+        conversation.submit(text: "elicit please")
+        await acpEventually("elicitation card appears") {
+            conversation.entries.contains { $0.elicitation != nil }
+        }
+        let callID = conversation.entries.first(where: { $0.elicitation != nil })?.elicitation?.toolCallId
+            ?? conversation.entries.first(where: { $0.elicitation != nil })?.callID
+        conversation.answerElicitation(callID: callID ?? "", text: "blue")
+        await acpEventually("run finishes") { !conversation.isRunning }
+        let assistant = conversation.entries.filter { $0.kind == .assistant }.map(\.text).joined()
+        XCTAssertTrue(assistant.contains("elicited:accept:blue"), assistant)
+        XCTAssertNotNil(host.agentProjectRoot)
+        conversation.teardown()
+    }
+
+    func testElicitationSkipDeclines() async throws {
+        let (root, script, log, pid) = try makeProject()
+        let (conversation, host, _) = makeConversation(root: root, script: script, log: log, pid: pid)
+        conversation.submit(text: "elicit please")
+        await acpEventually("elicitation card appears") {
+            conversation.entries.contains { $0.elicitation != nil }
+        }
+        let callID = conversation.entries.first(where: { $0.elicitation != nil })?.elicitation?.toolCallId
+            ?? conversation.entries.first(where: { $0.elicitation != nil })?.callID
+        conversation.answerElicitation(callID: callID ?? "", text: nil)
+        await acpEventually("run finishes") { !conversation.isRunning }
+        let assistant = conversation.entries.filter { $0.kind == .assistant }.map(\.text).joined()
+        XCTAssertTrue(assistant.contains("elicited:decline:"), assistant)
+        XCTAssertNotNil(host.agentProjectRoot)
+        conversation.teardown()
+    }
+
+    func testKeychainEnvRoundTrip() {
+        let defaults = UserDefaults(suiteName: "umbra.acp.tests.\(UUID().uuidString)")!
+        let keys = IDEAgentMemoryKeyStore()
+        let settings = IDEAgentSettings(defaults: defaults, keyStore: keys)
+        settings.addACPAgent(name: "A", commandLine: "agent --acp")
+        let id = settings.acpAgents[0].id
+        XCTAssertNoThrow(try settings.saveACPEnvValue("s3cr3t", agentID: id, key: "API_KEY"))
+        XCTAssertEqual(settings.acpKeychainEnv(for: id), ["API_KEY": "s3cr3t"])
+        // Only the key name is persisted; the value never touches UserDefaults.
+        let stored = defaults.dictionary(forKey: "umbra.agent.acpEnvKeys") as? [String: [String]]
+        XCTAssertEqual(stored?[id.uuidString], ["API_KEY"])
+        settings.removeACPEnvValue(agentID: id, key: "API_KEY")
+        XCTAssertTrue(settings.acpKeychainEnv(for: id).isEmpty)
+        XCTAssertNoThrow(try settings.saveACPEnvValue("x", agentID: id, key: "K"))
+        settings.removeACPAgent(id: id)
+        XCTAssertNil(try? keys.load(account: IDEAgentSettings.acpEnvAccount(agentID: id, key: "K")))
     }
 
     func testCrashThenRestartLoadsSession() async throws {

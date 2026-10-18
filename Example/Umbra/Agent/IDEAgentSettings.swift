@@ -135,6 +135,8 @@ final class IDEAgentSettings {
     var acpActiveAgentID: UUID? { didSet { defaults.set(acpActiveAgentID?.uuidString, forKey: Keys.acpActive) } }
     /// Per-agent "Allow running" consent, mirroring the remote-host consent flow.
     var acpAllowedAgentIDs: Set<UUID> { didSet { defaults.set(acpAllowedAgentIDs.map(\.uuidString).sorted(), forKey: Keys.acpAllowed) } }
+    /// Key names with Keychain-backed values per agent id (`[agentUUID: [key]]`; values excluded).
+    private(set) var acpEnvKeys: [String: [String]]
 
     var activeACPAgent: IDEACPDefinition? {
         guard let acpActiveAgentID, acpAllowedAgentIDs.contains(acpActiveAgentID) else { return nil }
@@ -151,11 +153,44 @@ final class IDEAgentSettings {
     func removeACPAgent(id: UUID) {
         acpAgents.removeAll { $0.id == id }
         acpAllowedAgentIDs.remove(id)
+        for key in acpEnvKeys[id.uuidString] ?? [] { try? keyStore.delete(account: Self.acpEnvAccount(agentID: id, key: key)) }
+        acpEnvKeys.removeValue(forKey: id.uuidString)
+        defaults.set(acpEnvKeys, forKey: Keys.acpEnvKeys)
         if acpActiveAgentID == id { acpActiveAgentID = nil }
     }
 
     func setACPAllowed(_ allowed: Bool, agentID: UUID) {
         if allowed { acpAllowedAgentIDs.insert(agentID) } else { acpAllowedAgentIDs.remove(agentID) }
+    }
+
+    // ACP secret environment values live in the Keychain (per-agent accounts), never in
+    // UserDefaults: `definition.env` is for non-secret values only.
+    static func acpEnvAccount(agentID: UUID, key: String) -> String { "acp.\(agentID.uuidString).\(key)" }
+
+    func saveACPEnvValue(_ value: String, agentID: UUID, key: String) throws {
+        try keyStore.save(value, account: Self.acpEnvAccount(agentID: agentID, key: key))
+        var keys = acpEnvKeys[agentID.uuidString] ?? []
+        if !keys.contains(key) {
+            keys.append(key)
+            acpEnvKeys[agentID.uuidString] = keys
+            defaults.set(acpEnvKeys, forKey: Keys.acpEnvKeys)
+        }
+    }
+
+    func acpKeychainEnv(for agentID: UUID) -> [String: String] {
+        var merged: [String: String] = [:]
+        for key in acpEnvKeys[agentID.uuidString] ?? [] {
+            if let value = try? keyStore.load(account: Self.acpEnvAccount(agentID: agentID, key: key)), !value.isEmpty {
+                merged[key] = value
+            }
+        }
+        return merged
+    }
+
+    func removeACPEnvValue(agentID: UUID, key: String) {
+        try? keyStore.delete(account: Self.acpEnvAccount(agentID: agentID, key: key))
+        acpEnvKeys[agentID.uuidString]?.removeAll { $0 == key }
+        defaults.set(acpEnvKeys, forKey: Keys.acpEnvKeys)
     }
 
     private func persistACPAgents() {
@@ -196,6 +231,7 @@ final class IDEAgentSettings {
         static let acpAgents = "umbra.agent.acpAgents"
         static let acpActive = "umbra.agent.acpActive"
         static let acpAllowed = "umbra.agent.acpAllowed"
+        static let acpEnvKeys = "umbra.agent.acpEnvKeys"
 
         /// `umbra.agent.baseURL` for the original (Responses) provider, so earlier settings carry over.
         static func field(_ name: String, _ provider: IDEAgentProvider) -> String {
@@ -241,6 +277,7 @@ final class IDEAgentSettings {
         acpAgents = (defaults.data(forKey: Keys.acpAgents)).flatMap { try? JSONDecoder().decode([IDEACPDefinition].self, from: $0) } ?? []
         acpActiveAgentID = defaults.string(forKey: Keys.acpActive).flatMap(UUID.init(uuidString:))
         acpAllowedAgentIDs = Set((defaults.stringArray(forKey: Keys.acpAllowed) ?? []).compactMap(UUID.init(uuidString:)))
+        acpEnvKeys = (defaults.dictionary(forKey: Keys.acpEnvKeys) as? [String: [String]]) ?? [:]
         disclosedHosts = Set(defaults.stringArray(forKey: Keys.disclosed) ?? [])
         refreshKeyState()
         refreshWebSearchKeyState()

@@ -92,6 +92,7 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private var acpTransport: IDEACPTransport?
     @ObservationIgnored private var acpFingerprint: String?
     @ObservationIgnored private var lastACPSessionID: String?
+    @ObservationIgnored private var pendingElicitations: [String: CheckedContinuation<String?, Never>] = [:]
     /// Agent-advertised modes for the ACP header chip; empty for the built-in agent.
     private(set) var acpAvailableModes: [ACPSessionMode] = []
     private(set) var acpCurrentModeID: String?
@@ -333,10 +334,13 @@ final class IDEAgentConversation: Identifiable {
         agentWorkspace = workspace
         var environment = await host.agentCommandEnvironment()
         for (key, value) in definition.env { environment[key] = value }
+        for (key, value) in settings.acpKeychainEnv(for: definition.id) { environment[key] = value }
         let transport = IDEACPTransport(definition: definition, workingDirectory: root, environment: environment)
+        var services = IDEACPHostServices.make(workspace: workspace, root: root)
+        services.askText = { [weak self] prompt in await self?.askElicitation(prompt) }
         let created = ACPClientSession(
             transport: transport,
-            hostServices: IDEACPHostServices.make(workspace: workspace, root: root),
+            hostServices: services,
             cwd: root.path,
             mode: mode,
             rules: currentRules(root: root),
@@ -680,6 +684,7 @@ final class IDEAgentConversation: Identifiable {
         // looks at this before it starts. (Not Task cancellation: that would also end the loop that reads
         // the run's events, and the run's ending would never reach the transcript.)
         stopRequested = true
+        cancelElicitations()
         guard isRunning else { return }
         if let session { Task { await session.stop() } }
         if let acpSession {
@@ -869,6 +874,7 @@ final class IDEAgentConversation: Identifiable {
         acpCurrentModeID = nil
         acpConfigOptions = []
         acpAgentName = nil
+        cancelElicitations()
         isRunning = false
         isAwaitingUser = false
         runRules = PermissionRules()
@@ -1045,7 +1051,7 @@ final class IDEAgentConversation: Identifiable {
             case .deny: "Denied"
             }
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
         if let session { Task { await session.resolveApproval(callID: callID, decision: decision) } }
         if let acpSession { Task { await acpSession.resolveApproval(callID: callID, decision: decision) } }
     }
@@ -1057,9 +1063,49 @@ final class IDEAgentConversation: Identifiable {
             entries[index].question = nil
             entries[index].questionOutcome = text == nil ? "Skipped" : "Answered"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
         if let session { Task { await session.answerQuestion(callID: callID, answer: text) } }
         if let acpSession { Task { await acpSession.answerQuestion(callID: callID, answer: text) } }
+    }
+
+    /// Answers an external agent's `elicitation/create` card; `nil` declines it.
+    func answerElicitation(callID: String, text: String?) {
+        if let index = toolIndex(callID) {
+            entries[index].elicitation = nil
+            entries[index].elicitationOutcome = text == nil ? "Declined" : "Answered"
+        }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        if let continuation = pendingElicitations.removeValue(forKey: callID) {
+            continuation.resume(returning: text)
+        }
+    }
+
+    /// Serves `ACPClientSession`'s `askText`: shows the elicitation as a card and waits.
+    /// Plan mode declines without a card, mirroring permission auto-reject.
+    private func askElicitation(_ prompt: ACPElicitationPrompt) async -> String? {
+        guard mode != .plan else { return nil }
+        let callID = prompt.toolCallId ?? UUID().uuidString
+        if let index = toolIndex(callID) {
+            entries[index].elicitation = prompt
+        } else {
+            append(.init(kind: .toolCall(name: prompt.title), text: "", callID: callID, elicitation: prompt))
+        }
+        isAwaitingUser = true
+        onAttention?(.needsYou(prompt.message.isEmpty ? prompt.title : prompt.message))
+        return await withCheckedContinuation { continuation in
+            pendingElicitations[callID] = continuation
+            if stopRequested { answerElicitation(callID: callID, text: nil) }
+        }
+    }
+
+    private func cancelElicitations() {
+        let pending = pendingElicitations
+        pendingElicitations = [:]
+        for (callID, continuation) in pending {
+            if let index = toolIndex(callID) { entries[index].elicitation = nil }
+            continuation.resume(returning: nil)
+        }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
     }
 
     // MARK: - Reverting
@@ -1072,7 +1118,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].planOutcome = "Approved · \(mode.displayName)"
         }
         if mode != .plan { self.mode = mode }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
         Task { await session.resolvePlan(callID: callID, decision: .approve(mode)) }
     }
 
@@ -1083,7 +1129,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].plan = nil
             entries[index].planOutcome = "Changes requested"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil }
+        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
         Task { await session.resolvePlan(callID: callID, decision: .revise(feedback)) }
     }
 
@@ -1333,6 +1379,7 @@ final class IDEAgentConversation: Identifiable {
                 entries[index].approval = nil
                 entries[index].question = nil
                 entries[index].plan = nil
+                entries[index].elicitation = nil
             }
         case .toolCallOutput:
             break

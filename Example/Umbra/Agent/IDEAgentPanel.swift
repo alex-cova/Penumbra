@@ -833,10 +833,10 @@ private struct IDEAgentToolCard: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
-                    if let outcome = entry.approvalOutcome ?? entry.questionOutcome {
+                    if let outcome = entry.approvalOutcome ?? entry.questionOutcome ?? entry.elicitationOutcome {
                         Text(outcome)
                             .font(IDEAppearance.Typography.caption)
-                            .foregroundStyle(outcome == "Denied" ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
+                            .foregroundStyle(outcome == "Denied" || outcome == "Declined" ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
                     }
                     statusIcon
                 }
@@ -859,6 +859,18 @@ private struct IDEAgentToolCard: View {
                 Divider().overlay(IDEAppearance.ColorToken.border)
                 IDEAgentQuestionView(question: question) { answer in
                     workspace.agent.answer(callID: question.callID, text: answer)
+                }
+            }
+
+            if let elicitation = entry.elicitation, entry.output == nil {
+                Divider().overlay(IDEAppearance.ColorToken.border)
+                IDEAgentQuestionView(
+                    question: UserQuestion(
+                        callID: elicitation.toolCallId ?? entry.callID ?? "",
+                        question: elicitation.message.isEmpty ? elicitation.title : elicitation.message)
+                ) { answer in
+                    workspace.agent.answerElicitation(
+                        callID: elicitation.toolCallId ?? entry.callID ?? "", text: answer)
                 }
             }
 

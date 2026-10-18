@@ -384,6 +384,7 @@ final class IDEAgentController {
     func decide(callID: String, _ decision: ApprovalDecision) { selected.decide(callID: callID, decision) }
 
     func answer(callID: String, text: String?) { selected.answer(callID: callID, text: text) }
+    func answerElicitation(callID: String, text: String?) { selected.answerElicitation(callID: callID, text: text) }
 
     func showDiff(for change: IDEAgentFileChange) { selected.showDiff(for: change) }
 

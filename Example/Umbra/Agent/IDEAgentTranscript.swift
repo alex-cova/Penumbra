@@ -32,6 +32,9 @@ struct IDEAgentEntry: Identifiable, Equatable {
     /// For `ask_user`: the question waiting for an answer, and the answer once given ("Skipped" if dismissed).
     var question: UserQuestion?
     var questionOutcome: String?
+    /// For an external agent's `elicitation/create`: the free-text prompt waiting for an answer.
+    var elicitation: ACPElicitationPrompt? = nil
+    var elicitationOutcome: String? = nil
     /// What the user chose, once they did: "Approved", "Edited and approved" or "Denied".
     var approvalOutcome: String?
     /// A command's output as it arrives; the card shows it in full while the model gets a summary.
