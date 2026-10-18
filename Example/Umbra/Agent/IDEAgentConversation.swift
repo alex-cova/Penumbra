@@ -87,6 +87,22 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored var willSend: (() -> Void)?
     @ObservationIgnored private var session: AgentSession?
     @ObservationIgnored private var sessionFingerprint: String?
+    // ACP backend (plan steps 5-6): an external agent presenting the same AgentEvent stream.
+    @ObservationIgnored private var acpSession: ACPClientSession?
+    @ObservationIgnored private var acpTransport: IDEACPTransport?
+    @ObservationIgnored private var acpFingerprint: String?
+    @ObservationIgnored private var lastACPSessionID: String?
+    /// Agent-advertised modes for the ACP header chip; empty for the built-in agent.
+    private(set) var acpAvailableModes: [ACPSessionMode] = []
+    private(set) var acpCurrentModeID: String?
+    /// Agent-advertised config options, shown read-only in the panel header.
+    private(set) var acpConfigOptions: [ACPConfigOption] = []
+    private(set) var acpAgentName: String?
+
+    /// Whether this chat is driven by an external ACP agent (selected in Settings ▸ Agent).
+    var isACPConversation: Bool { settings.activeACPAgent != nil }
+    /// Rewind/compact/checkpoints owned by AgentKit are not available for ACP conversations.
+    var supportsAgentKitOnlyFeatures: Bool { !isACPConversation }
     @ObservationIgnored private var runTask: Task<Void, Never>?
     @ObservationIgnored private var pendingText = ""
     @ObservationIgnored private var flushTask: Task<Void, Never>?
@@ -145,7 +161,7 @@ final class IDEAgentConversation: Identifiable {
     }
 
     var canSend: Bool {
-        !isRunning && !isCompacting && settings.hasAcceptedDisclosure && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !isRunning && !isCompacting && (settings.hasAcceptedDisclosure || isACPConversation) && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Sending
@@ -159,7 +175,7 @@ final class IDEAgentConversation: Identifiable {
     /// command's expansion, a skill's instructions), which the row offers as `detail`. `allowedTools` are
     /// permission rules for this run only. The draft is cleared once the message is on its way.
     func submit(text: String, modelText: String? = nil, allowedTools: [String] = []) {
-        guard !isRunning, !isCompacting, settings.hasAcceptedDisclosure, !text.isEmpty, let host else { return }
+        guard !isRunning, !isCompacting, settings.hasAcceptedDisclosure || isACPConversation, !text.isEmpty, let host else { return }
         guard let root = host.agentProjectRoot else {
             append(.init(kind: .error, text: "Open a project folder first; the agent works inside one."))
             return
@@ -180,6 +196,18 @@ final class IDEAgentConversation: Identifiable {
         let context = host.agentEditorContext()
         let body = fullText
         let entryID = entry.id
+        if isACPConversation {
+            openACPRun(root: root, host: host) { acp in
+                let resolution = await IDEAgentMentionResolver.resolve(body, sources: self.mentionSources(root: root))
+                if let index = self.entries.firstIndex(where: { $0.id == entryID }) {
+                    self.entries[index].attachments = resolution.attachments.map(\.summary)
+                }
+                if self.stopRequested { return nil }
+                if let index = self.entries.lastIndex(where: \.canRetry) { self.entries[index].canRetry = false }
+                return await acp.send(context + "\n\n" + body + resolution.modelBlock)
+            }
+            return
+        }
         openRun(root: root, host: host) { session in
             let framed = await self.frame(context: context, body: body, entryID: entryID, root: root, session: session)
             if self.stopRequested { return nil }
@@ -192,12 +220,18 @@ final class IDEAgentConversation: Identifiable {
     /// Tries the send that failed because the provider could not be reached. The message is already in
     /// the transcript and in the history, so this does not add another copy of it.
     func retry() {
-        guard !isRunning, !isCompacting, settings.hasAcceptedDisclosure, let host, let root = host.agentProjectRoot else { return }
+        guard !isRunning, !isCompacting, settings.hasAcceptedDisclosure || isACPConversation, let host, let root = host.agentProjectRoot else { return }
         guard entries.contains(where: \.canRetry) else { return }
         willSend?()
         commandCatalog?.invalidate()
         promptRecall.reset()
         dismissRetryError = true
+        if isACPConversation {
+            // The message is already in the transcript; resend its text to the external agent.
+            let text = entries.last(where: { $0.kind == .user })?.text ?? ""
+            openACPRun(root: root, host: host) { acp in await acp.send(text) }
+            return
+        }
         openRun(root: root, host: host) { session in
             await session.retry()
         }
@@ -246,6 +280,161 @@ final class IDEAgentConversation: Identifiable {
             if self.stopRequested { await activeSession.stop() }
             await self.consume(stream, session: activeSession)
         }
+    }
+
+    // MARK: - ACP backend
+
+    private func openACPRun(
+        root: URL, host: any IDEAgentHost,
+        makeStream: @escaping @MainActor (ACPClientSession) async -> AsyncStream<AgentEvent>?
+    ) {
+        stopRequested = false
+        isRunning = true
+        status = "Thinking…"
+        runTask = Task { [weak self] in
+            guard let self else { return }
+            let active: ACPClientSession
+            do {
+                active = try await self.currentACPSession(root: root, host: host)
+            } catch {
+                self.abandonRun(error: error.localizedDescription)
+                return
+            }
+            await active.setMode(self.mode)
+            await active.setRules(self.currentRules(root: root))
+            if self.stopRequested { return self.endBeforeStarting() }
+            guard let stream = await makeStream(active) else { return self.endBeforeStarting() }
+            if self.dismissRetryError {
+                self.dismissRetryError = false
+                if let index = self.entries.lastIndex(where: \.canRetry) { self.entries.remove(at: index) }
+            }
+            if self.stopRequested { await active.stop() }
+            await self.consumeACP(stream, session: active)
+        }
+    }
+
+    private func currentACPSession(root: URL, host: any IDEAgentHost) async throws -> ACPClientSession {
+        guard let definition = settings.activeACPAgent else {
+            throw ACPError.agentError(JSONRPCError(code: -32000, message: "No ACP agent is selected and allowed in Settings ▸ Agent."))
+        }
+        let fingerprint = "\(definition.id.uuidString)|\(definition.command)|\(definition.args.joined(separator: " "))|\(root.path)"
+        if let acpSession, acpFingerprint == fingerprint, await acpSession.isConnected {
+            return acpSession
+        }
+        // Crash/settings change: respawn. The old process is killed with its transport.
+        if let oldTransport = acpTransport { Task { await oldTransport.close() } }
+        acpSession = nil
+        let box = IDEAgentHostBox(host)
+        let writeFlag = self.writeFlag
+        let workspace = IDEAgentWorkspace(root: root, box: box, onWrite: { [weak self] path, before, after in
+            let isRevert = writeFlag.isReverting
+            Task { @MainActor in self?.noteAgentWrite(path: path, before: before, after: after, isRevert: isRevert) }
+        })
+        agentWorkspace = workspace
+        var environment = await host.agentCommandEnvironment()
+        for (key, value) in definition.env { environment[key] = value }
+        let transport = IDEACPTransport(definition: definition, workingDirectory: root, environment: environment)
+        let created = ACPClientSession(
+            transport: transport,
+            hostServices: IDEACPHostServices.make(workspace: workspace, root: root),
+            cwd: root.path,
+            mode: mode,
+            rules: currentRules(root: root),
+            checkpoints: await ensureCheckpointLog())
+        acpTransport = transport
+        acpSession = created
+        acpFingerprint = fingerprint
+        _ = try await created.connect()
+        do {
+            if let previous = lastACPSessionID, await created.agentCapabilities?.loadSession == true {
+                _ = try await created.loadSession(id: previous)
+            } else {
+                _ = try await created.newSession()
+            }
+        } catch {
+            // A failed load falls back to a fresh session on the same connection.
+            if lastACPSessionID != nil { _ = try await created.newSession() } else { throw error }
+        }
+        lastACPSessionID = await created.sessionId
+        acpAgentName = definition.displayName
+        refreshACPHeaderState()
+        return created
+    }
+
+    private func refreshACPHeaderState() {
+        guard let acpSession else { return }
+        Task {
+            acpAvailableModes = await acpSession.modeState?.availableModes ?? []
+            acpCurrentModeID = await acpSession.currentModeId
+            acpConfigOptions = await acpSession.configOptions
+        }
+    }
+
+    /// Switches the external agent's own mode (`session/set_mode`). Umbra's `PermissionMode`
+    /// continues to gate local fs/terminal effects independently (plan step 6).
+    func setACPMode(_ modeID: String) {
+        guard let acpSession else { return }
+        Task {
+            do {
+                try await acpSession.setAgentMode(modeID)
+                acpCurrentModeID = modeID
+            } catch {
+                appendError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func consumeACP(_ stream: AsyncStream<AgentEvent>, session: ACPClientSession) async {
+        for await event in stream {
+            handle(event)
+            if case .runStarted = event { refreshACPHeaderState() }
+        }
+        flush()
+        if let currentRun, let checkpoints = session.checkpoints {
+            let changes = await checkpoints.changes(in: currentRun)
+            if !changes.isEmpty {
+                var entry = IDEAgentEntry(kind: .changes, text: "")
+                entry.run = currentRun
+                entry.fileChanges = changes.map { IDEAgentFileChange(path: $0.path, original: $0.original) }
+                append(entry)
+            }
+        }
+        currentRun = nil
+        isRunning = false
+        isAwaitingUser = false
+        status = nil
+        runRules = PermissionRules()
+        fileClaims?.release(tab: id)
+        // Transcript persistence via the host blob; items are synthesized from the transcript.
+        let items: [ConversationItem] = entries.compactMap { entry in
+            switch entry.kind {
+            case .user: .user(entry.text)
+            case .assistant: .assistant(entry.text)
+            default: nil
+            }
+        }
+        persist(items: items, checkpoints: await session.checkpoints?.snapshot() ?? [])
+        onRunFinished?()
+        if let ending = lastEnding {
+            let lastAnswer = entries.last(where: { $0.kind == .assistant })?.text ?? ""
+            onAttention?(.finished(ending, summary: Self.firstLine(of: lastAnswer, limit: 140)))
+        }
+        refreshACPHeaderState()
+        drainQueue()
+    }
+
+    /// Restarts a crashed ACP agent process; the next send respawns it.
+    func restartACP() {
+        let transport = acpTransport
+        let session = acpSession
+        acpSession = nil
+        acpTransport = nil
+        acpFingerprint = nil
+        Task {
+            await session?.close()
+            await transport?.close()
+        }
+        appendNotice("The ACP agent will restart on the next message.")
     }
 
     /// The run never started. A Retry that was waiting stays, so the button is still there.
@@ -423,6 +612,7 @@ final class IDEAgentConversation: Identifiable {
         guard newMode != mode else { return }
         mode = newMode
         if let session { Task { await session.setMode(newMode) } }
+        if let acpSession { Task { await acpSession.setMode(newMode) } }
     }
 
     func cycleMode() { setMode(mode.next) }
@@ -476,9 +666,10 @@ final class IDEAgentConversation: Identifiable {
     }
 
     private func pushRules() {
-        guard let session, let root = host?.agentProjectRoot else { return }
+        guard let root = host?.agentProjectRoot else { return }
         let rules = currentRules(root: root)
-        Task { await session.setRules(rules) }
+        if let session { Task { await session.setRules(rules) } }
+        if let acpSession { Task { await acpSession.setRules(rules) } }
     }
 
     /// Cancels the stream and running tools. The run ends with a "Stopped." notice and the next
@@ -489,8 +680,17 @@ final class IDEAgentConversation: Identifiable {
         // looks at this before it starts. (Not Task cancellation: that would also end the loop that reads
         // the run's events, and the run's ending would never reach the transcript.)
         stopRequested = true
-        guard isRunning, let session else { return }
-        Task { await session.stop() }
+        guard isRunning else { return }
+        if let session { Task { await session.stop() } }
+        if let acpSession {
+            let transport = acpTransport
+            Task {
+                await acpSession.stop()
+                // Grace period, then the process group is killed (plan step 5).
+                try? await Task.sleep(for: .seconds(2))
+                transport?.terminate()
+            }
+        }
     }
 
     /// Empties the conversation in place, under a new identity. The one being left stays in the history.
@@ -652,6 +852,8 @@ final class IDEAgentConversation: Identifiable {
 
     private func endSession() {
         let old = session
+        let oldACP = acpSession
+        let oldTransport = acpTransport
         runTask?.cancel()
         runTask = nil
         flushTask?.cancel()
@@ -660,11 +862,22 @@ final class IDEAgentConversation: Identifiable {
         pendingOutput = [:]
         session = nil
         sessionFingerprint = nil
+        acpSession = nil
+        acpTransport = nil
+        acpFingerprint = nil
+        acpAvailableModes = []
+        acpCurrentModeID = nil
+        acpConfigOptions = []
+        acpAgentName = nil
         isRunning = false
         isAwaitingUser = false
         runRules = PermissionRules()
         fileClaims?.release(tab: id)
-        Task { await old?.stop() }
+        Task {
+            await old?.stop()
+            await oldACP?.close()
+            await oldTransport?.close()
+        }
     }
 
     // MARK: - Session
@@ -823,7 +1036,7 @@ final class IDEAgentConversation: Identifiable {
 
     /// Answers the question on a command's card. The run is paused until this is called, or Stop.
     func decide(callID: String, _ decision: ApprovalDecision) {
-        guard let session else { return }
+        guard session != nil || acpSession != nil else { return }
         if let index = toolIndex(callID) {
             entries[index].approval = nil
             entries[index].approvalOutcome = switch decision {
@@ -833,18 +1046,20 @@ final class IDEAgentConversation: Identifiable {
             }
         }
         isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil }
-        Task { await session.resolveApproval(callID: callID, decision: decision) }
+        if let session { Task { await session.resolveApproval(callID: callID, decision: decision) } }
+        if let acpSession { Task { await acpSession.resolveApproval(callID: callID, decision: decision) } }
     }
 
     /// Answers an `ask_user` card; `nil` skips it, and the model is told to use its judgment.
     func answer(callID: String, text: String?) {
-        guard let session else { return }
+        guard session != nil || acpSession != nil else { return }
         if let index = toolIndex(callID) {
             entries[index].question = nil
             entries[index].questionOutcome = text == nil ? "Skipped" : "Answered"
         }
         isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil }
-        Task { await session.answerQuestion(callID: callID, answer: text) }
+        if let session { Task { await session.answerQuestion(callID: callID, answer: text) } }
+        if let acpSession { Task { await acpSession.answerQuestion(callID: callID, answer: text) } }
     }
 
     // MARK: - Reverting
@@ -928,6 +1143,10 @@ final class IDEAgentConversation: Identifiable {
 
     /// `/compact`: summarizes the earlier conversation to free up the window. `focus` says what to keep in detail.
     func compact(focus: String?) async {
+        guard supportsAgentKitOnlyFeatures else {
+            appendNotice("Shortening is not available for an external ACP agent.")
+            return
+        }
         guard !isRunning, !isCompacting, let host, let root = host.agentProjectRoot else { return }
         guard session != nil || !(restoredItems ?? []).isEmpty else {
             appendNotice("There is nothing to shorten yet.")
@@ -957,8 +1176,11 @@ final class IDEAgentConversation: Identifiable {
 
     // MARK: - Rewinding and forking
 
-    /// The messages this chat can go back to, newest first.
-    var rewindTargets: [IDEAgentRewindTarget] { IDEAgentRewind.targets(in: entries) }
+    /// The messages this chat can go back to, newest first. Empty for ACP conversations:
+    /// rewind is an AgentKit-session feature an external agent cannot honour.
+    var rewindTargets: [IDEAgentRewindTarget] {
+        supportsAgentKitOnlyFeatures ? IDEAgentRewind.targets(in: entries) : []
+    }
 
     /// Goes back to before the user message `entryID`: its conversation, the files the agent changed since,
     /// or both. The message goes back into the field to be sent again, or changed. Not while a run is going.

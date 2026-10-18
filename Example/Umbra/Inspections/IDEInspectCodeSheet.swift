@@ -115,7 +115,7 @@ struct IDEInspectCodeSheet: View {
             HStack {
                 Button("Configure Profile…") {
                     close()
-                    workspace.requestedSettingsDomain = .inspections
+                    workspace.requestedSettingsDomain = .java
                     workspace.showSettings()
                 }
                 Spacer()

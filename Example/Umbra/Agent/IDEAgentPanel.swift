@@ -195,7 +195,19 @@ struct IDEAgentPanel: View {
             }
             HStack {
                 IDEAgentModeChip(mode: agent.mode) { agent.selected.setMode($0) }
-                IDEAgentModelChip(settings: settings) { isSettingsPresented = true }
+                if agent.selected.isACPConversation {
+                    IDEACPModeChip(conversation: agent.selected)
+                    if !agent.selected.acpConfigOptions.isEmpty {
+                        IDEACPConfigChip(options: agent.selected.acpConfigOptions)
+                    }
+                    Button("Restart Agent") { agent.selected.restartACP() }
+                        .buttonStyle(.borderless)
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .help("Kill the ACP agent process; it restarts on the next message")
+                } else {
+                    IDEAgentModelChip(settings: settings) { isSettingsPresented = true }
+                }
                 Spacer(minLength: IDEAppearance.Spacing.sm)
                 if let fraction = agent.selected.contextFraction {
                     IDEAgentContextMeter(
@@ -335,6 +347,65 @@ private struct IDEAgentModeChip: View {
         .fixedSize()
         .help("\(mode.title): \(mode.detail)\nPress ⇧Tab in the message field to switch.")
         .accessibilityLabel("Permission mode: \(mode.title)")
+    }
+}
+
+/// The external agent's own mode (`session/set_mode`), visibly separate from Umbra's
+/// `PermissionMode` chip: the agent's modes are agent-defined, local gating stays Umbra's.
+private struct IDEACPModeChip: View {
+    let conversation: IDEAgentConversation
+
+    var body: some View {
+        if conversation.acpAvailableModes.isEmpty {
+            Text(conversation.acpAgentName ?? "ACP agent")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .lineLimit(1)
+        } else {
+            Menu {
+                ForEach(conversation.acpAvailableModes, id: \.id) { candidate in
+                    Button {
+                        conversation.setACPMode(candidate.id)
+                    } label: {
+                        Label(candidate.name, systemImage: candidate.id == conversation.acpCurrentModeID ? "checkmark" : "")
+                    }
+                    .help(candidate.description ?? candidate.name)
+                }
+            } label: {
+                Label(
+                    conversation.acpAvailableModes.first { $0.id == conversation.acpCurrentModeID }?.name ?? "Agent mode",
+                    systemImage: "person.crop.circle")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.accent)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("The external agent's mode. Umbra's permission mode (left) still gates file and terminal effects on this Mac.")
+            .accessibilityLabel("ACP agent mode")
+        }
+    }
+}
+
+/// Agent-advertised config options, read-only in v1 (full config UI is a non-goal).
+private struct IDEACPConfigChip: View {
+    let options: [ACPConfigOption]
+
+    var body: some View {
+        Menu {
+            ForEach(options, id: \.id) { option in
+                Text("\(option.name): \(option.currentValueDescription ?? "—")")
+            }
+        } label: {
+            Label("Config", systemImage: "slider.horizontal.3")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Configuration advertised by the ACP agent (read-only)")
+        .accessibilityLabel("ACP agent configuration")
     }
 }
 
@@ -1013,6 +1084,8 @@ struct IDEAgentSettingsView: View {
     @State private var keyDraft = ""
     @State private var webSearchKeyDraft = ""
     @State private var isConfirmingClear = false
+    @State private var acpNameDraft = ""
+    @State private var acpCommandDraft = ""
 
     var body: some View {
         @Bindable var settings = settings
@@ -1039,6 +1112,56 @@ struct IDEAgentSettingsView: View {
                 : "Thinking makes each step slower. It applies to models that support it.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
+
+            Section("External ACP Agents") {
+                @Bindable var settings = settings
+                if settings.acpAgents.isEmpty {
+                    Text("No external agents. Add one by name and command; it runs as a process on this Mac and talks to the panel over the Agent Client Protocol.")
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                }
+                ForEach(settings.acpAgents) { definition in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(definition.displayName)
+                            Text(([definition.command] + definition.args).joined(separator: " "))
+                                .font(IDEAppearance.Typography.caption)
+                                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        let isUsed = settings.acpActiveAgentID == definition.id && settings.acpAllowedAgentIDs.contains(definition.id)
+                        Button {
+                            if isUsed {
+                                settings.acpActiveAgentID = nil
+                            } else {
+                                settings.setACPAllowed(true, agentID: definition.id)
+                                settings.acpActiveAgentID = definition.id
+                            }
+                        } label: {
+                            Label("Use", systemImage: isUsed ? "checkmark.square" : "square")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Allow running this agent and use it for new chats. Umbra asks through the existing approval cards before it changes files or runs commands.")
+                        .accessibilityLabel(isUsed ? "Stop using \(definition.displayName)" : "Use \(definition.displayName)")
+                        Button("Remove") { settings.removeACPAgent(id: definition.id) }
+                    }
+                }
+                TextField("Name (e.g. My Agent)", text: $acpNameDraft)
+                TextField("Command (e.g. my-agent --acp)", text: $acpCommandDraft)
+                    .font(IDEAppearance.Typography.monoSmall)
+                Button("Add Agent") {
+                    settings.addACPAgent(
+                        name: acpNameDraft.trimmingCharacters(in: .whitespaces),
+                        commandLine: acpCommandDraft.trimmingCharacters(in: .whitespaces))
+                    acpNameDraft = ""
+                    acpCommandDraft = ""
+                }
+                .disabled(acpCommandDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                Text("Turning on “Use” is the consent to run that command. Nothing is spawned until you send a message, and Stop kills the process group.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
 
             Section("Behavior") {
                 Picker("Mode for new chats", selection: $settings.mode) {

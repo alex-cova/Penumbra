@@ -2,9 +2,10 @@ import JavaIntelligence
 import Penumbra
 import SwiftUI
 
-/// Java in Umbra's chrome: the Java palette commands, the Java menu, the Java and Inspections settings
-/// pages, the Debug, Test Results, Hierarchy and Call Hierarchy tool windows, the Run tab and the
-/// Breakpoints sidebar tab. The intelligence is `JavaLanguageService`; Run and Test are
+/// Java in Umbra's chrome: the Java palette commands, the Java menu, the Java settings page
+/// (which holds the Inspections tabs too), the Debug, Test Results, Hierarchy and Call Hierarchy
+/// tool windows, the Run tab and the Breakpoints sidebar tab. The intelligence is
+/// `JavaLanguageService`; Run and Test are
 /// `IDEJavaRunProvider` (made by `makeRunProvider`), and the Gradle project, its sidebar and its console
 /// are `IDEGradleProjectSystem`'s. The debugger is the workspace's (Java-only).
 struct IDEJavaModule: IDELanguageModule {
@@ -235,12 +236,7 @@ struct IDEJavaModule: IDELanguageModule {
     }
 
     var preferencePanes: [IDEPreferencesPane] {
-        [
-            IDEPreferencesPane(domain: .java) { preferences, _ in AnyView(IDEPreferencesJavaPane(preferences: preferences)) },
-            IDEPreferencesPane(domain: .inspections) { preferences, _ in
-                AnyView(IDEPreferencesInspectionsPane(preferences: preferences))
-            }
-        ]
+        [IDEPreferencesPane(domain: .java) { preferences, _ in AnyView(IDEPreferencesJavaPane(preferences: preferences)) }]
     }
 }
 
@@ -342,14 +338,11 @@ extension IDEBottomPanelTab {
 }
 
 extension IDEPreferencesDomain {
+    /// The Java page, which also holds the inspections (profile, filters and one group at a time).
     static let java = IDEPreferencesDomain(
         id: "java", title: "Java", symbol: "cup.and.saucer",
-        searchTerms: ["jdk", "gradle", "maven", "sync", "timeout", "diagnostics", "compiler", "semantic highlighting", "parameter hints", "inlay", "gutter icons", "imports", "optimize imports", "run", "run configuration", "temporary"]
-    )
-
-    static let inspections = IDEPreferencesDomain(
-        id: "inspections", title: "Inspections", symbol: "checklist",
-        searchTerms: ["warnings", "severity", "code analysis", "quick fix", "lint", "probable bugs", "redundant code", "unused", "suppress", "noinspection"]
+        searchTerms: ["jdk", "gradle", "maven", "sync", "timeout", "diagnostics", "compiler", "semantic highlighting", "parameter hints", "inlay", "gutter icons", "imports", "optimize imports", "run", "run configuration", "temporary",
+                      "inspections", "warnings", "severity", "code analysis", "quick fix", "lint", "probable bugs", "redundant code", "unused", "suppress", "noinspection"]
             + JavaInspectionRule.allCases.map(\.title)
     )
 }

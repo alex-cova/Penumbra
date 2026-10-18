@@ -24,10 +24,10 @@ extension IDEWorkspace {
         }
     }
 
-    /// Opens Settings › Inspections with `rule` found and its scopes open.
+    /// Opens Settings › Java › Inspections with `rule` found, its group selected and its scopes open.
     func showInspectionSettings(for rule: JavaInspectionRule) {
         inspections.focusedRuleCode = rule.code
-        requestedSettingsDomain = .inspections
+        requestedSettingsDomain = .java
         showSettings()
     }
 

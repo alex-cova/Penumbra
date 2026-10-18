@@ -366,6 +366,8 @@ struct IDEPreferencesJavaPane: View {
                 .toggleStyle(.checkbox)
             }
         }
+
+        IDEPreferencesInspectionsPane(preferences: preferences)
     }
 
     private var postfixEnabled: Binding<Bool> {

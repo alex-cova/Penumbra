@@ -3,14 +3,15 @@ import JavaIntelligence
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Settings › Inspections: the active inspection profile (the project's own, or a global one),
-/// every Java inspection by group with an on/off checkbox, a severity and per-scope exceptions.
-/// Only deviations from a rule's default are stored in the profile.
+/// Settings › Java › Inspections: the active inspection profile (the project's own, or a global one),
+/// every Java inspection, one group at a time, with an on/off checkbox, a severity and per-scope
+/// exceptions. Only deviations from a rule's default are stored in the profile.
 struct IDEPreferencesInspectionsPane: View {
     @Bindable var preferences: IDEPreferences
     @Environment(IDEWorkspace.self) private var workspace
     @State private var query = ""
     @State private var filter: RuleFilter = .all
+    @State private var selectedGroup: JavaInspectionGroup = .probableBugs
     @State private var expandedScopes: Set<String> = []
     @State private var prompt: NamePrompt?
     @State private var promptText = ""
@@ -61,7 +62,7 @@ struct IDEPreferencesInspectionsPane: View {
 
     var body: some View {
         IDESettingsSection(
-            "Inspection Profile",
+            "Inspections",
             footer: "A project can carry its own profile in .umbra/inspections.json, shared through version control. Silence one place with a quick fix (Suppress for method or class), or a comment: //noinspection <id>."
         ) {
             profileBar
@@ -82,35 +83,60 @@ struct IDEPreferencesInspectionsPane: View {
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
+            groupPickerAndRules
         }
         .onAppear {
             store.reload()
             focusRequestedRule()
+            ensureVisibleSelection()
         }
         .onChange(of: inspections.focusedRuleCode) { _, _ in focusRequestedRule() }
+        .onChange(of: query) { _, _ in ensureVisibleSelection() }
+        .onChange(of: filter) { _, _ in ensureVisibleSelection() }
         .alert(prompt?.title ?? "", isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } })) {
             TextField("Name", text: $promptText)
             Button("OK") { commitPrompt() }
             Button("Cancel", role: .cancel) { prompt = nil }
         }
+    }
 
+    /// One group at a time, chosen with a pop-up: 18 groups do not fit in a tab strip
+    /// (their titles collapse into each other), so the group is a picker instead. The profile
+    /// bar and the filters above stay shared, so they keep applying while the group changes.
+    private var groupPickerAndRules: some View {
         let rules = matchingRules
-        ForEach(JavaInspectionGroup.allCases, id: \.self) { group in
-            let groupRules = rules.filter { $0.group == group }
-            if !groupRules.isEmpty {
-                IDESettingsSection(group.title) {
-                    groupToggle(group, rules: groupRules)
-                    ForEach(groupRules, id: \.self) { rule in
+        let groups = JavaInspectionGroup.allCases.filter { group in rules.contains { $0.group == group } }
+        return Group {
+            if groups.isEmpty {
+                Text(query.isEmpty ? "No inspection matches this filter." : "No inspection matches \u{201C}\(query)\u{201D}.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            } else {
+                Picker("Group", selection: $selectedGroup) {
+                    ForEach(groups, id: \.self) { group in
+                        let groupRules = rules.filter { $0.group == group }
+                        let enabled = groupRules.filter { profile.isEnabled($0) }.count
+                        Text("\(group.title) (\(enabled)/\(groupRules.count))").tag(group)
+                    }
+                }
+                let selectedRules = rules.filter { $0.group == selectedGroup }
+                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
+                    groupToggle(selectedGroup, rules: selectedRules)
+                    ForEach(selectedRules, id: \.self) { rule in
                         row(for: rule)
                     }
                 }
             }
         }
+    }
 
-        if rules.isEmpty {
-            Text(query.isEmpty ? "No inspection matches this filter." : "No inspection matches \u{201C}\(query)\u{201D}.")
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
+    /// The picker always shows a group: a filter that empties it moves to the first group
+    /// that still has a matching rule.
+    private func ensureVisibleSelection() {
+        let rules = matchingRules
+        guard !rules.contains(where: { $0.group == selectedGroup }) else { return }
+        if let first = JavaInspectionGroup.allCases.first(where: { group in rules.contains { $0.group == group } }) {
+            selectedGroup = first
         }
     }
 
@@ -229,6 +255,7 @@ struct IDEPreferencesInspectionsPane: View {
         guard let code = inspections.focusedRuleCode else { return }
         query = code
         filter = .all
+        if let rule = JavaInspectionRule(code: code) { selectedGroup = rule.group }
         expandedScopes.insert(code)
         inspections.focusedRuleCode = nil
     }
@@ -266,6 +293,7 @@ struct IDEPreferencesInspectionsPane: View {
                         .font(IDEAppearance.Typography.caption)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                         .help("Has a quick fix")
+                        .accessibilityLabel("Has a quick fix")
                 }
                 Spacer(minLength: IDEAppearance.Spacing.md)
                 Picker("Severity", selection: severityBinding(rule)) {

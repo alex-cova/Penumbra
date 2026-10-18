@@ -180,13 +180,14 @@ struct IDEPreferencesEditorPane: View {
 
         IDESettingsSection(
             "Layout",
-            footer: "The vertical scrollbar appears when the minimap is off."
+            footer: "The vertical scrollbar appears when the minimap is off. Hover the scrollbar, or the minimap outside the visible area, to see code that is off screen. Click to jump to the first line in the popup."
         ) {
             IDESettingsToggle("Line Numbers", isOn: $preferences.showLineNumbers)
             IDESettingsToggle("Code Folding", isOn: $preferences.isLineFoldingEnabled)
             IDESettingsToggle("Word Wrap", isOn: $preferences.wrapLines)
             IDESettingsToggle("Minimap", isOn: $preferences.showMinimap)
             IDESettingsToggle("Scrollbars", isOn: $preferences.showScrollbars)
+            IDESettingsToggle("Code Preview on Scrollbar Hover", isOn: $preferences.showEditorFragmentPreview)
         }
 
         IDESettingsSection(

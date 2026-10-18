@@ -128,6 +128,40 @@ final class IDEAgentSettings {
     /// Dollars per million tokens by model prefix, as editable text (see `IDEAgentPrices`).
     var priceTableText: String { didSet { defaults.set(priceTableText, forKey: Keys.prices) } }
     private(set) var disclosedHosts: Set<String>
+    // ACP (external agents, plan step 5). Command-based definitions only in v1.
+    /// User-added ACP agents by name + command, persisted as JSON in defaults (never in a repo).
+    var acpAgents: [IDEACPDefinition] { didSet { persistACPAgents() } }
+    /// The ACP agent new chats use, when set and allowed. `nil` uses the built-in agent.
+    var acpActiveAgentID: UUID? { didSet { defaults.set(acpActiveAgentID?.uuidString, forKey: Keys.acpActive) } }
+    /// Per-agent "Allow running" consent, mirroring the remote-host consent flow.
+    var acpAllowedAgentIDs: Set<UUID> { didSet { defaults.set(acpAllowedAgentIDs.map(\.uuidString).sorted(), forKey: Keys.acpAllowed) } }
+
+    var activeACPAgent: IDEACPDefinition? {
+        guard let acpActiveAgentID, acpAllowedAgentIDs.contains(acpActiveAgentID) else { return nil }
+        return acpAgents.first { $0.id == acpActiveAgentID }
+    }
+
+    func addACPAgent(name: String, commandLine: String) {
+        guard let parsed = IDEACPDefinition.parseCommandLine(commandLine) else { return }
+        let definition = IDEACPDefinition(name: name, command: parsed.command, args: parsed.args)
+        acpAgents.append(definition)
+        acpActiveAgentID = definition.id
+    }
+
+    func removeACPAgent(id: UUID) {
+        acpAgents.removeAll { $0.id == id }
+        acpAllowedAgentIDs.remove(id)
+        if acpActiveAgentID == id { acpActiveAgentID = nil }
+    }
+
+    func setACPAllowed(_ allowed: Bool, agentID: UUID) {
+        if allowed { acpAllowedAgentIDs.insert(agentID) } else { acpAllowedAgentIDs.remove(agentID) }
+    }
+
+    private func persistACPAgents() {
+        if let data = try? JSONEncoder().encode(acpAgents) { defaults.set(data, forKey: Keys.acpAgents) }
+    }
+
     /// Whether a key is saved for the current endpoint. Held here so views never read the Keychain.
     private(set) var hasAPIKey = false
     private(set) var keyError: String?
@@ -159,6 +193,9 @@ final class IDEAgentSettings {
         static let runSeconds = "umbra.agent.maxRunSeconds"
         static let runCost = "umbra.agent.maxRunCostCents"
         static let contextOverride = "umbra.agent.contextWindowOverride"
+        static let acpAgents = "umbra.agent.acpAgents"
+        static let acpActive = "umbra.agent.acpActive"
+        static let acpAllowed = "umbra.agent.acpAllowed"
 
         /// `umbra.agent.baseURL` for the original (Responses) provider, so earlier settings carry over.
         static func field(_ name: String, _ provider: IDEAgentProvider) -> String {
@@ -201,6 +238,9 @@ final class IDEAgentSettings {
         maxRunSeconds = max(0, defaults.integer(forKey: Keys.runSeconds))
         maxRunCostCents = max(0, defaults.integer(forKey: Keys.runCost))
         contextWindowOverride = max(0, defaults.integer(forKey: Keys.contextOverride))
+        acpAgents = (defaults.data(forKey: Keys.acpAgents)).flatMap { try? JSONDecoder().decode([IDEACPDefinition].self, from: $0) } ?? []
+        acpActiveAgentID = defaults.string(forKey: Keys.acpActive).flatMap(UUID.init(uuidString:))
+        acpAllowedAgentIDs = Set((defaults.stringArray(forKey: Keys.acpAllowed) ?? []).compactMap(UUID.init(uuidString:)))
         disclosedHosts = Set(defaults.stringArray(forKey: Keys.disclosed) ?? [])
         refreshKeyState()
         refreshWebSearchKeyState()

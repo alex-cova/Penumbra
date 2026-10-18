@@ -507,9 +507,12 @@ final class MinimapView: EditorView {
             return
         }
         if viewportIndicatorView.frame.contains(point) {
+            scrollView.beginEditorFragmentPreviewDrag()
             isDraggingIndicator = true
             dragStartLocalY = point.y
             dragStartContentOffsetY = scrollView.contentOffset.y
+        } else if scrollView.consumeEditorFragmentPreviewClick() {
+            return
         } else {
             isDraggingIndicator = false
             onUserScroll?()
@@ -535,11 +538,56 @@ final class MinimapView: EditorView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if isDraggingIndicator {
+            scrollView?.endEditorFragmentPreviewDrag()
+        }
         isDraggingIndicator = false
     }
 
     override func scrollWheel(with event: NSEvent) {
+        let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY * 10
+        if scrollView?.consumeEditorFragmentPreviewScroll(deltaY: delta) == true {
+            return
+        }
         // The minimap doesn't scroll independently — forward wheel events to the real editor.
         scrollView?.scrollWheel(with: event)
     }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        scrollView?.updateEditorFragmentPreview(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        scrollView?.updateEditorFragmentPreview(with: event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        scrollView?.updateEditorFragmentPreview(with: event)
+    }
+
+    /// Line y-position under `point`, and whether the point is on the viewport indicator.
+    func editorFragmentDocumentY(atLocalPoint point: CGPoint) -> (documentY: CGFloat, isOnIndicator: Bool)? {
+        guard let geometry = currentGeometry else {
+            return nil
+        }
+        let onIndicator = !viewportIndicatorView.isHidden && viewportIndicatorView.frame.contains(point)
+        return (geometry.documentY(forLocalY: point.y), onIndicator)
+    }
+
+    private var hoverTrackingArea: NSTrackingArea?
 }

@@ -268,7 +268,7 @@ final class OverlayScrollerView: EditorView {
         }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -283,6 +283,9 @@ final class OverlayScrollerView: EditorView {
         isHovered = true
         cancelPendingHide()
         refreshAppearance(animated: false)
+        if axis == .vertical {
+            scrollView?.updateEditorFragmentPreview(with: event)
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -291,6 +294,19 @@ final class OverlayScrollerView: EditorView {
         if !isDragging {
             scheduleHide()
         }
+        if axis == .vertical {
+            scrollView?.updateEditorFragmentPreview(with: event)
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard axis == .vertical, !isHidden else {
+            return
+        }
+        if alphaValue <= 0.01 {
+            flash()
+        }
+        scrollView?.updateEditorFragmentPreview(with: event)
     }
 
     // MARK: - Mouse handling
@@ -308,11 +324,16 @@ final class OverlayScrollerView: EditorView {
         }
         let along = position(of: point)
         if along >= geometry.knobOrigin, along <= geometry.knobOrigin + geometry.knobLength {
+            if axis == .vertical {
+                scrollView.beginEditorFragmentPreviewDrag()
+            }
             isDragging = true
             dragStartPosition = along
             dragStartContentOffset = axis == .vertical ? scrollView.contentOffset.y : scrollView.contentOffset.x
             cancelPendingHide()
             refreshAppearance(animated: false)
+        } else if axis == .vertical, scrollView.consumeEditorFragmentPreviewClick() {
+            return
         } else {
             isDragging = false
             let target = jumpsToClickedSpot
@@ -335,6 +356,9 @@ final class OverlayScrollerView: EditorView {
             return
         }
         isDragging = false
+        if axis == .vertical {
+            scrollView?.endEditorFragmentPreviewDrag()
+        }
         // The pointer may have left the slot during the drag without a matching mouseExited.
         let point = convert(event.locationInWindow, from: nil)
         isHovered = bounds.contains(point)
@@ -345,8 +369,20 @@ final class OverlayScrollerView: EditorView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY * 10
+        if axis == .vertical, scrollView?.consumeEditorFragmentPreviewScroll(deltaY: delta) == true {
+            return
+        }
         // The scroller doesn't scroll independently — forward wheel events to the real editor.
         scrollView?.scrollWheel(with: event)
+    }
+
+    /// Content Y under `localY`, and whether that point is on the knob. Nil when there is no track.
+    func editorFragmentContentY(atLocalY localY: CGFloat) -> (contentY: CGFloat, isOnKnob: Bool)? {
+        guard let geometry = currentGeometry else {
+            return nil
+        }
+        return (geometry.contentY(atTrackPosition: localY), geometry.isOnKnob(at: localY))
     }
 
     private func scroll(to target: CGFloat) {

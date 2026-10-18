@@ -4,7 +4,7 @@ import JavaIntelligence
 import XCTest
 @testable import Umbra
 
-/// Settings › Inspections stores rule codes, and only the severities that differ from a default.
+/// Settings › Java › Inspections stores rule codes, and only the severities that differ from a default.
 @MainActor
 final class IDEInspectionPreferencesTests: XCTestCase {
     private var originalDisabled: Set<String> = []

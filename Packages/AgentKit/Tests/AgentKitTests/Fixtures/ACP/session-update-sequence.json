@@ -1,0 +1,7 @@
+{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello "},"messageId":"m1"}
+{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking"},"messageId":"m1"}
+{"sessionUpdate":"tool_call","toolCallId":"call-1","title":"Read file","name":"read_file","kind":"read","status":"pending","rawInput":{"path":"README.md"},"content":[]}
+{"sessionUpdate":"tool_call_update","toolCallId":"call-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"file contents"}}]}
+{"sessionUpdate":"plan","entries":[{"content":"Do the thing","priority":"high","status":"in_progress"}]}
+{"sessionUpdate":"usage_update","used":42,"size":1000}
+{"sessionUpdate":"future_variant_xyz","anything":true}

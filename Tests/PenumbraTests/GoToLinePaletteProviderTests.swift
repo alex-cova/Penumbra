@@ -66,6 +66,19 @@ final class GoToLinePaletteProviderTests: XCTestCase {
         XCTAssertEqual(textView.selectedRange, NSRange(location: 6, length: 4))
     }
 
+    func testTextViewGoToLineCentersTheTargetLine() {
+        let textView = TextView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
+        textView.theme = DefaultTheme()
+        textView.text = (1...500).map { "line \($0)" }.joined(separator: "\n")
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.goToLine(249))
+        textView.layoutIfNeeded()
+        let location = (textView.text as NSString).range(of: "line 250\n").location
+        XCTAssertNotEqual(location, NSNotFound)
+        let caret = textView.caretRectInViewport(at: location)
+        XCTAssertEqual(caret.midY, textView.frame.height / 2, accuracy: caret.height)
+    }
+
     func testTextViewGoToLineRejectsOutOfRangeWithoutCrashing() {
         let textView = makeTextView(text: "only\ntwo\n")
         let original = textView.selectedRange

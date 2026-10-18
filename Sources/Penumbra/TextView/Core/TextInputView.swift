@@ -2453,6 +2453,66 @@ extension TextInputView {
         return attributed
     }
 
+    /// Highlighted lines for the scrollbar preview. Reads each row through ``lineInfo(atRow:)`` and
+    /// a capped substring — no line handle, and never the whole buffer. A line past
+    /// ``EditorFragmentPreview/maximumLineLength`` is cut.
+    func editorFragmentPreviewContent(forRows rows: [Int]) -> EditorFragmentPreviewContent? {
+        guard !rows.isEmpty else {
+            return nil
+        }
+        let defaultAttributes = DefaultStringAttributes(
+            textColor: theme.textColor,
+            font: theme.font,
+            kern: kern,
+            tabWidth: indentController.tabWidth
+        )
+        let highlighter = languageMode.createLineSyntaxHighlighter()
+        (highlighter as? TreeSitterSyntaxHighlighter)?.semanticHighlights = semanticHighlights
+        highlighter.theme = theme
+        let lines: [EditorFragmentPreviewLine] = rows.compactMap { row in
+            guard row >= 0, row < lineManager.lineCount else {
+                return nil
+            }
+            let info = lineManager.lineInfo(atRow: row)
+            let capped = min(info.length, EditorFragmentPreview.maximumLineLength)
+            let range = NSRange(location: info.location, length: capped)
+            guard let string = stringView.substring(in: range) else {
+                return nil
+            }
+            let attributed = NSMutableAttributedString(string: string)
+            defaultAttributes.apply(to: attributed)
+            if highlighter.canHighlight, !string.isEmpty {
+                let byteRange = ByteRange(
+                    location: ByteCount(utf16Length: info.location),
+                    length: ByteCount(utf16Length: capped)
+                )
+                highlighter.syntaxHighlight(LineSyntaxHighlighterInput(
+                    attributedString: attributed,
+                    byteRange: byteRange,
+                    hasOnlyDefaultAttributes: true
+                ))
+            }
+            if capped < info.length {
+                attributed.append(NSAttributedString(string: "…", attributes: [
+                    .font: theme.font,
+                    .foregroundColor: theme.textColor
+                ]))
+            }
+            return EditorFragmentPreviewLine(number: row + 1, text: attributed)
+        }
+        guard !lines.isEmpty else {
+            return nil
+        }
+        return EditorFragmentPreviewContent(
+            lines: lines,
+            rowHeight: stickyRowHeight,
+            textBackgroundColor: backgroundColor ?? .textBackgroundColor,
+            lineNumberColor: theme.lineNumberColor,
+            lineNumberFont: theme.lineNumberFont,
+            borderColor: theme.gutterHairlineColor
+        )
+    }
+
     func updateFoldPreview(at point: CGPoint) {
         let hit = layoutManager.foldPlaceholderHitTest(at: point)
         foldPreviewController.mouseMoved(

@@ -35,6 +35,7 @@ public final class IDEPreferences {
         static let isLineFoldingEnabled = "com.umbra.editor.isLineFoldingEnabled"
         static let showMinimap = "com.umbra.editor.showMinimap"
         static let showScrollbars = "com.umbra.editor.showScrollbars"
+        static let showEditorFragmentPreview = "com.umbra.editor.showEditorFragmentPreview"
         static let flattenJavaPackages = "com.umbra.editor.flattenJavaPackages"
         static let javaPostfix = "com.umbra.editor.javaPostfix"
         static let commandCompletion = "com.umbra.editor.commandCompletion"
@@ -267,6 +268,11 @@ public final class IDEPreferences {
     /// the minimap's viewport indicator already serves that role.
     var showScrollbars: Bool {
         didSet { UserDefaults.standard.set(showScrollbars, forKey: Keys.showScrollbars) }
+    }
+
+    /// Hover the scrollbar, or the minimap outside the visible area, to preview off-screen code.
+    var showEditorFragmentPreview: Bool {
+        didSet { UserDefaults.standard.set(showEditorFragmentPreview, forKey: Keys.showEditorFragmentPreview) }
     }
 
     /// Explorer shows each Java source root's packages as flat dotted rows (IntelliJ's
@@ -1019,6 +1025,7 @@ public final class IDEPreferences {
         isLineFoldingEnabled = defaults.object(forKey: Keys.isLineFoldingEnabled) as? Bool ?? true
         showMinimap = defaults.object(forKey: Keys.showMinimap) as? Bool ?? true
         showScrollbars = defaults.object(forKey: Keys.showScrollbars) as? Bool ?? true
+        showEditorFragmentPreview = defaults.object(forKey: Keys.showEditorFragmentPreview) as? Bool ?? true
         flattenJavaPackages = defaults.object(forKey: Keys.flattenJavaPackages) as? Bool ?? false
         if let data = defaults.data(forKey: Keys.javaPostfix),
            let stored = try? JSONDecoder().decode(JavaPostfixConfiguration.self, from: data) {
@@ -1164,6 +1171,7 @@ public final class IDEPreferences {
         textView.isLineWrappingEnabled = wrapLines
         textView.showMinimap = showMinimap
         textView.showsScrollers = showScrollbars
+        textView.showsEditorFragmentPreview = showEditorFragmentPreview
         textView.isMetalRenderingEnabled = isMetalRenderingEnabled
         textView.showMethodSeparators = showMethodSeparators
         textView.highlightsOccurrencesOfSelection = highlightsOccurrencesOfSelection
@@ -1355,6 +1363,7 @@ public final class IDEPreferences {
             isDistractionFreeModeEnabled: isDistractionFreeModeEnabled,
             isFocusModeEnabled: isFocusModeEnabled,
             showScrollbars: showScrollbars,
+            showEditorFragmentPreview: showEditorFragmentPreview,
             flattenJavaPackages: flattenJavaPackages,
             javaPostfix: javaPostfix
         )
@@ -1410,6 +1419,7 @@ public final class IDEPreferences {
         isDistractionFreeModeEnabled = snapshot.isDistractionFreeModeEnabled
         isFocusModeEnabled = snapshot.isFocusModeEnabled
         showScrollbars = snapshot.showScrollbars
+        showEditorFragmentPreview = snapshot.showEditorFragmentPreview
         flattenJavaPackages = snapshot.flattenJavaPackages
         javaPostfix = snapshot.javaPostfix
     }
@@ -1463,6 +1473,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var isDistractionFreeModeEnabled: Bool
     var isFocusModeEnabled: Bool
     var showScrollbars: Bool
+    var showEditorFragmentPreview: Bool
     var flattenJavaPackages: Bool
     var javaPostfix: JavaPostfixConfiguration
 
@@ -1514,6 +1525,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         isDistractionFreeModeEnabled: Bool = false,
         isFocusModeEnabled: Bool = false,
         showScrollbars: Bool = true,
+        showEditorFragmentPreview: Bool = true,
         flattenJavaPackages: Bool = false,
         javaPostfix: JavaPostfixConfiguration = .standard
     ) {
@@ -1564,6 +1576,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.isDistractionFreeModeEnabled = isDistractionFreeModeEnabled
         self.isFocusModeEnabled = isFocusModeEnabled
         self.showScrollbars = showScrollbars
+        self.showEditorFragmentPreview = showEditorFragmentPreview
         self.flattenJavaPackages = flattenJavaPackages
         self.javaPostfix = javaPostfix
     }
@@ -1621,6 +1634,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         isDistractionFreeModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isDistractionFreeModeEnabled) ?? false
         isFocusModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isFocusModeEnabled) ?? false
         showScrollbars = try container.decodeIfPresent(Bool.self, forKey: .showScrollbars) ?? true
+        showEditorFragmentPreview = try container.decodeIfPresent(Bool.self, forKey: .showEditorFragmentPreview) ?? true
         flattenJavaPackages = try container.decodeIfPresent(Bool.self, forKey: .flattenJavaPackages) ?? false
         javaPostfix = try container.decodeIfPresent(JavaPostfixConfiguration.self, forKey: .javaPostfix) ?? .standard
     }

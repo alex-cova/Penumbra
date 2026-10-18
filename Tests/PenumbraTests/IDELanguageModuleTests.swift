@@ -94,12 +94,12 @@ final class IDELanguageModuleTests: XCTestCase {
 
     // MARK: Settings
 
-    func testSettingsPagesKeepTheirOrderWithTheJavaOnesBetweenProjectAndAgent() {
+    func testSettingsPagesKeepTheirOrderWithTheJavaPageBetweenProjectAndAgent() {
         let modulePages = IDELanguageModules.preferencePanes.map(\.domain)
-        XCTAssertEqual(modulePages.map(\.id), ["java", "inspections", "typescript", "swift", "swiftUIPreview", "hex"])
+        XCTAssertEqual(modulePages.map(\.id), ["java", "typescript", "swift", "swiftUIPreview", "hex"])
         XCTAssertEqual(
             IDEPreferencesDomain.ordered(with: modulePages).map(\.id),
-            ["general", "editor", "saving", "appearance", "focus", "project", "java", "inspections", "typescript", "swift", "swiftUIPreview", "hex", "agent"]
+            ["general", "editor", "saving", "appearance", "focus", "project", "java", "typescript", "swift", "swiftUIPreview", "hex", "agent"]
         )
         XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "saving", "appearance", "focus", "project", "agent"])
     }
@@ -107,8 +107,9 @@ final class IDELanguageModuleTests: XCTestCase {
     func testSettingsSearchStillFindsTheJavaPages() {
         XCTAssertTrue(IDEPreferencesDomain.java.matches("gradle"))
         XCTAssertTrue(IDEPreferencesDomain.java.matches("JDK"))
-        XCTAssertTrue(IDEPreferencesDomain.inspections.matches("unused"))
-        XCTAssertTrue(IDEPreferencesDomain.inspections.matches("Unused Import"), "rule titles are searchable too")
+        XCTAssertTrue(IDEPreferencesDomain.java.matches("inspections"), "the inspections live on the Java page now")
+        XCTAssertTrue(IDEPreferencesDomain.java.matches("unused"))
+        XCTAssertTrue(IDEPreferencesDomain.java.matches("Unused Import"), "rule titles are searchable too")
         XCTAssertFalse(IDEPreferencesDomain.java.matches("zzz"))
         XCTAssertTrue(IDEPreferencesDomain.editor.showsTypePreview)
         XCTAssertFalse(IDEPreferencesDomain.java.showsTypePreview)

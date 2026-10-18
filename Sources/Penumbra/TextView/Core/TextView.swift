@@ -1266,6 +1266,16 @@ public struct DocumentTextExport: Sendable {
             }
         }
     }
+    /// Hover the vertical scrollbar, or the minimap outside its viewport indicator, to preview
+    /// code that is off screen. Click the strip while the popup is open to jump to the popup's
+    /// first line. On by default.
+    public var showsEditorFragmentPreview = true {
+        didSet {
+            if !showsEditorFragmentPreview {
+                editorFragmentPreview.dismiss()
+            }
+        }
+    }
     /// Width, in points, of the minimap shown when ``showMinimap`` is true.
     public var minimapWidth: CGFloat = 100 {
         didSet {
@@ -1444,8 +1454,18 @@ public struct DocumentTextExport: Sendable {
     func displayedLineForTesting(row: Int) -> (string: NSAttributedString, height: CGFloat)? {
         textInputView.displayedLineForTesting(row: row)
     }
+    /// Test hook — the scrollbar code preview.
+    var editorFragmentPreviewForTesting: EditorFragmentPreviewController { editorFragmentPreview }
+    func editorFragmentPreviewContentForTesting(anchorRow: Int) -> EditorFragmentPreviewContent? {
+        let window = editorFragmentRowWindow(anchorRow: anchorRow)
+        return textInputView.editorFragmentPreviewContent(forRows: window.rows)
+    }
+    func editorFragmentPreviewWindowForTesting(anchorRow: Int) -> EditorFragmentPreview.RowWindow {
+        editorFragmentRowWindow(anchorRow: anchorRow)
+    }
     #endif
     private let scrollerOverlay = ScrollerOverlayController()
+    private let editorFragmentPreview = EditorFragmentPreviewController()
     private let errorStripeController = ErrorStripeController()
     private let tapGestureRecognizer = EditorQuickTapGestureRecognizer()
     private var delegateAllowsEditingToBegin: Bool {
@@ -1688,10 +1708,12 @@ public struct DocumentTextExport: Sendable {
         scrollerOverlay.install(in: self, themeSource: textInputView) { [weak self] in
             self?.suspendTypewriterScrollingForUserInteraction()
         }
+        editorFragmentPreview.textView = self
         // Keep the minimap's indicator and the scrollers in sync with programmatic and animated
         // scrolls, which don't necessarily trigger a layout pass (see `scrollWheel`'s note).
         onDidScroll = { [weak self] in
             guard let self else { return }
+            self.editorFragmentPreview.dismiss()
             if self.showMinimap {
                 self.minimapView.setNeedsDisplayForContentChange()
             }
@@ -1880,6 +1902,7 @@ public struct DocumentTextExport: Sendable {
         distractionFreeController.mouseDidMove()
         let point = convert(event.locationInWindow, from: nil)
         scrollerOverlay.mouseMoved(to: point)
+        updateEditorFragmentPreview(with: event)
         // The fold hit test works in the text input's (document) coordinates, not the scroll view's.
         textInputView.updateFoldPreview(at: textInputView.convert(event.locationInWindow, from: nil))
         onHoverEvent?(event)
@@ -1891,6 +1914,7 @@ public struct DocumentTextExport: Sendable {
 
     override open func mouseExited(with event: NSEvent) {
         textInputView.dismissFoldPreview()
+        dismissEditorFragmentPreview()
         super.mouseExited(with: event)
     }
 
@@ -2463,6 +2487,9 @@ public struct DocumentTextExport: Sendable {
 
     /// Go to the beginning of the line at the specified index.
     ///
+    /// The target line is centered vertically in the viewport, matching navigation
+    /// scrolling (Go to Definition, gutter markers).
+    ///
     /// - Parameter lineIndex: Index of line to navigate to.
     /// - Parameter selection: The placement of the caret on the line.
     /// - Returns: True if the text view could navigate to the specified line index, otherwise false.
@@ -2479,7 +2506,6 @@ public struct DocumentTextExport: Sendable {
         becomeFirstResponder()
         let line = textInputView.lineManager.lineInfo(atRow: lineIndex)
         textInputView.prepareLineForDisplay(atLocation: line.location)
-        scrollLocationToVisible(line.location)
         layoutIfNeeded()
         switch selection {
         case .beginning:
@@ -2489,6 +2515,7 @@ public struct DocumentTextExport: Sendable {
         case .line:
             textInputView.selection = NSRange(location: line.location, length: line.length)
         }
+        scrollRangeToCenter(textInputView.selection ?? NSRange(location: line.location, length: 0))
         return true
     }
 
@@ -3061,6 +3088,7 @@ extension TextView: TextInputViewDelegate {
     }
 
     func textInputViewDidChange(_ view: TextInputView) {
+        editorFragmentPreview.dismiss()
         setNeedsLayout()
         if isAutomaticScrollEnabled, !isApplyingMirroredEdit, let newRange = textInputView.selection, newRange.length == 0 {
             let location = newRange.location
@@ -3238,6 +3266,7 @@ extension TextView: TextInputViewDelegate {
     }
 
     func textInputView(_ view: TextInputView, didReceiveKeyDown event: NSEvent) {
+        editorFragmentPreview.dismiss()
         distractionFreeController.typingDidBegin()
         if isTypewriterScrollingSuspendedByUser {
             resumeTypewriterScrollingAfterKeyPress()
@@ -3414,6 +3443,132 @@ extension TextView: FindPanelTarget {
 
     func findPanelModeDidChange(to mode: FindPanelMode) {
         setNeedsLayout()
+    }
+}
+
+// MARK: - Code preview outside the editor frame
+
+extension TextView {
+    func updateEditorFragmentPreview(with event: NSEvent) {
+        guard showsEditorFragmentPreview else {
+            editorFragmentPreview.dismiss()
+            return
+        }
+        editorFragmentPreview.mouseMoved(
+            to: convert(event.locationInWindow, from: nil),
+            showsImmediately: event.modifierFlags.contains(.option)
+        )
+    }
+
+    func dismissEditorFragmentPreview() {
+        editorFragmentPreview.dismiss()
+    }
+
+    func beginEditorFragmentPreviewDrag() {
+        editorFragmentPreview.beginDrag()
+    }
+
+    func endEditorFragmentPreviewDrag() {
+        editorFragmentPreview.endDrag()
+    }
+
+    func consumeEditorFragmentPreviewClick() -> Bool {
+        guard showsEditorFragmentPreview else {
+            return false
+        }
+        return editorFragmentPreview.consumeClick()
+    }
+
+    func consumeEditorFragmentPreviewScroll(deltaY: CGFloat) -> Bool {
+        guard showsEditorFragmentPreview else {
+            return false
+        }
+        return editorFragmentPreview.consumeScroll(deltaY: deltaY)
+    }
+
+    func editorFragmentHit(at point: CGPoint) -> EditorFragmentHit? {
+        if showMinimap, !minimapView.isHidden, minimapView.frame.contains(point) {
+            let local = minimapView.convert(point, from: self)
+            guard let sample = minimapView.editorFragmentDocumentY(atLocalPoint: local) else {
+                return nil
+            }
+            return editorFragmentHit(
+                documentLineY: sample.documentY,
+                isOnVisibleStrip: sample.isOnIndicator,
+                stripFrame: minimapView.frame
+            )
+        }
+        let scroller = scrollerOverlay.verticalScroller
+        if showsScrollers, !scroller.isHidden, scroller.alphaValue > 0.01, scroller.frame.contains(point) {
+            let localY = scroller.convert(point, from: self).y
+            guard let sample = scroller.editorFragmentContentY(atLocalY: localY) else {
+                return nil
+            }
+            return editorFragmentHit(
+                documentLineY: sample.contentY - textInputView.textContainerInset.top,
+                isOnVisibleStrip: sample.isOnKnob,
+                stripFrame: scroller.frame
+            )
+        }
+        return nil
+    }
+
+    func editorFragmentRowWindow(anchorRow: Int) -> EditorFragmentPreview.RowWindow {
+        let manager = textInputView.lineManager
+        return EditorFragmentPreview.rowWindow(anchorRow: anchorRow, lineCount: manager.lineCount) {
+            manager.lineInfo(atRow: $0).lineHeight
+        }
+    }
+
+    func editorFragmentPreviewContent(forRows rows: [Int]) -> EditorFragmentPreviewContent? {
+        textInputView.editorFragmentPreviewContent(forRows: rows)
+    }
+
+    func editorFragmentAnchor(from row: Int, movingBy steps: Int) -> Int {
+        let manager = textInputView.lineManager
+        return EditorFragmentPreview.row(from: row, movingBy: steps, lineCount: manager.lineCount) {
+            manager.lineInfo(atRow: $0).lineHeight
+        }
+    }
+
+    var editorFragmentRowHeight: CGFloat {
+        textInputView.stickyRowHeight
+    }
+
+    /// Puts the caret on `row` and scrolls so that line's top sits at `popupTop` in this view.
+    func jumpToEditorFragment(row: Int, aligningWith popupTop: CGFloat) {
+        let manager = textInputView.lineManager
+        guard row >= 0, row < manager.lineCount else {
+            return
+        }
+        recordNavigationCheckpoint()
+        let line = manager.lineInfo(atRow: row)
+        textInputView.prepareLineForDisplay(atLocation: line.location)
+        textInputView.selection = NSRange(location: line.location, length: 0)
+        let lineTop = textInputView.yPosition(ofRow: row)
+        let targetY = EditorFragmentPreview.contentOffset(
+            aligningLineTop: lineTop,
+            withPopupTop: popupTop,
+            minimum: minimumContentOffset.y,
+            maximum: maximumContentOffset.y
+        )
+        contentOffset = CGPoint(x: contentOffset.x, y: targetY)
+    }
+
+    private func editorFragmentHit(documentLineY: CGFloat, isOnVisibleStrip: Bool, stripFrame: CGRect) -> EditorFragmentHit? {
+        let manager = textInputView.lineManager
+        guard manager.lineCount > 0, let row = manager.row(containingYOffset: documentLineY) else {
+            return nil
+        }
+        let lineTop = textInputView.yPosition(ofRow: row)
+        let visibleTop = contentOffset.y + adjustedContentInset.top
+        let visibleHeight = max(bounds.height - adjustedContentInset.top - adjustedContentInset.bottom, 0)
+        let onScreen = isOnVisibleStrip || EditorFragmentPreview.isOnScreen(
+            lineTop: lineTop,
+            visibleTop: visibleTop,
+            visibleHeight: visibleHeight
+        )
+        return EditorFragmentHit(anchorRow: row, isOnScreen: onScreen, stripFrame: stripFrame)
     }
 }
 

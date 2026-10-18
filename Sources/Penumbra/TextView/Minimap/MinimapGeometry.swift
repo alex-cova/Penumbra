@@ -134,4 +134,12 @@ struct MinimapGeometry {
         }
         return clampContentOffsetY(startContentOffsetY + deltaLocalY * mainScrollRange / travel)
     }
+
+    /// Line y-position (the same space as ``bandY(forLineYPosition:)``'s input) under `localY`.
+    func documentY(forLocalY localY: CGFloat) -> CGFloat {
+        guard scale > 0 else {
+            return 0
+        }
+        return (localY + contentOffset) / scale - textContainerInsetTop
+    }
 }

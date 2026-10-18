@@ -182,6 +182,7 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.wrapLines) { applyLivePreferences() }
             .onChange(of: preferences.showMinimap) { applyLivePreferences() }
             .onChange(of: preferences.showScrollbars) { applyLivePreferences() }
+            .onChange(of: preferences.showEditorFragmentPreview) { applyLivePreferences() }
             .onChange(of: preferences.isMetalRenderingEnabled) { applyLivePreferences() }
             .onChange(of: preferences.showMethodSeparators) { applyLivePreferences() }
             .onChange(of: preferences.highlightsOccurrencesOfSelection) { applyLivePreferences() }

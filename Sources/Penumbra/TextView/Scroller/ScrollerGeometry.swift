@@ -98,4 +98,38 @@ struct ScrollerGeometry {
         }
         return clamped(startContentOffset + delta * scrollRange / travel)
     }
+
+    /// Whether `position` lies on the knob. That span is the code already on screen.
+    func isOnKnob(at position: CGFloat) -> Bool {
+        position >= knobOrigin && position <= knobOrigin + knobLength
+    }
+
+    /// Document content Y (the same space as `contentOffset`) under `position` along the track.
+    ///
+    /// The knob maps the visible span. The track above it maps the content above the viewport,
+    /// and the track below maps the content below, so a point just above the knob is the line
+    /// just above the viewport even when the minimum knob length has made the thumb non-linear.
+    func contentY(atTrackPosition position: CGFloat) -> CGFloat {
+        let clampedPosition = min(max(position, 0), max(trackLength, 0))
+        let knobEnd = knobOrigin + knobLength
+        if clampedPosition >= knobOrigin, clampedPosition <= knobEnd {
+            let fraction = knobLength > 0 ? (clampedPosition - knobOrigin) / knobLength : 0
+            return contentOffset + fraction * viewportLength
+        }
+        if clampedPosition < knobOrigin {
+            guard knobOrigin > 0 else {
+                return minimumContentOffset
+            }
+            let fraction = clampedPosition / knobOrigin
+            return minimumContentOffset + fraction * (contentOffset - minimumContentOffset)
+        }
+        let below = trackLength - knobEnd
+        let visibleBottom = contentOffset + viewportLength
+        guard below > 0 else {
+            return visibleBottom
+        }
+        let fraction = (clampedPosition - knobEnd) / below
+        let documentBottom = maximumContentOffset + viewportLength
+        return visibleBottom + fraction * (documentBottom - visibleBottom)
+    }
 }
