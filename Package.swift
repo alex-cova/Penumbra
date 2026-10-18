@@ -221,6 +221,18 @@ let package = Package(
             path: "Tools/AgentEval/Sources/AgentEval",
             swiftSettings: swift6
         ),
+        // Umbra as an ACP agent on stdio (docs/ACP_PLAN.md Phase 2): any ACP client can drive
+        // an AgentSession built from the user's configured provider.
+        .executableTarget(
+            name: "UmbraACP",
+            dependencies: [
+                .product(name: "AgentKit", package: "AgentKit"),
+                .product(name: "AgentKitMLX", package: "AgentKitMLX"),
+                .product(name: "LocalModelStore", package: "AgentKitMLX"),
+            ],
+            path: "Example/UmbraACP",
+            swiftSettings: swift6
+        ),
         .testTarget(
             name: "AgentEvalTests",
             dependencies: ["AgentEvalKit", .product(name: "AgentKit", package: "AgentKit")],
