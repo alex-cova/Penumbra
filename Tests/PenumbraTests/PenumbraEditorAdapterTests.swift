@@ -75,6 +75,46 @@ final class PenumbraEditorAdapterTests: XCTestCase {
         XCTAssertEqual(edits[0].range.end.utf16Offset, 5)
     }
 
+    func testBatchReplaceEmitsDocumentEditedWithSequentialEdits() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.text = "aaa bbb ccc"
+        let adapter = PenumbraEditorAdapter(textView: textView, context: EditorContext())
+        let events = adapter.events
+        let task = Task.detached {
+            var capturedEvents: [EditorEvent] = []
+            for await event in events {
+                capturedEvents.append(event)
+                if capturedEvents.contains(where: {
+                    if case .documentEdited = $0 { return true }
+                    return false
+                }) {
+                    break
+                }
+            }
+            return capturedEvents
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        textView.replaceText(in: BatchReplaceSet(replacements: [
+            BatchReplaceSet.Replacement(range: NSRange(location: 0, length: 3), text: "a"),
+            BatchReplaceSet.Replacement(range: NSRange(location: 8, length: 3), text: "ccccc"),
+        ]))
+        let capturedEvents = await task.value
+        guard let edited = capturedEvents.last, case .documentEdited(_, let edits, newSnapshot: let snapshot) = edited else {
+            return XCTFail("Expected documentEdited, got \(String(describing: capturedEvents.last))")
+        }
+        XCTAssertEqual(snapshot.text, "a bbb ccccc")
+        XCTAssertEqual(edits.count, 2)
+        XCTAssertEqual(edits[0].replacement, "a")
+        XCTAssertEqual(edits[0].range.start.utf16Offset, 0)
+        XCTAssertEqual(edits[0].range.end.utf16Offset, 3)
+        // The second range is in post-first-edit coordinates (8 - 2), so a server replaying
+        // the edits in order lands each replacement where it belongs.
+        XCTAssertEqual(edits[1].replacement, "ccccc")
+        XCTAssertEqual(edits[1].range.start.utf16Offset, 6)
+        XCTAssertEqual(edits[1].range.end.utf16Offset, 9)
+        XCTAssertEqual(edits[1].range.start.line, 0)
+    }
+
     func testFileBackedLoadDoesNotMaterializeSnapshotText() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try "file backed body\n".write(to: url, atomically: true, encoding: .utf8)

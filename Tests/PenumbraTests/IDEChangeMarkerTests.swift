@@ -135,5 +135,68 @@ final class IDEChangeMarkerTests: XCTestCase {
         text = text.replacingCharacters(in: edit.range, with: edit.replacement) as NSString
         XCTAssertEqual(text as String, "a\nb\n")
     }
+
+    // MARK: - HEAD blob cache bounds
+
+    func testHeadCacheStaysWithinTheEntryCap() {
+        let controller = IDEChangeMarkerController(defaults: defaults)
+        for i in 0 ..< IDEChangeMarkerController.maxHeadCacheEntries + 20 {
+            controller.cacheHead(relativePath: "src/File\(i).java", data: Data("x".utf8))
+        }
+        XCTAssertEqual(controller.headCacheEntryCount, IDEChangeMarkerController.maxHeadCacheEntries)
+        XCTAssertNil(controller.cachedHeadData(for: "src/File0.java"), "oldest entries go first")
+        XCTAssertNotNil(controller.cachedHeadData(for: "src/File\(IDEChangeMarkerController.maxHeadCacheEntries + 19).java"))
+    }
+
+    func testHeadCacheStaysWithinTheByteCap() {
+        let controller = IDEChangeMarkerController(defaults: defaults)
+        let blob = Data(repeating: 0x61, count: 1024 * 1024)
+        let inserted = IDEChangeMarkerController.maxHeadCacheBytes / blob.count + 4
+        for i in 0 ..< inserted {
+            controller.cacheHead(relativePath: "src/Big\(i).java", data: blob)
+        }
+        XCTAssertLessThanOrEqual(controller.headCacheByteCount, IDEChangeMarkerController.maxHeadCacheBytes)
+        XCTAssertLessThanOrEqual(controller.headCacheEntryCount, IDEChangeMarkerController.maxHeadCacheEntries)
+        XCTAssertNil(controller.cachedHeadData(for: "src/Big0.java"), "byte pressure evicts the oldest first")
+    }
+
+    func testHeadCacheReplacesAnEntryWithoutDoubleCounting() {
+        let controller = IDEChangeMarkerController(defaults: defaults)
+        controller.cacheHead(relativePath: "src/A.java", data: Data("aaa".utf8))
+        controller.cacheHead(relativePath: "src/A.java", data: Data("bb".utf8))
+        XCTAssertEqual(controller.headCacheEntryCount, 1)
+        XCTAssertEqual(controller.headCacheByteCount, 2)
+        XCTAssertEqual(controller.cachedHeadData(for: "src/A.java"), .some(Data("bb".utf8)))
+    }
+
+    func testInvalidateHeadCacheResetsByteAccounting() {
+        let controller = IDEChangeMarkerController(defaults: defaults)
+        controller.cacheHead(relativePath: "src/A.java", data: Data("aaa".utf8))
+        controller.invalidateHeadCache()
+        XCTAssertEqual(controller.headCacheEntryCount, 0)
+        XCTAssertEqual(controller.headCacheByteCount, 0)
+        controller.cacheHead(relativePath: "src/B.java", data: Data("bb".utf8))
+        XCTAssertEqual(controller.headCacheByteCount, 2)
+    }
+
+    func testAnOverCapSingleBlobStaysCached() {
+        let controller = IDEChangeMarkerController(defaults: defaults)
+        let blob = Data(repeating: 0x61, count: IDEChangeMarkerController.maxHeadCacheBytes + 1)
+        controller.cacheHead(relativePath: "src/Huge.java", data: blob)
+        XCTAssertNotNil(
+            controller.cachedHeadData(for: "src/Huge.java"),
+            "evicting the just-stored blob would re-read it from git on every refresh"
+        )
+        XCTAssertEqual(controller.headCacheEntryCount, 1)
+    }
+
+    func testMissingHeadEntriesDoNotConsumeTheByteBudget() {
+        let controller = IDEChangeMarkerController(defaults: defaults)
+        for i in 0 ..< 10 {
+            controller.cacheHead(relativePath: "src/New\(i).java", data: nil)
+        }
+        XCTAssertEqual(controller.headCacheEntryCount, 10)
+        XCTAssertEqual(controller.headCacheByteCount, 0)
+    }
 }
 

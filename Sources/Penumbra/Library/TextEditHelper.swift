@@ -61,6 +61,19 @@ final class TextEditHelper {
     /// the full string. See PERFORMANCE_AUDIT.md Phase 2 #7.
     struct BatchApplication {
         let inverseReplacements: [BatchReplaceSet.Replacement]
+        /// Each applied replacement in the order it landed. Ranges are in the coordinates of
+        /// the text as it was at that moment (already shifted by earlier replacements in the
+        /// batch), so consumers can replay them sequentially — the same contract single
+        /// keystrokes give `didChangeContent` one at a time.
+        let appliedEdits: [AppliedEdit]
+    }
+
+    /// One applied batch replacement with the line positions a `TextContentChange` needs.
+    struct AppliedEdit {
+        let range: NSRange
+        let text: String
+        let start: LinePosition
+        let oldEnd: LinePosition
     }
 
     func apply(_ batchReplaceSet: BatchReplaceSet) -> BatchApplication {
@@ -68,16 +81,23 @@ final class TextEditHelper {
         var totalChangeInLength = 0
         var replacedRanges: [NSRange] = []
         var inverseReplacements: [BatchReplaceSet.Replacement] = []
+        var appliedEdits: [AppliedEdit] = []
         for replacement in sortedReplacements where !replacedRanges.contains(where: { $0.overlaps(replacement.range) }) {
             let range = replacement.range
             let adjustedRange = NSRange(location: range.location + totalChangeInLength, length: range.length)
             let oldText = stringView.substring(in: adjustedRange) ?? ""
+            let oldEnd = lineManager.linePosition(at: adjustedRange.location + adjustedRange.length)
+                ?? lineManager.linePosition(at: stringView.length)
+                ?? LinePosition(row: 0, column: 0)
             _ = replaceText(in: adjustedRange, with: replacement.text)
+            let start = lineManager.linePosition(at: adjustedRange.location)
+                ?? LinePosition(row: 0, column: 0)
+            appliedEdits.append(AppliedEdit(range: adjustedRange, text: replacement.text, start: start, oldEnd: oldEnd))
             replacedRanges.append(replacement.range)
             totalChangeInLength += replacement.text.utf16.count - adjustedRange.length
             let newRange = NSRange(location: adjustedRange.location, length: (replacement.text as NSString).length)
             inverseReplacements.append(BatchReplaceSet.Replacement(range: newRange, text: oldText))
         }
-        return BatchApplication(inverseReplacements: inverseReplacements)
+        return BatchApplication(inverseReplacements: inverseReplacements, appliedEdits: appliedEdits)
     }
 }

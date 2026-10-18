@@ -18,6 +18,9 @@ public actor JavaOverlayService {
     private var debounceTasks: [DocumentID: Task<Void, Never>] = [:]
     private var lastIndexedVersion: [DocumentID: Int] = [:]
     private var fileStubsByDocument: [DocumentID: JavaSourceFileStubs] = [:]
+    /// One URL per open document, so closing it can drop its parse-cache entry immediately
+    /// instead of waiting for LRU pressure. `documentClosed` carries only the ID.
+    private var documentURLs: [DocumentID: URL] = [:]
     private var workspaceEventTask: Task<Void, Never>?
     /// Called after a document's overlay stubs are rebuilt. Host apps (Umbra) use this to refresh
     /// auxiliary indexes such as JUnit test discovery.
@@ -79,6 +82,9 @@ public actor JavaOverlayService {
 
     private func scheduleRebuild(for document: Document, debounced: Bool, edits: [TextEdit]? = nil) {
         let documentID = document.id
+        if let url = document.url {
+            documentURLs[documentID] = url
+        }
         debounceTasks[documentID]?.cancel()
         let delay = debounced ? debounceNanoseconds : 0
         debounceTasks[documentID] = Task { [weak self] in
@@ -114,6 +120,9 @@ public actor JavaOverlayService {
     private func removeDocument(_ documentID: DocumentID) async {
         debounceTasks[documentID]?.cancel()
         debounceTasks[documentID] = nil
+        if let url = documentURLs.removeValue(forKey: documentID) {
+            await parseCache?.invalidate(url)
+        }
         guard let removed = fileStubsByDocument.removeValue(forKey: documentID) else { return }
         lastIndexedVersion[documentID] = nil
         await applyDelta(previousNames: Set(removed.classes.map(\.qualifiedName)), for: documentID)

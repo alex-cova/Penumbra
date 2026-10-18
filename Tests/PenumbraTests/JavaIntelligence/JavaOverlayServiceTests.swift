@@ -1,6 +1,7 @@
 import XCTest
 import EditorIntelligence
 @testable import JavaIntelligence
+@testable import LanguageSyntax
 
 final class JavaOverlayServiceTests: XCTestCase {
     private func makeDocument(text: String, version: Int = 0, url: URL? = nil, language: String? = "java") -> Document {
@@ -101,6 +102,34 @@ final class JavaOverlayServiceTests: XCTestCase {
         bar = await index.classStub(qualifiedName: "Bar")
         XCTAssertNil(foo, "closed document's overlay entries should be removed")
         XCTAssertNotNil(bar, "other open documents' overlay entries should be unaffected")
+    }
+
+    func testClosingDocumentDropsItsParseCacheEntry() async throws {
+        let index = JavaIndex()
+        let parseCache = JavaDocumentParseCache()
+        let service = JavaOverlayService(index: index, parseCache: parseCache)
+        let workspace = Workspace()
+        let task = await service.connect(to: workspace)
+        defer { task.cancel() }
+
+        let first = makeDocument(text: "class Foo {}")
+        let second = makeDocument(text: "class Bar {}")
+        await workspace.openDocument(first)
+        await workspace.openDocument(second)
+        try await waitBriefly()
+
+        let firstCached = await parseCache.contains(first.url!)
+        let secondCached = await parseCache.contains(second.url!)
+        XCTAssertTrue(firstCached)
+        XCTAssertTrue(secondCached)
+
+        await workspace.closeDocument(first.id)
+        try await waitBriefly()
+
+        let firstKept = await parseCache.contains(first.url!)
+        let secondKept = await parseCache.contains(second.url!)
+        XCTAssertFalse(firstKept, "closing a document should release its pinned source and tree")
+        XCTAssertTrue(secondKept, "other open documents keep their parse-cache entries")
     }
 
     func testClosingOneOfTwoDocumentsDefiningSameClassKeepsTheOther() async throws {

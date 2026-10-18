@@ -795,9 +795,7 @@ final class TextInputView: EditorView {
                 invalidateLines()
                 layoutManager.setNeedsLayout()
                 setNeedsLayout()
-                if !preserveUndoStackWhenSettingString {
-                    undoManager?.removeAllActions()
-                }
+                undoManager?.removeAllActions()
                 startFullParse()
             }
         }
@@ -1213,7 +1211,6 @@ final class TextInputView: EditorView {
     private let editMenuController = EditMenuController()
     private var notifyDelegateAboutSelectionChangeInLayoutSubviews = false
     private var hasDeletedTextWithPendingLayoutSubviews = false
-    private var preserveUndoStackWhenSettingString = false
     private var cancellables: [AnyCancellable] = []
     var selectionAnchor: Int?
     /// Per-selection anchor/active ends kept by ``extendAllSelections(_:)``; only valid while they
@@ -3315,6 +3312,18 @@ extension TextInputView {
         contentSizeService.invalidateContentSize()
         gutterWidthService.invalidateLineNumberWidth()
         startFullParse()
+        // Report each replacement like a single keystroke reports its edit, before the
+        // coalescing change notification below. Without this a batch replace looks like an
+        // untracked whole-document change downstream: intelligence adapters emit a full
+        // snapshot event and language servers receive the entire text instead of the ranges.
+        for edit in application.appliedEdits {
+            delegate?.textInputView(self, didChangeContent: TextContentChange(
+                range: edit.range,
+                replacementText: edit.text,
+                start: TextLocation(edit.start),
+                oldEnd: TextLocation(edit.oldEnd)
+            ))
+        }
         delegate?.textInputViewDidChange(self)
         if let oldLinePosition = oldLinePosition {
             // By restoring the selected range using the old line position we can better preserve the old selected language.
@@ -3351,44 +3360,6 @@ extension TextInputView {
         timedUndoManager.notePayloadBytes(Self.undoPayloadBytes(for: inverseReplacements))
         if !isNestedInUndoOrRedo {
             timedUndoManager.endUndoGrouping()
-        }
-    }
-
-    private func setStringWithUndoAction(_ newString: NSString, inverseReplacements: [BatchReplaceSet.Replacement]) {
-        guard newString != string else {
-            return
-        }
-        // When this runs as the body of an undo/redo invocation (i.e. `registerUndo`'s closure,
-        // below, calling back into this method), `UndoManager` already has its own implicit group
-        // open around the invocation, to collect whatever `registerUndo` call happens inside it as
-        // the opposite-direction action. Unconditionally closing/reopening a group here — as this
-        // method used to, pre-existing bug independent of the delta-vs-snapshot change above —
-        // ends that implicit group early; when the manager tries to finalize it after this method
-        // returns, its bookkeeping is already inconsistent and it raises
-        // "endUndoGrouping called with no matching begin". Only manage grouping explicitly for a
-        // top-level (non-nested) call; a nested call relies on the manager's own grouping.
-        let isNestedInUndoOrRedo = timedUndoManager.isUndoing || timedUndoManager.isRedoing
-        if !isNestedInUndoOrRedo {
-            timedUndoManager.endUndoGrouping()
-        }
-        let oldSelectedRange = selection
-        preserveUndoStackWhenSettingString = true
-        string = newString
-        preserveUndoStackWhenSettingString = false
-        if !isNestedInUndoOrRedo {
-            timedUndoManager.beginUndoGrouping()
-            timedUndoManager.setActionName(L10n.Undo.ActionName.replaceAll)
-        }
-        timedUndoManager.registerUndo(withTarget: self) { textInputView in
-            textInputView.replaceText(in: BatchReplaceSet(replacements: inverseReplacements))
-        }
-        timedUndoManager.notePayloadBytes(Self.undoPayloadBytes(for: inverseReplacements))
-        if !isNestedInUndoOrRedo {
-            timedUndoManager.endUndoGrouping()
-        }
-        delegate?.textInputViewDidChange(self)
-        if let oldSelectedRange = oldSelectedRange {
-            selection = safeSelectionRange(from: oldSelectedRange)
         }
     }
 

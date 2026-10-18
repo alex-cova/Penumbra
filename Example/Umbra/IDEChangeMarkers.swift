@@ -99,7 +99,16 @@ final class IDEChangeMarkerController {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     @ObservationIgnored private var stamps: [ObjectIdentifier: Stamp] = [:]
+    /// `HEAD` blobs by project-relative path, least-recently-used first in `headCacheRecency`.
+    /// Unbounded this would pin one full file copy per file ever shown; browsing a large
+    /// repository would grow it without limit, so stores go through `cacheHead(relativePath:data:)`.
     @ObservationIgnored private var headCache: [String: CachedHead] = [:]
+    @ObservationIgnored private var headCacheRecency: [String] = []
+    @ObservationIgnored private var headCacheBytes = 0
+    /// Past this many files the least recently viewed file's blob is re-read from git.
+    static let maxHeadCacheEntries = 128
+    /// Past this many cached bytes the least recently viewed blobs go, even under the entry cap.
+    static let maxHeadCacheBytes = 32 * 1024 * 1024
 
     private struct Stamp: Equatable {
         let path: String
@@ -109,6 +118,13 @@ final class IDEChangeMarkerController {
     private enum CachedHead {
         case missing
         case blob(Data)
+
+        var byteCount: Int {
+            switch self {
+            case .missing: 0
+            case .blob(let data): data.count
+            }
+        }
     }
 
     private struct HeadRead: Sendable {
@@ -133,6 +149,8 @@ final class IDEChangeMarkerController {
     /// `HEAD` moved (commit, checkout, pull): the cached blobs no longer match.
     func invalidateHeadCache() {
         headCache.removeAll()
+        headCacheRecency.removeAll()
+        headCacheBytes = 0
         stamps.removeAll()
     }
 
@@ -205,6 +223,7 @@ final class IDEChangeMarkerController {
 
     private func readHead(relativePath: String, git: IDEGitStatusModel) async -> HeadRead? {
         if let cached = headCache[relativePath] {
+            touchHead(relativePath)
             switch cached {
             case .missing: return HeadRead(data: nil)
             case .blob(let data): return HeadRead(data: data)
@@ -212,7 +231,45 @@ final class IDEChangeMarkerController {
         }
         let read = await git.headContents(relativePath: relativePath)
         guard read.found else { return nil }
-        headCache[relativePath] = read.data.map { CachedHead.blob($0) } ?? .missing
+        cacheHead(relativePath: relativePath, data: read.data)
         return HeadRead(data: read.data)
+    }
+
+    /// Stores a `HEAD` read, evicting least-recently-used entries past the bounds.
+    func cacheHead(relativePath: String, data: Data?) {
+        if let old = headCache[relativePath] {
+            headCacheBytes -= old.byteCount
+            headCacheRecency.removeAll { $0 == relativePath }
+        }
+        headCache[relativePath] = data.map { CachedHead.blob($0) } ?? .missing
+        headCacheBytes += data?.count ?? 0
+        headCacheRecency.append(relativePath)
+        // The blob just stored is exempt: a single file larger than a cap stays cached
+        // (re-reading it from git on every refresh would cost more) and only pushes out older entries.
+        while headCache.count > Self.maxHeadCacheEntries || headCacheBytes > Self.maxHeadCacheBytes,
+              headCacheRecency.count > 1 {
+            guard let oldest = headCacheRecency.first else { break }
+            headCacheRecency.removeFirst()
+            if let removed = headCache.removeValue(forKey: oldest) {
+                headCacheBytes -= removed.byteCount
+            }
+        }
+    }
+
+    /// Marks a cache hit as most recently used.
+    private func touchHead(_ relativePath: String) {
+        guard headCacheRecency.last != relativePath else { return }
+        headCacheRecency.removeAll { $0 == relativePath }
+        headCacheRecency.append(relativePath)
+    }
+
+    var headCacheEntryCount: Int { headCache.count }
+    var headCacheByteCount: Int { headCacheBytes }
+    func cachedHeadData(for relativePath: String) -> Data?? {
+        guard let cached = headCache[relativePath] else { return nil }
+        switch cached {
+        case .missing: return .some(nil)
+        case .blob(let data): return .some(data)
+        }
     }
 }
