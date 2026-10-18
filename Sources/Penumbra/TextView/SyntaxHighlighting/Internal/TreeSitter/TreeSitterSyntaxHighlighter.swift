@@ -357,9 +357,14 @@ private extension NSFont {
     }
 }
 
-private enum DerivedFontCache {
+enum DerivedFontCache {
     // Keyed by the font itself, not its address: an `ObjectIdentifier` doesn't retain, so a
     // deallocated font's address could be reused by a different one and return the wrong derivation.
+    // Bounded: each key retains its base font, so an unbounded map would pin every distinct theme
+    // font ever seen. Realistic use is a handful of (base, traits) pairs; past the cap the map is
+    // flushed and derivations (cheap descriptor operations) are rebuilt on demand.
+    static let maxEntries = 64
+
     private struct Key: Hashable {
         let base: NSFont
         let traits: Int
@@ -378,8 +383,17 @@ private enum DerivedFontCache {
         lock.unlock()
         let derived = base.withSymbolicTraits(traits) ?? base
         lock.lock()
+        if fonts[key] == nil, fonts.count >= maxEntries {
+            fonts.removeAll(keepingCapacity: true)
+        }
         fonts[key] = derived
         lock.unlock()
         return derived
+    }
+
+    static var countForTesting: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return fonts.count
     }
 }

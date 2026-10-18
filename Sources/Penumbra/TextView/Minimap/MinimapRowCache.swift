@@ -81,7 +81,13 @@ final class MinimapRowCache {
     /// Call once at the end of a draw. Evicts everything not visited this frame.
     func endFrame() {
         if rows.count != visited.count {
-            rows = rows.filter { visited.contains($0.key) }
+            var victims: [DocumentLineNodeID] = []
+            for key in rows.keys where !visited.contains(key) {
+                victims.append(key)
+            }
+            for key in victims {
+                rows.removeValue(forKey: key)
+            }
         }
         if !provisional.isEmpty {
             provisional.formIntersection(visited)

@@ -60,8 +60,15 @@ final class LineControllerStorage {
             return 0
         }
         let countBefore = lineControllers.count
-        lineControllers = lineControllers.filter { lineID, lineController in
-            keptRows.contains(lineController.line.row) || pinnedLineIDs.contains(lineID)
+        var victims: [DocumentLineNodeID] = []
+        victims.reserveCapacity(countBefore - limit)
+        for (lineID, lineController) in lineControllers {
+            if !keptRows.contains(lineController.line.row) && !pinnedLineIDs.contains(lineID) {
+                victims.append(lineID)
+            }
+        }
+        for lineID in victims {
+            lineControllers.removeValue(forKey: lineID)
         }
         return countBefore - lineControllers.count
     }
@@ -77,26 +84,21 @@ final class LineControllerStorage {
 
 extension LineControllerStorage: Sequence {
     struct Iterator: IteratorProtocol {
-        private let lineControllers: [LineController]
-        private var index = 0
+        private var wrapped: Dictionary<DocumentLineNodeID, LineController>.Values.Iterator
 
-        init(lineControllers: [LineController]) {
-            self.lineControllers = lineControllers
+        init(_ values: Dictionary<DocumentLineNodeID, LineController>.Values) {
+            wrapped = values.makeIterator()
         }
 
         mutating func next() -> LineController? {
-            if index < lineControllers.count {
-                let lineController = lineControllers[index]
-                index += 1
-                return lineController
-            } else {
-                return nil
-            }
+            wrapped.next()
         }
     }
 
+    /// Iterates the live controllers without snapshotting them into an array, so layout and
+    /// theme passes over ~2k controllers do not allocate per pass. Do not add or remove
+    /// controllers while iterating.
     func makeIterator() -> Iterator {
-        let lineControllers = Array(lineControllers.values)
-        return Iterator(lineControllers: lineControllers)
+        Iterator(lineControllers.values)
     }
 }

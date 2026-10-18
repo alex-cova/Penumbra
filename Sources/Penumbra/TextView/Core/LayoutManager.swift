@@ -1924,8 +1924,10 @@ private extension LayoutManager {
     /// `EditorPerformanceConstants.minimumRetainedLineControllers`) it keeps only rows within a
     /// margin of the viewport, so evictions are rare. The lines holding the selection's ends and
     /// marked text are kept too: caret rects and line-boundary moves read their typesetting
-    /// without laying them out. Line widths stay cached in `ContentSizeService`, so the content
-    /// width doesn't change.
+    /// without laying them out. Per-line widths in `ContentSizeService` are trimmed to the
+    /// surviving lines alongside the controllers (the tracked longest line is always exempt),
+    /// so paging a huge nowrap file no longer grows `lineWidths` without bound; re-laid-out
+    /// lines re-record their widths through `setSize(of:to:)`, and the content width doesn't change.
     func evictDistantLineControllers(around laidOutRows: ClosedRange<Int>) {
         let laidOutCount = laidOutRows.count
         let limit = max(EditorPerformanceConstants.minimumRetainedLineControllers, laidOutCount * 8)
@@ -1943,6 +1945,11 @@ private extension LayoutManager {
             }
         }
         if lineControllerStorage.evictLineControllers(ifMoreThan: limit, keepingRows: keptRows, pinnedLineIDs: pinned) > 0 {
+            var survivingIDs: Set<DocumentLineNodeID> = []
+            for lineController in lineControllerStorage {
+                survivingIDs.insert(lineController.line.id)
+            }
+            contentSizeService.removeLineWidths(exceptLinesWithID: survivingIDs)
             lineManager.releaseUnreferencedHandles()
         }
     }

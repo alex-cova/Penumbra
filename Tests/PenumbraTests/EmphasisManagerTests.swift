@@ -18,6 +18,35 @@ final class EmphasisManagerTests: XCTestCase {
         XCTAssertEqual(highlightService.highlightedRanges, [userRange])
     }
 
+    func testAddPathIsCappedPerGroup() {
+        let lineManager = LineManager(stringView: StringView(string: "abc"))
+        let highlightService = HighlightService(lineManager: lineManager)
+        let manager = EmphasisManager()
+        manager.highlightService = highlightService
+        let bulk = (0 ..< EmphasisManager.maxAddedEmphasesPerGroup + 5).map {
+            Emphasis(range: NSRange(location: $0, length: 1), style: .standard)
+        }
+        manager.addEmphases(bulk, for: EmphasisGroup.brackets, color: .yellow)
+        XCTAssertEqual(highlightService.highlightedRanges.count, EmphasisManager.maxAddedEmphasesPerGroup)
+        // A full group stays full: further adds have no room.
+        manager.addEmphasis(Emphasis(range: NSRange(location: 0, length: 1), style: .standard),
+                             for: EmphasisGroup.brackets,
+                             color: .yellow)
+        XCTAssertEqual(highlightService.highlightedRanges.count, EmphasisManager.maxAddedEmphasesPerGroup)
+    }
+
+    func testReplacePathStaysUncapped() {
+        let lineManager = LineManager(stringView: StringView(string: "abc"))
+        let highlightService = HighlightService(lineManager: lineManager)
+        let manager = EmphasisManager()
+        manager.highlightService = highlightService
+        let bulk = (0 ..< EmphasisManager.maxAddedEmphasesPerGroup + 500).map {
+            Emphasis(range: NSRange(location: $0, length: 1), style: .standard)
+        }
+        manager.replaceEmphases(bulk, for: EmphasisGroup.occurrences, color: .yellow)
+        XCTAssertEqual(highlightService.highlightedRanges.count, bulk.count)
+    }
+
     func testFlashEmphasisIsRemovedAutomatically() async {
         let lineManager = LineManager(stringView: StringView(string: "abc"))
         let highlightService = HighlightService(lineManager: lineManager)

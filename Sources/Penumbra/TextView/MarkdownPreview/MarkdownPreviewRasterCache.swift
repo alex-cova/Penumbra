@@ -147,12 +147,20 @@ public final class MarkdownPreviewRasterCache: @unchecked Sendable {
     }
 
     /// Drops least recently used entries until both bounds hold, never the entry just stored.
+    /// Scans for the oldest entry per eviction instead of sorting a filtered copy, so a store
+    /// past the bounds does not allocate an array of the whole cache to drop (usually) one entry.
     private func evictLocked(keeping kept: Key) {
-        guard entries.count > maxEntries || totalBytes > maxBytes else { return }
-        let byAge = entries.filter { $0.key != kept }.sorted { $0.value.lastUse < $1.value.lastUse }
-        for (key, _) in byAge {
-            guard entries.count > maxEntries || totalBytes > maxBytes else { break }
-            removeLocked(key)
+        while entries.count > maxEntries || totalBytes > maxBytes {
+            var oldestKey: Key?
+            var oldestUse = UInt64.max
+            for (key, entry) in entries where key != kept {
+                if entry.lastUse < oldestUse {
+                    oldestUse = entry.lastUse
+                    oldestKey = key
+                }
+            }
+            guard let victim = oldestKey else { break }
+            removeLocked(victim)
         }
     }
 }

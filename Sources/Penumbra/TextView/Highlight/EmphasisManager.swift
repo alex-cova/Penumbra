@@ -26,29 +26,26 @@ public final class EmphasisManager {
 
     public init() {}
 
+    /// Upper bound on what the incremental `addEmphasis(s)` path can accumulate per group.
+    /// That path carries small transient markers (bracket pairs); bulk callers (occurrences,
+    /// diagnostics, find) go through `replaceEmphases`, which stays uncapped. Without a bound,
+    /// a future bulk add-caller would grow the group — plus one flash work item per entry —
+    /// without limit.
+    public static let maxAddedEmphasesPerGroup = 1_000
+
     public func addEmphasis(_ emphasis: Emphasis, for group: String, color: NSColor) {
         addEmphases([emphasis], for: group, color: color)
     }
 
     public func addEmphases(_ emphases: [Emphasis], for group: String, color: NSColor) {
-        var ranges = emphasesByGroup[group, default: []]
-        for emphasis in emphases {
-            let highlightedRange = HighlightedRange(emphasis: emphasis, group: group, color: resolvedColor(for: emphasis, baseColor: color))
-            ranges.append(highlightedRange)
-            if emphasis.selectInDocument {
-                onSelectInDocument?(emphasis.range)
-            }
-            if emphasis.flash {
-                scheduleFlashRemoval(for: highlightedRange.id, group: group)
-            }
-        }
-        emphasesByGroup[group] = ranges
-        syncHighlightedRanges()
+        let existing = emphasesByGroup[group]?.count ?? 0
+        let room = max(0, Self.maxAddedEmphasesPerGroup - existing)
+        appendEmphases(emphases.prefix(room), for: group, color: color)
     }
 
     public func replaceEmphases(_ emphases: [Emphasis], for group: String, color: NSColor) {
         removeEmphases(for: group)
-        addEmphases(emphases, for: group, color: color)
+        appendEmphases(emphases[...], for: group, color: color)
     }
 
     public func removeEmphases(for group: String) {
@@ -73,6 +70,22 @@ public final class EmphasisManager {
 }
 
 private extension EmphasisManager {
+    private func appendEmphases(_ emphases: ArraySlice<Emphasis>, for group: String, color: NSColor) {
+        var ranges = emphasesByGroup[group, default: []]
+        for emphasis in emphases {
+            let highlightedRange = HighlightedRange(emphasis: emphasis, group: group, color: resolvedColor(for: emphasis, baseColor: color))
+            ranges.append(highlightedRange)
+            if emphasis.selectInDocument {
+                onSelectInDocument?(emphasis.range)
+            }
+            if emphasis.flash {
+                scheduleFlashRemoval(for: highlightedRange.id, group: group)
+            }
+        }
+        emphasesByGroup[group] = ranges
+        syncHighlightedRanges()
+    }
+
     private func resolvedColor(for emphasis: Emphasis, baseColor: NSColor) -> NSColor {
         switch emphasis.style {
         case .standard:
