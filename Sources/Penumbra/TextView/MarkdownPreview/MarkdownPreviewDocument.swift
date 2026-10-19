@@ -139,7 +139,8 @@ public struct MarkdownPreviewDocument: Sendable, Hashable {
     /// just see an ordinary code fence); everything else is walked from Foundation's
     /// `PresentationIntent` tree by ``MarkdownPreviewIntentWalker``. Once every block is built,
     /// inline `[^1]` references are renumbered by first-reference order and a trailing
-    /// `.footnotes` block is appended if any definitions were found.
+    /// `.footnotes` block is appended if any definitions were found. A `{{TOC}}` marker line is
+    /// expanded into a heading-link list first (see ``MarkdownPreviewTableOfContents``).
     ///
     /// Pass the same `cache` to successive parses of an edited buffer to re-parse only the
     /// prose that changed (see ``MarkdownPreviewParseCache``).
@@ -148,9 +149,12 @@ public struct MarkdownPreviewDocument: Sendable, Hashable {
         cache.begin()
         defer { cache.end() }
         let (strippedSource, footnoteDefinitions) = MarkdownPreviewFootnotes.extract(from: source)
-        let linkDefinitions = MarkdownPreviewIntentWalker.linkReferenceDefinitions(in: strippedSource)
+        // `{{TOC}}` expands against the whole document before chunking, so the generated list
+        // re-parses whenever any heading changes (the expanded chunk text changes with it).
+        let tocExpandedSource = MarkdownPreviewTableOfContents.expanded(strippedSource)
+        let linkDefinitions = MarkdownPreviewIntentWalker.linkReferenceDefinitions(in: tocExpandedSource)
         var blocks: [MarkdownPreviewBlock] = []
-        for segment in MermaidFenceExtractor.segments(in: strippedSource) {
+        for segment in MermaidFenceExtractor.segments(in: tocExpandedSource) {
             switch segment {
             case .prose(let prose):
                 for chunk in MarkdownPreviewParseCache.chunks(of: prose) {
