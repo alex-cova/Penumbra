@@ -85,6 +85,38 @@ final class IDEAgentPermissionsModelTests: XCTestCase {
         XCTAssertTrue(entries(model, .projectLocal).isEmpty)
     }
 
+    func testExampleFailuresBadgeOnTheRightEntry() throws {
+        let local = root.appendingPathComponent(".umbra/settings.local.json")
+        try FileManager.default.createDirectory(at: local.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"""
+        {"permissions":{"allow":[
+          {"rule":"Bash(git status:*)","match":["git status --short"],"not_match":["git push"]},
+          {"rule":"Bash(npm test:*)","match":["npm run"]}
+        ]}}
+        """#.write(to: local, atomically: true, encoding: .utf8)
+        let model = makeModel()
+        model.reload()
+        let localEntries = try XCTUnwrap(model.groups.first { $0.origin == .projectLocal }?.entries)
+        XCTAssertEqual(localEntries.count, 2)
+        let passing = try XCTUnwrap(localEntries.first { $0.rule == PermissionRule(tool: "Bash", pattern: "git status:*") })
+        XCTAssertTrue(passing.exampleFailures.isEmpty, "passing examples give no badge")
+        let failing = try XCTUnwrap(localEntries.first { $0.rule == PermissionRule(tool: "Bash", pattern: "npm test:*") })
+        XCTAssertEqual(failing.exampleFailures.count, 1, "one failing example gives exactly one badge")
+        XCTAssertEqual(failing.exampleFailures.first?.example, "npm run")
+        XCTAssertEqual(failing.exampleFailures.first?.expectedMatch, true)
+    }
+
+    func testFileWithNoExamplesGivesNoBadges() throws {
+        let local = root.appendingPathComponent(".umbra/settings.local.json")
+        try FileManager.default.createDirectory(at: local.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"permissions":{"allow":["Bash(make:*)"]}}"#.write(to: local, atomically: true, encoding: .utf8)
+        let model = makeModel()
+        model.reload()
+        let localEntries = try XCTUnwrap(model.groups.first { $0.origin == .projectLocal }?.entries)
+        XCTAssertEqual(localEntries.count, 1)
+        XCTAssertTrue(localEntries.allSatisfy { $0.exampleFailures.isEmpty })
+    }
+
     func testAskingWhetherACommandWouldRunUsesTheRulesAndTheMode() async throws {
         let model = makeModel()
         model.add("Bash(make:*)", kind: .allow, scope: .project)

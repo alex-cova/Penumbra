@@ -12,6 +12,7 @@ final class IDEAgentPermissionsModel {
         let kind: PermissionRules.Kind
         let origin: IDEAgentPermissionFiles.Origin
         let file: URL
+        var exampleFailures: [PermissionRules.ExampleFailure] = []
 
         var id: String { "\(origin.title)|\(kind)|\(rule)" }
     }
@@ -41,8 +42,13 @@ final class IDEAgentPermissionsModel {
 
     func reload() {
         groups = IDEAgentPermissionFiles.loadEach(projectRoot: projectRoot(), appFile: appFile).map { source in
+            let failures = source.rules.checkExamples()
             func entries(_ rules: [PermissionRule], _ kind: PermissionRules.Kind) -> [Entry] {
-                rules.map { Entry(rule: $0, kind: kind, origin: source.origin, file: source.url) }
+                rules.map { rule in
+                    Entry(
+                        rule: rule, kind: kind, origin: source.origin, file: source.url,
+                        exampleFailures: failures.filter { $0.rule == rule && $0.kind == kind })
+                }
             }
             return Group(
                 origin: source.origin,

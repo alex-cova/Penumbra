@@ -45,6 +45,12 @@ struct IDEAgentPermissionsSection: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .textSelection(.enabled)
+                            if !entry.exampleFailures.isEmpty {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                                    .help(Self.exampleHelp(entry.exampleFailures))
+                                    .accessibilityLabel(Self.exampleHelp(entry.exampleFailures))
+                            }
                             Spacer(minLength: 0)
                             if entry.origin.isEditable {
                                 Button {
@@ -116,6 +122,14 @@ struct IDEAgentPermissionsSection: View {
             let verdict = await model.verdict(forCommand: command, mode: mode)
             probeResult = IDEAgentPermissionsModel.describe(verdict)
         }
+    }
+
+    static func exampleHelp(_ failures: [PermissionRules.ExampleFailure]) -> String {
+        failures.map { failure in
+            failure.expectedMatch
+                ? "`\(failure.example)` should match but does not"
+                : "`\(failure.example)` should not match but does"
+        }.joined(separator: "\n")
     }
 
     private static func label(_ kind: PermissionRules.Kind) -> String {

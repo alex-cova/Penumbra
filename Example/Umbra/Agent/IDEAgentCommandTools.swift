@@ -72,8 +72,12 @@ struct IDERunCommandTool: AgentTool {
     static let defaultTimeout: TimeInterval = 120
     static let maxTimeout: TimeInterval = 600
     static let maxOutputCharacters = 24_000
+    static let retryOutsideOption = "Run outside the sandbox"
+    static let keepSandboxedOption = "Keep the sandboxed result"
 
     let support: IDEAgentCommandSupport
+    /// The session's sandbox choice. `nil` runs commands directly.
+    var sandbox: IDEAgentSandboxChoice? = nil
 
     var risk: ToolRisk { .command }
     var definition: ToolDefinition {
@@ -97,10 +101,16 @@ struct IDERunCommandTool: AgentTool {
     func approvalRequest(for arguments: ToolArguments, context: ToolContext) async -> ApprovalRequest? {
         guard let command = try? arguments.string("command") else { return nil }
         let triage = await support.triage(context)
+        var notes = support.notes(triage)
+        if let sandbox {
+            notes.append(sandbox.isConsented
+                ? "Runs sandboxed: reads stay out of credentials, writes stay in the project, temp and build caches."
+                : "First sandboxed run: the workspace profile keeps reads out of credentials and writes in the project, temp and build caches. Approving runs it sandboxed.")
+        }
         return ApprovalRequest(
             title: "Run command", command: command, workingDirectory: support.root.path,
             reason: try? arguments.optionalString("reason"), warnings: CommandWarnings.warnings(for: command),
-            notes: support.notes(triage), editableArgument: "command")
+            notes: notes, editableArgument: "command")
     }
 
     func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
@@ -113,11 +123,34 @@ struct IDERunCommandTool: AgentTool {
         let progress = context.progress
         let commandID = UUID()
         let box = support.box
+        sandbox?.grant()
         box.showCommand(id: commandID, title: command, line: "$ \(command)\n")
-        let result: AgentCommandResult
+        let profile = sandbox?.profile
+        let result = try await Self.execute(
+            command: command, workingDirectory: support.root, environment: environment, timeout: timeout,
+            sandboxProfile: profile, commandID: commandID, box: box, progress: progress)
+        let formatted = Self.format(command: command, result: result, timeout: timeout)
+        let verdict = formatted.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+        let separator = result.output.hasSuffix("\n") || result.output.isEmpty ? "" : "\n"
+        box.showCommand(id: commandID, title: command, line: separator + verdict + "\n")
+        box.showCommand(id: commandID, title: command, line: nil)
+        guard profile != nil,
+              IDEAgentSandboxProfile.denialDetected(exitCode: result.exitCode, output: result.output)
+        else { return formatted }
+        return try await Self.retryOutsideSandbox(
+            command: command, workingDirectory: support.root, environment: environment, timeout: timeout,
+            commandID: commandID, box: box, progress: progress, formatted: formatted, context: context)
+    }
+
+    private static func execute(
+        command: String, workingDirectory: URL, environment: [String: String], timeout: TimeInterval,
+        sandboxProfile: String?, commandID: UUID, box: IDEAgentHostBox, progress: (@Sendable (String) -> Void)?
+    ) async throws -> AgentCommandResult {
         do {
-            result = try await AgentCommandRunner.run(
-                AgentCommandSpec(command: command, workingDirectory: support.root, environment: environment, timeout: timeout),
+            return try await AgentCommandRunner.run(
+                AgentCommandSpec(
+                    command: command, workingDirectory: workingDirectory, environment: environment,
+                    timeout: timeout, sandboxProfile: sandboxProfile),
                 onOutput: { chunk in
                     progress?(chunk)
                     box.showCommand(id: commandID, title: command, line: chunk)
@@ -127,12 +160,36 @@ struct IDERunCommandTool: AgentTool {
             box.showCommand(id: commandID, title: command, line: nil)
             throw ToolError(error.localizedDescription)
         }
-        let formatted = Self.format(command: command, result: result, timeout: timeout)
-        let verdict = formatted.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? ""
-        let separator = result.output.hasSuffix("\n") || result.output.isEmpty ? "" : "\n"
-        box.showCommand(id: commandID, title: command, line: separator + verdict + "\n")
-        box.showCommand(id: commandID, title: command, line: nil)
-        return formatted
+    }
+
+    /// A sandboxed run the sandbox denied: the output says so, and the command is offered once
+    /// outside the sandbox. Rules that already allowed it pre-allow the retry; otherwise the user
+    /// is asked, and the sandboxed result stands when they decline.
+    private static func retryOutsideSandbox(
+        command: String, workingDirectory: URL, environment: [String: String], timeout: TimeInterval,
+        commandID: UUID, box: IDEAgentHostBox, progress: (@Sendable (String) -> Void)?,
+        formatted: String, context: ToolContext
+    ) async throws -> String {
+        let blocked = "[Sandboxed run blocked: the sandbox denied file access (\"Operation not permitted\")."
+        if context.preapproved {
+            let rerun = try await execute(
+                command: command, workingDirectory: workingDirectory, environment: environment,
+                timeout: timeout, sandboxProfile: nil, commandID: commandID, box: box, progress: progress)
+            return Self.format(command: command, result: rerun, timeout: timeout)
+                + "\n" + blocked + " Retried outside the sandbox.]"
+        }
+        guard let ask = context.ask else { return formatted + "\n" + blocked + " Kept the sandboxed result.]" }
+        let answer = await ask(UserQuestion(
+            callID: context.callID, question: "Run outside the sandbox?",
+            options: [retryOutsideOption, keepSandboxedOption]))
+        guard answer == retryOutsideOption else {
+            return formatted + "\n" + blocked + " Kept the sandboxed result.]"
+        }
+        let rerun = try await execute(
+            command: command, workingDirectory: workingDirectory, environment: environment,
+            timeout: timeout, sandboxProfile: nil, commandID: commandID, box: box, progress: progress)
+        return Self.format(command: command, result: rerun, timeout: timeout)
+            + "\n" + blocked + " Retried outside the sandbox.]"
     }
 
     static func format(command: String, result: AgentCommandResult, timeout: TimeInterval) -> String {

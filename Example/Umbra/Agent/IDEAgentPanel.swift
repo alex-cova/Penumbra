@@ -1,5 +1,6 @@
 import AgentKit
 import AgentKitMLX
+import AppKit
 import LocalModelStore
 import SwiftUI
 
@@ -1210,6 +1211,40 @@ struct IDEAgentSettingsView: View {
                         Text("Add a Brave Search API key to turn this on.")
                             .font(IDEAppearance.Typography.caption)
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    }
+                }
+                Toggle("Run tests before finishing", isOn: $settings.runTestsBeforeFinishing)
+                Text("In a Gradle project, a run that changed files must pass the tests before it may end. Off until you turn it on; turning it on is the consent to run them.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                if IDEAgentSandbox.isAvailable {
+                    Toggle("Run commands in a sandbox", isOn: $settings.sandboxCommands)
+                    Text("Commands run under a workspace Seatbelt profile: reads stay out of credentials, writes stay in the project, temp and build caches, and .git stays read-only. Off until you turn it on; the first run asks. Direct builds only.")
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    if settings.sandboxCommands {
+                        Toggle("Block network in the sandbox", isOn: $settings.sandboxBlockNetwork)
+                    }
+                }
+            }
+
+            Section("Memory") {
+                Toggle("Remember across chats", isOn: $settings.memoryEnabled)
+                Text("The agent can save durable facts to a memory file beside the project's saved chats, outside the repo, and reads them back in later chats. Off until you turn it on.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                if settings.memoryEnabled {
+                    Toggle("Save memories without asking", isOn: $settings.saveMemoriesWithoutAsking)
+                    Text("Even then, a run that used web search or read untrusted content still asks before saving.")
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    HStack {
+                        Button("Open file") {
+                            if let url = agent?.memoryFile { NSWorkspace.shared.open(url) }
+                        }
+                        .disabled(agent?.memoryFile == nil)
+                        Button("Delete memories") { agent?.deleteMemories() }
+                            .disabled(agent?.memoryFile == nil)
                     }
                 }
             }

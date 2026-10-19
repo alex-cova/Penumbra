@@ -18,6 +18,23 @@ public struct ToolOutput: Sendable, Hashable {
     public static func error(_ text: String) -> ToolOutput { ToolOutput("Error: \(text)", isError: true) }
 }
 
+/// What the host's output shaper sees for one finished call.
+public struct ToolOutputShapingInput: Sendable {
+    public var toolName: String
+    public var arguments: String
+    public var risk: ToolRisk
+    public var isError: Bool
+    public var text: String
+
+    public init(toolName: String, arguments: String, risk: ToolRisk, isError: Bool, text: String) {
+        self.toolName = toolName
+        self.arguments = arguments
+        self.risk = risk
+        self.isError = isError
+        self.text = text
+    }
+}
+
 public struct ToolError: Error, Sendable, Equatable, LocalizedError {
     public let message: String
     public init(_ message: String) { self.message = message }
@@ -115,6 +132,16 @@ public struct ToolContext: Sendable {
     public let projectNotes: ProjectNoteTracker?
     /// Tells the session a file tool succeeded on `path` (conditional skills).
     public let fileTouched: (@Sendable (String) -> Void)?
+    /// Redacts a line before it is persisted outside the history (`remember`). The session wires
+    /// the configured output shaper; `nil` keeps the text as the model wrote it.
+    public let redactForMemory: (@Sendable (String) async -> String)?
+    /// Runs a child session for read-only research (`explore`). `nil` when the host session does
+    /// not offer subagents. The session counts the child's tokens against this run's budget.
+    public let spawnSubagent: (@Sendable (SubagentRequest) async -> SubagentResult)?
+    /// True when the permission rules already allowed this call outright (an allow rule or a safe
+    /// default), rather than the user approving its card. A tool that degrades gracefully (the
+    /// sandbox retry) may skip asking again.
+    public let preapproved: Bool
 
     public init(
         workspace: any AgentWorkspace,
@@ -128,7 +155,10 @@ public struct ToolContext: Sendable {
         editTolerance: EditTolerance = .hosted,
         editFailures: EditFailureLog? = nil,
         projectNotes: ProjectNoteTracker? = nil,
-        fileTouched: (@Sendable (String) -> Void)? = nil
+        fileTouched: (@Sendable (String) -> Void)? = nil,
+        redactForMemory: (@Sendable (String) async -> String)? = nil,
+        spawnSubagent: (@Sendable (SubagentRequest) async -> SubagentResult)? = nil,
+        preapproved: Bool = false
     ) {
         self.workspace = workspace
         self.ledger = ledger
@@ -142,6 +172,9 @@ public struct ToolContext: Sendable {
         self.editFailures = editFailures
         self.projectNotes = projectNotes
         self.fileTouched = fileTouched
+        self.redactForMemory = redactForMemory
+        self.spawnSubagent = spawnSubagent
+        self.preapproved = preapproved
     }
 
     /// Appends a nested instruction file the first time `path`'s folder is touched, and tells the
@@ -154,11 +187,48 @@ public struct ToolContext: Sendable {
     }
 }
 
+/// What a delegated research call asks the session to run.
+public struct SubagentRequest: Sendable {
+    /// The parent's tool-call id, so progress events tie back to the call.
+    public var id: String
+    public var task: String
+    public var maxIterations: Int
+    /// When set, the child asks this client instead of sharing the parent's. Tests use one scripted
+    /// client per side; production shares the parent's client, model and permission rules.
+    public var client: (any LLMClient)?
+
+    public init(id: String, task: String, maxIterations: Int, client: (any LLMClient)? = nil) {
+        self.id = id
+        self.task = task
+        self.maxIterations = maxIterations
+        self.client = client
+    }
+}
+
+/// What the child session brought back. `usage` is the child's whole run; the session adds it to
+/// the parent run's budget.
+public struct SubagentResult: Sendable {
+    public var summary: String
+    public var usage: TokenUsage
+    public var ending: RunEnding
+
+    public init(summary: String, usage: TokenUsage, ending: RunEnding) {
+        self.summary = summary
+        self.usage = usage
+        self.ending = ending
+    }
+}
+
 /// A hash of the text the model last saw for each file.
 public actor ReadLedger {
     private var seen: [String: UInt64] = [:]
 
-    public init() {}
+    public init(snapshot: [String: UInt64] = [:]) {
+        self.seen = snapshot
+    }
+
+    /// What this ledger holds, so a child session can start from a copy.
+    public func snapshot() -> [String: UInt64] { seen }
 
     public func record(path: String, text: String) { seen[path] = Self.hash(text) }
     /// Forgets everything the model was shown, as after a rewind: it must read before it edits again.
@@ -201,6 +271,9 @@ public protocol AgentTool: Sendable {
     /// When true, a successful call counts as checking the files this run changed (`diagnostics`,
     /// `run_tests`, `gradle`).
     var verifies: Bool { get }
+    /// When true, the call asks first in a run that used web search or read untrusted content, even
+    /// when the rules would allow it (`remember`, so prompt-injected text is not quietly persisted).
+    var asksAfterUntrustedContent: Bool { get }
     /// A file tool touched `path`. Skills with a `paths` filter use this; other tools ignore it.
     func noteFileTouched(_ path: String)
 }
@@ -214,6 +287,7 @@ extension AgentTool {
     public var isExemptFromRepeatGuard: Bool { false }
     public var honorsDenyRules: Bool { false }
     public var verifies: Bool { false }
+    public var asksAfterUntrustedContent: Bool { false }
     public func noteFileTouched(_ path: String) {}
 
     public func isOffered(in mode: PermissionMode) -> Bool { mode.offers(risk) }

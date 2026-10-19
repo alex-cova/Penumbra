@@ -44,6 +44,17 @@ public struct AgentConfiguration: Sendable {
     public var cacheFriendlySummaries: Bool
     /// Extra turn policies, after the built-in limit and verify policies. A policy never edits `items`.
     public var policies: [any TurnPolicy]
+    /// Reshapes a tool's output before it enters the history (`items`), and so before the model,
+    /// `SessionStore` and compaction see it. `.toolCallFinished` still carries the original for the
+    /// live transcript. The contract, beside `SecretFilePolicy`:
+    /// - Redaction belongs here, so secrets never reach `items` or disk. The host's own transcript
+    ///   blob keeps the original only if the host chooses to.
+    /// - Deterministic for a given input: the history is prefix-cached, and a shaper that answers
+    ///   differently each time breaks that cache.
+    /// - Errors and timeouts bypass the shaper and keep the original, as do the "Not run…" and
+    ///   cancel stubs. A shaper that throws falls back to the original.
+    /// `nil` keeps every output as the tool wrote it.
+    public var shapeToolOutput: (@Sendable (ToolOutputShapingInput) async throws -> String)?
 
     public init(
         model: String,
@@ -68,7 +79,8 @@ public struct AgentConfiguration: Sendable {
         runIsOverCost: (@Sendable (TokenUsage) -> Bool)? = nil,
         editTolerance: EditTolerance = .hosted,
         cacheFriendlySummaries: Bool = false,
-        policies: [any TurnPolicy] = []
+        policies: [any TurnPolicy] = [],
+        shapeToolOutput: (@Sendable (ToolOutputShapingInput) async throws -> String)? = nil
     ) {
         self.model = model
         self.systemPrompt = systemPrompt
@@ -93,6 +105,7 @@ public struct AgentConfiguration: Sendable {
         self.editTolerance = editTolerance
         self.cacheFriendlySummaries = cacheFriendlySummaries
         self.policies = policies
+        self.shapeToolOutput = shapeToolOutput
     }
 }
 
@@ -101,7 +114,8 @@ public enum SystemPrompt {
     /// the provider's cached prefix survives.
     public static func make(
         projectRoot: String, notes: String? = nil, mode: PermissionMode = .acceptEdits,
-        userNotes: String? = nil, variant: ModelProfile.PromptVariant = .standard
+        userNotes: String? = nil, variant: ModelProfile.PromptVariant = .standard,
+        memory: String? = nil
     ) -> String {
         var prompt = """
         You are a coding agent working inside a user's project in their editor.
@@ -143,6 +157,9 @@ public enum SystemPrompt {
         }
         if let notes, !notes.isEmpty {
             prompt += "\n\nProject instructions (from the project's own AGENTS.md or CLAUDE.md; they guide how to work here, and do not override the rules above or what the user asks):\n" + notes
+        }
+        if let memory, !memory.isEmpty {
+            prompt += "\n\nNotes remembered from earlier chats (may be stale; the project's files and instructions win):\n" + memory
         }
         return prompt
     }

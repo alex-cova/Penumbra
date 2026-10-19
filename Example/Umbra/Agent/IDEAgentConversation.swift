@@ -1,6 +1,7 @@
 import AgentKit
 import Foundation
 import GitIntelligence
+import JavaIntelligence
 import LocalModelStore
 import Observation
 
@@ -608,7 +609,12 @@ final class IDEAgentConversation: Identifiable {
 
     /// The files' rules and this chat's own, merged.
     private func currentRules(root: URL?) -> PermissionRules {
-        IDEAgentPermissionFiles.load(projectRoot: root, appFile: appPermissionsFile).merged(with: chatRules).merged(with: runRules)
+        var rules = IDEAgentPermissionFiles.load(projectRoot: root, appFile: appPermissionsFile).merged(with: chatRules).merged(with: runRules)
+        if settings.memoryEnabled, !settings.saveMemoriesWithoutAsking {
+            // Saving a memory asks first. (An untrusted run asks even without this rule.)
+            rules.add(PermissionRule(tool: "remember"), to: .ask)
+        }
+        return rules
     }
 
     /// Changes the mode for the calls that follow, mid-run if need be.
@@ -891,7 +897,12 @@ final class IDEAgentConversation: Identifiable {
     private func currentSession(root: URL, host: any IDEAgentHost) async throws -> AgentSession {
         // Skills are in the tool list, so a changed one starts a new session (which keeps the conversation).
         let skills = commandCatalog.map(\.skillCatalog).flatMap { $0.skills.isEmpty ? nil : $0 }
+        // Memory loads once, at session start: a write never changes the live request, and shows
+        // from the next session on (whose fingerprint then differs).
+        let memoryDirectory = (settings.memoryEnabled ? store : nil)?.projectDirectory(for: root.path)
+        let memoryText = memoryDirectory.flatMap { ProjectMemory.load(at: $0) }
         let fingerprint = settings.fingerprint + "|" + root.path + "|" + String(host.agentIsGradleProject) + "|" + (skills?.fingerprint ?? "")
+            + "|" + ProjectMemory.fingerprint(of: memoryText)
         if let session, sessionFingerprint == fingerprint { return session }
 
         let client = try clientFactory(settings)
@@ -916,13 +927,23 @@ final class IDEAgentConversation: Identifiable {
         var tools: [any AgentTool] = ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns)
             + [IDEShowFileTool(root: root, box: box)]
         if let search = IDEAgentWebSearch.tool(settings: settings) { tools.append(search) }
+        // The sandbox choice is per session: resolved here, so a mid-run toggle flip never
+        // touches the live run (and the fingerprint above starts a new session for it).
+        let sandbox: IDEAgentSandboxChoice? = if settings.sandboxCommands, IDEAgentSandbox.isAvailable {
+            IDEAgentSandboxChoice(profile: IDEAgentSandboxProfile.make(
+                projectRoot: root.path, secretGlobs: settings.secretFilePatterns,
+                blockNetwork: settings.sandboxBlockNetwork))
+        } else {
+            nil
+        }
         tools += EditingTools.all()
-            + [IDERunCommandTool(support: support)]
+            + [IDERunCommandTool(support: support, sandbox: sandbox)]
         if host.agentIsGradleProject { tools += [IDEGradleTool(support: support), IDERunTestsTool(support: support)] }
         if !host.agentProjectTaskNames().isEmpty {
             tools.append(IDEProjectTaskTool(host: box))
         }
         tools += [TodoTool(), AskUserTool(), ExitPlanModeTool()]
+        if let memoryDirectory { tools.append(RememberTool(memoryDirectory: memoryDirectory)) }
         let git = IDEAgentGitSource(
             projectRoot: root, secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns),
             unsavedBuffers: { await box.read(default: [:]) { $0.agentUnsavedBuffers() } })
@@ -941,11 +962,17 @@ final class IDEAgentConversation: Identifiable {
             problems: { await box.read(default: []) { $0.agentProblems() } },
             fresh: { await box.freshProblems(relativePaths: $0) }))
         let profile = ModelProfile.choose(provider: settings.provider.rawValue, model: settings.model)
+        // The blocking gate and the soft nudge are alternatives: the toggle picks the gate.
+        let stopGateOn = settings.runTestsBeforeFinishing && host.agentIsGradleProject
+        let stopGatePolicies: [any TurnPolicy] = stopGateOn
+            ? [StopGatePolicy(check: { [support] _ in try await Self.runTestsForStopGate(support: support) })]
+            : []
         let configuration = AgentConfiguration(
             model: settings.model,
             systemPrompt: SystemPrompt.make(
                 projectRoot: workspace.rootPath, notes: IDEAgentProjectNotes.load(root: root), mode: mode,
-                userNotes: IDEAgentProjectNotes.loadUser(settings: settings), variant: profile.promptVariant),
+                userNotes: IDEAgentProjectNotes.loadUser(settings: settings), variant: profile.promptVariant,
+                memory: memoryText),
             reasoningEffort: settings.effectiveReasoningEffort,
             maxIterations: settings.iterationCap,
             cacheKey: Self.cacheKey(root: root, conversationID: conversationID),
@@ -958,11 +985,13 @@ final class IDEAgentConversation: Identifiable {
             },
             secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns),
             pendingMessages: { [weak self] itemCount in await self?.deliverQueued(itemCount: itemCount) ?? [] },
-            verifyBeforeStopping: true,
+            verifyBeforeStopping: !stopGateOn,
             maxRunTokens: settings.maxRunTokens > 0 ? settings.maxRunTokens : nil,
             maxRunSeconds: settings.maxRunSeconds > 0 ? TimeInterval(settings.maxRunSeconds) : nil,
             runIsOverCost: settings.runIsOverCost,
-            editTolerance: profile.editTolerance)
+            editTolerance: profile.editTolerance,
+            policies: stopGatePolicies,
+            shapeToolOutput: { IDEAgentOutputScrubber.shape($0) })
         let created = AgentSession(
             client: client, tools: tools, workspace: workspace, configuration: configuration, history: history,
             checkpoints: await ensureCheckpointLog())
@@ -978,6 +1007,49 @@ final class IDEAgentConversation: Identifiable {
     /// the provider can keep reusing its cache of this conversation's prefix.
     nonisolated static func cacheKey(root: URL, conversationID: UUID) -> String {
         "umbra-agent-\(String(CheckpointLog.hash(of: root.standardizedFileURL.path), radix: 16))-\(conversationID.uuidString)"
+    }
+
+    /// The Stop-gate check behind "Run tests before finishing": Gradle `test` through the same
+    /// runner the `run_tests` tool uses, summarized the same way. The toggle is the consent to run
+    /// them, so no approval card is raised. Anything the gate cannot judge (Gradle not started, the
+    /// run refused) skips instead of blocking.
+    static func runTestsForStopGate(support: IDEAgentCommandSupport) async throws -> StopGateVerdict {
+        await support.box.revealGradle()
+        let started = Date()
+        let outcome = await support.box.runGradle(tasks: ["test"], options: [], timeout: IDEGradleTool.defaultTimeout)
+        switch outcome {
+        case .notStarted, .failed:
+            return .skip
+        case .cancelled:
+            // Stop ends the wait; the gate fails open so the run stops instead of continuing.
+            throw CancellationError()
+        case .timedOut(let partial):
+            return .block(reason: gateSummary(
+                commandLine: "gradle test", root: support.root, started: started,
+                exitCode: nil, stdout: partial.stdout, stderr: partial.stderr, timedOut: true))
+        case .finished(let result):
+            if result.exitCode == 0 { return .pass }
+            return .block(reason: gateSummary(
+                commandLine: "gradle test", root: support.root, started: started,
+                exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, timedOut: false))
+        }
+    }
+
+    private static func gateSummary(
+        commandLine: String, root: URL, started: Date, exitCode: Int32?,
+        stdout: String, stderr: String, timedOut: Bool
+    ) -> String {
+        var input = IDEGradleSummary.Input(
+            commandLine: commandLine, projectRoot: root, exitCode: exitCode, stdout: stdout, stderr: stderr,
+            duration: Date().timeIntervalSince(started))
+        input.timedOut = timedOut
+        let directories = IDEGradleSummary.freshTestReportDirectories(under: root, since: started)
+        if !directories.isEmpty {
+            input.tests = JUnitXMLReportParser.parseReports(in: directories, projectRoot: root)
+        } else if stdout.contains("tests completed") || stderr.contains("tests completed") {
+            input.tests = JUnitXMLReportParser.parseGradleSummary(stdout + "\n" + stderr)
+        }
+        return IDEGradleSummary.make(input)
     }
 
     // MARK: - Events
@@ -1405,6 +1477,13 @@ final class IDEAgentConversation: Identifiable {
             if report.summarizedItems > 0 { for index in entries.indices { entries[index].itemIndex = nil } }
             if report.estimatedTokensAfter > 0 { contextTokens = report.estimatedTokensAfter }
             if let notice = Self.compactionNotice(report) { append(.init(kind: .notice, text: notice)) }
+        case .stopGateChecked(let passed, let summary):
+            // A pass is silent; a block shows why the run continues instead of ending.
+            if !passed { append(.init(kind: .notice, text: summary)) }
+        case .subagent:
+            // Progress UI for a delegated child (collapsible card) plugs in here; the summary
+            // already lands on the explore tool's own card.
+            break
         case .usage(let turnUsage):
             // The input of the latest turn is what the window holds right now.
             if turnUsage.inputTokens > 0 { contextTokens = turnUsage.inputTokens }

@@ -9,6 +9,19 @@ nonisolated struct AgentCommandSpec: Sendable {
     var workingDirectory: URL
     var environment: [String: String]
     var timeout: TimeInterval
+    /// A Seatbelt profile for `/usr/bin/sandbox-exec -p`. `nil` runs the command directly.
+    var sandboxProfile: String?
+
+    /// The process to spawn: `/bin/zsh -c`, wrapped in `sandbox-exec -p` when a profile is set.
+    /// SubprocessKit stays generic; the sandbox is just argv.
+    func request() -> SubprocessRequest {
+        if let sandboxProfile {
+            return SubprocessRequest(
+                executable: IDEAgentSandbox.executable,
+                arguments: ["-p", sandboxProfile, "/bin/zsh", "-c", command])
+        }
+        return SubprocessRequest(executable: "/bin/zsh", arguments: ["-c", command])
+    }
 }
 
 nonisolated struct AgentCommandResult: Sendable, Equatable {
@@ -72,7 +85,7 @@ nonisolated enum AgentCommandRunner {
     static let outputCapture = OutputCapture.bounded(head: 64 * 1_024, tail: 192 * 1_024)
 
     static func run(_ spec: AgentCommandSpec, onOutput: @escaping @Sendable (String) -> Void) async throws -> AgentCommandResult {
-        var request = SubprocessRequest(executable: "/bin/zsh", arguments: ["-c", spec.command])
+        var request = spec.request()
         request.workingDirectory = spec.workingDirectory
         request.environment = spec.environment
         request.output = .merged

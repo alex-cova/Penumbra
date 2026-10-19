@@ -109,6 +109,21 @@ final class IDEAgentSettings {
     var loadsUserInstructions: Bool { didSet { defaults.set(loadsUserInstructions, forKey: Keys.userInstructions) } }
     /// Whether the agent may call `web_search`. Off until the user turns it on; a key is also required.
     var webSearchEnabled: Bool { didSet { defaults.set(webSearchEnabled, forKey: Keys.webSearch) } }
+    /// Whether a run that changed files must pass the project's tests before it may end. Off by
+    /// default; turning it on is the consent to run the tests. Only applies to Gradle projects.
+    var runTestsBeforeFinishing: Bool { didSet { defaults.set(runTestsBeforeFinishing, forKey: Keys.runTestsGate) } }
+    /// Whether the agent may keep a per-project memory file across chats. Off by default.
+    var memoryEnabled: Bool { didSet { defaults.set(memoryEnabled, forKey: Keys.memory) } }
+    /// Whether `remember` applies without asking. Off by default; even then, a run that used web
+    /// search or read untrusted content still asks before saving.
+    var saveMemoriesWithoutAsking: Bool { didSet { defaults.set(saveMemoriesWithoutAsking, forKey: Keys.memoryNoAsk) } }
+    /// Whether agent commands run under the workspace Seatbelt profile. Off by default, direct
+    /// builds only (the toggle hides itself in the App Store build). Chosen per session: flipping
+    /// it starts a new session, never changing the live run.
+    var sandboxCommands: Bool { didSet { defaults.set(sandboxCommands, forKey: Keys.sandbox) } }
+    /// Whether the sandbox profile blocks network access. Off by default (Gradle and Maven need
+    /// to resolve).
+    var sandboxBlockNetwork: Bool { didSet { defaults.set(sandboxBlockNetwork, forKey: Keys.sandboxNoNet) } }
     /// Whether a Brave Search key is saved. Held here so views never read the Keychain.
     private(set) var hasWebSearchKey = false
     /// What the agent may do without asking in a new chat (see `PermissionMode`); each chat can change its own.
@@ -221,6 +236,11 @@ final class IDEAgentSettings {
         static let userSkills = "umbra.agent.loadsUserSkills"
         static let userInstructions = "umbra.agent.loadsUserInstructions"
         static let webSearch = "umbra.agent.webSearch"
+        static let runTestsGate = "umbra.agent.runTestsBeforeFinishing"
+        static let memory = "umbra.agent.memoryEnabled"
+        static let memoryNoAsk = "umbra.agent.saveMemoriesWithoutAsking"
+        static let sandbox = "umbra.agent.sandboxCommands"
+        static let sandboxNoNet = "umbra.agent.sandboxBlockNetwork"
         static let prices = "umbra.agent.priceTable"
         static let secretPatterns = "umbra.agent.secretFilePatterns"
         static let iterationCap = "umbra.agent.iterationCap"
@@ -265,6 +285,11 @@ final class IDEAgentSettings {
         loadsUserSkills = defaults.object(forKey: Keys.userSkills) as? Bool ?? true
         loadsUserInstructions = defaults.bool(forKey: Keys.userInstructions)
         webSearchEnabled = defaults.bool(forKey: Keys.webSearch)
+        runTestsBeforeFinishing = defaults.bool(forKey: Keys.runTestsGate)
+        memoryEnabled = defaults.bool(forKey: Keys.memory)
+        saveMemoriesWithoutAsking = defaults.bool(forKey: Keys.memoryNoAsk)
+        sandboxCommands = defaults.bool(forKey: Keys.sandbox)
+        sandboxBlockNetwork = defaults.bool(forKey: Keys.sandboxNoNet)
         priceTableText = defaults.string(forKey: Keys.prices) ?? IDEAgentPrices.defaultText
         secretFilePatternsText = defaults.string(forKey: Keys.secretPatterns) ?? ""
         mode = defaults.string(forKey: Keys.mode).flatMap(PermissionMode.init(persisted:)) ?? .acceptEdits
@@ -518,7 +543,7 @@ final class IDEAgentSettings {
     var fingerprint: String {
         let local = provider == .ollama || provider == .mlx
         let prices = maxRunCostCents > 0 ? priceTableText : ""
-        return "\(provider.rawValue)|\(baseURL)|\(model)|\(reasoningEffort)|\(local ? String(effectiveContextLength) : "")|\(iterationCap)|\(maxRunTokens)|\(maxRunSeconds)|\(maxRunCostCents)|\(prices)|\(contextWindow ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)"
+        return "\(provider.rawValue)|\(baseURL)|\(model)|\(reasoningEffort)|\(local ? String(effectiveContextLength) : "")|\(iterationCap)|\(maxRunTokens)|\(maxRunSeconds)|\(maxRunCostCents)|\(prices)|\(contextWindow ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)|\(runTestsBeforeFinishing)|\(memoryEnabled)|\(saveMemoriesWithoutAsking)|\(sandboxCommands)|\(sandboxBlockNetwork)"
     }
 
     func makeClient() throws -> any LLMClient {

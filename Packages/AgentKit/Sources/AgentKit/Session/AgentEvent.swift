@@ -56,5 +56,10 @@ public enum AgentEvent: Sendable, Equatable {
     case usage(TokenUsage)
     /// The conversation was shortened to fit the window. The host's transcript is unaffected.
     case compacted(CompactionReport)
+    /// The Stop gate's check ran. `passed` is false when it blocked the ending or the cap ended it.
+    case stopGateChecked(passed: Bool, summary: String)
+    /// An event from a child subagent session, for progress UI. The parent's own run still ends
+    /// with exactly one top-level `.runEnded`.
+    indirect case subagent(id: String, event: AgentEvent)
     case runEnded(RunEnding)
 }

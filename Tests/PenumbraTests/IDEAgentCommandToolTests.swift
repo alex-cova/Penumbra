@@ -487,6 +487,113 @@ final class IDEAgentCommandToolTests: XCTestCase {
         XCTAssertTrue(badLine.isError)
         XCTAssertEqual(host.shownFiles.count, 1)
     }
+
+    // MARK: - Workspace sandbox (Seatbelt, direct builds only)
+
+    func testSandboxWrapsArgv() {
+        let direct = AgentCommandSpec(command: "git status", workingDirectory: project, environment: [:], timeout: 10)
+        XCTAssertEqual(direct.request().executable, "/bin/zsh")
+        XCTAssertEqual(direct.request().arguments, ["-c", "git status"])
+        var sandboxed = direct
+        sandboxed.sandboxProfile = "(version 1)"
+        let wrapped = sandboxed.request()
+        XCTAssertEqual(wrapped.executable, "/usr/bin/sandbox-exec")
+        XCTAssertEqual(wrapped.arguments, ["-p", "(version 1)", "/bin/zsh", "-c", "git status"])
+    }
+
+    func testSandboxProfileConfinesWritesAndDeniesCredentials() {
+        let profile = IDEAgentSandboxProfile.make(
+            projectRoot: "/proj", home: "/Users/t", tmpdir: "/tmp/x",
+            secretGlobs: ["*.key", "# comment", ""], blockNetwork: false)
+        XCTAssertTrue(profile.contains(#"(subpath "/proj")"#))
+        XCTAssertTrue(profile.contains(#"(subpath "/Users/t/.gradle")"#))
+        XCTAssertTrue(profile.contains(#"(subpath "/Users/t/.m2")"#))
+        XCTAssertTrue(profile.contains(".ssh"), "credential dirs are denied")
+        XCTAssertTrue(profile.contains("(allow network*)"))
+        XCTAssertFalse(profile.contains("(deny network*)"))
+        XCTAssertTrue(profile.contains(#".git(/|$)"#), ".git writes are denied")
+        XCTAssertFalse(
+            profile.split(separator: "\n").contains { $0.hasPrefix("(deny file-read*") && $0.contains(".git") },
+            ".git stays readable")
+        XCTAssertTrue(profile.contains(#"[^/]*\.key"#), "user globs convert to regex")
+        let blocked = IDEAgentSandboxProfile.make(projectRoot: "/proj", blockNetwork: true)
+        XCTAssertTrue(blocked.contains("(deny network*)"))
+        XCTAssertFalse(blocked.contains("(allow network*)"))
+    }
+
+    func testSandboxDenialDetection() {
+        XCTAssertTrue(IDEAgentSandboxProfile.denialDetected(exitCode: 1, output: "touch: x: Operation not permitted"))
+        XCTAssertTrue(IDEAgentSandboxProfile.denialDetected(exitCode: 1, output: "zsh:1: operation not permitted: .git/x"))
+        XCTAssertTrue(IDEAgentSandboxProfile.denialDetected(exitCode: 1, output: "deny(1) file-write* /x"))
+        XCTAssertFalse(IDEAgentSandboxProfile.denialDetected(exitCode: 0, output: "Operation not permitted"))
+        XCTAssertFalse(IDEAgentSandboxProfile.denialDetected(exitCode: 1, output: "all good"))
+        XCTAssertFalse(IDEAgentSandboxProfile.denialDetected(exitCode: nil, output: "Operation not permitted"))
+    }
+
+    func testSandboxApprovalNotesNameTheSandbox() async throws {
+        let arguments = try ToolArguments(json: #"{"command":"git status"}"#)
+        var tool = IDERunCommandTool(support: support())
+        let plain = await tool.approvalRequest(for: arguments, context: context())
+        XCTAssertFalse(plain?.notes.joined(separator: "\n").contains("sandbox") ?? true)
+        tool.sandbox = IDEAgentSandboxChoice(profile: "(version 1)")
+        let first = await tool.approvalRequest(for: arguments, context: context())
+        XCTAssertTrue(first?.notes.joined(separator: "\n").contains("First sandboxed run") ?? false)
+        tool.sandbox?.grant()
+        let later = await tool.approvalRequest(for: arguments, context: context())
+        XCTAssertTrue(later?.notes.joined(separator: "\n").contains("Runs sandboxed") ?? false)
+    }
+
+    private func sandboxContext(
+        ask: (@Sendable (UserQuestion) async -> String?)? = nil, preapproved: Bool = false
+    ) -> ToolContext {
+        ToolContext(
+            workspace: DiskAgentWorkspace(root: project), ledger: ReadLedger(), callID: "c",
+            ask: ask, preapproved: preapproved)
+    }
+
+    private func sandboxTool() throws -> IDERunCommandTool {
+        try FileManager.default.createDirectory(
+            at: project.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        let profile = IDEAgentSandboxProfile.make(projectRoot: project.path)
+        return IDERunCommandTool(support: support(), sandbox: IDEAgentSandboxChoice(profile: profile))
+    }
+
+    private func denialCommand() throws -> ToolArguments {
+        try ToolArguments(json: #"{"command":"echo probe > .git/sb-retry"}"#)
+    }
+
+    func testSandboxDenialAsksAndRetriesOutside() async throws {
+        try XCTSkipUnless(IDEAgentSandbox.isAvailable, "needs sandbox-exec outside the App Sandbox")
+        let asked = LockedStrings()
+        let tool = try sandboxTool()
+        let output = try await tool.run(try denialCommand(), context: sandboxContext(ask: { question in
+            asked.append(question.question)
+            return IDERunCommandTool.retryOutsideOption
+        }))
+        XCTAssertEqual(asked.joined, "Run outside the sandbox?")
+        XCTAssertTrue(output.lowercased().contains("operation not permitted"), "the output says the sandbox blocked it")
+        XCTAssertTrue(output.contains("Retried outside the sandbox"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: project.appendingPathComponent(".git/sb-retry").path))
+    }
+
+    func testSandboxDenialKeptWhenDeclined() async throws {
+        try XCTSkipUnless(IDEAgentSandbox.isAvailable, "needs sandbox-exec outside the App Sandbox")
+        let tool = try sandboxTool()
+        let output = try await tool.run(try denialCommand(), context: sandboxContext(ask: { _ in
+            IDERunCommandTool.keepSandboxedOption
+        }))
+        XCTAssertTrue(output.contains("Kept the sandboxed result"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: project.appendingPathComponent(".git/sb-retry").path))
+    }
+
+    func testSandboxDenialRetriesWithoutAskingWhenPreallowed() async throws {
+        try XCTSkipUnless(IDEAgentSandbox.isAvailable, "needs sandbox-exec outside the App Sandbox")
+        let tool = try sandboxTool()
+        let output = try await tool.run(try denialCommand(), context: sandboxContext(
+            ask: { _ in XCTFail("rules pre-allowed this command"); return nil }, preapproved: true))
+        XCTAssertTrue(output.contains("Retried outside the sandbox"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: project.appendingPathComponent(".git/sb-retry").path))
+    }
 }
 
 private final class LockedStrings: @unchecked Sendable {

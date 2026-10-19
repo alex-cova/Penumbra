@@ -416,7 +416,8 @@ public actor ACPAgentEndpoint {
                 "size": .int(contextWindow ?? 0),
             ])
         case .runStarted, .stateChanged, .turnRestarted, .assistantMessage, .approvalRequested,
-             .questionAsked, .planProposed, .unreadableToolCall, .compacted, .runEnded:
+             .questionAsked, .planProposed, .unreadableToolCall, .compacted, .stopGateChecked,
+             .subagent, .runEnded:
             return nil
         }
     }

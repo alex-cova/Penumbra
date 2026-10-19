@@ -41,7 +41,9 @@ public struct WriteProtection: Sendable {
 }
 
 /// Files that likely hold credentials. What the agent reads goes to the model's provider, so these
-/// are not read.
+/// are not read. Redacting secret *values* out of tool output is separate: `AgentConfiguration`
+/// `shapeToolOutput` reshapes output before it reaches the history, so a leaked key never lands in
+/// `items` or on disk.
 public enum SecretFilePolicy {
     /// Globs the user added to the built-in list. A pattern that doesn't parse is skipped: failing
     /// closed on a typo would hide nothing, and refusing to start would lose the setting entirely.

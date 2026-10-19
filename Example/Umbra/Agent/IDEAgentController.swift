@@ -151,6 +151,19 @@ final class IDEAgentController {
         IDEAgentPermissionsModel(projectRoot: { [weak self] in self?.host?.agentProjectRoot }, appFile: appPermissionsFile)
     }
 
+    /// The project's memory file for Settings ▸ Agent ▸ Memory, if there is a store behind it.
+    var memoryFile: URL? {
+        guard let store, let root = host?.agentProjectRoot else { return nil }
+        return ProjectMemory.url(in: store.projectDirectory(for: root.path))
+    }
+
+    /// Deletes the project's memories. The running session keeps what it loaded; the next one
+    /// starts with none.
+    func deleteMemories() {
+        guard let file = memoryFile else { return }
+        try? FileManager.default.removeItem(at: file)
+    }
+
 
     // MARK: - History
 

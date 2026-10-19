@@ -28,7 +28,7 @@ public actor AgentSession {
     private var rules: PermissionRules
     /// The mode the model was last told about; a change is announced at the next turn boundary.
     private var announcedMode: PermissionMode
-    private let ledger = ReadLedger()
+    private let ledger: ReadLedger
     /// Per-run checkpoints of every file the agent changed, for the changed-files summary and Revert.
     public let checkpoints: CheckpointLog
     private var runTask: Task<Void, Never>?
@@ -53,6 +53,14 @@ public actor AgentSession {
     /// Tokens reported during the current run. The budget uses this, not the session total, so
     /// “continue” starts a fresh allowance.
     private var runUsage = TokenUsage()
+    /// Whether this run used web search or read untrusted content. Calls that persist what the
+    /// model saw (like `remember`) ask first when this is set.
+    private var sawUntrustedThisRun = false
+    /// Calls the rules allowed outright this run (an allow rule or a safe default), rather than the
+    /// user approving their card. A tool that degrades gracefully reads this through the context.
+    private var preapprovedCalls: Set<String> = []
+    /// Marks tool output the model must treat as data, never instructions.
+    static let untrustedMarker = "<untrusted"
 
     public init(
         client: any LLMClient,
@@ -62,7 +70,8 @@ public actor AgentSession {
         history: [ConversationItem] = [],
         totalUsage: TokenUsage = TokenUsage(),
         sessionID: UUID = UUID(),
-        checkpoints: CheckpointLog = CheckpointLog()
+        checkpoints: CheckpointLog = CheckpointLog(),
+        ledger: ReadLedger = ReadLedger()
     ) {
         self.sessionID = sessionID
         self.checkpoints = checkpoints
@@ -77,6 +86,7 @@ public actor AgentSession {
         self.rules = configuration.permissions
         self.items = history
         self.todoList = TodoList(TodoList.latest(in: history))
+        self.ledger = ledger
     }
 
     /// Starts a run. The stream ends with exactly one `.runEnded`. Dropping the stream stops the run.
@@ -270,7 +280,10 @@ public actor AgentSession {
         failedEditCallsThisRun = 0
         unappliedEditsPolicy.reset()
         verifyPolicy.reset()
+        for policy in configuration.policies { policy.reset() }
         runUsage = TokenUsage()
+        sawUntrustedThisRun = false
+        preapprovedCalls = []
         out.yield(.runStarted(runID))
         let ending = await loop(out)
         isRunning = false
@@ -291,11 +304,12 @@ public actor AgentSession {
         var closing: RunEnding?
         let started = Date()
         let policies = turnPolicies()
+        var lastAssistantText = ""
 
         while true {
             if Task.isCancelled { return .stopped }
             if closing == nil {
-                switch await combined(policies, turnState(iteration: iteration, started: started), ending: false) {
+                switch await combined(policies, turnState(iteration: iteration, started: started, lastAssistantText: lastAssistantText), ending: false) {
                 case .proceed:
                     break
                 case .note(let text):
@@ -342,7 +356,10 @@ public actor AgentSession {
 
             items += turn.items
             items += turn.calls.map { .toolCall(id: $0.id, name: $0.name, arguments: $0.arguments) }
-            if !turn.text.isEmpty { out.yield(.assistantMessage(turn.text)) }
+            if !turn.text.isEmpty {
+                out.yield(.assistantMessage(turn.text))
+                lastAssistantText = turn.text
+            }
 
             // A turn cut off or filtered may hold half-written calls: answer them without running.
             if finish == .length || finish == .contentFilter {
@@ -383,7 +400,12 @@ public actor AgentSession {
                 continue
             }
             if turn.calls.isEmpty, turn.unreadable.isEmpty {
-                switch await combined(policies, turnState(iteration: iteration, started: started), ending: true) {
+                let decision = await combined(
+                    policies,
+                    turnState(iteration: iteration, started: started, lastAssistantText: lastAssistantText),
+                    ending: true)
+                drainStopGateEvents(policies, out)
+                switch decision {
                 case .note(let text):
                     items.append(.user(Self.editorNote(text)))
                     iteration += 1
@@ -400,6 +422,8 @@ public actor AgentSession {
                 case .end(let ending):
                     return ending
                 case .proceed:
+                    // A Stop that landed during the check ends the run, not completes it.
+                    if Task.isCancelled { return .stopped }
                     // Something the user wrote meanwhile is answered in this run, not in a new one.
                     if await takePendingMessages() {
                         iteration += 1
@@ -439,13 +463,124 @@ public actor AgentSession {
         return policies
     }
 
-    private func turnState(iteration: Int, started: Date) -> TurnState {
+    private func turnState(iteration: Int, started: Date, lastAssistantText: String) -> TurnState {
         TurnState(
             iteration: iteration, maxIterations: configuration.maxIterations, usage: runUsage,
             elapsed: Date().timeIntervalSince(started), contextWindow: configuration.contextWindow,
             estimatedTokens: estimatedContextTokens(), filesEdited: filesEditedThisRun,
             verifiedSinceEdit: verifiedSinceEdit, mode: mode,
-            editCalls: editCallsThisRun, failedEditCalls: failedEditCallsThisRun)
+            editCalls: editCallsThisRun, failedEditCalls: failedEditCallsThisRun,
+            lastAssistantText: lastAssistantText)
+    }
+
+    /// Yields what the Stop gate recorded while it was asked, if anything.
+    private func drainStopGateEvents(_ policies: [any TurnPolicy], _ out: AsyncStream<AgentEvent>.Continuation) {
+        for policy in policies {
+            guard let gate = policy as? StopGatePolicy else { continue }
+            for event in gate.takePendingEvents() { out.yield(event) }
+        }
+    }
+
+    /// Tools a child session may call: the parent's tools minus interaction, memory and nesting,
+    /// run in plan mode, so the effective list is the plan-mode tools minus those names. Anything
+    /// else the child tries answers "not available: … plan mode". `explore` itself is swapped for a
+    /// stub that answers with the depth limit, so a nested call fails with the reason instead of
+    /// running.
+    private func childToolsForSubagent() -> [any AgentTool] {
+        let withheld: Set<String> = ["ask_user", "exit_plan_mode", "todo", "remember", "explore"]
+        var tools = tools.filter { !withheld.contains($0.name) }
+        if toolsByName["explore"] != nil { tools.append(DepthLimitedExploreTool()) }
+        return tools
+    }
+
+    /// Runs one child session for read-only research, in the foreground only. The child shares this
+    /// run's client, workspace (with a copy of the read ledger), model, permission rules and window;
+    /// it runs in plan mode with a hard iteration cap. Its events are forwarded wrapped for progress
+    /// UI, its tokens join this run's budget, and Stop ends it together with the parent.
+    private func runSubagent(
+        _ request: SubagentRequest, _ out: AsyncStream<AgentEvent>.Continuation
+    ) async -> SubagentResult {
+        // The tool-timeout race may end the parent run while the child is still finishing: its
+        // late events drop on the closed stream, and its usage must not leak into the next run.
+        let run = currentRun
+        let child = AgentSession(
+            client: request.client ?? client,
+            tools: childToolsForSubagent(),
+            workspace: workspace,
+            configuration: AgentConfiguration(
+                model: configuration.model,
+                systemPrompt: SystemPrompt.make(projectRoot: workspace.rootPath, mode: .plan),
+                reasoningEffort: configuration.reasoningEffort,
+                maxOutputTokens: configuration.maxOutputTokens,
+                maxIterations: request.maxIterations,
+                toolTimeout: configuration.toolTimeout,
+                approval: configuration.approval,
+                contextWindow: configuration.contextWindow,
+                compactionThreshold: configuration.compactionThreshold,
+                mode: .plan,
+                permissions: rules,
+                secretPatterns: configuration.secretPatterns,
+                editTolerance: configuration.editTolerance),
+            ledger: ReadLedger(snapshot: await ledger.snapshot()))
+        var summary = ""
+        var ending: RunEnding = .failed("The child session ended without an answer.")
+        await withTaskCancellationHandler {
+            let message = request.task + "\n\nEnd with a self-contained summary of what you found."
+            for await event in await child.send(message) {
+                out.yield(.subagent(id: request.id, event: event))
+                if case .assistantMessage(let text) = event,
+                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    summary = text
+                }
+                if case .runEnded(let end) = event { ending = end }
+            }
+        } onCancel: {
+            Task { await child.stop() }
+        }
+        let usage = await child.totalUsage
+        if currentRun == run {
+            runUsage = runUsage + usage
+            totalUsage = totalUsage + usage
+            out.yield(.usage(usage))
+        }
+        return SubagentResult(summary: summary, usage: usage, ending: ending)
+    }
+
+    /// Redacts a line through the configured output shaper before it is persisted outside the
+    /// history. A shaper that throws falls back to the text as written.
+    private func memoryRedactor() -> (@Sendable (String) async -> String)? {
+        guard let shaper = configuration.shapeToolOutput else { return nil }
+        return { text in
+            let input = ToolOutputShapingInput(
+                toolName: "remember", arguments: "", risk: .edit, isError: false, text: text)
+            return (try? await shaper(input)) ?? text
+        }
+    }
+
+    /// The text of `output` as it enters the history: reshaped by the host's shaper, or the original
+    /// when there is no shaper, the output is an error, or the shaper throws. The event still carries
+    /// the original, and the "Not run…" and cancel stubs never reach the shaper.
+    private func historyOutput(call: PendingCall, plan: Plan, output: ToolOutput) async -> String {
+        guard let shaper = configuration.shapeToolOutput, !output.isError else { return output.text }
+        let name: String
+        let arguments: String
+        let risk: ToolRisk
+        switch plan {
+        case .run(let tool, let args, _):
+            name = tool.name
+            arguments = args
+            risk = tool.risk
+        case .answered:
+            name = call.name
+            arguments = call.arguments
+            risk = .read
+        }
+        do {
+            return try await shaper(ToolOutputShapingInput(
+                toolName: name, arguments: arguments, risk: risk, isError: output.isError, text: output.text))
+        } catch {
+            return output.text
+        }
     }
 
     /// The first terminal decision wins. Notes and a compaction are folded when nobody ends the run.
@@ -791,7 +926,7 @@ public actor AgentSession {
             for (call, plan) in zip(calls, plans) {
                 var output = ToolOutput.error("Not run: the run was stopped for repeating a call.")
                 if case .answered(let settled) = plan { output = settled }
-                items.append(.toolOutput(callID: call.id, output: output.text))
+                items.append(.toolOutput(callID: call.id, output: await historyOutput(call: call, plan: plan, output: output)))
                 out.yield(.toolCallFinished(id: call.id, name: call.name, output: output))
             }
             return .repeated(repeated)
@@ -824,6 +959,10 @@ public actor AgentSession {
             var changedFiles = false
             for (index, output) in batch {
                 outputs[index] = output
+                if output.text.contains(Self.untrustedMarker) { sawUntrustedThisRun = true }
+                if case .run(let untrustedTool, _, _) = plans[index], untrustedTool.honorsDenyRules {
+                    sawUntrustedThisRun = true
+                }
                 out.yield(.toolCallFinished(id: calls[index].id, name: calls[index].name, output: output))
                 if case .run(let tool, _, _) = plans[index], tool.risk == .edit {
                     editCallsThisRun += 1
@@ -848,7 +987,7 @@ public actor AgentSession {
         for (index, call) in calls.enumerated() {
             let output = outputs[index] ?? .error("Cancelled by user.")
             if outputs[index] == nil { out.yield(.toolCallFinished(id: call.id, name: call.name, output: output)) }
-            items.append(.toolOutput(callID: call.id, output: output.text))
+            items.append(.toolOutput(callID: call.id, output: await historyOutput(call: call, plan: plans[index], output: output)))
         }
         return cancelled ? .stopped : .continue
     }
@@ -883,7 +1022,14 @@ public actor AgentSession {
             mode: mode, rules: rules, gate: configuration.gate, secretPatterns: configuration.secretPatterns)
         let notes: [String]
         switch verdict {
-        case .allow: return plan
+        case .allow:
+            // A run that saw untrusted content still asks before persisting what the model saw.
+            if tool.asksAfterUntrustedContent, sawUntrustedThisRun {
+                notes = ["This run used web search or read untrusted content, so saving asks first."]
+            } else {
+                preapprovedCalls.insert(call.id)
+                return plan
+            }
         case .deny(let reason): return .answered(.error(reason))
         case .ask(let extra): notes = extra
         }
@@ -891,7 +1037,8 @@ public actor AgentSession {
         let context = ToolContext(
             workspace: workspace, ledger: ledger, callID: call.id,
             checkpoint: currentRun.map { CheckpointScope(log: checkpoints, run: $0) },
-            editTolerance: configuration.editTolerance, editFailures: editFailures, projectNotes: projectNotes)
+            editTolerance: configuration.editTolerance, editFailures: editFailures, projectNotes: projectNotes,
+            redactForMemory: memoryRedactor())
 
         var request: ApprovalRequest
         let isEdit = tool.risk == .edit
@@ -952,6 +1099,7 @@ public actor AgentSession {
         let failures = editFailures
         let notes = projectNotes
         let touchedTools = tools
+        let redactor = memoryRedactor()
         return await withTaskGroup(of: (Int, ToolOutput).self) { group in
             for index in indices {
                 let call = calls[index]
@@ -959,6 +1107,7 @@ public actor AgentSession {
                 case .answered(let output):
                     group.addTask { (index, output) }
                 case .run(let tool, let arguments, let note):
+                    let preapproved = preapprovedCalls.contains(call.id)
                     group.addTask {
                         let context = ToolContext(
                             workspace: workspace, ledger: ledger, callID: call.id, checkpoint: scope,
@@ -977,7 +1126,10 @@ public actor AgentSession {
                             editTolerance: tolerance, editFailures: failures, projectNotes: notes,
                             fileTouched: { path in
                                 for tool in touchedTools { tool.noteFileTouched(path) }
-                            })
+                            },
+                            redactForMemory: redactor,
+                            spawnSubagent: { request in await self.runSubagent(request, out) },
+                            preapproved: preapproved)
                         let output = await Self.run(tool, arguments: arguments, context: context, timeout: timeout)
                         guard let note else { return (index, output) }
                         return (index, ToolOutput(note + "\n" + output.text, isError: output.isError))
