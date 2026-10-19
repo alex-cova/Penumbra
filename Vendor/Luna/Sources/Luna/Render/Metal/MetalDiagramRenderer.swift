@@ -593,8 +593,8 @@ public final class MetalDiagramRenderer: @unchecked Sendable {
                 throw MetalDiagramError.encodeFailed("Metal flowchart renderer needs flowchart content")
             }
             try drawSubgraphBackgrounds(groups)
-            try drawEdges(edges)
-            try drawNodes(nodes)
+            drawEdges(edges)
+            drawNodes(nodes)
             try drawNodeLabels(nodes)
             try drawEdgeLabels(edges)
             try drawGroupLabels(groups)

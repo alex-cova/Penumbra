@@ -38,7 +38,7 @@ final class IDEManualInjectionStore: @unchecked Sendable {
     }
 
     func clear(forKey key: String) {
-        lock.withLock { injectionsByKey.removeValue(forKey: key) }
+        _ = lock.withLock { injectionsByKey.removeValue(forKey: key) }
     }
 }
 

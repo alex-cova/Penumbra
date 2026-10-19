@@ -28,7 +28,7 @@ public enum ProjectMemory {
         let tailWindow = 64 * 1024
         let size = (try? handle.seekToEnd()) ?? 0
         guard size > 0 else { return nil }
-        try? handle.seek(toFileOffset: size > UInt64(tailWindow) ? size - UInt64(tailWindow) : 0)
+        handle.seek(toFileOffset: size > UInt64(tailWindow) ? size - UInt64(tailWindow) : 0)
         var text = String(decoding: (try? handle.readToEnd()) ?? Data(), as: UTF8.self)
         if size > UInt64(tailWindow) {
             // The window starts mid-line: drop the partial first line.
