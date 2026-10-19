@@ -17,12 +17,20 @@ extension IDEWorkspace {
 
     /// An untitled SQL or JSON tab bound to the selected data source.
     func openDatabaseQueryConsole() {
-        guard let id = databaseSupport.selectedConnectionID,
-              let connection = databaseSupport.catalog.connection(id: id) else {
+        // Without a project or a document the sidebar stays hidden, so asking the user
+        // to select a data source there would do nothing visible. Fall back to the
+        // first data source, or offer to create one when none exists yet.
+        guard !databaseSupport.catalog.connections.isEmpty else {
+            showNewDatabaseConnection()
+            return
+        }
+        guard let connection = databaseSupport.connectionForNewConsole() else {
             databaseSupport.banner = "Select a data source first."
             showSidebarTab(.database)
             return
         }
+        databaseSupport.selectedConnectionID = connection.id
+        let id = connection.id
         let text: String
         let mongoDatabase: String?
         let mongoCollection: String?

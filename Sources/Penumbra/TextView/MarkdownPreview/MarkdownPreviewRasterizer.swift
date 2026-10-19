@@ -153,7 +153,7 @@ enum MarkdownPreviewRasterWorker {
     }
 
     /// Renders `pending` diagrams one at a time in document order, storing each in `cache` as it
-    /// finishes. Diagrams are not rendered concurrently: BeautifulMermaid shares one ELK layout
+    /// finishes. Diagrams are not rendered concurrently: Luna shares one ELK layout
     /// engine across calls. Stops early when the task is cancelled; finished diagrams stay cached.
     static func renderMermaid(
         _ pending: [(index: Int, source: String)],

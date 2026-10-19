@@ -62,6 +62,18 @@ struct DatabaseURLTests {
     }
 }
 
+struct SQLLoginHandshakeTests {
+    @Test func emptyDatabaseOpensTheSchemaEveryServerKeeps() {
+        #expect(SQLLogin(engine: .mysql, username: "root").handshakeDatabase == "information_schema")
+        #expect(SQLLogin(engine: .postgres, username: "root").handshakeDatabase == "postgres")
+    }
+
+    @Test func explicitDatabaseIsKept() {
+        #expect(SQLLogin(engine: .mysql, username: "root", database: "shop").handshakeDatabase == "shop")
+        #expect(SQLLogin(engine: .postgres, username: "root", database: "shop").handshakeDatabase == "shop")
+    }
+}
+
 struct SQLStatementTests {
     @Test func readOnlyAllowsReadsAndBlocksWrites() {
         #expect(SQLShaping.isReadOnlyStatement("SELECT * FROM users"))

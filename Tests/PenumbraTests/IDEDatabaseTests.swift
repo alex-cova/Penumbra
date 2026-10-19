@@ -64,6 +64,74 @@ final class IDEDatabaseTests: XCTestCase {
         XCTAssertEqual(commands, ["app.database.newDataSource", "app.database.newQuery", "app.database.execute"])
     }
 
+    func testNewConsoleFallsBackToTheFirstDataSource() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("umbra-database-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalog = IDEDatabaseCatalog(storeURL: directory.appendingPathComponent("database-connections.json"))
+        let support = IDEDatabaseSupport(catalog: catalog, keychain: IDEDatabaseMemoryKeyStore())
+        XCTAssertNil(support.connectionForNewConsole(), "No data source, no console target")
+
+        let first = DatabaseConnection(name: "first", engine: .postgres)
+        let second = DatabaseConnection(name: "second", engine: .postgres)
+        catalog.upsert(first)
+        catalog.upsert(second)
+
+        // A fresh window has configured data sources but no selection yet.
+        XCTAssertEqual(support.connectionForNewConsole()?.id, first.id)
+        support.selectedConnectionID = UUID()
+        XCTAssertEqual(
+            support.connectionForNewConsole()?.id, first.id,
+            "A stale selection falls back instead of leaving the console with nothing to bind"
+        )
+        support.selectedConnectionID = second.id
+        XCTAssertEqual(support.connectionForNewConsole()?.id, second.id)
+    }
+
+    func testNewQueryConsoleFromWelcomeBindsTheFirstDataSource() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        let workspace = IDEWorkspace()
+        defer { workspace.teardown() }
+        // An editor view needs the adapter that `bootstrap()` wires, which the window
+        // runs when it appears.
+        workspace.bootstrap()
+        guard let first = workspace.databaseSupport.catalog.connections.first else {
+            throw XCTSkip("Requires at least one configured data source")
+        }
+        XCTAssertFalse(workspace.hasOpenProject)
+        XCTAssertFalse(workspace.hasOpenDocuments)
+        // A fresh window has configured data sources but no selection yet.
+        workspace.databaseSupport.selectedConnectionID = nil
+        workspace.openDatabaseQueryConsole()
+        XCTAssertTrue(
+            workspace.hasOpenDocuments,
+            "The console opens as a document even with no project open"
+        )
+        XCTAssertEqual(workspace.databaseSupport.selectedConnectionID, first.id)
+        XCTAssertEqual(workspace.databaseSupport.consoles.values.first?.connectionID, first.id)
+    }
+
+    func testNewQueryConsoleWithoutDataSourcesOpensTheConnectionSheet() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        let workspace = IDEWorkspace()
+        defer { workspace.teardown() }
+        // An editor view needs the adapter that `bootstrap()` wires, which the window
+        // runs when it appears.
+        workspace.bootstrap()
+        try XCTSkipUnless(
+            workspace.databaseSupport.catalog.connections.isEmpty,
+            "Requires no configured data sources"
+        )
+        XCTAssertFalse(workspace.hasOpenProject)
+        XCTAssertFalse(workspace.hasOpenDocuments)
+        workspace.openDatabaseQueryConsole()
+        XCTAssertNotNil(
+            workspace.databaseSupport.editor,
+            "With no data source the console offers to create one instead of doing nothing"
+        )
+    }
+
     func testExecuteFillsResultsAndRefusesWritesWhenReadOnly() async {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("umbra-database-\(UUID().uuidString)", isDirectory: true)

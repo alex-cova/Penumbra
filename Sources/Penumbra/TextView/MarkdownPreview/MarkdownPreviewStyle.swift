@@ -162,6 +162,9 @@ public struct MarkdownPreviewStyle: Equatable {
         public let backgroundRGBA: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat)
         public let foregroundRGBA: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat)
         public let mermaidMaxDimension: CGFloat
+        /// Opt into Luna's Metal backend for flowchart/state diagrams.
+        /// Defaults to CoreGraphics; Metal failures fall back silently.
+        public var preferMetal: Bool = false
     }
 
     public var mermaidRenderingContext: MermaidRenderingContext {

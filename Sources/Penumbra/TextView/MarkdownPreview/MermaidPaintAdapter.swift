@@ -1,4 +1,4 @@
-import PenumbraBeautifulMermaid
+import PenumbraLuna
 @preconcurrency import AppKit
 import CoreGraphics
 
@@ -68,6 +68,18 @@ enum MermaidPaintAdapter {
             let displayWidth = min(contentWidth, bounds.width)
             let displayHeight = displayWidth * (bounds.height / bounds.width)
             // `render` is nonisolated async, so this already runs off the main actor.
+            // Metal first when opted in (flowchart/state only); any failure
+            // falls back to the CoreGraphics raster below.
+            if mermaidStyle.preferMetal,
+               let metalImage = try? rasterizeMetal(source: source, scale: scale, theme: theme)
+            {
+                return MermaidPaintResult(
+                    height: max(displayHeight, 80),
+                    image: metalImage,
+                    naturalSize: bounds.size,
+                    errorMessage: nil
+                )
+            }
             let image = try rasterize(prepared: prepared, scale: scale, theme: theme)
 
             return MermaidPaintResult(
@@ -79,6 +91,21 @@ enum MermaidPaintAdapter {
         } catch {
             return MermaidPaintResult(height: 120, image: nil, errorMessage: error.localizedDescription)
         }
+    }
+
+    /// Shared Metal renderer so the label atlas and pipelines persist across
+    /// diagrams. Renders run off-main; `MetalDiagramRenderer` is internally
+    /// synchronized.
+    private static let sharedMetalRenderer = MetalDiagramRenderer()
+
+    /// Metal raster for flowchart-family diagrams. Throws for other diagram
+    /// types and on any Metal failure; the caller falls back to CoreGraphics.
+    private static func rasterizeMetal(
+        source: String, scale: CGFloat, theme: DiagramTheme
+    ) throws -> CGImage? {
+        let positioned = try MermaidRenderer.layout(source)
+        guard positioned.width > 0, positioned.height > 0 else { return nil }
+        return try sharedMetalRenderer.renderCGImage(positioned, theme: theme, scale: scale)
     }
 
     private static func rasterize(prepared: PreparedDiagram, scale: CGFloat, theme: DiagramTheme) throws -> CGImage? {

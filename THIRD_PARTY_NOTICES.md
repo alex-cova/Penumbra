@@ -10,15 +10,13 @@ These are compiled as local SPM path targets, not fetched from GitHub at build t
 
 | Component | Source | License |
 | --- | --- | --- |
-| BeautifulMermaid | [lukilabs/beautiful-mermaid-swift](https://github.com/lukilabs/beautiful-mermaid-swift) | MIT (see `Vendor/BeautifulMermaid/LICENSE`) |
-| ElkSwift | [lukilabs/elk-swift](https://github.com/lukilabs/elk-swift) | **Eclipse Public License 2.0** (see `Vendor/ElkSwift/LICENSE`) |
+| Luna | [lukilabs/beautiful-mermaid-swift](https://github.com/lukilabs/beautiful-mermaid-swift) | MIT (see `Vendor/Luna/LICENSE`) |
 
-BeautifulMermaid uses ElkSwift for graph layout. ElkSwift is **not** MIT — it remains under
-EPL-2.0 in source and binary distributions. The EPL source for ElkSwift must remain available
-when distributing combined works.
+Luna's graph layout (`Sources/Luna/Mermaid/src_luna_layout.swift`) is Luna-owned.
+The former ElkSwift (Eclipse Public License 2.0) dependency has been removed.
 
 Textual, ConcurrencyExtras, and SwiftUIMath are also vendored under `Vendor/` for future use;
-only BeautifulMermaid and ElkSwift are wired into the build today.
+only Luna is wired into the build today.
 
 ## Umbra on-device models (MLX)
 

@@ -213,6 +213,15 @@ final class IDEDatabaseSupport {
         editor = IDEDatabaseConnectionEditor.makeNew()
     }
 
+    /// The data source a new query console binds to: the selection, or the first data
+    /// source when a fresh window has none yet. Nil only when no data source exists.
+    func connectionForNewConsole() -> DatabaseConnection? {
+        if let id = selectedConnectionID, let connection = catalog.connection(id: id) {
+            return connection
+        }
+        return catalog.connections.first
+    }
+
     func beginEdit(_ id: UUID) {
         guard let connection = catalog.connection(id: id) else { return }
         do {

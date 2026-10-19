@@ -1,6 +1,6 @@
 import XCTest
 @testable import Penumbra
-@testable import PenumbraBeautifulMermaid
+@testable import PenumbraLuna
 
 /// Covers the gitGraph layout's real commit topology: fork edges, merge edges
 /// anchored to the merged branch's actual tip, commit types (highlight,

@@ -78,16 +78,8 @@ let package = Package(
             ]
         ),
         .target(
-            name: "PenumbraElkSwift",
-            path: "Vendor/ElkSwift/Sources/ElkSwift",
-            swiftSettings: [
-                .swiftLanguageMode(.v5)
-            ]
-        ),
-        .target(
-            name: "PenumbraBeautifulMermaid",
-            dependencies: ["PenumbraElkSwift"],
-            path: "Vendor/BeautifulMermaid/Sources/BeautifulMermaidSwift",
+            name: "PenumbraLuna",
+            path: "Vendor/Luna/Sources/Luna",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(name: "EditorIntelligence", dependencies: [], exclude: ["CLAUDE.md"], swiftSettings: swift6),
@@ -116,7 +108,7 @@ let package = Package(
         ),
         .target(name: "Penumbra", dependencies: [
             "EditorIntelligence",
-            "PenumbraBeautifulMermaid",
+            "PenumbraLuna",
             "TreeSitter"
         ], exclude: [
             "CLAUDE.md",
@@ -531,7 +523,7 @@ let package = Package(
             "PenumbraGraphQLLanguage",
             "PenumbraMarkdownLanguage",
             "PenumbraLanguages",
-            "PenumbraBeautifulMermaid",
+            "PenumbraLuna",
             "JavaIntelligence",
             "SwiftIntelligence",
             "TypeScriptIntelligence",

@@ -53,6 +53,22 @@ extension DatabaseConnection {
     }
 }
 
+extension SQLLogin {
+    /// The database the handshake opens. The pool substitutes the username when none
+    /// is configured, which points at a database that is not there
+    /// (`Unknown database 'root'`), so an empty database opens the schema every
+    /// server of that engine keeps: `information_schema` on MySQL and MariaDB,
+    /// `postgres` on PostgreSQL. The saved connection keeps the empty database.
+    public var handshakeDatabase: String {
+        guard database.isEmpty else { return database }
+        switch engine {
+        case .mysql: return "information_schema"
+        case .postgres: return "postgres"
+        case .mongo: return database
+        }
+    }
+}
+
 enum SQLURLs {
     static func parse(_ urlString: String) throws -> SQLLogin {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -381,7 +397,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                 unixDomainSocketPath: socket,
                 username: login.username,
                 password: login.password,
-                database: login.database.isEmpty ? nil : login.database,
+                database: login.handshakeDatabase,
                 tlsConfiguration: login.useTLS ? .makeClientConfiguration() : nil
             )
         } else {
@@ -390,7 +406,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                 port: login.port,
                 username: login.username,
                 password: login.password,
-                database: login.database.isEmpty ? nil : login.database,
+                database: login.handshakeDatabase,
                 tlsConfiguration: login.useTLS ? .makeClientConfiguration() : nil
             )
         }
@@ -486,7 +502,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
             ? .prefer(.makeClientConfiguration())
             : .disable
         let password = login.password.isEmpty ? nil : login.password
-        let database = login.database.isEmpty ? nil : login.database
+        let database: String? = login.handshakeDatabase
         if let socket = login.unixSocketPath {
             return PostgresClient.Configuration(
                 unixSocketPath: socket,
