@@ -252,12 +252,7 @@ enum JavaInlineMethod {
     }
 
     private static func isPrivateMethod(_ method: SyntaxNode) -> Bool {
-        if let modifiers = method.child(byFieldName: "modifiers")
-            ?? method.namedChildren.first(where: { $0.type == "modifiers" }) {
-            if modifiers.text.contains("private") { return true }
-            if modifiers.children.contains(where: { $0.type == "private" }) { return true }
-        }
-        return method.children.contains(where: { $0.type == "private" })
+        method.hasModifier("private")
     }
 
     private static func formalParameters(in method: SyntaxNode) -> [(name: String, declarationRange: Range<Int>)] {

@@ -96,14 +96,16 @@ enum JavaSortedCollectionNonComparableInspection: JavaNodeInspection {
     }
 
     /// Whether the class `name` declared in this file is certainly not `Comparable` (its supertypes are in the file too).
-    private static func isNotComparable(_ name: String, root: SyntaxNode) -> Bool {
+    private static func isNotComparable(_ name: String, from node: SyntaxNode) -> Bool {
         var current = name
+        var scope = node
         for _ in 0..<8 {
-            guard let declaration = JavaDeclaredTypes.typeDeclaration(named: current, in: root),
+            guard let declaration = JavaDeclaredTypes.typeDeclaration(named: current, from: scope),
                   ["class_declaration", "record_declaration"].contains(declaration.type) else { return false }
             if JavaClassShape.implementedNames(of: declaration).contains("Comparable") { return false }
             guard let superclass = declaration.child(byFieldName: "superclass")?.namedChild(at: 0) else { return true }
             current = JavaDeclaredTypes.simpleName(of: superclass)
+            scope = declaration
         }
         return false
     }
@@ -113,7 +115,7 @@ enum JavaSortedCollectionNonComparableInspection: JavaNodeInspection {
               let created = node.child(byFieldName: "type") else { return }
         let collection = JavaDeclaredTypes.simpleName(of: created)
         guard sorted.contains(collection), let element = elementType(of: node, created: created),
-              isNotComparable(element, root: context.tree.rootNode) else { return }
+              isNotComparable(element, from: node) else { return }
         report(JavaInspectionSupport.inspection(
             rule, message: "'\(element)' is not 'Comparable'; the \(collection) needs a Comparator", node: created
         ))

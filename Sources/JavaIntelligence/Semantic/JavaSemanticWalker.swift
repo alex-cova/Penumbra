@@ -123,7 +123,7 @@ final class JavaSemanticWalker {
                 declaredTypes[name.text] = kind
             }
             if node.type == "method_declaration", let name = node.child(byFieldName: "name"),
-               node.children.contains(where: { $0.type == "modifiers" && $0.text.contains("static") }) {
+               node.hasModifier("static") {
                 staticMethodNames.insert(name.text)
             }
             stack.append(contentsOf: node.children)
@@ -284,7 +284,7 @@ final class JavaSemanticWalker {
     }
 
     private func isStatic(_ node: SyntaxNode) -> Bool {
-        node.children.contains { $0.type == "modifiers" && $0.text.contains("static") }
+        node.hasModifier("static")
     }
 
     private func walkLocalDeclaration(_ node: SyntaxNode) -> Bool {

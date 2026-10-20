@@ -12,6 +12,19 @@ private enum JavaMetrics {
         "switch_statement", "try_statement", "try_with_resources_statement", "synchronized_statement",
     ]
 
+    /// The children that belong to the method being measured. A local or anonymous class's methods are
+    /// measured on their own, so their branches do not count against the enclosing method.
+    static func ownChildren(of node: SyntaxNode) -> [SyntaxNode] {
+        switch node.type {
+        case "class_declaration", "interface_declaration", "enum_declaration", "record_declaration":
+            return []
+        case "class_body":
+            return node.parent?.type == "object_creation_expression" ? [] : node.namedChildren
+        default:
+            return node.namedChildren
+        }
+    }
+
     static func complexity(of body: SyntaxNode) -> Int {
         var count = 1
         var stack = [body]
@@ -28,7 +41,7 @@ private enum JavaMetrics {
             default:
                 break
             }
-            stack.append(contentsOf: node.namedChildren)
+            stack.append(contentsOf: ownChildren(of: node))
         }
         return count
     }
@@ -45,7 +58,7 @@ private enum JavaMetrics {
                 if !continuesChain { childDepth = depth + 1 }
                 if childDepth > best.depth { best = (childDepth, node) }
             }
-            for child in node.namedChildren { stack.append((child, childDepth)) }
+            for child in ownChildren(of: node) { stack.append((child, childDepth)) }
         }
         return best
     }

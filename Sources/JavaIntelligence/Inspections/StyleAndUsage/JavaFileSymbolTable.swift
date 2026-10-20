@@ -64,6 +64,15 @@ extension SyntaxNode {
         firstNamedChild(ofType: "modifiers")?.children.contains { $0.type == keyword } == true
     }
 
+    /// Whether the declaration carries the annotation, by simple or fully qualified name (`Override`, `java.lang.Override`).
+    func hasAnnotation(named simpleName: String) -> Bool {
+        firstNamedChild(ofType: "modifiers")?.namedChildren.contains { annotation in
+            guard annotation.type == "annotation" || annotation.type == "marker_annotation",
+                  let name = annotation.child(byFieldName: "name")?.text else { return false }
+            return name == simpleName || name.hasSuffix("." + simpleName)
+        } == true
+    }
+
     /// Whether the declaration carries any annotation.
     var hasAnnotation: Bool {
         firstNamedChild(ofType: "modifiers")?.namedChildren.contains { $0.type == "annotation" || $0.type == "marker_annotation" } == true

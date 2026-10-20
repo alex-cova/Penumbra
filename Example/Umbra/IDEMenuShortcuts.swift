@@ -12,7 +12,7 @@ enum IDEMenuCommand: CaseIterable, Hashable {
     // File
     case newFile, openFile, openFolder, save, saveAll, saveAs, reloadAllFromDisk, closeTab
     // Edit
-    case find, replace, findInFiles, replaceInFiles
+    case find, replace, findInFiles, replaceInFiles, copyPathReference
     // Go
     case goToFile, goToSymbol, fileStructure, goToLine, recentLocations, commandPalette, nextProblem, previousProblem
     // Java
@@ -92,6 +92,8 @@ enum IDEMenuShortcuts {
         // IntelliJ's macOS key for Run Inspection by Name, in every preset.
         .runInspectionByName: KeyboardShortcut("i", modifiers: [.command, .option, .shift]),
         .replaceInFiles: nil,
+        // IntelliJ's Copy Reference key, in every preset.
+        .copyPathReference: KeyboardShortcut("c", modifiers: [.command, .option, .shift]),
         .gitPull: nil,
         .gitPush: nil,
         .gitFileHistory: nil,

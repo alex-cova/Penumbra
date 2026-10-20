@@ -32,7 +32,7 @@ enum JavaSwitchEnumMissingCasesInspection: JavaNodeInspection {
             }
         }
         guard let type = JavaDeclaredTypes.type(of: condition.unparenthesized), !type.isArray,
-              let enumeration = JavaDeclaredTypes.typeDeclaration(named: type.name, in: node.tree.rootNode),
+              let enumeration = JavaDeclaredTypes.typeDeclaration(named: type.name, from: node),
               enumeration.type == "enum_declaration", let body = enumeration.child(byFieldName: "body") else { return }
         let constants = body.namedChildren(ofType: "enum_constant").compactMap { $0.child(byFieldName: "name")?.text }
         guard !constants.isEmpty, covered.isSubset(of: Set(constants)) else { return }

@@ -101,7 +101,7 @@ struct IDESidebarPanel: View {
                     cancelRename: { workspace.cancelExplorerRename() },
                     duplicate: { workspace.duplicateExplorerItem($0) },
                     trash: { workspace.trashExplorerItem($0) },
-                    copyPath: { workspace.copyExplorerPath($0, relative: $1) },
+                    copyPathReference: { workspace.showCopyReferencePopup(for: $0) },
                     findInFiles: { workspace.showFindInFiles(in: $0) },
                     showHistory: { workspace.showLocalHistory(for: $0) },
                     openOnWeb: { workspace.openFileOnWeb($0, copy: $1) },

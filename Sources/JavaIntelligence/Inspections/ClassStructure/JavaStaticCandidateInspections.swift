@@ -12,6 +12,8 @@ private func closedClassChain(of node: SyntaxNode) -> [SyntaxNode]? {
     var bodies: [SyntaxNode] = []
     var current = node.parent
     while let scope = current {
+        // A class inside an enum can use the enum's instance members, which this chain does not list.
+        if scope.type == "enum_body" { return nil }
         if scope.type == "class_body" {
             guard let declaration = scope.parent, declaration.type == "class_declaration",
                   declaration.child(byFieldName: "superclass") == nil else { return nil }
@@ -237,6 +239,9 @@ enum JavaInnerClassMayBeStaticInspection: JavaNodeInspection {
             }
             for child in candidate.namedChildren { visit(child) }
         }
+        // The header counts too: `extends` another inner class or `<U extends T>` needs the enclosing instance.
+        let header = [node.child(byFieldName: "superclass"), node.child(byFieldName: "interfaces"), node.firstNamedChild(ofType: "type_parameters")]
+        for part in header.compactMap({ $0 }) { visit(part) }
         visit(body)
         return !uses
     }
@@ -307,14 +312,13 @@ enum JavaNonSerializableFieldInspection: JavaNodeInspection {
 
     private static func implementsSerializable(_ declaration: SyntaxNode) -> Bool {
         guard let interfaces = declaration.child(byFieldName: "interfaces") else { return false }
-        var found = false
-        interfaces.forEachDescendant { if ($0.type == "type_identifier" || $0.type == "scoped_type_identifier"), serializable.contains($0.text) { found = true } }
-        return found
+        // Only the listed interfaces: `Comparable<Serializable>` does not make the class Serializable.
+        return interfaces.namedChildren(ofType: "type_list").contains { list in list.namedChildren.contains { serializable.contains($0.text) } }
     }
 
     /// A class of this file that has no supertypes at all, so it cannot be Serializable.
-    private static func isPlainClass(named name: String, in root: SyntaxNode) -> Bool {
-        guard let declaration = JavaDeclaredTypes.typeDeclaration(named: name, in: root), declaration.type == "class_declaration" else { return false }
+    private static func isPlainClass(named name: String, from node: SyntaxNode) -> Bool {
+        guard let declaration = JavaDeclaredTypes.typeDeclaration(named: name, from: node), declaration.type == "class_declaration" else { return false }
         return declaration.child(byFieldName: "superclass") == nil && declaration.child(byFieldName: "interfaces") == nil
     }
 
@@ -323,7 +327,9 @@ enum JavaNonSerializableFieldInspection: JavaNodeInspection {
               let owner = body.parent, owner.type == "class_declaration", implementsSerializable(owner),
               let type = node.child(byFieldName: "type"), type.type == "type_identifier" else { return }
         let name = type.text
-        guard knownNonSerializable.contains(name) || isPlainClass(named: name, in: context.tree.rootNode) else { return }
+        let root = context.tree.rootNode
+        // A class of this name declared here or imported from a project package is not the JDK type of that name.
+        guard (knownNonSerializable.contains(name) && JavaDeclaredTypes.mayBePlatformType(name, in: root)) || isPlainClass(named: name, from: node) else { return }
         for declarator in node.namedChildren(ofType: "variable_declarator") {
             guard let field = declarator.child(byFieldName: "name") else { continue }
             report(JavaInspectionSupport.inspection(
@@ -350,9 +356,12 @@ enum JavaRawTypeUsageInspection: JavaNodeInspection {
 
     static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
         let name = node.text
-        guard genericJDK.contains(name) || node.tree.declarationCache.genericTypeNames(root: node.tree.rootNode).contains(name),
+        let isGenericInFile = node.tree.declarationCache.genericTypeNames(root: node.tree.rootNode).contains(name)
+        guard genericJDK.contains(name) || isGenericInFile,
               let parent = node.parent, contexts.contains(parent.type),
               parent.child(byFieldName: "type")?.byteRange == node.byteRange else { return }
+        // A same-named class of this file or of a project package may not be generic.
+        if !isGenericInFile, !JavaDeclaredTypes.mayBePlatformType(name, in: node.tree.rootNode) { return }
         // `new ArrayList<>()` is a generic_type, so reaching here means no type arguments at all.
         report(JavaInspectionSupport.inspection(rule, message: "Raw use of the parameterized class '\(name)'", node: node))
     }

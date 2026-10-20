@@ -62,7 +62,7 @@ extension JavaEqualsHashCodePairInspection {
         while let superclass = current.child(byFieldName: "superclass")?.namedChild(at: 0) {
             let name = JavaDeclaredTypes.simpleName(of: superclass)
             guard name != "Object", seen.insert(name).inserted else { return false }
-            guard let declaration = JavaDeclaredTypes.typeDeclaration(named: name, in: context.tree.rootNode) else { return true }
+            guard let declaration = JavaDeclaredTypes.typeDeclaration(named: name, from: current) else { return true }
             if JavaTypeMembers.methods(of: declaration).contains(where: isMethod) { return true }
             current = declaration
         }

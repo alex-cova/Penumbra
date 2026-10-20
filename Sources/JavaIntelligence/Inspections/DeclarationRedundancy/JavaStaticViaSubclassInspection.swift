@@ -23,13 +23,12 @@ enum JavaStaticViaSubclassInspection: JavaNodeInspection {
     private static func resolve(_ node: SyntaxNode) -> (qualifier: SyntaxNode, owner: String)? {
         guard let qualifier = node.child(byFieldName: "object"), qualifier.type == "identifier", qualifier.text.first?.isUppercase == true,
               let member = node.child(byFieldName: node.type == "method_invocation" ? "name" : "field")?.text else { return nil }
-        let root = node.tree.rootNode
-        guard var current = JavaDeclaredTypes.typeDeclaration(named: qualifier.text, in: root), current.type == "class_declaration",
+        guard var current = JavaDeclaredTypes.typeDeclaration(named: qualifier.text, from: node), current.type == "class_declaration",
               members(named: member, in: current).isEmpty else { return nil }
         for _ in 0..<8 {
             guard let superclass = current.child(byFieldName: "superclass")?.namedChild(at: 0) else { return nil }
             let name = JavaDeclaredTypes.simpleName(of: superclass)
-            guard let parent = JavaDeclaredTypes.typeDeclaration(named: name, in: root), parent.type == "class_declaration" else { return nil }
+            guard let parent = JavaDeclaredTypes.typeDeclaration(named: name, from: current), parent.type == "class_declaration" else { return nil }
             let declared = members(named: member, in: parent)
             if !declared.isEmpty {
                 return declared.allSatisfy { $0.hasModifier("static") } ? (qualifier, name) : nil

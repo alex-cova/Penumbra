@@ -137,7 +137,7 @@ enum JavaProjectInspector {
         switch declaration.kind {
         case .method:
             if declaration.name.text == "main" || node.hasModifier("abstract") { return false }
-            if node.firstNamedChild(ofType: "modifiers")?.text.contains("@Override") == true { return false }
+            if node.hasAnnotation(named: "Override") { return false }
             if declaration.enclosingType?.type == "annotation_type_declaration" { return false }
         case .field:
             if declaration.name.text == "serialVersionUID" { return false }

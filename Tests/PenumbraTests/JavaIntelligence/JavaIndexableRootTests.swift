@@ -42,7 +42,47 @@ final class JavaIndexableRootTests: XCTestCase {
         XCTAssertThrowsError(try root.readStubs())
     }
 
+    // MARK: - JDK root choice
+
+    private func makeJDKLayout(withJmods: Bool) throws -> JDKInstallation {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("jdk-layout-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home.appendingPathComponent("lib"), withIntermediateDirectories: true)
+        // A zip with no release directories, like the JDK 21 ct.sym that has none for release 21.
+        try FileManager.default.copyItem(at: JavaFixtures.jarURL, to: home.appendingPathComponent("lib/ct.sym"))
+        if withJmods {
+            try FileManager.default.createDirectory(at: home.appendingPathComponent("jmods"), withIntermediateDirectories: true)
+        }
+        return JDKInstallation(home: home, featureVersion: 21, versionString: "21.0.1", vendor: nil)
+    }
+
+    func testJDKIndexRootFallsBackToJmodsWhenCtSymLacksTheRelease() throws {
+        let installation = try makeJDKLayout(withJmods: true)
+        defer { try? FileManager.default.removeItem(at: installation.home) }
+        let choice = JDKIndexRoot.make(for: installation)
+        XCTAssertEqual(choice.kind, "jmods")
+        XCTAssertTrue(choice.root is JModsRoot)
+    }
+
+    func testJDKIndexRootKeepsCtSymWithoutJmods() throws {
+        let installation = try makeJDKLayout(withJmods: false)
+        defer { try? FileManager.default.removeItem(at: installation.home) }
+        let choice = JDKIndexRoot.make(for: installation)
+        XCTAssertEqual(choice.kind, "ctsym")
+        XCTAssertTrue(choice.root is JDKCtSymRoot)
+    }
+
     // MARK: - Real JDK (opt-in)
+
+    func testEveryDiscoveredJDKIndexesJavaLang() throws {
+        let installations = JDKLocator().discoverAll(additionalHomes: [])
+        guard !installations.isEmpty else { throw XCTSkip("No JDK found on this machine") }
+        for installation in installations {
+            let stubs = try JDKIndexRoot.make(for: installation).root.readStubs()
+            let names = Set(stubs.map(\.qualifiedName))
+            XCTAssertTrue(names.contains("java.lang.String"), "JDK \(installation.versionString) lacks java.lang.String")
+            XCTAssertTrue(names.contains("java.nio.charset.StandardCharsets"), "JDK \(installation.versionString)")
+        }
+    }
 
     func testJDKCtSymRootIndexesJavaLangString() throws {
         guard let found = TestJDK.discovered,

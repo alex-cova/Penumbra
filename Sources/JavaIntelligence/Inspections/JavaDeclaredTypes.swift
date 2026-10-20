@@ -46,6 +46,8 @@ final class JavaDeclarationCache: @unchecked Sendable {
     private var blockLocalTables: [Range<Int>: [String: [BlockLocal]]] = [:]
     private var floatingMention: Bool?
     private var typeDeclarationRanges: [String: Range<Int>]?
+    private var duplicateTypes: Set<String> = []
+    private var patternBindingTables: [Int: Set<String>] = [:]
     private var fieldFlagTables: [Int: [String: (isStatic: Bool, isFinal: Bool)]] = [:]
 
     /// Locals with their uses and every identifier by name, built once per tree on first use.
@@ -119,17 +121,27 @@ final class JavaDeclarationCache: @unchecked Sendable {
         lock.unlock()
         let kinds: Set<String> = ["class_declaration", "record_declaration", "enum_declaration", "interface_declaration"]
         var table: [String: Range<Int>] = [:]
+        var duplicates = Set<String>()
         var stack = [root]
         while let node = stack.popLast() {
-            if kinds.contains(node.type), let name = node.child(byFieldName: "name")?.text, table[name] == nil {
-                table[name] = node.byteRange
+            if kinds.contains(node.type), let name = node.child(byFieldName: "name")?.text {
+                if table[name] == nil { table[name] = node.byteRange } else { duplicates.insert(name) }
             }
             stack.append(contentsOf: node.namedChildren.reversed())
         }
         lock.lock()
         typeDeclarationRanges = table
+        duplicateTypes = duplicates
         lock.unlock()
         return table
+    }
+
+    /// Simple names that two or more types of the file declare (nested types of different classes, say).
+    func duplicateTypeNames(root: SyntaxNode) -> Set<String> {
+        _ = typeDeclarationRanges(root: root)
+        lock.lock()
+        defer { lock.unlock() }
+        return duplicateTypes
     }
 
     /// Whether the file can hold a floating-point value at all: it says `double` or `float`, or
@@ -175,6 +187,32 @@ final class JavaDeclarationCache: @unchecked Sendable {
         blockLocalTables[key] = built
         lock.unlock()
         return built
+    }
+
+    /// The names bound by patterns (`o instanceof Foo name`, `case Foo name`, `Point(int name, …)`)
+    /// anywhere inside `member`. Built once per member.
+    func patternBindingNames(in member: SyntaxNode) -> Set<String> {
+        let key = member.startByte
+        lock.lock()
+        if let cached = patternBindingTables[key] { lock.unlock(); return cached }
+        lock.unlock()
+        var names = Set<String>()
+        var stack = [member]
+        while let node = stack.popLast() {
+            switch node.type {
+            case "instanceof_expression":
+                if let name = node.child(byFieldName: "name") { names.insert(name.text) }
+            case "type_pattern", "record_pattern_component":
+                if let name = node.namedChildren.last(where: { $0.type == "identifier" }) { names.insert(name.text) }
+            default:
+                break
+            }
+            stack.append(contentsOf: node.namedChildren)
+        }
+        lock.lock()
+        patternBindingTables[key] = names
+        lock.unlock()
+        return names
     }
 
     /// Names of the classes, interfaces and records of this file that declare type parameters.
@@ -342,11 +380,11 @@ enum JavaDeclaredTypes {
             guard let object = node.child(byFieldName: "object"), let field = node.child(byFieldName: "field") else { return nil }
             if object.type == "this" {
                 guard let body = enclosingTypeBody(of: node) else { return nil }
-                return fieldType(named: field.text, in: body)
+                return memberFieldType(named: field.text, in: body)
             }
             if object.type == "identifier", let owner = variableType(named: object.text, at: node),
-               let body = typeBody(named: owner.name, in: node.tree.rootNode) {
-                return fieldType(named: field.text, in: body)
+               let body = typeDeclaration(named: owner.name, from: node)?.child(byFieldName: "body") {
+                return memberFieldType(named: field.text, in: body)
             }
             return nil
         default:
@@ -386,18 +424,63 @@ enum JavaDeclaredTypes {
                     return make(type, dimensions: scope.child(byFieldName: "dimensions"))
                 }
             case "method_declaration", "constructor_declaration":
+                if let parameters = scope.child(byFieldName: "parameters"), let type = parameterType(named: name, in: parameters) { return type.type }
+            case "lambda_expression":
+                // A lambda parameter can shadow a field, so an untyped one ends the search as unknown.
                 if let parameters = scope.child(byFieldName: "parameters") {
-                    for parameter in parameters.namedChildren(ofType: "formal_parameter") where parameter.child(byFieldName: "name")?.text == name {
-                        if let type = parameter.child(byFieldName: "type") { return make(type, dimensions: parameter.child(byFieldName: "dimensions")) }
+                    switch parameters.type {
+                    case "identifier":
+                        if parameters.text == name { return nil }
+                    case "inferred_parameters":
+                        if parameters.namedChildren.contains(where: { $0.text == name }) { return nil }
+                    default:
+                        if let type = parameterType(named: name, in: parameters) { return type.type }
                     }
                 }
+            case "catch_clause":
+                if let parameter = scope.firstNamedChild(ofType: "catch_formal_parameter"), parameter.child(byFieldName: "name")?.text == name {
+                    // `catch (A | B e)` has no single declared type.
+                    let alternatives = parameter.firstNamedChild(ofType: "catch_type")?.namedChildren ?? []
+                    return alternatives.count == 1 ? make(alternatives[0], dimensions: nil) : nil
+                }
+            case "try_with_resources_statement":
+                // Resources are in scope in the body but not in the catch and finally clauses.
+                guard child.type != "catch_clause", child.type != "finally_clause",
+                      let specification = scope.firstNamedChild(ofType: "resource_specification") else { break }
+                for resource in specification.namedChildren(ofType: "resource") where resource.child(byFieldName: "name")?.text == name {
+                    guard let type = resource.child(byFieldName: "type") else { return nil }
+                    return make(type, dimensions: resource.child(byFieldName: "dimensions"))
+                }
+            case "record_declaration":
+                if let parameters = scope.child(byFieldName: "parameters"), let type = parameterType(named: name, in: parameters) { return type.type }
             case "class_body", "enum_body":
-                if let type = fieldType(named: name, in: scope) { return type }
+                // A pattern variable (`o instanceof Foo name`) can shadow a field in the member that declares it.
+                if node.tree.declarationCache.patternBindingNames(in: child).contains(name) { return nil }
+                if let type = memberFieldType(named: name, in: scope) { return type }
             default:
                 break
             }
             child = scope
             current = scope.parent
+        }
+        return nil
+    }
+
+    /// A parameter found by name; `type` is nil when its declared type is unknown (`var`).
+    private struct ParameterBinding { let type: JavaDeclaredType? }
+
+    /// The parameter called `name` in a parameter list, or nil when no parameter has that name. A varargs parameter is an array.
+    private static func parameterType(named name: String, in parameters: SyntaxNode) -> ParameterBinding? {
+        for parameter in parameters.namedChildren where parameter.type == "formal_parameter" || parameter.type == "spread_parameter" {
+            let declarator = parameter.firstNamedChild(ofType: "variable_declarator")
+            let declared = parameter.child(byFieldName: "name") ?? declarator?.child(byFieldName: "name")
+            guard declared?.text == name else { continue }
+            guard let typeNode = parameter.child(byFieldName: "type") ?? parameter.namedChildren.first(where: { $0.type != "modifiers" && $0.type != "variable_declarator" && $0.type != "identifier" }),
+                  var resolved = make(typeNode, dimensions: parameter.child(byFieldName: "dimensions") ?? declarator?.child(byFieldName: "dimensions")) else { return ParameterBinding(type: nil) }
+            if parameter.type == "spread_parameter" {
+                resolved = JavaDeclaredType(name: resolved.name, isArray: true, hasTypeArguments: resolved.hasTypeArguments)
+            }
+            return ParameterBinding(type: resolved)
         }
         return nil
     }
@@ -473,6 +556,83 @@ enum JavaDeclaredTypes {
             stack.append(contentsOf: node.namedChildren.reversed())
         }
         return nil
+    }
+
+    /// The type `name` refers to at `node`. A name the file declares once is that declaration; a name it
+    /// declares more than once (two classes each with a nested `Entry`) is resolved by scope, innermost
+    /// first, and is nil when no enclosing scope declares it, because then there is no telling which one is meant.
+    static func typeDeclaration(named name: String, from node: SyntaxNode) -> SyntaxNode? {
+        let root = node.tree.rootNode
+        guard node.tree.declarationCache.duplicateTypeNames(root: root).contains(name) else {
+            return typeDeclaration(named: name, in: root)
+        }
+        let declarations: Set<String> = ["class_declaration", "record_declaration", "enum_declaration", "interface_declaration"]
+        let containers: Set<String> = ["program", "class_body", "interface_body", "enum_body_declarations", "block", "constructor_body", "switch_block"]
+        var current: SyntaxNode? = node
+        while let scope = current {
+            if declarations.contains(scope.type), scope.child(byFieldName: "name")?.text == name { return scope }
+            if containers.contains(scope.type),
+               let hit = scope.namedChildren.first(where: { declarations.contains($0.type) && $0.child(byFieldName: "name")?.text == name }) {
+                return hit
+            }
+            current = scope.parent
+        }
+        return nil
+    }
+
+    /// The types a declaration names after `extends` and `implements`, or an anonymous class's own type.
+    private static func supertypeNames(of owner: SyntaxNode) -> [String] {
+        if owner.type == "object_creation_expression" {
+            return owner.child(byFieldName: "type").map { [simpleName(of: $0)] } ?? []
+        }
+        var names: [String] = []
+        if let superclass = owner.child(byFieldName: "superclass")?.namedChild(at: 0) { names.append(simpleName(of: superclass)) }
+        for clause in [owner.child(byFieldName: "interfaces"), owner.firstNamedChild(ofType: "extends_interfaces")].compactMap({ $0 }) {
+            for list in clause.namedChildren(ofType: "type_list") { names.append(contentsOf: list.namedChildren.map(simpleName(of:))) }
+        }
+        return names
+    }
+
+    /// A field `name` that `owner` inherits from a type this file declares, searching the chain. Types the file
+    /// does not declare are not searched, so a field they bring is unknown rather than found.
+    private static func inheritedFieldType(named name: String, in owner: SyntaxNode, depth: Int = 0) -> JavaDeclaredType? {
+        guard depth < 8 else { return nil }
+        for superName in supertypeNames(of: owner) {
+            guard let declaration = typeDeclaration(named: superName, from: owner), declaration.byteRange != owner.byteRange else { continue }
+            if let body = declaration.child(byFieldName: "body") {
+                if let type = fieldType(named: name, in: body) { return type }
+                if let type = inheritedFieldType(named: name, in: declaration, depth: depth + 1) { return type }
+            }
+        }
+        return nil
+    }
+
+    /// The field `name` of the type whose body this is: its own, else one inherited from a type of this file.
+    static func memberFieldType(named name: String, in body: SyntaxNode) -> JavaDeclaredType? {
+        if let type = fieldType(named: name, in: body) { return type }
+        guard let owner = body.parent else { return nil }
+        return inheritedFieldType(named: name, in: owner)
+    }
+
+    /// The qualified name a single-type import gives `simpleName` (`import a.b.Logger;` → `a.b.Logger`), or nil.
+    static func importedQualifiedName(of simpleName: String, in root: SyntaxNode) -> String? {
+        for declaration in root.namedChildren(ofType: "import_declaration") {
+            let text = declaration.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard text.hasPrefix("import"), !text.hasPrefix("import static") else { continue }
+            let qualified = text.dropFirst("import".count).dropLast(text.hasSuffix(";") ? 1 : 0)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if qualified.hasSuffix("." + simpleName) { return qualified }
+        }
+        return nil
+    }
+
+    /// Whether `simpleName` is a JDK-style type in this file: not declared here, and either not imported by a single-type
+    /// import or imported from a platform package. A same-named class from a project or library package is some other type.
+    static func mayBePlatformType(_ simpleName: String, in root: SyntaxNode) -> Bool {
+        if typeDeclaration(named: simpleName, in: root) != nil { return false }
+        guard let qualified = importedQualifiedName(of: simpleName, in: root) else { return true }
+        return ["java.", "javax.", "jakarta.", "jdk.", "org.slf4j.", "org.apache.logging.", "org.apache.commons.logging.", "org.jboss.logging."]
+            .contains(where: qualified.hasPrefix)
     }
 
     static func typeBody(named name: String, in root: SyntaxNode) -> SyntaxNode? {

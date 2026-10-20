@@ -62,6 +62,70 @@ final class JavaInspectionServiceTests: XCTestCase {
         XCTAssertEqual(inspections.first?.fixTitle, "Add @Override")
     }
 
+    func testMissingOverrideInspectionAcceptsAnnotatedOverride() async throws {
+        let baseURL = scratch.appendingPathComponent("Handler.java")
+        let baseSource = "interface Handler { void handleMessage(String event) throws Exception; }"
+        try baseSource.write(to: baseURL, atomically: true, encoding: .utf8)
+        let childURL = scratch.appendingPathComponent("Impl.java")
+        let source = """
+        class Impl implements Handler {
+            @Override
+            public void handleMessage(@NotNull String event) throws Exception { }
+        }
+        """
+        try source.write(to: childURL, atomically: true, encoding: .utf8)
+        var stubs: [JavaClassStub] = []
+        stubs.append(contentsOf: JavaSourceStubBuilder.build(source: baseSource, url: baseURL).classes)
+        stubs.append(contentsOf: JavaSourceStubBuilder.build(source: source, url: childURL).classes)
+        let index = try await makeIndex(stubs: stubs)
+        let inspections = await JavaMissingOverrideInspection.inspect(source: source, url: childURL, index: index)
+        XCTAssertTrue(inspections.isEmpty)
+    }
+
+    private func missingOverrides(supertypes: [String], checking source: String) async throws -> [JavaInspection] {
+        var stubs: [JavaClassStub] = []
+        for (offset, text) in (supertypes + [source]).enumerated() {
+            let url = scratch.appendingPathComponent("Source\(offset).java")
+            stubs.append(contentsOf: JavaSourceStubBuilder.build(source: text, url: url).classes)
+        }
+        let index = try await makeIndex(stubs: stubs)
+        return await JavaMissingOverrideInspection.inspect(source: source, url: scratch.appendingPathComponent("Checked.java"), index: index)
+    }
+
+    func testMissingOverrideInspectionIgnoresStaticAndPrivateMethods() async throws {
+        let base = "class Base { static void util() { } private void hidden() { } }"
+        let source = "class Child extends Base { static void util() { } private void hidden() { } }"
+        let inspections = try await missingOverrides(supertypes: [base], checking: source)
+        XCTAssertTrue(inspections.isEmpty)
+    }
+
+    func testMissingOverrideInspectionIgnoresStaticAndPrivateSuperMethods() async throws {
+        let base = "class Base { static void util() { } private void hidden() { } }"
+        let source = "class Child extends Base { void util() { } void hidden() { } }"
+        let inspections = try await missingOverrides(supertypes: [base], checking: source)
+        XCTAssertTrue(inspections.isEmpty)
+    }
+
+    func testMissingOverrideInspectionFollowsTheWholeSupertypeChain() async throws {
+        let supertypes = ["class Base { void run() { } }", "class Mid extends Base { }"]
+        let source = "class Leaf extends Mid { void run() { } }"
+        let inspections = try await missingOverrides(supertypes: supertypes, checking: source)
+        XCTAssertEqual(inspections.map(\.id), ["missing-override"])
+    }
+
+    func testMissingOverrideInspectionDoesNotAttributeNestedTypeMethodsToTheOuterType() async throws {
+        let base = "class Base { void run() { } }"
+        let source = """
+        class Outer extends Base {
+            @Override void run() { }
+            class Inner { void run() { } }
+            Runnable r = new Runnable() { public void run() { } };
+        }
+        """
+        let inspections = try await missingOverrides(supertypes: [base], checking: source)
+        XCTAssertTrue(inspections.isEmpty)
+    }
+
     func testUnresolvedTypeInspectionWarnsWhenNoCandidateExists() async throws {
         let index = try await makeIndex()
         let source = "class T { UnknownType value; }"

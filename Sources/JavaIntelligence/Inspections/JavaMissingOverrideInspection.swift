@@ -16,9 +16,11 @@ enum JavaMissingOverrideInspection {
             guard let typeName = enclosingTypeName(of: typeNode, file: file) else { continue }
             for methodNode in methodDeclarations(in: typeNode) {
                 guard let nameNode = methodNode.child(byFieldName: "name") else { continue }
+                // A static or private method can only hide or shadow, and `@Override` on it is a compile error.
+                guard !methodNode.hasModifier("static"), !methodNode.hasModifier("private") else { continue }
                 let name = nameNode.text
                 let keys = JavaTypeKeys.keys(of: methodNode)
-                guard await shouldOverride(name: name, keys: keys, in: typeName, index: index) else { continue }
+                guard await shouldOverride(name: name, keys: keys, in: typeName, package: file.packageName, index: index) else { continue }
                 guard !hasOverrideModifier(methodNode) else { continue }
                 let start = JavaImportInserter.textPosition(forByteOffset: methodNode.startByte, in: parsedTree.sourceBytes)
                 let end = JavaImportInserter.textPosition(forByteOffset: nameNode.endByte, in: parsedTree.sourceBytes)
@@ -47,14 +49,16 @@ enum JavaMissingOverrideInspection {
         return nodes
     }
 
+    /// The type's own methods. Nested types are inspected as types of their own, and an anonymous class's
+    /// methods belong to the anonymous class, so neither is reached through a method body or a member type.
     private static func methodDeclarations(in typeNode: SyntaxNode) -> [SyntaxNode] {
         guard let body = typeNode.child(byFieldName: "body") else { return [] }
-        var stack = [body]
         var methods: [SyntaxNode] = []
-        while let node = stack.popLast() {
-            if node.type == "method_declaration" { methods.append(node) }
-            for index in (0..<node.namedChildCount).reversed() {
-                stack.append(node.namedChild(at: index)!)
+        for member in body.namedChildren {
+            if member.type == "method_declaration" {
+                methods.append(member)
+            } else if member.type == "enum_body_declarations" {
+                methods.append(contentsOf: member.namedChildren.filter { $0.type == "method_declaration" })
             }
         }
         return methods
@@ -84,18 +88,22 @@ enum JavaMissingOverrideInspection {
     }
 
     private static func hasOverrideModifier(_ methodNode: SyntaxNode) -> Bool {
-        if let modifiers = methodNode.child(byFieldName: "modifiers"), modifiers.text.contains("@Override") {
-            return true
-        }
-        return false
+        methodNode.hasAnnotation(named: "Override")
     }
 
-    private static func shouldOverride(name: String, keys: [String], in typeName: String, index: JavaIndex) async -> Bool {
-        for superName in await JavaMemberLookup.directSupertypeNames(of: typeName, index: index) {
+    private static func shouldOverride(name: String, keys: [String], in typeName: String, package typePackage: String, index: JavaIndex) async -> Bool {
+        var superNames = await JavaMemberLookup.supertypeClosure(of: typeName, index: index)
+        superNames.remove(typeName)
+        for superName in superNames {
             guard let stub = await index.classStub(qualifiedName: superName) else { continue }
-            if stub.methods.contains(where: { $0.name == name && JavaTypeKeys.keys(of: $0) == keys }) {
+            let overridable = stub.methods.contains { method in
+                guard method.name == name, !method.isConstructor, JavaTypeKeys.keys(of: method) == keys else { return false }
+                if method.modifiers.contains(.staticFlag) || method.modifiers.contains(.privateFlag) || method.modifiers.contains(.synthetic) { return false }
+                // A package-private method is only overridden from the same package.
+                if method.modifiers.isPackagePrivate, stub.kind != .interfaceKind, stub.packageName != typePackage { return false }
                 return true
             }
+            if overridable { return true }
         }
         return false
     }

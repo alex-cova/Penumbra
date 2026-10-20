@@ -73,10 +73,7 @@ struct IDEProblemsPanel: View {
     }
 
     private var problemList: some View {
-        let activeURL = workspace.workbench.activePane.selectedDocument?.url?.standardizedFileURL
-        let all = workspace.problems.files
-        let files = runs.selection == .file ? all.filter { $0.url.standardizedFileURL == activeURL } : all
-        let messages = runs.selection == .file ? [] : workspace.problems.visibleBuildMessages
+        let (files, messages) = workspace.visibleProblems()
         return Group {
             if files.isEmpty && messages.isEmpty {
                 emptyState
@@ -225,9 +222,7 @@ private struct IDEProblemRowView: View {
     @State private var isHovering = false
 
     /// An inspection's readable name; the tool's id for everything else.
-    private var origin: String {
-        row.diagnostic.code.flatMap { IDEWorkspace.diagnosticTitle(source: row.diagnostic.source, code: $0) } ?? row.diagnostic.source
-    }
+    private var origin: String { IDEProblemsMarkdown.origin(of: row.diagnostic) }
 
     var body: some View {
         Button(action: onOpen) {
@@ -313,12 +308,36 @@ enum IDEProblemStyle {
 /// Header controls shown in place of the shell's restart button while the Problems tab is selected.
 struct IDEProblemsControls: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @State private var didCopy = false
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             filterToggle(.error, count: workspace.problems.errorCount, label: "Errors")
             filterToggle(.warning, count: workspace.problems.warningCount, label: "Warnings")
+            copyButton
         }
+    }
+
+    /// Copies the list as shown; an Inspect Code run has its own results view, so it is not exported here.
+    private var copyButton: some View {
+        let visible = workspace.visibleProblems()
+        let canCopy = workspace.inspectionRuns.selectedRun == nil && !(visible.files.isEmpty && visible.messages.isEmpty)
+        return Button {
+            workspace.copyProblemsAsMarkdown()
+            didCopy = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                didCopy = false
+            }
+        } label: {
+            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        }
+        .buttonStyle(.borderless)
+        .disabled(!canCopy)
+        .help("Copy Problems as Markdown")
+        .accessibilityLabel("Copy Problems as Markdown")
     }
 
     private func filterToggle(_ severity: DiagnosticSeverity, count: Int, label: String) -> some View {

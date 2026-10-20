@@ -9,7 +9,7 @@ struct IDEFileTreeActions {
     var cancelRename: () -> Void
     var duplicate: (URL) -> Void
     var trash: (URL) -> Void
-    var copyPath: (_ url: URL, _ relative: Bool) -> Void
+    var copyPathReference: (URL) -> Void
     var findInFiles: (_ directory: URL) -> Void
     var showHistory: (URL) -> Void
     var openOnWeb: (_ url: URL, _ copy: Bool) -> Void
@@ -444,8 +444,7 @@ private struct IDEFileTreeRow: View {
             Button("Duplicate") { selectAndRun { actions.duplicate(node.url) } }
                 .disabled(isRoot)
             Divider()
-            Button("Copy Path") { selectAndRun { actions.copyPath(node.url, false) } }
-            Button("Copy Relative Path") { selectAndRun { actions.copyPath(node.url, true) } }
+            Button("Copy Path/Reference…") { selectAndRun { actions.copyPathReference(node.url) } }
             Button("Show History") { selectAndRun { actions.showHistory(node.url) } }
             if gitStatus == .untracked || (node.isDirectory && gitStatus != .ignored && !isRoot) {
                 Button("Add to .gitignore") { selectAndRun { actions.addToIgnoreFile(node.url, false) } }

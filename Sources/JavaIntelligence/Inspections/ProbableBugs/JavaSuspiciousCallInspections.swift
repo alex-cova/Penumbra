@@ -15,27 +15,23 @@ enum JavaMathRandomCastInspection: JavaNodeInspection {
 }
 
 enum JavaThrowableNames {
-    /// Names that read as throwables, plus classes this file declares as extending one.
-    static func isThrowable(_ typeName: String, in root: SyntaxNode) -> Bool {
+    /// Whether the name is a throwable: a class this file declares by what it extends, else a name that reads like one.
+    static func isThrowable(_ typeName: String, from node: SyntaxNode) -> Bool {
         var seen = Set<String>()
         var name = typeName
+        var scope = node
         while seen.insert(name).inserted {
-            if name == "Throwable" || name.hasSuffix("Exception") || name.hasSuffix("Error") { return true }
-            guard let superclass = declaredSuperclass(of: name, in: root) else { return false }
+            if name == "Throwable" { return true }
+            guard let declaration = JavaDeclaredTypes.typeDeclaration(named: name, from: scope) else {
+                return name.hasSuffix("Exception") || name.hasSuffix("Error")
+            }
+            // The file says what the class extends, so its name proves nothing.
+            guard declaration.type == "class_declaration",
+                  let superclass = declaration.child(byFieldName: "superclass")?.namedChild(at: 0).map(JavaDeclaredTypes.simpleName(of:)) else { return false }
             name = superclass
+            scope = declaration
         }
         return false
-    }
-
-    private static func declaredSuperclass(of name: String, in root: SyntaxNode) -> String? {
-        var stack = [root]
-        while let node = stack.popLast() {
-            if node.type == "class_declaration", node.child(byFieldName: "name")?.text == name {
-                return node.child(byFieldName: "superclass")?.namedChild(at: 0).map(JavaDeclaredTypes.simpleName(of:))
-            }
-            stack.append(contentsOf: node.namedChildren.reversed())
-        }
-        return nil
     }
 }
 
@@ -53,7 +49,7 @@ enum JavaThrowableNotThrownInspection: JavaNodeInspection {
     static let nodeTypes: Set<String> = ["expression_statement"]
 
     static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
-        guard let (creation, typeName) = bareCreation(node), JavaThrowableNames.isThrowable(typeName, in: context.tree.rootNode) else { return }
+        guard let (creation, typeName) = bareCreation(node), JavaThrowableNames.isThrowable(typeName, from: node) else { return }
         report(JavaInspectionSupport.inspection(rule, message: "'\(typeName)' is created but not thrown", node: creation, fixTitle: "Add 'throw'"))
     }
 
@@ -70,7 +66,7 @@ enum JavaObjectAllocationIgnoredInspection: JavaNodeInspection {
     static let nodeTypes: Set<String> = ["expression_statement"]
 
     static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
-        guard let (creation, typeName) = bareCreation(node), !JavaThrowableNames.isThrowable(typeName, in: context.tree.rootNode) else { return }
+        guard let (creation, typeName) = bareCreation(node), !JavaThrowableNames.isThrowable(typeName, from: node) else { return }
         report(JavaInspectionSupport.inspection(rule, message: "Result of 'new \(typeName)()' is ignored", node: creation))
     }
 }

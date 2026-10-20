@@ -443,7 +443,7 @@ final class JavaDataFlowAnalyzer {
         let members = block.namedChildren.filter { !Self.comments.contains($0.type) }
         if members.contains(where: { $0.type == "switch_rule" }) {
             for rule in members where rule.type == "switch_rule" {
-                if rule.firstNamedChild(ofType: "switch_label")?.text.contains("default") == true { hasDefault = true }
+                if rule.firstNamedChild(ofType: "switch_label")?.children.contains(where: { $0.type == "default" }) == true { hasDefault = true }
                 guard let body = rule.namedChildren.last(where: { $0.type != "switch_label" && !Self.comments.contains($0.type) }) else {
                     outcomes.append((entry, true))
                     continue
@@ -453,7 +453,7 @@ final class JavaDataFlowAnalyzer {
         } else {
             var fallThrough: JavaFlowState?
             for group in members where group.type == "switch_block_statement_group" {
-                if group.namedChildren(ofType: "switch_label").contains(where: { $0.text.contains("default") }) { hasDefault = true }
+                if group.namedChildren(ofType: "switch_label").contains(where: { $0.children.contains(where: { $0.type == "default" }) }) { hasDefault = true }
                 let groupEntry = fallThrough.map { entry.joined(with: $0) } ?? entry
                 fallThrough = execStatements(group.namedChildren.filter { $0.type != "switch_label" }, groupEntry)
             }

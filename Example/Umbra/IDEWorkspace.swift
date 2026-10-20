@@ -4233,6 +4233,7 @@ public final class IDEWorkspace {
             guard let self, let host else { return [] }
             let url = self.workbench.layout.findPane(id: paneID)?.selectedDocument?.url
             return self.editorContextMenuItems(context: context, paneID: paneID, url: url)
+                + self.copyReferenceContextMenuItems(context: context, paneID: paneID, url: url)
                 + self.diffContextMenuItems(url: url)
                 + self.diagramContextMenuItems(url: url)
                 + self.inspectionContextMenuItems(url: url)
@@ -5830,12 +5831,6 @@ public final class IDEWorkspace {
             await project.refresh(directories: [url.deletingLastPathComponent().path])
             gitStatus.refresh()
         }
-    }
-
-    func copyExplorerPath(_ url: URL, relative: Bool) {
-        let value = relative ? (fileOperations?.relativePath(of: url) ?? url.path) : url.path
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
     }
 
     private func discardPlaceholder(_ url: URL) {

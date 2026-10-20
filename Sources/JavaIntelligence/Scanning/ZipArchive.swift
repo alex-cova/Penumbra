@@ -133,6 +133,18 @@ public final class ZipArchive: @unchecked Sendable {
             throw ZipArchiveError.corruptCentralDirectory
         }
 
+        // Bytes in front of the archive shift where the central directory really is, and every
+        // offset in it stays relative to the archive's own start: a `.jmod` has a 4-byte `JM\1\0`
+        // header. The directory sits just before the end record (no ZIP64 record between).
+        var prefix = 0
+        if data.readUInt32LE(at: cdOffset) != 0x0201_4b50 {
+            let gap = eocdOffset - cdSize - cdOffset
+            if gap > 0, cdOffset + gap + 4 <= data.count, data.readUInt32LE(at: cdOffset + gap) == 0x0201_4b50 {
+                prefix = gap
+                cdOffset += gap
+            }
+        }
+
         var entries: [ZipEntry] = []
         entries.reserveCapacity(entryCount)
         var cursor = cdOffset
@@ -174,7 +186,7 @@ public final class ZipArchive: @unchecked Sendable {
                 compressionMethod: compressionMethod,
                 compressedSize: compressedSize,
                 uncompressedSize: uncompressedSize,
-                localHeaderOffset: localHeaderOffset,
+                localHeaderOffset: localHeaderOffset + prefix,
                 crc32: crc32
             ))
             cursor = nameStart + nameLength + extraLength + commentLength

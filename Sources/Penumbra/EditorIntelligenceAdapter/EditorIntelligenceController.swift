@@ -783,16 +783,22 @@ public final class EditorIntelligenceController {
         }
     }
 
+    /// A reference to the symbol at the caret (`pkg.Class#method(int)`), or `nil` when the
+    /// language has no provider or the caret is not on a symbol.
+    public func symbolReferenceAtCaret() async -> String? {
+        guard let symbolReferenceProvider, let document = liveDocument() else { return nil }
+        return await symbolReferenceProvider.symbolReference(for: document, at: document.cursor.position)
+    }
+
     /// Copies a reference to the symbol at the caret to the pasteboard.
     @discardableResult
     public func copyReference() -> Bool {
-        guard let symbolReferenceProvider, let document = liveDocument() else {
+        guard symbolReferenceProvider != nil else {
             showTransientHint("Copy Reference isn't available for this file")
             return true
         }
-        let position = document.cursor.position
         Task { [weak self] in
-            guard let reference = await symbolReferenceProvider.symbolReference(for: document, at: position) else {
+            guard let reference = await self?.symbolReferenceAtCaret() else {
                 self?.showTransientHint("No symbol to copy a reference to")
                 return
             }

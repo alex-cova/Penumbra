@@ -11,6 +11,14 @@ final class ZipArchiveTests: XCTestCase {
         XCTAssertTrue(names.contains("META-INF/MANIFEST.MF"))
     }
 
+    /// A `.jmod` is a zip behind a 4-byte `JM\1\0` header, with offsets relative to the zip.
+    func testReadsAnArchiveBehindAPrefix() throws {
+        let jar = try Data(contentsOf: JavaFixtures.jarURL)
+        let archive = try ZipArchive(data: Data([0x4A, 0x4D, 0x01, 0x00]) + jar)
+        XCTAssertEqual(Set(archive.entries.map(\.name)), Set(try ZipArchive(data: jar).entries.map(\.name)))
+        XCTAssertEqual(try archive.data(for: "com/penumbra/fixture/Fixture.class"), JavaFixtures.classFile("Fixture"))
+    }
+
     func testDecompressedEntryMatchesDirectlyReadClassFile() throws {
         let archive = try ZipArchive(url: JavaFixtures.jarURL)
         let fromZip = try archive.data(for: "com/penumbra/fixture/Fixture.class")

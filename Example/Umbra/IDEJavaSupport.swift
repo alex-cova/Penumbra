@@ -969,8 +969,10 @@ final class IDEJavaSupport {
             }
             let homePath = installation.home.resolvingSymlinksInPath().path
             pendingJDKHomePath = homePath
-            let root = JDKCtSymRoot(installation: installation)
-            let shardURL = paths.jdkShard(installation, kind: "ctsym")
+            // Opens ct.sym's directory, so off the main actor.
+            let (root, kind) = await Task.detached(priority: .utility) { JDKIndexRoot.make(for: installation) }.value
+            guard !Task.isCancelled else { return }
+            let shardURL = paths.jdkShard(installation, kind: kind)
             let message = "Indexing JDK \(installation.featureVersion)…"
             if status.message == nil {
                 status.set(message)
@@ -994,11 +996,25 @@ final class IDEJavaSupport {
                 }
             }
             guard !Task.isCancelled else { return }
-            jdkReader = reader
-            indexedJDKHomePath = homePath
             pendingJDKHomePath = nil
             status.clear(message)
+            // A JDK that yields no classes must not replace one that works: with no `java.lang`
+            // every `String` is unresolved.
+            guard let reader, !reader.allQualifiedNames.isEmpty || jdkReader == nil else {
+                if noteToConsole {
+                    appendBuildNote("JDK \(installation.featureVersion) produced no classes; keeping the JDK already indexed")
+                }
+                return
+            }
+            let isReplacement = jdkReader != nil
+            jdkReader = reader
+            indexedJDKHomePath = homePath
             await publishSources()
+            if isReplacement {
+                // Results computed against the previous JDK are stale.
+                onInspectionConfigurationChanged?()
+                refreshCompilerDiagnostics()
+            }
         }
     }
 

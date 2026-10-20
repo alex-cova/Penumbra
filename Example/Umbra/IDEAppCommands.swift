@@ -240,6 +240,9 @@ private struct IDEFindCommands: View {
             .menuShortcut(.findInFiles, in: preset)
         Button("Replace in Files…", systemImage: "arrow.left.arrow.right.square", action: { workspace?.showReplaceInFiles() })
             .menuShortcut(.replaceInFiles, in: preset)
+        Divider()
+        Button("Copy Path/Reference…", systemImage: "doc.on.doc", action: { workspace?.showCopyPathReferenceForActiveEditor() })
+            .menuShortcut(.copyPathReference, in: preset)
     }
 }
 

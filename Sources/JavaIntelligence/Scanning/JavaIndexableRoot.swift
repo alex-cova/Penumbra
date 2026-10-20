@@ -30,6 +30,31 @@ enum CtSymRelease {
         let scalarValue = UInt8(ascii: "A") + UInt8(offset)
         return Character(UnicodeScalar(scalarValue))
     }
+
+    /// Whether `archive` carries API signatures for the release. A JDK's `ct.sym` holds the older
+    /// releases only: for its own (JDK 21's `L/` is just `system-modules`) javac reads the runtime
+    /// image instead, so indexing it gives no classes.
+    static func hasSignatures(in archive: ZipArchive, forFeatureVersion version: Int) -> Bool {
+        guard let letter = letter(forFeatureVersion: version) else { return false }
+        return archive.entries.contains { entry in
+            guard entry.name.hasSuffix(".sig") else { return false }
+            let top = entry.name.prefix { $0 != "/" }
+            return top.count < entry.name.count && top.contains(letter)
+        }
+    }
+}
+
+/// Picks what to index for a JDK: `ct.sym` when it has signatures for the JDK's own release, else
+/// `jmods/` (the shard kind differs, so a shard written empty from `ct.sym` is never read again).
+public enum JDKIndexRoot {
+    public static func make(for installation: JDKInstallation) -> (root: any JavaIndexableRoot, kind: String) {
+        let ctSym = JDKCtSymRoot(installation: installation)
+        let hasSignatures = (try? ZipArchive(url: installation.ctSym)).map {
+            CtSymRelease.hasSignatures(in: $0, forFeatureVersion: installation.featureVersion)
+        } ?? false
+        if hasSignatures || !installation.hasJmods { return (ctSym, "ctsym") }
+        return (JModsRoot(installation: installation), "jmods")
+    }
 }
 
 /// Reads a JDK's `lib/ct.sym`: a ZIP of `.sig` files that are themselves class files (public API
@@ -76,8 +101,8 @@ public struct JDKCtSymRoot: JavaIndexableRoot {
 }
 
 /// Reads a JDK's `jmods/` directory: one `.jmod` per module, each a ZIP-format archive whose class
-/// files live under a `classes/` prefix. Used only when `ct.sym` is absent (some distributions omit
-/// it) or when a caller specifically wants module structure `ct.sym` doesn't preserve.
+/// files live under a `classes/` prefix. Used when `ct.sym` is absent (some distributions omit it) or
+/// has no signatures for the JDK's own release (see ``JDKIndexRoot``).
 public struct JModsRoot: JavaIndexableRoot {
     private let installation: JDKInstallation
     public let id: String
