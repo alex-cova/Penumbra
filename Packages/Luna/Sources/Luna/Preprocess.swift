@@ -932,7 +932,7 @@ private func entityCodePoint(_ n: UInt32, fallback: String) -> String {
 private func decodePlaceholders(_ text: String) -> String {
     var out = ""
     var last = text.startIndex
-    var from = text.range(of: entityOpen)?.lowerBound
+    let from = text.range(of: entityOpen)?.lowerBound
     var f = from
     while let at = f {
         guard let stop = text[at...].range(of: "\u{B6}")?.lowerBound,

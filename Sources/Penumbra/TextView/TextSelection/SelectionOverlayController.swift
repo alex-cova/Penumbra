@@ -422,6 +422,10 @@ private final class SelectionChromeHostView: EditorView {
         super.init(frame: frame)
         wantsLayer = true
         layer?.isOpaque = false
+        // The host is a fixed overlay on the scroll view, so a caret scrolled out of the viewport
+        // is outside its frame, and an unclipped layer paints it over the views around the editor
+        // (the tab bar above it).
+        layer?.masksToBounds = true
         isUserInteractionEnabled = true
     }
 
