@@ -3493,7 +3493,12 @@ extension TextInputView {
         // The caret moved before the text did, so Focus Mode resolved its ranges against the old
         // text. The edited line is painted right below; with the old ranges its new characters are
         // dimmed for one frame, which reads as the paragraph flashing on every keystroke.
-        focusModeController.updateFocusedRanges(for: selectedRanges)
+        // A multi-caret batch (`updateSelection: false`) edits once per caret and then assigns the
+        // new carets through `applySelectedRanges`, which refreshes the ranges. Refreshing here as
+        // well resolves every caret on every edit: quadratic in the caret count.
+        if updateSelection || !multiSelectionController.hasMultipleSelections {
+            focusModeController.updateFocusedRanges(for: selectedRanges)
+        }
         EditorPerformanceTrace.shared.measure(.visibleLayout) {
             applyLineChangesToLayoutManager(lineChangeSet)
         }
