@@ -9,6 +9,7 @@ final class TreeSitterInternalLanguage {
     let lineCommentPrefix: String?
     let blockCommentDelimiters: BlockCommentDelimiters?
     let enterBehavior: EnterBehavior?
+    var predictsATXHeadings = false
 
     init(languagePointer: TreeSitterLanguagePointer,
          highlightsQuery: TreeSitterQuery?,

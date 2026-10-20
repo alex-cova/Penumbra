@@ -3550,6 +3550,11 @@ extension TextInputView {
                 ? "TextInputView.lineStructureChanged"
                 : "TextInputView.lineContentChanged"
         )
+        // Removing a whole line leaves the next line's text in the surviving node, so the removed
+        // node's controller holds the attributes that text should keep. Read them before it goes.
+        let removedLineAttributes = lineChangeSet.removedLines.count == 1
+            ? lineChangeSet.removedLines.first.flatMap { lineControllerStorage[$0.id]?.attributesForMovedLine }
+            : nil
         if didAddOrRemoveLines {
             contentSizeService.invalidateContentSize()
             for removedLine in lineChangeSet.removedLines {
@@ -3559,6 +3564,7 @@ extension TextInputView {
         }
         let editedLineIDs = Set(lineChangeSet.editedLines.map(\.id))
         let colorShift: (utf16RangeInLine: NSRange, text: String)?
+        var colorShiftAttributes: NSAttributedString?
         // Shifted colors are a guess that the post-parse recolor replaces, so they only make sense
         // while a parse is pending. After a synchronous keystroke parse the tree is current and
         // nothing would replace them.
@@ -3597,6 +3603,11 @@ extension TextInputView {
                     // A join or a split: everything after the edit start is new text (from the
                     // removed line, or just the delimiter), and the head keeps its attributes.
                     colorShift = (NSRange(location: localLocation, length: LineController.toEnd), tail)
+                    // A line removed whole at its start: the next line's text takes its place and
+                    // keeps the attributes it had.
+                    if localLocation == 0, !isSplit {
+                        colorShiftAttributes = removedLineAttributes
+                    }
                 } else {
                     colorShift = nil
                 }
@@ -3606,9 +3617,27 @@ extension TextInputView {
         } else {
             colorShift = nil
         }
+        // Text inserted at the start of a line, ending in a line break, pushes that whole line into a
+        // new node below the insertion (duplicate line, move line, undo of a line delete). The new
+        // node has no controller, so without this it is drawn in the default font and color until
+        // the parse lands. It holds the text the shifted line is showing right now.
+        var seededLineIDs: Set<DocumentLineNodeID> = []
+        if isSplit,
+           let colorShift, colorShift.utf16RangeInLine.location == 0,
+           lastReplaceEditRange.length == 0,
+           lastReplaceNewString.last?.isNewline ?? false,
+           let shiftedLine,
+           let movedLine = lineChangeSet.insertedLines.max(by: { $0.location < $1.location }),
+           let attributes = lineControllerStorage[shiftedLine.id]?.attributesForMovedLine {
+            if lineControllerStorage.getOrCreateLineController(for: movedLine).adoptAttributes(from: attributes) {
+                seededLineIDs.insert(movedLine.id)
+            }
+        }
         let contentSizeBeforeEdit = contentSize
         let heightChanged = layoutManager.redisplayLines(withIDs: editedLineIDs, colorShift: colorShift,
-                                                         colorShiftLineID: shiftedLine?.id)
+                                                         colorShiftLineID: shiftedLine?.id,
+                                                         colorShiftAttributes: colorShiftAttributes,
+                                                         seededLineIDs: seededLineIDs)
         if contentSize != contentSizeBeforeEdit {
             delegate?.textInputViewDidInvalidateContentSize(self)
         }

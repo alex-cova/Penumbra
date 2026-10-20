@@ -17,6 +17,22 @@ extension XCTestCase {
                                caretAfter anchor: String? = nil,
                                file: StaticString = #filePath,
                                line: UInt = #line) throws -> TextView {
+        try makeProbeView(document: document, language: .markdown, languageProvider: MarkdownLanguageProvider(),
+                          dark: dark, metal: metal, focusMode: focusMode, caretAfter: anchor, file: file, line: line)
+    }
+
+    /// Same, for any language. The theme is a palette theme, which scales Markdown headings, so a
+    /// language that is not Markdown shows whether a `#` line is wrongly scaled.
+    @MainActor
+    func makeProbeView(document: String,
+                       language: TreeSitterLanguage,
+                       languageProvider: TreeSitterLanguageProvider? = nil,
+                       dark: Bool = false,
+                       metal: Bool = false,
+                       focusMode: Bool = false,
+                       caretAfter anchor: String? = nil,
+                       file: StaticString = #filePath,
+                       line: UInt = #line) throws -> TextView {
         if metal {
             try XCTSkipUnless(MetalContext.isAvailable, "Metal is not available")
         }
@@ -29,13 +45,13 @@ extension XCTestCase {
         textView.isMetalRenderingEnabled = metal
         textView.setState(TextViewState(text: document,
                                         theme: PaletteTheme(palette: palette, postscriptName: nil),
-                                        language: .markdown,
-                                        languageProvider: MarkdownLanguageProvider(),
+                                        language: language,
+                                        languageProvider: languageProvider,
                                         parsePolicy: .eager))
         textView.layoutIfNeeded()
         pumpMainRunLoop(for: 0.3)
         textView.layoutIfNeeded()
-        try XCTSkipUnless(textView.isSyntaxTreeReady, "markdown tree not ready")
+        try XCTSkipUnless(textView.isSyntaxTreeReady, "syntax tree not ready")
         if metal {
             try XCTSkipUnless(textView.isMetalRenderingActive, "Metal rendering did not activate")
         }
@@ -71,6 +87,7 @@ extension XCTestCase {
     /// the parse settles. Fails for any sample that differs from the settled one in:
     /// - the caret's x, y and height,
     /// - the y of each line that contains one of `watching` (found after the action),
+    /// - with Metal on: the glyph color of the first character of each `colored` snippet,
     /// - with Focus Mode and Metal on and `focused` / `unfocused` given: the alpha of the glyphs of
     ///   the edited paragraph (full) and of an unfocused one (the unfocused alpha).
     @MainActor
@@ -79,6 +96,7 @@ extension XCTestCase {
                             watching: [String] = [],
                             focused: String? = nil,
                             unfocused: String? = nil,
+                            colored: [String] = [],
                             file: StaticString = #filePath,
                             line: UInt = #line,
                             action: () -> Void) {
@@ -99,8 +117,20 @@ extension XCTestCase {
                 }
                 return textView.metalDebugGlyphColors(atLocation: range.location + 1).map(\.w)
             }
+            let colors: [SIMD3<Float>?] = colored.map { snippet in
+                guard textView.isMetalRenderingActive else {
+                    return nil
+                }
+                let range = text.range(of: snippet)
+                guard range.location != NSNotFound,
+                      let color = textView.metalDebugGlyphColors(atLocation: range.location + 1).first else {
+                    return nil
+                }
+                return SIMD3(color.x, color.y, color.z)
+            }
             return EditSample(caret: textView.caretRect(at: textView.selectedRange.location),
                               watchedYs: ys,
+                              colors: colors,
                               focusedAlphas: alphas(focused),
                               unfocusedAlphas: alphas(unfocused))
         }
@@ -136,6 +166,15 @@ extension XCTestCase {
                     continue
                 }
                 XCTAssertEqual(y, settledY, accuracy: 0.5, "\(label): y of '\(watching[snippetIndex])'", file: file, line: line)
+            }
+            for (snippetIndex, color) in current.colors.enumerated() {
+                guard let color, let settledColor = settled.colors[snippetIndex] else {
+                    continue
+                }
+                // Focus Mode dims by alpha only, so the color channels compare directly.
+                XCTAssertEqual(color.x, settledColor.x, accuracy: 0.02, "\(label): red of '\(colored[snippetIndex])'", file: file, line: line)
+                XCTAssertEqual(color.y, settledColor.y, accuracy: 0.02, "\(label): green of '\(colored[snippetIndex])'", file: file, line: line)
+                XCTAssertEqual(color.z, settledColor.z, accuracy: 0.02, "\(label): blue of '\(colored[snippetIndex])'", file: file, line: line)
             }
             guard focusDimming else {
                 continue
@@ -186,6 +225,7 @@ extension XCTestCase {
 private struct EditSample {
     let caret: CGRect
     let watchedYs: [CGFloat?]
+    let colors: [SIMD3<Float>?]
     let focusedAlphas: [Float]?
     let unfocusedAlphas: [Float]?
 }
@@ -204,8 +244,19 @@ enum EditStabilityDocuments {
     - First list item
     - Second list item
 
+    > Quoted line that has its own color.
+
     ## Second section heading
 
     Final paragraph is the unfocused one.
+    """
+
+    /// Two titles in a row, so a line inserted above one has a title for a neighbour.
+    static let adjacentTitles = """
+    # First title
+    ## Second title
+    ## Third title
+
+    Body paragraph below the titles.
     """
 }

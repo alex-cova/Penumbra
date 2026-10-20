@@ -754,11 +754,16 @@ final class LayoutManager {
     /// another viewport layout; the line was just typeset and upserted here.
     @discardableResult
     /// `colorShiftLineID` names the line the shift applies to when several lines were edited (a split);
-    /// without it the shift applies only to a single edited line.
+    /// without it the shift applies only to a single edited line. `colorShiftAttributes` are the
+    /// attributes of a line that moved whole into the shifted line's place. A line in
+    /// `seededLineIDs` was given the attributes of the text it now holds and is displayed as it is.
     func redisplayLines(withIDs lineIDs: Set<DocumentLineNodeID>,
                         colorShift: (utf16RangeInLine: NSRange, text: String)? = nil,
-                        colorShiftLineID: DocumentLineNodeID? = nil) -> Bool {
+                        colorShiftLineID: DocumentLineNodeID? = nil,
+                        colorShiftAttributes: NSAttributedString? = nil,
+                        seededLineIDs: Set<DocumentLineNodeID> = []) -> Bool {
         recentlyEditedLineIDs.formUnion(lineIDs)
+        let predictsATXHeadings = (languageMode as? TreeSitterInternalLanguageMode)?.predictsATXHeadings ?? false
         var heightChanged = false
         for lineID in lineIDs {
             if let lineController = lineControllerStorage[lineID] {
@@ -767,12 +772,14 @@ final class LayoutManager {
                 if let colorShift, lineIDs.count == 1 || colorShiftLineID == lineID {
                     usedColorShift = lineController.applyColorShift(
                         replacing: colorShift.utf16RangeInLine,
-                        with: colorShift.text
+                        with: colorShift.text,
+                        adopting: colorShiftAttributes,
+                        predictsATXHeadings: predictsATXHeadings
                     )
                 } else {
                     usedColorShift = false
                 }
-                if !usedColorShift {
+                if !usedColorShift && !seededLineIDs.contains(lineID) {
                     lineController.invalidateEverything()
                 }
                 // Only display the line if it's currently visible on the screen. Otherwise it's enough to invalidate it and redisplay it later.

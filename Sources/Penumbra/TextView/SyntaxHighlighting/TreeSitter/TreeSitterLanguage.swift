@@ -24,6 +24,11 @@ public final class TreeSitterLanguage {
     /// Rules for the Enter key (block-comment continuation, string splitting, structure-aware indent),
     /// or `nil` for the generic behavior. See ``EnterBehavior``.
     public let enterBehavior: EnterBehavior?
+    /// Whether a line that starts with one to six `#`s and a space is an ATX heading (Markdown).
+    /// While a parse is pending after an edit, the editor then draws such a line in its heading
+    /// font and color instead of the body font. Leave it `false` for languages where `#` starts a
+    /// comment: a `# comment` must never be scaled. Set it before the language is first used.
+    public var predictsATXHeadings = false
 
     var internalLanguage: TreeSitterInternalLanguage {
         prepare()
@@ -129,6 +134,7 @@ private extension TreeSitterInternalLanguage {
                   lineCommentPrefix: language.lineCommentPrefix,
                   blockCommentDelimiters: language.blockCommentDelimiters,
                   enterBehavior: language.enterBehavior)
+        predictsATXHeadings = language.predictsATXHeadings
     }
 
     private static func makeInternalQuery(from query: TreeSitterLanguage.Query?, with language: TreeSitterLanguagePointer) -> TreeSitterQuery? {

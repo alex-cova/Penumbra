@@ -16,10 +16,12 @@ public extension TreeSitterLanguage {
     static var markdown: TreeSitterLanguage {
         let highlightsQuery = TreeSitterLanguage.Query(contentsOf: markdownQueryURL(named: "highlights", in: "Block"))
         let injectionsQuery = TreeSitterLanguage.Query(contentsOf: markdownQueryURL(named: "injections", in: "Block"))
-        return TreeSitterLanguage(tree_sitter_markdown(),
-                                   highlightsQuery: highlightsQuery,
-                                   injectionsQuery: injectionsQuery,
-                                   indentationScopes: .markdown)
+        let language = TreeSitterLanguage(tree_sitter_markdown(),
+                                          highlightsQuery: highlightsQuery,
+                                          injectionsQuery: injectionsQuery,
+                                          indentationScopes: .markdown)
+        language.predictsATXHeadings = true
+        return language
     }
 
     /// The inline Markdown grammar, resolving emphasis, strong emphasis, links, code spans, and

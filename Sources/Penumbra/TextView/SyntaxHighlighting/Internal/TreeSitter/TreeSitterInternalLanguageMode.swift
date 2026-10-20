@@ -36,6 +36,10 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         rootLanguageLayer.language.enterBehavior
     }
 
+    var predictsATXHeadings: Bool {
+        rootLanguageLayer.language.predictsATXHeadings
+    }
+
     var hasIndentationScopes: Bool {
         rootLanguageLayer.language.indentationScopes != nil
     }

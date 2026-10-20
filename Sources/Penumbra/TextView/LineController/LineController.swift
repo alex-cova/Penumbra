@@ -223,8 +223,16 @@ final class LineController: @unchecked Sendable {
     /// A range of length `toEnd` replaces everything from its location to the end of the line: a
     /// join takes the next line's text in over the delimiter, and the head of the line keeps its
     /// attributes.
+    ///
+    /// `adoptedAttributes` are the attributes of `text` when it is a line that moved here whole
+    /// (a line removed at its start takes the next line's place): they are used instead of the
+    /// defaults. `predictsATXHeadings` lets an edit near the start of the line turn it into a
+    /// heading (or not) without waiting for the parse.
     @discardableResult
-    func applyColorShift(replacing requestedRange: NSRange, with text: String) -> Bool {
+    func applyColorShift(replacing requestedRange: NSRange,
+                         with text: String,
+                         adopting adoptedAttributes: NSAttributedString? = nil,
+                         predictsATXHeadings: Bool = false) -> Bool {
         guard let attributedString,
               !isStringInvalid,
               requestedRange.location >= 0,
@@ -242,6 +250,12 @@ final class LineController: @unchecked Sendable {
         let expectedLength = attributedString.length + (text as NSString).length - utf16RangeInLine.length
         guard expectedLength == line.data.totalLength else {
             return false
+        }
+        if let adoptedAttributes, adoptedAttributes.string == text {
+            attributedString.replaceCharacters(in: utf16RangeInLine, with: adoptedAttributes)
+            isTypesetterInvalid = true
+            colorsStale = true
+            return true
         }
         // Text typed into a scaled run (a markdown heading) keeps its size: at the body size the
         // line shrinks on every keystroke and grows back when the highlight lands, which moves the
@@ -265,8 +279,47 @@ final class LineController: @unchecked Sendable {
         }
         if wasHeading {
             applyPredictedHeadingFont(to: attributedString)
+        } else if predictsATXHeadings,
+                  let level = Self.headingLevel(ofMarkerIn: attributedString.string as NSString),
+                  utf16RangeInLine.location <= level {
+            // The edit touched the `#`s or the space after them: this line may have just become a
+            // title (a `# ` typed in front of text, or a title copied or moved here). An edit past
+            // the marker never gets here, so typing in a `# comment` inside a code fence does not
+            // change size on every keystroke.
+            applyNewHeadingStyle(level: level, to: attributedString)
         }
         isTypesetterInvalid = true
+        colorsStale = true
+        return true
+    }
+
+    /// The attributes this line shows for its current text, for a line that is about to take its
+    /// place. `nil` when they do not describe the text on screen or carry inlay hint widening.
+    var attributesForMovedLine: NSAttributedString? {
+        guard let attributedString, !isStringInvalid, hintKernedRanges.isEmpty else {
+            return nil
+        }
+        return NSAttributedString(attributedString: attributedString)
+    }
+
+    /// Takes the attributes of the line that used to hold this line's text, for a new line created
+    /// by an insert at the start of that line. Returns `false` unless `source` is exactly this
+    /// line's text, so a wrong guess about which line moved cannot show wrong text.
+    @discardableResult
+    func adoptAttributes(from source: NSAttributedString) -> Bool {
+        guard isStringInvalid,
+              source.length == line.data.totalLength,
+              stringView.substring(in: NSRange(location: line.location, length: line.data.totalLength)) == source.string else {
+            return false
+        }
+        attributedString = NSMutableAttributedString(attributedString: source)
+        hintKernedRanges = []
+        isStringInvalid = false
+        isDefaultAttributesInvalid = false
+        isSyntaxHighlightingInvalid = false
+        isTypesetterInvalid = true
+        attributesAreDefaults = false
+        // The colors are the old line's: the parse that follows the edit replaces them.
         colorsStale = true
         return true
     }
@@ -293,14 +346,34 @@ final class LineController: @unchecked Sendable {
     /// authoritative: a wrong guess is replaced by its result like any other shifted color.
     private func applyPredictedHeadingFont(to attributedString: NSMutableAttributedString) {
         let string = attributedString.string as NSString
+        let level = Self.headingLevel(ofMarkerIn: string)
+        let font = level.flatMap { theme.font(for: Self.headingHighlightNames[$0 - 1]) } ?? theme.font
+        attributedString.addAttribute(.font, value: font, range: NSRange(location: 0, length: string.length))
+    }
+
+    /// A line that was not a heading starts like one: give it the heading font and color the parse
+    /// is expected to. The parse stays authoritative.
+    private func applyNewHeadingStyle(level: Int, to attributedString: NSMutableAttributedString) {
+        let name = Self.headingHighlightNames[level - 1]
+        let range = NSRange(location: 0, length: attributedString.length)
+        if let font = theme.font(for: name) {
+            attributedString.addAttribute(.font, value: font, range: range)
+        }
+        if let color = theme.textColor(for: name) {
+            attributedString.addAttribute(.foregroundColor, value: color, range: range)
+        }
+    }
+
+    /// The level (1...6) of the ATX heading marker a line starts with: one to six `#`s followed by
+    /// a space, a tab or the end of the line.
+    private static func headingLevel(ofMarkerIn string: NSString) -> Int? {
         var hashes = 0
         while hashes < string.length, string.character(at: hashes) == 0x23 /* # */ {
             hashes += 1
         }
         let isMarker = hashes >= 1 && hashes <= 6
             && (hashes == string.length || [0x20, 0x09, 0x0A, 0x0D].contains(string.character(at: hashes)))
-        let font = (isMarker ? theme.font(for: Self.headingHighlightNames[hashes - 1]) : nil) ?? theme.font
-        attributedString.addAttribute(.font, value: font, range: NSRange(location: 0, length: string.length))
+        return isMarker ? hashes : nil
     }
 
     func markColorsStale() {
