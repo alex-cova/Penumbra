@@ -3554,27 +3554,38 @@ extension TextInputView {
         // nothing would replace them.
         let parseIsPending = languageMode is TreeSitterInternalLanguageMode && !languageMode.isSyntaxTreeReady
         let newLength = (lastReplaceNewString as NSString).length
+        // Enter splits the line: the first half stays this line, the rest moves to an inserted one.
+        let isSplit = lineChangeSet.removedLines.isEmpty
+            && !lineChangeSet.insertedLines.isEmpty
+            && Self.containsLineBreak(lastReplaceNewString)
+        // A split reports both halves as edited; the first one is the line the edit started in.
+        let shiftedLine = isSplit
+            ? lineChangeSet.editedLines.min { $0.location < $1.location }
+            : lineChangeSet.editedLines.first
         if parseIsPending,
-           editedLineIDs.count == 1,
-           lineChangeSet.insertedLines.isEmpty,
+           editedLineIDs.count == 1 || isSplit,
+           lineChangeSet.insertedLines.isEmpty || isSplit,
            lineChangeSet.removedLines.count <= 1,
            !(lineChangeSet.removedLines.count == 1 && Self.containsLineBreak(lastReplaceNewString)),
-           let line = lineChangeSet.editedLines.first {
+           let line = shiftedLine {
             let lineRange = NSRange(location: line.location, length: line.data.length)
             let totalRange = NSRange(location: line.location, length: line.data.totalLength)
             // `lineRange` is the line after the edit, so the replacement must end inside it; the
-            // replaced range itself may reach past it (deleting the line's last character).
+            // replaced range itself may reach past it (deleting the line's last character). A split
+            // only has to start inside it.
+            let replacementReach = isSplit ? 0 : newLength
             if lastReplaceEditRange.location >= lineRange.location,
-               lastReplaceEditRange.location + newLength <= lineRange.upperBound {
+               lastReplaceEditRange.location + replacementReach <= lineRange.upperBound {
                 let localLocation = lastReplaceEditRange.location - lineRange.location
-                if lineChangeSet.removedLines.isEmpty {
+                if lineChangeSet.removedLines.isEmpty && !isSplit {
                     colorShift = (NSRange(location: localLocation, length: lastReplaceEditRange.length),
                                   lastReplaceNewString)
                 } else if let tail = stringView.substring(in: NSRange(
                     location: lastReplaceEditRange.location,
                     length: totalRange.upperBound - lastReplaceEditRange.location
                 )) {
-                    // A join: the text after the edit came from the removed line.
+                    // A join or a split: everything after the edit start is new text (from the
+                    // removed line, or just the delimiter), and the head keeps its attributes.
                     colorShift = (NSRange(location: localLocation, length: LineController.toEnd), tail)
                 } else {
                     colorShift = nil
@@ -3586,7 +3597,8 @@ extension TextInputView {
             colorShift = nil
         }
         let contentSizeBeforeEdit = contentSize
-        let heightChanged = layoutManager.redisplayLines(withIDs: editedLineIDs, colorShift: colorShift)
+        let heightChanged = layoutManager.redisplayLines(withIDs: editedLineIDs, colorShift: colorShift,
+                                                         colorShiftLineID: shiftedLine?.id)
         if contentSize != contentSizeBeforeEdit {
             delegate?.textInputViewDidInvalidateContentSize(self)
         }

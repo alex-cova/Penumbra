@@ -408,4 +408,38 @@ final class TextViewFocusModeTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(minimumAlpha, unfocusedAlpha - 0.01,
                                     "an unfocused line was dimmed below the unfocused alpha while its highlight was pending")
     }
+
+    /// Enter splits the heading line in two. The line used to be rebuilt at the body size until the
+    /// parse landed, so the lines below it moved up and back on every Enter in a title.
+    func testEnterInHeadingKeepsTheLinesBelowStable() throws {
+        let doc = "# Title\n\nIntro paragraph here.\n\n## First section heading\nTight paragraph below it.\n\nNext paragraph.\n"
+        let palette = ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: true)
+        for (name, after) in [("end of the title", "## First section heading"), ("middle of the title", "## First sect")] {
+            let textView = makeFocusedTextView(text: "")
+            textView.setState(TextViewState(text: doc,
+                                            theme: PaletteTheme(palette: palette, postscriptName: nil),
+                                            language: .markdown,
+                                            languageProvider: MarkdownLanguageProvider(),
+                                            parsePolicy: .eager))
+            textView.layoutIfNeeded()
+            pumpMainRunLoop(for: 0.3)
+            textView.layoutIfNeeded()
+            try XCTSkipUnless(textView.isSyntaxTreeReady, "markdown tree not ready")
+            textView.isFocusModeEnabled = true
+            let anchor = (doc as NSString).range(of: after)
+            textView.selectedRange = NSRange(location: anchor.upperBound, length: 0)
+            textView.layoutIfNeeded()
+            pumpMainRunLoop(for: 0.1)
+
+            func belowY() -> CGFloat {
+                textView.caretRect(at: (textView.text as NSString).range(of: "Next paragraph").location).minY
+            }
+            textView.insertText("\n")
+            textView.layoutIfNeeded()
+            let immediate = belowY()
+            pumpMainRunLoop(for: 0.2)
+            textView.layoutIfNeeded()
+            XCTAssertEqual(immediate, belowY(), accuracy: 0.5, "Enter in the \(name): the lines below moved after the parse")
+        }
+    }
 }

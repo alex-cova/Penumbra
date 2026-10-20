@@ -753,14 +753,18 @@ final class LayoutManager {
     /// Returns whether any visible edited line changed height. A same-height edit does not need
     /// another viewport layout; the line was just typeset and upserted here.
     @discardableResult
-    func redisplayLines(withIDs lineIDs: Set<DocumentLineNodeID>, colorShift: (utf16RangeInLine: NSRange, text: String)? = nil) -> Bool {
+    /// `colorShiftLineID` names the line the shift applies to when several lines were edited (a split);
+    /// without it the shift applies only to a single edited line.
+    func redisplayLines(withIDs lineIDs: Set<DocumentLineNodeID>,
+                        colorShift: (utf16RangeInLine: NSRange, text: String)? = nil,
+                        colorShiftLineID: DocumentLineNodeID? = nil) -> Bool {
         recentlyEditedLineIDs.formUnion(lineIDs)
         var heightChanged = false
         for lineID in lineIDs {
             if let lineController = lineControllerStorage[lineID] {
                 let oldHeight = lineController.lineHeight
                 let usedColorShift: Bool
-                if let colorShift, lineIDs.count == 1 {
+                if let colorShift, lineIDs.count == 1 || colorShiftLineID == lineID {
                     usedColorShift = lineController.applyColorShift(
                         replacing: colorShift.utf16RangeInLine,
                         with: colorShift.text
