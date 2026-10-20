@@ -16,12 +16,15 @@
 (atx_heading (atx_h5_marker)) @markup.heading.5
 (atx_heading (atx_h6_marker)) @markup.heading.6
 
+; Setext headings are deliberately not levelled: they keep the heading colour and weight, but a
+; theme must not scale them. Typing a line right above a `---` (no blank line) turns it into one,
+; and a line that jumps to a title size while it is being typed is jarring.
 (setext_heading
-  (paragraph) @markup.heading.1
+  (paragraph) @markup.heading
   (setext_h1_underline))
 
 (setext_heading
-  (paragraph) @markup.heading.2
+  (paragraph) @markup.heading
   (setext_h2_underline))
 
 [

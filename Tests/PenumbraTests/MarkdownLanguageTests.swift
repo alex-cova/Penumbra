@@ -207,10 +207,34 @@ final class MarkdownLanguageTests: XCTestCase {
         }
     }
 
-    func testSetextHeadingLevelsAreCaptured() {
+    func testSetextHeadingsAreCapturedWithoutALevel() {
         let names = captureNames(in: "Title\n=====\n\nSubtitle\n--------\n")
-        XCTAssertTrue(names.contains("markup.heading.1"), "\(names)")
-        XCTAssertTrue(names.contains("markup.heading.2"), "\(names)")
+        XCTAssertTrue(names.contains("markup.heading"), "\(names)")
+        XCTAssertFalse(names.contains("markup.heading.1"), "setext headings must not be scaled: \(names)")
+        XCTAssertFalse(names.contains("markup.heading.2"), "setext headings must not be scaled: \(names)")
+    }
+
+    // A line typed right above a `---` becomes a setext heading. It keeps the heading colour and
+    // weight, but not a title size.
+    func testSetextHeadingKeepsTheBodyFontSize() throws {
+        let text = "intro line\njjjj\n---\n"
+        let theme = PaletteTheme(size: 13, palette: ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: true),
+                                 postscriptName: "Menlo-Regular")
+        let languageMode = makeMarkdownLanguageMode(text: text, languageProvider: MarkdownLanguageProvider())
+        let highlighter = languageMode.createLineSyntaxHighlighter()
+        highlighter.theme = theme
+
+        let line = "jjjj\n"
+        let attributed = NSMutableAttributedString(string: line, attributes: [.font: theme.font, .foregroundColor: theme.textColor])
+        let start = ("intro line\n" as NSString).byteCount
+        highlighter.syntaxHighlight(LineSyntaxHighlighterInput(
+            attributedString: attributed,
+            byteRange: ByteRange(from: start, to: start + (line as NSString).byteCount)
+        ))
+        let font = try XCTUnwrap(attributed.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertEqual(font.pointSize, theme.font.pointSize, "a setext heading must not be scaled")
+        XCTAssertNotEqual(attributed.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, theme.textColor,
+                          "it is still coloured as a heading")
     }
 
     func testHeadingCaptureCoversTheMarker() {
