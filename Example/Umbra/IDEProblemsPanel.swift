@@ -91,7 +91,11 @@ struct IDEProblemsPanel: View {
                                         row: row,
                                         onOpen: { workspace.openProblem(row) },
                                         onFix: { workspace.fixProblemWithAgent(row) },
-                                        onQuickFixes: row.diagnostic.source == IDEProblemsStore.inspectionSource ? { showQuickFixes(for: row) } : nil
+                                        onQuickFixes: row.diagnostic.source == IDEProblemsStore.inspectionSource ? { showQuickFixes(for: row) } : nil,
+                                        rule: inspectionRule(for: row),
+                                        onDisableRule: { workspace.disableInspection($0) },
+                                        onQuietRule: { rule in workspace.inspections.edit { $0.setSeverity(.noHighlighting, for: rule) } },
+                                        onConfigureRule: { workspace.showInspectionSettings(for: $0) }
                                     )
                                 }
                             }
@@ -102,6 +106,12 @@ struct IDEProblemsPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// The inspection behind a row, nil for compiler, editor and tool diagnostics.
+    private func inspectionRule(for row: ProblemRow) -> JavaInspectionRule? {
+        guard row.diagnostic.source == IDEProblemsStore.inspectionSource else { return nil }
+        return row.diagnostic.code.flatMap { JavaInspectionRule(code: $0) }
     }
 
     private func showQuickFixes(for row: ProblemRow) {
@@ -218,6 +228,10 @@ private struct IDEProblemRowView: View {
     let onOpen: () -> Void
     let onFix: () -> Void
     var onQuickFixes: (() -> Void)?
+    var rule: JavaInspectionRule?
+    var onDisableRule: ((JavaInspectionRule) -> Void)?
+    var onQuietRule: ((JavaInspectionRule) -> Void)?
+    var onConfigureRule: ((JavaInspectionRule) -> Void)?
 
     @State private var isHovering = false
 
@@ -271,6 +285,12 @@ private struct IDEProblemRowView: View {
         .contextMenu {
             if let onQuickFixes { Button("Show Quick Fixes…", action: onQuickFixes) }
             Button("Fix with Agent", systemImage: "sparkles", action: onFix)
+            if let rule {
+                Divider()
+                Button("Disable Inspection \u{201C}\(rule.title)\u{201D}") { onDisableRule?(rule) }
+                Button("Turn Off Highlighting (Keep Fix)") { onQuietRule?(rule) }
+                Button("Edit Inspection Settings…") { onConfigureRule?(rule) }
+            }
         }
         .accessibilityLabel("\(IDEProblemStyle.label(for: row.diagnostic.severity)) at line \(row.diagnostic.range.start.line + 1): \(row.diagnostic.message)")
     }
