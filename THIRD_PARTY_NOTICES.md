@@ -3,16 +3,16 @@
 Penumbra itself is licensed under the Apache License 2.0 (see [LICENSE](LICENSE)); it is a macOS port of
 [simonbs/Runestone](https://github.com/simonbs/Runestone).
 
-## Vendored markdown preview dependencies
+## Markdown preview dependencies
 
-The markdown preview (`MarkdownPreviewController`) embeds vendored sources under `Vendor/`.
-These are compiled as local SPM path targets, not fetched from GitHub at build time.
+The markdown preview (`MarkdownPreviewController`) renders Mermaid diagrams through Luna,
+a first-party package under `Packages/Luna/` (Apache 2.0, see `Packages/Luna/LICENSE`).
+It is compiled as a local SPM path target, not fetched from GitHub at build time.
 
-| Component | Source | License |
-| --- | --- | --- |
-| Luna | [lukilabs/beautiful-mermaid-swift](https://github.com/lukilabs/beautiful-mermaid-swift) | MIT (see `Vendor/Luna/LICENSE`) |
-
-Luna's graph layout (`Sources/Luna/Mermaid/src_luna_layout.swift`) is Luna-owned.
+Luna's graph layout (`Sources/Luna/Mermaid/src_luna_layout.swift`, engine in
+`Sources/Luna/Layout/`) ports the layered, compound and lane layouts, the
+preprocessing and the YAML subset from [obsidianmd/pele](https://github.com/obsidianmd/pele)
+(MIT, Copyright (c) 2026 kepano), commit `8603bf3313ad`; see `Packages/Luna/NOTICE`.
 The former ElkSwift (Eclipse Public License 2.0) dependency has been removed.
 
 Textual, ConcurrencyExtras, and SwiftUIMath are also vendored under `Vendor/` for future use;

@@ -1,5 +1,5 @@
 {
-  "originHash" : "c6e57ca756c0462745817b1337dfd666d201f61b2f80e3b1ab1524be7bc290a8",
+  "originHash" : "a9611d8c59b472b8d1c74ff746bc533f1e7e958ab9c8b3433ca278c9f58a14f1",
   "pins" : [
     {
       "identity" : "async-kit",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/alex-cova/DiagramKit",
       "state" : {
-        "revision" : "6a7771ae42d7b31386b9a937570590cd0d9e36e2",
-        "version" : "1.0.0"
+        "revision" : "9bc15c55eb77650c178c51e55721242a23e04243",
+        "version" : "1.1.0"
       }
     },
     {

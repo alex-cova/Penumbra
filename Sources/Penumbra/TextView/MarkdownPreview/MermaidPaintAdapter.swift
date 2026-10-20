@@ -22,20 +22,28 @@ enum MermaidPaintAdapter {
     static func diagramTheme(from context: MarkdownPreviewStyle.MermaidRenderingContext) -> DiagramTheme {
         let background = context.backgroundRGBA
         let foreground = context.foregroundRGBA
-        return DiagramTheme(
-            background: BMColor(
-                red: background.red,
-                green: background.green,
-                blue: background.blue,
-                alpha: background.alpha
-            ),
-            foreground: BMColor(
-                red: foreground.red,
-                green: foreground.green,
-                blue: foreground.blue,
-                alpha: foreground.alpha
-            )
+        let backgroundColor = BMColor(
+            red: background.red,
+            green: background.green,
+            blue: background.blue,
+            alpha: background.alpha
         )
+        let foregroundColor = BMColor(
+            red: foreground.red,
+            green: foreground.green,
+            blue: foreground.blue,
+            alpha: foreground.alpha
+        )
+        // Seed from a full scheme so edge/series colors come from real roles:
+        // with only bg/fg the accent falls back to the foreground, and in dark
+        // mode the series hue rotation around near-white produces
+        // white/salmon/red instead of the scheme's family.
+        let brightness =
+            0.299 * background.red + 0.587 * background.green + 0.114 * background.blue
+        var theme = brightness < 0.5 ? DiagramTheme.umbra : DiagramTheme.zincLight
+        theme.background = backgroundColor
+        theme.foreground = foregroundColor
+        return theme
     }
 
     /// Lays out and rasterizes a mermaid diagram off the main actor.

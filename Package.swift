@@ -54,7 +54,7 @@ let package = Package(
         .package(url: "https://github.com/ChimeHQ/JSONRPC", from: "0.9.0"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0"),
         .package(url: "https://github.com/alex-cova/sunflower", from: "1.0.0"),
-        .package(url: "https://github.com/alex-cova/DiagramKit", from: "1.0.0"),
+        .package(url: "https://github.com/alex-cova/DiagramKit", from: "1.1.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
         .package(url: "https://github.com/apple/xcode-project-format", from: "0.1.0")
     ],
@@ -79,7 +79,7 @@ let package = Package(
         ),
         .target(
             name: "PenumbraLuna",
-            path: "Vendor/Luna/Sources/Luna",
+            path: "Packages/Luna/Sources/Luna",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(name: "EditorIntelligence", dependencies: [], exclude: ["CLAUDE.md"], swiftSettings: swift6),
@@ -536,6 +536,6 @@ let package = Package(
             .product(name: "LocalModelStore", package: "AgentKitMLX"),
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol"),
             .product(name: "DatabaseKit", package: "DatabaseKit")
-        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus"), .copy("Fixtures/JavaCommandCorpus")], swiftSettings: swift6)
+        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus"), .copy("Fixtures/JavaCommandCorpus"), .copy("MermaidCorpus")], swiftSettings: swift6)
     ]
 )

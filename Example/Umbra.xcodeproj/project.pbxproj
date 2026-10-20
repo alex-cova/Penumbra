@@ -506,7 +506,7 @@
 			repositoryURL = "https://github.com/alex-cova/DiagramKit";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.0;
+				minimumVersion = 1.1.0;
 			};
 		};
 		000000000000000000000091 /* XCRemoteSwiftPackageReference "xcode-project-format" */ = {

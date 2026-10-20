@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/alex-cova/DiagramKit",
       "state" : {
-        "revision" : "6a7771ae42d7b31386b9a937570590cd0d9e36e2",
-        "version" : "1.0.0"
+        "revision" : "9bc15c55eb77650c178c51e55721242a23e04243",
+        "version" : "1.1.0"
       }
     },
     {

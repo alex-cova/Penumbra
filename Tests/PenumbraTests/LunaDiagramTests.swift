@@ -126,10 +126,10 @@ final class LunaDiagramTests: XCTestCase {
                 Task two
         """),
         (.usecase, """
-        usecase
+        usecase-beta
             actor User
-            (Login)
-            User --> (Login)
+            Login("Sign in")
+            User --> Login
         """),
         (.treeView, """
         treeView
@@ -166,8 +166,8 @@ final class LunaDiagramTests: XCTestCase {
             Stored
         """),
         (.railroad, """
-        railroad
-            identifier equals number
+        railroad-ebnf-beta
+            assign = name "=" number ;
         """),
         (.agentflow, """
         agentflow-beta
@@ -933,6 +933,1214 @@ final class LunaDiagramTests: XCTestCase {
         XCTAssertTrue(ys.contains { $0 > meanY })
     }
 
+    // MARK: - Requirement / C4 / Sankey / Ishikawa / Event modeling regressions
+
+    private func extraSceneTexts(_ scene: ExtraScene) -> [(String, Double, Double, Double, ExtraAnchor, Int)] {
+        scene.items.compactMap { item in
+            if case let .text(text, x, y, size, _, anchor, weight) = item {
+                return (text, x, y, size, anchor, weight)
+            }
+            return nil
+        }
+    }
+
+    private func assertTextsDoNotOverlap(
+        _ scene: ExtraScene,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let frames = extraSceneTexts(scene).map { entry -> (String, CGRect) in
+            let (text, x, y, size, anchor, weight) = entry
+            let w = ExtraText.width(text, size: size, weight: weight)
+            let x0: Double
+            switch anchor {
+            case .start: x0 = x
+            case .middle: x0 = x - w / 2
+            case .end: x0 = x
+            }
+            return (text, CGRect(x: x0 - 1, y: y - size / 2 - 1, width: w + 2, height: size + 2))
+        }
+        for i in frames.indices {
+            for j in frames.indices where j > i {
+                XCTAssertFalse(
+                    frames[i].1.intersects(frames[j].1),
+                    "'\(frames[i].0)' overlaps '\(frames[j].0)'",
+                    file: file, line: line
+                )
+            }
+        }
+    }
+
+    private func assertRectsDoNotOverlap(
+        _ scene: ExtraScene,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let rects = scene.items.compactMap { item -> CGRect? in
+            if case let .rect(x, y, width, height, _, _, _, _) = item {
+                return CGRect(x: x, y: y, width: width, height: height)
+            }
+            return nil
+        }
+        for i in rects.indices {
+            for j in rects.indices where j > i {
+                XCTAssertFalse(rects[i].intersects(rects[j]), "boxes overlap", file: file, line: line)
+            }
+        }
+    }
+
+    func testRequirementDocExampleLaysOutSideBySide() throws {
+        let source = """
+        requirementDiagram
+            requirement test_req {
+            id: 1
+            text: the test text.
+            risk: high
+            verifymethod: test
+            }
+            element test_entity {
+            type: simulation
+            }
+            test_entity - satisfies -> test_req
+        """
+        let graph = try MermaidRenderer.parse(source)
+        XCTAssertEqual(graph.type, .requirement)
+        guard let extra = graph.payload as? ExtraParsed, case .requirement(let chart) = extra else {
+            XCTFail("Expected requirement payload")
+            return
+        }
+        XCTAssertEqual(chart.boxes.count, 2)
+        XCTAssertEqual(chart.edges.count, 1)
+        XCTAssertEqual(chart.edges[0].label, "satisfies")
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        assertRectsDoNotOverlap(scene)
+        assertTextsDoNotOverlap(scene)
+        // Same-row edge drops into the lane below the row (two verticals plus
+        // one horizontal run) instead of crossing the narrow gap, and the
+        // label sits on the bottom run clear of both boxes' borders.
+        let lines = scene.items.compactMap { item -> (Double, Double, Double, Double)? in
+            if case let .line(x1, y1, x2, y2, _, _, _) = item { return (x1, y1, x2, y2) }
+            return nil
+        }
+        XCTAssertEqual(lines.count, 3)
+        let horizontals = lines.filter { abs($0.1 - $0.3) < 1 }
+        XCTAssertEqual(horizontals.count, 1)
+        let boxes = scene.items.compactMap { item -> CGRect? in
+            if case let .rect(x, y, width, height, _, _, _, _) = item {
+                return CGRect(x: x, y: y, width: width, height: height)
+            }
+            return nil
+        }
+        XCTAssertEqual(boxes.count, 2)
+        let labelFrame: CGRect = {
+            let entry = extraSceneTexts(scene).first { $0.0 == "satisfies" }
+            XCTAssertNotNil(entry, "Expected the 'satisfies' edge label")
+            let w = ExtraText.width("satisfies", size: 10, weight: 400)
+            return CGRect(x: entry!.1 - w / 2 - 1, y: entry!.2 - 6, width: w + 2, height: 12)
+        }()
+        XCTAssertGreaterThan(labelFrame.minY, boxes.map(\.maxY).max() ?? 0)
+        for box in boxes {
+            XCTAssertFalse(box.intersects(labelFrame), "Edge label overlaps a box border")
+        }
+    }
+
+    func testRequirementDetailTextIsNotAnEdge() throws {
+        let source = """
+        requirementDiagram
+            requirement test_req {
+            id: 1
+            text: the test text contains details and satisfies nothing
+            }
+            element test_entity {
+            type: simulation
+            }
+            test_entity - satisfies -> test_req
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .requirement(let chart) = extra else {
+            XCTFail("Expected requirement payload")
+            return
+        }
+        XCTAssertEqual(chart.boxes.count, 2)
+        XCTAssertEqual(chart.edges.count, 1)
+        XCTAssertEqual(chart.edges[0].label, "satisfies")
+        XCTAssertEqual(chart.boxes[0].detail, "the test text contains details and satisfies nothing")
+    }
+
+    func testC4DocExampleWrapsDetailsInsideBoxes() throws {
+        let source = """
+        C4Context
+              title System Context diagram for Internet Banking System
+              Person(customerA, "Banking Customer A", "A customer of the bank, with personal bank accounts.")
+              System(SystemAA, "Internet Banking System", "Allows customers to view information about their bank accounts, and make payments.")
+              Rel(customerA, SystemAA, "Uses")
+        """
+        let graph = try MermaidRenderer.parse(source)
+        XCTAssertEqual(graph.type, .c4)
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        assertRectsDoNotOverlap(scene)
+        assertTextsDoNotOverlap(scene)
+        // The long descriptions wrap: no in-box line is wider than the box.
+        for (text, _, _, size, _, weight) in extraSceneTexts(scene) where size <= 12 {
+            XCTAssertLessThanOrEqual(
+                ExtraText.width(text, size: size, weight: weight), 170,
+                "'\(text)' overflows its box"
+            )
+        }
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        XCTAssertTrue(texts.contains("Uses"))
+        // Style directives never become edges or labels.
+        let updateSource = """
+        C4Context
+              title T
+              Person(a, "A", "detail")
+              System(b, "B", "detail")
+              Rel(a, b, "Uses")
+              UpdateRelStyle(a, b, $offsetX="-40")
+              UpdateLayoutConfig($c4ShapeInRow="3")
+        """
+        let updateGraph = try MermaidRenderer.parse(updateSource)
+        guard let updateExtra = updateGraph.payload as? ExtraParsed, case .c4(let updateChart) = updateExtra else {
+            XCTFail("Expected c4 payload")
+            return
+        }
+        XCTAssertEqual(updateChart.edges.count, 1)
+        XCTAssertEqual(updateChart.edges[0].label, "Uses")
+        let updateTexts = extraSceneTexts(try MermaidRenderer.layout(updateSource).extraScene ?? .empty).map { $0.0 }
+        XCTAssertFalse(updateTexts.contains(where: { $0.contains("$") }))
+        // The Rel label routes below the row, clear of both boxes' borders.
+        let boxes = scene.items.compactMap { item -> CGRect? in
+            if case let .rect(x, y, width, height, _, _, _, _) = item {
+                return CGRect(x: x, y: y, width: width, height: height)
+            }
+            return nil
+        }
+        XCTAssertEqual(boxes.count, 2)
+        if let uses = extraSceneTexts(scene).first(where: { $0.0 == "Uses" }) {
+            let w = ExtraText.width("Uses", size: uses.3, weight: uses.5)
+            let frame = CGRect(x: uses.1 - w / 2 - 1, y: uses.2 - uses.3 / 2 - 1, width: w + 2, height: uses.3 + 2)
+            for box in boxes {
+                XCTAssertFalse(box.intersects(frame), "Rel label overlaps a box border")
+            }
+        } else {
+            XCTFail("Expected the 'Uses' rel label")
+        }
+    }
+
+    func testSankeyDocExampleNormalizesFlowWidths() throws {
+        let source = """
+        sankey
+            Bio-conversion,Liquid,0.597
+            Bio-conversion,Losses,26.862
+            Bio-conversion,Solid,280.322
+            Bio-conversion,Gas,81.144
+            Biofuel imports,Liquid,35
+            Biomass imports,Solid,35
+        """
+        let positioned = try MermaidRenderer.layout(source)
+        XCTAssertEqual(positioned.diagram.type, .sankey)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        // One closed ribbon per link, each scaled to the 400pt plot.
+        let ribbons = scene.items.compactMap { item -> [ExtraPoint]? in
+            if case let .polyline(points, _, _, _, closed) = item, closed { return points }
+            return nil
+        }
+        XCTAssertEqual(ribbons.count, 6)
+        let thicknesses = ribbons.map { ribbon in
+            ribbon.map(\.y).max()! - ribbon.map(\.y).min()!
+        }
+        XCTAssertTrue(thicknesses.allSatisfy { $0 <= 400 }, "raw values buried the plot: \(thicknesses)")
+        XCTAssertTrue(thicknesses.allSatisfy { $0 >= 1 })
+        // The 280.322 link dominates its fan-out: thickest ribbon overall.
+        XCTAssertEqual(thicknesses.max() ?? -1, thicknesses[2], accuracy: 0.5)
+        assertTextsDoNotOverlap(scene)
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        XCTAssertTrue(texts.contains("Bio-conversion 388.93"))
+        XCTAssertTrue(texts.contains("Solid 315.32"))
+    }
+
+    func testSankeyQuotedCommasAndMultistageLayers() throws {
+        let source = [
+            "sankey",
+            "    Pumped heat,\"Heating and cooling, homes\",193.026",
+            "    Pumped heat,\"Heating and cooling, \"\"commercial\"\"\",70.672",
+            "    Raw,Refined,100",
+            "    Refined,Shipped,80",
+            "    Shipped,Sold,60",
+        ].joined(separator: "\n")
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .sankey(let chart) = extra else {
+            XCTFail("Expected sankey payload")
+            return
+        }
+        let targets = chart.links.map(\.target)
+        XCTAssertTrue(targets.contains("Heating and cooling, homes"))
+        XCTAssertTrue(targets.contains("Heating and cooling, \"commercial\""))
+        XCTAssertFalse(targets.contains("\"Heating and cooling"))
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        // The Raw→Refined→Shipped→Sold chain takes four layers: every band
+        // runs left to right with nonzero length.
+        let ribbons = scene.items.compactMap { item -> [ExtraPoint]? in
+            if case let .polyline(points, _, _, _, closed) = item, closed { return points }
+            return nil
+        }
+        XCTAssertEqual(ribbons.count, 5)
+        for ribbon in ribbons {
+            let xs = ribbon.map(\.x)
+            XCTAssertGreaterThan(xs.max()! - xs.min()!, 10, "degenerate band stacked in one column")
+        }
+        assertTextsDoNotOverlap(scene)
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        XCTAssertTrue(texts.contains("Heating and cooling, homes 193.03"))
+    }
+
+    func testSankeyBandsStackWithoutOverlap() throws {
+        let source = """
+        sankey
+            Grid,Homes,113.726
+            Grid,Industry,342.165
+            Grid,Losses,56.691
+        """
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        // Bands leaving Grid occupy disjoint vertical intervals at the
+        // source bar: no two links share one line anymore.
+        let ribbons = scene.items.compactMap { item -> [ExtraPoint]? in
+            if case let .polyline(points, _, _, _, closed) = item, closed { return points }
+            return nil
+        }
+        XCTAssertEqual(ribbons.count, 3)
+        let leftX = ribbons.map { $0.map(\.x).min()! }.min()!
+        let intervals = ribbons.map { ribbon -> (Double, Double) in
+            let ys = ribbon.filter { abs($0.x - leftX) < 1 }.map(\.y)
+            return (ys.min()!, ys.max()!)
+        }.sorted { $0.0 < $1.0 }
+        for (first, second) in zip(intervals, intervals.dropFirst()) {
+            XCTAssertLessThanOrEqual(first.1, second.0 + 0.5, "bands overlap at the source bar")
+        }
+    }
+
+    func testRailroadEbnfDigitStacksAlternatives() throws {
+        let source = """
+        railroad-ebnf-beta
+        title "Digit Definition"
+        digit = "0" | "1" | "2" | "3" ;
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .railroad(let chart) = extra else {
+            XCTFail("Expected railroad payload")
+            return
+        }
+        XCTAssertEqual(chart.notation, "ebnf")
+        XCTAssertEqual(chart.title, "Digit Definition")
+        XCTAssertEqual(chart.rules.map(\.name), ["digit"])
+        if case .choice(let alts) = chart.rules[0].definition {
+            XCTAssertEqual(alts.count, 4)
+        } else {
+            XCTFail("Expected a choice of four terminals")
+        }
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        // The first alternative stays on the track; the rest stack below it,
+        // centered on it — Pele's own layout assertions.
+        let pills = scene.items.compactMap { item -> (Double, Double, Double, Double)? in
+            if case let .rect(x, y, width, height, _, _, corner, _) = item, corner > 10 {
+                return (x, y, width, height)
+            }
+            return nil
+        }
+        XCTAssertEqual(pills.count, 4)
+        let first = pills[0]
+        for pill in pills.dropFirst() {
+            XCTAssertGreaterThanOrEqual(pill.1, first.1 + first.3, "branch not stacked below")
+            XCTAssertEqual(pill.0 + pill.2 / 2, first.0 + first.2 / 2, accuracy: 0.5)
+        }
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        for digit in ["0", "1", "2", "3"] {
+            XCTAssertTrue(texts.contains(digit), "missing terminal \(digit)")
+        }
+        XCTAssertTrue(texts.contains("digit"))
+        XCTAssertTrue(texts.contains("Digit Definition"))
+    }
+
+    func testRailroadNotationsShareOneModel() throws {
+        let sources: [(String, String)] = [
+            ("railroad-beta", "expression = sequence(nonterminal(\"term\"), zeroOrMore(choice(terminal(\"+\"), terminal(\"-\")))) ;"),
+            ("railroad-ebnf-beta", "expression = term, { \"+\" | \"-\" } ;"),
+            ("railroad-abnf-beta", "expression = term *( \"+\" / \"-\" ) ;"),
+            ("railroad-peg-beta", "expression <- term ( \"+\" / \"-\" )* ;"),
+        ]
+        for (keyword, rule) in sources {
+            let graph = try MermaidRenderer.parse("\(keyword)\n\(rule)")
+            guard let extra = graph.payload as? ExtraParsed,
+                  case .railroad(let chart) = extra else {
+                XCTFail("Expected railroad payload for \(keyword)")
+                return
+            }
+            XCTAssertEqual(chart.rules.count, 1, keyword)
+            // A term followed by a loop of the two operators.
+            guard case .sequence(let parts) = chart.rules[0].definition,
+                  parts.count == 2,
+                  case .nonterminal(let name) = parts[0], name == "term",
+                  case .repetition(_, let min, let max) = parts[1],
+                  min == 0, max == nil else {
+                XCTFail("Unexpected shape for \(keyword)")
+                return
+            }
+            let positioned = try MermaidRenderer.layout("\(keyword)\n\(rule)")
+            guard let scene = positioned.extraScene else {
+                XCTFail("Expected extra scene for \(keyword)")
+                return
+            }
+            // The loop arrow and both operator pills render.
+            let arrows = scene.items.filter {
+                if case let .polyline(points, _, _, _, closed) = $0 {
+                    return closed && points.count == 3
+                }
+                return false
+            }
+            XCTAssertFalse(arrows.isEmpty, "missing loop arrow for \(keyword)")
+            let texts = extraSceneTexts(scene).map { $0.0 }
+            XCTAssertTrue(texts.contains("+"), "missing + for \(keyword)")
+            XCTAssertTrue(texts.contains("-"), "missing - for \(keyword)")
+        }
+    }
+
+    func testKanbanIdsMetadataAndWrapping() throws {
+        let source = """
+        kanban
+          todo[Todo]
+            id3[Update Database Function]@{ ticket: MC-2037, assigned: 'knsv', priority: 'High' }
+            docs[Create Blog about the new diagram]
+          Doing
+            id6[Create renderer so that it works in all cases. We also add some extra text here for testing purposes.]
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .kanban(let chart) = extra else {
+            XCTFail("Expected kanban payload")
+            return
+        }
+        XCTAssertEqual(chart.columns.map(\.name), ["Todo", "Doing"])
+        XCTAssertEqual(chart.columns[0].cards.map(\.id), ["id3", "docs"])
+        XCTAssertEqual(chart.columns[0].cards.map(\.label), ["Update Database Function", "Create Blog about the new diagram"])
+        XCTAssertEqual(chart.columns[0].cards[0].ticket, "MC-2037")
+        XCTAssertEqual(chart.columns[0].cards[0].assigned, "knsv")
+        XCTAssertEqual(chart.columns[0].cards[0].priority, "High")
+        XCTAssertNil(chart.columns[0].cards[1].ticket)
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        // Brackets and metadata stay out of the labels…
+        XCTAssertFalse(texts.contains(where: { $0.contains("[") || $0.contains("@{") }))
+        for name in ["Todo", "Doing", "Update Database Function", "MC-2037", "knsv", "2", "1"] {
+            XCTAssertTrue(texts.contains(name), "missing label \(name)")
+        }
+        // …the long card wraps inside its 200-wide column, and the High
+        // card carries a priority stripe.
+        let known = Set(["Todo", "Doing", "Update Database Function", "MC-2037", "knsv", "2", "1",
+                         "Create Blog about the new diagram"])
+        let longLines = texts.filter { !known.contains($0) && !$0.isEmpty }
+        XCTAssertGreaterThanOrEqual(longLines.count, 2)
+        XCTAssertTrue(longLines.allSatisfy {
+            ExtraText.width($0, size: 14) <= 170
+        }, "card overflows its column: \(longLines)")
+        let stripes = scene.items.filter {
+            if case let .line(_, _, _, _, stroke, width, _) = $0, width == 3 {
+                return stroke == .translucent(.accent)
+            }
+            return false
+        }
+        XCTAssertEqual(stripes.count, 1)
+        assertTextsDoNotOverlap(scene)
+    }
+
+    func testVennCirclesAreTranslucent() throws {
+        let source = """
+        venn
+          set A Cats
+          set B Dogs
+          A&B = Both
+        """
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let fills = scene.items.compactMap { item -> ExtraFill? in
+            if case let .ellipse(_, _, _, _, fill, _) = item { return fill }
+            return nil
+        }
+        XCTAssertEqual(fills.count, 2)
+        // Series color at low opacity, with a solid series edge — overlaps
+        // darken instead of covering.
+        XCTAssertEqual(fills[0], .translucent(.series(0)))
+        XCTAssertEqual(fills[1], .translucent(.series(1)))
+        let strokes = scene.items.compactMap { item -> ExtraFill? in
+            if case let .ellipse(_, _, _, _, _, stroke) = item { return stroke }
+            return nil
+        }
+        XCTAssertEqual(strokes, [.series(0), .series(1)])
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        XCTAssertTrue(texts.contains("Cats"))
+        XCTAssertTrue(texts.contains("Dogs"))
+    }
+
+    func testRailroadAbnfCountsAndPegPredicates() throws {
+        let abnf = try MermaidRenderer.parse("railroad-abnf-beta\nr = 2*4\"a\" 1*\"b\" *\"c\" ;")
+        guard let extra = abnf.payload as? ExtraParsed,
+              case .railroad(let chart) = extra,
+              case .sequence(let parts) = chart.rules[0].definition,
+              parts.count == 3,
+              case .repetition(_, let min1, let max1) = parts[0],
+              case .repetition(_, let min2, let max2) = parts[1],
+              case .repetition(_, let min3, let max3) = parts[2] else {
+            XCTFail("Unexpected ABNF shape")
+            return
+        }
+        XCTAssertEqual(min1, 2)
+        XCTAssertEqual(max1, 4)
+        XCTAssertEqual(min2, 1)
+        XCTAssertEqual(max2, nil)
+        XCTAssertEqual(min3, 0)
+        XCTAssertEqual(max3, nil)
+
+        let positioned = try MermaidRenderer.layout("railroad-abnf-beta\nr = 2*4\"a\" ;")
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        XCTAssertTrue(texts.contains("2–4×"), "missing count label: \(texts)")
+
+        let peg = try MermaidRenderer.parse("railroad-peg-beta\nr <- !keyword name ;")
+        guard let extra2 = peg.payload as? ExtraParsed,
+              case .railroad(let chart2) = extra2,
+              case .sequence(let seq) = chart2.rules[0].definition,
+              seq.count == 2,
+              case .special(let text) = seq[0] else {
+            XCTFail("Unexpected PEG shape")
+            return
+        }
+        XCTAssertEqual(text, "!keyword")
+    }
+
+    func testBlockSpansAndSpaces() throws {
+        let source = """
+        block
+          columns 3
+          a["A label"] b:2 c:2 d
+          ida space:3 idb idc
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .block(let chart) = extra else {
+            XCTFail("Expected block payload")
+            return
+        }
+        func spans(_ nodes: [BlockNode]) -> [String: Int] {
+            Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0.span) })
+        }
+        let top = spans(chart.root.children)
+        XCTAssertEqual(top["b"], 2)
+        XCTAssertEqual(top["c"], 2)
+        XCTAssertEqual(top["d"], 1)
+        XCTAssertEqual(chart.root.children.filter { $0.kind == "space" }.count, 3)
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        // Row 0 is `a b b`: the spanned block is ~two cells wide.
+        let widths = scene.items.compactMap { item -> Double? in
+            if case let .rect(_, _, width, _, _, _, _, false) = item { return width }
+            return nil
+        }
+        XCTAssertEqual(widths.count, 7)
+        XCTAssertGreaterThan(widths[1], widths[0] * 1.8, "span lost: \(widths)")
+        assertTextsDoNotOverlap(scene)
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        for name in ["A label", "b", "c", "d", "ida", "idb", "idc"] {
+            XCTAssertTrue(texts.contains(name), "missing label \(name)")
+        }
+    }
+
+    func testBlockCompositeAndEdges() throws {
+        let source = """
+        block
+        columns 1
+          db(("DB"))
+          block:ID
+            A
+            B["A wide one in the middle"]
+            C
+          end
+          space
+          D
+          ID --> D
+          C --> D
+          style B fill:#969,stroke:#333,stroke-width:4px
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .block(let chart) = extra else {
+            XCTFail("Expected block payload")
+            return
+        }
+        // No bogus blocks from keywords, style lines or gaps.
+        func allIDs(_ node: BlockNode) -> [String] {
+            [node.id] + node.children.flatMap(allIDs)
+        }
+        let ids = allIDs(chart.root)
+        for bogus in ["block", "end", "space", "style", "fill"] {
+            XCTAssertFalse(ids.contains(bogus), "bogus block \(bogus) in \(ids)")
+        }
+        XCTAssertEqual(chart.edges.map(\.start), ["ID", "C"])
+        XCTAssertEqual(chart.edges.map(\.end), ["D", "D"])
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        // The composite draws one dashed frame; both edges route to D.
+        let dashed = scene.items.filter {
+            if case let .rect(_, _, _, _, _, _, _, dashed) = $0 { return dashed }
+            return false
+        }
+        XCTAssertEqual(dashed.count, 1)
+        let lines = scene.items.compactMap { item -> (Double, Double, Double, Double)? in
+            if case let .line(x1, y1, x2, y2, _, _, _) = item { return (x1, y1, x2, y2) }
+            return nil
+        }
+        XCTAssertEqual(lines.count, 2)
+        assertTextsDoNotOverlap(scene)
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        for name in ["DB", "A", "A wide one in the middle", "C", "D"] {
+            XCTAssertTrue(texts.contains(name), "missing label \(name)")
+        }
+    }
+
+    func testBlockShapesLabelsAndEdgeLabels() throws {
+        let source = """
+        block
+          id1[("Database")]
+          id2>"plain box"]
+          down<[" "]>(down)
+          A space B
+          A -- "X" --> B
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .block(let chart) = extra else {
+            XCTFail("Expected block payload")
+            return
+        }
+        func byID(_ nodes: [BlockNode]) -> [String: BlockNode] {
+            Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        }
+        let nodes = byID(chart.root.children)
+        XCTAssertEqual(nodes["id1"]?.label, "Database")
+        XCTAssertEqual(nodes["id1"]?.shape, "cylinder")
+        XCTAssertEqual(nodes["id2"]?.shape, "rect_left_inv_arrow")
+        XCTAssertEqual(nodes["down"]?.shape, "block_arrow")
+        XCTAssertEqual(nodes["down"]?.directions, ["down"])
+        XCTAssertEqual(chart.edges.first?.label, "X")
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        for name in ["Database", "plain box", "A", "B", "X"] {
+            XCTAssertTrue(texts.contains(name), "missing label \(name)")
+        }
+        // The blank arrow block draws a direction glyph, not an empty box.
+        let glyphs = scene.items.filter {
+            if case let .polyline(points, _, _, _, closed) = $0 {
+                return closed && points.count == 3
+            }
+            return false
+        }
+        XCTAssertFalse(glyphs.isEmpty, "missing blockArrow direction glyph")
+    }
+
+    func testIshikawaDocExampleParsesEffectAndBones() throws {
+        let source = """
+        ishikawa-beta
+            Blurry Photo
+            Process
+                Out of focus
+                Shutter speed too slow
+                Protective film not removed
+            User
+                Shaky hands
+            Equipment
+                LENS
+                    Inappropriate lens
+                    Damaged lens
+                    Dirty lens
+            Environment
+                Subject moved too quickly
+                Too dark
+        """
+        let graph = try MermaidRenderer.parse(source)
+        XCTAssertEqual(graph.type, .ishikawa)
+        guard let extra = graph.payload as? ExtraParsed, case .ishikawa(let chart) = extra else {
+            XCTFail("Expected ishikawa payload")
+            return
+        }
+        XCTAssertEqual(chart.effect, "Blurry Photo")
+        XCTAssertEqual(chart.bones.map { $0.name }, ["Process", "User", "Equipment", "Environment"])
+        XCTAssertEqual(chart.bones[0].causes, ["Out of focus", "Shutter speed too slow", "Protective film not removed"])
+        XCTAssertEqual(chart.bones[1].causes, ["Shaky hands"])
+        XCTAssertTrue(chart.bones[2].causes.contains("Damaged lens"))
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        assertTextsDoNotOverlap(scene)
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        XCTAssertTrue(texts.contains("Blurry Photo"))
+        XCTAssertTrue(texts.contains("Too dark"))
+    }
+
+    func testEventModelingDocExampleGroupsSwimlanes() throws {
+        let source = """
+        eventmodeling
+        timeframe 01 ui CartUI
+        timeframe 02 command AddItem { description: string }
+        timeframe 03 event ItemAdded { description: string }
+        """
+        let graph = try MermaidRenderer.parse(source)
+        XCTAssertEqual(graph.type, .eventmodeling)
+        guard let extra = graph.payload as? ExtraParsed, case .eventmodeling(let chart) = extra else {
+            XCTFail("Expected eventmodeling payload")
+            return
+        }
+        XCTAssertEqual(chart.frames.map(\.name), ["CartUI", "AddItem", "ItemAdded"])
+        XCTAssertEqual(chart.frames.map(\.kind), ["UI", "Command", "Event"])
+        XCTAssertEqual(
+            chart.lanes.map(\.name),
+            ["UI / Automation", "Command / Read model", "Events"]
+        )
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        assertRectsDoNotOverlap(scene)
+        assertTextsDoNotOverlap(scene)
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        XCTAssertTrue(texts.contains("CartUI"))
+        XCTAssertFalse(texts.contains { $0.contains("timeframe") })
+    }
+
+    func testEventModelingSkipsDataBlocks() throws {
+        let source = """
+        eventmodeling
+        tf 01 ui CartUI
+        tf 02 cmd AddItem [[AddItem01]]
+        tf 03 evt ItemAdded [[ItemAdded]]
+
+        data AddItem01 {
+          description: 'john'
+        }
+        """
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        XCTAssertFalse(texts.contains { $0.contains("john") })
+        XCTAssertFalse(texts.contains { $0.contains("description") })
+    }
+
+    // MARK: - Architecture regressions
+
+    private func architectureRects(_ scene: ExtraScene) -> [CGRect] {
+        scene.items.compactMap { item in
+            if case let .rect(x, y, width, height, _, _, _, _) = item {
+                return CGRect(x: x, y: y, width: width, height: height)
+            }
+            return nil
+        }
+    }
+
+    func testArchitectureDocExampleNestsServicesInGroup() throws {
+        let source = """
+        architecture-beta
+            group api(cloud)[API]
+            service db(database)[Database] in api
+            service disk1(disk)[Storage] in api
+            service disk2(disk)[Storage] in api
+            service server(server)[Server] in api
+            db:L -- R:server
+            disk1:T -- B:server
+            disk2:T -- B:db
+        """
+        let graph = try MermaidRenderer.parse(source)
+        XCTAssertEqual(graph.type, .architecture)
+        guard let extra = graph.payload as? ExtraParsed, case .architecture(let chart) = extra else {
+            XCTFail("Expected architecture payload")
+            return
+        }
+        XCTAssertEqual(chart.groups.map { $0.id }, ["api"])
+        XCTAssertEqual(chart.groups[0].label, "API")
+        XCTAssertNil(chart.groups[0].group)
+        XCTAssertEqual(chart.services.map { $0.id }, ["db", "disk1", "disk2", "server"])
+        XCTAssertTrue(chart.services.allSatisfy { $0.group == "api" })
+        XCTAssertEqual(chart.edges.count, 3)
+        XCTAssertEqual(chart.edges[0].fromPort, "L")
+        XCTAssertEqual(chart.edges[0].toPort, "R")
+        XCTAssertFalse(chart.edges[0].endArrow)
+        XCTAssertTrue(chart.edges.allSatisfy { $0.label.isEmpty })
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        assertTextsDoNotOverlap(scene)
+        let rects = architectureRects(scene)
+        // One group box containing the four service boxes.
+        XCTAssertEqual(rects.count, 5)
+        let group = rects.max { $0.width * $0.height < $1.width * $1.height }!
+        for rect in rects where rect != group {
+            XCTAssertTrue(group.contains(rect), "service escapes its group")
+        }
+        for i in rects.indices {
+            for j in rects.indices where j > i {
+                let overlap = rects[i].intersection(rects[j])
+                // Only containment of members inside the group may intersect.
+                if overlap.width * overlap.height > 1 {
+                    XCTAssertTrue(rects[i].contains(rects[j]) || rects[j].contains(rects[i]))
+                }
+            }
+        }
+        // Three port edges, no arrowheads on plain `--` edges.
+        let open = scene.items.filter {
+            if case let .polyline(points, _, _, _, closed) = $0 { return !closed && points.count >= 2 }
+            return false
+        }
+        let closed = scene.items.filter {
+            if case .polyline(_, _, _, _, true) = $0 { return true }
+            return false
+        }
+        XCTAssertEqual(open.count, 3)
+        XCTAssertEqual(closed.count, 0)
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        XCTAssertTrue(texts.contains("API"))
+        XCTAssertTrue(texts.contains("Server"))
+        XCTAssertFalse(texts.contains { $0.contains(">") })
+    }
+
+    func testArchitecturePortEdgesRouteAroundServices() throws {
+        // Same-orientation ports (L→R, T→B) must leave along their side normal
+        // and travel around the endpoint boxes, not cut straight through them.
+        let source = """
+        architecture-beta
+            group api(cloud)[API]
+            service db(database)[Database] in api
+            service disk1(disk)[Storage] in api
+            service disk2(disk)[Storage] in api
+            service server(server)[Server] in api
+            db:L -- R:server
+            disk1:T -- B:server
+            disk2:T -- B:db
+        """
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let rects = architectureRects(scene)
+        let group = rects.max { $0.width * $0.height < $1.width * $1.height }!
+        let services = rects.filter { $0 != group }
+        XCTAssertEqual(services.count, 4)
+        let open = scene.items.compactMap { item -> [CGPoint]? in
+            if case let .polyline(points, _, _, _, closed) = item, !closed {
+                return points.map { CGPoint(x: $0.x, y: $0.y) }
+            }
+            return nil
+        }
+        XCTAssertEqual(open.count, 3)
+        for points in open {
+            XCTAssertGreaterThanOrEqual(points.count, 2)
+            for k in 0..<(points.count - 1) {
+                let mid = CGPoint(x: (points[k].x + points[k + 1].x) / 2,
+                                  y: (points[k].y + points[k + 1].y) / 2)
+                for box in services {
+                    XCTAssertFalse(box.insetBy(dx: 0.5, dy: 0.5).contains(mid),
+                                   "edge segment cuts through a service box")
+                }
+            }
+        }
+    }
+
+    func testRadarBetaDocsExampleRenders() throws {
+        let source = """
+        ---
+        title: "Grades"
+        ---
+        radar-beta
+          axis m["Math"], s["Science"], e["English"]
+          axis h["History"], g["Geography"], a["Art"]
+          curve a["Alice"]{85, 90, 80, 70, 75, 90}
+          curve b["Bob"]{70, 75, 85, 80, 90, 85}
+
+          max 100
+          min 0
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .radar(let chart) = extra else {
+            XCTFail("Expected radar payload")
+            return
+        }
+        XCTAssertEqual(chart.axes, ["Math", "Science", "English", "History", "Geography", "Art"])
+        XCTAssertEqual(chart.series.map(\.name), ["Alice", "Bob"])
+        XCTAssertEqual(chart.series[0].values, [85, 90, 80, 70, 75, 90])
+        XCTAssertEqual(chart.max, 100)
+        XCTAssertEqual(chart.min, 0)
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        // Both series draw closed data polygons.
+        let data = scene.items.compactMap { item -> [ExtraPoint]? in
+            if case let .polyline(points, _, stroke, _, closed) = item, closed, stroke != .muted {
+                return points
+            }
+            return nil
+        }
+        XCTAssertEqual(data.count, 2)
+        // Scaled by max 100: radii from the spoke center match value ratios exactly.
+        let spokes = scene.items.compactMap { item -> (Double, Double)? in
+            if case let .line(x1, y1, _, _, _, _, _) = item { return (x1, y1) }
+            return nil
+        }
+        XCTAssertFalse(spokes.isEmpty)
+        let (ccx, ccy) = spokes[0]
+        let alice = data[0].map { hypot($0.x - ccx, $0.y - ccy) }
+        XCTAssertEqual(alice[1] / alice[3], 90.0 / 70.0, accuracy: 0.01)
+        XCTAssertEqual(alice[0] / alice[3], 85.0 / 70.0, accuracy: 0.01)
+    }
+
+    func testTreeViewBoxDrawingParsesHierarchy() throws {
+        let source = """
+        treeView-beta
+        ├── src/
+        │   ├── index.ts
+        │   └── utils.ts
+        ├── package.json
+        └── README.md
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .treeView(let chart) = extra else {
+            XCTFail("Expected treeView payload")
+            return
+        }
+        // Directories lose their slash; nesting is a real tree.
+        XCTAssertEqual(chart.nodes.map(\.name), ["src", "package.json", "README.md"])
+        XCTAssertTrue(chart.nodes[0].isDirectory)
+        XCTAssertFalse(chart.nodes[1].isDirectory)
+        XCTAssertEqual(chart.nodes[0].children.map(\.name), ["index.ts", "utils.ts"])
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let labels = scene.items.compactMap { item -> String? in
+            if case let .text(text, _, _, _, _, _, _) = item { return text }
+            return nil
+        }
+        for name in ["src", "index.ts", "utils.ts", "package.json", "README.md"] {
+            XCTAssertTrue(labels.contains(name), "missing label \(name)")
+        }
+        // Guide rails route the hierarchy, and the directory row is bold.
+        XCTAssertTrue(scene.items.contains {
+            if case .line = $0 { return true }
+            return false
+        })
+        let bolds = scene.items.compactMap { item -> String? in
+            if case let .text(text, _, _, _, _, _, weight) = item, weight == 600 { return text }
+            return nil
+        }
+        XCTAssertTrue(bolds.contains("src"))
+    }
+
+    func testTreeViewAnnotationsIconsAndDescriptions() throws {
+        let source = """
+        treeView-beta
+          elegant/
+            App.tsx :::highlight icon(logos:react) ## main component
+            "quoted name" ## quoted
+            plain icon(none)
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .treeView(let chart) = extra else {
+            XCTFail("Expected treeView payload")
+            return
+        }
+        XCTAssertEqual(chart.nodes.map(\.name), ["elegant"])
+        XCTAssertTrue(chart.nodes[0].isDirectory)
+        let kids = chart.nodes[0].children
+        XCTAssertEqual(kids.map(\.name), ["App.tsx", "quoted name", "plain"])
+        XCTAssertEqual(kids[0].cssClass, "highlight")
+        XCTAssertEqual(kids[0].icon, "logos:react")
+        XCTAssertEqual(kids[0].description, "main component")
+        XCTAssertEqual(kids[1].description, "quoted")
+        XCTAssertEqual(kids[2].icon, "none")
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let texts = extraSceneTexts(scene).map { $0.0 }
+        // Annotation syntax stays out of the labels; the description renders.
+        XCTAssertFalse(texts.contains(where: { $0.contains(":::") || $0.contains("icon(") }))
+        for name in ["elegant", "App.tsx", "main component", "quoted name", "quoted", "plain"] {
+            XCTAssertTrue(texts.contains(name), "missing label \(name)")
+        }
+        // The highlight row carries a translucent wash.
+        XCTAssertTrue(scene.items.contains {
+            if case let .rect(_, _, _, _, fill, _, _, _) = $0, fill == .translucent(.accent) {
+                return true
+            }
+            return false
+        })
+        assertTextsDoNotOverlap(scene)
+    }
+
+    func testUseCaseBetaDocsExampleRenders() throws {
+        let source = """
+        usecase-beta
+        direction LR
+        actor Customer("Customer")
+        systemBoundary "Order system"
+          Checkout("Place order")
+        end
+        Customer --> Checkout
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .usecase(let chart) = extra else {
+            XCTFail("Expected usecase payload")
+            return
+        }
+        XCTAssertEqual(chart.actors.map(\.id), ["Customer"])
+        XCTAssertEqual(chart.actors.map(\.label), ["Customer"])
+        XCTAssertEqual(chart.cases.map(\.id), ["Checkout"])
+        XCTAssertEqual(chart.cases.map(\.label), ["Place order"])
+        XCTAssertEqual(chart.boundaries.map(\.label), ["Order system"])
+        XCTAssertEqual(chart.boundaries.first?.members, ["Checkout"])
+        XCTAssertEqual(chart.edges.count, 1)
+        XCTAssertEqual(chart.edges.first?.from, "Customer")
+        XCTAssertEqual(chart.edges.first?.to, "Checkout")
+        XCTAssertEqual(chart.edges.first?.kind, "association")
+        XCTAssertEqual(chart.edges.first?.endMarker, "arrow")
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let labels = scene.items.compactMap { item -> String? in
+            if case let .text(text, _, _, _, _, _, _) = item { return text }
+            return nil
+        }
+        for name in ["Customer", "Place order", "Order system"] {
+            XCTAssertTrue(labels.contains(name), "missing label \(name)")
+        }
+        // The edge runs from the actor column to the use-case column.
+        let lines = scene.items.compactMap { item -> (Double, Double, Double, Double)? in
+            if case let .line(x1, y1, x2, y2, _, _, _) = item { return (x1, y1, x2, y2) }
+            return nil
+        }
+        XCTAssertFalse(lines.isEmpty)
+        XCTAssertTrue(lines.contains { $0.0 < $0.2 }, "edge never leaves the actor column")
+    }
+
+    func testUseCaseBareIdsIncludeAndRects() throws {
+        let source = """
+        usecase-beta
+        Customer --> Login
+        actor Customer
+        actor Support
+        Login("Sign in")
+        Report[Generate report]
+        "Reset password"
+        Support --> Track
+        Checkout ..> : include Browse
+        """
+        let graph = try MermaidRenderer.parse(source)
+        guard let extra = graph.payload as? ExtraParsed, case .usecase(let chart) = extra else {
+            XCTFail("Expected usecase payload")
+            return
+        }
+        // Bare endpoints become use cases even when the edge precedes them.
+        let byID = Dictionary(uniqueKeysWithValues: chart.cases.map { ($0.id, $0) })
+        XCTAssertEqual(byID["Login"]?.label, "Sign in")
+        XCTAssertEqual(byID["Report"]?.label, "Generate report")
+        XCTAssertEqual(byID["Report"]?.shape, "rect")
+        XCTAssertEqual(byID["Reset_password"]?.label, "Reset password")
+        XCTAssertEqual(byID["Track"]?.label, "Track")
+        XCTAssertEqual(chart.actors.map(\.id), ["Customer", "Support"])
+        let kinds = Dictionary(uniqueKeysWithValues: chart.edges.map { ("\($0.from)->\($0.to)", $0.kind) })
+        XCTAssertEqual(kinds["Customer->Login"], "association")
+        XCTAssertEqual(kinds["Support->Track"], "association")
+        XCTAssertEqual(kinds["Checkout->Browse"], "include")
+        XCTAssertEqual(chart.edges.first { $0.kind == "include" }?.label, "include")
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let labels = scene.items.compactMap { item -> String? in
+            if case let .text(text, _, _, _, _, _, _) = item { return text }
+            return nil
+        }
+        for name in ["Customer", "Support", "Sign in", "Generate report", "Reset password", "include"] {
+            XCTAssertTrue(labels.contains(name), "missing label \(name)")
+        }
+        // The actor edges are routed to different use cases, not stacked on
+        // one hardcoded line. (Figure limbs are short; routed edges span the
+        // actor-to-case column gap.)
+        let edgeLines = scene.items.compactMap { item -> String? in
+            if case let .line(x1, y1, x2, y2, _, _, false) = item, x2 - x1 > 60 {
+                return "\(x1),\(y1),\(x2),\(y2)"
+            }
+            return nil
+        }
+        XCTAssertEqual(edgeLines.count, 2)
+        XCTAssertEqual(edgeLines.count, Set(edgeLines).count, "duplicate edge lines overlap exactly")
+    }
+
+    func testArchitectureArrowsJunctionsAndAlignRow() throws {
+        let source = """
+        architecture-beta
+            service left(disk)[Left]
+            service right(disk)[Right]
+            junction jc
+            left:R --> L:jc
+            jc:R --> L:right
+            align row left jc right
+        """
+        let graph = try MermaidRenderer.parse(source)
+        XCTAssertEqual(graph.type, .architecture)
+        guard let extra = graph.payload as? ExtraParsed, case .architecture(let chart) = extra else {
+            XCTFail("Expected architecture payload")
+            return
+        }
+        XCTAssertEqual(chart.services.count, 3)
+        XCTAssertEqual(chart.services.last?.shape, "junction")
+        XCTAssertEqual(chart.edges.count, 2)
+        XCTAssertTrue(chart.edges.allSatisfy { $0.endArrow && !$0.startArrow })
+        XCTAssertEqual(chart.alignments.count, 1)
+        XCTAssertEqual(chart.alignments[0].axis, "row")
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        assertTextsDoNotOverlap(scene)
+        // Junction renders as a circle, not a box.
+        let ellipses = scene.items.filter {
+            if case .ellipse = $0 { return true }
+            return false
+        }
+        XCTAssertEqual(ellipses.count, 1)
+        // Two arrowheads: closed triangles.
+        let heads = scene.items.filter {
+            if case let .polyline(points, _, _, _, closed) = $0 { return closed && points.count == 3 }
+            return false
+        }
+        XCTAssertEqual(heads.count, 2)
+        // Aligned row: node centers share one y.
+        let centers = architectureRects(scene).map { $0.midY }
+            + ellipses.compactMap { item -> Double? in
+                if case let .ellipse(_, y, _, height, _, _) = item { return y + height / 2 }
+                return nil
+            }
+        XCTAssertGreaterThanOrEqual(centers.count, 3)
+        XCTAssertLessThan(centers.max()! - centers.min()!, 2)
+    }
+
+    func testArchitectureGroupModifierEdgesTouchGroupBorders() throws {
+        let source = """
+        architecture-beta
+            group g1(cloud)[G1]
+            group g2(cloud)[G2]
+            service s1(server)[S1] in g1
+            service s2(server)[S2] in g2
+            s1{group}:R --> L:s2{group}
+        """
+        let graph = try MermaidRenderer.parse(source)
+        XCTAssertEqual(graph.type, .architecture)
+        guard let extra = graph.payload as? ExtraParsed, case .architecture(let chart) = extra else {
+            XCTFail("Expected architecture payload")
+            return
+        }
+        XCTAssertEqual(chart.edges.count, 1)
+        XCTAssertTrue(chart.edges[0].fromGroup)
+        XCTAssertTrue(chart.edges[0].toGroup)
+        XCTAssertTrue(chart.edges[0].endArrow)
+
+        let positioned = try MermaidRenderer.layout(source)
+        guard let scene = positioned.extraScene else {
+            XCTFail("Expected extra scene")
+            return
+        }
+        let rects = architectureRects(scene)
+        guard let edge = scene.items.first(where: {
+            if case let .polyline(points, _, _, _, closed) = $0 { return !closed && points.count >= 2 }
+            return false
+        }) else {
+            XCTFail("Expected group edge polyline")
+            return
+        }
+        guard case let .polyline(points, _, _, _, _) = edge else { return }
+        let start = points.first!
+        let end = points.last!
+        XCTAssertTrue(rects.contains { abs($0.maxX - start.x) < 1 && start.y >= $0.minY && start.y <= $0.maxY })
+        XCTAssertTrue(rects.contains { abs($0.minX - end.x) < 1 && end.y >= $0.minY && end.y <= $0.maxY })
+    }
+
     func testMindmapRadialAndTreeBothRasterize() async {
         let treeSource = """
         mindmap
@@ -959,5 +2167,33 @@ final class LunaDiagramTests: XCTestCase {
             XCTAssertNotNil(result.image, result.errorMessage ?? "missing image")
             XCTAssertNil(result.errorMessage)
         }
+    }
+
+    func testUmbraThemeMatchesArmadaPalette() throws {
+        // Armada Dark editor values from ThemeCatalog (Armada_Dark.icls).
+        let umbra = DiagramTheme.umbra
+        XCTAssertTrue(umbra.background.bmColorEquals(BMColor(hex: "#18191B")))
+        XCTAssertTrue(umbra.foreground.bmColorEquals(BMColor(hex: "#E0E1E4")))
+        XCTAssertTrue(umbra.effectiveAccent().bmColorEquals(BMColor(hex: "#82D2CE")))
+        XCTAssertTrue(umbra.effectiveMuted().bmColorEquals(BMColor(hex: "#909194")))
+        XCTAssertEqual(DiagramTheme.theme(named: "Umbra")?.background.bmColorEquals(umbra.background), true)
+        XCTAssertTrue(DiagramTheme.allThemes.contains { $0.name == "Umbra" })
+        // Umbra is the default mermaid scheme.
+        XCTAssertTrue(DiagramTheme.default.background.bmColorEquals(umbra.background))
+        XCTAssertTrue(DiagramTheme.default.foreground.bmColorEquals(umbra.foreground))
+        // The preview adapter seeds dark pages from Umbra so series colors stay
+        // in the teal family instead of rotating around near-white foreground.
+        typealias Context = MarkdownPreviewStyle.MermaidRenderingContext
+        let dark = Context(
+            backgroundRGBA: (0.09, 0.10, 0.11, 1), foregroundRGBA: (0.88, 0.88, 0.90, 1),
+            mermaidMaxDimension: 4096)
+        let darkTheme = MermaidPaintAdapter.diagramTheme(from: dark)
+        XCTAssertTrue(darkTheme.effectiveAccent().bmColorEquals(BMColor(hex: "#82D2CE")))
+        XCTAssertTrue(darkTheme.effectiveMuted().bmColorEquals(BMColor(hex: "#909194")))
+        let light = Context(
+            backgroundRGBA: (1, 1, 1, 1), foregroundRGBA: (0.1, 0.1, 0.1, 1),
+            mermaidMaxDimension: 4096)
+        let lightTheme = MermaidPaintAdapter.diagramTheme(from: light)
+        XCTAssertTrue(lightTheme.effectiveAccent().bmColorEquals(lightTheme.foreground))
     }
 }
