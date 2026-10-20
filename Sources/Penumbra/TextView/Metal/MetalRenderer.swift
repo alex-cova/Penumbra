@@ -519,7 +519,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             }
             if !spec.isSyntaxHighlightPending {
                 fragment.colorSamples = result.glyphs.map {
-                    GlyphColorSample(stringIndex: $0.stringIndex, color: $0.instance.color)
+                    GlyphColorSample(stringIndex: $0.stringIndex, color: $0.undimmedColor)
                 }
             }
         }

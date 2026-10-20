@@ -46,6 +46,9 @@ struct ExtractedGlyph {
     var isColor: Bool
     var matrixHash: UInt64
     var glyph: CGGlyph
+    /// `instance.color` before Focus Mode dimming. A pending re-extract carries this over
+    /// (`GlyphColorSample`); carrying the dimmed color would dim the glyph a second time.
+    var undimmedColor: SIMD4<Float>
 }
 
 struct GlyphExtractResult {
@@ -260,6 +263,8 @@ private extension GlyphRunExtractor {
         var position: CGPoint
         var stringIndex: Int
         var color: SIMD4<Float>
+        /// `color` before Focus Mode dimming.
+        var undimmedColor: SIMD4<Float>
         var band: Band
     }
 
@@ -455,6 +460,7 @@ private extension GlyphRunExtractor {
             if let previousColor = previousColor(at: stringIndex, request: request) {
                 color = previousColor
             }
+            let undimmedColor = color
             if request.unfocusedAlpha < 1, !isFocused(stringIndex, ranges: request.focusedRanges) {
                 color *= Float(request.unfocusedAlpha)
             }
@@ -463,6 +469,7 @@ private extension GlyphRunExtractor {
                 position: position,
                 stringIndex: stringIndex,
                 color: color,
+                undimmedColor: undimmedColor,
                 band: band
             ))
         }
@@ -533,9 +540,12 @@ private extension GlyphRunExtractor {
         let originX = request.fragmentFrame.minX + pending.position.x + CGFloat(slot.originX) / scale
         let originY = request.fragmentFrame.minY + requestBaselineY(request) - (CGFloat(slot.originY) / scale + height)
         var color = pending.color
+        var undimmedColor = pending.undimmedColor
         if preparedRun.isColor {
             let alpha = color.w
             color = SIMD4(alpha, alpha, alpha, alpha)
+            let undimmedAlpha = undimmedColor.w
+            undimmedColor = SIMD4(undimmedAlpha, undimmedAlpha, undimmedAlpha, undimmedAlpha)
         }
         let uv = uvRect(for: slot)
         let instance = GlyphInstance(
@@ -555,7 +565,8 @@ private extension GlyphRunExtractor {
             stringIndex: pending.stringIndex,
             isColor: preparedRun.isColor,
             matrixHash: preparedRun.matrixHash,
-            glyph: pending.glyph
+            glyph: pending.glyph,
+            undimmedColor: undimmedColor
         )
     }
 
@@ -662,7 +673,8 @@ private extension GlyphRunExtractor {
             stringIndex: run.stringIndexRange.lowerBound,
             isColor: true,
             matrixHash: run.matrixHash,
-            glyph: 0
+            glyph: 0,
+            undimmedColor: SIMD4(1, 1, 1, 1)
         ))
     }
 

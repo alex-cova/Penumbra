@@ -3485,6 +3485,10 @@ extension TextInputView {
         // post-parse recolor, and the tree diff does not report text changed inside a leaf.
         noteRowsNeedingSyntaxColor(lineChangeSet)
         noteMinimapEdit(lineChangeSet)
+        // The caret moved before the text did, so Focus Mode resolved its ranges against the old
+        // text. The edited line is painted right below; with the old ranges its new characters are
+        // dimmed for one frame, which reads as the paragraph flashing on every keystroke.
+        focusModeController.updateFocusedRanges(for: selectedRanges)
         EditorPerformanceTrace.shared.measure(.visibleLayout) {
             applyLineChangesToLayoutManager(lineChangeSet)
         }
@@ -3545,18 +3549,36 @@ extension TextInputView {
         }
         let editedLineIDs = Set(lineChangeSet.editedLines.map(\.id))
         let colorShift: (utf16RangeInLine: NSRange, text: String)?
-        if editedLineIDs.count == 1,
+        // Shifted colors are a guess that the post-parse recolor replaces, so they only make sense
+        // while a parse is pending. After a synchronous keystroke parse the tree is current and
+        // nothing would replace them.
+        let parseIsPending = languageMode is TreeSitterInternalLanguageMode && !languageMode.isSyntaxTreeReady
+        let newLength = (lastReplaceNewString as NSString).length
+        if parseIsPending,
+           editedLineIDs.count == 1,
            lineChangeSet.insertedLines.isEmpty,
-           lineChangeSet.removedLines.isEmpty,
+           lineChangeSet.removedLines.count <= 1,
+           !(lineChangeSet.removedLines.count == 1 && Self.containsLineBreak(lastReplaceNewString)),
            let line = lineChangeSet.editedLines.first {
             let lineRange = NSRange(location: line.location, length: line.data.length)
+            let totalRange = NSRange(location: line.location, length: line.data.totalLength)
+            // `lineRange` is the line after the edit, so the replacement must end inside it; the
+            // replaced range itself may reach past it (deleting the line's last character).
             if lastReplaceEditRange.location >= lineRange.location,
-               lastReplaceEditRange.upperBound <= lineRange.upperBound + (lastReplaceNewString as NSString).length {
-                let localRange = NSRange(
-                    location: lastReplaceEditRange.location - lineRange.location,
-                    length: lastReplaceEditRange.length
-                )
-                colorShift = (localRange, lastReplaceNewString)
+               lastReplaceEditRange.location + newLength <= lineRange.upperBound {
+                let localLocation = lastReplaceEditRange.location - lineRange.location
+                if lineChangeSet.removedLines.isEmpty {
+                    colorShift = (NSRange(location: localLocation, length: lastReplaceEditRange.length),
+                                  lastReplaceNewString)
+                } else if let tail = stringView.substring(in: NSRange(
+                    location: lastReplaceEditRange.location,
+                    length: totalRange.upperBound - lastReplaceEditRange.location
+                )) {
+                    // A join: the text after the edit came from the removed line.
+                    colorShift = (NSRange(location: localLocation, length: LineController.toEnd), tail)
+                } else {
+                    colorShift = nil
+                }
             } else {
                 colorShift = nil
             }

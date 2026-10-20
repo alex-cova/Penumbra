@@ -215,32 +215,92 @@ final class LineController: @unchecked Sendable {
         _lineHeight = nil
     }
 
+    /// `applyColorShift` range length meaning "to the end of the line".
+    static let toEnd = Int.max
+
     /// Shifts cached syntax colors for an in-place edit without re-querying tree-sitter.
+    ///
+    /// A range of length `toEnd` replaces everything from its location to the end of the line: a
+    /// join takes the next line's text in over the delimiter, and the head of the line keeps its
+    /// attributes.
     @discardableResult
-    func applyColorShift(replacing utf16RangeInLine: NSRange, with text: String) -> Bool {
+    func applyColorShift(replacing requestedRange: NSRange, with text: String) -> Bool {
         guard let attributedString,
               !isStringInvalid,
-              utf16RangeInLine.location >= 0,
-              utf16RangeInLine.upperBound <= attributedString.length else {
+              requestedRange.location >= 0,
+              requestedRange.location <= attributedString.length else {
             return false
         }
-        let expectedLength = attributedString.length + (text as NSString).length - utf16RangeInLine.length
-        guard expectedLength == line.data.length else {
+        var utf16RangeInLine = requestedRange
+        if utf16RangeInLine.length == Self.toEnd {
+            utf16RangeInLine.length = attributedString.length - utf16RangeInLine.location
+        }
+        guard utf16RangeInLine.upperBound <= attributedString.length else {
             return false
+        }
+        // The attributed string spans the line and its delimiter, like `totalLength`.
+        let expectedLength = attributedString.length + (text as NSString).length - utf16RangeInLine.length
+        guard expectedLength == line.data.totalLength else {
+            return false
+        }
+        // Text typed into a scaled run (a markdown heading) keeps its size: at the body size the
+        // line shrinks on every keystroke and grows back when the highlight lands, which moves the
+        // caret and every line below it.
+        var font = theme.font
+        if utf16RangeInLine.location > 0,
+           let neighbour = attributedString.attribute(.font, at: utf16RangeInLine.location - 1, effectiveRange: nil) as? NSFont,
+           neighbour.pointSize != font.pointSize {
+            font = neighbour
         }
         let defaultAttributes: [NSAttributedString.Key: Any] = [
             .foregroundColor: theme.textColor,
-            .font: theme.font,
+            .font: font,
             .kern: kern as NSNumber
         ]
+        let wasHeading = headingLevel(ofFontAt: 0, in: attributedString) != nil
         attributedString.replaceCharacters(in: utf16RangeInLine, with: text)
         let insertedRange = NSRange(location: utf16RangeInLine.location, length: (text as NSString).length)
         if insertedRange.length > 0 {
             attributedString.addAttributes(defaultAttributes, range: insertedRange)
         }
+        if wasHeading {
+            applyPredictedHeadingFont(to: attributedString)
+        }
         isTypesetterInvalid = true
         colorsStale = true
         return true
+    }
+
+    private static let headingHighlightNames = (1...6).map { "markup.heading.\($0)" }
+
+    /// The heading level (1...6) whose theme font is the font at `index`, or `nil`.
+    private func headingLevel(ofFontAt index: Int, in attributedString: NSAttributedString) -> Int? {
+        guard index < attributedString.length,
+              let font = attributedString.attribute(.font, at: index, effectiveRange: nil) as? NSFont,
+              font.pointSize != theme.font.pointSize else {
+            return nil
+        }
+        for (offset, name) in Self.headingHighlightNames.enumerated() {
+            if let headingFont = theme.font(for: name), headingFont.pointSize == font.pointSize {
+                return offset + 1
+            }
+        }
+        return nil
+    }
+
+    /// Editing the `#`s of a line that is a heading changes its level, and with it the font size.
+    /// Without this the line keeps the old size until the parse lands, then jumps. The parse stays
+    /// authoritative: a wrong guess is replaced by its result like any other shifted color.
+    private func applyPredictedHeadingFont(to attributedString: NSMutableAttributedString) {
+        let string = attributedString.string as NSString
+        var hashes = 0
+        while hashes < string.length, string.character(at: hashes) == 0x23 /* # */ {
+            hashes += 1
+        }
+        let isMarker = hashes >= 1 && hashes <= 6
+            && (hashes == string.length || [0x20, 0x09, 0x0A, 0x0D].contains(string.character(at: hashes)))
+        let font = (isMarker ? theme.font(for: Self.headingHighlightNames[hashes - 1]) : nil) ?? theme.font
+        attributedString.addAttribute(.font, value: font, range: NSRange(location: 0, length: string.length))
     }
 
     func markColorsStale() {
