@@ -442,4 +442,49 @@ final class TextViewFocusModeTests: XCTestCase {
             XCTAssertEqual(immediate, belowY(), accuracy: 0.5, "Enter in the \(name): the lines below moved after the parse")
         }
     }
+
+    /// Replace All used to drop every line controller, so each visible line was drawn at the body
+    /// size in the default color until the full parse landed: the titles shrank and the lines below
+    /// them moved up, then back. Lines the replacement did not touch must keep their size.
+    func testBatchReplaceKeepsUntouchedHeadingsAtTheirSize() throws {
+        let doc = "# Title\n\nIntro paragraph here.\n\n## First section heading\n\nTight paragraph below it.\n\nNext paragraph.\n"
+        let palette = ThemeCatalog.palette(id: ThemeCatalog.defaultLightID, fallbackDark: false)
+        let textView = makeFocusedTextView(text: "")
+        textView.setState(TextViewState(text: doc,
+                                        theme: PaletteTheme(palette: palette, postscriptName: nil),
+                                        language: .markdown,
+                                        languageProvider: MarkdownLanguageProvider(),
+                                        parsePolicy: .eager))
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.3)
+        textView.layoutIfNeeded()
+        try XCTSkipUnless(textView.isSyntaxTreeReady, "markdown tree not ready")
+
+        func location(of word: String) -> Int {
+            (textView.text as NSString).range(of: word).location
+        }
+        func metrics() -> (title: CGRect, section: CGRect, below: CGRect) {
+            (textView.caretRect(at: location(of: "Title")),
+             textView.caretRect(at: location(of: "First section")),
+             textView.caretRect(at: location(of: "Next paragraph")))
+        }
+        let before = metrics()
+        XCTAssertGreaterThan(before.title.height, before.below.height, "the title should be scaled")
+
+        let range = (doc as NSString).range(of: "Intro")
+        textView.replaceText(in: BatchReplaceSet(replacements: [.init(range: range, text: "Introduction")]))
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.text.contains("Introduction paragraph here."))
+        let immediate = metrics()
+        XCTAssertEqual(immediate.title.height, before.title.height, accuracy: 0.5, "the title lost its size")
+        XCTAssertEqual(immediate.section.height, before.section.height, accuracy: 0.5, "the section heading lost its size")
+
+        pumpMainRunLoop(for: 0.3)
+        textView.layoutIfNeeded()
+        let settled = metrics()
+        XCTAssertEqual(immediate.title.minY, settled.title.minY, accuracy: 0.5)
+        XCTAssertEqual(immediate.section.minY, settled.section.minY, accuracy: 0.5, "the section heading moved after the parse")
+        XCTAssertEqual(immediate.below.minY, settled.below.minY, accuracy: 0.5, "the lines below moved after the parse")
+        XCTAssertEqual(immediate.section.height, settled.section.height, accuracy: 0.5)
+    }
 }

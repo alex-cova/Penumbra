@@ -66,6 +66,10 @@ final class TextEditHelper {
         /// batch), so consumers can replay them sequentially — the same contract single
         /// keystrokes give `didChangeContent` one at a time.
         let appliedEdits: [AppliedEdit]
+        /// Lines whose text, length or existence the batch changed. A line outside this set still
+        /// holds the text it had before, whatever row it moved to. IDs only: holding the nodes
+        /// would make every later insert and removal in the batch walk them.
+        let touchedLineIDs: Set<DocumentLineNodeID>
     }
 
     /// One applied batch replacement with the line positions a `TextContentChange` needs.
@@ -82,6 +86,7 @@ final class TextEditHelper {
         var replacedRanges: [NSRange] = []
         var inverseReplacements: [BatchReplaceSet.Replacement] = []
         var appliedEdits: [AppliedEdit] = []
+        var touchedLineIDs: Set<DocumentLineNodeID> = []
         for replacement in sortedReplacements where !replacedRanges.contains(where: { $0.overlaps(replacement.range) }) {
             let range = replacement.range
             let adjustedRange = NSRange(location: range.location + totalChangeInLength, length: range.length)
@@ -89,7 +94,10 @@ final class TextEditHelper {
             let oldEnd = lineManager.linePosition(at: adjustedRange.location + adjustedRange.length)
                 ?? lineManager.linePosition(at: stringView.length)
                 ?? LinePosition(row: 0, column: 0)
-            _ = replaceText(in: adjustedRange, with: replacement.text)
+            let lineChangeSet = replaceText(in: adjustedRange, with: replacement.text).lineChangeSet
+            touchedLineIDs.formUnion(lineChangeSet.editedLines.map(\.id))
+            touchedLineIDs.formUnion(lineChangeSet.insertedLines.map(\.id))
+            touchedLineIDs.formUnion(lineChangeSet.removedLines.map(\.id))
             let start = lineManager.linePosition(at: adjustedRange.location)
                 ?? LinePosition(row: 0, column: 0)
             appliedEdits.append(AppliedEdit(range: adjustedRange, text: replacement.text, start: start, oldEnd: oldEnd))
@@ -98,6 +106,8 @@ final class TextEditHelper {
             let newRange = NSRange(location: adjustedRange.location, length: (replacement.text as NSString).length)
             inverseReplacements.append(BatchReplaceSet.Replacement(range: newRange, text: oldText))
         }
-        return BatchApplication(inverseReplacements: inverseReplacements, appliedEdits: appliedEdits)
+        return BatchApplication(inverseReplacements: inverseReplacements,
+                                appliedEdits: appliedEdits,
+                                touchedLineIDs: touchedLineIDs)
     }
 }

@@ -3301,12 +3301,17 @@ extension TextInputView {
         if !inlayHints.isEmpty { inlayHints = [] }
         if !supplementaryInlayHints.isEmpty { supplementaryInlayHints = [] }
         registerBatchUndo(inverseReplacements: application.inverseReplacements)
-        invalidateLines()
         // The edits went straight to the string and line tree, so the syntax tree and the typeset
-        // lines still describe the old text: a highlight computed from them would paint ranges
-        // that no longer fit the line. Drop them and reparse, as the `string` setter does.
-        lineControllerStorage.removeAllLineControllers()
-        contentSizeService.reset()
+        // lines of the touched lines describe the old text: a highlight computed from them would
+        // paint ranges that no longer fit the line. Drop those and reparse. Lines the batch did
+        // not touch keep their text and colors on screen until the parse recolors them; dropping
+        // them too drew every visible line in the default color and size until it landed.
+        let touchedLineIDs = application.touchedLineIDs
+        let droppedLineIDs = lineControllerStorage.removeLineControllersAfterBatchEdit(touching: touchedLineIDs)
+        for lineID in touchedLineIDs.union(droppedLineIDs) {
+            contentSizeService.removeLine(withID: lineID)
+        }
+        contentSizeService.invalidateContentSize()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
         contentSizeService.invalidateContentSize()

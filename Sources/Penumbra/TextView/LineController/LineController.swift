@@ -325,6 +325,23 @@ final class LineController: @unchecked Sendable {
         isSyntaxHighlightingInvalid = true
     }
 
+    /// A batch edit left this line's text alone, though it may have moved. Keeps the typeset line
+    /// and its colors on screen until the parse that follows recolors them in place. Returns
+    /// `false` when the cached text no longer fits the line, and the controller must be dropped.
+    func keepAfterBatchEdit() -> Bool {
+        guard let attributedString,
+              !isStringInvalid,
+              attributedString.length == line.data.totalLength else {
+            return false
+        }
+        // A pass started against the old tree must not mark the line highlighted.
+        cancelSyntaxHighlighting()
+        if syntaxHighlighter?.canEventuallyHighlight ?? false {
+            isSyntaxHighlightingInvalid = true
+        }
+        return true
+    }
+
     /// Pass `lineYPosition` when the caller already has it; reading `line.yPosition` walks the line index.
     func lineFragmentControllers(in rect: CGRect, lineYPosition: CGFloat? = nil) -> [LineFragmentController] {
         let lineYPosition = lineYPosition ?? line.yPosition

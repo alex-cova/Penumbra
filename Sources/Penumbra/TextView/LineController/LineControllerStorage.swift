@@ -49,6 +49,22 @@ final class LineControllerStorage {
         lineControllers.removeAll()
     }
 
+    /// After a batch edit: drops the controllers of `touchedLineIDs`, and of any line whose cached
+    /// text no longer fits it. The rest keep their typeset text and colors. Returns the IDs dropped.
+    @discardableResult
+    func removeLineControllersAfterBatchEdit(touching touchedLineIDs: Set<DocumentLineNodeID>) -> [DocumentLineNodeID] {
+        var dropped: [DocumentLineNodeID] = []
+        for (lineID, lineController) in lineControllers {
+            if touchedLineIDs.contains(lineID) || !lineController.keepAfterBatchEdit() {
+                dropped.append(lineID)
+            }
+        }
+        for lineID in dropped {
+            lineControllers.removeValue(forKey: lineID)
+        }
+        return dropped
+    }
+
     /// Once more than `limit` controllers are kept, drops those whose line row is outside
     /// `keptRows`, except `pinnedLineIDs`. A dropped controller is recreated (and re-typeset) the
     /// next time its line is needed. Returns how many were dropped.
