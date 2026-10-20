@@ -302,6 +302,12 @@ public enum JavaMemberLookup {
     ) async -> JavaTypeRef {
         if case .classType = type { return type }
         guard case .unresolved = type else { return type }
+        // A qualified supertype as written (`implements java.io.Serializable`): source stubs
+        // spell it `.unresolved`, and no scope lookup applies — it names the stub directly.
+        if case .unresolved(let dotted, let arguments) = type, dotted.contains("."),
+           await index.classStub(qualifiedName: dotted) != nil {
+            return .classType(qualifiedName: dotted, arguments: arguments, outer: nil)
+        }
         if let fileContext = await contextOfDeclaringFile(stub, cache: cache) {
             let resolved = await JavaTypeResolver.resolve(type, context: fileContext, index: index)
             if case .classType = resolved { return resolved }
@@ -454,8 +460,12 @@ extension JavaMemberLookup {
         guard case .classType(let start, let arguments, _) = type else { return nil }
         let cache = DeclaringFileCache()
         var visited = Set<String>()
+        // Empty arguments mean "raw" only when the type actually declares type parameters;
+        // a non-generic start (empty because there is nothing to fill) views its supertypes
+        // with their written arguments, not as raw.
+        let startDeclaresParameters = await index.classStub(qualifiedName: start).map { !$0.typeParameters.isEmpty } ?? false
         var queue: [(name: String, substitution: [String: JavaTypeRef], isRaw: Bool)] = [
-            (start, await substitutionMap(forTypeArguments: arguments, appliedTo: start, index: index), arguments.isEmpty)
+            (start, await substitutionMap(forTypeArguments: arguments, appliedTo: start, index: index), arguments.isEmpty && startDeclaresParameters)
         ]
         var position = 0
         while position < queue.count {

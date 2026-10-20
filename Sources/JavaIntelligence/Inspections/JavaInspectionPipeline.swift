@@ -38,6 +38,7 @@ enum JavaInspectionPipeline {
             if allowed.contains(.classFileNameMismatch) {
                 isolated.append(contentsOf: JavaClassFileNameInspection.inspect(context: tolerant))
             }
+            await JavaInheritedFields.prepare(context: tolerant)
             isolated.append(contentsOf: JavaInspectionRunner.run(context: tolerant, enabled: allowed))
             return isolated.filter { !tolerant.touchesError($0) }
         }
@@ -63,6 +64,7 @@ enum JavaInspectionPipeline {
         if enabled.contains(.classFileNameMismatch) {
             found.append(contentsOf: JavaClassFileNameInspection.inspect(context: context))
         }
+        await JavaInheritedFields.prepare(context: context)
         found.append(contentsOf: JavaInspectionRunner.run(context: context, enabled: enabled))
         if Task.isCancelled { return found }
         found.append(contentsOf: JavaInspectionRunner.runFlow(context: context, enabled: enabled))

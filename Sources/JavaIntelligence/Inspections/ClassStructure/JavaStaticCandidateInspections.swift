@@ -327,9 +327,8 @@ enum JavaNonSerializableFieldInspection: JavaNodeInspection {
               let owner = body.parent, owner.type == "class_declaration", implementsSerializable(owner),
               let type = node.child(byFieldName: "type"), type.type == "type_identifier" else { return }
         let name = type.text
-        let root = context.tree.rootNode
-        // A class of this name declared here or imported from a project package is not the JDK type of that name.
-        guard (knownNonSerializable.contains(name) && JavaDeclaredTypes.mayBePlatformType(name, in: root)) || isPlainClass(named: name, from: node) else { return }
+        // A class of this name visible here or imported from a project package is not the JDK type of that name.
+        guard (knownNonSerializable.contains(name) && JavaDeclaredTypes.mayBePlatformType(name, at: node)) || isPlainClass(named: name, from: node) else { return }
         for declarator in node.namedChildren(ofType: "variable_declarator") {
             guard let field = declarator.child(byFieldName: "name") else { continue }
             report(JavaInspectionSupport.inspection(
@@ -360,8 +359,8 @@ enum JavaRawTypeUsageInspection: JavaNodeInspection {
         guard genericJDK.contains(name) || isGenericInFile,
               let parent = node.parent, contexts.contains(parent.type),
               parent.child(byFieldName: "type")?.byteRange == node.byteRange else { return }
-        // A same-named class of this file or of a project package may not be generic.
-        if !isGenericInFile, !JavaDeclaredTypes.mayBePlatformType(name, in: node.tree.rootNode) { return }
+        // A same-named class visible here or of a project package may not be generic.
+        if !isGenericInFile, !JavaDeclaredTypes.mayBePlatformType(name, at: node) { return }
         // `new ArrayList<>()` is a generic_type, so reaching here means no type arguments at all.
         report(JavaInspectionSupport.inspection(rule, message: "Raw use of the parameterized class '\(name)'", node: node))
     }
@@ -372,10 +371,31 @@ enum JavaUncheckedCastInspection: JavaNodeInspection {
     static let rule = JavaInspectionRule.uncheckedCast
     static let nodeTypes: Set<String> = ["cast_expression"]
 
+    /// The declared type arguments of the cast operand, for a plain variable or a
+    /// `this.`-qualified field. Anything else has no declaration to read.
+    private static func operandArguments(of operand: SyntaxNode, at node: SyntaxNode) -> [String]? {
+        let ref = operand.unparenthesized
+        if ref.type == "identifier" {
+            return JavaDeclaredTypeArguments.arguments(ofVariable: ref.text, at: node)
+        }
+        if ref.type == "field_access", ref.child(byFieldName: "object")?.type == "this",
+           let field = ref.child(byFieldName: "field") {
+            return JavaDeclaredTypeArguments.arguments(ofVariable: field.text, at: node)
+        }
+        return nil
+    }
+
     static func check(node: SyntaxNode, context: JavaInspectionContext, report: (JavaInspection) -> Void) {
         guard let type = node.child(byFieldName: "type"), type.type == "generic_type",
               let arguments = type.firstNamedChild(ofType: "type_arguments"),
-              arguments.namedChildren.contains(where: { $0.type != "wildcard" }) else { return }
+              arguments.namedChildren.contains(where: { $0.type != "wildcard" }),
+              let operand = node.child(byFieldName: "value") else { return }
+        // javac does not warn when the operand is already declared with the same type
+        // arguments (`(ArrayList<String>) list` for a `List<String> list`): the cast adds
+        // no unchecked step. Compare the written argument lists.
+        if let target = JavaDeclaredTypeArguments.arguments(of: type),
+           let operandArgs = operandArguments(of: operand, at: node),
+           target == operandArgs { return }
         report(JavaInspectionSupport.inspection(
             rule, message: "Unchecked cast to '\(type.text)': the type arguments are erased at run time", node: node
         ))

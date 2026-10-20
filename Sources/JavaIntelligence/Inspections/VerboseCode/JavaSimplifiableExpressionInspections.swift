@@ -176,7 +176,7 @@ enum JavaUnnecessaryEnumDefaultInspection: JavaNodeInspection {
     private static func analysis(of node: SyntaxNode) -> (defaultRule: SyntaxNode, label: SyntaxNode)? {
         guard let selector = node.child(byFieldName: "condition")?.unparenthesized,
               let declared = JavaDeclaredTypes.type(of: selector), !declared.isArray,
-              let enumDeclaration = JavaDeclaredTypes.typeDeclaration(named: declared.name, from: node),
+              let enumDeclaration = JavaDeclaredTypes.typeDeclaration(of: declared, from: node),
               enumDeclaration.type == "enum_declaration", let enumBody = enumDeclaration.child(byFieldName: "body"),
               let block = node.child(byFieldName: "body") else { return nil }
         let rules = block.namedChildren(ofType: "switch_rule")

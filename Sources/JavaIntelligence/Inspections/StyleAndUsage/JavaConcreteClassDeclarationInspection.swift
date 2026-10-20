@@ -46,15 +46,44 @@ enum JavaDeclarationUsesConcreteClassInspection: JavaNodeInspection {
         }
     }
 
-    /// Whether `interface` names `java.util.<interface>` in this file (imported, or no import says otherwise).
-    private static func importState(of interface: String, in root: SyntaxNode) -> (clash: Bool, imported: Bool) {
+    /// Whether `interface` names `java.util.<interface>` at `node` (imported, or no import says otherwise).
+    /// A visible same-named type of this file clashes: the fix must not add the import.
+    /// An external supertype clashes only when it (transitively) brings a nested type of
+    /// that name; a file-wide "any external supertype clashes" would silence the rule for
+    /// every class that extends anything (everything implementing `Serializable`).
+    private static func importState(of interface: String, from node: SyntaxNode) -> (clash: Bool, imported: Bool) {
         var imported = false
-        for declaration in root.namedChildren(ofType: "import_declaration") {
+        for declaration in node.tree.rootNode.namedChildren(ofType: "import_declaration") {
             let text = declaration.text.replacingOccurrences(of: " ", with: "")
             if text == "importjava.util.*;" || text == "importjava.util.\(interface);" { imported = true }
             else if text.hasSuffix(".\(interface);") { return (true, false) }
         }
-        return (JavaDeclaredTypes.typeDeclaration(named: interface, in: root) != nil, imported)
+        if JavaDeclaredTypes.isFileTypeVisible(named: interface, from: node) { return (true, imported) }
+        return (externalSupertypeBrings(interface, from: node), imported)
+    }
+
+    /// Whether an external supertype of an enclosing type may declare a nested type
+    /// called `name`, from the prepass tables. An `.open` table — or no prepass over a
+    /// body with an external supertype — clashes, as before.
+    private static func externalSupertypeBrings(_ name: String, from node: SyntaxNode) -> Bool {
+        let cache = node.tree.declarationCache
+        var current: SyntaxNode? = node
+        while let scope = current {
+            if ["class_body", "interface_body", "enum_body"].contains(scope.type) {
+                switch (cache.externalFieldsPrepared, cache.externalFields(forBodyAt: scope.startByte)) {
+                case (_, .open):
+                    return true
+                case (true, .known(_, let nested)):
+                    if nested.contains(name) { return true }
+                case (true, nil):
+                    break
+                case (false, _):
+                    if JavaInheritedFields.hasExternalSupertypes(body: scope) { return true }
+                }
+            }
+            current = scope.parent
+        }
+        return false
     }
 
     private static func candidate(_ node: SyntaxNode, context: JavaInspectionContext) -> (identifier: SyntaxNode, interface: String, needsImport: Bool)? {
@@ -68,7 +97,7 @@ enum JavaDeclarationUsesConcreteClassInspection: JavaNodeInspection {
             ? table.nonLocalOccurrences(of: name.text, excluding: name.byteRange)
             : (table.locals[name.byteRange]?.uses ?? [])
         guard uses.allSatisfy({ isInterfaceUse(context.tree.node(inByteRange: $0)) }) else { return nil }
-        let (clash, imported) = importState(of: interface, in: context.tree.rootNode)
+        let (clash, imported) = importState(of: interface, from: node)
         guard !clash else { return nil }
         return (identifier, interface, !imported)
     }
@@ -88,7 +117,7 @@ enum JavaDeclarationUsesConcreteClassInspection: JavaNodeInspection {
               let interface = interfaces[identifier.text] else { return [] }
         var edits = [JavaInspectionSupport.edit(replacingBytes: identifier.byteRange, with: interface, in: tree)]
         let root = tree.rootNode
-        if !importState(of: interface, in: root).imported {
+        if !importState(of: interface, from: identifier).imported {
             let line = "import java.util.\(interface);"
             if let last = root.namedChildren(ofType: "import_declaration").last {
                 edits.append(JavaInspectionSupport.edit(replacingBytes: last.endByte..<last.endByte, with: "\n\(line)", in: tree))

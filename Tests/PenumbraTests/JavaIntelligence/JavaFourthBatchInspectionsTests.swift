@@ -238,7 +238,196 @@ final class JavaFourthBatchInspectionsTests: XCTestCase {
         XCTAssertEqual(try count(.uncheckedCast, method("        String s = (String) o;", params: "Object o")), 0)
     }
 
+    func testUncheckedCastSameTypeArguments() throws {
+        // javac does not warn when the operand is already declared with the same arguments.
+        XCTAssertEqual(try count(.uncheckedCast, method("        ArrayList<String> l = (ArrayList<String>) o;", params: "List<String> o")), 0)
+        XCTAssertEqual(
+            try count(.uncheckedCast, method("        ArrayList<String> l = (ArrayList<String>) this.o;", members: "    List<String> o;")),
+            0
+        )
+        XCTAssertEqual(try count(.uncheckedCast, method("        ArrayList<Integer> l = (ArrayList<Integer>) o;", params: "List<String> o")), 1)
+    }
+
+    func testDeclarationUsesConcreteClassExternalNestedClash() async throws {
+        let source = """
+        import java.util.*;
+        class T extends ExternalBase {
+            void f() { ArrayList<String> l = new ArrayList<>(); l.add("a"); }
+        }
+        """
+        // An external supertype that brings a nested List clashes.
+        let clash = try await preparedCount(
+            .declarationUsesConcreteClass, source, stubs: ["class ExternalBase { class List { } }"]
+        )
+        XCTAssertEqual(clash, 0)
+        // One that brings no nested List still fires.
+        let clear = try await preparedCount(
+            .declarationUsesConcreteClass, source, stubs: ["class ExternalBase { int x; }"]
+        )
+        XCTAssertEqual(clear, 1)
+    }
+
+    func testDeclarationUsesConcreteClassSerializableSupertypes() async throws {
+        let stubs = [
+            "package java.io; public interface Serializable { }",
+            "package java.lang; public interface Comparable<T> { int compareTo(T o); }",
+            "package java.lang; public interface CharSequence { int length(); }",
+            "package java.lang.constant; public interface Constable { }",
+            "package java.lang.constant; public interface ConstantDesc { }",
+        ]
+        let source = """
+        package java.lang;
+        import java.util.*;
+        import java.lang.constant.Constable;
+        import java.lang.constant.ConstantDesc;
+        public final class String
+            implements java.io.Serializable, Comparable<String>, CharSequence,
+                       Constable, ConstantDesc {
+            void f() { ArrayList<String> l = new ArrayList<>(); l.add("a"); }
+        }
+        """
+        let hits = try await preparedCount(.declarationUsesConcreteClass, source, stubs: stubs)
+        XCTAssertEqual(hits, 1)
+    }
+
+    func testSwitchEnumMissingCasesQualifiedName() throws {
+        // Outer.E resolves through the qualifier, picking the right E of the two.
+        let source = """
+        class Outer { enum E { X, Y } }
+        class Other { enum E { C, D } }
+        class T {
+            Other.E e;
+            void f() {
+                switch (e) {
+                    case C:
+                        break;
+                }
+            }
+        }
+        """
+        XCTAssertEqual(try count(.switchEnumMissingCases, source), 1)
+        let complete = """
+        class Other { enum E { C, D } }
+        class T {
+            Other.E e;
+            void f() {
+                switch (e) {
+                    case C:
+                        break;
+                    case D:
+                        break;
+                }
+            }
+        }
+        """
+        XCTAssertEqual(try count(.switchEnumMissingCases, complete), 0)
+        // Map.Entry with a file-local Entry: the first segment is not a type of this
+        // file, so the rule stays silent instead of reading the wrong enum.
+        let mismatch = """
+        class T {
+            enum Entry { A, B }
+            void f(Map.Entry e) {
+                switch (e) {
+                    case A:
+                        break;
+                }
+            }
+        }
+        """
+        XCTAssertEqual(try count(.switchEnumMissingCases, mismatch), 0)
+    }
+
     // MARK: Probable bugs
+
+    /// Runs one node rule with the prepass over `stubs` plus `source`, like the pipeline does.
+    private func preparedCount(_ rule: JavaInspectionRule, _ source: String, stubs: [String] = []) async throws -> Int {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("java-field-prepass-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        var classes: [JavaClassStub] = []
+        for (offset, text) in (stubs + [source]).enumerated() {
+            let url = scratch.appendingPathComponent("S\(offset).java")
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            classes += JavaSourceStubBuilder.build(source: text, url: url).classes
+        }
+        let shard = scratch.appendingPathComponent("index.idx")
+        try JavaIndexShardWriter().write(classes, stamp: JavaStamp(size: 0, modificationDate: 0), to: shard)
+        let index = JavaIndex()
+        await index.setSources([.init(precedence: 1, reader: try JavaIndexShardReader(url: shard))])
+        let tree = try XCTUnwrap(JavaSyntaxParser().parse(source))
+        let context = try XCTUnwrap(JavaInspectionContext(source: source, tree: tree, url: scratch.appendingPathComponent("T.java"), index: index))
+        await JavaInheritedFields.prepare(context: context)
+        return JavaInspectionRunner.run(context: context, enabled: [rule]).filter { $0.id == rule.code }.count
+    }
+
+    private func unpreparedCount(_ rule: JavaInspectionRule, _ source: String) throws -> Int {
+        let tree = try XCTUnwrap(JavaSyntaxParser().parse(source))
+        let context = try XCTUnwrap(JavaInspectionContext(source: source, tree: tree, url: url, index: JavaIndex()))
+        return JavaInspectionRunner.run(context: context, enabled: [rule]).filter { $0.id == rule.code }.count
+    }
+
+    func testInheritedExternalFieldShadowsEnclosingScope() async throws {
+        // `value` is a String on the indexed external base, an int on the outer class:
+        // the inherited member wins, so `equals` between String and Integer fires.
+        let source = """
+        class Outer {
+            int value;
+            class Inner extends ExternalBase {
+                boolean check(Integer i) { return value.equals(i); }
+            }
+        }
+        """
+        let hit = try await preparedCount(.equalsIncompatibleTypes, source, stubs: ["class ExternalBase { String value; }"])
+        XCTAssertEqual(hit, 1)
+        // Without the index the hierarchy is open and the lookup stays silent.
+        let open = try await preparedCount(.equalsIncompatibleTypes, source)
+        XCTAssertEqual(open, 0)
+        // Without the prepass the type is unknown even when the stub is indexed.
+        XCTAssertEqual(try unpreparedCount(.equalsIncompatibleTypes, source), 0)
+    }
+
+    func testInheritedTypeVariableFieldStaysSilent() async throws {
+        // A bare type variable names no resolvable member set (lookup would answer
+        // `Object`'s), so the prepass leaves it out and the outer field keeps applying.
+        let source = """
+        class Outer {
+            Integer leftChild;
+            class Inner extends ExternalBase<String> {
+                boolean check(Integer i) { return leftChild.equals(i); }
+            }
+        }
+        """
+        let hit = try await preparedCount(.equalsIncompatibleTypes, source, stubs: ["class ExternalBase<K> { K leftChild; }"])
+        XCTAssertEqual(hit, 0)
+    }
+
+    func testInheritedExternalFieldAtTopLevel() async throws {
+        let source = """
+        class T extends ExternalBase {
+            boolean check(Integer i) { return value.equals(i); }
+        }
+        """
+        let hit = try await preparedCount(.equalsIncompatibleTypes, source, stubs: ["class ExternalBase { String value; }"])
+        XCTAssertEqual(hit, 1)
+        let miss = try await preparedCount(.equalsIncompatibleTypes, source)
+        XCTAssertEqual(miss, 0)
+    }
+
+    func testInheritedExternalFieldInAnonymousBody() async throws {
+        let source = """
+        class Outer {
+            int value;
+            Object o = new ExternalBase() {
+                boolean check(Integer i) { return value.equals(i); }
+            };
+        }
+        """
+        let hit = try await preparedCount(.equalsIncompatibleTypes, source, stubs: ["class ExternalBase { String value; }"])
+        XCTAssertEqual(hit, 1)
+        let miss = try await preparedCount(.equalsIncompatibleTypes, source)
+        XCTAssertEqual(miss, 0)
+    }
 
     func testSwitchEnumMissingCases() throws {
         let members = "    enum Color { RED, GREEN, BLUE }\n    Color color;"

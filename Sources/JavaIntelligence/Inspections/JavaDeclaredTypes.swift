@@ -9,6 +9,15 @@ struct JavaDeclaredType: Equatable {
     let isArray: Bool
     /// Declared with type arguments (`List<String>`), so a raw `(List) x` is not the same type.
     var hasTypeArguments = false
+    /// The qualifier the name was written with (`Outer` for `Outer.Entry`), outermost
+    /// first. Empty for simple names. Comparisons (`==`, and the rules built on them such
+    /// as `equals-incompatible-types` and the wrapper checks) are about the simple type,
+    /// so this is deliberately left out of equality.
+    var qualifier: [String] = []
+
+    static func == (lhs: JavaDeclaredType, rhs: JavaDeclaredType) -> Bool {
+        lhs.name == rhs.name && lhs.isArray == rhs.isArray && lhs.hasTypeArguments == rhs.hasTypeArguments
+    }
 
     static let string = JavaDeclaredType(name: "String", isArray: false)
 
@@ -49,6 +58,10 @@ final class JavaDeclarationCache: @unchecked Sendable {
     private var duplicateTypes: Set<String> = []
     private var patternBindingTables: [Int: Set<String>] = [:]
     private var fieldFlagTables: [Int: [String: (isStatic: Bool, isFinal: Bool)]] = [:]
+    /// External inherited fields per class body, set by `JavaInheritedFields.prepare`
+    /// once per pass. `nil` means the prepass did not run: callers fall back to a
+    /// synchronous external-supertype check instead of trusting an empty table.
+    private var externalFieldTables: [Int: JavaExternalFields]?
 
     /// Locals with their uses and every identifier by name, built once per tree on first use.
     func fileSymbols(context: JavaInspectionContext) -> JavaFileSymbolTable {
@@ -282,6 +295,27 @@ final class JavaDeclarationCache: @unchecked Sendable {
         return built
     }
 
+    /// Whether `JavaInheritedFields.prepare` ran for this tree's pass.
+    var externalFieldsPrepared: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return externalFieldTables != nil
+    }
+
+    /// The prepass result for the body starting at `startByte`, or nil when the body
+    /// has no external supertypes (or the prepass did not run).
+    func externalFields(forBodyAt startByte: Int) -> JavaExternalFields? {
+        lock.lock()
+        defer { lock.unlock() }
+        return externalFieldTables?[startByte]
+    }
+
+    func storeExternalFields(_ tables: [Int: JavaExternalFields]) {
+        lock.lock()
+        externalFieldTables = tables
+        lock.unlock()
+    }
+
     func fields(of body: SyntaxNode, build: () -> [String: JavaDeclaredType]) -> [String: JavaDeclaredType] {
         lock.lock()
         if let table = fieldTables[body.startByte] { lock.unlock(); return table }
@@ -383,7 +417,7 @@ enum JavaDeclaredTypes {
                 return memberFieldType(named: field.text, in: body)
             }
             if object.type == "identifier", let owner = variableType(named: object.text, at: node),
-               let body = typeDeclaration(named: owner.name, from: node)?.child(byFieldName: "body") {
+               let body = typeDeclaration(of: owner, from: node)?.child(byFieldName: "body") {
                 return memberFieldType(named: field.text, in: body)
             }
             return nil
@@ -457,6 +491,9 @@ enum JavaDeclaredTypes {
                 // A pattern variable (`o instanceof Foo name`) can shadow a field in the member that declares it.
                 if node.tree.declarationCache.patternBindingNames(in: child).contains(name) { return nil }
                 if let type = memberFieldType(named: name, in: scope) { return type }
+                // An inherited member from outside the file shadows the enclosing scope,
+                // so an unseen (or not-yet-looked-up) hierarchy ends the search as unknown.
+                if JavaInheritedFields.shadowsOuterScope(body: scope) { return nil }
             default:
                 break
             }
@@ -512,9 +549,24 @@ enum JavaDeclaredTypes {
     private static func make(_ type: SyntaxNode, dimensions: SyntaxNode?) -> JavaDeclaredType? {
         let isArray = type.type == "array_type" || dimensions != nil
         let element = type.type == "array_type" ? (type.child(byFieldName: "element") ?? type) : type
-        let name = simpleName(of: element)
+        let (name, qualifier) = splitName(of: element)
         guard !name.isEmpty, name != "var" else { return nil }
-        return JavaDeclaredType(name: name, isArray: isArray, hasTypeArguments: element.type == "generic_type")
+        return JavaDeclaredType(name: name, isArray: isArray, hasTypeArguments: element.type == "generic_type", qualifier: qualifier)
+    }
+
+    /// The simple name and qualifier of a type node: `Outer.Entry` is `("Entry", ["Outer"])`,
+    /// through a generic base (`Box<String>.Entry` still qualifies as `Box`). Simple names
+    /// have an empty qualifier.
+    private static func splitName(of type: SyntaxNode) -> (name: String, qualifier: [String]) {
+        if type.type == "generic_type", let base = type.namedChild(at: 0) {
+            return splitName(of: base)
+        }
+        if type.type == "scoped_type_identifier" {
+            let parts = JavaTypeNodeConverter.dottedTypeName(type).split(separator: ".").map(String.init)
+            guard let last = parts.last else { return (type.text, []) }
+            return (last, Array(parts.dropLast()))
+        }
+        return (simpleName(of: type), [])
     }
 
     /// `java.util.List<String>` → `List`.
@@ -580,17 +632,125 @@ enum JavaDeclaredTypes {
         return nil
     }
 
+    /// The type a declared type refers to at `node`, following its qualifier: `Outer.Entry`
+    /// resolves `Outer` by scope and then walks member types by name. A simple name is the
+    /// scope-resolved declaration. When the first segment is not a type of this file
+    /// (`Map.Entry` with a file-local `Entry`), the answer is nil instead of the wrong type.
+    static func typeDeclaration(of type: JavaDeclaredType, from node: SyntaxNode) -> SyntaxNode? {
+        guard !type.qualifier.isEmpty else { return typeDeclaration(named: type.name, from: node) }
+        guard var current = typeDeclaration(named: type.qualifier[0], from: node) else { return nil }
+        for segment in type.qualifier.dropFirst() + [type.name] {
+            guard let next = memberType(named: segment, in: current) else { return nil }
+            current = next
+        }
+        return current
+    }
+
+    /// The member type called `name` declared directly in the body of `declaration`
+    /// (a class, interface, enum or record body, including an enum's declaration list).
+    static func memberType(named name: String, in declaration: SyntaxNode) -> SyntaxNode? {
+        let declarations: Set<String> = ["class_declaration", "record_declaration", "enum_declaration", "interface_declaration"]
+        guard let body = declaration.child(byFieldName: "body") else { return nil }
+        var holders = [body]
+        if let declarationsList = body.firstNamedChild(ofType: "enum_body_declarations") { holders.append(declarationsList) }
+        for holder in holders {
+            if let hit = holder.namedChildren.first(where: {
+                declarations.contains($0.type) && $0.child(byFieldName: "name")?.text == name
+            }) { return hit }
+        }
+        return nil
+    }
+
+    /// Whether `name` could name a type visible at `node`: a top-level type of the file,
+    /// an enclosing type itself, a member type of an enclosing body, a local class in an
+    /// enclosing block, or a member type of an in-file supertype. Answers "visible" (stay
+    /// silent) when a supertype in the chain is outside the file, because that type may
+    /// bring a nested type of the same name.
+    static func isTypeVisible(named name: String, from node: SyntaxNode) -> Bool {
+        if isFileTypeVisible(named: name, from: node) { return true }
+        var current: SyntaxNode? = node
+        while let scope = current {
+            if typeDeclarations.contains(scope.type), superChainIsOpen(in: scope) { return true }
+            current = scope.parent
+        }
+        return false
+    }
+
+    /// Whether `name` names a type this file visibly declares at `node`, without the
+    /// open-hierarchy rule: top-level types, enclosing types, member types of enclosing
+    /// bodies, local classes in enclosing blocks, and member types of in-file supertypes.
+    /// `mayBePlatformType` uses this: an unseen supertype's hypothetical nested type must
+    /// not veto a platform verdict, or every `implements Serializable` would silence every
+    /// platform-type rule. (That blind spot predates this check: external supertypes were
+    /// never searched.)
+    static func isFileTypeVisible(named name: String, from node: SyntaxNode) -> Bool {
+        let root = node.tree.rootNode
+        for child in root.namedChildren where typeDeclarations.contains(child.type) {
+            if child.child(byFieldName: "name")?.text == name { return true }
+        }
+        var current: SyntaxNode? = node
+        while let scope = current {
+            if typeDeclarations.contains(scope.type) {
+                if scope.child(byFieldName: "name")?.text == name { return true }
+                if superChainDeclares(name: name, in: scope) { return true }
+            }
+            if ["class_body", "interface_body", "enum_body", "enum_body_declarations"].contains(scope.type) {
+                if let owner = scope.parent, typeDeclarations.contains(owner.type),
+                   memberType(named: name, in: owner) != nil { return true }
+            }
+            if ["block", "constructor_body", "switch_block"].contains(scope.type) {
+                if scope.namedChildren.contains(where: {
+                    typeDeclarations.contains($0.type) && $0.child(byFieldName: "name")?.text == name
+                }) { return true }
+            }
+            current = scope.parent
+        }
+        return false
+    }
+
+    private static let typeDeclarations: Set<String> = ["class_declaration", "record_declaration", "enum_declaration", "interface_declaration"]
+
+    /// Whether the in-file supertype chain of `declaration` declares a member type called `name`.
+    private static func superChainDeclares(name: String, in declaration: SyntaxNode, depth: Int = 0) -> Bool {
+        guard depth < 8 else { return false }
+        for superName in supertypeNames(of: declaration) {
+            guard let superDeclaration = typeDeclaration(named: superName, from: declaration),
+                  superDeclaration.byteRange != declaration.byteRange else { continue }
+            if memberType(named: name, in: superDeclaration) != nil { return true }
+            if superChainDeclares(name: name, in: superDeclaration, depth: depth + 1) { return true }
+        }
+        return false
+    }
+
+    /// Whether the supertype chain of `declaration` reaches outside the file, whose types
+    /// may declare a nested type of any name.
+    private static func superChainIsOpen(in declaration: SyntaxNode, depth: Int = 0) -> Bool {
+        guard depth < 8 else { return false }
+        for superName in supertypeNames(of: declaration) {
+            guard let superDeclaration = typeDeclaration(named: superName, from: declaration),
+                  superDeclaration.byteRange != declaration.byteRange else { return true }
+            if superChainIsOpen(in: superDeclaration, depth: depth + 1) { return true }
+        }
+        return false
+    }
+
+    /// The type nodes a declaration names after `extends` and `implements`, or an
+    /// anonymous class's created type.
+    static func supertypeTypeNodes(of owner: SyntaxNode) -> [SyntaxNode] {
+        if owner.type == "object_creation_expression" {
+            return owner.child(byFieldName: "type").map { [$0] } ?? []
+        }
+        var nodes: [SyntaxNode] = []
+        if let superclass = owner.child(byFieldName: "superclass")?.namedChild(at: 0) { nodes.append(superclass) }
+        for clause in [owner.child(byFieldName: "interfaces"), owner.firstNamedChild(ofType: "extends_interfaces")].compactMap({ $0 }) {
+            for list in clause.namedChildren(ofType: "type_list") { nodes.append(contentsOf: list.namedChildren) }
+        }
+        return nodes
+    }
+
     /// The types a declaration names after `extends` and `implements`, or an anonymous class's own type.
     private static func supertypeNames(of owner: SyntaxNode) -> [String] {
-        if owner.type == "object_creation_expression" {
-            return owner.child(byFieldName: "type").map { [simpleName(of: $0)] } ?? []
-        }
-        var names: [String] = []
-        if let superclass = owner.child(byFieldName: "superclass")?.namedChild(at: 0) { names.append(simpleName(of: superclass)) }
-        for clause in [owner.child(byFieldName: "interfaces"), owner.firstNamedChild(ofType: "extends_interfaces")].compactMap({ $0 }) {
-            for list in clause.namedChildren(ofType: "type_list") { names.append(contentsOf: list.namedChildren.map(simpleName(of:))) }
-        }
-        return names
+        supertypeTypeNodes(of: owner).map { simpleName(of: $0) }
     }
 
     /// A field `name` that `owner` inherits from a type this file declares, searching the chain. Types the file
@@ -607,11 +767,16 @@ enum JavaDeclaredTypes {
         return nil
     }
 
-    /// The field `name` of the type whose body this is: its own, else one inherited from a type of this file.
+    /// The field `name` of the type whose body this is: its own, else one inherited
+    /// from a type of this file, else one inherited from outside the file (prepass).
     static func memberFieldType(named name: String, in body: SyntaxNode) -> JavaDeclaredType? {
         if let type = fieldType(named: name, in: body) { return type }
         guard let owner = body.parent else { return nil }
-        return inheritedFieldType(named: name, in: owner)
+        if let type = inheritedFieldType(named: name, in: owner) { return type }
+        if case .known(let table, _) = body.tree.declarationCache.externalFields(forBodyAt: body.startByte) {
+            return table[name]
+        }
+        return nil
     }
 
     /// The qualified name a single-type import gives `simpleName` (`import a.b.Logger;` → `a.b.Logger`), or nil.
@@ -626,10 +791,12 @@ enum JavaDeclaredTypes {
         return nil
     }
 
-    /// Whether `simpleName` is a JDK-style type in this file: not declared here, and either not imported by a single-type
-    /// import or imported from a platform package. A same-named class from a project or library package is some other type.
-    static func mayBePlatformType(_ simpleName: String, in root: SyntaxNode) -> Bool {
-        if typeDeclaration(named: simpleName, in: root) != nil { return false }
+    /// Whether `simpleName` at `node` is a JDK-style type: no visible declaration here,
+    /// and either not imported by a single-type import or imported from a platform package.
+    /// A same-named class from a project or library package is some other type.
+    static func mayBePlatformType(_ simpleName: String, at node: SyntaxNode) -> Bool {
+        if isFileTypeVisible(named: simpleName, from: node) { return false }
+        let root = node.tree.rootNode
         guard let qualified = importedQualifiedName(of: simpleName, in: root) else { return true }
         return ["java.", "javax.", "jakarta.", "jdk.", "org.slf4j.", "org.apache.logging.", "org.apache.commons.logging.", "org.jboss.logging."]
             .contains(where: qualified.hasPrefix)

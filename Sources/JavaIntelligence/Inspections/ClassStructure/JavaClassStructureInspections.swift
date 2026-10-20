@@ -294,8 +294,11 @@ enum JavaClassMayBeInterfaceInspection: JavaNodeInspection {
             let words = JavaNameShape.modifierWords(of: member)
             switch member.type {
             case "method_declaration":
-                // Only abstract, public-or-package methods fit an interface; a body means `default`.
-                guard member.child(byFieldName: "body") == nil, words.isDisjoint(with: blocked), !JavaClassShape.hasAnnotation(member) else { return }
+                // Only explicitly public abstract methods fit an interface without changing
+                // visibility: a package-private method turns public, breaking any
+                // package-private implementation in another file. A body means `default`.
+                guard member.child(byFieldName: "body") == nil, words.contains("public"),
+                      words.isDisjoint(with: blocked), !JavaClassShape.hasAnnotation(member) else { return }
                 methods += 1
             case "field_declaration":
                 guard words.contains("static"), words.contains("final"), words.isDisjoint(with: ["private", "protected"]) else { return }

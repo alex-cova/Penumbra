@@ -228,4 +228,14 @@ final class JavaStyleUsageInspectionTests: XCTestCase {
         XCTAssertEqual(try messages(source, rule: .javadocInvalidParam), ["'@param z' does not match a parameter", "Duplicate '@param a' tag"])
         XCTAssertEqual(try messages("class T {\n    /**\n     * @param <E> element\n     * @param e value\n     */\n    <E> void f(E e) {}\n}\n", rule: .javadocInvalidParam), [])
     }
+
+    func testDeclarationUsesConcreteClassNestedNameScope() throws {
+        let rule = JavaInspectionRule.declarationUsesConcreteClass
+        // A nested List in an unrelated class is not visible here: the interface is usable.
+        let source = "import java.util.*;\nclass A {\n    class List { }\n}\nclass T {\n    void f() { ArrayList<String> l = new ArrayList<>(); l.add(\"a\"); }\n}\n"
+        XCTAssertEqual(try findings(source, rule: rule).count, 1)
+        // A nested List in the same class clashes: the fix must not add the import.
+        let same = "import java.util.*;\nclass T {\n    class List { }\n    void f() { ArrayList<String> l = new ArrayList<>(); l.add(\"a\"); }\n}\n"
+        XCTAssertEqual(try findings(same, rule: rule).count, 0)
+    }
 }

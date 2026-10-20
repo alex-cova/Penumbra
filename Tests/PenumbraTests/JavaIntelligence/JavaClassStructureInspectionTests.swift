@@ -89,7 +89,10 @@ final class JavaClassStructureInspectionTests: XCTestCase {
 
     func testClassMayBeInterface() throws {
         let rule = JavaInspectionRule.classMayBeInterface
-        XCTAssertEqual(try codes("abstract class T {\n    abstract void f();\n    public abstract int g(int a);\n    static final int X = 1;\n}\n", rule: rule), [rule.code])
+        XCTAssertEqual(try codes("abstract class T {\n    public abstract void f();\n    public abstract int g(int a);\n    static final int X = 1;\n}\n", rule: rule), [rule.code])
+        // A package-private abstract method turns public in an interface, which would
+        // break package-private implementations in another file.
+        XCTAssertEqual(try codes("abstract class T {\n    abstract void f();\n    public abstract int g(int a);\n}\n", rule: rule), [])
         XCTAssertEqual(try codes("abstract class T {\n    abstract void f();\n    void g() {}\n}\n", rule: rule), [])
         XCTAssertEqual(try codes("abstract class T {\n    abstract void f();\n    int x;\n}\n", rule: rule), [])
         XCTAssertEqual(try codes("abstract class T {\n    protected abstract void f();\n}\n", rule: rule), [])

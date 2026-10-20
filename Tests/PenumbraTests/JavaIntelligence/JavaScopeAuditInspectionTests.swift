@@ -161,10 +161,11 @@ final class JavaScopeAuditInspectionTests: XCTestCase {
         XCTAssertEqual(try typeOfV(direct)?.name, "Integer")
     }
 
-    func testFieldOfATypeTheFileDoesNotDeclareIsStillOnlyTheOuterField() throws {
-        // Nothing says what `External` brings, so the outer field is the best answer there is.
+    func testFieldOfAnUnseenExternalHierarchyIsUnknown() throws {
+        // Nothing says what `External` brings, so the lookup ends unknown instead of
+        // guessing the outer field, which an inherited member would shadow.
         let source = "class C {\n    String v;\n    class In extends External {\n        void m() { v.probe(); }\n    }\n}\n"
-        XCTAssertEqual(try typeOfV(source)?.name, "String")
+        XCTAssertNil(try typeOfV(source))
     }
 
     func testFieldAccessUsesTheNearestOfTwoSameNamedNestedTypes() throws {

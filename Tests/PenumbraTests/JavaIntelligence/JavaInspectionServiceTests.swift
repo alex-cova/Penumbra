@@ -126,6 +126,82 @@ final class JavaInspectionServiceTests: XCTestCase {
         XCTAssertTrue(inspections.isEmpty)
     }
 
+    func testMissingOverrideFlagsGenericInterfaceOverride() async throws {
+        let base = "interface Comparable<T> { int compareTo(T o); }"
+        let source = "class Foo implements Comparable<Foo> { int compareTo(Foo o) { return 0; } }"
+        let inspections = try await missingOverrides(supertypes: [base], checking: source)
+        XCTAssertEqual(inspections.map(\.id), ["missing-override"])
+    }
+
+    func testMissingOverrideIgnoresOverloadAgainstGenericSupertype() async throws {
+        let base = "interface Comparable<T> { int compareTo(T o); }"
+        let source = "class Foo implements Comparable<Foo> { int compareTo(Bar o) { return 0; } }"
+        let inspections = try await missingOverrides(supertypes: [base], checking: source)
+        XCTAssertTrue(inspections.isEmpty)
+    }
+
+    func testMissingOverrideFlagsRawGenericSupertype() async throws {
+        let base = "interface Comparable<T> { int compareTo(T o); }"
+        let source = "class Foo implements Comparable { int compareTo(Object o) { return 0; } }"
+        let inspections = try await missingOverrides(supertypes: [base], checking: source)
+        XCTAssertEqual(inspections.map(\.id), ["missing-override"])
+    }
+
+    func testMissingOverrideIgnoresRawGenericOverload() async throws {
+        let base = "interface Comparable<T> { int compareTo(T o); }"
+        let source = "class Foo implements Comparable { int compareTo(String o) { return 0; } }"
+        let inspections = try await missingOverrides(supertypes: [base], checking: source)
+        XCTAssertTrue(inspections.isEmpty)
+    }
+
+    func testMissingOverrideFollowsGenericChainTwoLevels() async throws {
+        let supertypes = ["class Base<T> { void put(T t) { } }", "class Mid<U> extends Base<List<U>> { }"]
+        let source = "class Leaf extends Mid<String> { void put(List<String> l) { } }"
+        let inspections = try await missingOverrides(supertypes: supertypes, checking: source)
+        XCTAssertEqual(inspections.map(\.id), ["missing-override"])
+    }
+
+    func testMissingOverrideFlagsGenericMethodOverride() async throws {
+        let base = "class Base { <U> void m(U u) { } }"
+        let source = "class Child extends Base { <V> void m(V v) { } }"
+        let inspections = try await missingOverrides(supertypes: [base], checking: source)
+        XCTAssertEqual(inspections.map(\.id), ["missing-override"])
+    }
+
+    func testMissingOverrideIgnoresGenericMethodCountMismatch() async throws {
+        let base = "class Base { <U> void m(U u) { } }"
+        let source = "class Child extends Base { void m(Object o) { } }"
+        let inspections = try await missingOverrides(supertypes: [base], checking: source)
+        XCTAssertTrue(inspections.isEmpty)
+    }
+
+    func testMissingOverrideFlagsEnumConstantBody() async throws {
+        let source = "enum E { A { void run() { } }; abstract void run(); }"
+        let inspections = try await missingOverrides(supertypes: [], checking: source)
+        XCTAssertEqual(inspections.map(\.id), ["missing-override"])
+    }
+
+    func testMissingOverrideFlagsAnonymousClass() async throws {
+        let base = "interface Comparator<T> { int compare(T a, T b); }"
+        let source = "class C { Comparator<String> c = new Comparator<String>() { public int compare(String a, String b) { return 0; } }; }"
+        let inspections = try await missingOverrides(supertypes: [base], checking: source)
+        XCTAssertEqual(inspections.map(\.id), ["missing-override"])
+    }
+
+    func testMissingOverrideIgnoresUnresolvableAnonymousType() async throws {
+        let source = "class C { Object c = new Unknown() { void run() { } }; }"
+        let inspections = try await missingOverrides(supertypes: [], checking: source)
+        XCTAssertTrue(inspections.isEmpty)
+    }
+
+    func testMissingOverrideFlagsInterfaceObjectMethod() async throws {
+        // JLS 9.2 gives interfaces Object's public methods; redeclaring one is an override.
+        let object = "package java.lang; public class Object { public boolean equals(Object o) { return true; } }"
+        let source = "interface C { boolean equals(Object o); }"
+        let inspections = try await missingOverrides(supertypes: [object], checking: source)
+        XCTAssertEqual(inspections.map(\.id), ["missing-override"])
+    }
+
     func testUnresolvedTypeInspectionWarnsWhenNoCandidateExists() async throws {
         let index = try await makeIndex()
         let source = "class T { UnknownType value; }"
