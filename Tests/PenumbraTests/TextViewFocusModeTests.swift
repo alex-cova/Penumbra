@@ -223,6 +223,97 @@ final class TextViewFocusModeTests: XCTestCase {
         return (textView.text as NSString).substring(with: range)
     }
 
+    func testFocusToolbarFadeDefaultsOff() {
+        let textView = makeFocusedTextView(text: "Hello.")
+
+        XCTAssertFalse(textView.focusModeHidesChrome)
+    }
+
+    func testFocusModeAloneDoesNotFadeHostChrome() {
+        let textView = makeFocusedTextView(text: "Hello.")
+        let delegate = FocusChromeDelegate()
+        textView.editorDelegate = delegate
+        textView.distractionFreeFadeDuration = 0
+        textView.isFocusModeEnabled = true
+
+        send(keyEvent(keyCode: 0, characters: "a"), to: textView)
+
+        XCTAssertTrue(textView.isDistractionFreeChromeVisible)
+        XCTAssertNil(delegate.lastVisibility)
+    }
+
+    func testFocusModeToolbarFadeHidesHostChromeButKeepsEditorChrome() {
+        let textView = makeFocusedTextView(text: "Hello.")
+        let delegate = FocusChromeDelegate()
+        textView.editorDelegate = delegate
+        textView.distractionFreeFadeDuration = 0
+        textView.isFocusModeEnabled = true
+        textView.focusModeHidesChrome = true
+        // Enabling the fade must not fire the host callback on its own.
+        XCTAssertNil(delegate.lastVisibility)
+
+        send(keyEvent(keyCode: 0, characters: "a"), to: textView)
+
+        XCTAssertFalse(textView.isDistractionFreeChromeVisible)
+        XCTAssertEqual(delegate.lastVisibility, false)
+        XCTAssertEqual(textView.gutterContainerViewForTesting.alphaValue, 1)
+        XCTAssertEqual(textView.minimapViewForTesting.alphaValue, 1)
+
+        sendMouseMove(to: textView)
+
+        XCTAssertTrue(textView.isDistractionFreeChromeVisible)
+        XCTAssertEqual(delegate.lastVisibility, true)
+    }
+
+    func testDistractionFreeStillHidesEditorChrome() {
+        let textView = makeFocusedTextView(text: "Hello.")
+        let delegate = FocusChromeDelegate()
+        textView.editorDelegate = delegate
+        textView.distractionFreeFadeDuration = 0
+        textView.isDistractionFreeModeEnabled = true
+
+        send(keyEvent(keyCode: 0, characters: "a"), to: textView)
+
+        XCTAssertFalse(textView.isDistractionFreeChromeVisible)
+        XCTAssertEqual(delegate.lastVisibility, false)
+        XCTAssertEqual(textView.gutterContainerViewForTesting.alphaValue, 0)
+    }
+
+    func testDisablingFocusToolbarFadeRestoresHostChrome() {
+        let textView = makeFocusedTextView(text: "Hello.")
+        let delegate = FocusChromeDelegate()
+        textView.editorDelegate = delegate
+        textView.distractionFreeFadeDuration = 0
+        textView.isFocusModeEnabled = true
+        textView.focusModeHidesChrome = true
+
+        send(keyEvent(keyCode: 0, characters: "a"), to: textView)
+        XCTAssertEqual(delegate.lastVisibility, false)
+
+        textView.focusModeHidesChrome = false
+
+        XCTAssertTrue(textView.isDistractionFreeChromeVisible)
+        XCTAssertEqual(delegate.lastVisibility, true)
+        XCTAssertEqual(delegate.lastDuration, 0)
+    }
+
+    func testEnablingDistractionFreeWhileFocusChromeHiddenResyncsVisible() {
+        let textView = makeFocusedTextView(text: "Hello.")
+        let delegate = FocusChromeDelegate()
+        textView.editorDelegate = delegate
+        textView.distractionFreeFadeDuration = 0
+        textView.isFocusModeEnabled = true
+        textView.focusModeHidesChrome = true
+
+        send(keyEvent(keyCode: 0, characters: "a"), to: textView)
+        XCTAssertEqual(delegate.lastVisibility, false)
+
+        textView.isDistractionFreeModeEnabled = true
+
+        XCTAssertTrue(textView.isDistractionFreeChromeVisible)
+        XCTAssertEqual(delegate.lastVisibility, true)
+    }
+
     /// Typing into a scaled Markdown heading must not change the line's metrics. The edit used to
     /// rebuild the whole line at the body size until the highlight landed, so the caret jumped left
     /// and the lines below it moved up on every keystroke, then both snapped back.
@@ -486,5 +577,32 @@ final class TextViewFocusModeTests: XCTestCase {
         XCTAssertEqual(immediate.section.minY, settled.section.minY, accuracy: 0.5, "the section heading moved after the parse")
         XCTAssertEqual(immediate.below.minY, settled.below.minY, accuracy: 0.5, "the lines below moved after the parse")
         XCTAssertEqual(immediate.section.height, settled.section.height, accuracy: 0.5)
+    }
+
+    private func sendMouseMove(to textView: TextView) {
+        let event = NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: textView.window?.windowNumber ?? 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 0,
+            pressure: 0
+        )!
+        textView.mouseMoved(with: event)
+    }
+}
+
+private final class FocusChromeDelegate: TextViewDelegate {
+    var lastVisibility: Bool?
+    var lastDuration: TimeInterval?
+
+    func textView(_ textView: TextView,
+                  didChangeDistractionFreeChromeVisibility isVisible: Bool,
+                  transitionDuration: TimeInterval) {
+        lastVisibility = isVisible
+        lastDuration = transitionDuration
     }
 }

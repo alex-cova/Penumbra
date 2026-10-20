@@ -20,6 +20,12 @@ struct IDEPreferencesFocusPane: View {
                 isOn: $preferences.isFocusModeEnabled,
                 detail: "Dims text outside the current sentence or paragraph."
             )
+            IDESettingsToggle(
+                "Fade toolbars",
+                isOn: $preferences.isFocusModeToolbarFadeEnabled,
+                detail: "While Focus Mode is on, typing fades the toolbar and status bar out; moving the mouse or pausing brings them back."
+            )
+            .disabled(!preferences.isFocusModeEnabled)
         }
     }
 }

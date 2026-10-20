@@ -205,6 +205,9 @@ public struct DocumentTextExport: Sendable {
                     textInputView.clearSelection()
                     textInputViewDidEndEditing(textInputView)
                 }
+                // The editor may still be the window's first responder (turning selection off
+                // does not always resign it), in which case nothing would start the caret again.
+                beginCaretSessionIfFocused()
             }
         }
     }
@@ -331,6 +334,14 @@ public struct DocumentTextExport: Sendable {
         }
         set {
             textInputView.selectedRanges = newValue
+        }
+    }
+    /// Puts back carets saved earlier, dropping the ones the document has since shrunk past.
+    func restoreSelectedRanges(_ ranges: [NSRange]) {
+        let length = textInputView.string.length
+        let valid = ranges.filter { $0.location >= 0 && $0.length >= 0 && $0.location + $0.length <= length }
+        if !valid.isEmpty {
+            selectedRanges = valid
         }
     }
     /// Whether the text view currently has multiple carets.
@@ -757,6 +768,7 @@ public struct DocumentTextExport: Sendable {
         }
         set {
             textInputView.isFocusModeEnabled = newValue
+            updateChromeFadeEnabled()
         }
     }
     /// The unit of text Focus Mode keeps focused. Defaults to ``FocusGranularity/paragraph``.
@@ -831,11 +843,38 @@ public struct DocumentTextExport: Sendable {
     /// idle pause restores it. Host-owned chrome is coordinated through ``TextViewDelegate``.
     public var isDistractionFreeModeEnabled: Bool {
         get {
-            distractionFreeController.isEnabled
+            distractionFreePreference
         }
         set {
-            distractionFreeController.isEnabled = newValue
+            distractionFreePreference = newValue
+            updateChromeFadeEnabled()
         }
+    }
+    /// When on alongside ``isFocusModeEnabled``, typing fades host-owned chrome (the toolbar,
+    /// status bar and sidebars, via ``TextViewDelegate``) in and out with the distraction-free
+    /// timing, while the editor's own gutter, minimap, find panel and sticky lines stay visible.
+    /// Off by default.
+    public var focusModeHidesChrome = false {
+        didSet {
+            guard focusModeHidesChrome != oldValue else {
+                return
+            }
+            updateChromeFadeEnabled()
+        }
+    }
+    /// The distraction-free preference, kept apart from the controller's enabled state so Focus
+    /// Mode can drive host-chrome fading without hiding the editor's own chrome.
+    private var distractionFreePreference = false
+    /// The chrome-fade controller runs while Distraction Free is on, or while Focus Mode is on
+    /// with ``focusModeHidesChrome``. Turning the last one off restores chrome through the
+    /// controller's own reset.
+    private func updateChromeFadeEnabled() {
+        let enabled =
+            distractionFreePreference || (textInputView.isFocusModeEnabled && focusModeHidesChrome)
+        if enabled, enabled == distractionFreeController.isEnabled {
+            distractionFreeController.resyncChromeVisible()
+        }
+        distractionFreeController.isEnabled = enabled
     }
     /// Delay after the last key event before hidden chrome returns. Defaults to 1.5 seconds.
     public var distractionFreeIdleDelay: TimeInterval {
@@ -1428,6 +1467,8 @@ public struct DocumentTextExport: Sendable {
     #if DEBUG
     /// Test hook — the minimap overlay, so tests can render and probe it directly.
     var minimapViewForTesting: MinimapView { minimapView }
+    /// Test hook — the gutter container, so tests can tell editor chrome apart from host chrome.
+    var gutterContainerViewForTesting: EditorView { textInputView.gutterContainerView }
     /// Test hook — the overlay scrollers, so tests can probe and drive them directly.
     var scrollerOverlayForTesting: ScrollerOverlayController { scrollerOverlay }
     /// Test hook — the error stripe, so tests can read its ticks.
@@ -1947,11 +1988,12 @@ public struct DocumentTextExport: Sendable {
     /// Notifies this object that it has been asked to relinquish its status as first responder in its window.
     @discardableResult
     override open func resignFirstResponder() -> Bool {
-        if isEditing && shouldEndEditing {
-            return textInputView.resignFirstResponder()
-        } else {
-            return false
+        guard isEditing else {
+            // Not editing, so there is no session to protect. Refusing would pin the window's
+            // focus on this view and keep ``focusTextInput()`` from ever moving it to the editor.
+            return true
         }
+        return shouldEndEditing && textInputView.resignFirstResponder()
     }
 
     /// Installs the underlying text input as the window's first responder.
@@ -2885,29 +2927,34 @@ private extension TextView {
     }
 
     private func applyDistractionFreeChromeVisibility(_ isVisible: Bool, duration: TimeInterval) {
-        let alpha: CGFloat = isVisible ? 1 : 0
-        let chromeViews: [NSView] = [
-            textInputView.gutterContainerView,
-            minimapView,
-            findPanelController.panelView,
-            stickyLinesController.view
-        ]
-        if duration > 0 {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = duration
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        // Focus-driven fades only move host-owned chrome through the delegate below. The editor's
+        // own gutter, minimap, find panel, sticky lines and scrollers stay visible unless
+        // Distraction Free itself is on.
+        if distractionFreePreference {
+            let alpha: CGFloat = isVisible ? 1 : 0
+            let chromeViews: [NSView] = [
+                textInputView.gutterContainerView,
+                minimapView,
+                findPanelController.panelView,
+                stickyLinesController.view
+            ]
+            if duration > 0 {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = duration
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    for view in chromeViews {
+                        view.animator().alphaValue = alpha
+                    }
+                }
+            } else {
                 for view in chromeViews {
-                    view.animator().alphaValue = alpha
+                    view.alphaValue = alpha
                 }
             }
-        } else {
-            for view in chromeViews {
-                view.alphaValue = alpha
-            }
+            // The scrollers manage their own auto-hide opacity, so they follow the chrome through a
+            // suppression flag instead of being faded directly.
+            scrollerOverlay.setChromeVisible(isVisible, duration: duration)
         }
-        // The scrollers manage their own auto-hide opacity, so they follow the chrome through a
-        // suppression flag instead of being faded directly.
-        scrollerOverlay.setChromeVisible(isVisible, duration: duration)
         editorDelegate?.textView(
             self,
             didChangeDistractionFreeChromeVisibility: isVisible,

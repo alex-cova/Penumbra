@@ -53,6 +53,90 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertFalse(controller.isVisible)
     }
 
+    /// Showing the preview makes the editor unselectable, which resigns it and clears its
+    /// selection; closing it must bring the focus, the caret session and the carets back.
+    @MainActor
+    func testClosingPreviewRestoresEditorCaretAndFocus() {
+        for umbraLike in [false, true] {
+            let (window, textView, controller) = makeEditorWithPreview(umbraLike: umbraLike)
+            XCTAssertTrue(textView.focusTextInput())
+            textView.selectedRange = NSRange(location: 2, length: 5)
+            XCTAssertTrue(textView.isEditing)
+
+            XCTAssertTrue(controller.toggle())
+            XCTAssertFalse(textView.isSelectable)
+            // Clicking the rendered page leaves the window's focus on the (not editing) TextView.
+            window.makeFirstResponder(textView)
+            XCTAssertTrue(controller.toggle())
+            textView.layoutIfNeeded()
+
+            XCTAssertTrue(textView.isSelectable, "umbraLike: \(umbraLike)")
+            XCTAssertTrue(textView.isEditing, "the caret session restarts when the preview closes (umbraLike: \(umbraLike))")
+            XCTAssertEqual(textView.selectedRange, NSRange(location: 2, length: 5))
+            XCTAssertFalse(visibleViews(ofType: "SelectionOverlayView", in: window.contentView!).isEmpty, "umbraLike: \(umbraLike)")
+
+            // A click, then a drag, selects and shows the selection.
+            let input = findTextInputView(in: window.contentView!)!
+            let down = mouseEvent(.leftMouseDown, at: CGPoint(x: 30, y: 12), in: window)
+            let drag = mouseEvent(.leftMouseDragged, at: CGPoint(x: 90, y: 12), in: window)
+            input.mouseDown(with: down)
+            input.mouseDragged(with: drag)
+            input.mouseUp(with: mouseEvent(.leftMouseUp, at: CGPoint(x: 90, y: 12), in: window))
+            textView.layoutIfNeeded()
+            XCTAssertGreaterThan(textView.selectedRange.length, 0, "umbraLike: \(umbraLike)")
+            XCTAssertTrue(textView.isEditing, "umbraLike: \(umbraLike)")
+            XCTAssertFalse(visibleViews(ofType: "SelectionOverlayView", in: window.contentView!).isEmpty, "umbraLike: \(umbraLike)")
+            _ = window
+        }
+    }
+
+    @MainActor
+    private func makeEditorWithPreview(umbraLike: Bool) -> (NSWindow, TextView, MarkdownPreviewController) {
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        let controller = MarkdownPreviewController(textView: textView)
+        if umbraLike {
+            textView.isMetalRenderingEnabled = true
+            textView.showMinimap = true
+            textView.isLineFoldingEnabled = true
+            textView.showsStickyLines = true
+            controller.embed(editorView: textView)
+            window.contentView = controller.containerView
+        } else {
+            window.contentView = textView
+        }
+        window.makeKeyAndOrderFront(nil)
+        textView.setState(TextViewState(text: "# Title\n\nBody text and more body text here", theme: DefaultTheme()))
+        textView.languageIdentifier = "markdown"
+        window.contentView?.layoutSubtreeIfNeeded()
+        textView.layoutIfNeeded()
+        return (window, textView, controller)
+    }
+
+    private func visibleViews(ofType name: String, in view: NSView) -> [NSView] {
+        var found: [NSView] = []
+        if String(describing: type(of: view)) == name, !view.isHidden { found.append(view) }
+        for sub in view.subviews { found += visibleViews(ofType: name, in: sub) }
+        return found
+    }
+
+    private func findTextInputView(in view: NSView) -> NSView? {
+        if String(describing: type(of: view)) == "TextInputView" { return view }
+        for sub in view.subviews { if let f = findTextInputView(in: sub) { return f } }
+        return nil
+    }
+
+    private func mouseEvent(_ type: NSEvent.EventType, at point: CGPoint, in window: NSWindow) -> NSEvent {
+        NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                           windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                           clickCount: 1, pressure: 1)!
+    }
+
     @MainActor
     func testToggleIgnoredForNilAndMermaidLanguageIdentifiers() {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))

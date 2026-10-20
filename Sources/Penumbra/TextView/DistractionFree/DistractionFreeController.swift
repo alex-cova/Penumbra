@@ -82,6 +82,15 @@ final class DistractionFreeController {
         idleCancellation = nil
     }
 
+    /// Restores visible chrome without changing the enabled state. A preference change under an
+    /// already-running controller (e.g. Distraction Free switched on while focus-driven chrome is
+    /// hidden) resyncs this way, so the next keystroke starts a fresh hide cycle from visible.
+    func resyncChromeVisible() {
+        idleCancellation?.cancel()
+        idleCancellation = nil
+        setChromeVisible(true, animated: false)
+    }
+
     private func setChromeVisible(_ visible: Bool, animated: Bool) {
         guard visible != isChromeVisible else { return }
         isChromeVisible = visible

@@ -197,6 +197,7 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.isTypewriterScrollingEnabled) { applyLivePreferences() }
             .onChange(of: preferences.isDistractionFreeModeEnabled) { applyLivePreferences() }
             .onChange(of: preferences.isFocusModeEnabled) { applyLivePreferences() }
+            .onChange(of: preferences.isFocusModeToolbarFadeEnabled) { applyLivePreferences() }
     }
 
     private func codeInsightChanges(_ view: some View) -> some View {

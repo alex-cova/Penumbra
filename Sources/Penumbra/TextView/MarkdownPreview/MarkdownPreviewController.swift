@@ -28,6 +28,9 @@ public final class MarkdownPreviewController: NSObject {
     private var previewDelegate: PreviewTextViewDelegate?
     private var chainedTextViewDelegate: ChainedTextViewDelegate?
     private var editorWasSelectableBeforePreview = true
+    /// The editor's carets when the preview covered it. Making the editor unselectable clears its
+    /// selection, so they are put back when the preview closes.
+    private var editorSelectionBeforePreview: [NSRange] = []
 
     /// Base URL for resolving relative markdown image paths (typically the open document's file URL).
     public var documentBaseURL: URL?
@@ -270,6 +273,7 @@ public final class MarkdownPreviewController: NSObject {
         // (invisible) text remains selectable/focusable while the rendered preview covers it.
         if let textView {
             editorWasSelectableBeforePreview = textView.isSelectable
+            editorSelectionBeforePreview = textView.selectedRanges
             textView.isSelectable = false
         }
         previewView.isHidden = false
@@ -277,12 +281,19 @@ public final class MarkdownPreviewController: NSObject {
     }
 
     private func hidePreview() {
+        let wasVisible = isPreviewVisible
         isPreviewVisible = false
         previewView.isHidden = true
         updateAppearanceToggle()
-        textView?.isSelectable = editorWasSelectableBeforePreview
         parseTask?.cancel()
         cancelMermaidWork()
+        // Called for every document load too; only a preview that was up changed the editor.
+        guard wasVisible, let textView else { return }
+        textView.isSelectable = editorWasSelectableBeforePreview
+        // Hiding the editor dropped its focus and caret session: bring both back where they were.
+        textView.restoreSelectedRanges(editorSelectionBeforePreview)
+        editorSelectionBeforePreview = []
+        textView.focusTextInput()
     }
 
     func noteTextDidChange() {

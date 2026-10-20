@@ -586,6 +586,7 @@ private struct IDEViewCommands: View {
         Toggle("Typewriter Scrolling", isOn: binding(\.isTypewriterScrollingEnabledBinding))
         Toggle("Distraction Free", isOn: binding(\.isDistractionFreeModeEnabledBinding))
         Toggle("Focus Mode", isOn: binding(\.isFocusModeEnabledBinding))
+        Toggle("Fade Toolbars in Focus Mode", isOn: binding(\.isFocusModeToolbarFadeEnabledBinding))
         Toggle("Use Metal Renderer", isOn: binding(\.isMetalRenderingEnabledBinding))
     }
 }

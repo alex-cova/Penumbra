@@ -3703,6 +3703,12 @@ public final class IDEWorkspace {
         focusActiveEditor()
     }
 
+    public func toggleFocusModeToolbarFade() {
+        preferences.isFocusModeToolbarFadeEnabled.toggle()
+        applyPreferencesToAllHosts()
+        focusActiveEditor()
+    }
+
     func toggleMetalRendering() {
         preferences.isMetalRenderingEnabled.toggle()
         applyPreferencesToAllHosts()
@@ -3743,6 +3749,10 @@ public final class IDEWorkspace {
 
     public var isFocusModeEnabledBinding: Binding<Bool> {
         preferenceBinding(\.isFocusModeEnabled)
+    }
+
+    public var isFocusModeToolbarFadeEnabledBinding: Binding<Bool> {
+        preferenceBinding(\.isFocusModeToolbarFadeEnabled)
     }
 
     private func preferenceBinding(_ keyPath: ReferenceWritableKeyPath<IDEPreferences, Bool>) -> Binding<Bool> {
@@ -5275,6 +5285,8 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.toggleDistractionFreeMode() }),
             EditorCommand(id: "app.toggleFocusMode", title: "Toggle Focus Mode", group: "View",
                           action: { [weak self] in self?.toggleFocusMode() }),
+            EditorCommand(id: "app.toggleFocusModeToolbarFade", title: "Toggle Focus Mode Toolbar Fade", group: "View",
+                          action: { [weak self] in self?.toggleFocusModeToolbarFade() }),
             EditorCommand(id: "app.showNotifications", title: "Show Notifications", group: "View",
                           action: { [weak self] in self?.showNotifications() }),
             EditorCommand(id: "app.toggleMetalRendering", title: "Use Metal Renderer", group: "View",

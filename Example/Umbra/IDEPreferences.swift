@@ -78,6 +78,7 @@ public final class IDEPreferences {
         static let isTypewriterScrollingEnabled = "com.umbra.editor.isTypewriterScrollingEnabled"
         static let isDistractionFreeModeEnabled = "com.umbra.editor.isDistractionFreeModeEnabled"
         static let isFocusModeEnabled = "com.umbra.editor.isFocusModeEnabled"
+        static let isFocusModeToolbarFadeEnabled = "com.umbra.editor.isFocusModeToolbarFadeEnabled"
         static let hasCompletedFirstRunGuide = "com.umbra.editor.hasCompletedFirstRunGuide"
         static let javaGradleAutoSync = "com.umbra.editor.javaGradleAutoSync"
         static let javaMavenAutoRead = "com.umbra.editor.javaMavenAutoRead"
@@ -580,6 +581,10 @@ public final class IDEPreferences {
 
     var isFocusModeEnabled: Bool {
         didSet { UserDefaults.standard.set(isFocusModeEnabled, forKey: Keys.isFocusModeEnabled) }
+    }
+
+    var isFocusModeToolbarFadeEnabled: Bool {
+        didSet { UserDefaults.standard.set(isFocusModeToolbarFadeEnabled, forKey: Keys.isFocusModeToolbarFadeEnabled) }
     }
 
     var keymap: Keymap { keymapPreset.keymap }
@@ -1134,6 +1139,7 @@ public final class IDEPreferences {
         isTypewriterScrollingEnabled = defaults.object(forKey: Keys.isTypewriterScrollingEnabled) as? Bool ?? false
         isDistractionFreeModeEnabled = defaults.object(forKey: Keys.isDistractionFreeModeEnabled) as? Bool ?? false
         isFocusModeEnabled = defaults.object(forKey: Keys.isFocusModeEnabled) as? Bool ?? false
+        isFocusModeToolbarFadeEnabled = defaults.object(forKey: Keys.isFocusModeToolbarFadeEnabled) as? Bool ?? false
         hasCompletedFirstRunGuide = defaults.bool(forKey: Keys.hasCompletedFirstRunGuide)
         javaGradleAutoSync = defaults.object(forKey: Keys.javaGradleAutoSync) as? Bool ?? true
         javaMavenAutoRead = defaults.object(forKey: Keys.javaMavenAutoRead) as? Bool ?? true
@@ -1224,6 +1230,7 @@ public final class IDEPreferences {
         }
         textView.isDistractionFreeModeEnabled = isDistractionFreeModeEnabled
         textView.isFocusModeEnabled = isFocusModeEnabled
+        textView.focusModeHidesChrome = isFocusModeToolbarFadeEnabled
         textView.keymap = keymap
         textView.theme = IDEEditorTheme.shared.current
         textView.tooltipDelay = TimeInterval(tooltipDelayMilliseconds) / 1000
@@ -1394,6 +1401,7 @@ public final class IDEPreferences {
             isTypewriterScrollingEnabled: isTypewriterScrollingEnabled,
             isDistractionFreeModeEnabled: isDistractionFreeModeEnabled,
             isFocusModeEnabled: isFocusModeEnabled,
+            isFocusModeToolbarFadeEnabled: isFocusModeToolbarFadeEnabled,
             showScrollbars: showScrollbars,
             showEditorFragmentPreview: showEditorFragmentPreview,
             flattenJavaPackages: flattenJavaPackages,
@@ -1450,6 +1458,7 @@ public final class IDEPreferences {
         isTypewriterScrollingEnabled = snapshot.isTypewriterScrollingEnabled
         isDistractionFreeModeEnabled = snapshot.isDistractionFreeModeEnabled
         isFocusModeEnabled = snapshot.isFocusModeEnabled
+        isFocusModeToolbarFadeEnabled = snapshot.isFocusModeToolbarFadeEnabled
         showScrollbars = snapshot.showScrollbars
         showEditorFragmentPreview = snapshot.showEditorFragmentPreview
         flattenJavaPackages = snapshot.flattenJavaPackages
@@ -1504,6 +1513,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var isTypewriterScrollingEnabled: Bool
     var isDistractionFreeModeEnabled: Bool
     var isFocusModeEnabled: Bool
+    var isFocusModeToolbarFadeEnabled: Bool
     var showScrollbars: Bool
     var showEditorFragmentPreview: Bool
     var flattenJavaPackages: Bool
@@ -1556,6 +1566,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         isTypewriterScrollingEnabled: Bool = false,
         isDistractionFreeModeEnabled: Bool = false,
         isFocusModeEnabled: Bool = false,
+        isFocusModeToolbarFadeEnabled: Bool = false,
         showScrollbars: Bool = true,
         showEditorFragmentPreview: Bool = true,
         flattenJavaPackages: Bool = false,
@@ -1607,6 +1618,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.isTypewriterScrollingEnabled = isTypewriterScrollingEnabled
         self.isDistractionFreeModeEnabled = isDistractionFreeModeEnabled
         self.isFocusModeEnabled = isFocusModeEnabled
+        self.isFocusModeToolbarFadeEnabled = isFocusModeToolbarFadeEnabled
         self.showScrollbars = showScrollbars
         self.showEditorFragmentPreview = showEditorFragmentPreview
         self.flattenJavaPackages = flattenJavaPackages
@@ -1665,6 +1677,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         isTypewriterScrollingEnabled = try container.decodeIfPresent(Bool.self, forKey: .isTypewriterScrollingEnabled) ?? false
         isDistractionFreeModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isDistractionFreeModeEnabled) ?? false
         isFocusModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isFocusModeEnabled) ?? false
+        isFocusModeToolbarFadeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isFocusModeToolbarFadeEnabled) ?? false
         showScrollbars = try container.decodeIfPresent(Bool.self, forKey: .showScrollbars) ?? true
         showEditorFragmentPreview = try container.decodeIfPresent(Bool.self, forKey: .showEditorFragmentPreview) ?? true
         flattenJavaPackages = try container.decodeIfPresent(Bool.self, forKey: .flattenJavaPackages) ?? false
