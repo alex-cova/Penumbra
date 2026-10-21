@@ -91,6 +91,25 @@ enum EnterSessionProfile {
                           extra: "p90=\(String(format: "%.6f", p90)) shiftVisits=\(visits) live=\(live) extracts=\(extracts) decorations=\(decorations)")
         }
 
+        // ⌘-hover copies the buffer once per edit (`JumpToDefinitionController.currentText`): the
+        // first hover after typing pays `textView.text` on the main thread.
+        do {
+            var times: [Double] = []
+            for _ in 0 ..< max(samples, 5) {
+                autoreleasepool {
+                    textView.insertText(" ")
+                    let start = CFAbsoluteTimeGetCurrent()
+                    let copy = textView.text
+                    times.append(CFAbsoluteTimeGetCurrent() - start)
+                    _ = copy.utf8.count
+                }
+                textView.deleteBackward()
+            }
+            let median = Measurement.percentile(times, 0.5)
+            warn(String(format: "  text_copy after an edit: median=%7.3f ms", median * 1000))
+            ResultLog.row("text_copy", file: file, sizeBytes: sizeBytes, seconds: median, extra: "")
+        }
+
         let top = min(40, lineCount - 1)
         let middle = lineCount / 2
         let end = max(lineCount - 20, 0)
