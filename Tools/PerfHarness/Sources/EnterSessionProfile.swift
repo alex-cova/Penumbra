@@ -91,8 +91,9 @@ enum EnterSessionProfile {
                           extra: "p90=\(String(format: "%.6f", p90)) shiftVisits=\(visits) live=\(live) extracts=\(extracts) decorations=\(decorations)")
         }
 
-        // ⌘-hover copies the buffer once per edit (`JumpToDefinitionController.currentText`): the
-        // first hover after typing pays `textView.text` on the main thread.
+        // What copying the whole buffer costs after an edit. ⌘-hover used to pay it on the main
+        // thread (the first one after typing); `JumpToDefinitionController` now builds the string
+        // off it, so this is the price of any caller that still reads `textView.text`.
         do {
             var times: [Double] = []
             for _ in 0 ..< max(samples, 5) {
