@@ -27,6 +27,12 @@ struct IDEAIModeView: View {
             IDEAIModelsSheet(settings: workspace.agent.settings)
                 .preferredColorScheme(IDEAppearance.preferredColorScheme)
         }
+        .sheet(item: Bindable(workspace).aiModelSetup) { tab in
+            IDEAIModelSetupSheet(
+                settings: workspace.agent.settings, mode: tab == .code ? .code : .chat,
+                onUse: { workspace.selectAIModel($0, for: tab) })
+                .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        }
     }
 }
 
@@ -35,9 +41,13 @@ struct IDEAIMainView: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        switch workspace.aiTab {
-        case .chat: IDEAIChatView()
-        case .code: IDEAICodeView()
+        Group {
+            switch workspace.aiTab {
+            case .chat: IDEAIChatView()
+            case .code: IDEAICodeView()
+            }
         }
+        // The first time a tab shows with no usable model, the setup sheet opens by itself.
+        .task(id: workspace.aiTab) { await workspace.offerAIModelSetupIfNeeded() }
     }
 }

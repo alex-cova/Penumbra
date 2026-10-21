@@ -62,10 +62,7 @@ struct IDEAIChatView: View {
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
             composerColumn
             if let hint = conversation.setupHint {
-                Text(hint)
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.error)
-                    .multilineTextAlignment(.center)
+                IDEAISetupButton(hint: hint) { workspace.requestAIModelSetup(for: .chat) }
             }
             Spacer(minLength: 0)
             Spacer(minLength: 0)
@@ -106,6 +103,15 @@ struct IDEAIChatView: View {
 
     // MARK: - Composer
 
+    /// With no usable model, Send asks for one instead of doing nothing.
+    private func send() {
+        if conversation.setupHint != nil, !conversation.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            workspace.requestAIModelSetup(for: .chat)
+        } else {
+            conversation.send()
+        }
+    }
+
     /// Long lines stay readable.
     static let columnWidth: CGFloat = 760
 
@@ -128,7 +134,7 @@ struct IDEAIChatView: View {
                         placeholder: "Message the model",
                         state: composerState, focusRequest: chat.composerFocusRequest, acceptRequest: acceptRequest,
                         suggestions: { _ in [] },
-                        onSend: { conversation.send() },
+                        onSend: send,
                         onStop: { conversation.stop() })
                         .frame(height: composerHeight)
                     if conversation.isRunning {
@@ -137,7 +143,7 @@ struct IDEAIChatView: View {
                     } else {
                         IDEAgentIconButton(
                             systemImage: "arrow.up.circle.fill", help: "Send", tint: IDEAppearance.ColorToken.accent,
-                            isDisabled: !conversation.canSend, action: conversation.send)
+                            isDisabled: !conversation.canSend, action: send)
                     }
                 }
                 HStack(spacing: IDEAppearance.Spacing.sm) {
@@ -154,7 +160,7 @@ struct IDEAIChatView: View {
                     }
                     IDEAIModelPicker(
                         settings: workspace.agent.settings, choice: conversation.effectiveChoice, mode: .chat,
-                        onSelect: { chat.choose($0) }, onManage: { workspace.isAIModelsPresented = true })
+                        onSelect: { workspace.selectAIModel($0, for: .chat) }, onManage: { workspace.isAIModelsPresented = true })
                 }
             }
             .padding(IDEAppearance.Spacing.sm)

@@ -164,5 +164,46 @@ final class IDEAIModeTests: XCTestCase {
         XCTAssertEqual(workspace.windowMode, .editor, "a file is shown in the editor")
         workspace.teardown()
     }
-}
 
+    // MARK: - Model setup
+
+    /// An on-device choice with no model is never usable, whether or not this machine can run MLX.
+    private let unusableChoice = IDEAIModelChoice(provider: .mlx, model: "")
+
+    func testTheSetupSheetOpensByItselfOnceWhenTheModelIsUnusable() async {
+        let workspace = makeWorkspace()
+        workspace.agent.selected.modelChoice = unusableChoice
+        workspace.showAIMode(tab: .code)
+        XCTAssertNotNil(workspace.aiModelSetupHint(for: .code))
+
+        await workspace.offerAIModelSetupIfNeeded()
+        XCTAssertEqual(workspace.aiModelSetup, .code)
+
+        workspace.aiModelSetup = nil
+        await workspace.offerAIModelSetupIfNeeded()
+        XCTAssertNil(workspace.aiModelSetup, "dismissed once: it does not come back by itself")
+
+        workspace.requestAIModelSetup(for: .chat)
+        XCTAssertEqual(workspace.aiModelSetup, .chat, "the button and Send still open it")
+    }
+
+    func testTheSetupSheetStaysClosedOutsideAIMode() async {
+        let workspace = makeWorkspace()
+        workspace.agent.selected.modelChoice = unusableChoice
+        await workspace.offerAIModelSetupIfNeeded()
+        XCTAssertNil(workspace.aiModelSetup)
+        XCTAssertFalse(workspace.hasOfferedAIModelSetup)
+    }
+
+    func testChoosingAModelInTheSetupSheetSetsItForTheTabThatAsked() {
+        let workspace = makeWorkspace()
+        let saved = IDEAISettings.shared.codeChoice
+        defer { IDEAISettings.shared.codeChoice = saved }
+        let choice = IDEAIModelChoice(provider: .ollama, model: "qwen3:8b")
+
+        workspace.selectAIModel(choice, for: .code)
+        XCTAssertEqual(workspace.agent.selected.modelChoice, choice)
+        XCTAssertEqual(workspace.agent.newChatChoice, choice)
+        XCTAssertEqual(IDEAISettings.shared.codeChoice, choice)
+    }
+}

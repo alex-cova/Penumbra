@@ -245,6 +245,11 @@ struct IDEAgentPanel: View {
 
     private func send() {
         guard !needsProject else { return }
+        // A message that would be sent (not a /command) with no usable model asks for one first.
+        if isAIMode, !agent.draft.hasPrefix("/"), workspace.aiModelSetupHint(for: .code) != nil {
+            workspace.requestAIModelSetup(for: .code)
+            return
+        }
         agent.submit()
     }
 
@@ -279,11 +284,7 @@ struct IDEAgentPanel: View {
             if isAIMode {
                 IDEAIModelPicker(
                     settings: settings, choice: choice, mode: .code,
-                    onSelect: { picked in
-                        agent.selected.modelChoice = picked
-                        IDEAISettings.shared.codeChoice = picked
-                        agent.newChatChoice = picked
-                    },
+                    onSelect: { workspace.selectAIModel($0, for: .code) },
                     onManage: { workspace.isAIModelsPresented = true })
             }
         }
@@ -303,11 +304,8 @@ struct IDEAgentPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .multilineTextAlignment(.center)
             composer
-            if let hint = settings.setupHint(for: choice), !agent.selected.isACPConversation {
-                Text(hint)
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.error)
-                    .multilineTextAlignment(.center)
+            if let hint = workspace.aiModelSetupHint(for: .code) {
+                IDEAISetupButton(hint: hint) { workspace.requestAIModelSetup(for: .code) }
             }
             Spacer(minLength: 0)
             Spacer(minLength: 0)

@@ -240,7 +240,7 @@ private struct IDEAIProvidersTab: View {
     }
 }
 
-private struct IDEAIProviderSection: View {
+struct IDEAIProviderSection: View {
     let settings: IDEAgentSettings
     let provider: IDEAgentProvider
     let modelHint: String

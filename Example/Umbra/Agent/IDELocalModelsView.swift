@@ -12,6 +12,7 @@ struct IDELocalModelsView: View {
 
     @State private var selectedID: String?
     @State private var tokenDraft = ""
+    @State private var filter = IDELocalModelFilter()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,6 +23,8 @@ struct IDELocalModelsView: View {
                     if store.availability != .available { availabilityBanner }
                     installedSection
                     if let download = store.download { downloadSection(download) }
+                    filterBar
+                    suggestedSection
                     searchSection
                     footer
                 }
@@ -72,7 +75,7 @@ struct IDELocalModelsView: View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
             Text("Installed").font(IDEAppearance.Typography.sectionHeader)
             if store.installed.isEmpty {
-                Text("No models yet. Search below and download one that supports tools.")
+                Text("No models yet. Download a suggested one below, or search for another that supports tools.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
@@ -181,6 +184,87 @@ struct IDELocalModelsView: View {
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
     }
 
+    // MARK: - Filters
+
+    /// Precision and Parameters narrow the suggestions and the search results below.
+    private var filterBar: some View {
+        HStack(spacing: IDEAppearance.Spacing.md) {
+            Picker("Precision", selection: $filter.precision) {
+                Text("Any").tag(IDELocalModelFilter.Precision?.none)
+                ForEach(IDELocalModelFilter.Precision.allCases) { Text($0.title).tag(IDELocalModelFilter.Precision?.some($0)) }
+            }
+            .help("Bits per weight. Fewer bits is smaller and faster, and loses some accuracy.")
+            Picker("Parameters", selection: $filter.parameters) {
+                Text("Any").tag(IDELocalModelFilter.Parameters?.none)
+                ForEach(IDELocalModelFilter.Parameters.allCases) { Text($0.title).tag(IDELocalModelFilter.Parameters?.some($0)) }
+            }
+            .help("The model's size in billions of parameters")
+            Spacer(minLength: 0)
+            if filter.isActive {
+                Button("Clear Filters") { filter = IDELocalModelFilter() }.controlSize(.small)
+            }
+        }
+        .pickerStyle(.menu)
+        .font(IDEAppearance.Typography.caption)
+        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+    }
+
+    // MARK: - Suggested
+
+    private var suggestedSection: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            Text("Suggested").font(IDEAppearance.Typography.sectionHeader)
+            let shown = IDESuggestedLocalModels.all.filter(filter.matches)
+            ForEach(shown) { suggested in suggestedRow(suggested) }
+            if shown.isEmpty {
+                Text("No suggestion has that precision and size.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            if let error = store.downloadError, store.download == nil {
+                Text(error).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
+            }
+        }
+    }
+
+    private func suggestedRow(_ suggested: IDESuggestedLocalModel) -> some View {
+        let isInstalled = store.installed.contains { $0.id == suggested.id }
+        let isDownloading = store.download?.id == suggested.id
+        let fits = suggested.fitsMemory()
+        return HStack(spacing: IDEAppearance.Spacing.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(LocalModelFormat.shortName(suggested.id)).font(IDEAppearance.Typography.body).lineLimit(1)
+                Text(suggested.blurb).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.muted)
+                HStack(spacing: IDEAppearance.Spacing.xs) {
+                    Text("\(IDELocalModelFilter.sizeLabel(billions: suggested.parameterBillions)) · \(suggested.bits)-bit · about \(LocalModelFormat.bytes(suggested.approximateBytes))")
+                    if let memory = suggested.recommendedMemoryGB {
+                        Text("· \(memory) GB memory or more")
+                            .foregroundStyle(fits ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.error)
+                    }
+                }
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            Spacer(minLength: 0)
+            if isInstalled {
+                Label("Installed", systemImage: "checkmark.circle.fill")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.run)
+            } else if isDownloading {
+                ProgressView().controlSize(.small)
+            } else {
+                Button("Download") { store.startDownload(suggested.id) }
+                    .controlSize(.small)
+                    .disabled(!store.canStartDownload)
+                    .help(store.download == nil ? "Download from huggingface.co" : "One download at a time.")
+            }
+        }
+        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+        .padding(IDEAppearance.Spacing.sm)
+        .background(IDEAppearance.ColorToken.card)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+    }
+
     // MARK: - Search
 
     private var searchSection: some View {
@@ -200,7 +284,15 @@ struct IDELocalModelsView: View {
             if let error = store.searchError {
                 Text(error).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
             }
-            ForEach(store.results) { result in resultRow(result) }
+            let shown = store.results.filter(filter.matches)
+            ForEach(shown) { result in resultRow(result) }
+            if filter.isActive, shown.count < store.results.count {
+                Text(shown.isEmpty
+                    ? "No result matches the filters. A model whose precision or size is not known is hidden while one is set."
+                    : "\(store.results.count - shown.count) more hidden by the filters.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
             if let selectedID, let result = store.results.first(where: { $0.id == selectedID }) { detailsPane(result) }
         }
     }
@@ -214,8 +306,8 @@ struct IDELocalModelsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(result.id).font(IDEAppearance.Typography.body).lineLimit(1)
                     HStack(spacing: IDEAppearance.Spacing.xs) {
-                        if let count = result.parameterCount { Text(LocalModelFormat.parameters(count)) }
-                        if let quantization = result.quantization { Text("· \(quantization)") }
+                        if let billions = IDELocalModelFilter.billions(of: result) { Text(IDELocalModelFilter.sizeLabel(billions: billions)) }
+                        if let bits = IDELocalModelFilter.bits(of: result) { Text("· \(bits)-bit") }
                         Text("· \(LocalModelFormat.compactCount(result.downloads)) downloads")
                         if result.isGated { Text("· gated").foregroundStyle(IDEAppearance.ColorToken.error) }
                     }

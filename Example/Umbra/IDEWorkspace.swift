@@ -191,6 +191,10 @@ public final class IDEWorkspace {
     let aiSessions = IDEAISessions(store: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentController.appStore() : nil)
     /// The Manage Models sheet of AI mode.
     var isAIModelsPresented = false
+    /// The guided "Set up a model" sheet of AI mode, for the tab that asked.
+    var aiModelSetup: IDEAITab?
+    /// Set once the sheet has opened on its own, so it never opens by itself twice in a window.
+    var hasOfferedAIModelSetup = false
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
     /// Hierarchies kept with Pin Tab, and which one the tab shows (nil: the live one).
