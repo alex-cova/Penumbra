@@ -47,7 +47,7 @@ final class IDEAISessions {
         let currentKey = currentRoot.map(standardized)
 
         var groups: [IDEAISessionGroup] = []
-        if let currentRoot, let currentKey {
+        if let currentRoot {
             let rows = IDEAgentHistorySearch.rank(current, query: trimmed, requiresMatch: !trimmed.isEmpty)
             if !rows.isEmpty || trimmed.isEmpty { groups.append(IDEAISessionGroup(projectRoot: currentRoot, rows: rows)) }
         }
