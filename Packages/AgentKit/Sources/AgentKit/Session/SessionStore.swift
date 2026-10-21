@@ -41,13 +41,18 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
     public let messageCount: Int
     /// Dollars recorded in the host blob's `cost` field, when the host saved one.
     public let cost: Double?
+    /// The project the conversation belongs to, as saved in the snapshot.
+    public let projectRoot: String?
 
-    public init(id: UUID, title: String, updatedAt: Date, messageCount: Int = 0, cost: Double? = nil) {
+    public init(
+        id: UUID, title: String, updatedAt: Date, messageCount: Int = 0, cost: Double? = nil, projectRoot: String? = nil
+    ) {
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
         self.messageCount = messageCount
         self.cost = cost
+        self.projectRoot = projectRoot
     }
 }
 
@@ -99,14 +104,48 @@ public struct SessionStore: Sendable {
         let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
         return files
             .filter { $0.pathExtension == "json" }
-            .compactMap { url -> SessionSummary? in
-                guard let data = try? Data(contentsOf: url), let snapshot = decode(data) else { return nil }
-                return SessionSummary(
-                    id: snapshot.id, title: snapshot.title, updatedAt: snapshot.updatedAt,
-                    messageCount: snapshot.items.reduce(into: 0) { count, item in if case .user = item { count += 1 } },
-                    cost: Self.cost(in: snapshot.host))
+            .compactMap(summary(at:))
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// The newest conversations of every project, newest first, for a list that is not tied to one
+    /// folder. Conversations can be large, so only the `limit` most recently written files are read,
+    /// and a file whose summary is in `previous` and has not been written since is not read again
+    /// (a list that refreshes whenever a chat is saved would otherwise decode every conversation each time).
+    public func listAll(limit: Int = 100, reusing previous: [SessionSummary] = []) -> [SessionSummary] {
+        let fileManager = FileManager.default
+        let keys: [URLResourceKey] = [.isDirectoryKey, .contentModificationDateKey]
+        let folders = (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys)) ?? []
+        var candidates: [(url: URL, modified: Date)] = []
+        for folder in folders where (try? folder.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            // One level only: `blobs/` and any other subfolder hold checkpoint data, not conversations.
+            for url in (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys)) ?? []
+            where url.pathExtension == "json" {
+                let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                candidates.append((url, modified))
+            }
+        }
+        let known = Dictionary(previous.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return candidates
+            .sorted { $0.modified > $1.modified }
+            .prefix(max(0, limit))
+            .compactMap { candidate -> SessionSummary? in
+                // The file is named after the session id, and `updatedAt` is stamped when it is written.
+                if let id = UUID(uuidString: candidate.url.deletingPathExtension().lastPathComponent),
+                   let earlier = known[id], abs(earlier.updatedAt.timeIntervalSince(candidate.modified)) < 2 {
+                    return earlier
+                }
+                return summary(at: candidate.url)
             }
             .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private func summary(at url: URL) -> SessionSummary? {
+        guard let data = try? Data(contentsOf: url), let snapshot = decode(data) else { return nil }
+        return SessionSummary(
+            id: snapshot.id, title: snapshot.title, updatedAt: snapshot.updatedAt,
+            messageCount: snapshot.items.reduce(into: 0) { count, item in if case .user = item { count += 1 } },
+            cost: Self.cost(in: snapshot.host), projectRoot: snapshot.projectRoot)
     }
 
     public func delete(_ id: UUID, projectRoot: String) {

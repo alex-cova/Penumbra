@@ -26,7 +26,7 @@ public enum HTTPErrorClassifier {
         let lowered = text.lowercased()
         let needles = [
             "context_length_exceeded", "maximum context length", "context length", "context size",
-            "exceeds the available context", "prompt too long", "input length exceeds",
+            "exceeds the available context", "prompt too long", "prompt is too long", "input length exceeds",
         ]
         return needles.contains { lowered.contains($0) }
     }

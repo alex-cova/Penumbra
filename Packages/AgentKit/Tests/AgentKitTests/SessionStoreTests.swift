@@ -43,6 +43,59 @@ private func snapshot(_ root: String = "/proj/a", title: String = "Fix the build
         #expect(store.load(new.id, projectRoot: "/proj/b") == nil, "another project's folder never answers")
     }
 
+    @Test func listAllSpansProjectsNewestFirstNamesTheProjectAndHonorsTheLimit() throws {
+        let (store, directory) = makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sessions = [
+            snapshot("/proj/a", title: "a-old", at: Date(timeIntervalSince1970: 1_000)),
+            snapshot("/proj/b", title: "b-new", at: Date(timeIntervalSince1970: 3_000)),
+            snapshot("/proj/a", title: "a-new", at: Date(timeIntervalSince1970: 2_000)),
+        ]
+        for item in sessions {
+            try store.save(item)
+            // The limit reads the newest files, so give each file the time its snapshot says.
+            let url = store.projectDirectory(for: item.projectRoot).appendingPathComponent("\(item.id.uuidString).json")
+            try FileManager.default.setAttributes([.modificationDate: item.updatedAt], ofItemAtPath: url.path)
+        }
+        // Checkpoint data sits beside the conversations and must not be read as one.
+        let blobs = store.projectDirectory(for: "/proj/a").appendingPathComponent("blobs/run-1", isDirectory: true)
+        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: blobs.appendingPathComponent("A.java.json"))
+        try Data("note".utf8).write(to: store.projectDirectory(for: "/proj/a").appendingPathComponent("prompts.jsonl"))
+
+        let all = store.listAll()
+        #expect(all.map(\.title) == ["b-new", "a-new", "a-old"])
+        #expect(all.map(\.projectRoot) == ["/proj/b", "/proj/a", "/proj/a"])
+        #expect(store.listAll(limit: 2).map(\.title) == ["b-new", "a-new"])
+        #expect(store.listAll(limit: 0).isEmpty)
+        #expect(SessionStore(directory: directory.appendingPathComponent("missing")).listAll().isEmpty)
+        #expect(store.list(projectRoot: "/proj/a").allSatisfy { $0.projectRoot == "/proj/a" })
+    }
+
+    @Test func listAllDoesNotReadAFileAgainUnlessItWasWrittenSince() throws {
+        let (store, directory) = makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let item = snapshot("/proj/a", title: "first title", at: Date())
+        try store.save(item)
+        let first = store.listAll()
+        #expect(first.map(\.title) == ["first title"])
+
+        // Overwrite the file with another title and put its time back: a list that reuses what it knows
+        // must not notice (it did not read the file), which shows the cache is what answered.
+        let url = store.projectDirectory(for: "/proj/a").appendingPathComponent("\(item.id.uuidString).json")
+        let before = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        var changed = item
+        changed.title = "second title"
+        try store.save(changed)
+        try FileManager.default.setAttributes([.modificationDate: before as Any], ofItemAtPath: url.path)
+        #expect(store.listAll(reusing: first).map(\.title) == ["first title"])
+        #expect(store.listAll().map(\.title) == ["second title"], "without what it knew, the file is read")
+
+        // A file written a while later is read again.
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: url.path)
+        #expect(store.listAll(reusing: first).map(\.title) == ["second title"])
+    }
+
     @Test func listCountsUserMessagesAndReadsCostFromTheHostBlob() throws {
         let (store, directory) = makeStore()
         defer { try? FileManager.default.removeItem(at: directory) }
