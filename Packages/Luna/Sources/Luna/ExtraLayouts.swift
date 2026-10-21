@@ -1966,16 +1966,33 @@ func layoutArchitecture(_ chart: ArchitectureChart) -> ExtraScene {
             }
         }
         flushRow()
-        let contentW = rows.map { $0.map(\.w).reduce(0, +) + gap * Double(max($0.count - 1, 0)) }.max() ?? 0
-        let rowsH = rows.map { $0.map(\.h).max() ?? 0 }.reduce(0, +) + gap * Double(max(rows.count - 1, 0))
+        func rowWidth(_ row: [Block]) -> Double {
+            var w = 0.0
+            for block in row { w += block.w }
+            if row.count > 1 { w += gap * Double(row.count - 1) }
+            return w
+        }
+        func rowHeight(_ row: [Block]) -> Double {
+            var h = 0.0
+            for block in row { if block.h > h { h = block.h } }
+            return h
+        }
+        var contentW = 0.0
+        var rowsH = 0.0
+        for row in rows {
+            let w = rowWidth(row)
+            if w > contentW { contentW = w }
+            rowsH += rowHeight(row)
+        }
+        if rows.count > 1 { rowsH += gap * Double(rows.count - 1) }
         let head = gid == nil ? 0 : groupHead
         let width = (gid == nil ? contentW : contentW + pad * 2)
         let height = head + rowsH + (gid == nil ? 0 : pad * 2)
         var placed: [Placed] = []
         var y = head
         for row in rows {
-            let rowH = row.map(\.h).max() ?? 0
-            let rowW = row.map(\.w).reduce(0, +) + gap * Double(max(row.count - 1, 0))
+            let rowH = rowHeight(row)
+            let rowW = rowWidth(row)
             var x = gid == nil ? (contentW - rowW) / 2 : pad + (contentW - rowW) / 2
             for block in row {
                 let by = y + (rowH - block.h) / 2
