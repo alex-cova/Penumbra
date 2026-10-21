@@ -55,7 +55,16 @@ extension JavaNavigationSession {
     }
 
     func implementationHits(_ reference: JavaReference) async -> [JavaDefinitionHit] {
-        let targets = await implementationTargets(reference)
+        await implementationHits(targets: await implementationTargets(reference))
+    }
+
+    /// The project's implementations of one method: the overrides in subtypes, and the anonymous
+    /// classes and enum constant bodies that override it.
+    func implementationHits(forMethod target: MethodTarget) async -> [JavaDefinitionHit] {
+        await implementationHits(targets: [.method(target)])
+    }
+
+    private func implementationHits(targets: [ImplementationTarget]) async -> [JavaDefinitionHit] {
         guard !targets.isEmpty else { return [] }
         let projectClasses = await index.projectClassStubs()
         var hits: [JavaDefinitionHit] = []

@@ -76,11 +76,14 @@ public enum JavaMemberLookup {
         // its sources or overlay change.
         let scope = JavaIndex.queryScope.map { $0.sorted().joined(separator: ",") } ?? "*"
         let cacheKey = "\(type)|\(mode)|\(checkAccess)|\(context.packageName)|\(context.enclosingTypeQualifiedNames)|\(context.imports)|\(scope)"
-        if sourceTextProvider == nil, let cached = await index.cachedMemberSet(cacheKey) {
+        // A request that sees the buffer's own classes (`JavaIndex.liveStubs`) must not read or fill
+        // a cache that other requests share.
+        let isCacheable = sourceTextProvider == nil && JavaIndex.liveStubs == nil
+        if isCacheable, let cached = await index.cachedMemberSet(cacheKey) {
             return cached
         }
         let result = await walkMembers(of: qualifiedName, arguments: arguments, mode: mode, context: context, index: index, checkAccess: checkAccess)
-        if sourceTextProvider == nil {
+        if isCacheable {
             await index.storeMemberSet(result, for: cacheKey)
         }
         return result
@@ -90,7 +93,7 @@ public enum JavaMemberLookup {
         of qualifiedName: String, arguments: [JavaTypeArgument], mode: JavaMemberLookupMode,
         context: JavaResolutionContext, index: JavaIndex, checkAccess: Bool
     ) async -> [JavaResolvedMember] {
-        let selfHierarchy = await ancestorQualifiedNames(of: context.topLevelTypeQualifiedName, index: index)
+        let selfHierarchy = await enclosingHierarchy(of: context, index: index)
         let fileCache = DeclaringFileCache()
 
         var seenSignatures = Set<String>()
@@ -183,7 +186,7 @@ public enum JavaMemberLookup {
         guard case .classType(let qualifiedName, _, _) = type else { return [] }
         guard let stub = await index.classStub(qualifiedName: qualifiedName) else { return [] }
         if stub.kind == .interfaceKind || stub.kind == .annotationKind { return [] }
-        let selfHierarchy = await ancestorQualifiedNames(of: context.topLevelTypeQualifiedName, index: index)
+        let selfHierarchy = await enclosingHierarchy(of: context, index: index)
         var visible: [JavaMethodStub] = []
         for method in stub.methods where method.isConstructor {
             if await isAccessible(
@@ -267,6 +270,17 @@ public enum JavaMemberLookup {
         closure.insert(qualifiedName)
         closure.insert("java.lang.Object") // every reference type, interfaces included, converts to Object
         return closure
+    }
+
+    /// The ancestors of every type the query stands in, not only the top-level one: a protected
+    /// member is reachable from a nested class that extends the declaring class even when the
+    /// class around it does not.
+    private static func enclosingHierarchy(of context: JavaResolutionContext, index: JavaIndex) async -> Set<String> {
+        var hierarchy = await ancestorQualifiedNames(of: context.topLevelTypeQualifiedName, index: index)
+        for enclosing in context.enclosingTypeQualifiedNames {
+            hierarchy.formUnion(await ancestorQualifiedNames(of: enclosing, index: index))
+        }
+        return hierarchy
     }
 
     /// Every ancestor (superclass chain + interfaces, transitively) of `qualifiedName`, used only

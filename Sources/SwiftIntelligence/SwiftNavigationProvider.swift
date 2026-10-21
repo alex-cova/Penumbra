@@ -42,6 +42,8 @@ public struct SwiftNavigationProvider: NavigationProvider {
         case .typeDefinition:
             guard let location = await typeDefinition(context, parsed: parsed, byte: byte, resolver: resolver) else { return nil }
             return .single(location)
+        case .siblings:
+            return nil
         }
     }
 

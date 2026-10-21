@@ -89,6 +89,7 @@ public struct JavaLanguageService: LanguageService {
             structure: structure,
             typeHierarchy: typeHierarchy,
             callHierarchy: callHierarchy,
+            methodHierarchy: JavaMethodHierarchyProvider(typeHierarchy: typeHierarchy),
             symbolReference: symbolReference
         )
     }

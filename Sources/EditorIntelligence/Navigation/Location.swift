@@ -9,6 +9,19 @@ public struct Location: Sendable, Hashable, Identifiable, CustomStringConvertibl
     public let displayName: String
     /// Extra facts a results list can show for a usage; nil for plain navigation targets.
     public let usage: UsageInfo?
+    /// What the location points at. Everything but `.source` has no text to select.
+    public let target: Target
+
+    /// What a navigation request landed on.
+    public enum Target: Sendable, Hashable {
+        /// A range in a document (`url` and `range`).
+        case source
+        /// A folder on disk (`url`): a project package's directory. `range` is empty.
+        case directory
+        /// A package with no folder in the project, such as `java.util`. The host decides how to
+        /// show it; `range` is empty and `url` is nil.
+        case package(String)
+    }
 
     /// How a usage reads in a list: what kind of use it is, how sure the resolver is, and the
     /// source line with the matched identifier's UTF-16 range inside it.
@@ -35,7 +48,8 @@ public struct Location: Sendable, Hashable, Identifiable, CustomStringConvertibl
         url: URL? = nil,
         range: TextRange,
         displayName: String,
-        usage: UsageInfo? = nil
+        usage: UsageInfo? = nil,
+        target: Target = .source
     ) {
         self.id = id
         self.documentID = documentID
@@ -43,6 +57,7 @@ public struct Location: Sendable, Hashable, Identifiable, CustomStringConvertibl
         self.range = range
         self.displayName = displayName
         self.usage = usage
+        self.target = target
     }
 
     public var description: String {

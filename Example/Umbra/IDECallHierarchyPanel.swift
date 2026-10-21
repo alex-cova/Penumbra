@@ -20,11 +20,15 @@ final class IDECallHierarchyStore {
         var id: String { node.id }
     }
 
-    typealias Loader = @MainActor (HierarchyItem, Direction, URL?) async -> [HierarchyItem]
+    typealias Loader = @MainActor (HierarchyItem, Direction, HierarchyScope, URL?) async -> [HierarchyItem]
 
     private(set) var root: HierarchyItem?
     private(set) var message: String?
     private(set) var direction: Direction = .callers
+    /// Which sources the callers are searched in.
+    private(set) var scope: HierarchyScope = .all
+    /// The language the hierarchy was asked for; its nodes go back to that language's provider.
+    private(set) var languageIdentifier: String?
     private(set) var file: URL?
     var selectedID: String?
 
@@ -43,8 +47,9 @@ final class IDECallHierarchyStore {
         return result
     }
 
-    func show(root: HierarchyItem, file: URL?) {
+    func show(root: HierarchyItem, file: URL?, languageIdentifier: String? = nil) {
         generation += 1
+        self.languageIdentifier = languageIdentifier
         self.root = root
         message = nil
         self.file = file
@@ -85,6 +90,33 @@ final class IDECallHierarchyStore {
         generation += 1
     }
 
+    func setScope(_ newScope: HierarchyScope) {
+        guard newScope != scope else { return }
+        scope = newScope
+        guard let root else { return }
+        children = [:]
+        expanded = []
+        loading = []
+        generation += 1
+        toggle(root)
+    }
+
+    /// A copy of what the tab shows now, with its own expansion state, for Pin Tab.
+    func copy() -> IDECallHierarchyStore {
+        let copy = IDECallHierarchyStore()
+        copy.root = root
+        copy.message = message
+        copy.direction = direction
+        copy.scope = scope
+        copy.languageIdentifier = languageIdentifier
+        copy.file = file
+        copy.loader = loader
+        copy.children = children
+        copy.expanded = expanded
+        copy.selectedID = selectedID
+        return copy
+    }
+
     func toggle(_ node: HierarchyItem) {
         if expanded.contains(node.id) {
             expanded.remove(node.id)
@@ -96,9 +128,10 @@ final class IDECallHierarchyStore {
         let token = generation
         guard let loader else { return }
         let direction = direction
+        let scope = scope
         let file = file
         Task { [weak self] in
-            let loaded = await loader(node, direction, file)
+            let loaded = await loader(node, direction, scope, file)
             guard let self, self.generation == token else { return }
             self.children[node.id] = loaded
             self.loading.remove(node.id)
@@ -123,8 +156,17 @@ struct IDECallHierarchyPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        let store = workspace.callHierarchy
+        let store = workspace.visibleCallHierarchy
         VStack(spacing: 0) {
+            if !workspace.pinnedCallHierarchies.isEmpty {
+                IDEHierarchyPinStrip(
+                    pins: workspace.pinnedCallHierarchies.map { ($0.id, $0.title) },
+                    selected: workspace.selectedCallHierarchyPinID,
+                    onSelect: { workspace.selectedCallHierarchyPinID = $0 },
+                    onUnpin: { workspace.unpinCallHierarchy($0) }
+                )
+                Divider()
+            }
             if let root = store.root {
                 header(store, root: root)
                 Divider()
@@ -147,10 +189,18 @@ struct IDECallHierarchyPanel: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(width: 200)
+            IDEHierarchyScopeMenu(scope: store.scope, isEnabled: store.direction == .callers) { store.setScope($0) }
             Text(root.name)
                 .font(IDEAppearance.Typography.body.weight(.medium))
                 .lineLimit(1)
             Spacer()
+            Button { workspace.pinCallHierarchy() } label: {
+                Image(systemName: "pin")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .help("Pin Tab: keep this hierarchy when the next one opens")
+            .accessibilityLabel("Pin hierarchy")
             Button { workspace.closeCallHierarchy() } label: {
                 Image(systemName: "xmark")
             }
@@ -186,7 +236,7 @@ struct IDECallHierarchyPanel: View {
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
                     // Double-tap first, or the single tap consumes the click.
-                    .onTapGesture(count: 2) { workspace.openCallHierarchyNode(row.node) }
+                    .onTapGesture(count: 2) { workspace.openCallHierarchyNode(row.node, in: store) }
                     .accessibilityAddTraits(.isButton)
                     .onTapGesture { store.selectedID = row.node.id }
                 }

@@ -61,7 +61,7 @@ extension JavaNavigationSession {
         return await typeHits(of: typed.type)
     }
 
-    private func scopeLocals(atByteOffset offset: Int) async -> [JavaLocalVariable] {
+    func scopeLocals(atByteOffset offset: Int) async -> [JavaLocalVariable] {
         await JavaExpressionTyper.resolvingVarLocals(
             JavaLocalScope.locals(in: tree, atByteOffset: offset), context: context, index: index
         )

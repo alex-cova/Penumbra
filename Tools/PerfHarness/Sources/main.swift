@@ -42,6 +42,7 @@ func printUsageAndExit() -> Never {
       java-diagnostics (survival|latency|typing) <path|synthetic> [--lines N] [--samples N]
       java-analysis-server <path|synthetic> [--lines N] [--samples N]
       java-scope-tree <path|synthetic> [--lines N] [--samples N]
+      java-goto-definition synthetic [--lines N] [--samples N]
       java-profile-import synthetic [--samples N] [--depth N] [--stacks N]
       java-coverage-bands synthetic [--lines N]
       swift-index <path|synthetic> [--files N]
@@ -93,7 +94,7 @@ let options = Commands.Options(
     language: flagValue("--lang", in: rest)
 )
 
-let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree"
+let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition"
     || command == "java-profile-import" || command == "java-coverage-bands"
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
@@ -156,6 +157,11 @@ do {
             pathOrSynthetic: path,
             lines: Int(flagValue("--lines", in: rest) ?? "") ?? 2_000,
             samples: Int(flagValue("--samples", in: rest) ?? "") ?? 5
+        )
+    case "java-goto-definition":
+        try JavaGoToDefinitionProfile.run(
+            lines: Int(flagValue("--lines", in: rest) ?? "") ?? 3_000,
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 7
         )
     case "java-scope-tree":
         try JavaScopeTreeProfile.run(

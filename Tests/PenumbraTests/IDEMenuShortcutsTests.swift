@@ -25,6 +25,17 @@ final class IDEMenuShortcutsTests: XCTestCase {
         if shortcut.key.character == Character(UnicodeScalar(NSF12FunctionKey)!) {
             return KeyChord(code: 0x6F, modifiers)
         }
+        if shortcut.key.character == Character(UnicodeScalar(NSF3FunctionKey)!) {
+            return KeyChord(code: 0x63, modifiers)
+        }
+        if shortcut.key.character == Character(UnicodeScalar(NSF8FunctionKey)!) {
+            return KeyChord(code: 0x64, modifiers)
+        }
+        // The keymaps bind the brackets by key code.
+        if shortcut.key.character == "[" { return KeyChord(code: 0x21, modifiers) }
+        if shortcut.key.character == "]" { return KeyChord(code: 0x1E, modifiers) }
+        if shortcut.key == .downArrow { return KeyChord(code: 0x7D, modifiers) }
+        if shortcut.key == .upArrow { return KeyChord(code: 0x7E, modifiers) }
         return KeyChord(String(shortcut.key.character), modifiers)
     }
 
@@ -163,6 +174,70 @@ final class IDEMenuShortcutsTests: XCTestCase {
                 "\(command) uses \(chord(of: menuShortcut).displayString), which the IntelliJ keymap binds differently"
             )
         }
+    }
+
+    // MARK: - Bookmarks and navigation
+
+    private let f2 = KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!))
+    private let f3 = KeyEquivalent(Character(UnicodeScalar(NSF3FunctionKey)!))
+    private let f8 = KeyEquivalent(Character(UnicodeScalar(NSF8FunctionKey)!))
+
+    func testSublimeAndDefaultBookmarkKeysAreSublimes() {
+        for preset in [KeymapPreset.sublime, .default_] {
+            XCTAssertEqual(shortcut(.toggleBookmark, preset), KeyboardShortcut(f2, modifiers: .command))
+            XCTAssertEqual(shortcut(.showBookmarks, preset), KeyboardShortcut(f2, modifiers: [.command, .shift]))
+            XCTAssertEqual(shortcut(.nextBookmark, preset), KeyboardShortcut(f2, modifiers: []))
+            XCTAssertEqual(shortcut(.previousBookmark, preset), KeyboardShortcut(f2, modifiers: .shift))
+            XCTAssertNil(shortcut(.toggleBookmarkWithMnemonic, preset))
+            XCTAssertEqual(shortcut(.toggleBreakpoint, preset), KeyboardShortcut(f3, modifiers: []), "F3 stays the breakpoint key here")
+        }
+    }
+
+    func testIntelliJBookmarkKeysAreIntelliJsAndBreakpointsMoveToCommandF8() {
+        XCTAssertEqual(shortcut(.toggleBookmark, .intelliJ), KeyboardShortcut(f3, modifiers: []))
+        XCTAssertEqual(shortcut(.toggleBookmarkWithMnemonic, .intelliJ), KeyboardShortcut(f3, modifiers: .option))
+        XCTAssertEqual(shortcut(.showBookmarks, .intelliJ), KeyboardShortcut(f3, modifiers: .command))
+        XCTAssertEqual(shortcut(.nextBookmark, .intelliJ), KeyboardShortcut(.downArrow, modifiers: [.control, .option]))
+        XCTAssertEqual(shortcut(.previousBookmark, .intelliJ), KeyboardShortcut(.upArrow, modifiers: [.control, .option]))
+        XCTAssertEqual(shortcut(.toggleBreakpoint, .intelliJ), KeyboardShortcut(f8, modifiers: .command))
+        XCTAssertFalse(
+            IDEMenuShortcuts.secondaryShortcuts(in: .intelliJ).contains { $0.command == .toggleBreakpoint },
+            "⌘F8 is the menu key now, not a secondary one"
+        )
+    }
+
+    func testNoMenuShortcutShadowsAnEditorKeymapBindingOfAnotherAction() {
+        // Menu keys are handled before the editor, so a menu command on a key the keymap binds to
+        // something else would silently replace that action.
+        let navigation: [(IDEMenuCommand, EditorActionID?)] = [
+            (.navigateBack, .navigateBack), (.navigateForward, .navigateForward),
+            (.toggleBookmark, nil), (.toggleBookmarkWithMnemonic, nil), (.showBookmarks, nil),
+            (.nextBookmark, nil), (.previousBookmark, nil)
+        ]
+        for preset in KeymapPreset.allCases {
+            for (command, mirrored) in navigation {
+                guard let menuShortcut = shortcut(command, preset) else { continue }
+                let bound = preset.keymap.action(for: KeyStroke(chord(of: menuShortcut)))
+                // A command that mirrors an editor action may sit on a key the preset leaves
+                // unbound (the menu then adds it); any other binding would be shadowed.
+                let agrees = bound == nil || bound == mirrored
+                XCTAssertTrue(agrees, "\(preset): \(command) uses \(chord(of: menuShortcut).displayString), bound to \(String(describing: bound))")
+                if mirrored == nil { XCTAssertNil(bound) }
+            }
+        }
+    }
+
+    func testIntelliJKeymapBindsTheNavigationActions() {
+        let keymap = Keymap.intelliJ
+        XCTAssertEqual(keymap.action(for: KeyStroke(KeyChord(code: 0x33, [.command, .shift]))), .lastEditLocation)
+        XCTAssertEqual(keymap.action(for: KeyStroke(KeyChord(code: 0x7D, .control))), .nextMethod)
+        XCTAssertEqual(keymap.action(for: KeyStroke(KeyChord(code: 0x7E, .control))), .previousMethod)
+        XCTAssertEqual(keymap.action(for: KeyStroke(KeyChord(code: 0x7D, [.control, .option, .shift]))), .nextChange)
+        XCTAssertEqual(keymap.action(for: KeyStroke(KeyChord(code: 0x7E, [.control, .option, .shift]))), .previousChange)
+        XCTAssertEqual(keymap.action(for: KeyStroke(KeyChord(code: 0x21, [.command, .option]))), .moveToCodeBlockStart)
+        XCTAssertEqual(keymap.action(for: KeyStroke(KeyChord(code: 0x1E, [.command, .option]))), .moveToCodeBlockEnd)
+        XCTAssertEqual(keymap.action(for: KeyStroke(KeyChord(code: 0x21, [.command, .option, .shift]))), .selectToCodeBlockStart)
+        XCTAssertEqual(keymap.action(for: KeyStroke(KeyChord(code: 0x1E, [.command, .option, .shift]))), .selectToCodeBlockEnd)
     }
 
     func testFileStructureMenuUsesCommandF12InEveryPreset() {

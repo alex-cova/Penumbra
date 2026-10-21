@@ -1851,6 +1851,22 @@ final class TextInputView: EditorView {
         }
     }
 
+    var gutterBookmarks: [GutterBookmark] {
+        get { layoutManager.gutterBookmarks }
+        set {
+            layoutManager.gutterBookmarks = newValue
+            // As for decorations: the column's frame is set in the layout pass.
+            setNeedsLayout()
+        }
+    }
+    var gutterBookmarkHandler: ((GutterBookmark) -> Void)? {
+        get { layoutManager.gutterBookmarkHandler }
+        set { layoutManager.gutterBookmarkHandler = newValue }
+    }
+    var gutterBookmarksDidMove: (([GutterBookmark]) -> Void)? {
+        get { layoutManager.gutterBookmarksDidMove }
+        set { layoutManager.gutterBookmarksDidMove = newValue }
+    }
     var gutterDecorationHandler: ((Int) -> Void)? {
         get { layoutManager.gutterDecorationHandler }
         set { layoutManager.gutterDecorationHandler = newValue }

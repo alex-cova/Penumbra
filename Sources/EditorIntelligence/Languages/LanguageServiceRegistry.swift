@@ -77,6 +77,7 @@ public struct LanguageServiceRegistry: Sendable {
         case .lineMarkers: return providers.lineMarkers != nil
         case .typeHierarchy: return providers.typeHierarchy != nil
         case .callHierarchy: return providers.callHierarchy != nil
+        case .methodHierarchy: return providers.methodHierarchy != nil
         case .codeGeneration: return providers.codeGeneration != nil
         case .symbolReference: return providers.symbolReference != nil
         }
@@ -222,6 +223,9 @@ public struct LanguageServiceRegistry: Sendable {
     }
     public func callHierarchy(for languageIdentifier: String?) -> (any CallHierarchyProviding)? {
         owner(of: languageIdentifier, feature: .callHierarchy, \.callHierarchy)
+    }
+    public func methodHierarchy(for languageIdentifier: String?) -> (any MethodHierarchyProviding)? {
+        owner(of: languageIdentifier, feature: .methodHierarchy, \.methodHierarchy)
     }
 
     /// Services claiming `languageIdentifier` that are ready for `feature`, highest tier first.

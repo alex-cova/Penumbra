@@ -14,6 +14,15 @@ final class IDETypeHierarchyStore {
         var id: String { rawValue }
     }
 
+    /// Whose hierarchy the tab shows: a type's, or a method's (the same tree over the classes that
+    /// declare it, each marked by what it does with it).
+    enum Kind {
+        case type
+        case method
+
+        var title: String { self == .type ? "Type Hierarchy" : "Method Hierarchy" }
+    }
+
     struct Row: Identifiable {
         let node: HierarchyItem
         let depth: Int
@@ -25,12 +34,19 @@ final class IDETypeHierarchyStore {
         var id: String { node.id }
     }
 
-    typealias Loader = @MainActor (HierarchyItem, Direction, URL?) async -> [HierarchyItem]
+    typealias Loader = @MainActor (HierarchyItem, Direction, HierarchyScope, URL?) async -> [HierarchyItem]
 
     private(set) var root: HierarchyItem?
     /// A line shown instead of a tree, e.g. when the caret is not in a type.
     private(set) var message: String?
     private(set) var direction: Direction = .supertypes
+    private(set) var kind: Kind = .type
+    /// Which of the project's classes a subtype search covers.
+    private(set) var scope: HierarchyScope = .all
+    /// The language the hierarchy was asked for. Its nodes carry that language's own records, so
+    /// expanding or opening one goes back to the provider that made it, even if the active editor
+    /// has since switched to another language.
+    private(set) var languageIdentifier: String?
     /// The file the hierarchy was asked from, which decides the source set that scopes lookups.
     private(set) var file: URL?
     var selectedID: String?
@@ -64,10 +80,14 @@ final class IDETypeHierarchyStore {
         return result
     }
 
-    /// Shows `root` and expands its first level.
-    func show(root: HierarchyItem, file: URL?) {
+    /// Shows `root` and expands its first level. A method hierarchy starts from the topmost
+    /// declaration, so it opens downward.
+    func show(root: HierarchyItem, file: URL?, kind: Kind = .type, languageIdentifier: String? = nil) {
         self.root = root
         self.file = file
+        self.kind = kind
+        self.languageIdentifier = languageIdentifier
+        if kind == .method { direction = .subtypes }
         message = nil
         resetTree()
         selectedID = root.id
@@ -92,6 +112,31 @@ final class IDETypeHierarchyStore {
         guard let root else { return }
         resetTree()
         expand(root)
+    }
+
+    func setScope(_ newScope: HierarchyScope) {
+        guard newScope != scope else { return }
+        scope = newScope
+        guard let root else { return }
+        resetTree()
+        expand(root)
+    }
+
+    /// A copy of what the tab shows now, with its own expansion state, for Pin Tab.
+    func copy() -> IDETypeHierarchyStore {
+        let copy = IDETypeHierarchyStore()
+        copy.root = root
+        copy.message = message
+        copy.direction = direction
+        copy.kind = kind
+        copy.scope = scope
+        copy.languageIdentifier = languageIdentifier
+        copy.file = file
+        copy.loader = loader
+        copy.children = children
+        copy.expanded = expanded
+        copy.selectedID = selectedID
+        return copy
     }
 
     func toggle(_ node: HierarchyItem) {
@@ -128,9 +173,10 @@ final class IDETypeHierarchyStore {
         loading.insert(node.id)
         let token = generation
         let direction = direction
+        let scope = scope
         let file = file
         Task { [weak self] in
-            let loaded = await loader(node, direction, file)
+            let loaded = await loader(node, direction, scope, file)
             guard let self, self.generation == token else { return }
             self.children[node.id] = loaded
             self.loading.remove(node.id)
@@ -145,14 +191,23 @@ struct IDETypeHierarchyPanel: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        let store = workspace.typeHierarchy
+        let store = workspace.visibleTypeHierarchy
         VStack(spacing: 0) {
+            if !workspace.pinnedTypeHierarchies.isEmpty {
+                IDEHierarchyPinStrip(
+                    pins: workspace.pinnedTypeHierarchies.map { ($0.id, $0.title) },
+                    selected: workspace.selectedTypeHierarchyPinID,
+                    onSelect: { workspace.selectedTypeHierarchyPinID = $0 },
+                    onUnpin: { workspace.unpinTypeHierarchy($0) }
+                )
+                Divider()
+            }
             if let root = store.root {
                 header(store, root: root)
                 Divider()
                 tree(store)
             } else {
-                emptyState(store.message ?? "Place the caret in a type and press ⌃H")
+                emptyState(store.message ?? "Place the caret in a type and press ⌃H, or in a method and press ⇧⌘H")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -170,11 +225,22 @@ struct IDETypeHierarchyPanel: View {
             .labelsHidden()
             .frame(width: 200)
 
-            Text(root.name)
+            IDEHierarchyScopeMenu(scope: store.scope, isEnabled: store.direction == .subtypes) { store.setScope($0) }
+
+            Text(store.kind == .method ? "\(store.kind.title): \(root.name)" : root.name)
                 .font(IDEAppearance.Typography.body.weight(.medium))
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
             Spacer()
+            Button {
+                workspace.pinTypeHierarchy()
+            } label: {
+                Image(systemName: "pin")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .help("Pin Tab: keep this hierarchy when the next one opens")
+            .accessibilityLabel("Pin hierarchy")
             Button {
                 workspace.closeTypeHierarchy()
             } label: {
@@ -182,8 +248,8 @@ struct IDETypeHierarchyPanel: View {
             }
             .buttonStyle(.borderless)
             .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help("Close Type Hierarchy")
-            .accessibilityLabel("Close Type Hierarchy")
+            .help("Close Hierarchy")
+            .accessibilityLabel("Close hierarchy")
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .padding(.vertical, IDEAppearance.Spacing.xs)
@@ -202,7 +268,7 @@ struct IDETypeHierarchyPanel: View {
                             store.selectedID = row.id
                             isFocused = true
                         },
-                        onOpen: { workspace.openTypeHierarchyNode(row.node) }
+                        onOpen: { workspace.openTypeHierarchyNode(row.node, in: store) }
                     )
                 }
             }
@@ -212,7 +278,7 @@ struct IDETypeHierarchyPanel: View {
         .focused($isFocused)
         .focusEffectDisabled()
         .onKeyPress(.return) {
-            if let id = store.selectedID, let node = store.node(withID: id) { workspace.openTypeHierarchyNode(node) }
+            if let id = store.selectedID, let node = store.node(withID: id) { workspace.openTypeHierarchyNode(node, in: store) }
             return .handled
         }
         .onKeyPress(.downArrow) {

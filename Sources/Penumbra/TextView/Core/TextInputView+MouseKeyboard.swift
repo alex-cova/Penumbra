@@ -501,6 +501,18 @@ extension TextInputView {
             unselectLastOccurrence()
         case .goToMatchingBracket:
             goToMatchingBracket()
+        case .nextMethod:
+            return goToMethod(forward: true)
+        case .previousMethod:
+            return goToMethod(forward: false)
+        case .moveToCodeBlockStart:
+            return moveToCodeBlock(end: false, extendingSelection: false)
+        case .moveToCodeBlockEnd:
+            return moveToCodeBlock(end: true, extendingSelection: false)
+        case .selectToCodeBlockStart:
+            return moveToCodeBlock(end: false, extendingSelection: true)
+        case .selectToCodeBlockEnd:
+            return moveToCodeBlock(end: true, extendingSelection: true)
         case .expandSelection:
             expandSemanticSelection()
         case .shrinkSelection:

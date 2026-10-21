@@ -10,6 +10,9 @@ public enum NavigationKind: Sendable {
     /// The declaration of a symbol's type: the class of a variable, field or expression, or the
     /// return type of a method.
     case typeDefinition
+    /// The other implementations of the methods the method at the caret overrides or implements
+    /// (IntelliJ's Show Siblings).
+    case siblings
     case references
 }
 

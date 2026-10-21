@@ -89,7 +89,7 @@ public actor JavaGoToDefinitionProvider: NavigationProvider {
 
     public func provide(context: NavigationContext) async -> NavigationResult? {
         guard context.kind == .definition || context.kind == .implementation || context.kind == .superMethod
-            || context.kind == .typeDefinition else { return nil }
+            || context.kind == .typeDefinition || context.kind == .siblings else { return nil }
         guard context.document.languageIdentifier == "java" else { return nil }
         let source = JavaNavigationText.fullText(of: context.document)
         guard !source.isEmpty else { return nil }
@@ -110,6 +110,17 @@ public actor JavaGoToDefinitionProvider: NavigationProvider {
                     cacheRoot: cacheRoot,
                     openBuffer: lookup,
                     decompile: gate
+                )
+            }
+            if kind == .siblings {
+                return await JavaGoToSiblings.resolve(
+                    source: source,
+                    fileURL: context.document.url,
+                    utf16Offset: utf16Offset,
+                    index: self.index,
+                    jdkHome: home,
+                    cacheRoot: cacheRoot,
+                    openBuffer: lookup
                 )
             }
             if kind == .typeDefinition {
@@ -184,7 +195,8 @@ public actor JavaGoToDefinitionProvider: NavigationProvider {
                 documentID: same ? document.id : DocumentID(),
                 url: hit.url,
                 range: hit.range,
-                displayName: hit.displayName
+                displayName: hit.displayName,
+                target: hit.target
             )
         }
         switch locations.count {

@@ -19,6 +19,7 @@ struct IDESidebarTab: RawRepresentable, Codable, Hashable, Identifiable {
     static let explorer = IDESidebarTab(rawValue: "explorer")
     static let structure = IDESidebarTab(rawValue: "structure")
     static let changes = IDESidebarTab(rawValue: "changes")
+    static let bookmarks = IDESidebarTab(rawValue: "bookmarks")
     static let history = IDESidebarTab(rawValue: "history")
 
     /// The Explorer is the sidebar's home: it stays when the others are closed.
@@ -57,6 +58,7 @@ enum IDESidebarTabs {
         static let structure = 10
         static let changes = 20
         static let breakpoints = 30
+        static let bookmarks = 35
         static let history = 40
         static let database = 50
     }
@@ -82,6 +84,10 @@ enum IDESidebarTabs {
                 badge: { $0.gitStatus.changes.count },
                 onShow: { $0.gitStatus.refresh() },
                 content: { AnyView(IDEChangesPanel(gitStatus: $0.gitStatus)) }
+            ),
+            IDESidebarTabDescriptor(
+                tab: .bookmarks, title: "Bookmarks", systemImage: "bookmark", order: Order.bookmarks,
+                tint: .purple, content: { _ in AnyView(IDEBookmarksPanel()) }
             ),
             IDESidebarTabDescriptor(
                 tab: .history, title: "History", systemImage: "clock.arrow.circlepath", order: Order.history,

@@ -90,6 +90,14 @@ extension JavaNavigationSession {
         return []
     }
 
+    /// The methods the method whose name is at the caret overrides or implements, for a ⌘-click on
+    /// the name of the declaration. Nothing for anything that is not an overriding method.
+    func overriddenMethodHits(atDeclarationName name: SyntaxNode) async -> [JavaDefinitionHit] {
+        guard let declaration = name.parent, declaration.type == "method_declaration",
+              declaration.child(byFieldName: "name")?.byteRange == name.byteRange else { return [] }
+        return await superMethodHits(forMethod: declaration)
+    }
+
     private func superMethodHits(forMethod declaration: SyntaxNode) async -> [JavaDefinitionHit] {
         if let body = declaration.parent, let parent = body.parent,
            parent.type == "object_creation_expression" || parent.type == "enum_constant" {

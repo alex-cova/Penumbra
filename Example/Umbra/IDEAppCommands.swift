@@ -70,7 +70,7 @@ struct IDEAppCommands: Commands {
             }
         }
 
-        CommandMenu("Go") {
+        CommandMenu("Navigate") {
             if let focused { IDEGoCommands(ref: focused) } else { IDENoWindowCommand() }
         }
 
@@ -246,7 +246,8 @@ private struct IDEFindCommands: View {
     }
 }
 
-/// The Go menu.
+/// The Navigate menu: the ways to move around the code, files and history, in IntelliJ's order.
+/// Most items run an editor action, so the key shown is the one the preset's `Keymap` binds.
 private struct IDEGoCommands: View {
     let ref: IDEWorkspaceRef
 
@@ -257,22 +258,87 @@ private struct IDEGoCommands: View {
     private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
     var body: some View {
-        Button("Go to File…", action: { workspace?.showQuickOpen() })
-            .menuShortcut(.goToFile, in: preset)
-        Button("Go to Symbol…", action: { workspace?.showGoToSymbol() })
-            .menuShortcut(.goToSymbol, in: preset)
-        Button("Go to Package…", action: { workspace?.showGoToPackage() })
-        Button("Tool Window…", action: { workspace?.showToolWindows() })
-        Button("File Structure…", action: { workspace?.showFileStructure() })
-            .menuShortcut(.fileStructure, in: preset)
-        Button("Go to Line…", action: { workspace?.showGoToLine() })
-            .menuShortcut(.goToLine, in: preset)
-        Button("Next Problem") { workspace?.goToProblem(forward: true) }
-            .menuShortcut(.nextProblem, in: preset)
-        Button("Previous Problem") { workspace?.goToProblem(forward: false) }
-            .menuShortcut(.previousProblem, in: preset)
-        Button("Recent Locations…", action: { workspace?.showRecentLocations() })
-            .menuShortcut(.recentLocations, in: preset)
+        Group {
+            Button("Go to File…", action: { workspace?.showQuickOpen() })
+                .menuShortcut(.goToFile, in: preset)
+            Button("Go to Symbol…", action: { workspace?.showGoToSymbol() })
+                .menuShortcut(.goToSymbol, in: preset)
+            Button("Go to Package…", action: { workspace?.showGoToPackage() })
+            Button("Tool Window…", action: { workspace?.showToolWindows() })
+            Button("File Structure…", action: { workspace?.showFileStructure() })
+                .menuShortcut(.fileStructure, in: preset)
+            Button("Go to Line…", action: { workspace?.showGoToLine() })
+                .menuShortcut(.goToLine, in: preset)
+        }
+        Divider()
+        Group {
+            Button("Back") { workspace?.performEditorAction(.navigateBack) }
+                .menuShortcut(.navigateBack, in: preset)
+            Button("Forward") { workspace?.performEditorAction(.navigateForward) }
+                .menuShortcut(.navigateForward, in: preset)
+            Button("Last Edit Location") { workspace?.performEditorAction(.lastEditLocation) }
+            Button("Recent Locations…", action: { workspace?.showRecentLocations() })
+                .menuShortcut(.recentLocations, in: preset)
+        }
+        Divider()
+        Group {
+            Button("Declaration") { workspace?.performEditorAction(.goToDefinition) }
+            Button("Implementation(s)") { workspace?.performEditorAction(.goToImplementation) }
+            Button("Type Declaration") { workspace?.performEditorAction(.goToTypeDefinition) }
+            Button("Super Method") { workspace?.performEditorAction(.goToSuperMethod) }
+            Button("Show Siblings") { workspace?.performEditorAction(.showSiblings) }
+            Button("Find Usages") { workspace?.performEditorAction(.findUsages) }
+        }
+        Divider()
+        Group {
+            Button("Type Hierarchy") { workspace?.performEditorAction(.typeHierarchy) }
+            Button("Method Hierarchy") { workspace?.performEditorAction(.methodHierarchy) }
+            Button("Call Hierarchy") { workspace?.performEditorAction(.callHierarchy) }
+        }
+        Divider()
+        Group {
+            Button("Next Method") { workspace?.performEditorAction(.nextMethod) }
+            Button("Previous Method") { workspace?.performEditorAction(.previousMethod) }
+            Button("Next Change") { workspace?.performEditorAction(.nextChange) }
+            Button("Previous Change") { workspace?.performEditorAction(.previousChange) }
+            Button("Next Problem") { workspace?.goToProblem(forward: true) }
+                .menuShortcut(.nextProblem, in: preset)
+            Button("Previous Problem") { workspace?.goToProblem(forward: false) }
+                .menuShortcut(.previousProblem, in: preset)
+            Button("Code Block Start") { workspace?.performEditorAction(.moveToCodeBlockStart) }
+            Button("Code Block End") { workspace?.performEditorAction(.moveToCodeBlockEnd) }
+        }
+        Divider()
+        Menu("Bookmarks") {
+            Button("Toggle Bookmark") { workspace?.toggleBookmarkAtCaret() }
+                .menuShortcut(.toggleBookmark, in: preset)
+            Button("Toggle Bookmark with Mnemonic…") { workspace?.assignBookmarkMnemonicAtCaret() }
+                .menuShortcut(.toggleBookmarkWithMnemonic, in: preset)
+            Button("Show Bookmarks…") { workspace?.showBookmarksList() }
+                .menuShortcut(.showBookmarks, in: preset)
+                .disabled(workspace?.bookmarks.isEmpty ?? true)
+            Divider()
+            Button("Next Bookmark") { workspace?.goToBookmark(forward: true) }
+                .menuShortcut(.nextBookmark, in: preset)
+                .disabled(workspace?.bookmarks.isEmpty ?? true)
+            Button("Previous Bookmark") { workspace?.goToBookmark(forward: false) }
+                .menuShortcut(.previousBookmark, in: preset)
+                .disabled(workspace?.bookmarks.isEmpty ?? true)
+            Divider()
+            Menu("Go to Mnemonic Bookmark") {
+                let named = workspace?.bookmarksWithMnemonics ?? []
+                if named.isEmpty {
+                    Text("No Mnemonics Yet")
+                } else {
+                    ForEach(named) { bookmark in
+                        Button("\(bookmark.mnemonic ?? "")  \(bookmark.title)") { workspace?.openBookmark(bookmark) }
+                    }
+                }
+            }
+            Button("Show Bookmarks Tab") { workspace?.showSidebarTab(.bookmarks) }
+        }
+        Button("Select In…") { workspace?.showSelectIn() }
+        Divider()
         Button("Command Palette…", action: { workspace?.showCommandPalette() })
             .menuShortcut(.commandPalette, in: preset)
     }

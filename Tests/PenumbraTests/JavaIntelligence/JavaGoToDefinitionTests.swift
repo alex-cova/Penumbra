@@ -88,6 +88,24 @@ final class JavaGoToDefinitionTests: XCTestCase {
         XCTAssertLessThan(parameterHit.range.start.utf16Offset, "class T { void m(int count) { int copy = ".utf16.count)
     }
 
+    func testNavigationSeesTheBuffersOwnClassesEvenWhenTheIndexHasNotCaughtUp() async throws {
+        // Nothing indexed: `T` is code typed a moment ago, before the overlay's debounce.
+        let call = try await navigate("class T { void helper() {} void m() { €helper(); } }")
+        XCTAssertEqual(selected(try single(call), in: "class T { void helper() {} void m() { helper(); } }"), "helper")
+        let field = try await navigate("class T { int count; int m() { return this.€count; } }")
+        XCTAssertEqual(selected(try single(field), in: "class T { int count; int m() { return this.count; } }"), "count")
+        let inherited = try await navigate("class T { static class A { void run() {} } static class B extends A { void m() { €run(); } } }")
+        XCTAssertEqual(selected(try single(inherited), in: "class T { static class A { void run() {} } static class B extends A { void m() { run(); } } }"), "run")
+    }
+
+    func testTheBuffersClassesWinOverAStaleIndexedCopy() async throws {
+        // The index still has the old shape of `Bar`, without `fresh()`.
+        let stale = try await write("Bar.java", "class Bar { void old() {} }")
+        let source = "class Bar { void old() {} void fresh() {} void m() { €fresh(); } }"
+        let result = try await navigate(source, indexing: [stale], url: stale.url)
+        XCTAssertEqual(selected(try single(result), in: source.replacingOccurrences(of: "€", with: "")), "fresh")
+    }
+
     func testClickingADeclarationDoesNothing() async throws {
         let result = try await navigate("class T { void m() { int €value = 1; } }")
         XCTAssertNil(result)
@@ -105,22 +123,46 @@ final class JavaGoToDefinitionTests: XCTestCase {
         XCTAssertEqual(location.displayName, "Bar(int x)")
     }
 
-    func testSameArityConstructorsReturnEveryMatch() async throws {
+    func testSameArityConstructorsAreNarrowedByTheArgumentTypes() async throws {
         let bar = try await write("Bar.java", """
         class Bar {
             Bar(int x) {}
             Bar(String s) {}
         }
         """)
-        let result = try await navigate("class T { void m() { new €Bar(1); } }", indexing: [bar])
+        let byInt = try await navigate("class T { void m() { new €Bar(1); } }", indexing: [bar])
+        XCTAssertEqual(try single(byInt).displayName, "Bar(int x)")
+        let byString = try await navigate("class T { void m() { new €Bar(\"a\"); } }", indexing: [bar])
+        XCTAssertEqual(try single(byString).displayName, "Bar(String s)")
+    }
+
+    func testConstructorsStayAllListedWhenTheArgumentCannotBeTyped() async throws {
+        let bar = try await write("Bar.java", """
+        class Bar {
+            Bar(int x) {}
+            Bar(String s) {}
+        }
+        """)
+        let result = try await navigate("class T { void m() { new €Bar(somethingUnknown()); } }", indexing: [bar])
         guard case .multiple(let locations) = result else {
             return XCTFail("Expected both constructors, got \(String(describing: result))")
         }
-        XCTAssertEqual(locations.count, 2)
         XCTAssertEqual(Set(locations.map(\.displayName)), ["Bar(int x)", "Bar(String s)"])
         let offsets = Set(locations.map { selected($0, in: bar.source) })
         XCTAssertEqual(offsets, ["Bar"])
         XCTAssertNotEqual(locations[0].range.start.utf16Offset, locations[1].range.start.utf16Offset)
+    }
+
+    func testExplicitSuperConstructorCallIsNarrowedToo() async throws {
+        let base = try await write("Base.java", """
+        class Base {
+            Base(int x) {}
+            Base(String s) {}
+        }
+        """)
+        let child = try await write("T.java", "class T extends Base { T() { super(\"a\"); } }")
+        let result = try await navigate("class T extends Base { T() { €super(\"a\"); } }", indexing: [base, child], url: child.url)
+        XCTAssertEqual(try single(result).displayName, "Base(String s)")
     }
 
     func testNavigatesSingleTypeImportAndStaticImportCall() async throws {

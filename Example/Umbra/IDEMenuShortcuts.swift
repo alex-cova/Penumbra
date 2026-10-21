@@ -15,6 +15,8 @@ enum IDEMenuCommand: CaseIterable, Hashable {
     case find, replace, findInFiles, replaceInFiles, copyPathReference
     // Go
     case goToFile, goToSymbol, fileStructure, goToLine, recentLocations, commandPalette, nextProblem, previousProblem
+    case navigateBack, navigateForward
+    case toggleBookmark, toggleBookmarkWithMnemonic, showBookmarks, nextBookmark, previousBookmark
     // Java
     case showContextActions, parameterInfo, goToTypeDefinition
     case inspectCode, runInspectionByName
@@ -103,8 +105,17 @@ enum IDEMenuShortcuts {
         .toggleDebugTool: nil,
         .hideAllToolWindows: nil,
         .resetZoom: nil,
-        // F3 in every preset; IntelliJ's ⌘F8 is a secondary key (`secondaryShortcuts`).
+        // F3 in Sublime and Default; IntelliJ gives F3 to bookmarks and moves this to ⌘F8.
         .toggleBreakpoint: KeyboardShortcut(functionKey3, modifiers: []),
+        // Sublime Text's bookmark keys: ⌘F2 toggles, F2 / ⇧F2 step, ⇧⌘F2 lists.
+        .toggleBookmark: KeyboardShortcut(functionKey2, modifiers: .command),
+        .toggleBookmarkWithMnemonic: nil,
+        .showBookmarks: KeyboardShortcut(functionKey2, modifiers: [.command, .shift]),
+        .nextBookmark: KeyboardShortcut(functionKey2, modifiers: []),
+        .previousBookmark: KeyboardShortcut(functionKey2, modifiers: .shift),
+        // Back and Forward are ⌘[ and ⌘] in every preset's `Keymap` too.
+        .navigateBack: KeyboardShortcut("[", modifiers: .command),
+        .navigateForward: KeyboardShortcut("]", modifiers: .command),
         .viewBreakpoints: nil,
         .muteBreakpoints: nil,
         .debugRunToCursor: nil,
@@ -207,6 +218,14 @@ enum IDEMenuShortcuts {
         .debugInContext: KeyboardShortcut("d", modifiers: [.control, .shift]),
         .nextProblem: KeyboardShortcut(functionKey2, modifiers: []),
         .previousProblem: KeyboardShortcut(functionKey2, modifiers: .shift),
+        // IntelliJ's macOS keys: F3 toggles a bookmark (so Toggle Line Breakpoint is ⌘F8 here),
+        // ⌥F3 gives it a mnemonic, ⌘F3 lists them, ⌃⌥↓ / ⌃⌥↑ step through them.
+        .toggleBreakpoint: KeyboardShortcut(functionKey8, modifiers: .command),
+        .toggleBookmark: KeyboardShortcut(functionKey3, modifiers: []),
+        .toggleBookmarkWithMnemonic: KeyboardShortcut(functionKey3, modifiers: .option),
+        .showBookmarks: KeyboardShortcut(functionKey3, modifiers: .command),
+        .nextBookmark: KeyboardShortcut(.downArrow, modifiers: [.control, .option]),
+        .previousBookmark: KeyboardShortcut(.upArrow, modifiers: [.control, .option]),
         .goToTypeDefinition: KeyboardShortcut("b", modifiers: [.control, .shift]),
         .recentLocations: KeyboardShortcut("e", modifiers: [.command, .shift]),
         .commandPalette: KeyboardShortcut("a", modifiers: [.command, .shift]),
@@ -229,9 +248,8 @@ extension IDEMenuShortcuts {
     static func secondaryShortcuts(in preset: KeymapPreset) -> [(command: IDEMenuCommand, key: String, modifiers: NSEvent.ModifierFlags)] {
         switch preset {
         case .intelliJ:
-            // IntelliJ's Toggle Line Breakpoint, next to F3, and Version Control next to ⌘K.
-            return [(.toggleBreakpoint, String(Character(UnicodeScalar(NSF8FunctionKey)!)), .command),
-                    (.toggleSourceControl, "9", .command)]
+            // Version Control (⌘9), next to ⌘K.
+            return [(.toggleSourceControl, "9", .command)]
         case .sublime, .default_:
             return []
         }
@@ -250,6 +268,14 @@ enum IDESecondaryShortcutMonitor {
             guard let workspace = IDEWindowRegistry.shared.activeWorkspace else { return event }
             let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
             let key = event.charactersIgnoringModifiers ?? ""
+            // IntelliJ's ⌃1 … ⌃0 go to the bookmark with that mnemonic. A digit nobody named is
+            // left alone (⌃digit may be a system shortcut).
+            if workspace.preferences.keymapPreset == .intelliJ, flags == .control, key.count == 1,
+               key.first?.isNumber == true,
+               workspace.bookmarkStore.bookmark(withMnemonic: key, project: workspace.project.rootURL) != nil {
+                workspace.goToBookmark(mnemonic: key)
+                return nil
+            }
             for shortcut in IDEMenuShortcuts.secondaryShortcuts(in: workspace.preferences.keymapPreset)
             where shortcut.key == key && shortcut.modifiers == flags {
                 workspace.perform(shortcut.command)

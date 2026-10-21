@@ -703,15 +703,18 @@ public final class RecentLocationsPaletteProvider: SearchEverywhereProvider {
     public let sectionOrder = 5
     private let entries: @MainActor @Sendable () -> [PaletteLocationEntry]
     private let root: @MainActor @Sendable () -> URL?
+    private let onRemove: (@MainActor @Sendable (PaletteLocationEntry) -> Void)?
     private let onOpen: @MainActor @Sendable (URL, PaletteLineTarget) -> Void
 
     public init(
         entries: @escaping @MainActor @Sendable () -> [PaletteLocationEntry],
         root: @escaping @MainActor @Sendable () -> URL? = { nil },
+        onRemove: (@MainActor @Sendable (PaletteLocationEntry) -> Void)? = nil,
         onOpen: @escaping @MainActor @Sendable (URL, PaletteLineTarget) -> Void
     ) {
         self.entries = entries
         self.root = root
+        self.onRemove = onRemove
         self.onOpen = onOpen
     }
 
@@ -741,6 +744,10 @@ public final class RecentLocationsPaletteProvider: SearchEverywhereProvider {
             let url = entry.url
             let target = PaletteLineTarget(line: entry.line, column: entry.column)
             let text = entry.lineText?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var remove: (@MainActor @Sendable () -> Void)?
+            if let onRemove = self.onRemove {
+                remove = { onRemove(entry) }
+            }
             return PaletteItem(
                 id: "location:\(url.path):\(entry.line)",
                 title: Self.title(for: entry),
@@ -751,7 +758,8 @@ public final class RecentLocationsPaletteProvider: SearchEverywhereProvider {
                 action: { onOpen(url, target) },
                 location: text?.isEmpty == false ? text : nil,
                 footer: RecentFilesPaletteProvider.displayPath(url),
-                fileURL: url
+                fileURL: url,
+                removeAction: remove
             )
         }
     }

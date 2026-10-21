@@ -187,9 +187,14 @@ public final class IDEWorkspace {
         commandsAppSupport: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentPermissionFiles.appFile()?.deletingLastPathComponent() : nil)
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
+    /// Hierarchies kept with Pin Tab, and which one the tab shows (nil: the live one).
+    var pinnedTypeHierarchies: [IDEPinnedHierarchy<IDETypeHierarchyStore>] = []
+    var selectedTypeHierarchyPinID: UUID?
     /// The Structure tool window's member tree for the type at the caret.
     let structureStore = IDEStructureStore()
     let callHierarchy = IDECallHierarchyStore()
+    var pinnedCallHierarchies: [IDEPinnedHierarchy<IDECallHierarchyStore>] = []
+    var selectedCallHierarchyPinID: UUID?
     let debugSession = JavaDebugSession()
     /// Swift debugging through `lldb-dap`. The Debug tool window shows this while it is active.
     let dapDebugSession = DAPDebugSession()
@@ -448,7 +453,6 @@ public final class IDEWorkspace {
     /// for; a click maps the engine marker's `id` back to its index here.
     @ObservationIgnored private var lineMarkersByEditor: [ObjectIdentifier: (generation: UInt64, markers: [LineMarker])] = [:]
     /// The language the Type and Call Hierarchy tabs were last asked for (their items belong to it).
-    @ObservationIgnored private var hierarchyLanguageIdentifier: String?
     @ObservationIgnored private var javaRunAvailabilityTask: Task<Void, Never>?
     @ObservationIgnored private var structureRefreshTask: Task<Void, Never>?
     /// The last configuration Run launched in this project, restored across launches. Run Last
@@ -492,6 +496,12 @@ public final class IDEWorkspace {
     /// Replaceable so a test does not write to the real store.
     @ObservationIgnored var runConfigurationStore = IDESharedServices.shared.runConfigurations
     let breakpointStore = IDESharedServices.shared.breakpoints
+    let bookmarkStore = IDESharedServices.shared.bookmarks
+    /// The project's bookmarks and bookmark lists, mirrored from `bookmarkStore` (which is not
+    /// observable) for the Bookmarks tab. Refreshed by `refreshBookmarks()` after every change.
+    var bookmarks: [IDEBookmark] = []
+    var bookmarkLists: [IDEBookmarkList] = []
+    var defaultBookmarkListID: UUID?
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
     /// What the HTTP gutter's send buttons were last built for, so a caret move alone doesn't re-parse.
@@ -566,8 +576,15 @@ public final class IDEWorkspace {
     var showsRunTab: Bool { runs.hasContent }
     /// The Type Hierarchy tab appears once a hierarchy (or a message about why there is none) has
     /// been requested, and goes when it is closed.
-    var showsTypeHierarchyTab: Bool { typeHierarchy.hasContent }
-    var showsCallHierarchyTab: Bool { callHierarchy.hasContent }
+    var showsTypeHierarchyTab: Bool { typeHierarchy.hasContent || !pinnedTypeHierarchies.isEmpty }
+    var showsCallHierarchyTab: Bool { callHierarchy.hasContent || !pinnedCallHierarchies.isEmpty }
+    /// What the Type Hierarchy tab shows: the pinned hierarchy that is selected, else the live one.
+    var visibleTypeHierarchy: IDETypeHierarchyStore {
+        pinnedTypeHierarchies.first { $0.id == selectedTypeHierarchyPinID }?.store ?? typeHierarchy
+    }
+    var visibleCallHierarchy: IDECallHierarchyStore {
+        pinnedCallHierarchies.first { $0.id == selectedCallHierarchyPinID }?.store ?? callHierarchy
+    }
     var showsDebugTab: Bool {
         switch debugSession.state {
         case .idle: return false
@@ -1341,12 +1358,16 @@ public final class IDEWorkspace {
     /// Back-stack caret positions (⌘[ history), newest first. Line text comes from an editor
     /// currently showing the file; other rows go without it.
     private func recentLocationEntries() -> [PaletteLocationEntry] {
+        recentLocationEntries(from: workbench.navigationHistory.backEntries.reversed())
+    }
+
+    private func recentLocationEntries(from entries: [NavigationEntry]) -> [PaletteLocationEntry] {
         var textViews: [URL: TextView] = [:]
         for pane in workbench.panes {
             guard let url = pane.selectedDocument?.url, let host = hostCache.peek(pane.id) else { continue }
             textViews[url.standardizedFileURL] = host.textView
         }
-        return workbench.navigationHistory.backEntries.reversed().compactMap { entry in
+        return entries.compactMap { entry in
             guard let url = entry.url else { return nil }
             let line = entry.location.lineNumber
             let text = textViews[url.standardizedFileURL].flatMap { Self.lineText(line, in: $0) }
@@ -2770,51 +2791,87 @@ public final class IDEWorkspace {
     /// request: outside a Java type the tab says so instead of the key doing nothing.
     @discardableResult
     func showTypeHierarchy() -> Bool {
-        if typeHierarchy.loader == nil {
-            typeHierarchy.loader = { [weak self] node, direction, file in
-                guard let provider = self?.activeTypeHierarchyProvider else { return [] }
-                switch direction {
-                case .supertypes: return await provider.supertypes(of: node, file: file)
-                case .subtypes: return await provider.subtypes(of: node, file: file)
-                }
-            }
-        }
+        showHierarchy(kind: .type)
+    }
+
+    /// Shows the hierarchy of the method at the active editor's caret (⇧⌘H): the classes that
+    /// declare it and the ones below them, each marked by what it does with it.
+    @discardableResult
+    func showMethodHierarchy() -> Bool {
+        showHierarchy(kind: .method)
+    }
+
+    private func showHierarchy(kind: IDETypeHierarchyStore.Kind) -> Bool {
         let host = host(for: workbench.activePane.id)
         let textView = host.textView
         let url = textView.documentURL
         let languageIdentifier = workbench.activePane.selectedDocument?.languageIdentifier
-        guard let provider = languages.typeHierarchy(for: languageIdentifier) else {
-            typeHierarchy.show(message: "Type Hierarchy is not available for \(IDELanguageSupport.displayName(forIdentifier: languageIdentifier)) files")
+        // A new request goes to the live view, whichever pinned one was showing.
+        selectedTypeHierarchyPinID = nil
+        // Each store keeps its own provider lookup, so a pinned copy still expands after the live
+        // view has moved on to another kind or language.
+        typeHierarchy.loader = { [weak self] node, direction, scope, file in
+            guard let provider = self?.typeHierarchyProvider(kind: kind, language: languageIdentifier) else { return [] }
+            switch direction {
+            case .supertypes: return await provider.supertypes(of: node, file: file)
+            case .subtypes: return await provider.subtypes(of: node, file: file, scope: scope)
+            }
+        }
+        guard let provider = typeHierarchyProvider(kind: kind, language: languageIdentifier) else {
+            typeHierarchy.show(message: "\(kind.title) is not available for \(IDELanguageSupport.displayName(forIdentifier: languageIdentifier)) files")
             showBottomTab(.typeHierarchy)
             return true
         }
-        hierarchyLanguageIdentifier = languageIdentifier
         let source = textView.text
         let offset = textView.selectedRange.location
         Task { [weak self] in
             let root = await provider.rootItem(source: source, fileURL: url, utf16Offset: offset)
             guard let self else { return }
             if let root {
-                self.typeHierarchy.show(root: root, file: url)
+                self.typeHierarchy.show(root: root, file: url, kind: kind, languageIdentifier: languageIdentifier)
             } else {
-                self.typeHierarchy.show(message: "No type at the caret")
+                self.typeHierarchy.show(message: kind == .method ? "No method at the caret" : "No type at the caret")
             }
             self.showBottomTab(.typeHierarchy)
         }
         return true
     }
 
-    /// Closes the Type Hierarchy tab, back to whichever shell was showing.
+    private func typeHierarchyProvider(kind: IDETypeHierarchyStore.Kind, language: String?) -> (any TypeHierarchyProviding)? {
+        kind == .method ? languages.methodHierarchy(for: language) : languages.typeHierarchy(for: language)
+    }
+
+    /// Closes what the Type Hierarchy tab shows: a pinned hierarchy goes, the live one is cleared.
+    /// The tab itself goes when nothing is left.
     func closeTypeHierarchy() {
-        typeHierarchy.clear()
-        deselectBottomTab(.typeHierarchy)
+        if let pin = selectedTypeHierarchyPinID {
+            unpinTypeHierarchy(pin)
+        } else {
+            typeHierarchy.clear()
+        }
+        if !showsTypeHierarchyTab { deselectBottomTab(.typeHierarchy) }
+    }
+
+    /// Pin Tab: keeps the hierarchy on screen as a copy, so the next one opens in the live view.
+    func pinTypeHierarchy() {
+        let store = visibleTypeHierarchy
+        guard let root = store.root, selectedTypeHierarchyPinID == nil else { return }
+        let pin = IDEPinnedHierarchy(title: "\(store.kind.title): \(root.name)", store: store.copy())
+        pinnedTypeHierarchies.append(pin)
+        selectedTypeHierarchyPinID = pin.id
+    }
+
+    func unpinTypeHierarchy(_ id: UUID) {
+        pinnedTypeHierarchies.removeAll { $0.id == id }
+        if selectedTypeHierarchyPinID == id { selectedTypeHierarchyPinID = nil }
+        if !showsTypeHierarchyTab { deselectBottomTab(.typeHierarchy) }
     }
 
     /// Opens the declaration of a hierarchy node: in the project, or in an attached source. A type
     /// with no source (a class file) has nowhere to go, so the system beeps.
-    func openTypeHierarchyNode(_ node: HierarchyItem) {
-        guard let provider = activeTypeHierarchyProvider else { return }
-        let file = typeHierarchy.file
+    func openTypeHierarchyNode(_ node: HierarchyItem, in store: IDETypeHierarchyStore) {
+        guard let provider = typeHierarchyProvider(kind: store.kind, language: store.languageIdentifier) else { return }
+        let file = store.file
         Task { [weak self] in
             guard let location = await provider.location(of: node, file: file), let url = location.url else {
                 NSSound.beep()
@@ -2826,49 +2883,36 @@ public final class IDEWorkspace {
         }
     }
 
-    /// The language the open hierarchy tabs were asked for. Their nodes carry that language's own
-    /// records, so expanding or opening one goes back to the provider that made it, even if the
-    /// active editor has since switched to another language.
-    private var activeTypeHierarchyProvider: (any TypeHierarchyProviding)? {
-        languages.typeHierarchy(for: hierarchyLanguageIdentifier)
-    }
-
-    private var activeCallHierarchyProvider: (any CallHierarchyProviding)? {
-        languages.callHierarchy(for: hierarchyLanguageIdentifier)
-    }
-
     // MARK: Call hierarchy
 
     @discardableResult
     func showCallHierarchy() -> Bool {
-        if callHierarchy.loader == nil {
-            callHierarchy.loader = { [weak self] node, direction, file in
-                guard let provider = self?.activeCallHierarchyProvider else { return [] }
-                switch direction {
-                case .callers: return await provider.callers(of: node, file: file)
-                case .callees: return await provider.callees(of: node, file: file)
-                }
-            }
-        }
         let host = host(for: workbench.activePane.id)
         let textView = host.textView
         let url = textView.documentURL
         let languageIdentifier = workbench.activePane.selectedDocument?.languageIdentifier
+        selectedCallHierarchyPinID = nil
+        callHierarchy.loader = { [weak self] node, direction, scope, file in
+            guard let provider = self?.languages.callHierarchy(for: languageIdentifier) else { return [] }
+            switch direction {
+            case .callers: return await provider.callers(of: node, file: file, scope: scope)
+            case .callees: return await provider.callees(of: node, file: file)
+            }
+        }
         guard let provider = languages.callHierarchy(for: languageIdentifier) else {
             callHierarchy.show(message: "Call Hierarchy is not available for \(IDELanguageSupport.displayName(forIdentifier: languageIdentifier)) files")
             showBottomTab(.callHierarchy)
             return true
         }
-        hierarchyLanguageIdentifier = languageIdentifier
         let source = textView.text
         let offset = textView.selectedRange.location
         Task { [weak self] in
             let root = await provider.rootItem(source: source, fileURL: url, utf16Offset: offset)
             guard let self else { return }
             if let root {
-                self.callHierarchy.show(root: root, file: url)
+                self.callHierarchy.show(root: root, file: url, languageIdentifier: languageIdentifier)
             } else {
-                self.callHierarchy.show(message: "No method at the caret")
+                self.callHierarchy.show(message: "No method or field at the caret")
             }
             self.showBottomTab(.callHierarchy)
         }
@@ -2876,13 +2920,31 @@ public final class IDEWorkspace {
     }
 
     func closeCallHierarchy() {
-        callHierarchy.clear()
-        deselectBottomTab(.callHierarchy)
+        if let pin = selectedCallHierarchyPinID {
+            unpinCallHierarchy(pin)
+        } else {
+            callHierarchy.clear()
+        }
+        if !showsCallHierarchyTab { deselectBottomTab(.callHierarchy) }
     }
 
-    func openCallHierarchyNode(_ node: HierarchyItem) {
-        guard let provider = activeCallHierarchyProvider else { return }
-        let file = callHierarchy.file
+    func pinCallHierarchy() {
+        let store = visibleCallHierarchy
+        guard let root = store.root, selectedCallHierarchyPinID == nil else { return }
+        let pin = IDEPinnedHierarchy(title: "Call Hierarchy: \(root.name)", store: store.copy())
+        pinnedCallHierarchies.append(pin)
+        selectedCallHierarchyPinID = pin.id
+    }
+
+    func unpinCallHierarchy(_ id: UUID) {
+        pinnedCallHierarchies.removeAll { $0.id == id }
+        if selectedCallHierarchyPinID == id { selectedCallHierarchyPinID = nil }
+        if !showsCallHierarchyTab { deselectBottomTab(.callHierarchy) }
+    }
+
+    func openCallHierarchyNode(_ node: HierarchyItem, in store: IDECallHierarchyStore) {
+        guard let provider = languages.callHierarchy(for: store.languageIdentifier) else { return }
+        let file = store.file
         Task { [weak self] in
             guard let location = await provider.location(of: node, file: file), let url = location.url else {
                 NSSound.beep()
@@ -3159,6 +3221,16 @@ public final class IDEWorkspace {
     /// cache are ordinary files the read-only check in ``applyState`` then locks.
     @discardableResult
     func openNavigationLocation(_ location: Location) -> Bool {
+        switch location.target {
+        case .source:
+            break
+        case .directory:
+            if let url = location.url { revealInExplorer(url) }
+            return true
+        case .package(let name):
+            showLibraryPackage(name)
+            return true
+        }
         let current = host(for: workbench.activePaneID)
         current.textView.recordNavigationCheckpoint()
         let nsRange = NSRange(
@@ -3246,7 +3318,7 @@ public final class IDEWorkspace {
         }
         let items = locations.map { location -> (title: String, subtitle: String?) in
             // The file with its folder, so two classes named alike in different packages are told apart.
-            let subtitle = location.url.map { url in
+            let subtitle = location.target != .source ? nil : location.url.map { url in
                 let folder = url.deletingLastPathComponent().lastPathComponent
                 return folder.isEmpty ? url.lastPathComponent : "\(folder)/\(url.lastPathComponent)"
             }
@@ -3264,6 +3336,7 @@ public final class IDEWorkspace {
         case .implementation: return "Go to Implementation"
         case .superMethod: return "Go to Super Method"
         case .typeDefinition: return "Go to Type Declaration"
+        case .siblings: return "Show Siblings"
         case .references: return "Find Usages"
         }
     }
@@ -4263,6 +4336,9 @@ public final class IDEWorkspace {
         host.wireProblemNavigation { [weak self] forward in
             self?.goToProblem(forward: forward)
         }
+        host.wireSelectIn { [weak self] in
+            self?.showSelectIn()
+        }
         // Find in Files (⌘⇧F) gets Umbra's own bottom panel rather than the built-in palette
         // mode; Go to Line needs no host wiring at all — `CommandPaletteController` handles
         // `.goToLine` natively.
@@ -4272,6 +4348,12 @@ public final class IDEWorkspace {
         }
         host.intelligenceController?.onRequestTypeHierarchy = { [weak self] in
             self?.showTypeHierarchy() ?? false
+        }
+        host.intelligenceController?.onRequestMethodHierarchy = { [weak self] in
+            self?.showMethodHierarchy() ?? false
+        }
+        host.intelligenceController?.onRequestCallHierarchy = { [weak self] in
+            self?.showCallHierarchy() ?? false
         }
         host.intelligenceController?.onCodeActionCommand = { [weak self] command in
             self?.performCodeActionCommand(command)
@@ -5085,6 +5167,12 @@ public final class IDEWorkspace {
         palette.recentLocationsProvider = { [weak self] in
             self?.recentLocationEntries() ?? []
         }
+        palette.recentEditedLocationsProvider = { [weak self] in
+            self?.recentLocationEntries(from: self?.workbench.navigationHistory.editEntries.reversed() ?? []) ?? []
+        }
+        palette.onRemoveRecentLocation = { [weak self] entry in
+            self?.workbench.navigationHistory.forget(url: entry.url, line: entry.line - 1)
+        }
         palette.navigationDestinationsProvider = { [weak self] in
             guard let self else { return [] }
             var destinations = self.toolWindows.map { window in
@@ -5441,6 +5529,7 @@ public final class IDEWorkspace {
         languageServerHost.projectDidChange(root: url, connections: intelligenceServices.languageServerConnections)
         refreshLastRunConfiguration()
         refreshBreakpoints()
+        refreshBookmarks()
         loadWatches()
         paletteController?.workspaceRoot = url
     }
@@ -6555,6 +6644,7 @@ public final class IDEWorkspace {
         // `setState` cleared the blame column and the change spans; bring both back.
         blame.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true)
         applyProfileLineHints(to: host.textView, url: document.url)
+        applyBookmarkGutter(to: host, document: document)
         changeMarkers.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true, delay: .zero)
         if pane.id == workbench.activePaneID {
             adapter.refreshCachedDocuments()

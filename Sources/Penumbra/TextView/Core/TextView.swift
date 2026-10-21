@@ -320,7 +320,7 @@ public struct DocumentTextExport: Sendable {
                 return selectedRange
             } else {
                 // UITextView returns the end of the document for the selectedRange by default.
-                return NSRange(location: textInputView.string.length, length: 0)
+                return NSRange(location: textInputView.documentLength, length: 0)
             }
         }
         set {
@@ -570,6 +570,31 @@ public struct DocumentTextExport: Sendable {
     public var gutterDecorations: [GutterDecoration] {
         get { textInputView.gutterDecorations }
         set { textInputView.gutterDecorations = newValue }
+    }
+
+    /// Bookmarks drawn in the gutter beside the decorations (see ``GutterBookmark``). Replaced
+    /// wholesale, like ``gutterDecorations``, and independent of them: whatever a host does with
+    /// breakpoints and run buttons leaves the bookmarks alone.
+    public var gutterBookmarks: [GutterBookmark] {
+        get { textInputView.gutterBookmarks }
+        set { textInputView.gutterBookmarks = newValue }
+    }
+
+    public func setGutterBookmarks(_ bookmarks: [GutterBookmark]) {
+        gutterBookmarks = bookmarks
+    }
+
+    /// Called when the user clicks a bookmark's icon.
+    public var gutterBookmarkHandler: ((GutterBookmark) -> Void)? {
+        get { textInputView.gutterBookmarkHandler }
+        set { textInputView.gutterBookmarkHandler = newValue }
+    }
+
+    /// Called after an edit that adds or removes line breaks moved or dropped bookmarks (one on a
+    /// deleted line is dropped), with all of them, so the host can keep its record in step.
+    public var gutterBookmarksDidMove: (([GutterBookmark]) -> Void)? {
+        get { textInputView.gutterBookmarksDidMove }
+        set { textInputView.gutterBookmarksDidMove = newValue }
     }
 
     /// Called when the user clicks a gutter decoration; the argument is the 1-based line number.
@@ -2217,6 +2242,12 @@ public struct DocumentTextExport: Sendable {
             return navigateBack()
         case .navigateForward:
             return navigateForward()
+        case .lastEditLocation:
+            return goToLastEditLocation()
+        case .nextChange:
+            return goToChange(forward: true)
+        case .previousChange:
+            return goToChange(forward: false)
         case .reformatCode:
             return textInputView.performFallbackAction(action, isEditable: isEditable)
         case .toggleMethodSeparators:
@@ -2397,6 +2428,33 @@ public struct DocumentTextExport: Sendable {
     public func navigateForward() -> Bool {
         guard let target = navigationHistory.goForward(from: currentNavigationEntry()) else { return false }
         return applyHistoryEntry(target)
+    }
+
+    /// Moves the caret to where the text was last edited, and on a repeat to the edit before it.
+    /// The place the caret came from becomes a back stop.
+    @discardableResult
+    public func goToLastEditLocation() -> Bool {
+        guard let target = navigationHistory.lastEditLocation(from: currentNavigationEntry()) else { return false }
+        recordNavigationCheckpoint()
+        return applyHistoryEntry(target)
+    }
+
+    /// Moves the caret to the start of the next (or previous) changed line in the gutter's change
+    /// stripe, wrapping at the ends. False when there are no changes.
+    @discardableResult
+    public func goToChange(forward: Bool) -> Bool {
+        let rows = Set(gutterChanges.map { $0.firstRow }).sorted()
+        guard !rows.isEmpty else { return false }
+        let caretRow = textLocation(at: selectedRange.location)?.lineNumber ?? 0
+        let target = forward
+            ? (rows.first { $0 > caretRow } ?? rows[0])
+            : (rows.last { $0 < caretRow } ?? rows[rows.count - 1])
+        guard let location = location(at: TextLocation(lineNumber: target, column: 0)) else { return false }
+        recordNavigationCheckpoint()
+        let range = NSRange(location: location, length: 0)
+        selectedRange = range
+        scrollRangeToCenterIfNeeded(range)
+        return true
     }
 
     private func applyHistoryEntry(_ entry: NavigationEntry) -> Bool {
@@ -3137,6 +3195,9 @@ extension TextView: TextInputViewDelegate {
     func textInputViewDidChange(_ view: TextInputView) {
         editorFragmentPreview.dismiss()
         setNeedsLayout()
+        if !isApplyingMirroredEdit, !isApplyingHistoryNavigation {
+            navigationHistory.noteEdit(currentNavigationEntry())
+        }
         if isAutomaticScrollEnabled, !isApplyingMirroredEdit, let newRange = textInputView.selection, newRange.length == 0 {
             let location = newRange.location
             DispatchQueue.main.async { [weak self] in
@@ -3307,6 +3368,12 @@ extension TextView: TextInputViewDelegate {
             return navigateBack()
         case .navigateForward:
             return navigateForward()
+        case .lastEditLocation:
+            return goToLastEditLocation()
+        case .nextChange:
+            return goToChange(forward: true)
+        case .previousChange:
+            return goToChange(forward: false)
         default:
             return false
         }

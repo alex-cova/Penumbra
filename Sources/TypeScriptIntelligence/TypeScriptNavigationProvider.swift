@@ -27,7 +27,7 @@ public struct TypeScriptNavigationProvider: NavigationProvider {
         case .references:
             let locations = await references(context)
             return locations.isEmpty ? nil : .multiple(locations)
-        case .implementation, .superMethod, .typeDefinition:
+        case .implementation, .superMethod, .typeDefinition, .siblings:
             return nil
         }
     }

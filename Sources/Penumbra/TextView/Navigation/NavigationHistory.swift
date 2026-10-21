@@ -37,6 +37,18 @@ public final class NavigationHistory {
     /// The most recent observed cursor position (not yet necessarily a history stop).
     private var lastObserved: NavigationEntry?
 
+    /// Where the document was last edited, oldest first: one entry per cluster of nearby edits
+    /// (IntelliJ's Last Edit Location, ⇧⌘⌫). Kept apart from the back/forward stacks, which
+    /// follow the caret rather than the text.
+    public private(set) var editEntries: [NavigationEntry] = []
+    /// Maximum entries kept in ``editEntries``.
+    public var editCapacity = 32
+    /// Edits within this many lines of the newest entry (in the same document) update it instead
+    /// of adding another.
+    public var editLineThreshold = 4
+    /// The entry the last ``lastEditLocation(from:)`` returned; reset by the next edit.
+    private var editCursor: Int?
+
     public init() {}
 
     public var canGoBack: Bool { !backEntries.isEmpty }
@@ -45,7 +57,47 @@ public final class NavigationHistory {
     public func clear() {
         backEntries.removeAll()
         forwardEntries.removeAll()
+        editEntries.removeAll()
+        editCursor = nil
         lastObserved = nil
+    }
+
+    /// Removes every stop at `line` (zero-based) of `url` from the back, forward and edit lists, so
+    /// a place the user dropped from Recent Locations does not come back through ⌘[.
+    public func forget(url: URL, line: Int) {
+        func keep(_ entry: NavigationEntry) -> Bool {
+            !(entry.url?.standardizedFileURL == url.standardizedFileURL && entry.location.lineNumber == line)
+        }
+        backEntries.removeAll { !keep($0) }
+        forwardEntries.removeAll { !keep($0) }
+        editEntries.removeAll { !keep($0) }
+        editCursor = nil
+    }
+
+    /// Notes that the text changed with the caret at `entry`. O(1): it compares with the newest
+    /// entry only, so it is safe to call on every keystroke.
+    public func noteEdit(_ entry: NavigationEntry) {
+        editCursor = nil
+        if let last = editEntries.last, !entry.isSignificantlyDifferent(from: last, lineThreshold: editLineThreshold) {
+            editEntries[editEntries.count - 1] = entry
+            return
+        }
+        editEntries.append(entry)
+        if editEntries.count > editCapacity {
+            editEntries.removeFirst(editEntries.count - editCapacity)
+        }
+    }
+
+    /// The edit to jump to from `current`: the newest one, or, when the caret is already there (or
+    /// the last call just brought it there), the one before it.
+    public func lastEditLocation(from current: NavigationEntry) -> NavigationEntry? {
+        guard !editEntries.isEmpty else { return nil }
+        var index = min(editCursor ?? editEntries.count - 1, editEntries.count - 1)
+        if index > 0, !current.isSignificantlyDifferent(from: editEntries[index], lineThreshold: 2) {
+            index -= 1
+        }
+        editCursor = index
+        return editEntries[index]
     }
 
     /// Observes an ordinary cursor move. Pushes the *previous* position onto the back stack

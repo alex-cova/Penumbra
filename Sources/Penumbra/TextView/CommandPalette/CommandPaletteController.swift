@@ -47,6 +47,11 @@ public final class CommandPaletteController {
     }
     /// Supplies Recent Locations (⌘⇧E), newest first. Rows open through ``onOpenFileAtLine``.
     public var recentLocationsProvider: (@MainActor @Sendable () -> [PaletteLocationEntry])?
+    /// The places where text was edited (Recent Locations with "edited only", ⌘⇧E again), newest
+    /// first. Without it, ⌘⇧E again does nothing.
+    public var recentEditedLocationsProvider: (@MainActor @Sendable () -> [PaletteLocationEntry])?
+    /// Forgets a Recent Locations row (⌫ on an empty query). Rows are only removable when set.
+    public var onRemoveRecentLocation: ((PaletteLocationEntry) -> Void)?
     /// A prebuilt, host-maintained file index. When set it replaces ``fileEntriesProvider`` for the
     /// Files section: nothing is enumerated per keystroke, rows get icons / module / path columns,
     /// and the Text tab reuses its file list instead of walking the disk.
@@ -121,6 +126,7 @@ public final class CommandPaletteController {
     private var indexedFilesProvider: FilesPaletteProvider?
     private var recentFilesProvider: RecentFilesPaletteProvider?
     private var recentFilesEditedOnly = false
+    private var recentLocationsEditedOnly = false
     private var selectedDestinationIndex = 0
     /// Every sidebar destination; the view shows the ones matching the query.
     private var allNavigationDestinations: [RecentFilesDestination] = []
@@ -249,8 +255,23 @@ public final class CommandPaletteController {
     @discardableResult
     public func presentRecentLocations() -> Bool {
         guard recentLocationsProvider != nil, onOpenFileAtLine != nil else { return false }
-        present(mode: .recentLocations, placeholder: "Search recent locations")
+        recentLocationsEditedOnly = false
+        present(mode: .recentLocations, placeholder: Self.recentLocationsPlaceholder(editedOnly: false))
         return true
+    }
+
+    private static func recentLocationsPlaceholder(editedOnly: Bool) -> String {
+        editedOnly ? "Search recent locations (edited only)" : "Search recent locations"
+    }
+
+    /// ⌘⇧E again while Recent Locations is open: switches between every visited place and only the
+    /// places where text was edited.
+    private func toggleRecentLocationsEditedOnly() {
+        guard recentEditedLocationsProvider != nil else { return }
+        recentLocationsEditedOnly.toggle()
+        paletteView.placeholder = Self.recentLocationsPlaceholder(editedOnly: recentLocationsEditedOnly)
+        paletteModel.selectedIndex = 0
+        runQuery(paletteModel.query)
     }
 
     public func presentQuickOpen() {
@@ -531,9 +552,19 @@ public final class CommandPaletteController {
     }
 
     private func makeRecentLocationsProvider() -> RecentLocationsPaletteProvider? {
-        guard let entries = recentLocationsProvider else { return nil }
+        guard let all = recentLocationsProvider else { return nil }
         let root = workspaceRoot
-        return RecentLocationsPaletteProvider(entries: entries, root: { root }) { [weak self] url, target in
+        let edited = recentEditedLocationsProvider
+        let editedOnly: @MainActor @Sendable () -> Bool = { [weak self] in self?.recentLocationsEditedOnly ?? false }
+        let entries: @MainActor @Sendable () -> [PaletteLocationEntry] = {
+            if editedOnly(), let edited { return edited() }
+            return all()
+        }
+        var remove: (@MainActor @Sendable (PaletteLocationEntry) -> Void)?
+        if onRemoveRecentLocation != nil {
+            remove = { [weak self] entry in self?.onRemoveRecentLocation?(entry) }
+        }
+        return RecentLocationsPaletteProvider(entries: entries, root: { root }, onRemove: remove) { [weak self] url, target in
             self?.onOpenFileAtLine?(url, target)
         }
     }
@@ -734,8 +765,8 @@ public final class CommandPaletteController {
     /// ⌫ on an empty query: forgets the selected recent file (the host closes its editor), or
     /// hides the selected tool window. The row goes away in place, keeping the selection index.
     func removeSelection() {
-        guard usesNavigationChrome else { return }
-        if paletteView.navigationPane == .destinations {
+        guard usesNavigationChrome || paletteModel.mode == .recentLocations else { return }
+        if usesNavigationChrome, paletteView.navigationPane == .destinations {
             let destinations = paletteView.navigationDestinations
             guard destinations.indices.contains(selectedDestinationIndex),
                   let close = destinations[selectedDestinationIndex].close else { return }
@@ -871,7 +902,12 @@ public final class CommandPaletteController {
             self?.navigateRecentFilesPane(by: delta) ?? false
         }
         paletteView.onToggleEditedOnly = { [weak self] in
-            guard let self, self.paletteModel.mode == .recentFiles else { return }
+            guard let self else { return }
+            if self.paletteModel.mode == .recentLocations {
+                self.toggleRecentLocationsEditedOnly()
+                return
+            }
+            guard self.paletteModel.mode == .recentFiles else { return }
             self.recentFilesEditedOnly.toggle()
             self.paletteView.editedOnly = self.recentFilesEditedOnly
             self.pendingInitialRecentSelection = false
@@ -887,7 +923,7 @@ public final class CommandPaletteController {
         }
         paletteView.onConfirm = { [weak self] in self?.activateSelection() }
         paletteView.onDeleteSelection = { [weak self] in
-            guard let self, self.usesNavigationChrome else { return false }
+            guard let self, self.usesNavigationChrome || self.paletteModel.mode == .recentLocations else { return false }
             self.removeSelection()
             return true
         }

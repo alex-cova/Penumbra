@@ -1,0 +1,12 @@
+//! target: model/Role.java:isAdmin
+package com.acme.cases;
+
+import com.acme.model.*;
+import com.acme.service.*;
+import com.acme.util.Strings;
+import java.util.*;
+import java.util.function.*;
+
+class MethodOnEnumConstant {
+    boolean m() { return Role.ADMIN./*|*/isAdmin(); }
+}

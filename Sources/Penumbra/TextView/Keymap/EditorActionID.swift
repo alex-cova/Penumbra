@@ -140,6 +140,9 @@ public extension EditorActionID {
     /// class, a method's return type, an expression's type (⌃⇧B in the IntelliJ keymap).
     static let goToTypeDefinition = EditorActionID("goToTypeDefinition")
     static let findUsages = EditorActionID("findUsages")
+    /// Lists the other implementations of the methods the method at the caret overrides or
+    /// implements (IntelliJ's Show Siblings).
+    static let showSiblings = EditorActionID("showSiblings")
     /// Copies a reference to the symbol at the caret (`pkg.Class#method(params)`), from
     /// command completion in read-only files.
     static let copyReference = EditorActionID("copyReference")
@@ -150,6 +153,26 @@ public extension EditorActionID {
     static let goToPreviousProblem = EditorActionID("goToPreviousProblem")
     static let navigateBack = EditorActionID("navigateBack")
     static let navigateForward = EditorActionID("navigateForward")
+    /// Jumps to where the text was last edited; again for the edit before it (⇧⌘⌫ in the IntelliJ
+    /// keymap). Works across documents through the shared ``NavigationHistory``.
+    static let lastEditLocation = EditorActionID("lastEditLocation")
+    /// Moves the caret to the next / previous method name (⌃↓ / ⌃↑ in the IntelliJ keymap).
+    static let nextMethod = EditorActionID("nextMethod")
+    static let previousMethod = EditorActionID("previousMethod")
+    /// Moves the caret to the opening brace of the code block around it, or just after its closing
+    /// brace (⌥⌘[ / ⌥⌘] in the IntelliJ keymap); the `select` variants extend the selection (⇧).
+    /// Jumps to the next / previous changed line (the gutter's change stripe), wrapping around
+    /// (⌃⌥⇧↓ / ⌃⌥⇧↑ in the IntelliJ keymap).
+    static let nextChange = EditorActionID("nextChange")
+    static let previousChange = EditorActionID("previousChange")
+    /// Offers the places to show the current file in: Explorer, Finder, Structure, a terminal.
+    /// The host owns those, so it handles this through ``TextView/editorActionHandler``. It has
+    /// no key of its own: ⌥F1 is Umbra's Reveal in Explorer under the IntelliJ preset.
+    static let selectIn = EditorActionID("selectIn")
+    static let moveToCodeBlockStart = EditorActionID("moveToCodeBlockStart")
+    static let moveToCodeBlockEnd = EditorActionID("moveToCodeBlockEnd")
+    static let selectToCodeBlockStart = EditorActionID("selectToCodeBlockStart")
+    static let selectToCodeBlockEnd = EditorActionID("selectToCodeBlockEnd")
     /// Show completions at the caret. Bound to Control-Space in the shipped keymaps.
     static let triggerCompletion = EditorActionID("triggerCompletion")
     /// Shows the documentation of the symbol at the caret right away (F1, ⌃J), instead of waiting
@@ -165,6 +188,11 @@ public extension EditorActionID {
     /// Shows the supertype/subtype hierarchy of the type at the caret (⌃H in the IntelliJ keymap).
     /// The host presents it: see ``EditorIntelligenceController/onRequestTypeHierarchy``.
     static let typeHierarchy = EditorActionID("typeHierarchy")
+    /// Shows the hierarchy of the method at the caret: the classes that declare it and the ones
+    /// below them, each marked by what it does with it (⇧⌘H in the IntelliJ keymap).
+    static let methodHierarchy = EditorActionID("methodHierarchy")
+    /// Shows the callers and callees of the method at the caret (⌃⌥H in the IntelliJ keymap).
+    static let callHierarchy = EditorActionID("callHierarchy")
     /// Quick fixes and refactorings at the caret. Bound to Option-Return.
     static let showContextActions = EditorActionID("showContextActions")
     /// Removes unused imports and sorts the rest (and whatever else the language's organize-imports action does).
@@ -273,6 +301,16 @@ public extension EditorActionID {
         .goToPreviousProblem: "Go to Previous Problem",
         .navigateBack: "Back",
         .navigateForward: "Forward",
+        .lastEditLocation: "Last Edit Location",
+        .nextMethod: "Next Method",
+        .previousMethod: "Previous Method",
+        .selectIn: "Select In…",
+        .nextChange: "Next Change",
+        .previousChange: "Previous Change",
+        .moveToCodeBlockStart: "Move Caret to Code Block Start",
+        .moveToCodeBlockEnd: "Move Caret to Code Block End",
+        .selectToCodeBlockStart: "Move Caret to Code Block Start with Selection",
+        .selectToCodeBlockEnd: "Move Caret to Code Block End with Selection",
         .triggerCompletion: "Complete",
         .triggerSmartCompletion: "Smart Type Completion",
         .rename: "Rename…",
@@ -289,6 +327,9 @@ public extension EditorActionID {
         .moveClass: "Move Class…",
         .safeDelete: "Safe Delete",
         .typeHierarchy: "Type Hierarchy",
+        .methodHierarchy: "Method Hierarchy",
+        .callHierarchy: "Call Hierarchy",
+        .showSiblings: "Show Siblings",
         .quickDocumentation: "Quick Documentation",
         .showErrorDescription: "Show Error Description",
         .showParameterInfo: "Parameter Info",

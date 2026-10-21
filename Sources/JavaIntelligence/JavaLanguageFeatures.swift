@@ -75,8 +75,12 @@ extension JavaTypeHierarchyProvider: TypeHierarchyProviding {
     }
 
     public func subtypes(of item: HierarchyItem, file: URL?) async -> [HierarchyItem] {
+        await subtypes(of: item, file: file, scope: .all)
+    }
+
+    public func subtypes(of item: HierarchyItem, file: URL?, scope: HierarchyScope) async -> [HierarchyItem] {
         guard let node = item.payload as? JavaTypeHierarchyNode else { return [] }
-        return await subtypes(of: node, file: file).map(Self.item)
+        return await subtypes(of: node, file: file, scope: scope).map(Self.item)
     }
 
     public func location(of item: HierarchyItem, file: URL?) async -> HierarchyLocation? {
@@ -108,14 +112,71 @@ extension JavaTypeHierarchyProvider: TypeHierarchyProviding {
     }
 }
 
+extension JavaMethodHierarchyProvider: MethodHierarchyProviding {
+    public func rootItem(source: String, fileURL: URL?, utf16Offset: Int) async -> HierarchyItem? {
+        await rootNode(source: source, fileURL: fileURL, utf16Offset: utf16Offset).map(Self.item)
+    }
+
+    public func supertypes(of item: HierarchyItem, file: URL?) async -> [HierarchyItem] {
+        guard let node = item.payload as? JavaMethodHierarchyNode else { return [] }
+        return await supertypes(of: node, file: file).map(Self.item)
+    }
+
+    public func subtypes(of item: HierarchyItem, file: URL?) async -> [HierarchyItem] {
+        await subtypes(of: item, file: file, scope: .all)
+    }
+
+    public func subtypes(of item: HierarchyItem, file: URL?, scope: HierarchyScope) async -> [HierarchyItem] {
+        guard let node = item.payload as? JavaMethodHierarchyNode else { return [] }
+        return await subtypes(of: node, file: file, scope: scope).map(Self.item)
+    }
+
+    public func location(of item: HierarchyItem, file: URL?) async -> HierarchyLocation? {
+        guard let node = item.payload as? JavaMethodHierarchyNode,
+              let location = await location(of: node, file: file) else { return nil }
+        return HierarchyLocation(url: location.url, range: location.range)
+    }
+
+    private static func item(_ node: JavaMethodHierarchyNode) -> HierarchyItem {
+        let kind: HierarchyItemKind
+        switch node.type.kind {
+        case .classKind: kind = .classType
+        case .interfaceKind: kind = .interfaceType
+        case .enumKind: kind = .enumType
+        case .recordKind: kind = .recordType
+        case .annotationKind: kind = .annotationType
+        }
+        let origin: HierarchyOrigin
+        switch node.type.origin {
+        case .source: origin = .project
+        case .jar: origin = .library
+        case .jdk: origin = .runtime
+        }
+        let badge: String
+        switch node.status {
+        case .defines: badge = "defines \(node.subject.displayName)"
+        case .inherits: badge = "inherits"
+        case .shouldDefine: badge = "missing \(node.subject.displayName)"
+        }
+        return HierarchyItem(
+            id: node.id, name: node.type.displayName + (node.isCurrent ? "  ◂" : ""),
+            detail: node.type.packageName, kind: kind, origin: origin, badge: badge, payload: node
+        )
+    }
+}
+
 extension JavaCallHierarchyProvider: CallHierarchyProviding {
     public func rootItem(source: String, fileURL: URL?, utf16Offset: Int) async -> HierarchyItem? {
         await rootMethod(source: source, fileURL: fileURL, utf16Offset: utf16Offset).map(Self.item)
     }
 
     public func callers(of item: HierarchyItem, file: URL?) async -> [HierarchyItem] {
+        await callers(of: item, file: file, scope: .all)
+    }
+
+    public func callers(of item: HierarchyItem, file: URL?, scope: HierarchyScope) async -> [HierarchyItem] {
         guard let node = item.payload as? JavaCallHierarchyNode else { return [] }
-        return await callers(of: node, file: file).map(Self.item)
+        return await callers(of: node, file: file, scope: scope).map(Self.item)
     }
 
     public func callees(of item: HierarchyItem, file: URL?) async -> [HierarchyItem] {

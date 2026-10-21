@@ -184,6 +184,54 @@ final class RecentFilesSwitcherTests: XCTestCase {
         XCTAssertEqual(controller.paletteModel.mode, .recentLocations)
     }
 
+    func testRecentLocationsEditedOnlyListsTheEditedPlaces() async {
+        let controller = CommandPaletteController(textView: makeFocusedTextView(text: "x"))
+        let a = root.appendingPathComponent("A.java")
+        let b = root.appendingPathComponent("B.java")
+        controller.recentLocationsProvider = { [PaletteLocationEntry(url: a, line: 3), PaletteLocationEntry(url: b, line: 9)] }
+        controller.recentEditedLocationsProvider = { [PaletteLocationEntry(url: b, line: 9)] }
+        controller.onOpenFileAtLine = { _, _ in }
+
+        XCTAssertTrue(controller.presentRecentLocations())
+        await waitUntil { controller.flatItems.count == 2 }
+        controller.paletteView.onToggleEditedOnly?()
+        await waitUntil { controller.flatItems.count == 1 }
+        XCTAssertEqual(controller.flatItems.map(\.title), ["B.java:9"])
+
+        controller.paletteView.onToggleEditedOnly?()
+        await waitUntil { controller.flatItems.count == 2 }
+    }
+
+    func testRecentLocationsEditedOnlyNeedsAnEditedProvider() async {
+        let controller = CommandPaletteController(textView: makeFocusedTextView(text: "x"))
+        let a = root.appendingPathComponent("A.java")
+        controller.recentLocationsProvider = { [PaletteLocationEntry(url: a, line: 3)] }
+        controller.onOpenFileAtLine = { _, _ in }
+
+        XCTAssertTrue(controller.presentRecentLocations())
+        await waitUntil { controller.flatItems.count == 1 }
+        controller.paletteView.onToggleEditedOnly?()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(controller.flatItems.count, 1, "without edited places the toggle changes nothing")
+    }
+
+    func testRemovingARecentLocationForgetsItAndDropsTheRow() async {
+        let controller = CommandPaletteController(textView: makeFocusedTextView(text: "x"))
+        let a = root.appendingPathComponent("A.java")
+        let b = root.appendingPathComponent("B.java")
+        var entries = [PaletteLocationEntry(url: a, line: 3), PaletteLocationEntry(url: b, line: 9)]
+        controller.recentLocationsProvider = { entries }
+        controller.onOpenFileAtLine = { _, _ in }
+        controller.onRemoveRecentLocation = { removed in entries.removeAll { $0 == removed } }
+
+        XCTAssertTrue(controller.presentRecentLocations())
+        await waitUntil { controller.flatItems.count == 2 }
+        controller.removeSelection()
+
+        XCTAssertEqual(entries.map(\.url), [b])
+        XCTAssertEqual(controller.flatItems.map(\.title), ["B.java:9"])
+    }
+
     func testStatusColorsFollowTheAppearance() {
         let color = paletteFileStatusColor(for: .modified)
         var dark: NSColor?

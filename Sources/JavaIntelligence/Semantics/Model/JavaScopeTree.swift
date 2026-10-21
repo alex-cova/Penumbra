@@ -825,10 +825,17 @@ private struct ScopeBuilder {
     /// (typed from the pattern itself, so no index is needed); anything else binds nothing.
     func patternBindings(in node: SyntaxNode) -> [PendingBinding] {
         if node.type == "type_pattern" {
-            guard let nameNode = node.child(byFieldName: "name"),
-                  let typeNode = node.child(byFieldName: "type") ?? node.child(byFieldName: "right") else { return [] }
+            // This grammar leaves the parts unnamed: `(type_pattern (type_identifier) (identifier))`.
+            let named = node.namedChildren
+            guard let nameNode = node.child(byFieldName: "name") ?? (named.last?.type == "identifier" ? named.last : nil),
+                  let typeNode = node.child(byFieldName: "type") ?? node.child(byFieldName: "right")
+                    ?? named.first(where: { $0.type != "modifiers" && $0.byteRange != nameNode.byteRange }) else { return [] }
             return [PendingBinding(name: nameNode.text, nameRange: nameNode.byteRange,
                                    type: JavaTypeNodeConverter.convert(typeNode), alternativeTypes: [])]
+        }
+        if node.type == "switch_label" || node.type == "pattern" {
+            // `case Dog d ->`: the pattern sits under the label.
+            return node.namedChildren.flatMap { patternBindings(in: $0) }
         }
         if node.type == "instanceof_expression" {
             // A nested pattern (`record_pattern`, ...) rides under `pattern:`; a plain type

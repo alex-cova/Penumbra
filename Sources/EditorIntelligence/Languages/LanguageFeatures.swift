@@ -214,19 +214,63 @@ public struct HierarchyLocation: Sendable, Equatable {
     }
 }
 
+/// Which of the project's classes a subtype search looks at (IntelliJ's hierarchy scope).
+public enum HierarchyScope: String, CaseIterable, Sendable, Identifiable {
+    /// Production and test sources.
+    case all
+    /// Production sources only.
+    case production
+    /// Test sources only.
+    case tests
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .all: return "All"
+        case .production: return "Production"
+        case .tests: return "Tests"
+        }
+    }
+}
+
 public protocol TypeHierarchyProviding: Sendable {
     /// The type at `utf16Offset` of `source`, else the type the caret is inside; nil outside a type.
     func rootItem(source: String, fileURL: URL?, utf16Offset: Int) async -> HierarchyItem?
     func supertypes(of item: HierarchyItem, file: URL?) async -> [HierarchyItem]
     /// The project's own subtypes; a scan, so only for an explicit request.
     func subtypes(of item: HierarchyItem, file: URL?) async -> [HierarchyItem]
+    /// ``subtypes(of:file:)`` limited to the classes in `scope`. A provider that cannot tell test
+    /// sources from production ones answers with all of them.
+    func subtypes(of item: HierarchyItem, file: URL?, scope: HierarchyScope) async -> [HierarchyItem]
     func location(of item: HierarchyItem, file: URL?) async -> HierarchyLocation?
 }
+
+public extension TypeHierarchyProviding {
+    func subtypes(of item: HierarchyItem, file: URL?, scope: HierarchyScope) async -> [HierarchyItem] {
+        await subtypes(of: item, file: file)
+    }
+}
+
+/// The hierarchy of one method (IntelliJ's Method Hierarchy): the same tree as a type hierarchy,
+/// over the classes that declare the method and the ones between them, where each item's `badge`
+/// says what the class does with it (`defines`, `inherits`, `missing`). The root is the topmost
+/// class that declares the method at `rootItem`'s offset.
+public protocol MethodHierarchyProviding: TypeHierarchyProviding {}
 
 public protocol CallHierarchyProviding: Sendable {
     /// The method at `utf16Offset` of `source`; nil when there is none.
     func rootItem(source: String, fileURL: URL?, utf16Offset: Int) async -> HierarchyItem?
     func callers(of item: HierarchyItem, file: URL?) async -> [HierarchyItem]
+    /// ``callers(of:file:)`` limited to calls in the sources `scope` names. A provider that cannot
+    /// tell test sources from production ones answers with all of them.
+    func callers(of item: HierarchyItem, file: URL?, scope: HierarchyScope) async -> [HierarchyItem]
     func callees(of item: HierarchyItem, file: URL?) async -> [HierarchyItem]
     func location(of item: HierarchyItem, file: URL?) async -> HierarchyLocation?
+}
+
+public extension CallHierarchyProviding {
+    func callers(of item: HierarchyItem, file: URL?, scope: HierarchyScope) async -> [HierarchyItem] {
+        await callers(of: item, file: file)
+    }
 }

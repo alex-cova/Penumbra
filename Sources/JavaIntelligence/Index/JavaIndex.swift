@@ -28,6 +28,12 @@ public actor JavaIndex {
     /// (precedence 3), the overlay, and sources with an empty `shardPath` stay visible either way.
     @TaskLocal public static var queryScope: Set<String>?
 
+    /// The classes of the buffer a request is about, by qualified name. They win over whatever is
+    /// indexed under the same names for the length of that request: the overlay follows an edit
+    /// after its debounce, and a request about code just typed must still see its own classes.
+    /// Anything that caches answers (the member-set cache) must not be used while this is set.
+    @TaskLocal public static var liveStubs: [String: JavaClassStub]?
+
     private var sources: [Source] = []
     /// `sources` ordered by precedence, cached by `setSources` so `classStub` doesn't re-sort on
     /// every lookup.
@@ -269,6 +275,9 @@ public actor JavaIndex {
 
     /// The single, highest-precedence definition of a qualified name, or `nil` if unknown.
     public func classStub(qualifiedName: String) -> JavaClassStub? {
+        if let live = Self.liveStubs?[qualifiedName] {
+            return live
+        }
         if let overlaid = overlay[qualifiedName] {
             return overlaid
         }
@@ -543,6 +552,11 @@ public actor JavaIndex {
             }
         }
         return results
+    }
+
+    /// Whether `name` is a package (or the leading part of one) that some visible class lives in.
+    public func hasPackage(_ name: String) -> Bool {
+        visiblePackagePools().contains { $0.contains(name) }
     }
 
     /// Direct subpackages of `prefix` (empty string for top-level packages), for import/package

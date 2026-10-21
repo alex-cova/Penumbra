@@ -126,6 +126,16 @@ enum JavaDeclarationLocator {
         return nil
     }
 
+    /// A parameter (or record component) of a method, constructor or record declaration.
+    static func parameterRange(named name: String, in declaration: SyntaxNode) -> Range<Int>? {
+        formalParameterRange(named: name, in: declaration.child(byFieldName: "parameters"))
+    }
+
+    /// A type parameter of a method, constructor or type declaration.
+    static func typeParameterRange(named name: String, in declaration: SyntaxNode) -> Range<Int>? {
+        typeParameterName(name, in: declaration.child(byFieldName: "type_parameters"))
+    }
+
     // MARK: - Tree walk
 
     private static func packageName(in tree: JavaSyntaxTree) -> String {

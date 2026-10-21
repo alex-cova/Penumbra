@@ -264,7 +264,7 @@ private struct LSPReadyNavigation: NavigationProvider {
             return await LSPImplementationProvider(client: client).provide(context: context)
         case .typeDefinition:
             return await LSPTypeDefinitionProvider(client: client).provide(context: context)
-        case .superMethod:
+        case .superMethod, .siblings:
             return nil
         }
     }

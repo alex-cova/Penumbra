@@ -5,6 +5,7 @@ struct JavaDefinitionHit: Equatable, Sendable {
     var url: URL?
     var range: EditorIntelligence.TextRange
     var displayName: String
+    var target: Location.Target = .source
 }
 
 /// Resolves the Java symbol at a caret to the declaration name that should be selected.
@@ -19,26 +20,47 @@ enum JavaGoToDefinition {
         openBuffer: (@Sendable (URL) async -> String?)?,
         decompile: JavaDecompileGate
     ) async -> [JavaDefinitionHit] {
-        guard let tree = JavaSyntaxParser().parse(source) else { return [] }
+        guard let parsed = JavaNavigationParseMemo.shared.parsed(source: source, url: fileURL) else { return [] }
+        let tree = parsed.tree
         let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: utf16Offset, in: source)
+        func makeSession(at offset: Int, decompile: JavaDecompileGate) -> JavaNavigationSession {
+            JavaNavigationSession(
+                source: source, fileURL: fileURL, tree: tree, byteOffset: offset, fileStubs: parsed.stubs,
+                index: index, jdkHome: jdkHome, cacheRoot: cacheRoot, openBuffer: openBuffer, decompile: decompile
+            )
+        }
+        let leaf = tree.node(atByteOffset: byteOffset)
+        if leaf.type == "block_comment" {
+            let session = makeSession(at: JavaNavigationSession.javadocAnchor(of: leaf), decompile: decompile)
+            return await session.withLiveStubs { await session.javadocHits(comment: leaf, clickOffset: byteOffset) }
+        }
+        if let extra = JavaNavigationExtras.classify(in: tree, atByteOffset: byteOffset) {
+            let session = makeSession(at: byteOffset, decompile: decompile)
+            return await session.withLiveStubs { await session.resolve(extra: extra) }
+        }
         guard let reference = JavaReferenceClassifier.classify(in: tree, atByteOffset: byteOffset) else { return [] }
         if case .declaration = reference {
             // A declaration is its own definition. On an abstract one, the useful target is what
-            // implements it, as with Go to Implementation.
-            guard JavaGoToImplementation.isAbstractDeclaration(in: tree, atByteOffset: byteOffset) else { return [] }
-            let session = JavaNavigationSession(
-                source: source, fileURL: fileURL, tree: tree, byteOffset: byteOffset,
-                index: index, jdkHome: jdkHome, cacheRoot: cacheRoot, openBuffer: openBuffer,
-                decompile: JavaDecompileGate(policy: .denied)
-            )
-            return await session.implementationHits(reference)
+            // implements it, as with Go to Implementation; on a method that overrides or implements
+            // another, it is that method, as in IntelliJ.
+            let session = makeSession(at: byteOffset, decompile: JavaDecompileGate(policy: .denied))
+            if JavaGoToImplementation.isAbstractDeclaration(in: tree, atByteOffset: byteOffset) {
+                return await session.withLiveStubs { await session.implementationHits(reference) }
+            }
+            return await session.withLiveStubs { await session.overriddenMethodHits(atDeclarationName: leaf) }
         }
 
-        let session = JavaNavigationSession(
-            source: source, fileURL: fileURL, tree: tree, byteOffset: byteOffset,
-            index: index, jdkHome: jdkHome, cacheRoot: cacheRoot, openBuffer: openBuffer, decompile: decompile
-        )
-        return await session.resolve(reference)
+        let session = makeSession(at: byteOffset, decompile: decompile)
+        return await session.withLiveStubs { await session.resolve(reference) }
+    }
+}
+
+extension JavaNavigationSession {
+    /// Runs `body` with this buffer's own classes visible to the index (`JavaIndex.liveStubs`).
+    func withLiveStubs<T>(_ body: () async -> T) async -> T {
+        var stubs: [String: JavaClassStub] = [:]
+        for stub in currentClasses { stubs[stub.qualifiedName] = stub }
+        return await JavaIndex.$liveStubs.withValue(stubs) { await body() }
     }
 }
 
@@ -114,18 +136,25 @@ struct JavaNavigationSession {
         case .type(let token):
             return await typeHits(components: JavaReferenceClassifier.typeComponents(endingAt: token))
         case .constructor(let token, let argumentCount):
+            let arguments = Self.ancestor(of: token, type: "object_creation_expression")?.child(byFieldName: "arguments")
             return await constructorHits(
-                components: JavaReferenceClassifier.typeComponents(endingAt: token), argumentCount: argumentCount
+                components: JavaReferenceClassifier.typeComponents(endingAt: token), argumentCount: argumentCount,
+                arguments: arguments
             )
         case .explicitConstructor(let isSuper, let argumentCount):
             guard let owner = await constructorOwner(isSuper: isSuper) else { return [] }
-            return await constructorHits(type: owner, argumentCount: argumentCount)
+            let invocation = Self.ancestor(of: tree.node(atByteOffset: byteOffset), type: "explicit_constructor_invocation")
+            return await constructorHits(type: owner, argumentCount: argumentCount, arguments: invocation?.child(byFieldName: "arguments"))
         case .methodCall(let invocation):
             return await methodCallHits(invocation)
         case .fieldAccess(let access):
             return await fieldAccessHits(access)
         case .bareName(let token):
-            return await bareNameHits(token.text)
+            let hits = await bareNameHits(token.text)
+            if hits.isEmpty, Self.isQualifierHead(token) {
+                return await packageHits(components: [token.text])
+            }
+            return hits
         case .keywordThis:
             guard let name = context.enclosingTypeQualifiedNames.first else { return [] }
             return await typeHits(qualifiedName: name)
@@ -170,20 +199,27 @@ struct JavaNavigationSession {
         return []
     }
 
-    func constructorHits(components: [String], argumentCount: Int) async -> [JavaDefinitionHit] {
+    func constructorHits(components: [String], argumentCount: Int, arguments: SyntaxNode? = nil) async -> [JavaDefinitionHit] {
         guard let resolved = await resolveType(components: components),
               case .classType(let qualifiedName, _, _) = resolved else { return [] }
-        return await constructorHits(type: .classType(qualifiedName: qualifiedName, arguments: [], outer: nil), argumentCount: argumentCount)
+        return await constructorHits(
+            type: .classType(qualifiedName: qualifiedName, arguments: [], outer: nil),
+            argumentCount: argumentCount, arguments: arguments
+        )
     }
 
-    func constructorHits(type: JavaTypeRef, argumentCount: Int) async -> [JavaDefinitionHit] {
+    /// The constructors of `type` a call with `argumentCount` arguments can reach, narrowed by the
+    /// arguments' types when they are given: `new Foo("m", cause)` goes to `Foo(String, Exception)`,
+    /// not to every two-argument constructor. When the types cannot tell them apart, all remain.
+    func constructorHits(type: JavaTypeRef, argumentCount: Int, arguments: SyntaxNode? = nil) async -> [JavaDefinitionHit] {
         guard case .classType(let qualifiedName, _, _) = type else { return [] }
         let declared = await JavaMemberLookup.constructors(of: type, context: context, index: index)
         if declared.isEmpty {
             return await typeHits(qualifiedName: qualifiedName)
         }
         let targets = declared.map { MethodTarget(declaringClass: qualifiedName, method: $0) }
-        let chosen = choose(primary: targets, secondary: [], argumentCount: argumentCount)
+        let byCount = choose(primary: targets, secondary: [], argumentCount: argumentCount)
+        let chosen = await refine(byCount, arguments: arguments).targets
         let hits = await methodHits(chosen)
         return hits.isEmpty ? await typeHits(qualifiedName: qualifiedName) : hits
     }
@@ -197,7 +233,53 @@ struct JavaNavigationSession {
     }
 
     func methodCallHits(_ invocation: SyntaxNode) async -> [JavaDefinitionHit] {
-        await methodHits(methodCallTargets(invocation))
+        // Arity picks the candidates; the argument types then pick among same-arity overloads.
+        let candidates = await methodCallTargets(invocation)
+        let narrowed = await refine(candidates, arguments: invocation.child(byFieldName: "arguments"))
+        let hits = await methodHits(narrowed.targets)
+        if !hits.isEmpty { return hits }
+        return await generatedAccessorHits(invocation)
+    }
+
+    /// Lombok writes `getName()`, `isActive()` and `setAge(..)` at compile time, so no declaration
+    /// exists to jump to: the field they are generated from is the closest thing.
+    func generatedAccessorHits(_ invocation: SyntaxNode) async -> [JavaDefinitionHit] {
+        guard let nameNode = invocation.child(byFieldName: "name"),
+              let fieldNames = Self.accessorFieldNames(for: nameNode.text),
+              let receiver = await receiverInfo(of: invocation, nameNode: nameNode),
+              case .classType = receiver.type else { return [] }
+        for fieldName in fieldNames {
+            // The field is private; the generated accessor is what makes it reachable.
+            guard let target = await fieldTarget(named: fieldName, on: receiver.type, mode: .instance, checkAccess: false) else { continue }
+            let hits = await fieldHits(of: target)
+            if !hits.isEmpty { return hits }
+        }
+        return []
+    }
+
+    /// The fields a `getX`/`isX`/`setX` accessor can be generated from, most likely first.
+    static func accessorFieldNames(for method: String) -> [String]? {
+        for prefix in ["get", "set", "is"] where method.hasPrefix(prefix) && method.count > prefix.count {
+            let rest = String(method.dropFirst(prefix.count))
+            guard let first = rest.first, first.isUppercase else { continue }
+            var names = [first.lowercased() + rest.dropFirst()]
+            if prefix == "is" { names.append(method) }
+            if rest != names[0] { names.append(rest) }
+            return names
+        }
+        return nil
+    }
+
+    /// Whether `token` starts a dotted chain (`com` in `com.acme.Foo.bar()`), where it may name a
+    /// package rather than a variable.
+    static func isQualifierHead(_ token: SyntaxNode) -> Bool {
+        guard let parent = token.parent else { return false }
+        switch parent.type {
+        case "field_access", "method_invocation":
+            return parent.child(byFieldName: "object")?.byteRange == token.byteRange
+        default:
+            return false
+        }
     }
 
     /// The declarations a method call can bind to, narrowed by argument count.
@@ -221,7 +303,16 @@ struct JavaNavigationSession {
         _ invocation: SyntaxNode, receiver: JavaReceiverInfo, nameNode: SyntaxNode, argumentCount: Int
     ) async -> [MethodTarget] {
         let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
-        var primary = await allMethods(named: nameNode.text, on: receiver.type, mode: mode)
+        var primary: [MethodTarget] = []
+        if invocation.child(byFieldName: "object") == nil {
+            // Inside `new Named() { ... }` the anonymous class is the innermost scope.
+            for supertype in await anonymousClassSupertypes(of: invocation) where primary.isEmpty {
+                primary = await allMethods(named: nameNode.text, on: supertype, mode: .instance)
+            }
+        }
+        if primary.isEmpty {
+            primary = await allMethods(named: nameNode.text, on: receiver.type, mode: mode)
+        }
         if primary.isEmpty, invocation.child(byFieldName: "object") == nil {
             // An unqualified call may name a method of an enclosing class.
             for outer in context.enclosingTypeQualifiedNames.dropFirst() where primary.isEmpty {
@@ -239,8 +330,19 @@ struct JavaNavigationSession {
     }
 
     func fieldAccessHits(_ access: SyntaxNode) async -> [JavaDefinitionHit] {
-        guard let target = await fieldAccessTarget(access) else { return [] }
+        guard let target = await fieldAccessTarget(access) else { return await qualifiedNameHits(endingAt: access) }
         return await fieldHits(of: target)
+    }
+
+    /// `com.acme.util.Strings` spelled out in an expression: a type, or a package for a shorter
+    /// prefix. A chain that starts with a variable is a member chain and never reaches here.
+    func qualifiedNameHits(endingAt access: SyntaxNode) async -> [JavaDefinitionHit] {
+        guard let components = Self.dottedComponents(access), components.count >= 2,
+              scopeDeclarationRange(named: components[0], labels: false) == nil else { return [] }
+        if let resolved = await resolveType(components: components), case .classType(let qualifiedName, _, _) = resolved {
+            return await typeHits(qualifiedName: qualifiedName)
+        }
+        return await packageHits(components: components)
     }
 
     /// The field a `receiver.name` expression binds to, with the class that declares it.
@@ -261,9 +363,34 @@ struct JavaNavigationSession {
         return await fieldTarget(named: fieldNode.text, on: receiver.type, mode: mode)
     }
 
+    /// The types named by the anonymous classes around `node`, innermost first (`Named` for the
+    /// body of `new Named() { ... }`). Their members are in scope there without a receiver.
+    func anonymousClassSupertypes(of node: SyntaxNode) async -> [JavaTypeRef] {
+        var types: [JavaTypeRef] = []
+        var current = node.parent
+        while let next = current {
+            if next.type == "class_body", let creation = next.parent, creation.type == "object_creation_expression",
+               let typeNode = creation.child(byFieldName: "type") {
+                let components = JavaReferenceClassifier.pathComponents(typeNode).map(\.name)
+                if !components.isEmpty, let resolved = await resolveType(components: components), case .classType = resolved {
+                    types.append(resolved)
+                }
+            }
+            current = next.parent
+        }
+        return types
+    }
+
     func bareNameHits(_ name: String) async -> [JavaDefinitionHit] {
-        if let range = JavaDeclarationLocator.localDeclarationRange(name: name, in: tree, atByteOffset: byteOffset) {
+        if let range = scopeDeclarationRange(named: name, labels: false)
+            ?? JavaDeclarationLocator.localDeclarationRange(name: name, in: tree, atByteOffset: byteOffset) {
             return [hit(text: source, url: fileURL, byteRange: range, displayName: name)]
+        }
+        if let node = bareNameNode(atByteOffset: byteOffset) {
+            for supertype in await anonymousClassSupertypes(of: node) {
+                let fields = await fieldHits(named: name, on: supertype, mode: .instance)
+                if !fields.isEmpty { return fields }
+            }
         }
         for enclosing in context.enclosingTypeQualifiedNames {
             let type = JavaTypeRef.classType(qualifiedName: enclosing, arguments: [], outer: nil)
@@ -273,6 +400,10 @@ struct JavaNavigationSession {
         let imported = await staticImportFieldHits(name)
         if !imported.isEmpty { return imported }
         return await typeHits(components: [name])
+    }
+
+    func bareNameNode(atByteOffset offset: Int) -> SyntaxNode? {
+        tree.node(atByteOffset: offset)
     }
 
     func importHits(_ declaration: SyntaxNode, clicked: SyntaxNode) async -> [JavaDefinitionHit] {
@@ -292,7 +423,8 @@ struct JavaNavigationSession {
             if !methods.isEmpty { return methods }
             return await fieldHits(named: member, on: type, mode: .staticOnly)
         }
-        return await typeHits(qualifiedName: prefix.joined(separator: "."))
+        let typeHits = await typeHits(qualifiedName: prefix.joined(separator: "."))
+        return typeHits.isEmpty ? await packageHits(components: Array(prefix)) : typeHits
     }
 
     // MARK: - Members
@@ -344,8 +476,10 @@ struct JavaNavigationSession {
         return await fieldHits(of: target)
     }
 
-    func fieldTarget(named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode) async -> FieldTarget? {
-        let members = await JavaMemberLookup.members(of: type, mode: mode, context: context, index: index)
+    func fieldTarget(
+        named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode, checkAccess: Bool = true
+    ) async -> FieldTarget? {
+        let members = await JavaMemberLookup.members(of: type, mode: mode, context: context, index: index, checkAccess: checkAccess)
         for member in members {
             if case .field(let field, let declaringClass) = member, field.name == name {
                 return FieldTarget(declaringClass: declaringClass, field: field)
@@ -404,9 +538,17 @@ struct JavaNavigationSession {
                     in: tree
                 )
             }
-            hits.append(contentsOf: found)
+            hits.append(contentsOf: found.isEmpty ? await synthesizedMemberHits(target) : found)
         }
         return dedupe(hits)
+    }
+
+    /// An enum's `values()` and `valueOf(String)` exist for javac but not in the source, so the
+    /// enum itself is where they are "declared".
+    func synthesizedMemberHits(_ target: MethodTarget) async -> [JavaDefinitionHit] {
+        guard let stub = await index.classStub(qualifiedName: target.declaringClass), stub.kind == .enumKind,
+              target.method.name == "values" || target.method.name == "valueOf" else { return [] }
+        return await typeHits(qualifiedName: target.declaringClass)
     }
 
     func methodDisplayName(_ target: MethodTarget) -> String {
@@ -457,7 +599,7 @@ struct JavaNavigationSession {
             if JavaNavigationText.sameFile(url, fileURL) {
                 return (fileURL, source, tree, nil)
             }
-            if let text = await load(url), let parsed = JavaSyntaxParser().parse(text) {
+            if let text = await load(url), let parsed = JavaNavigationParseMemo.shared.tree(for: text) {
                 return (url, text, parsed, nil)
             }
             if currentClasses.contains(where: { $0.qualifiedName == stub.qualifiedName }) {
@@ -467,14 +609,14 @@ struct JavaNavigationSession {
         case .jdkModule(let module):
             if let extracted = JavaAttachedSources.extract(
                 jdkHome: jdkHome, module: module, binaryJar: nil, topLevel: top, cacheRoot: cacheRoot
-            ), let parsed = JavaSyntaxParser().parse(extracted.text) {
+            ), let parsed = JavaNavigationParseMemo.shared.tree(for: extracted.text) {
                 return (extracted.url, extracted.text, parsed, nil)
             }
             return await decompiledSourceFile(stub)
         case .jar(let jar):
             if let extracted = JavaAttachedSources.extract(
                 jdkHome: nil, module: nil, binaryJar: jar, topLevel: top, cacheRoot: cacheRoot
-            ), let parsed = JavaSyntaxParser().parse(extracted.text) {
+            ), let parsed = JavaNavigationParseMemo.shared.tree(for: extracted.text) {
                 return (extracted.url, extracted.text, parsed, nil)
             }
             return await decompiledSourceFile(stub)

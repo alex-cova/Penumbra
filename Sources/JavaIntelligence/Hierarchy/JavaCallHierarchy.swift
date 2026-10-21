@@ -66,30 +66,50 @@ public actor JavaCallHierarchyProvider {
         openBuffer = lookup
     }
 
-    /// The method at `utf16Offset` in `source`, or `nil` when the caret is not on a method.
+    /// The method (or field) at `utf16Offset` in `source`, or `nil` when the caret is on neither. A
+    /// field's callers are the methods that read or write it.
     public func rootMethod(source: String, fileURL: URL?, utf16Offset: Int) async -> JavaCallHierarchyNode? {
         guard JavaSyntaxParser().parse(source) != nil else { return nil }
         let environment = makeEnvironment()
-        guard let id = await JavaSymbolIdentity.symbolID(at: utf16Offset, in: source, url: fileURL, environment: environment),
-              case .method = id else { return nil }
-        return await self.makeNode(for: id, path: [Self.pathKey(for: id)], file: fileURL)
+        guard let id = await JavaSymbolIdentity.symbolID(at: utf16Offset, in: source, url: fileURL, environment: environment) else {
+            return nil
+        }
+        switch id {
+        case .method, .field:
+            return await self.makeNode(for: id, path: [Self.pathKey(for: id)], file: fileURL)
+        default:
+            return nil
+        }
     }
 
-    /// Methods that call `node` anywhere in the project.
-    public func callers(of node: JavaCallHierarchyNode, file: URL?) async -> [JavaCallHierarchyNode] {
-        guard case .method = node.symbolID else { return [] }
+    /// Methods that call `node` anywhere in the project, or, for a field, methods that use it.
+    public func callers(
+        of node: JavaCallHierarchyNode, file: URL?, scope: HierarchyScope = .all
+    ) async -> [JavaCallHierarchyNode] {
+        let targets: [JavaSymbolID]
+        switch node.symbolID {
+        case .method:
+            targets = await JavaMethodFamily.symbolIDs(of: node.symbolID, index: index)
+        case .field:
+            targets = [node.symbolID]
+        default:
+            return []
+        }
+        let isField: Bool
+        if case .field = node.symbolID { isField = true } else { isField = false }
         let environment = makeEnvironment()
         var result: [JavaCallHierarchyNode] = []
         var seen = Set<String>()
         let searchRoots = roots.isEmpty ? (file.map { [$0] } ?? []) : roots
         let scan = JavaTextScanCandidateSource(textProvider: openBuffer, extraFiles: file.map { [$0] } ?? [])
         let candidates = JavaIndexedOrScanningCandidates(nameIndex: nil, scan: scan)
-        let targets = await JavaMethodFamily.symbolIDs(of: node.symbolID, index: index)
         for target in targets {
             let usages = await JavaUsageSearch.collect(
                 target, candidates: candidates, roots: searchRoots, environment: environment, includeDeclarations: false
             )
-            for usage in usages where usage.kind == .call || usage.kind == .methodReference {
+            for usage in usages where isField ? (usage.kind == .read || usage.kind == .write)
+                : (usage.kind == .call || usage.kind == .methodReference) {
+                guard JavaHierarchyScope.contains(usage.url, scope: scope, model: classpathModel) else { continue }
                 guard let enclosing = await enclosingMethod(at: usage, environment: environment) else { continue }
                 let key = Self.pathKey(for: enclosing)
                 guard seen.insert(key).inserted else { continue }
@@ -132,6 +152,9 @@ public actor JavaCallHierarchyProvider {
 
     /// Opens the declaration of `node`.
     public func location(of node: JavaCallHierarchyNode, file: URL?) async -> JavaCallHierarchyLocation? {
+        if case .field(let declaringClass, let name) = node.symbolID {
+            return await fieldLocation(declaringClass: declaringClass, name: name, file: file)
+        }
         guard case .method(let declaringClass, let name, let parameterKeys) = node.symbolID else { return nil }
         return await scoped(file) { [index, jdkHome, indexPaths, openBuffer] in
             guard let source = await Self.source(
@@ -142,6 +165,26 @@ public actor JavaCallHierarchyProvider {
                   let methodNode = Self.methodNode(named: name, parameterKeys: parameterKeys, in: tree) else { return nil }
             let start = JavaImportInserter.textPosition(forByteOffset: methodNode.startByte, in: tree.sourceBytes)
             let end = JavaImportInserter.textPosition(forByteOffset: methodNode.endByte, in: tree.sourceBytes)
+            let url = await Self.sourceURL(
+                for: declaringClass, preferred: file ?? URL(fileURLWithPath: "/"), index: index, jdkHome: jdkHome,
+                cacheRoot: indexPaths.root, openBuffer: openBuffer
+            )
+            return JavaCallHierarchyLocation(url: url, range: TextRange(start: start, end: end))
+        }
+    }
+
+    private func fieldLocation(declaringClass: String, name: String, file: URL?) async -> JavaCallHierarchyLocation? {
+        await scoped(file) { [index, jdkHome, indexPaths, openBuffer] in
+            guard let source = await Self.source(
+                for: declaringClass, preferred: file, index: index, jdkHome: jdkHome,
+                cacheRoot: indexPaths.root, openBuffer: openBuffer
+            ),
+                  let tree = JavaSyntaxParser().parse(source),
+                  let range = JavaDeclarationLocator.fieldRanges(declaringClass: declaringClass, name: name, in: tree).first else {
+                return nil
+            }
+            let start = JavaImportInserter.textPosition(forByteOffset: range.lowerBound, in: tree.sourceBytes)
+            let end = JavaImportInserter.textPosition(forByteOffset: range.upperBound, in: tree.sourceBytes)
             let url = await Self.sourceURL(
                 for: declaringClass, preferred: file ?? URL(fileURLWithPath: "/"), index: index, jdkHome: jdkHome,
                 cacheRoot: indexPaths.root, openBuffer: openBuffer
@@ -192,6 +235,17 @@ public actor JavaCallHierarchyProvider {
             let display = declaringClass.split(separator: ".").last.map { "\($0).\(signature)" } ?? signature
             return JavaCallHierarchyNode(
                 symbolID: id, displayName: display, declaringClass: declaringClass, origin: resolvedOrigin, path: path
+            )
+        case .field(let declaringClass, let name):
+            let display = declaringClass.split(separator: ".").last.map { "\($0).\(name)" } ?? name
+            let fieldOrigin: JavaCallHierarchyNode.Origin
+            if let origin {
+                fieldOrigin = origin
+            } else {
+                fieldOrigin = await originOf(for: declaringClass)
+            }
+            return JavaCallHierarchyNode(
+                symbolID: id, displayName: display, declaringClass: declaringClass, origin: fieldOrigin, path: path
             )
         default:
             return nil

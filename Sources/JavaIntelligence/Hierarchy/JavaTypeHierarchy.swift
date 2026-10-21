@@ -39,7 +39,7 @@ public struct JavaTypeHierarchyLocation: Sendable, Equatable {
 /// JDK; subtypes are the project's own classes (a scan of every project class per expansion, so it
 /// belongs behind an explicit request, not typing).
 public actor JavaTypeHierarchyProvider {
-    private let index: JavaIndex
+    nonisolated let index: JavaIndex
     private let indexPaths: JavaIndexPaths
     private var classpathModel: JavaGradleProjectModel?
     private var classpathPaths: JavaIndexPaths?
@@ -112,13 +112,18 @@ public actor JavaTypeHierarchyProvider {
         }
     }
 
-    /// The project types that directly extend or implement `node`, sorted by name.
-    public func subtypes(of node: JavaTypeHierarchyNode, file: URL?) async -> [JavaTypeHierarchyNode] {
+    /// The project types that directly extend or implement `node`, sorted by name, from the sources
+    /// `scope` names.
+    public func subtypes(
+        of node: JavaTypeHierarchyNode, file: URL?, scope: HierarchyScope = .all
+    ) async -> [JavaTypeHierarchyNode] {
         let index = self.index
+        let model = classpathModel
         return await scoped(file) {
             let simple = node.displayName.split(separator: ".").last.map(String.init) ?? node.displayName
             var result: [JavaTypeHierarchyNode] = []
             for stub in await index.projectClassStubs() where !node.path.contains(stub.qualifiedName) {
+                guard JavaHierarchyScope.contains(stub, scope: scope, model: model) else { continue }
                 // Cheap pre-filter: only a class that names the type at all is worth resolving.
                 let referenced = ([stub.superclass].compactMap { $0 } + stub.interfaces).contains { ref in
                     let name = ref.simpleDisplayName
@@ -150,7 +155,7 @@ public actor JavaTypeHierarchyProvider {
 
     // MARK: - Helpers
 
-    private func makeSession(source: String, fileURL: URL?, tree: JavaSyntaxTree, byteOffset: Int) -> JavaNavigationSession {
+    func makeSession(source: String, fileURL: URL?, tree: JavaSyntaxTree, byteOffset: Int) -> JavaNavigationSession {
         JavaNavigationSession(
             source: source, fileURL: fileURL, tree: tree, byteOffset: byteOffset,
             index: index, jdkHome: jdkHome, cacheRoot: indexPaths.root, openBuffer: openBuffer,
@@ -159,7 +164,7 @@ public actor JavaTypeHierarchyProvider {
     }
 
     /// Runs `body` with the file's source-set scope and the open-buffer lookup installed.
-    private func scoped<T: Sendable>(_ file: URL?, _ body: @Sendable @escaping () async -> T) async -> T {
+    func scoped<T: Sendable>(_ file: URL?, _ body: @Sendable @escaping () async -> T) async -> T {
         let lookup = openBuffer
         if let file, let classpathModel, let classpathPaths,
            let scope = classpathModel.visibleShardPaths(forFile: file, paths: classpathPaths) {
@@ -170,7 +175,7 @@ public actor JavaTypeHierarchyProvider {
         return await JavaMemberLookup.$sourceTextProvider.withValue(lookup) { await body() }
     }
 
-    private static func node(for stub: JavaClassStub, path: [String]) -> JavaTypeHierarchyNode {
+    static func node(for stub: JavaClassStub, path: [String]) -> JavaTypeHierarchyNode {
         let origin: JavaTypeHierarchyNode.Origin
         switch stub.origin {
         case .source: origin = .source

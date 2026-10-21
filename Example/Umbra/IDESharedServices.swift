@@ -32,6 +32,8 @@ final class IDESharedServices {
     /// The run configurations kept on this Mac and the ones a project shares in `.umbra/runConfigurations`.
     let runConfigurations: JavaRunConfigurationCatalog
     let breakpoints: JavaBreakpointStore
+    /// Bookmarks and bookmark lists per project.
+    let bookmarks: IDEBookmarkStore
     /// Data sources for the Database tool. Passwords stay in the Keychain.
     let databases: IDEDatabaseCatalog
     /// One indexing run and one parsed shard per JDK and per dependency jar, for all windows.
@@ -51,6 +53,7 @@ final class IDESharedServices {
             store: JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
         )
         breakpoints = JavaBreakpointStore(storeURL: JavaBreakpointStore.defaultStoreURL)
+        bookmarks = IDEBookmarkStore(storeURL: IDEBookmarkStore.defaultStoreURL)
         databases = IDEDatabaseCatalog(storeURL: IDEDatabaseCatalog.defaultStoreURL)
         let hub = JavaSharedShardHub()
         shards = hub

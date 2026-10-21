@@ -325,7 +325,7 @@ extension JavaNavigationSession {
 
     /// Narrows arity-matched `targets` with the argument expressions' types. `ambiguous` when the
     /// types still could not pick one.
-    private func refine(_ targets: [MethodTarget], arguments: SyntaxNode?) async -> (targets: [MethodTarget], ambiguous: Bool) {
+    func refine(_ targets: [MethodTarget], arguments: SyntaxNode?) async -> (targets: [MethodTarget], ambiguous: Bool) {
         guard targets.count > 1, let arguments else { return (targets, false) }
         let argumentNodes = arguments.namedChildren
         let locals = await JavaExpressionTyper.resolvingVarLocals(
@@ -336,7 +336,11 @@ extension JavaNavigationSession {
             if JavaExpressionTyper.isFunctionalArgument(argument) {
                 types.append(nil)
             } else {
-                types.append(await JavaExpressionTyper.typed(argument, locals: locals, context: context, index: index)?.type)
+                let type = await JavaExpressionTyper.typed(argument, locals: locals, context: context, index: index)?.type
+                // An argument that cannot be typed fits any overload; picking one of them anyway
+                // would bind the call to a guess, so every candidate stays.
+                guard let type else { return (targets, true) }
+                types.append(type)
             }
         }
         let best = await JavaExpressionTyper.resolveOverloads(targets.map(\.method), argumentTypes: types, context: context, index: index)

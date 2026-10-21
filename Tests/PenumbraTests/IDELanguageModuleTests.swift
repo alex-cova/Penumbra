@@ -187,11 +187,11 @@ final class IDELanguageModuleTests: XCTestCase {
     func testTheSidebarKeepsItsTabsInOrder() {
         XCTAssertEqual(
             IDESidebarTabs.all.map(\.tab.rawValue),
-            ["explorer", "structure", "changes", "breakpoints", "history", "database"]
+            ["explorer", "structure", "changes", "breakpoints", "bookmarks", "history", "database"]
         )
         XCTAssertEqual(
             IDESidebarTabs.all.map(\.title),
-            ["Explorer", "Structure", "Changes", "Breakpoints", "History", "Database"]
+            ["Explorer", "Structure", "Changes", "Breakpoints", "Bookmarks", "History", "Database"]
         )
         XCTAssertEqual(IDESidebarTab.breakpoints.systemImage, "circle.fill")
         XCTAssertEqual(IDESidebarTabs.descriptor(for: .breakpoints)?.iconSize, 8)
@@ -205,12 +205,12 @@ final class IDELanguageModuleTests: XCTestCase {
     func testOnlyTheBreakpointsTabComesFromTheJavaModule() {
         XCTAssertEqual(IDEJavaModule().sidebarTabs.map(\.tab), [.breakpoints])
         XCTAssertTrue(IDEHTTPModule().sidebarTabs.isEmpty)
-        XCTAssertEqual(IDESidebarTabs.builtIn.map(\.tab.rawValue), ["explorer", "structure", "changes", "history"])
+        XCTAssertEqual(IDESidebarTabs.builtIn.map(\.tab.rawValue), ["explorer", "structure", "changes", "bookmarks", "history"])
     }
 
     func testAFreshWindowOffersEveryTabButChangesWithoutARepository() {
         let workspace = makeWorkspace()
-        XCTAssertEqual(workspace.sidebarTabs.map(\.rawValue), ["explorer", "structure", "breakpoints", "history", "database"])
+        XCTAssertEqual(workspace.sidebarTabs.map(\.rawValue), ["explorer", "structure", "breakpoints", "bookmarks", "history", "database"])
         XCTAssertFalse(workspace.isSidebarTabAvailable(.changes))
         XCTAssertFalse(workspace.isSidebarTabAvailable(IDESidebarTab(rawValue: "mystery")))
         XCTAssertEqual(workspace.activeSidebarTab, .explorer)

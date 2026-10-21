@@ -20,7 +20,8 @@ public extension CommandRegistry {
         .toggleFindPanel, .toggleReplacePanel, .findNext, .findPrevious, .findInFiles,
         .searchEverywhere, .findAction, .quickOpenFile, .recentFiles, .recentLocations, .goToSymbol, .goToFileSymbol, .goToTool, .goToLine,
         .toggleMarkdownPreview,
-        .goToDefinition, .goToImplementation, .goToSuperMethod, .goToTypeDefinition, .findUsages, .goToNextProblem, .goToPreviousProblem, .navigateBack, .navigateForward,
+        .goToDefinition, .goToImplementation, .goToSuperMethod, .goToTypeDefinition, .findUsages, .goToNextProblem, .goToPreviousProblem, .navigateBack, .navigateForward, .lastEditLocation, .nextMethod, .previousMethod,
+        .nextChange, .previousChange, .selectIn, .moveToCodeBlockStart, .moveToCodeBlockEnd, .selectToCodeBlockStart, .selectToCodeBlockEnd,
         .triggerCompletion, .triggerSmartCompletion,
         .quickDocumentation, .showErrorDescription, .showParameterInfo, .showContextActions, .optimizeImports,
         .rename,
@@ -28,7 +29,7 @@ public extension CommandRegistry {
         .inlineVariable, .inlineMethod,
         .changeSignature, .encapsulateField, .generateAccessors, .generate,
         .moveClass, .safeDelete,
-        .typeHierarchy, .copyReference
+        .typeHierarchy, .methodHierarchy, .callHierarchy, .showSiblings, .copyReference
     ]
 
     /// Registers one command per ``findActionIDs`` entry, each performing the action through

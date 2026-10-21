@@ -443,6 +443,10 @@ public final class EditorIntelligenceController {
     /// caret and shows its hierarchy; return `true` once handled. Left `nil`, the action is not
     /// handled.
     public var onRequestTypeHierarchy: (() -> Bool)?
+    /// Invoked for `.methodHierarchy` (⇧⌘H in the IntelliJ keymap), like ``onRequestTypeHierarchy``.
+    public var onRequestMethodHierarchy: (() -> Bool)?
+    /// Invoked for `.callHierarchy` (⌃⌥H in the IntelliJ keymap), like ``onRequestTypeHierarchy``.
+    public var onRequestCallHierarchy: (() -> Bool)?
     /// Invoked whenever enclosing-symbol breadcrumbs are recomputed. Hosts that render their own
     /// trail (rather than ``breadcrumbBarView``) should assign this and ignore the AppKit bar.
     public var onBreadcrumbsUpdated: (([BreadcrumbSegment]) -> Void)?
@@ -916,6 +920,8 @@ public final class EditorIntelligenceController {
             return navigate(kind: .superMethod)
         case .goToTypeDefinition:
             return navigate(kind: .typeDefinition)
+        case .showSiblings:
+            return navigate(kind: .siblings)
         case .findUsages:
             return navigate(kind: .references)
         case .acceptInlineProposal:
@@ -999,6 +1005,12 @@ public final class EditorIntelligenceController {
         case .typeHierarchy:
             guard let onRequestTypeHierarchy else { return false }
             return onRequestTypeHierarchy()
+        case .methodHierarchy:
+            guard let onRequestMethodHierarchy else { return false }
+            return onRequestMethodHierarchy()
+        case .callHierarchy:
+            guard let onRequestCallHierarchy else { return false }
+            return onRequestCallHierarchy()
         default:
             return false
         }
@@ -1060,6 +1072,10 @@ public final class EditorIntelligenceController {
 
     private func focus(_ location: Location) {
         guard let textView else { return }
+        if location.target != .source {
+            _ = onOpenLocationInOtherDocument?(location)
+            return
+        }
         if let url = location.url, url != textView.documentURL,
            onOpenLocationInOtherDocument?(location) == true {
             return
@@ -2262,6 +2278,8 @@ public final class EditorIntelligenceController {
             return "No super method found"
         case .typeDefinition:
             return "No type declaration found"
+        case .siblings:
+            return "No siblings found"
         case .references:
             return "No usages found"
         }

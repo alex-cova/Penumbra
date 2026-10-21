@@ -168,7 +168,7 @@ enum TieredGroups {
         switch kind {
         case .definition: return .definition
         case .implementation: return .implementation
-        case .superMethod: return .superMethod
+        case .superMethod, .siblings: return .superMethod
         case .typeDefinition: return .typeDefinition
         case .references: return .references
         }

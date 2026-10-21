@@ -368,6 +368,17 @@ final class LayoutManager {
             updateGutterDecorationPlacement()
         }
     }
+    /// Bookmarks, drawn in the decoration column with ``gutterDecorations`` but owned separately.
+    var gutterBookmarks: [GutterBookmark] = [] {
+        didSet {
+            installDecorationClickRouting()
+            updateGutterDecorationPlacement()
+        }
+    }
+    /// Called with the bookmark whose icon was clicked.
+    var gutterBookmarkHandler: ((GutterBookmark) -> Void)?
+    /// Called with every bookmark after an edit moved or dropped some.
+    var gutterBookmarksDidMove: (([GutterBookmark]) -> Void)?
     /// The decorations drawn in place of a line number, by 1-based line.
     private var lineNumberDecorations: [Int: GutterDecoration] = [:]
     /// Keeps the decoration column (and so the text's x position) while there are no decorations.
@@ -380,12 +391,29 @@ final class LayoutManager {
     }
     var gutterDecorationHandler: ((Int) -> Void)? {
         didSet {
+            installDecorationClickRouting()
+        }
+    }
+    /// A click on the decoration column goes to the bookmark on that line unless the host has an
+    /// icon of its own there; the line-marker column (run buttons) always goes to the host.
+    private func installDecorationClickRouting() {
+        lineMarkerView.onDecorationClicked = gutterDecorationHandler
+        guard !gutterBookmarks.isEmpty else {
             gutterDecorationView.onLineClicked = gutterDecorationHandler
-            lineMarkerView.onDecorationClicked = gutterDecorationHandler
+            return
+        }
+        gutterDecorationView.onLineClicked = { [weak self] line in
+            guard let self else { return }
+            let hostHasIcon = self.gutterDecorations.contains { $0.line == line && $0.placement != .lineMarkerColumn }
+            if !hostHasIcon, let bookmark = self.gutterBookmarks.first(where: { $0.line == line }) {
+                self.gutterBookmarkHandler?(bookmark)
+            } else {
+                self.gutterDecorationHandler?(line)
+            }
         }
     }
     var hasGutterDecorations: Bool {
-        !gutterDecorations.isEmpty
+        !gutterDecorations.isEmpty || !gutterBookmarks.isEmpty
     }
     /// Called with every decoration after an edit moved or dropped some.
     var gutterDecorationsDidMove: (([GutterDecoration]) -> Void)?
@@ -408,9 +436,34 @@ final class LayoutManager {
                 moved.append(decoration)
             }
         }
+        if changed {
+            gutterDecorations = moved
+            gutterDecorationsDidMove?(moved)
+        }
+        applyGutterBookmarkEdit(edit)
+    }
+
+    /// Moves the bookmarks through the same edit; one on a deleted line is dropped.
+    private func applyGutterBookmarkEdit(_ edit: GutterLineMarkerEdit) {
+        guard !gutterBookmarks.isEmpty else { return }
+        var changed = false
+        var moved: [GutterBookmark] = []
+        moved.reserveCapacity(gutterBookmarks.count)
+        for bookmark in gutterBookmarks {
+            guard let row = edit.newRow(forRow: bookmark.line - 1) else {
+                changed = true
+                continue
+            }
+            if row + 1 != bookmark.line {
+                changed = true
+                moved.append(bookmark.moved(toLine: row + 1))
+            } else {
+                moved.append(bookmark)
+            }
+        }
         guard changed else { return }
-        gutterDecorations = moved
-        gutterDecorationsDidMove?(moved)
+        gutterBookmarks = moved
+        gutterBookmarksDidMove?(moved)
     }
 
     /// Clicks in the line-number column, and in the decoration column away from a decoration.
@@ -429,7 +482,7 @@ final class LayoutManager {
         var columnDecorations: [GutterDecoration] = []
         var lineNumberDecorations: [Int: GutterDecoration] = [:]
         var markerColumnDecorations: [GutterDecoration] = []
-        for decoration in gutterDecorations {
+        for decoration in gutterDecorations + gutterBookmarks.map(\.decoration) {
             switch decoration.placement {
             case .lineNumber where showLineNumbers:
                 if lineNumberDecorations[decoration.line] == nil {

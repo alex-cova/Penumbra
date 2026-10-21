@@ -536,6 +536,6 @@ let package = Package(
             .product(name: "LocalModelStore", package: "AgentKitMLX"),
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol"),
             .product(name: "DatabaseKit", package: "DatabaseKit")
-        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus"), .copy("Fixtures/JavaCommandCorpus"), .copy("MermaidCorpus")], swiftSettings: swift6)
+        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JavaNavigationCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus"), .copy("Fixtures/JavaCommandCorpus"), .copy("MermaidCorpus")], swiftSettings: swift6)
     ]
 )

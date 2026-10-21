@@ -88,14 +88,58 @@ final class JavaCallHierarchyTests: XCTestCase {
         XCTAssertEqual(callers.first?.origin, .source)
     }
 
-    func testRootMethodRequiresCaretOnAMethod() async throws {
+    func testRootMethodRequiresCaretOnAMethodOrAField() async throws {
         let fixture = try JavaReferenceFixture()
-        try fixture.add("A.java", "class A { int €count; void run() { } }")
+        try fixture.add("A.java", "class A { void run() { int €local = 1; } }")
         let provider = try await makeProvider(fixture)
         let caret = try XCTUnwrap(fixture.caretLocation)
         let source = try XCTUnwrap(fixture.sources[caret.file])
         let root = await provider.rootMethod(source: source, fileURL: fixture.url(caret.file), utf16Offset: caret.utf16Offset)
-        XCTAssertNil(root)
+        XCTAssertNil(root, "a local variable has no hierarchy")
+    }
+
+    func testAFieldIsARootAndItsCallersAreTheMethodsThatUseIt() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Counter.java", """
+        class Counter {
+            int €count;
+            void increment() { count++; }
+            int read() { return count; }
+            void unrelated() { int count = 3; }
+        }
+        """)
+        try fixture.add("Use.java", "class Use { int peek(Counter c) { return c.count; } }")
+        let provider = try await makeProvider(fixture)
+        let root = try await rootMethod(provider, fixture)
+        XCTAssertEqual(root.displayName, "Counter.count")
+
+        let callers = await provider.callers(of: root, file: fixture.url("Counter.java"))
+        XCTAssertEqual(callers.map(\.displayName), ["Counter.increment()", "Counter.read()", "Use.peek(Counter)"])
+        XCTAssertTrue(callers.allSatisfy { $0.origin == .source })
+    }
+
+    func testAFieldHasNoCallees() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Counter.java", "class Counter { int €count; void increment() { count++; } }")
+        let provider = try await makeProvider(fixture)
+        let root = try await rootMethod(provider, fixture)
+        let callees = await provider.callees(of: root, file: fixture.url("Counter.java"))
+        XCTAssertTrue(callees.isEmpty)
+    }
+
+    func testAFieldLocationSelectsItsName() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Counter.java", "class Counter { int €count; void increment() { count++; } }")
+        let provider = try await makeProvider(fixture)
+        let root = try await rootMethod(provider, fixture)
+        guard let found = await provider.location(of: root, file: fixture.url("Counter.java")) else {
+            throw XCTSkip("location requires attached navigation sources in this fixture")
+        }
+        let text = try String(contentsOf: try XCTUnwrap(found.url), encoding: .utf8) as NSString
+        XCTAssertEqual(
+            text.substring(with: NSRange(location: found.range.start.utf16Offset, length: found.range.end.utf16Offset - found.range.start.utf16Offset)),
+            "count"
+        )
     }
 
     func testLocationSelectsTheDeclaringMethodName() async throws {
