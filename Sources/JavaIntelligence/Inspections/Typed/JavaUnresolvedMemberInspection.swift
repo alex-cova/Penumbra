@@ -340,7 +340,7 @@ enum JavaUnresolvedMemberInspection: JavaTypedInspection {
         name: String, nameNode: SyntaxNode, node: SyntaxNode, pass: Pass, report: (JavaInspection) -> Void
     ) async {
         // `@Data` gives the class its own getters, which never appear in source stubs.
-        if lombokImports(in: pass.context).any { return }
+        if lombokImports(in: pass.context).anyLombok { return }
         let session = JavaInspectionSupport.session(for: pass.context, at: node.startByte)
         let data = await implicitData(for: node, session: session, pass: pass)
         guard !data.open, !data.methods.contains(name) else { return }
@@ -559,7 +559,7 @@ enum JavaUnresolvedMemberInspection: JavaTypedInspection {
         return supers
     }
 
-    private static func lombokImports(in context: JavaInspectionContext) -> (extensionMethods: Bool, any: Bool) {
+    private static func lombokImports(in context: JavaInspectionContext) -> (extensionMethods: Bool, anyLombok: Bool) {
         var extensionMethods = false
         var any = false
         for imp in context.file.imports {

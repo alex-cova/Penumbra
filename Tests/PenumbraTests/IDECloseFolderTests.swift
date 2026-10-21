@@ -185,6 +185,15 @@ final class IDECloseFolderTests: XCTestCase {
     // MARK: - Which window forgets the folder
 
     func testOnlyTheLastWindowWithContentForgetsTheFolder() {
+        // The registry is shared by the whole test process, and tests that never close their
+        // workspace leave them registered while they live: one of those with content would be the
+        // session window, or the window that takes over, instead of this test's own.
+        let registry = IDEWindowRegistry.shared
+        for other in registry.workspaces where other !== workspace {
+            registry.unregister(other)
+        }
+        registry.didBecomeActive(workspace)
+
         XCTAssertTrue(IDEWindowRegistry.shared.forgetsFolderWhenClosing(workspace))
 
         let extra = IDEWorkspace()

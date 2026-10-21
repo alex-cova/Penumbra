@@ -26,7 +26,7 @@ public struct InlineCompletionRequest: Sendable {
 
     /// The line the caret is on, before the caret.
     public var currentLinePrefix: String {
-        prefix.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? prefix
+        self.prefix.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? prefix
     }
 
     /// The line the caret is on, after the caret.

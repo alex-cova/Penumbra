@@ -104,7 +104,11 @@ final class CommandPaletteControllerTests: XCTestCase {
     /// fails after adding a new built-in action, add the ID to `findActionIDs`; if it fails after
     /// adding a title-less internal ID, add it to `builtInTitles` or exclude it deliberately here.
     func testFindActionIDsCoversEveryBuiltInTitledAction() {
-        let titled = Set(EditorActionID.builtInTitles.keys)
+        // Only meaningful while an inline suggestion is showing, so Find Action has nothing to offer.
+        let inlineProposalActions: Set<EditorActionID> = [
+            .acceptInlineProposal, .acceptInlineProposalWord, .acceptInlineProposalLine, .dismissInlineProposal
+        ]
+        let titled = Set(EditorActionID.builtInTitles.keys).subtracting(inlineProposalActions)
         let registered = Set(CommandRegistry.findActionIDs)
         let missing = titled.subtracting(registered)
         XCTAssertTrue(missing.isEmpty, "Missing from CommandRegistry.findActionIDs: \(missing.map(\.rawValue).sorted())")

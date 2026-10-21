@@ -23,11 +23,24 @@ final class GradleProjectIntegrationTests: XCTestCase {
         let runner = GradleCommandRunner(trustStore: store)
         let extractor = GradleProjectModelExtractor(runner: runner)
 
-        let (model, result) = try await extractor.extract(
-            projectDirectory: projectDirectory,
-            javaHome: jdk.home,
-            timeout: .seconds(300)
-        )
+        // Gradle's Groovy reads class files of the JVM it runs on, so a Gradle release that is a
+        // few months older than the newest JDK fails at "Unsupported class file major version".
+        // That says nothing about the extractor: try the installed JDKs newest first.
+        var candidates = JDKLocator().discoverAll().map(\.home)
+        if candidates.isEmpty { candidates = [jdk.home] }
+        var extracted: (JavaGradleProjectModel, GradleCommandResult)?
+        for home in candidates {
+            do {
+                extracted = try await extractor.extract(projectDirectory: projectDirectory, javaHome: home, timeout: .seconds(300))
+                break
+            } catch GradleProjectModelExtractionError.syncFailed(let failure)
+                where failure.stderr.contains("Unsupported class file major version") {
+                continue
+            }
+        }
+        guard let (model, result) = extracted else {
+            throw XCTSkip("The installed gradle cannot run on any installed JDK (class file version unsupported)")
+        }
         XCTAssertEqual(result.exitCode, 0, "gradle sync should succeed: \(result.stderr)")
         XCTAssertEqual(Set(model.subprojects.map(\.path)), [":", ":app", ":lib"])
 

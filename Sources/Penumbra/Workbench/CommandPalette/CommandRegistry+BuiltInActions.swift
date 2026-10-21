@@ -28,7 +28,7 @@ public extension CommandRegistry {
         .inlineVariable, .inlineMethod,
         .changeSignature, .encapsulateField, .generateAccessors, .generate,
         .moveClass, .safeDelete,
-        .typeHierarchy
+        .typeHierarchy, .copyReference
     ]
 
     /// Registers one command per ``findActionIDs`` entry, each performing the action through

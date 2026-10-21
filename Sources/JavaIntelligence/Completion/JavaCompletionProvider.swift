@@ -1264,27 +1264,27 @@ public actor JavaCompletionProvider: CompletionProvider {
         assignability: JavaAssignability
     ) async -> CompletionItem {
         let edits: [TextEdit]
-        let override: String?
+        let insertText: String?
         switch request.importer.decisionForStaticMember(owner: owner, member: member.name) {
         case .none:
             edits = []
-            override = nil
+            insertText = nil
         case .addImport(let edit):
             edits = [edit]
-            override = nil
+            insertText = nil
         case .useQualifiedName:
             edits = []
             switch member {
             case .field:
-                override = "\(owner).\(member.name)"
+                insertText = "\(owner).\(member.name)"
             case .method:
-                override = "\(owner).\(member.name)()"
+                insertText = "\(owner).\(member.name)()"
             }
         }
         let matches = await Self.matchesExpected(member.valueType, expected: expected, assignability: assignability)
         return request.factory.memberItem(
             member, receiverQualifiedName: nil, basePriority: JavaCompletionPriority.staticImport,
-            expectedMatch: matches, additionalEdits: edits, insertTextOverride: override
+            expectedMatch: matches, additionalEdits: edits, insertTextOverride: insertText
         )
     }
 

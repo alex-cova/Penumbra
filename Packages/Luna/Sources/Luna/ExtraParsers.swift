@@ -3016,7 +3016,8 @@ struct RailroadParser {
                 try fail("token of type '\(open == "(" ? "groupEnd" : "optionEnd")'")
             }
             advance()
-            return open == "(" ? inner : .optional(inner)
+            if open == "(" { return inner }
+            return .optional(inner)
         default:
             try fail("a string, a number, a name, or an opening bracket")
         }
