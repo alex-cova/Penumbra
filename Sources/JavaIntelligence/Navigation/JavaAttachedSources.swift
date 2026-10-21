@@ -60,9 +60,7 @@ public enum JavaAttachedSources {
     }
 
     private static func read(archive url: URL, names: [String]) -> (entry: String, text: String)? {
-        guard FileManager.default.fileExists(atPath: url.path), let archive = try? ZipArchive(url: url) else {
-            return nil
-        }
+        guard let archive = ZipArchiveCache.shared.archive(at: url) else { return nil }
         for name in names {
             guard let data = try? archive.data(for: name), let text = String(data: data, encoding: .utf8) else { continue }
             return (name, text)
@@ -77,6 +75,7 @@ public enum JavaAttachedSources {
         for component in entry.split(separator: "/") {
             destination.appendPathComponent(String(component))
         }
+        if isCurrent(destination, size: text.utf8.count, archive: archive) { return destination }
         let directory = destination.deletingLastPathComponent()
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -85,6 +84,18 @@ public enum JavaAttachedSources {
         } catch {
             return nil
         }
+    }
+
+    /// The copy from an earlier request, when it is the size of the entry and no older than the
+    /// archive: writing it again would only touch a file the editor may have open.
+    private static func isCurrent(_ destination: URL, size: Int, archive: URL) -> Bool {
+        let fileManager = FileManager.default
+        guard let copy = try? fileManager.attributesOfItem(atPath: destination.path),
+              let copySize = copy[.size] as? Int, copySize == size,
+              let copyDate = copy[.modificationDate] as? Date,
+              let source = try? fileManager.attributesOfItem(atPath: archive.path),
+              let sourceDate = source[.modificationDate] as? Date else { return false }
+        return copyDate >= sourceDate
     }
 
     static func stableKey(_ path: String) -> String {

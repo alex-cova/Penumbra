@@ -199,12 +199,36 @@ public struct SyntaxNode {
         ts_node_next_parse_state(raw)
     }
 
+    /// One cursor walk: `ts_node_child(i)` walks from the first child every time, so asking for
+    /// each index is quadratic, which a class with thousands of members turns into milliseconds.
     public var children: [SyntaxNode] {
-        (0..<childCount).compactMap { child(at: $0) }
+        var result: [SyntaxNode] = []
+        result.reserveCapacity(childCount)
+        walkChildren { node in
+            result.append(node)
+            return true
+        }
+        return result
     }
 
     public var namedChildren: [SyntaxNode] {
-        (0..<namedChildCount).compactMap { namedChild(at: $0) }
+        var result: [SyntaxNode] = []
+        result.reserveCapacity(namedChildCount)
+        walkChildren { node in
+            if node.isNamed { result.append(node) }
+            return true
+        }
+        return result
+    }
+
+    /// Calls `body` for each direct child in order until it returns `false`.
+    private func walkChildren(_ body: (SyntaxNode) -> Bool) {
+        var cursor = ts_tree_cursor_new(raw)
+        defer { ts_tree_cursor_delete(&cursor) }
+        guard ts_tree_cursor_goto_first_child(&cursor) else { return }
+        repeat {
+            if !body(SyntaxNode(raw: ts_tree_cursor_current_node(&cursor), tree: tree)) { return }
+        } while ts_tree_cursor_goto_next_sibling(&cursor)
     }
 
     /// Every direct child, anonymous tokens included, in order, with the grammar field it fills
@@ -243,7 +267,13 @@ public struct SyntaxNode {
     }
 
     public func firstNamedChild(ofType type: String) -> SyntaxNode? {
-        namedChildren.first { $0.type == type }
+        var found: SyntaxNode?
+        walkChildren { node in
+            guard node.isNamed, node.type == type else { return true }
+            found = node
+            return false
+        }
+        return found
     }
 
     /// tree-sitter's debug S-expression for this subtree, e.g. `(class_declaration name: (identifier))`.

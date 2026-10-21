@@ -17,16 +17,24 @@ enum JavaNavigationText {
     }
 
     static func utf8ByteOffset(forUTF16Offset utf16Offset: Int, in text: String) -> Int {
-        let ns = text as NSString
-        let clamped = max(0, min(utf16Offset, ns.length))
-        let prefix = ns.substring(with: NSRange(location: 0, length: clamped))
-        return prefix.utf8.count
+        let utf16 = text.utf16
+        let clamped = max(0, min(utf16Offset, utf16.count))
+        let index = utf16.index(utf16.startIndex, offsetBy: clamped)
+        return text.utf8.distance(from: text.utf8.startIndex, to: index)
     }
 
+    /// Both ends in one pass over the bytes, instead of one scan from the start per end.
     static func textRange(for byteRange: Range<Int>, in source: String) -> EditorIntelligence.TextRange {
-        let start = utf16Offset(forByte: byteRange.lowerBound, in: source)
-        let end = utf16Offset(forByte: byteRange.upperBound, in: source)
-        return EditorIntelligence.TextRange(start: position(utf16Offset: start, in: source), end: position(utf16Offset: end, in: source))
+        var source = source
+        return source.withUTF8 { bytes in
+            let lower = max(0, min(byteRange.lowerBound, bytes.count))
+            let upper = max(lower, min(byteRange.upperBound, bytes.count))
+            var scan = LineScan()
+            scan.advance(bytes, toByte: lower)
+            let start = scan.position
+            scan.advance(bytes, toByte: upper)
+            return EditorIntelligence.TextRange(start: start, end: scan.position)
+        }
     }
 
     static func utf16Offset(forByte byteOffset: Int, in source: String) -> Int {
@@ -43,28 +51,74 @@ enum JavaNavigationText {
     /// Line and column are what ``TextView/location(at:)`` turns back into a caret, so they have
     /// to count the same UTF-16 units the line manager does, including `\r\n` as one break.
     static func position(utf16Offset: Int, in source: String) -> EditorIntelligence.TextPosition {
-        let ns = source as NSString
-        let clamped = max(0, min(utf16Offset, ns.length))
-        var line = 0
-        var column = 0
-        var index = 0
-        while index < clamped {
-            let unit = ns.character(at: index)
-            if unit == 10 {
-                line += 1
-                column = 0
-            } else if unit == 13 {
-                line += 1
-                column = 0
-                if index + 1 < clamped && ns.character(at: index + 1) == 10 {
-                    index += 1
-                }
-            } else {
-                column += 1
-            }
-            index += 1
+        var source = source
+        return source.withUTF8 { bytes in
+            var scan = LineScan()
+            scan.advance(bytes, toUTF16: max(0, utf16Offset))
+            return scan.position
         }
-        return EditorIntelligence.TextPosition(line: line, column: column, utf16Offset: clamped)
+    }
+}
+
+/// A walk over UTF-8 bytes that tracks the line, the column in UTF-16 units and the UTF-16 offset.
+/// The text is read as bytes because `NSString.character(at:)` per unit costs far more than the
+/// comparison it feeds, and a click near the end of a large file used to scan all of it that way.
+private struct LineScan {
+    private var byteIndex = 0
+    private var line = 0
+    private var column = 0
+    private var utf16 = 0
+    private var afterCarriageReturn = false
+
+    var position: EditorIntelligence.TextPosition {
+        EditorIntelligence.TextPosition(line: line, column: column, utf16Offset: utf16)
+    }
+
+    mutating func advance(_ bytes: UnsafeBufferPointer<UInt8>, toByte target: Int) {
+        while byteIndex < target, byteIndex < bytes.count {
+            step(bytes[byteIndex])
+            byteIndex += 1
+        }
+    }
+
+    /// Stops after the unit that reaches `target`, or at the end of the text.
+    mutating func advance(_ bytes: UnsafeBufferPointer<UInt8>, toUTF16 target: Int) {
+        while utf16 < target, byteIndex < bytes.count {
+            let byte = bytes[byteIndex]
+            if byte >= 0xF0, utf16 + 2 > target {
+                // The offset is between the halves of a surrogate pair: count the first.
+                column += 1
+                utf16 += 1
+                return
+            }
+            step(byte)
+            byteIndex += 1
+        }
+    }
+
+    private mutating func step(_ byte: UInt8) {
+        switch byte {
+        case 10:
+            if !afterCarriageReturn { line += 1 }
+            column = 0
+            utf16 += 1
+            afterCarriageReturn = false
+        case 13:
+            line += 1
+            column = 0
+            utf16 += 1
+            afterCarriageReturn = true
+        case 0x80 ..< 0xC0:
+            break
+        case 0xF0...:
+            column += 2
+            utf16 += 2
+            afterCarriageReturn = false
+        default:
+            column += 1
+            utf16 += 1
+            afterCarriageReturn = false
+        }
     }
 }
 

@@ -84,7 +84,7 @@ enum JavaClassDecompiler {
     }
 
     private static func zipEntry(_ name: String, in archiveURL: URL) -> Data? {
-        guard let archive = try? ZipArchive(url: archiveURL) else { return nil }
+        guard let archive = ZipArchiveCache.shared.archive(at: archiveURL) else { return nil }
         return try? archive.data(for: name)
     }
 
