@@ -25,6 +25,12 @@ final class IDEWindowRegistry {
     private struct PendingOpen {
         let url: URL
         let origin: IDEOpenOrigin
+        var aiOpen: IDEAIOpenRequest?
+    }
+
+    private struct NewWindowJob {
+        var urls: [URL]
+        var aiOpen: IDEAIOpenRequest?
     }
 
     /// Opens waiting for something they need: a window to exist, or SwiftUI's `openWindow` to be
@@ -34,7 +40,7 @@ final class IDEWindowRegistry {
     private var openWindowAction: (() -> Void)?
     /// One entry per window requested through `openNewWindow`, in request order; the next workspace
     /// to register takes the first and opens its URLs.
-    private var newWindowJobs: [[URL]] = []
+    private var newWindowJobs: [NewWindowJob] = []
     /// The window a requested new window should join as a native tab, taken by its configurator.
     private var pendingTabParent: NSWindow?
     /// Set by a Dock reopen with no window left: the next window to appear is centered on screen
@@ -89,9 +95,10 @@ final class IDEWindowRegistry {
             in: current.map(\.windowID)
         ))
         if !newWindowJobs.isEmpty {
-            let urls = newWindowJobs.removeFirst()
-            if !urls.isEmpty {
-                workspace.openDroppedURLs(urls)
+            let job = newWindowJobs.removeFirst()
+            if !job.urls.isEmpty {
+                workspace.pendingAIOpen = job.aiOpen
+                workspace.openDroppedURLs(job.urls)
             }
         }
         drainPendingOpens()
@@ -150,7 +157,7 @@ final class IDEWindowRegistry {
     var shouldRestoreLastWindow: Bool {
         IDESessionWindowPolicy.shouldRestoreLastWindow(
             openWindowCount: workspaces.count,
-            pendingNewWindowJobs: newWindowJobs.filter { !$0.isEmpty }.count
+            pendingNewWindowJobs: newWindowJobs.filter { !$0.urls.isEmpty }.count
         )
     }
 
@@ -177,13 +184,13 @@ final class IDEWindowRegistry {
     /// Routes folders and files to a window (see `IDEOpenRouter`). External opens (Dock, Finder,
     /// `open -a`) pass `.external`; requests made inside a window pass `.window(id)`. Anything that
     /// cannot be placed yet, because no window exists or `openWindow` is not wired, waits.
-    func open(urls: [URL], origin: IDEOpenOrigin = .external) {
-        pendingOpens.append(contentsOf: urls.map { PendingOpen(url: $0, origin: origin) })
+    func open(urls: [URL], origin: IDEOpenOrigin = .external, aiOpen: IDEAIOpenRequest? = nil) {
+        pendingOpens.append(contentsOf: urls.map { PendingOpen(url: $0, origin: origin, aiOpen: aiOpen) })
         drainPendingOpens()
     }
 
     /// Shows the Open Folder panel and routes the chosen folder.
-    func chooseFolder(from origin: IDEOpenOrigin) {
+    func chooseFolder(from origin: IDEOpenOrigin, aiOpen: IDEAIOpenRequest? = nil) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -192,7 +199,7 @@ final class IDEWindowRegistry {
             // The panel already grants access to what it returns; the workspace that opens the
             // folder holds it from there (`IDESecurityScopedAccess`).
             guard result == .OK, let url = panel.url else { return }
-            self?.open(urls: [url], origin: origin)
+            self?.open(urls: [url], origin: origin, aiOpen: aiOpen)
         }
     }
 
@@ -237,15 +244,24 @@ final class IDEWindowRegistry {
         if isDirectory.boolValue {
             switch router.routeFolder(item.url, origin: item.origin) {
             case .focus(let id):
-                workspace(withID: id)?.focusWindow()
+                let target = workspace(withID: id)
+                target?.focusWindow()
+                // The folder is already open there: apply the AI request at once.
+                if let request = item.aiOpen { target?.applyAIOpen(request) }
             case .reuse(let id):
-                workspace(withID: id)?.openProjectFolder(item.url)
+                let target = workspace(withID: id)
+                target?.pendingAIOpen = item.aiOpen
+                target?.openProjectFolder(item.url)
             case .replace(let id):
-                workspace(withID: id)?.replaceProject(with: item.url)
+                let target = workspace(withID: id)
+                target?.pendingAIOpen = item.aiOpen
+                target?.replaceProject(with: item.url)
             case .askReplaceOrNew(let id):
-                workspace(withID: id)?.askHowToOpenFolder(item.url)
+                let target = workspace(withID: id)
+                target?.pendingAIOpen = item.aiOpen
+                target?.askHowToOpenFolder(item.url)
             case .newWindow:
-                return openNewWindow(urls: [item.url])
+                return openNewWindow(urls: [item.url], aiOpen: item.aiOpen)
             }
         } else {
             switch router.routeFile(item.url) {
@@ -269,9 +285,9 @@ final class IDEWindowRegistry {
     /// Opens a window and gives it `urls` once it exists. With a `parent`, the new window joins
     /// that window's native tab group. False when `openWindow` is not wired yet.
     @discardableResult
-    func openNewWindow(urls: [URL] = [], asTabOf parent: NSWindow? = nil) -> Bool {
+    func openNewWindow(urls: [URL] = [], asTabOf parent: NSWindow? = nil, aiOpen: IDEAIOpenRequest? = nil) -> Bool {
         guard let openWindowAction else { return false }
-        newWindowJobs.append(urls)
+        newWindowJobs.append(NewWindowJob(urls: urls, aiOpen: aiOpen))
         pendingTabParent = parent
         openWindowAction()
         return true

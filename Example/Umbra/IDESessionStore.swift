@@ -192,6 +192,9 @@ struct IDEWindowSession: Codable {
     /// The saved conversations the agent's chat tabs showed, and which one was selected.
     var agentChats: [UUID]?
     var agentSelectedChat: UUID?
+    /// Editor or AI mode, and which half of AI mode; older files have neither and open in the editor.
+    var windowMode: IDEWindowMode?
+    var aiTab: IDEAITab?
 
     static let empty = IDEWindowSession()
 
@@ -211,7 +214,9 @@ struct IDEWindowSession: Codable {
         isAgentPanelVisible: Bool? = nil,
         agentPanelWidth: Double? = nil,
         agentChats: [UUID]? = nil,
-        agentSelectedChat: UUID? = nil
+        agentSelectedChat: UUID? = nil,
+        windowMode: IDEWindowMode? = nil,
+        aiTab: IDEAITab? = nil
     ) {
         self.restoration = restoration
         self.projectRootBookmark = projectRootBookmark
@@ -229,6 +234,8 @@ struct IDEWindowSession: Codable {
         self.agentPanelWidth = agentPanelWidth
         self.agentChats = agentChats
         self.agentSelectedChat = agentSelectedChat
+        self.windowMode = windowMode
+        self.aiTab = aiTab
     }
 
     private enum LegacyKeys: String, CodingKey {
@@ -264,6 +271,8 @@ struct IDEWindowSession: Codable {
         agentPanelWidth = try container.decodeIfPresent(Double.self, forKey: .agentPanelWidth)
         agentChats = try? container.decodeIfPresent([UUID].self, forKey: .agentChats)
         agentSelectedChat = try? container.decodeIfPresent(UUID.self, forKey: .agentSelectedChat)
+        windowMode = try? container.decodeIfPresent(IDEWindowMode.self, forKey: .windowMode)
+        aiTab = try? container.decodeIfPresent(IDEAITab.self, forKey: .aiTab)
     }
 
     /// The session written when this window's folder is going away: no project, no editor tabs, and

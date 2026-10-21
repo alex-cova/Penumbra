@@ -36,6 +36,12 @@ final class IDEAgentController {
     var isPanelVisible = false {
         didSet { if oldValue != isPanelVisible { layoutChanged() } }
     }
+    /// AI mode's Code tab is on screen. Counts as the chat being open for notifications, without the
+    /// docked panel, which would be a second view of the same chats.
+    var isShownInAIMode = false
+
+    /// The next chat to be used is a new one: what the latest saved conversation held is not loaded into it.
+    func startFresh() { didRestore = true }
     /// Called when what a window session keeps of the agent changed: the chats, the selection, the panel.
     @ObservationIgnored var onLayoutChanged: (() -> Void)?
     @ObservationIgnored private var layoutNotificationsSuspended = false
@@ -57,6 +63,15 @@ final class IDEAgentController {
     @ObservationIgnored private let store: SessionStore?
     @ObservationIgnored private let appPermissionsFile: URL?
     @ObservationIgnored private let clientFactory: @MainActor (IDEAgentSettings) throws -> any LLMClient
+    /// Builds the client for a chat that has its own model choice (AI mode); tests replace it.
+    @ObservationIgnored var choiceClientFactory: @MainActor (IDEAgentSettings, IDEAIModelChoice) throws -> any LLMClient = {
+        try $0.makeClient(for: $1)
+    } {
+        didSet { for conversation in conversations { conversation.choiceClientFactory = choiceClientFactory } }
+    }
+    /// The model a new chat starts with. `nil` follows the global settings, which is the docked panel's
+    /// behavior; AI mode sets it to what the user last picked.
+    @ObservationIgnored var newChatChoice: IDEAIModelChoice?
     @ObservationIgnored private var didRestore = false
     /// True while a Gradle run the agent started is going, so Stop ends that run and no other.
     @ObservationIgnored var isGradleRunActive = false
@@ -90,6 +105,7 @@ final class IDEAgentController {
 
     private func wire(_ conversation: IDEAgentConversation) {
         conversation.host = host
+        conversation.choiceClientFactory = choiceClientFactory
         conversation.fileClaims = fileClaims
         conversation.commandCatalog = commandCatalog
         conversation.onPersisted = { [weak self] in
@@ -228,6 +244,7 @@ final class IDEAgentController {
     func addConversation() -> IDEAgentConversation {
         let created = IDEAgentConversation(
             settings: settings, store: store, appPermissionsFile: appPermissionsFile, clientFactory: clientFactory)
+        created.modelChoice = newChatChoice
         wire(created)
         conversations.append(created)
         select(created.id)
@@ -245,7 +262,7 @@ final class IDEAgentController {
 
     /// Whether the user can see this chat right now: the window is active, the panel is open, and it is the chat shown.
     func isInView(_ conversation: IDEAgentConversation) -> Bool {
-        conversation.id == selectedID && isPanelVisible && (isUserWatching?() ?? true)
+        conversation.id == selectedID && (isPanelVisible || isShownInAIMode) && (isUserWatching?() ?? true)
     }
 
     private func notify(_ attention: IDEAgentConversation.Attention, from conversation: IDEAgentConversation) {

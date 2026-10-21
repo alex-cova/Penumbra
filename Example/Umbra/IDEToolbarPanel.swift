@@ -10,6 +10,14 @@ struct IDEToolbarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
+        if workspace.isAIMode {
+            IDEAIToolbarRow()
+        } else {
+            editorRow
+        }
+    }
+
+    private var editorRow: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             HStack(spacing: IDEAppearance.Spacing.xs) {
                 IDETitlebarPanelToggles(
@@ -206,6 +214,12 @@ private struct IDETitlebarGlobalActions: View {
             )
             .disabled(!workspace.hasOpenProject)
 
+            IDEToolbarIconButton(
+                systemName: "bubbles.and.sparkles",
+                help: "AI Mode",
+                action: { workspace.showAIMode() }
+            )
+
             Button(action: workspace.showSettings) {
                 IDEToolbarIconLabel(systemName: "gearshape", isHighlighted: isHoveringSettings || workspace.isSettingsVisible)
             }
@@ -256,7 +270,7 @@ private struct IDEToolbarActionCluster: View {
 
 /// Shared glyph-button chrome for the titlebar: a fixed square hit target, muted by default,
 /// brightening on hover (and filled while its panel is open) so every action reads as one family.
-private struct IDEToolbarIconButton: View {
+struct IDEToolbarIconButton: View {
     let systemName: String
     var isActive = false
     var tint: Color? = nil
@@ -285,7 +299,7 @@ private struct IDEToolbarIconButton: View {
     }
 }
 
-private struct IDEToolbarIconLabel: View {
+struct IDEToolbarIconLabel: View {
     let systemName: String
     var isActive = false
     var isHighlighted = false
@@ -321,4 +335,67 @@ private struct IDEToolbarIconLabel: View {
         }())
         .frame(width: 720, height: IDEAppearance.Spacing.titlebarMinHeight)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
+}
+
+/// The titlebar row in AI mode: the list toggle and Chat / Code at the leading end, the global actions
+/// and the way back to the editor at the trailing end.
+private struct IDEAIToolbarRow: View {
+    @Environment(IDEWorkspace.self) private var workspace
+    @State private var isHoveringSettings = false
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            HStack(spacing: IDEAppearance.Spacing.xs) {
+                IDEToolbarIconButton(
+                    systemName: "sidebar.left",
+                    isActive: workspace.showsAISidebar,
+                    help: workspace.showsAISidebar ? "Hide Chats" : "Show Chats",
+                    action: { workspace.showsAISidebar.toggle() }
+                )
+                ForEach(IDEAITab.allCases) { tab in
+                    IDEToolbarIconButton(
+                        systemName: tab.symbolName,
+                        isActive: workspace.aiTab == tab,
+                        help: tab == .chat ? "Chat: talk to any model, no project" : "Code: an agent working in a project",
+                        action: { workspace.aiTab = tab }
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 2) {
+                IDEToolbarIconButton(systemName: "bolt", help: "Actions…", action: workspace.showCommandPalette)
+                IDEToolbarIconButton(
+                    systemName: workspace.notifications.items.isEmpty ? "bell" : "bell.badge",
+                    isActive: workspace.notifications.isPanelPresented,
+                    tint: !workspace.notifications.items.isEmpty && !workspace.notifications.isPanelPresented
+                        ? IDEAppearance.ColorToken.accent : nil,
+                    help: "Notifications",
+                    action: workspace.notifications.togglePanel
+                )
+                IDEToolbarIconButton(
+                    systemName: "bubbles.and.sparkles",
+                    isActive: true,
+                    help: "Back to the Editor",
+                    action: workspace.showEditorMode
+                )
+                Button {
+                    workspace.showEditorMode()
+                    workspace.showSettings()
+                } label: {
+                    IDEToolbarIconLabel(systemName: "gearshape", isHighlighted: isHoveringSettings)
+                }
+                .buttonStyle(.plain)
+                .onHover { isHoveringSettings = $0 }
+                .help("Settings")
+                .accessibilityLabel("Settings")
+                .focusable(false)
+            }
+        }
+        .padding(.leading, IDEAppearance.Spacing.trafficLightsInset)
+        .padding(.trailing, IDEAppearance.Spacing.sm)
+        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .focusable(false)
+    }
 }

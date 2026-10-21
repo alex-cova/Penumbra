@@ -66,6 +66,22 @@ final class IDEAgentConversation: Identifiable {
 
     let settings: IDEAgentSettings
 
+    /// The model this chat was given in AI mode; `nil` follows the global agent settings (the docked
+    /// panel's behavior). Saved with the chat. Changing it starts a new session on the next send,
+    /// which keeps the conversation.
+    var modelChoice: IDEAIModelChoice?
+    /// Builds the client for a chat that has its own choice. The factory given at creation serves the
+    /// chats that follow the settings, so existing callers and tests are unchanged.
+    @ObservationIgnored var choiceClientFactory: @MainActor (IDEAgentSettings, IDEAIModelChoice) throws -> any LLMClient = {
+        try $0.makeClient(for: $1)
+    }
+
+    /// What this chat uses now: its own choice, else the global settings.
+    var effectiveChoice: IDEAIModelChoice { modelChoice ?? settings.currentChoice }
+
+    /// The external agent driving this chat, when it has one and may run it.
+    private var acpDefinition: IDEACPDefinition? { settings.acpAgent(for: effectiveChoice) }
+
     @ObservationIgnored weak var host: (any IDEAgentHost)?
     /// Shared by the window's chats; `nil` when there is only ever one.
     @ObservationIgnored var fileClaims: IDEAgentFileClaims?
@@ -101,8 +117,8 @@ final class IDEAgentConversation: Identifiable {
     private(set) var acpConfigOptions: [ACPConfigOption] = []
     private(set) var acpAgentName: String?
 
-    /// Whether this chat is driven by an external ACP agent (selected in Settings ▸ Agent).
-    var isACPConversation: Bool { settings.activeACPAgent != nil }
+    /// Whether this chat is driven by an external ACP agent (its own choice, else the one selected in Settings ▸ Agent).
+    var isACPConversation: Bool { acpDefinition != nil }
     /// Rewind/compact/checkpoints owned by AgentKit are not available for ACP conversations.
     var supportsAgentKitOnlyFeatures: Bool { !isACPConversation }
     @ObservationIgnored private var runTask: Task<Void, Never>?
@@ -158,13 +174,17 @@ final class IDEAgentConversation: Identifiable {
 
     /// How full the model's window is, from 0 to 1; `nil` when the window or the use is not known.
     var contextFraction: Double? {
-        guard let window = settings.contextWindow, window > 0, let contextTokens else { return nil }
+        guard let window = settings.contextWindow(for: effectiveChoice), window > 0, let contextTokens else { return nil }
         return min(1, Double(contextTokens) / Double(window))
     }
 
     var canSend: Bool {
-        !isRunning && !isCompacting && (settings.hasAcceptedDisclosure || isACPConversation) && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !isRunning && !isCompacting && hasConsent && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+
+    /// Whether what this chat sends may leave the Mac: the endpoint was accepted, or it runs on this Mac,
+    /// or an external agent the user allowed does the work.
+    var hasConsent: Bool { settings.hasAcceptedDisclosure(for: effectiveChoice.provider) || isACPConversation }
 
     // MARK: - Sending
 
@@ -177,7 +197,7 @@ final class IDEAgentConversation: Identifiable {
     /// command's expansion, a skill's instructions), which the row offers as `detail`. `allowedTools` are
     /// permission rules for this run only. The draft is cleared once the message is on its way.
     func submit(text: String, modelText: String? = nil, allowedTools: [String] = []) {
-        guard !isRunning, !isCompacting, settings.hasAcceptedDisclosure || isACPConversation, !text.isEmpty, let host else { return }
+        guard !isRunning, !isCompacting, hasConsent, !text.isEmpty, let host else { return }
         guard let root = host.agentProjectRoot else {
             append(.init(kind: .error, text: "Open a project folder first; the agent works inside one."))
             return
@@ -222,7 +242,7 @@ final class IDEAgentConversation: Identifiable {
     /// Tries the send that failed because the provider could not be reached. The message is already in
     /// the transcript and in the history, so this does not add another copy of it.
     func retry() {
-        guard !isRunning, !isCompacting, settings.hasAcceptedDisclosure || isACPConversation, let host, let root = host.agentProjectRoot else { return }
+        guard !isRunning, !isCompacting, hasConsent, let host, let root = host.agentProjectRoot else { return }
         guard entries.contains(where: \.canRetry) else { return }
         willSend?()
         commandCatalog?.invalidate()
@@ -257,7 +277,7 @@ final class IDEAgentConversation: Identifiable {
                 return
             }
             // Loading an on-device model reads gigabytes; say so, and fail visibly rather than inside the first turn.
-            if self.settings.provider == .mlx, let model = self.settings.selectedMLXModel {
+            if self.effectiveChoice.provider == .mlx, let model = self.settings.selectedMLXModel(id: self.effectiveChoice.model) {
                 let models = IDELocalModelsStore.shared
                 if models.loadedID != model.id {
                     self.status = "Loading \(LocalModelFormat.shortName(model.id))…"
@@ -316,7 +336,7 @@ final class IDEAgentConversation: Identifiable {
     }
 
     private func currentACPSession(root: URL, host: any IDEAgentHost) async throws -> ACPClientSession {
-        guard let definition = settings.activeACPAgent else {
+        guard let definition = acpDefinition else {
             throw ACPError.agentError(JSONRPCError(code: -32000, message: "No ACP agent is selected and allowed in Settings ▸ Agent."))
         }
         let fingerprint = "\(definition.id.uuidString)|\(definition.command)|\(definition.args.joined(separator: " "))|\(root.path)"
@@ -725,6 +745,8 @@ final class IDEAgentConversation: Identifiable {
         customTitle = nil
         isAwaitingUser = false
         contextTokens = nil
+        // A new conversation is a new external session too.
+        lastACPSessionID = nil
         fileClaims?.release(tab: id)
     }
 
@@ -810,6 +832,8 @@ final class IDEAgentConversation: Identifiable {
         contextTokens = nil
         summaryTitle = snapshot.title
         customTitle = saved.customTitle
+        modelChoice = saved.modelChoice
+        lastACPSessionID = nil
         status = nil
     }
 
@@ -833,7 +857,8 @@ final class IDEAgentConversation: Identifiable {
             id: conversationID, projectRoot: root.path, title: customTitle ?? SessionStore.title(from: items),
             createdAt: createdAt, updatedAt: Date(), items: items, totalUsage: usage,
             host: IDEAgentSavedTranscript.encode(
-                entries: entries, cost: cost, todos: todos, customTitle: customTitle, checkpoints: checkpoints))
+                entries: entries, cost: cost, todos: todos, customTitle: customTitle, checkpoints: checkpoints,
+                modelChoice: modelChoice))
         // A write failure only costs the history; it is not worth interrupting the user for.
         try? store.save(snapshot)
         // The originals are kept for the newest runs of the project; this chat's own are never the ones to go.
@@ -901,11 +926,12 @@ final class IDEAgentConversation: Identifiable {
         // from the next session on (whose fingerprint then differs).
         let memoryDirectory = (settings.memoryEnabled ? store : nil)?.projectDirectory(for: root.path)
         let memoryText = memoryDirectory.flatMap { ProjectMemory.load(at: $0) }
-        let fingerprint = settings.fingerprint + "|" + root.path + "|" + String(host.agentIsGradleProject) + "|" + (skills?.fingerprint ?? "")
+        let choice = effectiveChoice
+        let fingerprint = settings.fingerprint(for: choice) + "|" + root.path + "|" + String(host.agentIsGradleProject) + "|" + (skills?.fingerprint ?? "")
             + "|" + ProjectMemory.fingerprint(of: memoryText)
         if let session, sessionFingerprint == fingerprint { return session }
 
-        let client = try clientFactory(settings)
+        let client = modelChoice == nil ? try clientFactory(settings) : try choiceClientFactory(settings, choice)
         // A settings change keeps the conversation, minus provider items that only the old model
         // or endpoint may be sent back.
         var history: [ConversationItem] = []
@@ -961,23 +987,23 @@ final class IDEAgentConversation: Identifiable {
         tools.append(IDEDiagnosticsTool(
             problems: { await box.read(default: []) { $0.agentProblems() } },
             fresh: { await box.freshProblems(relativePaths: $0) }))
-        let profile = ModelProfile.choose(provider: settings.provider.rawValue, model: settings.model)
+        let profile = ModelProfile.choose(provider: choice.provider.rawValue, model: choice.model)
         // The blocking gate and the soft nudge are alternatives: the toggle picks the gate.
         let stopGateOn = settings.runTestsBeforeFinishing && host.agentIsGradleProject
         let stopGatePolicies: [any TurnPolicy] = stopGateOn
             ? [StopGatePolicy(check: { [support] _ in try await Self.runTestsForStopGate(support: support) })]
             : []
         let configuration = AgentConfiguration(
-            model: settings.model,
+            model: choice.model,
             systemPrompt: SystemPrompt.make(
                 projectRoot: workspace.rootPath, notes: IDEAgentProjectNotes.load(root: root), mode: mode,
                 userNotes: IDEAgentProjectNotes.loadUser(settings: settings), variant: profile.promptVariant,
                 memory: memoryText),
-            reasoningEffort: settings.effectiveReasoningEffort,
+            reasoningEffort: choice.effectiveReasoningEffort,
             maxIterations: settings.iterationCap,
             cacheKey: Self.cacheKey(root: root, conversationID: conversationID),
-            contextWindow: settings.contextWindow,
-            compactionThreshold: settings.provider == .ollama ? 0.60 : 0.75,
+            contextWindow: settings.contextWindow(for: choice),
+            compactionThreshold: choice.provider == .ollama ? 0.60 : 0.75,
             mode: mode,
             permissions: currentRules(root: root),
             gate: fileClaims.map { claims in
@@ -988,7 +1014,7 @@ final class IDEAgentConversation: Identifiable {
             verifyBeforeStopping: !stopGateOn,
             maxRunTokens: settings.maxRunTokens > 0 ? settings.maxRunTokens : nil,
             maxRunSeconds: settings.maxRunSeconds > 0 ? TimeInterval(settings.maxRunSeconds) : nil,
-            runIsOverCost: settings.runIsOverCost,
+            runIsOverCost: settings.runIsOverCost(for: choice),
             editTolerance: profile.editTolerance,
             policies: stopGatePolicies,
             shapeToolOutput: { IDEAgentOutputScrubber.shape($0) })
@@ -1488,7 +1514,7 @@ final class IDEAgentConversation: Identifiable {
             // The input of the latest turn is what the window holds right now.
             if turnUsage.inputTokens > 0 { contextTokens = turnUsage.inputTokens }
             usage = usage + turnUsage
-            if let turnCost = settings.cost(of: turnUsage), let total = cost { cost = total + turnCost } else { cost = nil }
+            if let turnCost = settings.cost(of: turnUsage, for: effectiveChoice), let total = cost { cost = total + turnCost } else { cost = nil }
         case .runEnded(let ending):
             lastEnding = ending
             closeStreamingEntry()

@@ -30,11 +30,15 @@ public struct IDERootView: View {
         _agentPanelWidth = State(initialValue: session.agentPanelWidth ?? IDEAppearance.Spacing.agentPanelWidth)
     }
 
-    private var isAgentPageShown: Bool { workspace.agent.coversEditor && workspace.hasOpenProject }
-    private var isAgentDocked: Bool { workspace.agent.isPanelVisible && !workspace.agent.settings.opensAsPage && workspace.hasOpenProject }
+    private var isAIMode: Bool { workspace.isAIMode }
+    private var isAgentPageShown: Bool { workspace.agent.coversEditor && workspace.hasOpenProject && !isAIMode }
+    private var isAgentDocked: Bool {
+        workspace.agent.isPanelVisible && !workspace.agent.settings.opensAsPage && workspace.hasOpenProject && !isAIMode
+    }
 
     public var body: some View {
         let _ = workspace.layoutEpoch
+        let _ = workspace.windowMode
         let _ = workspace.showsWelcome
         let _ = workspace.preferences.uiFontName
         let _ = workspace.preferences.uiFontSize
@@ -174,11 +178,23 @@ public struct IDERootView: View {
 
                 Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
             }
+            // AI mode covers the editor, which stays mounted: its carets and scroll positions survive.
+            .opacity(isAIMode ? 0 : 1)
+            .allowsHitTesting(!isAIMode)
+            .accessibilityHidden(isAIMode)
+            .overlay {
+                if isAIMode {
+                    IDEAIModeView(sidebarWidth: $sidebarWidth)
+                        .opacity(workspace.chromeOpacity)
+                }
+            }
 
-            IDEStatusBarPanel()
-                .id(workspace.uiColorSchemeEpoch)
-                .opacity(workspace.chromeOpacity)
-                .allowsHitTesting(workspace.chromeOpacity > 0.05)
+            if !isAIMode {
+                IDEStatusBarPanel()
+                    .id(workspace.uiColorSchemeEpoch)
+                    .opacity(workspace.chromeOpacity)
+                    .allowsHitTesting(workspace.chromeOpacity > 0.05)
+            }
         }
         .ignoresSafeArea(.container, edges: .top)
         .onGeometryChange(for: CGFloat.self, of: \.safeAreaInsets.top) { inset in
@@ -444,7 +460,7 @@ private struct IDETerminalResizeHandle: View {
     }
 }
 
-private struct IDESidebarResizeHandle: View {
+struct IDESidebarResizeHandle: View {
     enum Edge {
         case leading, trailing
     }

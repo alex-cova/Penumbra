@@ -185,6 +185,12 @@ public final class IDEWorkspace {
         appPermissionsFile: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentPermissionFiles.appFile() : nil,
         commandsHome: IDEWorkspace.isSessionPersistenceEnabled ? FileManager.default.homeDirectoryForCurrentUser : nil,
         commandsAppSupport: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentPermissionFiles.appFile()?.deletingLastPathComponent() : nil)
+    /// AI mode's plain chats (no project), and the list of every project's saved Code sessions.
+    /// A `var` so tests can give the window a chat controller that talks to a scripted client.
+    var aiChat = IDEAIChatController(store: IDEWorkspace.isSessionPersistenceEnabled ? IDEAIChatController.appStore() : nil)
+    let aiSessions = IDEAISessions(store: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentController.appStore() : nil)
+    /// The Manage Models sheet of AI mode.
+    var isAIModelsPresented = false
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
     /// Hierarchies kept with Pin Tab, and which one the tab shows (nil: the live one).
@@ -406,6 +412,26 @@ public final class IDEWorkspace {
     /// Settings open over the editor area, like a tab, instead of in their own window. The editor
     /// underneath stays mounted so its carets and scroll positions survive.
     private(set) var isSettingsVisible = false
+    /// Editor, or AI mode over the whole window. The editor stays mounted underneath AI mode.
+    var windowMode: IDEWindowMode = .editor {
+        didSet { if oldValue != windowMode { noteAIModeChanged() } }
+    }
+    /// Which half of AI mode shows.
+    var aiTab: IDEAITab = .code {
+        didSet { if oldValue != aiTab { noteAIModeChanged() } }
+    }
+    /// Whether AI mode's list of chats is shown.
+    var showsAISidebar = true
+    /// Set while a saved window comes back, which is not a change worth saving.
+    private var isRestoringAIMode = false
+    /// What to do in AI mode once the folder being opened here is the project; see `applyAIOpen`.
+    var pendingAIOpen: IDEAIOpenRequest?
+
+    private func noteAIModeChanged() {
+        guard !isRestoringAIMode else { return }
+        saveSession()
+    }
+
     /// A pane Settings should open on, set by whatever sent the user there; the settings view takes it.
     var requestedSettingsDomain: IDEPreferencesDomain?
     /// The intention Settings › Java › Intentions should scroll to, set by Edit intention settings.
@@ -417,6 +443,14 @@ public final class IDEWorkspace {
         agent.dismissPage()
         isSettingsVisible = true
         // Otherwise keystrokes keep going to the editor hidden under the settings.
+        window?.makeFirstResponder(nil)
+    }
+
+    /// AI mode covers the window: Settings and an expanded bottom panel belong to the editor, and
+    /// keystrokes must not keep going to a text view that is no longer on screen.
+    func prepareForAIMode() {
+        isSettingsVisible = false
+        isBottomPanelExpanded = false
         window?.makeFirstResponder(nil)
     }
 
@@ -1032,6 +1066,7 @@ public final class IDEWorkspace {
         blame.cancelAll()
         changeMarkers.cancelAll()
         agent.teardown()
+        aiChat.teardown()
         databaseSupport.closeAll()
         closeAllDiffSessions()
         closeAllDiagramSessions()
@@ -1225,6 +1260,10 @@ public final class IDEWorkspace {
         showsWelcome = !hasOpenDocuments
         refreshPresentation()
         saveSession()
+        if let request = pendingAIOpen {
+            pendingAIOpen = nil
+            applyAIOpen(request)
+        }
         // A project the New Project wizard just made opens on its main file.
         if let file = IDENewProjectOpenRequests.take(for: url) {
             Task { await openDocument(from: file) }
@@ -4107,7 +4146,9 @@ public final class IDEWorkspace {
             isAgentPanelVisible: agent.isPanelVisible && !agent.settings.opensAsPage,
             agentPanelWidth: agentPanelWidth,
             agentChats: agent.restorableTabs.ids,
-            agentSelectedChat: agent.restorableTabs.selected
+            agentSelectedChat: agent.restorableTabs.selected,
+            windowMode: windowMode,
+            aiTab: aiTab
         )
     }
 
@@ -4230,6 +4271,10 @@ public final class IDEWorkspace {
             selectedSidebarTab = .explorer
         }
         agentPanelWidth = session.agentPanelWidth ?? IDEAppearance.Spacing.agentPanelWidth
+        isRestoringAIMode = true
+        windowMode = session.windowMode ?? .editor
+        aiTab = session.aiTab ?? .code
+        isRestoringAIMode = false
         if hasOpenProject {
             // Restoring is not a change worth saving: the rest of the window is not back yet.
             agent.withoutLayoutNotifications {
@@ -5308,6 +5353,12 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.toggleProjectSidebar() }),
             EditorCommand(id: "app.toggleAgent", title: "Toggle Agent", group: "View",
                           action: { [weak self] in self?.toggleAgentPanel() }),
+            EditorCommand(id: "app.toggleAIMode", title: "Toggle AI Mode", group: "View",
+                          action: { [weak self] in self?.toggleAIMode() }),
+            EditorCommand(id: "app.aiChat", title: "AI Mode: Chat", group: "View",
+                          action: { [weak self] in self?.showAIMode(tab: .chat) }),
+            EditorCommand(id: "app.aiCode", title: "AI Mode: Code", group: "View",
+                          action: { [weak self] in self?.showAIMode(tab: .code) }),
             EditorCommand(id: "history.show", title: "Show Local History", group: "Local History",
                           action: { [weak self] in self?.showLocalHistory() }),
             EditorCommand(id: "history.recent", title: "Recent Changes", group: "Local History",

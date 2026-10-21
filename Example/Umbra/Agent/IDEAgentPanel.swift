@@ -16,19 +16,25 @@ struct IDEAgentPanel: View {
     @State private var composerHeight: CGFloat = 22
     @State private var acceptRequest = 0
 
+    @Environment(IDEWorkspace.self) private var workspace
+
     private var settings: IDEAgentSettings { agent.settings }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            if agent.conversations.count > 1 { IDEAgentTabsBar(agent: agent) }
+            if placement != .aiMode, agent.conversations.count > 1 { IDEAgentTabsBar(agent: agent) }
             if !agent.todos.isEmpty { IDEAgentTodoListView(items: agent.todos) }
-            transcript
-            Divider().overlay(IDEAppearance.ColorToken.border)
-            composer
+            if placement == .aiMode, agent.entries.isEmpty {
+                aiEmptyState
+            } else {
+                transcript
+                if placement != .aiMode { Divider().overlay(IDEAppearance.ColorToken.border) }
+                composer
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(placement == .page ? Color.clear : IDEAppearance.ColorToken.panel)
+        .background(placement == .docked ? IDEAppearance.ColorToken.panel : Color.clear)
         .sheet(isPresented: $isSettingsPresented) {
             IDEAgentSettingsSheet(settings: settings)
         }
@@ -53,16 +59,18 @@ struct IDEAgentPanel: View {
                         + (agent.cost == nil ? "" : "\nCost is an estimate from the price table in Settings ▸ Agent."))
                     .padding(.trailing, IDEAppearance.Spacing.xs)
             }
-            IDEAgentIconButton(systemImage: "square.and.pencil", help: "New Chat (⌥⌘T)", isDisabled: agent.entries.isEmpty && !agent.isRunning) {
-                agent.newConversation()
+            if placement != .aiMode {
+                IDEAgentIconButton(systemImage: "square.and.pencil", help: "New Chat (⌥⌘T)", isDisabled: agent.entries.isEmpty && !agent.isRunning) {
+                    agent.newConversation()
+                }
+                IDEAgentIconButton(systemImage: "clock.arrow.circlepath", help: "Earlier Chats", isActive: isHistoryPresented) {
+                    isHistoryPresented.toggle()
+                }
+                .popover(isPresented: $isHistoryPresented, arrowEdge: .bottom) {
+                    IDEAgentHistoryPopover(agent: agent) { isHistoryPresented = false }
+                }
+                .onAppear { agent.restoreLatestIfNeeded() }
             }
-            IDEAgentIconButton(systemImage: "clock.arrow.circlepath", help: "Earlier Chats", isActive: isHistoryPresented) {
-                isHistoryPresented.toggle()
-            }
-            .popover(isPresented: $isHistoryPresented, arrowEdge: .bottom) {
-                IDEAgentHistoryPopover(agent: agent) { isHistoryPresented = false }
-            }
-            .onAppear { agent.restoreLatestIfNeeded() }
             if placement == .docked {
                 IDEAgentIconButton(systemImage: "arrow.up.left.and.arrow.down.right", help: "Expand over the editor") {
                     expandOverEditor()
@@ -80,8 +88,8 @@ struct IDEAgentPanel: View {
         if placement == .docked {
             IDEPanelTitle("Agent")
                 .frame(maxWidth: .infinity, alignment: .leading)
-        } else if agent.conversations.count < 2 {
-            Text(agent.selected.title)
+        } else if agent.conversations.count < 2 || placement == .aiMode {
+            Text(agent.selected.isEmpty ? "New session" : agent.selected.title)
                 .font(IDEAppearance.Typography.sectionHeader)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
@@ -130,10 +138,15 @@ struct IDEAgentPanel: View {
 
     // MARK: - Composer
 
+    private var isAIMode: Bool { placement == .aiMode }
+    private var choice: IDEAIModelChoice { agent.selected.effectiveChoice }
+    /// AI mode starts sessions anywhere; they need a project to work in.
+    private var needsProject: Bool { isAIMode && agent.projectRoot == nil }
+
     private var composer: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
-            if !settings.hasAcceptedDisclosure {
-                IDEAgentDisclosureCard(settings: settings)
+            if !agent.selected.hasConsent {
+                IDEAgentDisclosureCard(settings: settings, provider: choice.provider)
             }
             if let status = agent.status {
                 HStack(spacing: IDEAppearance.Spacing.xs) {
@@ -152,82 +165,159 @@ struct IDEAgentPanel: View {
                     acceptRequest += 1
                 }
             }
-            HStack(alignment: .bottom, spacing: IDEAppearance.Spacing.sm) {
-                @Bindable var agent = agent
-                IDEAgentComposerField(
-                    text: $agent.draft, height: $composerHeight,
-                    placeholder: agent.isRunning ? "Write what to do next; it is sent at the next step…" : "Ask about this project…",
-                    state: composerState, focusRequest: agent.composerFocusRequest, acceptRequest: acceptRequest,
-                    suggestions: { agent.suggestions(for: $0) },
-                    onSend: { agent.submit() },
-                    onStop: {
-                        if agent.isRunning { agent.stop(); return }
-                        // Esc twice in an empty field: go back to an earlier message.
-                        guard agent.draft.isEmpty, !agent.selected.rewindTargets.isEmpty else { return }
-                        if let last = lastEscape, Date().timeIntervalSince(last) < 0.6 {
-                            lastEscape = nil
-                            agent.rewindRequest = IDEAgentRewindRequest()
-                        } else {
-                            lastEscape = Date()
-                        }
-                    },
-                    onCycleMode: { agent.selected.cycleMode() },
-                    onAccept: { agent.perform($0) },
-                    onUserEdit: { agent.selected.promptRecall.reset() },
-                    onHistory: { agent.recallPrompt($0) },
-                    onDropFiles: { urls in
-                        urls.map { IDEAgentMentionToken.format(path: IDEAgentMentionPath.relative($0, root: agent.projectRoot)) }
-                            .joined(separator: " ") + " "
-                    }
-                )
-                .frame(height: composerHeight)
+            if isAIMode {
+                // One card holds the field and its chips, like the message box of a chat app.
+                VStack(spacing: IDEAppearance.Spacing.xs) {
+                    fieldRow
+                    chipRow
+                }
                 .padding(IDEAppearance.Spacing.sm)
                 .background(IDEAppearance.ColorToken.card)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
-
-                if agent.isRunning {
-                    IDEAgentIconButton(
-                        systemImage: "stop.fill", help: "Stop", tint: IDEAppearance.ColorToken.error, action: agent.stop)
-                } else {
-                    IDEAgentIconButton(
-                        systemImage: "arrow.up.circle.fill", help: "Send", tint: IDEAppearance.ColorToken.accent,
-                        isDisabled: agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, action: agent.submit)
-                }
+                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous)
+                        .stroke(IDEAppearance.ColorToken.border, lineWidth: 1))
+            } else {
+                fieldRow
+                chipRow
+                    .padding(.horizontal, IDEAppearance.Spacing.xs)
             }
-            HStack {
-                IDEAgentModeChip(mode: agent.mode) { agent.selected.setMode($0) }
-                if agent.selected.isACPConversation {
-                    IDEACPModeChip(conversation: agent.selected)
-                    if !agent.selected.acpConfigOptions.isEmpty {
-                        IDEACPConfigChip(options: agent.selected.acpConfigOptions)
-                    }
-                    Button("Restart Agent") { agent.selected.restartACP() }
-                        .buttonStyle(.borderless)
-                        .font(IDEAppearance.Typography.caption)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .help("Kill the ACP agent process; it restarts on the next message")
-                } else {
-                    IDEAgentModelChip(settings: settings) { isSettingsPresented = true }
-                }
-                Spacer(minLength: IDEAppearance.Spacing.sm)
-                if let fraction = agent.selected.contextFraction {
-                    IDEAgentContextMeter(
-                        fraction: fraction, tokens: agent.selected.contextTokens ?? 0, window: settings.contextWindow ?? 0,
-                        isBusy: agent.selected.isRunning || agent.selected.isCompacting
-                    ) {
-                        let chat = agent.selected
-                        Task { await chat.compact(focus: nil) }
-                    }
-                }
-            }
-            .padding(.horizontal, IDEAppearance.Spacing.xs)
         }
         .padding(IDEAppearance.Spacing.sm)
+    }
+
+    private var fieldRow: some View {
+        HStack(alignment: .bottom, spacing: IDEAppearance.Spacing.sm) {
+            @Bindable var agent = agent
+            let field = IDEAgentComposerField(
+                text: $agent.draft, height: $composerHeight,
+                placeholder: placeholder,
+                state: composerState, focusRequest: agent.composerFocusRequest, acceptRequest: acceptRequest,
+                suggestions: { agent.suggestions(for: $0) },
+                onSend: send,
+                onStop: {
+                    if agent.isRunning { agent.stop(); return }
+                    // Esc twice in an empty field: go back to an earlier message.
+                    guard agent.draft.isEmpty, !agent.selected.rewindTargets.isEmpty else { return }
+                    if let last = lastEscape, Date().timeIntervalSince(last) < 0.6 {
+                        lastEscape = nil
+                        agent.rewindRequest = IDEAgentRewindRequest()
+                    } else {
+                        lastEscape = Date()
+                    }
+                },
+                onCycleMode: { agent.selected.cycleMode() },
+                onAccept: { agent.perform($0) },
+                onUserEdit: { agent.selected.promptRecall.reset() },
+                onHistory: { agent.recallPrompt($0) },
+                onDropFiles: { urls in
+                    urls.map { IDEAgentMentionToken.format(path: IDEAgentMentionPath.relative($0, root: agent.projectRoot)) }
+                        .joined(separator: " ") + " "
+                }
+            )
+            .frame(height: composerHeight)
+            if isAIMode {
+                field
+            } else {
+                field
+                    .padding(IDEAppearance.Spacing.sm)
+                    .background(IDEAppearance.ColorToken.card)
+                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+            }
+
+            if agent.isRunning {
+                IDEAgentIconButton(
+                    systemImage: "stop.fill", help: "Stop", tint: IDEAppearance.ColorToken.error, action: agent.stop)
+            } else {
+                IDEAgentIconButton(
+                    systemImage: "arrow.up.circle.fill", help: needsProject ? "Choose a project first" : "Send",
+                    tint: IDEAppearance.ColorToken.accent,
+                    isDisabled: needsProject || agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, action: send)
+            }
+        }
+    }
+
+    private var placeholder: String {
+        if agent.isRunning { return "Write what to do next; it is sent at the next step…" }
+        if needsProject { return "Choose a project to start" }
+        return isAIMode ? "Describe a task or ask a question" : "Ask about this project…"
+    }
+
+    private func send() {
+        guard !needsProject else { return }
+        agent.submit()
+    }
+
+    private var chipRow: some View {
+        HStack {
+            if isAIMode { IDEAIProjectChip() }
+            IDEAgentModeChip(mode: agent.mode) { agent.selected.setMode($0) }
+            if agent.selected.isACPConversation {
+                IDEACPModeChip(conversation: agent.selected)
+                if !agent.selected.acpConfigOptions.isEmpty {
+                    IDEACPConfigChip(options: agent.selected.acpConfigOptions)
+                }
+                Button("Restart Agent") { agent.selected.restartACP() }
+                    .buttonStyle(.borderless)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .help("Kill the ACP agent process; it restarts on the next message")
+            } else if !isAIMode {
+                IDEAgentModelChip(settings: settings) { isSettingsPresented = true }
+            }
+            Spacer(minLength: IDEAppearance.Spacing.sm)
+            if let fraction = agent.selected.contextFraction {
+                IDEAgentContextMeter(
+                    fraction: fraction, tokens: agent.selected.contextTokens ?? 0,
+                    window: settings.contextWindow(for: choice) ?? 0,
+                    isBusy: agent.selected.isRunning || agent.selected.isCompacting
+                ) {
+                    let chat = agent.selected
+                    Task { await chat.compact(focus: nil) }
+                }
+            }
+            if isAIMode {
+                IDEAIModelPicker(
+                    settings: settings, choice: choice, mode: .code,
+                    onSelect: { picked in
+                        agent.selected.modelChoice = picked
+                        IDEAISettings.shared.codeChoice = picked
+                        agent.newChatChoice = picked
+                    },
+                    onManage: { workspace.isAIModelsPresented = true })
+            }
+        }
+    }
+
+    // MARK: - AI mode's empty session
+
+    /// A greeting with the message field in the middle, as in a chat app's new conversation.
+    private var aiEmptyState: some View {
+        VStack(spacing: IDEAppearance.Spacing.lg) {
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                .font(.system(size: 26))
+                .foregroundStyle(IDEAppearance.ColorToken.accent)
+            Text(agent.projectRoot.map { "What should we do in \($0.lastPathComponent)?" } ?? "Let's build something")
+                .font(IDEAppearance.Typography.brandTitle)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .multilineTextAlignment(.center)
+            composer
+            if let hint = settings.setupHint(for: choice), !agent.selected.isACPConversation {
+                Text(hint)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .multilineTextAlignment(.center)
+            }
+            Spacer(minLength: 0)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 /// Messages written while the agent works, waiting for its next step. ✕ takes one back.
-private struct IDEAgentQueuedMessages: View {
+struct IDEAgentQueuedMessages: View {
     let queue: [IDEAgentConversation.QueuedMessage]
     let remove: (UUID) -> Void
 
@@ -271,7 +361,7 @@ private struct IDEAgentQueuedMessages: View {
 
 /// How full the model's window is: a ring and a percentage, turning orange and then red as it fills.
 /// The menu summarizes the earlier conversation to make room.
-private struct IDEAgentContextMeter: View {
+struct IDEAgentContextMeter: View {
     let fraction: Double
     let tokens: Int
     let window: Int
@@ -315,7 +405,7 @@ private struct IDEAgentContextMeter: View {
 }
 
 /// The chat's permission mode. A menu to pick one; ⇧Tab in the message field walks through them.
-private struct IDEAgentModeChip: View {
+struct IDEAgentModeChip: View {
     let mode: PermissionMode
     let select: (PermissionMode) -> Void
 
@@ -353,7 +443,7 @@ private struct IDEAgentModeChip: View {
 
 /// The external agent's own mode (`session/set_mode`), visibly separate from Umbra's
 /// `PermissionMode` chip: the agent's modes are agent-defined, local gating stays Umbra's.
-private struct IDEACPModeChip: View {
+struct IDEACPModeChip: View {
     let conversation: IDEAgentConversation
 
     var body: some View {
@@ -389,7 +479,7 @@ private struct IDEACPModeChip: View {
 }
 
 /// Agent-advertised config options, read-only in v1 (full config UI is a non-goal).
-private struct IDEACPConfigChip: View {
+struct IDEACPConfigChip: View {
     let options: [ACPConfigOption]
 
     var body: some View {
@@ -1031,18 +1121,21 @@ private struct IDEAgentEmptyState: View {
     }
 }
 
-private struct IDEAgentDisclosureCard: View {
+struct IDEAgentDisclosureCard: View {
     let settings: IDEAgentSettings
+    /// The provider whose endpoint is being accepted; the global one when not given.
+    var provider: IDEAgentProvider?
 
     var body: some View {
+        let provider = provider ?? settings.provider
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
             Label("Your code leaves this Mac", systemImage: "network")
                 .font(IDEAppearance.Typography.sectionHeader)
-            Text("When you send a message, file contents the agent reads and the editor's problems are sent to \(settings.endpointHost). Nothing is sent before then.")
+            Text("When you send a message, file contents the agent reads and the editor's problems are sent to \(settings.endpointHost(for: provider)). Nothing is sent before then.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Allow Sending to \(settings.endpointHost)") { settings.acceptDisclosure() }
+            Button("Allow Sending to \(settings.endpointHost(for: provider))") { settings.acceptDisclosure(for: provider) }
                 .controlSize(.small)
         }
         .foregroundStyle(IDEAppearance.ColorToken.foreground)
@@ -1114,13 +1207,15 @@ struct IDEAgentSettingsView: View {
             switch settings.provider {
             case .ollama: ollamaSection(settings)
             case .mlx: mlxSection(settings)
-            case .openAIResponses, .chatCompletions: TextField("Model", text: $settings.model)
+            case .openAIResponses, .chatCompletions, .anthropic: TextField("Model", text: $settings.model)
             }
 
             Picker("Reasoning", selection: $settings.reasoningEffort) {
-                ForEach(IDEAgentSettings.reasoningEfforts, id: \.self) { Text($0.capitalized).tag($0) }
+                ForEach(settings.provider.reasoningEfforts, id: \.self) { Text($0.capitalized).tag($0) }
             }
-            Text(settings.provider == .openAIResponses || settings.provider == .chatCompletions
+            Text(settings.provider == .anthropic
+                ? "Off leaves the model's own default: current Claude models always think, and the effort sets how much."
+                : settings.provider == .openAIResponses || settings.provider == .chatCompletions
                 ? "Use Off for models without reasoning; they reject the setting."
                 : "Thinking makes each step slower. It applies to models that support it.")
                 .font(IDEAppearance.Typography.caption)
@@ -1446,7 +1541,7 @@ enum IDEAgentOllamaLabel {
     }
 }
 
-private struct IDEAgentIconButton: View {
+struct IDEAgentIconButton: View {
     let systemImage: String
     let help: String
     var tint: Color?

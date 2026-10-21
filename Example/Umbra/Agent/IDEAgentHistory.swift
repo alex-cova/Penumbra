@@ -120,22 +120,25 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
 
 extension IDEAgentSavedTranscript {
     static func encode(
-        entries: [IDEAgentEntry], cost: Double?, todos: [TodoItem] = [], customTitle: String? = nil, checkpoints: [RunSnapshot] = []
+        entries: [IDEAgentEntry], cost: Double?, todos: [TodoItem] = [], customTitle: String? = nil, checkpoints: [RunSnapshot] = [],
+        modelChoice: IDEAIModelChoice? = nil
     ) -> Data? {
         try? JSONEncoder().encode(IDEAgentSavedTranscript(
             entries: entries.compactMap(IDEAgentPersistedEntry.init), cost: cost, todos: todos.isEmpty ? nil : todos,
-            customTitle: customTitle?.isEmpty == false ? customTitle : nil, checkpoints: checkpoints.isEmpty ? nil : checkpoints))
+            customTitle: customTitle?.isEmpty == false ? customTitle : nil, modelChoice: modelChoice,
+            checkpoints: checkpoints.isEmpty ? nil : checkpoints))
     }
 
     /// A blob from before cost was saved is a bare array of rows; it reads as having no known cost.
     static func decode(_ data: Data?) -> (
-        entries: [IDEAgentPersistedEntry], cost: Double?, todos: [TodoItem], customTitle: String?, checkpoints: [RunSnapshot]
+        entries: [IDEAgentPersistedEntry], cost: Double?, todos: [TodoItem], customTitle: String?, checkpoints: [RunSnapshot],
+        modelChoice: IDEAIModelChoice?
     ) {
-        guard let data else { return ([], 0, [], nil, []) }
+        guard let data else { return ([], 0, [], nil, [], nil) }
         if let saved = try? JSONDecoder().decode(IDEAgentSavedTranscript.self, from: data) {
-            return (saved.entries, saved.cost, saved.todos ?? [], saved.customTitle, saved.checkpoints ?? [])
+            return (saved.entries, saved.cost, saved.todos ?? [], saved.customTitle, saved.checkpoints ?? [], saved.modelChoice)
         }
-        if let rows = try? JSONDecoder().decode([IDEAgentPersistedEntry].self, from: data) { return (rows, nil, [], nil, []) }
-        return ([], 0, [], nil, [])
+        if let rows = try? JSONDecoder().decode([IDEAgentPersistedEntry].self, from: data) { return (rows, nil, [], nil, [], nil) }
+        return ([], 0, [], nil, [], nil)
     }
 }

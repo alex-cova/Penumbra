@@ -4,6 +4,9 @@ import SwiftUI
 enum IDEAgentPlacement {
     case docked
     case page
+    /// AI mode's Code tab: the window's list shows the chats, so the panel has no tab strip or history
+    /// button, and an empty chat shows a greeting with the message field in the middle.
+    case aiMode
 }
 
 /// The agent chat opened over the editor. The bar is the way back to the side panel; the conversation

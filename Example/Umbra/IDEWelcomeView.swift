@@ -103,7 +103,8 @@ struct IDEWelcomeView: View {
                     openFolder: workspace.openFolder,
                     cloneRepository: workspace.promptClone,
                     newFile: workspace.newFile,
-                    newProject: workspace.showNewProject
+                    newProject: workspace.showNewProject,
+                    openAIMode: { workspace.showAIMode() }
                 )
                 if !workspace.recentProjectURLs.isEmpty {
                     IDEWelcomeRecentProjectsSection(
@@ -260,6 +261,7 @@ private struct IDEWelcomeProjectContent: View {
                     IDEWelcomeActionRow(title: "Find in Files…", systemImage: "text.magnifyingglass", shortcut: "⌘⇧F", action: workspace.showFindInFiles)
                     IDEWelcomeActionRow(title: "New File", systemImage: "doc.badge.plus", shortcut: "⌘N", action: workspace.newFile)
                     IDEWelcomeActionRow(title: "Open Terminal", systemImage: "terminal", shortcut: nil, action: workspace.showTerminal)
+                    IDEWelcomeActionRow(title: "AI Mode", systemImage: "bubbles.and.sparkles", shortcut: "⌃⌘I", action: { workspace.showAIMode(tab: .code) })
                 }
                 if !projectFiles.isEmpty {
                     VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
@@ -330,9 +332,11 @@ private struct IDEWelcomeActionList: View {
     let cloneRepository: () -> Void
     let newFile: () -> Void
     let newProject: () -> Void
+    let openAIMode: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            IDEWelcomeActionRow(title: "AI Mode", systemImage: "bubbles.and.sparkles", shortcut: "⌃⌘I", action: openAIMode)
             IDEWelcomeActionRow(title: "New Project…", systemImage: "shippingbox", shortcut: nil, action: newProject)
             IDEWelcomeActionRow(title: "Open File…", systemImage: "doc", shortcut: "⌘O", action: openFile)
             IDEWelcomeActionRow(title: "Open Folder…", systemImage: "folder", shortcut: "⌘⇧O", action: openFolder)

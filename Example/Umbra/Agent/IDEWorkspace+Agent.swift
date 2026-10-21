@@ -121,6 +121,8 @@ extension IDEWorkspace: IDEAgentHost {
     }
 
     func agentOpenText(title: String, text: String) {
+        // What the agent hands over is shown in the editor, so AI mode steps aside.
+        leaveAIModeForEditor()
         openUntitled(displayName: title, text: text)
     }
 
@@ -129,6 +131,7 @@ extension IDEWorkspace: IDEAgentHost {
     }
 
     func agentInsertAtCaret(_ text: String) -> Bool {
+        leaveAIModeForEditor()
         guard let document = workbench.activePane.selectedDocument, document.contentKind == .text else { return false }
         let textView = host(for: workbench.activePaneID).textView
         textView.replace(textView.selectedRange, withText: text)
@@ -206,6 +209,7 @@ extension IDEWorkspace: IDEAgentHost {
 
     func agentShowDiff(relativePath: String, original: String?) {
         guard let url = try? agentURL(relativePath) else { return }
+        leaveAIModeForEditor()
         let name = url.lastPathComponent
         openDiff(IDEDiffRequest(
             left: IDEDiffSide(source: .text(original ?? ""), title: original == nil ? "Before (new file)" : "Before the agent"),
@@ -341,6 +345,8 @@ extension IDEWorkspace: IDEAgentHost {
     /// edits stay, and the caret is placed from that buffer rather than the copy on disk.
     func openAgentCitedFile(_ reference: IDEAgentFileLinks.Reference) async {
         guard let root = project.rootURL, let url = IDEAgentFileLinks.resolve(reference.path, under: root) else { return }
+        // A file is shown in the editor; in AI mode that means leaving it (the editor stays as it was).
+        leaveAIModeForEditor()
         host(for: workbench.activePaneID).textView.recordNavigationCheckpoint()
         let range = await citedSelection(reference, in: url)
         if focusOpenDocument(url, selecting: range) { return }
