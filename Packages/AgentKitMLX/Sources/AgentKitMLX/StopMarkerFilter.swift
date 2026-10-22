@@ -29,6 +29,8 @@ struct StopMarkerFilter {
     private static let carriageReturn: Unicode.Scalar = "\r"
 
     private(set) var stopped = false
+    /// The stop was a `User:` / `Human:` header, a turn the model invented, not its own end-of-turn token.
+    private(set) var stoppedAtInventedTurn = false
     private var held: [Unicode.Scalar] = []
     /// True until text has been shown, so a header opening the turn counts as line-start.
     private var atTurnStart = true
@@ -39,8 +41,9 @@ struct StopMarkerFilter {
         held += text.unicodeScalars
         let virtualNewline: [Unicode.Scalar] = atTurnStart ? [Self.newline] : []
         let scan = virtualNewline + held
-        if let cut = Self.firstStop(in: scan) {
+        if let (cut, isHeader) = Self.firstStop(in: scan) {
             stopped = true
+            stoppedAtInventedTurn = isHeader
             defer { held = [] }
             return Self.string(held.prefix(max(0, cut - virtualNewline.count)))
         }
@@ -63,11 +66,12 @@ struct StopMarkerFilter {
 
     /// Where the earliest marker or header starts in `scan`. A header's leading `\n` takes the `\r`
     /// before it along, so a CRLF line break is dropped whole.
-    private static func firstStop(in scan: [Unicode.Scalar]) -> Int? {
+    private static func firstStop(in scan: [Unicode.Scalar]) -> (index: Int, isHeader: Bool)? {
         for start in scan.indices {
             for stop in stops where scan[start...].starts(with: stop) {
-                let crlf = stop[0] == newline && start > 0 && scan[start - 1] == carriageReturn
-                return crlf ? start - 1 : start
+                let isHeader = stop[0] == newline
+                let crlf = isHeader && start > 0 && scan[start - 1] == carriageReturn
+                return (crlf ? start - 1 : start, isHeader)
             }
         }
         return nil

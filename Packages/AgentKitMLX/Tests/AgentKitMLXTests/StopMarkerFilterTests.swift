@@ -48,6 +48,15 @@ import Testing
         #expect(result.stopped)
     }
 
+    @Test func onlyAnInventedTurnCountsAsDegenerate() {
+        var header = StopMarkerFilter()
+        _ = header.consume("Hello.\nUser: and then?")
+        #expect(header.stopped && header.stoppedAtInventedTurn)
+        var marker = StopMarkerFilter()
+        _ = marker.consume("Hello.<|im_end|>more")
+        #expect(marker.stopped && !marker.stoppedAtInventedTurn, "the model's own end token is a normal finish")
+    }
+
     @Test func stopsAtAHeaderOpeningTheTurn() {
         let result = run(["Human: hi"])
         #expect(result.text.isEmpty)

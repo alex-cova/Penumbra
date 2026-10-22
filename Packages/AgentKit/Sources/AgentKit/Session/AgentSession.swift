@@ -362,12 +362,20 @@ public actor AgentSession {
             }
 
             // A turn cut off or filtered may hold half-written calls: answer them without running.
-            if finish == .length || finish == .contentFilter {
-                let reason = finish == .length ? "the response hit the length limit" : "the response was blocked by a content filter"
+            if finish == .length || finish == .contentFilter || finish == .degenerate {
+                let reason = switch finish {
+                case .length: "the response hit the length limit"
+                case .degenerate: "the response was cut off because the model started repeating itself"
+                default: "the response was blocked by a content filter"
+                }
                 for call in turn.calls {
                     items.append(.toolOutput(callID: call.id, output: "Not run: \(reason)."))
                 }
-                return finish == .length ? .lengthLimit : .contentFiltered
+                return switch finish {
+                case .length: .lengthLimit
+                case .degenerate: .degenerateOutput
+                default: .contentFiltered
+                }
             }
             if let closing {
                 for call in turn.calls {

@@ -155,6 +155,8 @@ enum IDEAgentToolSummary {
         case .stopped: ("Stopped.", false)
         case .lengthLimit: ("The model reached its output limit. Send “continue” to go on.", false)
         case .contentFiltered: ("The response was blocked by the provider's content filter.", true)
+        case .degenerateOutput:
+            ("Stopped: the model started repeating itself. Try rephrasing, or choose a larger or instruction-tuned model.", true)
         case .iterationCap: ("Paused after \(iterationLimit) steps. Send “continue” to go on.", false)
         case .budget: ("Paused: the run reached its token, time or cost budget. Send “continue” to go on.", false)
         case .repeatedCall(let name): ("Stopped: the model kept repeating the same \(name) call.", true)

@@ -366,6 +366,8 @@ public actor ACPAgentEndpoint {
             return .success(.object(["stopReason": .string(ACPStopReason.maxTurnRequests.rawValue)]))
         case .contentFiltered:
             return .success(.object(["stopReason": .string(ACPStopReason.refusal.rawValue)]))
+        case .degenerateOutput:
+            return .success(.object(["stopReason": .string(ACPStopReason.endTurn.rawValue)]))
         case .stopped:
             return .success(.object(["stopReason": .string(ACPStopReason.cancelled.rawValue)]))
         }

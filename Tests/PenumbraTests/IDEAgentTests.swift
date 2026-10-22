@@ -148,6 +148,7 @@ final class IDEAgentToolSummaryTests: XCTestCase {
     func testOnlyAbnormalEndingsProduceANotice() {
         XCTAssertNil(IDEAgentToolSummary.endingMessage(.completed, iterationLimit: 40))
         XCTAssertEqual(IDEAgentToolSummary.endingMessage(.stopped, iterationLimit: 40)?.isError, false)
+        XCTAssertTrue(IDEAgentToolSummary.endingMessage(.degenerateOutput, iterationLimit: 40)!.text.contains("repeating itself"))
         XCTAssertTrue(IDEAgentToolSummary.endingMessage(.iterationCap, iterationLimit: 40)!.text.contains("40 steps"))
         XCTAssertEqual(IDEAgentToolSummary.endingMessage(.budget, iterationLimit: 40)?.isError, false)
         XCTAssertEqual(IDEAgentToolSummary.endingMessage(.failed("boom"), iterationLimit: 40)?.text, "boom")

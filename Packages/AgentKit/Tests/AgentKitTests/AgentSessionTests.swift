@@ -287,6 +287,21 @@ private func ending(_ events: [AgentEvent]) -> RunEnding? {
         expectEveryCallAnswered(await session.items)
     }
 
+    @Test func aTurnTheClientCutOffForDegeneratingEndsTheRunAndKeepsWhatWasStreamed() async throws {
+        let probe = Probe()
+        let client = MockLLMClient(turns: [
+            MockTurn([
+                .textDelta("ACHI ACHI"), .toolCallStarted(id: "c", name: "look"),
+                .toolCallFinished(id: "c", name: "look", arguments: "{}"), .finished(.degenerate),
+            ])
+        ])
+        let session = try makeSession(client, tools: [ProbeTool(name: "look", probe: probe)])
+        #expect(ending(await runToEnd(session)) == .degenerateOutput)
+        #expect(toolOutputs(await session.items)["c"] == "Not run: the response was cut off because the model started repeating itself.")
+        #expect(await probe.startedCount == 0)
+        expectEveryCallAnswered(await session.items)
+    }
+
     @Test func aContentFilterEndsTheRun() async throws {
         let client = MockLLMClient(turns: [MockTurn([.finished(.contentFilter)])])
         #expect(ending(await runToEnd(try makeSession(client, tools: []))) == .contentFiltered)

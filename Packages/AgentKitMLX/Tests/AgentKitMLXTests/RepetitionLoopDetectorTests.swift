@@ -31,6 +31,17 @@ import Testing
         #expect(tripped([String(repeating: "I am sorry, I cannot. ", count: 12)]))
     }
 
+    @Test func catchesAWholeLineRepeatedLikeTheCyrillicQuestion() {
+        // The base model's reply to "hi": one 41-character line, with CRLF, over and over.
+        let line = "сколько времени уходит до конца года?\r\n"
+        #expect(tripped(["hi\r\n"] + Array(repeating: line, count: 8)))
+    }
+
+    @Test func fourCopiesOfALongLineAreNotYetALoop() {
+        let line = "Add the dependency to your build file, then sync.\n"
+        #expect(!tripped([line + String(repeating: line, count: 3)]))
+    }
+
     @Test func letsOrdinaryTextThrough() {
         let prose = "Umbra opens files from the File menu. Use Open to pick one, or drag it onto the window. "
         #expect(!tripped([prose + prose]))

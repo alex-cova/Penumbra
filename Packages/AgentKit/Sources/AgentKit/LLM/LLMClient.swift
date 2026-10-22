@@ -5,6 +5,9 @@ public enum FinishReason: String, Sendable, Hashable, Codable {
     case toolCalls
     case length
     case contentFilter
+    /// The client ended the turn itself because the model degenerated: it repeated one unit
+    /// endlessly or wrote the user's next turn. What was streamed is kept.
+    case degenerate
 }
 
 public enum LLMEvent: Sendable, Hashable {

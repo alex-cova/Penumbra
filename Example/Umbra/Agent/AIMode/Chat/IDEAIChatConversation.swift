@@ -236,6 +236,10 @@ final class IDEAIChatConversation: Identifiable {
             entries.append(IDEAgentEntry(kind: .notice, text: "The reply was cut off at the model's output limit."))
         case .contentFiltered:
             entries.append(IDEAgentEntry(kind: .notice, text: "The model declined to answer this."))
+        case .degenerateOutput:
+            entries.append(IDEAgentEntry(
+                kind: .notice,
+                text: "Stopped: the model started repeating itself. Try rephrasing, or choose a larger or instruction-tuned model."))
         case .iterationCap, .budget, .repeatedCall:
             entries.append(IDEAgentEntry(kind: .notice, text: "The run stopped early."))
         case .failed(let message):

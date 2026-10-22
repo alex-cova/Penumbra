@@ -160,6 +160,7 @@ public enum TrialRunner {
         case .completed: "completed"
         case .lengthLimit: "output limit"
         case .contentFiltered: "content filter"
+        case .degenerateOutput: "degenerate output"
         case .iterationCap: "step limit"
         case .budget: "budget"
         case .stopped: "stopped"

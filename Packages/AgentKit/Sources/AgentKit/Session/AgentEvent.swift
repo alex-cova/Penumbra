@@ -18,6 +18,8 @@ public enum RunEnding: Sendable, Equatable {
     /// The model hit its output limit; the UI offers Continue.
     case lengthLimit
     case contentFiltered
+    /// The model degenerated (an endless repeat, or it wrote the user's next turn) and the client cut it off.
+    case degenerateOutput
     /// Paused, not failed: the UI offers Continue.
     case iterationCap
     /// Paused because the run spent its token, time or cost budget. The UI offers Continue.

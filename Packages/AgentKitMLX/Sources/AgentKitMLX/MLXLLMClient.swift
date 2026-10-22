@@ -137,9 +137,11 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
         var answer = ""
         var calls: [(id: String, name: String, arguments: String)] = []
         var info: GenerateCompletionInfo?
-        // A call read by `MLXToolCallRecovery` was never seen by the session, whose own transcript
-        // (what it re-renders and matches its cache against) therefore diverges from ours.
-        var recoveredACall = false
+        // The session's own transcript (what it re-renders and matches its cache against) no longer
+        // matches ours: it holds a call `MLXToolCallRecovery` rewrote, a broken call, or text a guard cut off.
+        var sessionDiverged = false
+        // A guard ended the turn because the model degenerated, not because it finished.
+        var degenerated = false
 
         func forward(_ deltas: [LocalModelReasoningParser.Delta]) {
             for delta in deltas {
@@ -168,13 +170,15 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
                     // The model wrote an end-of-turn token as text, or a `User:` header of its own, and would
                     // carry on with an invented turn. End here; the session's transcript holds that text, so
                     // the next request rebuilds.
-                    recoveredACall = true
+                    sessionDiverged = true
+                    degenerated = stopFilter.stoppedAtInventedTurn
                     break streaming
                 }
                 if !visible.isEmpty, loopDetector.consume(visible) {
                     // Stuck repeating one unit; the penalty did not break it. End the turn rather than
                     // run to maxTokens, and rebuild the session next time.
-                    recoveredACall = true
+                    sessionDiverged = true
+                    degenerated = true
                     break streaming
                 }
             case .toolCall(let call):
@@ -189,7 +193,7 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
                 if rejected.reason == .malformedSyntax, !rejected.isPreviewTruncated,
                    let recovered = MLXToolCallRecovery.recover(rejected.rawTextPreview, knownTools: Set(request.tools.map(\.name))) {
                     let id = Self.newCallID()
-                    recoveredACall = true
+                    sessionDiverged = true
                     calls.append((id, recovered.name, recovered.arguments))
                     out.yield(.toolCallStarted(id: id, name: recovered.name))
                     out.yield(.toolCallFinished(id: id, name: recovered.name, arguments: recovered.arguments))
@@ -197,7 +201,7 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
                 }
                 // The loop tells the model and lets it try again; the session's own transcript no longer
                 // matches ours (it holds the broken call), so the next request rebuilds from our history.
-                recoveredACall = true
+                sessionDiverged = true
                 let detail = rejected.detail.map { ": \($0)" } ?? ""
                 out.yield(.unreadableToolCall(detail: "\(rejected.reason.rawValue)\(detail)", raw: rejected.rawTextPreview))
             }
@@ -214,7 +218,7 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
         produced += calls.map { .toolCall(id: $0.id, name: $0.name, arguments: $0.arguments) }
         // After a recovered call the session cannot be trusted to match our history: the next request
         // rebuilds from it (one full prefill) rather than continuing a divergent transcript.
-        lock.withLock { live = recoveredACall ? nil : Live(key: key, session: session, consumed: request.items + produced) }
+        lock.withLock { live = sessionDiverged ? nil : Live(key: key, session: session, consumed: request.items + produced) }
 
         if let info {
             out.yield(.usage(TokenUsage(
@@ -223,7 +227,8 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
                 outputTokens: info.generationTokenCount,
                 cachedInputTokens: info.cachedPromptTokenCount)))
         }
-        let reason: FinishReason = !calls.isEmpty ? .toolCalls : (info?.stopReason == .length ? .length : .completed)
+        let reason: FinishReason =
+            degenerated ? .degenerate : !calls.isEmpty ? .toolCalls : (info?.stopReason == .length ? .length : .completed)
         out.yield(.finished(reason))
     }
 
