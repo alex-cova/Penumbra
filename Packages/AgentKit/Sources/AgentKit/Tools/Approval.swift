@@ -105,7 +105,13 @@ public enum OutputTruncation {
     /// Keeps the start and, more of, the end of long output: a build's verdict is at the bottom.
     /// Cuts on line boundaries when it can, and says how much it left out.
     public static func headAndTail(_ text: String, maxCharacters: Int, headShare: Double = 0.3) -> String {
-        guard text.count > maxCharacters, maxCharacters > 40 else { return text }
+        guard let pieces = cut(text, maxCharacters: maxCharacters, headShare: headShare) else { return text }
+        return pieces.head + "\n[… \(pieces.omitted) characters omitted from the middle …]\n" + pieces.tail
+    }
+
+    /// The two kept ends of `text` and how many characters lie between them, or `nil` when it fits.
+    static func cut(_ text: String, maxCharacters: Int, headShare: Double) -> (head: String, tail: String, omitted: Int)? {
+        guard text.count > maxCharacters, maxCharacters > 40 else { return nil }
         let headCount = Int(Double(maxCharacters) * headShare)
         let tailCount = maxCharacters - headCount
 
@@ -117,7 +123,6 @@ public enum OutputTruncation {
         if let newline = tail.firstIndex(of: "\n"), tail.distance(from: tail.startIndex, to: newline) < tailCount / 2 {
             tail = String(tail[tail.index(after: newline)...])
         }
-        let omitted = text.count - head.count - tail.count
-        return head + "\n[… \(omitted) characters omitted from the middle …]\n" + tail
+        return (head, tail, text.count - head.count - tail.count)
     }
 }

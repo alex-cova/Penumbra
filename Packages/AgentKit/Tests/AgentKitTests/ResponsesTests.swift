@@ -216,17 +216,31 @@ private enum Fixture {
         #expect(transport.requests.count == 2)
     }
 
-    @Test func aDroppedConnectionMidStreamResendsTheWholeTurn() async throws {
+    @Test func aDroppedConnectionAfterOutputIsHandedToTheLoopAndNotResent() async throws {
         let transport = StubTransport([
             .response(status: 200, lines: Array(Fixture.textTurn.prefix(3)), failure: URLError(.networkConnectionLost)),
             .response(status: 200, lines: Fixture.textTurn),
         ])
+        var events: [LLMEvent] = []
+        var failure: Error?
+        do { for try await event in client(transport).stream(request) { events.append(event) } } catch { failure = error }
+        // The text that arrived was delivered; resending would have thrown it away.
+        #expect(events == [.textDelta("Hel")])
+        guard case .interruptedAfterOutput = failure as? LLMError else {
+            Issue.record("expected interruptedAfterOutput, got \(String(describing: failure))"); return
+        }
+        #expect(transport.requests.count == 1)
+    }
+
+    @Test func aDroppedConnectionBeforeAnyOutputResendsTheWholeTurn() async throws {
+        let transport = StubTransport([
+            .response(status: 200, lines: Array(Fixture.textTurn.prefix(1)), failure: URLError(.networkConnectionLost)),
+            .response(status: 200, lines: Fixture.textTurn),
+        ])
         let events = try await collect(client(transport).stream(request))
-        let retryIndex = try #require(events.firstIndex(of: .retrying(attempt: 1, after: 0.001)))
-        // Everything before the marker is the discarded partial turn; the full turn follows it.
-        #expect(retryIndex > 0)
-        #expect(Array(events[(retryIndex + 1)...]).first == .textDelta("Hel"))
+        #expect(events.contains(.retrying(attempt: 1, after: 0.001)))
         #expect(events.last == .finished(.completed))
+        #expect(transport.requests.count == 2)
     }
 
     @Test func aStreamThatEndsEarlyCountsAsAConnectionLoss() async throws {

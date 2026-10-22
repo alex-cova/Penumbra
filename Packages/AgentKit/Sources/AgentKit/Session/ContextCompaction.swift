@@ -114,6 +114,10 @@ public enum ToolOutputStubs {
             }
         }
         let lines = output.split(separator: "\n", omittingEmptySubsequences: false).count
+        // Output that was saved whole stays reachable, which is better than running the call again.
+        if let id = ToolOutputID.id(inPointerIn: output) {
+            return "[\(what): \(marker) (\(lines) lines). Full output saved: \(ToolOutputID.pointer(id: id)). Call it again only if that is gone.]"
+        }
         return "[\(what): \(marker) (\(lines) lines). Call it again if you need it.]"
     }
 

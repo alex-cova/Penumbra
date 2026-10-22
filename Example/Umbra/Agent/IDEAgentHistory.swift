@@ -18,6 +18,8 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
     var itemIndex: Int?
     /// Set on an error the user can retry. Absent on older transcripts.
     var canRetry: Bool?
+    /// Set on the notice of an interrupted run that can still be resumed.
+    var canResume: Bool?
     /// For the "files changed" card: the run, its files, which of them the run created, and whether it was reverted.
     var run: UUID?
     var paths: [String]?
@@ -37,6 +39,7 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
         case .error:
             kind = .error
             if entry.canRetry { canRetry = true }
+            if entry.canResume { canResume = true }
         case .changes:
             // The card is kept only for a run whose originals are on disk (see `restoredEntry`).
             guard let run = entry.run, !entry.fileChanges.isEmpty else { return nil }
@@ -96,6 +99,7 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
             {
                 var entry = IDEAgentEntry(kind: .error, text: text)
                 entry.canRetry = canRetry ?? false
+                entry.canResume = canResume ?? false
                 return entry
             }()
         case .toolCall:
@@ -121,24 +125,27 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
 extension IDEAgentSavedTranscript {
     static func encode(
         entries: [IDEAgentEntry], cost: Double?, todos: [TodoItem] = [], customTitle: String? = nil, checkpoints: [RunSnapshot] = [],
-        modelChoice: IDEAIModelChoice? = nil
+        modelChoice: IDEAIModelChoice? = nil, runInProgress: Bool = false, queued: [String] = []
     ) -> Data? {
         try? JSONEncoder().encode(IDEAgentSavedTranscript(
             entries: entries.compactMap(IDEAgentPersistedEntry.init), cost: cost, todos: todos.isEmpty ? nil : todos,
             customTitle: customTitle?.isEmpty == false ? customTitle : nil, modelChoice: modelChoice,
-            checkpoints: checkpoints.isEmpty ? nil : checkpoints))
+            checkpoints: checkpoints.isEmpty ? nil : checkpoints,
+            runInProgress: runInProgress ? true : nil, queued: runInProgress && !queued.isEmpty ? queued : nil))
     }
 
     /// A blob from before cost was saved is a bare array of rows; it reads as having no known cost.
     static func decode(_ data: Data?) -> (
         entries: [IDEAgentPersistedEntry], cost: Double?, todos: [TodoItem], customTitle: String?, checkpoints: [RunSnapshot],
-        modelChoice: IDEAIModelChoice?
+        modelChoice: IDEAIModelChoice?, runInProgress: Bool, queued: [String]
     ) {
-        guard let data else { return ([], 0, [], nil, [], nil) }
+        guard let data else { return ([], 0, [], nil, [], nil, false, []) }
         if let saved = try? JSONDecoder().decode(IDEAgentSavedTranscript.self, from: data) {
-            return (saved.entries, saved.cost, saved.todos ?? [], saved.customTitle, saved.checkpoints ?? [], saved.modelChoice)
+            return (
+                saved.entries, saved.cost, saved.todos ?? [], saved.customTitle, saved.checkpoints ?? [], saved.modelChoice,
+                saved.runInProgress ?? false, saved.queued ?? [])
         }
-        if let rows = try? JSONDecoder().decode([IDEAgentPersistedEntry].self, from: data) { return (rows, nil, [], nil, [], nil) }
-        return ([], 0, [], nil, [], nil)
+        if let rows = try? JSONDecoder().decode([IDEAgentPersistedEntry].self, from: data) { return (rows, nil, [], nil, [], nil, false, []) }
+        return ([], 0, [], nil, [], nil, false, [])
     }
 }

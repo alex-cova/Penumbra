@@ -219,6 +219,9 @@ final class IDEAIChatConversation: Identifiable {
             if let turnCost = settings.cost(of: turnUsage, for: effectiveChoice), let total = cost { cost = total + turnCost } else { cost = nil }
         case .compacted:
             entries.append(IDEAgentEntry(kind: .notice, text: "Earlier messages were summarized to make room in the model's window."))
+        case .continuing(let reason, let attempt):
+            flushPending()
+            entries.append(IDEAgentEntry(kind: .notice, text: IDEAgentToolSummary.continuationNotice(reason, attempt: attempt)))
         case .runEnded(let ending):
             flushPending()
             closeStreamingEntry()

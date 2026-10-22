@@ -250,10 +250,29 @@ private let thinkingBlock: JSONValue = ["type": "thinking", "thinking": "Let me 
         #expect(sent.value(forHTTPHeaderField: "Authorization") == nil)
     }
 
-    @Test func anOverloadedStreamIsRetriedAndTheConsumerIsToldToDropThePartialTurn() async throws {
+    @Test func anOverloadedStreamAfterTextIsHandedToTheLoopAndNotResent() async throws {
         let overloaded = sse(
             #"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
             #"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"par"}}"#,
+            #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#)
+        let transport = StubTransport([.response(status: 200, lines: overloaded), .response(status: 200, lines: ok)])
+        var events: [LLMEvent] = []
+        var failure: Error?
+        do {
+            for try await event in AnthropicMessagesClient(transport: transport, retry: fastRetry).stream(request) {
+                events.append(event)
+            }
+        } catch { failure = error }
+        #expect(events == [.textDelta("par")])
+        guard case .interruptedAfterOutput = failure as? LLMError else {
+            Issue.record("expected interruptedAfterOutput, got \(String(describing: failure))"); return
+        }
+        #expect(transport.requests.count == 1)
+    }
+
+    @Test func anOverloadedStreamBeforeAnyOutputIsRetriedAndTheConsumerIsToldToDropTheTurn() async throws {
+        let overloaded = sse(
+            #"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
             #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#)
         let transport = StubTransport([.response(status: 200, lines: overloaded), .response(status: 200, lines: ok)])
         let events = try await collect(AnthropicMessagesClient(transport: transport, retry: fastRetry).stream(request))

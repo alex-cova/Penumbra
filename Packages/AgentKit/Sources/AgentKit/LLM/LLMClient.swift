@@ -28,11 +28,20 @@ public enum LLMEvent: Sendable, Hashable {
     case retrying(attempt: Int, after: TimeInterval)
 }
 
+/// What the model may do with the tools it is shown.
+public enum ToolChoice: Sendable, Hashable {
+    /// The model must answer in text. The tools stay in the request so the provider's cached prefix
+    /// (which starts with the tool list) survives the closing turn of a run.
+    case disabled
+}
+
 public struct LLMRequest: Sendable {
     public var model: String
     public var system: String
     public var items: [ConversationItem]
     public var tools: [ToolDefinition]
+    /// `nil` leaves the choice to the model. Sent only when the client `supportsDisabledToolChoice`.
+    public var toolChoice: ToolChoice?
     /// `nil` for models without reasoning. Otherwise the provider's effort name ("low", "medium", "high").
     public var reasoningEffort: String?
     public var maxOutputTokens: Int?
@@ -47,6 +56,7 @@ public struct LLMRequest: Sendable {
         system: String = "",
         items: [ConversationItem],
         tools: [ToolDefinition] = [],
+        toolChoice: ToolChoice? = nil,
         reasoningEffort: String? = nil,
         maxOutputTokens: Int? = nil,
         cacheKey: String? = nil,
@@ -56,6 +66,7 @@ public struct LLMRequest: Sendable {
         self.system = system
         self.items = items
         self.tools = tools
+        self.toolChoice = toolChoice
         self.reasoningEffort = reasoningEffort
         self.maxOutputTokens = maxOutputTokens
         self.cacheKey = cacheKey
@@ -70,7 +81,14 @@ public struct LLMRequest: Sendable {
 public protocol LLMClient: Sendable {
     /// Tags the `OpaqueItem`s this client produces, so they are replayed only to it.
     var providerID: String { get }
+    /// Whether the endpoint takes `ToolChoice.disabled` with a tool list. When it does not, the closing
+    /// turn of a run is sent with no tools instead.
+    var supportsDisabledToolChoice: Bool { get }
     func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error>
+}
+
+extension LLMClient {
+    public var supportsDisabledToolChoice: Bool { false }
 }
 
 public enum LLMError: Error, Sendable, Equatable, LocalizedError {
@@ -83,6 +101,10 @@ public enum LLMError: Error, Sendable, Equatable, LocalizedError {
     case api(message: String, code: String?)
     /// The connection dropped, or the stream ended before the provider said it was done.
     case connectionLost(String)
+    /// The connection dropped after the turn had already produced text or a tool call. Resending the
+    /// turn would throw that away, so the client does not: the loop keeps what arrived and asks the
+    /// model to carry on.
+    case interruptedAfterOutput(String)
     /// Nothing is listening there (connection refused, unknown host). Not retried.
     case unreachable(String)
     case malformedEvent(String)
@@ -95,7 +117,7 @@ public enum LLMError: Error, Sendable, Equatable, LocalizedError {
         case .contextLengthExceeded: "The conversation no longer fits the model's context window."
         case .badRequest(let status, let message): "The API rejected the request (\(status)): \(message)"
         case .api(let message, _): message
-        case .connectionLost(let detail): "The connection to the API was lost: \(detail)"
+        case .connectionLost(let detail), .interruptedAfterOutput(let detail): "The connection to the API was lost: \(detail)"
         case .unreachable(let detail): detail
         case .malformedEvent(let detail): "The API sent an event that could not be read: \(detail)"
         }

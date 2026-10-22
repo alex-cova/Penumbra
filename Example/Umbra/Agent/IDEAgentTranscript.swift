@@ -52,6 +52,8 @@ struct IDEAgentEntry: Identifiable, Equatable {
     var planOutcome: String?
     /// For an error: the send never reached the model, and Retry will try the same message again.
     var canRetry = false
+    /// For the notice of an interrupted run: the saved steps are in the history, and Resume carries on from them.
+    var canResume = false
 
     var isFinishedToolCall: Bool { output != nil }
 }
@@ -147,6 +149,14 @@ enum IDEAgentToolSummary {
         guard let offset = object["offset"]?.intValue else { return nil }
         if let limit = object["limit"]?.intValue { return ":\(offset)–\(offset + limit - 1)" }
         return ":\(offset)"
+    }
+
+    /// The notice shown when the loop asks the model to carry on after a cut-off response.
+    static func continuationNotice(_ reason: ContinuationReason, attempt: Int) -> String {
+        switch reason {
+        case .outputLimit: "The reply hit the model's output limit. Asking it to continue (try \(attempt))."
+        case .interrupted: "The connection dropped while the model was answering. Asking it to carry on (try \(attempt))."
+        }
     }
 
     static func endingMessage(_ ending: RunEnding, iterationLimit: Int) -> (text: String, isError: Bool)? {

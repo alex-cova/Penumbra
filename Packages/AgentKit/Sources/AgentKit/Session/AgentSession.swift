@@ -50,6 +50,8 @@ public actor AgentSession {
     private var editCallsThisRun = 0
     private var failedEditCallsThisRun = 0
     private let unappliedEditsPolicy = UnappliedEditsPolicy()
+    /// What the model knows of the instruction file, so an edit made mid-conversation becomes a note.
+    private let instructionState: InstructionState?
     /// Tokens reported during the current run. The budget uses this, not the session total, so
     /// “continue” starts a fresh allowance.
     private var runUsage = TokenUsage()
@@ -77,6 +79,11 @@ public actor AgentSession {
         self.checkpoints = checkpoints
         self.totalUsage = totalUsage
         self.client = client
+        // A pointer to saved output is only useful with the tool that reads it, so a store brings the tool.
+        var tools = tools
+        if let store = configuration.toolOutputStore, !tools.contains(where: { $0.name == "read_tool_output" }) {
+            tools.append(ReadToolOutputTool(store: store))
+        }
         self.tools = tools
         self.toolsByName = Dictionary(tools.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         self.workspace = workspace
@@ -84,9 +91,11 @@ public actor AgentSession {
         self.mode = configuration.mode
         self.announcedMode = configuration.mode
         self.rules = configuration.permissions
-        self.items = history
+        self.items = ConversationItem.answeringUnansweredCalls(history)
         self.todoList = TodoList(TodoList.latest(in: history))
         self.ledger = ledger
+        self.instructionState = configuration.currentInstructions == nil
+            ? nil : InstructionState(initial: configuration.instructionsBaseline)
     }
 
     /// Starts a run. The stream ends with exactly one `.runEnded`. Dropping the stream stops the run.
@@ -106,6 +115,17 @@ public actor AgentSession {
                 if case .user(let text) = item { return text }
             }
             return ""
+        }
+    }
+
+    /// Runs again after the app was closed in the middle of a run. The history holds the steps that were
+    /// saved (calls the interruption left open are answered when the session is made); the model is told
+    /// what happened and carries on from there. Unlike `retry()` it adds a note, since the last step may
+    /// have partly run.
+    public func resume() -> AsyncStream<AgentEvent> {
+        beginRun {
+            items.append(.user(Self.editorNote(Self.resumeNote)))
+            return "Resume"
         }
     }
 
@@ -246,6 +266,7 @@ public actor AgentSession {
         guard items.indices.contains(index), case .user = items[index] else { throw RewindError.notAUserMessage }
         let removed = Array(items[index...])
         items.removeSubrange(index...)
+        await instructionState?.rewound(toBeforeItem: index)
         await ledger.removeAll()
         lastInputTokens = 0
         itemsAtLastReport = 0
@@ -299,6 +320,9 @@ public actor AgentSession {
         var compactedAfterOverflow = false
         var unreadableCalls = 0
         var emptyTurns = 0
+        /// Consecutive turns cut off at the output limit, and consecutive turns the connection dropped in.
+        var lengthStreak = 0
+        var interruptedTurns = 0
         var iteration = 0
         /// Set when this turn is the last one: no tools, then the run ends with this reason.
         var closing: RunEnding?
@@ -323,6 +347,7 @@ public actor AgentSession {
                     return ending
                 }
             }
+            await noteInstructionChanges()
             await takePendingMessages()
             announceModeChange()
             if closing == nil { await compactIfNeeded(force: false, out) }
@@ -344,7 +369,12 @@ public actor AgentSession {
                 return .failed(error.localizedDescription)
             }
             if Task.isCancelled { return .stopped }
-            guard let finish = turn.finish else { return .failed("The model's response ended unexpectedly.") }
+            // The connection dropped after output began. What arrived is kept; on the closing turn it is
+            // the summary and counts as finished.
+            let interruption = closing == nil ? turn.interruption : nil
+            guard let finish = turn.finish ?? (turn.interruption != nil ? .completed : nil) else {
+                return .failed("The model's response ended unexpectedly.")
+            }
 
             runUsage = runUsage + turn.usage
             totalUsage = totalUsage + turn.usage
@@ -359,6 +389,59 @@ public actor AgentSession {
             if !turn.text.isEmpty {
                 out.yield(.assistantMessage(turn.text))
                 lastAssistantText = turn.text
+            }
+
+            if let interruption {
+                interruptedTurns += 1
+                guard interruptedTurns <= Self.maxInterruptedTurns else {
+                    for call in turn.calls {
+                        let output = ToolOutput("Not run: the connection dropped before the response finished.", isError: true)
+                        items.append(.toolOutput(callID: call.id, output: output.text))
+                        out.yield(.toolCallFinished(id: call.id, name: call.name, output: output))
+                    }
+                    // The history ends with a user item, so Continue and Retry have a valid request to send.
+                    items.append(.user(Self.editorNote(Self.interruptedNote)))
+                    return .failed("The connection to the model dropped repeatedly while it was answering (\(interruption)). Send “continue” to go on.")
+                }
+                out.yield(.continuing(reason: .interrupted, attempt: interruptedTurns))
+                if !turn.calls.isEmpty {
+                    let unrunnable = turn.unrunnable("Not run: the connection dropped before the arguments were complete. Reissue the call.")
+                    switch await execute(turn.calls, counts: &callCounts, unrunnable: unrunnable, out) {
+                    case .continue: break
+                    case .stopped: return .stopped
+                    case .repeated(let name): return .repeatedCall(name)
+                    }
+                    if Task.isCancelled { return .stopped }
+                }
+                items.append(.user(Self.editorNote(Self.interruptedNote)))
+                out.yield(.stepFinished(items: items))
+                iteration += 1
+                continue
+            }
+            interruptedTurns = 0
+
+            // Cut off at the output limit: carry on, in smaller pieces, a couple of times. Calls that
+            // arrived whole run (their outputs are the next turn's input); the others are answered.
+            if finish != .length { lengthStreak = 0 }
+            if finish == .length, closing == nil {
+                lengthStreak += 1
+                if lengthStreak <= configuration.maxLengthContinuations {
+                    out.yield(.continuing(reason: .outputLimit, attempt: lengthStreak))
+                    if turn.calls.isEmpty {
+                        items.append(.user(Self.editorNote(Self.outputLimitNote)))
+                    } else {
+                        let unrunnable = turn.unrunnable(Self.outputLimitCallMessage)
+                        switch await execute(turn.calls, counts: &callCounts, unrunnable: unrunnable, out) {
+                        case .continue: break
+                        case .stopped: return .stopped
+                        case .repeated(let name): return .repeatedCall(name)
+                        }
+                        if Task.isCancelled { return .stopped }
+                    }
+                    out.yield(.stepFinished(items: items))
+                    iteration += 1
+                    continue
+                }
             }
 
             // A turn cut off or filtered may hold half-written calls: answer them without running.
@@ -452,6 +535,7 @@ public actor AgentSession {
             if !turn.unreadable.isEmpty {
                 items.append(.user(Self.unreadableCallNote(turn.unreadable)))
             }
+            out.yield(.stepFinished(items: items))
             iteration += 1
         }
     }
@@ -528,7 +612,9 @@ public actor AgentSession {
                 mode: .plan,
                 permissions: rules,
                 secretPatterns: configuration.secretPatterns,
-                editTolerance: configuration.editTolerance),
+                editTolerance: configuration.editTolerance,
+                shapeToolOutput: configuration.shapeToolOutput,
+                toolOutputStore: configuration.toolOutputStore),
             ledger: ReadLedger(snapshot: await ledger.snapshot()))
         var summary = ""
         var ending: RunEnding = .failed("The child session ended without an answer.")
@@ -569,6 +655,13 @@ public actor AgentSession {
     /// when there is no shaper, the output is an error, or the shaper throws. The event still carries
     /// the original, and the "Not run…" and cancel stubs never reach the shaper.
     private func historyOutput(call: PendingCall, plan: Plan, output: ToolOutput) async -> String {
+        let shaped = await shapedOutput(call: call, plan: plan, output: output)
+        // Whatever no tool bounded is saved whole and cut to its first lines. Errors stay as they are.
+        guard let store = configuration.toolOutputStore, !output.isError else { return shaped }
+        return ToolOutputNet.spill(shaped, into: store)
+    }
+
+    private func shapedOutput(call: PendingCall, plan: Plan, output: ToolOutput) async -> String {
         guard let shaper = configuration.shapeToolOutput, !output.isError else { return output.text }
         let name: String
         let arguments: String
@@ -614,6 +707,12 @@ public actor AgentSession {
     }
 
     static let maxUnreadableCalls = 3
+    /// Consecutive turns a dropped connection may cut short before the run fails.
+    static let maxInterruptedTurns = 2
+    static let outputLimitNote = "Your last response hit the output token limit. Do not apologize, recap, or repeat yourself. Continue where you stopped, and break the remaining work into smaller pieces."
+    static let outputLimitCallMessage = "Not run: the output token limit was reached before the arguments were complete. Break large payloads (a big write_file or apply_patch) into smaller calls and reissue it."
+    static let resumeNote = "The app was closed while you were working, and this conversation was restored from its last saved step. Carry on from where you left off. The last step may have partly run, so check the current state of the files before you repeat an edit."
+    static let interruptedNote = "The previous response was interrupted. Continue from where you left off without repeating completed content."
     /// Empty turns in one run that are retried before the run fails.
     static let maxEmptyTurns = 1
 
@@ -625,6 +724,25 @@ public actor AgentSession {
         let texts = await source(items.count)
         for text in texts { items.append(.user(text)) }
         return !texts.isEmpty
+    }
+
+    /// Adds a note when the instruction file changed since the model last saw it. Always between a call's
+    /// output and the next request, never inside a pair. A change the agent made itself is not news.
+    private func noteInstructionChanges() async {
+        guard let state = instructionState, let source = configuration.currentInstructions else { return }
+        let snapshot = await source()
+        if filesEditedThisRun.contains(where: { Self.isInstructionFile($0, named: snapshot.name) }) {
+            await state.accept(snapshot, itemCount: items.count)
+        } else if let note = await state.observe(snapshot, itemCount: items.count) {
+            items.append(.user(Self.editorNote(note)))
+        }
+    }
+
+    /// Whether an edited path (project-relative, as the model writes it) is the root instruction file.
+    private static func isInstructionFile(_ path: String, named file: String) -> Bool {
+        var path = path
+        if path.hasPrefix("./") { path.removeFirst(2) }
+        return path == file
     }
 
     /// Tells the model the mode changed since it last heard. Always between a call's output and the
@@ -662,10 +780,18 @@ public actor AgentSession {
 
     /// Tokens the next request would carry, as best they can be known (see above).
     public func estimatedContextTokens() -> Int {
+        let parts = contextTokenParts()
+        return parts.measured + parts.estimated
+    }
+
+    /// The same estimate in two parts: what the provider measured for an earlier request, and the tokens
+    /// added since (or the whole prompt when nothing was measured, or the measure is below the estimate).
+    private func contextTokenParts() -> (measured: Int, estimated: Int) {
         let fixed = ContextBudget.tokens(system: configuration.systemPrompt, tools: offeredTools.map(\.definition))
         let whole = fixed + ContextBudget.tokens(items)
-        guard lastInputTokens > 0, itemsAtLastReport <= items.count else { return whole }
-        return max(whole, lastInputTokens + ContextBudget.tokens(items[itemsAtLastReport...]))
+        guard lastInputTokens > 0, itemsAtLastReport <= items.count else { return (0, whole) }
+        let appended = ContextBudget.tokens(items[itemsAtLastReport...])
+        return lastInputTokens + appended >= whole ? (lastInputTokens, appended) : (0, whole)
     }
 
     /// Shortens the conversation when it passes the threshold (or at once if `force`). Returns
@@ -738,6 +864,9 @@ public actor AgentSession {
                 report.summarizedItems = cut
                 items = ConversationSummary.replacing(items, upTo: cut, with: summary, verbatim: prepared.verbatim)
                 await projectNotes.reset()
+                if let note = await instructionState?.summarized(itemCount: items.count) {
+                    items.append(.user(Self.editorNote(note)))
+                }
             } else {
                 report.summaryFailed = !Task.isCancelled
                 summaryBackoffUntilItems = items.count + 6
@@ -817,16 +946,38 @@ public actor AgentSession {
         var finish: FinishReason?
         /// Notes for the model about calls it wrote that could not be read.
         var unreadable: [(detail: String, raw: String)] = []
+        /// Calls whose arguments the provider finished sending.
+        var finishedCallIDs: Set<String> = []
+        /// Set when the connection dropped after output began: what arrived is kept and `finish` is nil.
+        var interruption: String?
+
+        /// A call that arrived whole. One cut off by the output limit or a dropped connection has
+        /// arguments that do not parse (or never finished), and must not run.
+        func isComplete(_ call: PendingCall) -> Bool {
+            finishedCallIDs.contains(call.id) && (try? ToolArguments(json: call.arguments)) != nil
+        }
+
+        /// The output each incomplete call gets instead of a run.
+        func unrunnable(_ message: String) -> [String: String] {
+            Dictionary(calls.filter { !isComplete($0) }.map { ($0.id, message) }, uniquingKeysWith: { first, _ in first })
+        }
     }
 
     private func streamTurn(_ out: AsyncStream<AgentEvent>.Continuation, toolsEnabled: Bool = true) async throws -> Turn {
+        // The closing turn keeps the tool list where the endpoint can switch tools off: the list starts
+        // the provider's cached prefix, and dropping it would make the last turn of a run pay for everything.
+        let disabled = !toolsEnabled && client.supportsDisabledToolChoice
+        let context = contextTokenParts()
         let request = LLMRequest(
             model: configuration.model,
             system: configuration.systemPrompt,
             items: items,
-            tools: toolsEnabled ? offeredTools.map(\.definition) : [],
+            tools: toolsEnabled || disabled ? offeredTools.map(\.definition) : [],
+            toolChoice: disabled ? .disabled : nil,
             reasoningEffort: configuration.reasoningEffort,
-            maxOutputTokens: configuration.maxOutputTokens,
+            maxOutputTokens: OutputBudget.maxOutputTokens(
+                requested: configuration.maxOutputTokens, window: configuration.contextWindow,
+                measured: context.measured, estimated: context.estimated),
             cacheKey: configuration.cacheKey,
             contextWindow: configuration.contextWindow)
 
@@ -839,41 +990,46 @@ public actor AgentSession {
             turn.items.append(.assistant(turn.text))
         }
 
-        for try await event in client.stream(request) {
-            switch event {
-            case .textDelta(let delta):
-                turn.text += delta
-                out.yield(.textDelta(delta))
-            case .reasoningDelta(let delta):
-                out.yield(.reasoningDelta(delta))
-            case .toolCallStarted(let id, let name):
-                flushText(&turn)
-                if !turn.calls.contains(where: { $0.id == id }) { turn.calls.append(PendingCall(id: id, name: name, arguments: "")) }
-                out.yield(.toolCallStarted(id: id, name: name))
-            case .toolCallArgumentsDelta(let id, let delta):
-                if let index = turn.calls.firstIndex(where: { $0.id == id }) { turn.calls[index].arguments += delta }
-            case .toolCallFinished(let id, let name, let arguments):
-                if let index = turn.calls.firstIndex(where: { $0.id == id }) {
-                    turn.calls[index].arguments = arguments
-                } else {
+        do {
+            for try await event in client.stream(request) {
+                switch event {
+                case .textDelta(let delta):
+                    turn.text += delta
+                    out.yield(.textDelta(delta))
+                case .reasoningDelta(let delta):
+                    out.yield(.reasoningDelta(delta))
+                case .toolCallStarted(let id, let name):
                     flushText(&turn)
-                    turn.calls.append(PendingCall(id: id, name: name, arguments: arguments))
+                    if !turn.calls.contains(where: { $0.id == id }) { turn.calls.append(PendingCall(id: id, name: name, arguments: "")) }
+                    out.yield(.toolCallStarted(id: id, name: name))
+                case .toolCallArgumentsDelta(let id, let delta):
+                    if let index = turn.calls.firstIndex(where: { $0.id == id }) { turn.calls[index].arguments += delta }
+                case .toolCallFinished(let id, let name, let arguments):
+                    turn.finishedCallIDs.insert(id)
+                    if let index = turn.calls.firstIndex(where: { $0.id == id }) {
+                        turn.calls[index].arguments = arguments
+                    } else {
+                        flushText(&turn)
+                        turn.calls.append(PendingCall(id: id, name: name, arguments: arguments))
+                    }
+                    out.yield(.toolCallArguments(id: id, name: name, arguments: arguments))
+                case .opaqueItem(let item):
+                    turn.items.append(.opaque(item))
+                case .unreadableToolCall(let detail, let raw):
+                    turn.unreadable.append((detail, raw))
+                    out.yield(.unreadableToolCall(detail: detail))
+                case .usage(let usage):
+                    turn.usage = usage
+                case .finished(let reason):
+                    turn.finish = reason
+                case .retrying:
+                    turn = Turn()
+                    textFlushed = false
+                    out.yield(.turnRestarted)
                 }
-                out.yield(.toolCallArguments(id: id, name: name, arguments: arguments))
-            case .opaqueItem(let item):
-                turn.items.append(.opaque(item))
-            case .unreadableToolCall(let detail, let raw):
-                turn.unreadable.append((detail, raw))
-                out.yield(.unreadableToolCall(detail: detail))
-            case .usage(let usage):
-                turn.usage = usage
-            case .finished(let reason):
-                turn.finish = reason
-            case .retrying:
-                turn = Turn()
-                textFlushed = false
-                out.yield(.turnRestarted)
             }
+        } catch LLMError.interruptedAfterOutput(let detail) {
+            turn.interruption = detail
         }
         if Task.isCancelled { throw CancellationError() }
         flushText(&turn)
@@ -902,15 +1058,22 @@ public actor AgentSession {
         }
     }
 
+    /// `unrunnable` maps a call's id to the output it gets without running (a call cut off before its
+    /// arguments were complete); such a call is not counted by the repeat guard.
     private func execute(
         _ calls: [PendingCall],
         counts: inout [String: Int],
+        unrunnable: [String: String] = [:],
         _ out: AsyncStream<AgentEvent>.Continuation
     ) async -> ExecutionResult {
         // The same call a third time gets a warning instead of a run; a fourth stops the run.
         var plans: [Plan] = []
         var repeated: String?
         for call in calls {
+            if let message = unrunnable[call.id] {
+                plans.append(.answered(ToolOutput(message, isError: true)))
+                continue
+            }
             let key = call.name + "\u{0}" + Self.canonical(call.arguments)
             // Bookkeeping such as a checklist is meant to be sent again unchanged; the iteration cap bounds it.
             let exempt = toolsByName[call.name]?.isExemptFromRepeatGuard ?? false
@@ -1108,6 +1271,8 @@ public actor AgentSession {
         let notes = projectNotes
         let touchedTools = tools
         let redactor = memoryRedactor()
+        let outputStore = configuration.toolOutputStore
+        let shaper = configuration.shapeToolOutput
         return await withTaskGroup(of: (Int, ToolOutput).self) { group in
             for index in indices {
                 let call = calls[index]
@@ -1116,6 +1281,7 @@ public actor AgentSession {
                     group.addTask { (index, output) }
                 case .run(let tool, let arguments, let note):
                     let preapproved = preapprovedCalls.contains(call.id)
+                    let redact = Self.redactor(shaper, toolName: tool.name, risk: tool.risk, arguments: arguments)
                     group.addTask {
                         let context = ToolContext(
                             workspace: workspace, ledger: ledger, callID: call.id, checkpoint: scope,
@@ -1137,7 +1303,9 @@ public actor AgentSession {
                             },
                             redactForMemory: redactor,
                             spawnSubagent: { request in await self.runSubagent(request, out) },
-                            preapproved: preapproved)
+                            preapproved: preapproved,
+                            outputStore: outputStore,
+                            redactOutput: redact)
                         let output = await Self.run(tool, arguments: arguments, context: context, timeout: timeout)
                         guard let note else { return (index, output) }
                         return (index, ToolOutput(note + "\n" + output.text, isError: output.isError))
@@ -1147,6 +1315,18 @@ public actor AgentSession {
             var results: [(Int, ToolOutput)] = []
             for await result in group { results.append(result) }
             return results.sorted { $0.0 < $1.0 }
+        }
+    }
+
+    /// Scrubs text the way this call's output is scrubbed on its way into the history.
+    private static func redactor(
+        _ shaper: (@Sendable (ToolOutputShapingInput) async throws -> String)?,
+        toolName: String, risk: ToolRisk, arguments: String
+    ) -> (@Sendable (String) async -> String)? {
+        guard let shaper else { return nil }
+        return { text in
+            let input = ToolOutputShapingInput(toolName: toolName, arguments: arguments, risk: risk, isError: false, text: text)
+            return (try? await shaper(input)) ?? text
         }
     }
 

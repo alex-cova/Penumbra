@@ -32,12 +32,14 @@ public struct MockTurn: Sendable {
 /// Replays scripted turns, one per `stream` call, and records the requests it received.
 public final class MockLLMClient: LLMClient, @unchecked Sendable {
     public let providerID: String
+    public let supportsDisabledToolChoice: Bool
     private let lock = NSLock()
     private var turns: [MockTurn]
     private var received: [LLMRequest] = []
 
-    public init(providerID: String = "mock", turns: [MockTurn]) {
+    public init(providerID: String = "mock", supportsDisabledToolChoice: Bool = false, turns: [MockTurn]) {
         self.providerID = providerID
+        self.supportsDisabledToolChoice = supportsDisabledToolChoice
         self.turns = turns
     }
 

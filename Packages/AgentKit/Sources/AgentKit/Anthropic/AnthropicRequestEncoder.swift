@@ -29,6 +29,8 @@ public enum AnthropicRequestEncoder {
                 ])
             })
         }
+        // Disabled tools keep their definitions in the request: the cached prefix starts with them.
+        if request.toolChoice == .disabled, !request.tools.isEmpty { body["tool_choice"] = ["type": "none"] }
         applyReasoning(to: &body, request: request, maxTokens: maxTokens)
         // The provider keys its cache on the prefix, not on a name: any key asks for caching.
         if request.cacheKey != nil { body["cache_control"] = ["type": "ephemeral"] }

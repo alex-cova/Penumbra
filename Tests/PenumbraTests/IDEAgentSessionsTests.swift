@@ -198,6 +198,154 @@ final class IDEAgentSessionsTests: XCTestCase {
         XCTAssertEqual(IDEAgentPersistedEntry.decode(Data("garbage".utf8)), [])
     }
 
+    // MARK: - Interrupted runs
+
+    private func loadSnapshot(_ id: UUID) -> SessionSnapshot? {
+        SessionStore(directory: storeDirectory).load(id, projectRoot: project.path)
+    }
+
+    private func savedSnapshot(_ id: UUID) throws -> SessionSnapshot {
+        try XCTUnwrap(loadSnapshot(id))
+    }
+
+    func testARunIsMarkedInProgressInTheSavedFileUntilItEnds() async throws {
+        let slow = MockTurn([.textDelta("working"), .finished(.completed)], delayPerEvent: .milliseconds(300))
+        let (controller, _) = makeController([slow])
+        let id = controller.conversationID
+        controller.draft = "hello"
+        controller.send()
+
+        await waitFor("the run is written down before its first step ends") { self.loadSnapshot(id) != nil }
+        let during = try savedSnapshot(id)
+        XCTAssertTrue(IDEAgentSavedTranscript.decode(during.host).runInProgress)
+        XCTAssertEqual(during.items.count, 1, "the message is in the file, with no answer yet")
+        XCTAssertEqual(IDEAgentSavedTranscript.decode(during.host).entries.map(\.kind), [.user])
+
+        await waitFor("the run ends") { !controller.isRunning }
+        let after = try savedSnapshot(id)
+        XCTAssertFalse(IDEAgentSavedTranscript.decode(after.host).runInProgress, "the end of the run clears the mark")
+        XCTAssertEqual(IDEAgentSavedTranscript.decode(after.host).entries.map(\.kind), [.user, .assistant])
+    }
+
+    func testAStoppedRunIsNotLeftMarkedAsInterrupted() async throws {
+        let slow = MockTurn([.textDelta("working"), .finished(.completed)], delayPerEvent: .seconds(5))
+        let (controller, _) = makeController([slow])
+        let id = controller.conversationID
+        controller.draft = "hello"
+        controller.send()
+        await waitFor("the claim is written") { self.loadSnapshot(id) != nil }
+        controller.stop()
+        await waitFor("the run ends") { !controller.isRunning }
+        let saved = IDEAgentSavedTranscript.decode(try savedSnapshot(id).host)
+        XCTAssertFalse(saved.runInProgress)
+        XCTAssertFalse(saved.entries.contains { $0.canResume == true })
+    }
+
+    /// A run that read a file, then was cut off while the model was writing its next turn.
+    private func interruptedRun() async throws -> UUID {
+        try "hello\n".write(to: project.appendingPathComponent("A.txt"), atomically: true, encoding: .utf8)
+        let slowSecondTurn = MockTurn([.textDelta("still working"), .finished(.completed)], delayPerEvent: .seconds(5))
+        let (first, _) = makeController([
+            .toolCalls((id: "r", name: "read_file", arguments: #"{"path":"A.txt"}"#)), slowSecondTurn,
+        ])
+        let id = first.conversationID
+        first.draft = "read it"
+        first.send()
+        await waitFor("the first step finished") { first.selected.finishedStepItemCountForTesting == 3 }
+        first.selected.enqueue("one more thing")
+        first.teardown()
+        return id
+    }
+
+    func testClosingTheWindowMidRunKeepsTheFinishedStepsAndTheQueue() async throws {
+        let id = try await interruptedRun()
+        let snapshot = try savedSnapshot(id)
+        XCTAssertEqual(snapshot.items.count, 3, "the message, the call and its output: no half step")
+        expectEveryCallAnsweredInSaved(snapshot.items)
+        let saved = IDEAgentSavedTranscript.decode(snapshot.host)
+        XCTAssertTrue(saved.runInProgress)
+        XCTAssertEqual(saved.queued, ["one more thing"])
+        XCTAssertEqual(saved.entries.map(\.kind), [.user, .toolCall])
+        XCTAssertEqual(saved.entries.last?.outputText?.contains("hello"), true)
+    }
+
+    private func expectEveryCallAnsweredInSaved(_ items: [ConversationItem]) {
+        var calls: [String] = [], outputs: [String] = []
+        for item in items {
+            if case .toolCall(let id, _, _) = item { calls.append(id) }
+            if case .toolOutput(let id, _) = item { outputs.append(id) }
+        }
+        XCTAssertEqual(calls.sorted(), outputs.sorted())
+    }
+
+    func testReopeningAnInterruptedChatOffersResumeOnceAndGivesBackTheQueue() async throws {
+        let id = try await interruptedRun()
+        let client = MockLLMClient(turns: [.text("all done")])
+        let (second, _) = makeController([], client: client)
+        second.resume(id)
+
+        let notice = try XCTUnwrap(second.entries.last)
+        XCTAssertEqual(notice.kind, .error)
+        XCTAssertTrue(notice.canResume)
+        XCTAssertTrue(notice.text.contains("interrupted"))
+        XCTAssertEqual(second.draft, "one more thing", "what was waiting is back in the field, not sent")
+        XCTAssertFalse(IDEAgentSavedTranscript.decode(try savedSnapshot(id).host).runInProgress, "the mark is cleared at once")
+
+        // A third reader sees the notice (it is part of the transcript) but no new mark.
+        let (third, _) = makeController([])
+        third.resume(id)
+        XCTAssertEqual(third.entries.filter { $0.canResume }.count, 1)
+        XCTAssertEqual(third.entries.filter { $0.text.contains("interrupted when Umbra closed") }.count, 1)
+    }
+
+    func testResumeCarriesOnFromTheSavedStepWithANoteAndNoNewMessage() async throws {
+        let id = try await interruptedRun()
+        let client = MockLLMClient(turns: [.text("all done")])
+        let (second, _) = makeController([], client: client)
+        second.resume(id)
+        second.resume()
+        await waitFor("the resumed run ends") { !second.isRunning && second.entries.contains { $0.kind == .assistant } }
+
+        XCTAssertEqual(second.entries.last?.text, "all done")
+        XCTAssertFalse(second.entries.contains { $0.canResume }, "the button is gone once used")
+        let sent = try XCTUnwrap(client.requests.first).items
+        XCTAssertEqual(sent.count, 4)
+        guard case .user(let note) = sent[3] else { return XCTFail("the run should end with the resume note") }
+        XCTAssertTrue(note.hasPrefix("[Note from the editor, not from the user]") && note.contains("app was closed"))
+        XCTAssertEqual(sent.filter { if case .user = $0 { true } else { false } }.count, 2, "no message was added by the user")
+    }
+
+    func testWritingAMessageInsteadOfResumingDropsTheButton() async throws {
+        let id = try await interruptedRun()
+        let client = MockLLMClient(turns: [.text("on it")])
+        let (second, _) = makeController([], client: client)
+        second.resume(id)
+        second.draft = "do something else"
+        second.send()
+        await waitFor("the message is answered") { !second.isRunning && second.entries.contains { $0.kind == .assistant } }
+        XCTAssertFalse(second.entries.contains { $0.canResume })
+        let sent = try XCTUnwrap(client.requests.first).items
+        var calls = 0, outputs = 0
+        for item in sent {
+            if case .toolCall = item { calls += 1 }
+            if case .toolOutput = item { outputs += 1 }
+        }
+        XCTAssertEqual(calls, outputs)
+    }
+
+    func testTheSavedMarkAndQueueRoundTripAndOlderFilesReadAsNotInterrupted() throws {
+        let rows = [IDEAgentEntry(kind: .user, text: "q")]
+        let marked = IDEAgentSavedTranscript.decode(
+            IDEAgentSavedTranscript.encode(entries: rows, cost: 0, runInProgress: true, queued: ["a", "b"]))
+        XCTAssertTrue(marked.runInProgress)
+        XCTAssertEqual(marked.queued, ["a", "b"])
+        let plain = IDEAgentSavedTranscript.decode(IDEAgentSavedTranscript.encode(entries: rows, cost: 0, queued: ["ignored"]))
+        XCTAssertFalse(plain.runInProgress)
+        XCTAssertEqual(plain.queued, [], "a queue only matters for a run that was cut off")
+        XCTAssertFalse(IDEAgentSavedTranscript.decode(IDEAgentPersistedEntry.encode(rows)).runInProgress)
+        XCTAssertFalse(IDEAgentSavedTranscript.decode(nil).runInProgress)
+    }
+
     // MARK: - Project instructions
 
     func testAGENTSmdGoesToTheModelAndFallsBackToCLAUDEmd() async throws {
@@ -213,6 +361,28 @@ final class IDEAgentSessionsTests: XCTestCase {
         XCTAssertEqual(IDEAgentProjectNotes.load(root: project), "claude only")
         try FileManager.default.removeItem(at: project.appendingPathComponent("CLAUDE.md"))
         XCTAssertNil(IDEAgentProjectNotes.load(root: project))
+    }
+
+    func testAnEditToAGENTSmdMidConversationReachesTheModelAsANoteNotAsANewPrompt() async throws {
+        let file = project.appendingPathComponent("AGENTS.md")
+        try "Use tabs.".write(to: file, atomically: true, encoding: .utf8)
+        let (controller, client) = makeController([.text("one"), .text("two"), .text("three")])
+        await run(controller, "hi")
+        try "Use spaces.".write(to: file, atomically: true, encoding: .utf8)
+        await run(controller, "again")
+        await run(controller, "and again")
+
+        XCTAssertEqual(client.requests.count, 3)
+        XCTAssertEqual(client.requests[0].system, client.requests[1].system, "the prompt, and its cached prefix, stay put")
+        let notes = { (request: LLMRequest) -> [String] in
+            request.items.compactMap { item in
+                if case .user(let text) = item, text.hasPrefix("[Note from the editor, not from the user] AGENTS.md changed") { text } else { nil }
+            }
+        }
+        XCTAssertTrue(notes(client.requests[0]).isEmpty)
+        let note = try XCTUnwrap(notes(client.requests[1]).first)
+        XCTAssertTrue(note.contains("-Use tabs.") && note.contains("+Use spaces."))
+        XCTAssertEqual(notes(client.requests[2]).count, 1, "the same change is told once")
     }
 
     func testProjectNotesAreCappedAndSymlinksAreNotFollowed() throws {

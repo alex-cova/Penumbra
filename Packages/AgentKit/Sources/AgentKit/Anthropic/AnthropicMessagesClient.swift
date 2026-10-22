@@ -8,6 +8,7 @@ extension LLMEndpoint {
 /// Anthropic's `/v1/messages`, stateless: see `AnthropicRequestEncoder`.
 public struct AnthropicMessagesClient: LLMClient {
     public var providerID: String { AnthropicRequestEncoder.providerID }
+    public var supportsDisabledToolChoice: Bool { true }
 
     public static let apiVersion = "2023-06-01"
 

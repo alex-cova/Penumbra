@@ -13,11 +13,15 @@ public struct ChatCompletionsCapabilities: Sendable, Equatable {
     public var maxTokensField: String
     public var sendsReasoningEffort: Bool
     public var promptCacheKey: Bool
+    /// `tool_choice: "none"` next to the tool list, so the closing turn of a run keeps the cached prefix.
+    /// Without it that turn is sent with no tools.
+    public var toolChoiceNone: Bool
 
     public init(
         strictTools: Bool, usageInStream: Bool, parallelToolCalls: Bool? = nil,
-        maxTokensField: String, sendsReasoningEffort: Bool, promptCacheKey: Bool
+        maxTokensField: String, sendsReasoningEffort: Bool, promptCacheKey: Bool, toolChoiceNone: Bool = false
     ) {
+        self.toolChoiceNone = toolChoiceNone
         self.strictTools = strictTools
         self.usageInStream = usageInStream
         self.parallelToolCalls = parallelToolCalls
@@ -28,7 +32,7 @@ public struct ChatCompletionsCapabilities: Sendable, Equatable {
 
     public static let openAI = ChatCompletionsCapabilities(
         strictTools: true, usageInStream: true, maxTokensField: "max_completion_tokens",
-        sendsReasoningEffort: true, promptCacheKey: true)
+        sendsReasoningEffort: true, promptCacheKey: true, toolChoiceNone: true)
 
     /// Azure, LM Studio, Ollama's `/v1` and the like: the conservative subset.
     public static let compatible = ChatCompletionsCapabilities(
@@ -59,6 +63,7 @@ public enum ChatCompletionsRequestEncoder {
                 return ["type": "function", "function": .object(function)]
             })
             if let parallel = capabilities.parallelToolCalls { body["parallel_tool_calls"] = .bool(parallel) }
+            if request.toolChoice == .disabled { body["tool_choice"] = "none" }
         }
         if capabilities.sendsReasoningEffort, let effort = request.reasoningEffort { body["reasoning_effort"] = .string(effort) }
         if let limit = request.maxOutputTokens { body[capabilities.maxTokensField] = .int(limit) }
@@ -204,6 +209,7 @@ public struct ChatCompletionsEventDecoder: StreamDecoder {
 /// Ollama's `/v1`). Pick `capabilities` for the endpoint.
 public struct OpenAIChatCompletionsClient: LLMClient {
     public var providerID: String { ChatCompletionsRequestEncoder.providerID }
+    public var supportsDisabledToolChoice: Bool { capabilities.toolChoiceNone }
 
     public let endpoint: LLMEndpoint
     public let capabilities: ChatCompletionsCapabilities

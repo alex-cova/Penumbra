@@ -224,6 +224,7 @@ final class IDEAgentController {
             let blobs = IDEAgentCheckpointBlobs(store: store, projectRoot: root.path)
             for run in IDEAgentSavedTranscript.decode(snapshot.host).checkpoints { blobs.removeRun(run.id) }
         }
+        IDEAgentToolOutputs(store: store, projectRoot: root.path, conversationID: id).removeConversation()
         store.delete(id, projectRoot: root.path)
         refreshHistory()
     }
@@ -233,6 +234,7 @@ final class IDEAgentController {
         guard let store, let root = host?.agentProjectRoot else { return }
         store.deleteAll(projectRoot: root.path)
         IDEAgentCheckpointBlobs(store: store, projectRoot: root.path).removeAll()
+        IDEAgentToolOutputs(store: store, projectRoot: root.path, conversationID: UUID()).removeAll()
         promptHistory()?.clear()
         history = []
     }
@@ -406,6 +408,9 @@ final class IDEAgentController {
 
     /// Tries the last send again after a network failure. The message is not added a second time.
     func retry() { selected.retry() }
+
+    /// Carries on with a run the app was closed in the middle of, from its last saved step.
+    func resume() { selected.resume() }
 
     func stop() { selected.stop() }
 

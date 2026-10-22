@@ -12,6 +12,44 @@ public enum ConversationItem: Sendable, Hashable, Codable {
     case opaque(OpaqueItem)
 }
 
+extension ConversationItem {
+    /// `items` with an output added after any tool call that has none. A history saved while a run was
+    /// going (the app closed, a crash) can end in calls nobody answered, and both APIs reject that. The
+    /// output says the call may have partly run, so the model checks before repeating it. Idempotent.
+    public static func answeringUnansweredCalls(_ items: [ConversationItem]) -> [ConversationItem] {
+        var answered = Set<String>()
+        for case .toolOutput(let callID, _) in items { answered.insert(callID) }
+        guard items.contains(where: { if case .toolCall(let id, _, _) = $0 { !answered.contains(id) } else { false } }) else {
+            return items
+        }
+        var result: [ConversationItem] = []
+        var group: [(id: String, name: String)] = []
+        func closeGroup() {
+            for call in group where !answered.contains(call.id) {
+                result.append(.toolOutput(callID: call.id, output: interruptedCallOutput(name: call.name)))
+            }
+            group = []
+        }
+        for item in items {
+            switch item {
+            case .toolCall(let id, let name, _):
+                group.append((id, name))
+            case .toolOutput:
+                break
+            default:
+                closeGroup()
+            }
+            result.append(item)
+        }
+        closeGroup()
+        return result
+    }
+
+    static func interruptedCallOutput(name: String) -> String {
+        "Tool execution interrupted: \(name). The app closed before it returned, so it may have partly run. Check the current state (read the file, git_status) before repeating it."
+    }
+}
+
 /// A provider item the loop stores and replays without reading, such as an OpenAI reasoning item
 /// with `encrypted_content`. Only the client that produced it may send it back.
 public struct OpaqueItem: Sendable, Hashable, Codable {

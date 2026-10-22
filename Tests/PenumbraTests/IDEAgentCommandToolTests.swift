@@ -371,6 +371,27 @@ final class IDEAgentCommandToolTests: XCTestCase {
         XCTAssertTrue(truncated.contains("characters omitted from the middle"))
     }
 
+    func testLargeOutputIsSavedWholeAndTheMiddleCanBeReadBack() async throws {
+        let outputs = IDEAgentToolOutputs(
+            directory: project.appendingPathComponent("saved-outputs"), conversationID: UUID())
+        let ctx = ToolContext(
+            workspace: DiskAgentWorkspace(root: project), ledger: ReadLedger(), callID: "c", outputStore: outputs)
+        let tool = IDERunCommandTool(support: support())
+        let output = try await tool.run(try ToolArguments(json: #"{"command":"seq 1 20000","reason":"r"}"#), context: ctx)
+
+        XCTAssertLessThan(output.count, 25_000)
+        XCTAssertFalse(output.contains("\n10000\n"), "the middle is not shown")
+        let pointer = try XCTUnwrap(output.range(of: #"read_tool_output\(id: "out_[0-9a-f]+""#, options: .regularExpression), "the middle says how to read it")
+        let id = String(output[pointer].dropFirst(#"read_tool_output(id: ""#.count).dropLast())
+        XCTAssertTrue(output.hasSuffix("s]"), "the verdict at the bottom is still last")
+        let saved = try XCTUnwrap(outputs.load(id: id))
+        XCTAssertTrue(saved.contains("\n10000\n") && saved.hasSuffix("20000\n"))
+
+        let reader = ReadToolOutputTool(store: outputs)
+        let found = await reader.execute(argumentsJSON: #"{"id":"\#(id)","pattern":"^10000$"}"#, context: ctx)
+        XCTAssertTrue(found.text.contains("1 matching lines of 20000") && found.text.contains("10000\t10000"))
+    }
+
     func testEmptyCommandsAreRejectedAndALaunchFailureIsAnError() async throws {
         let tool = IDERunCommandTool(support: support())
         let empty = await tool.execute(argumentsJSON: #"{"command":"  ","reason":"r"}"#, context: context())

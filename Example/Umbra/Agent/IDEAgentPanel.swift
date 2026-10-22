@@ -586,6 +586,12 @@ private struct IDEAgentErrorRow: View {
 }
 
 /// One of the user's messages, with Rewind and Fork when the pointer is over it.
+            if entry.canResume {
+                Button("Resume") { agent.resume() }
+                    .controlSize(.small)
+                    .disabled(agent.isRunning || agent.selected.isCompacting)
+                    .help("Carry on from the last saved step")
+            }
 private struct IDEAgentUserRow: View {
     let entry: IDEAgentEntry
     @Environment(IDEWorkspace.self) private var workspace

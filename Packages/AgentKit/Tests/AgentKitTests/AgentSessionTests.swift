@@ -273,14 +273,16 @@ private func ending(_ events: [AgentEvent]) -> RunEnding? {
         #expect(await session.items == [.user("go"), .assistant("full answer")])
     }
 
-    @Test func aTurnCutOffByTheLengthLimitAnswersItsCallsWithoutRunningThem() async throws {
+    @Test func aTurnCutOffByTheLengthLimitAnswersItsCallsWithoutRunningThemWhenContinuationsAreOff() async throws {
         let probe = Probe()
         let client = MockLLMClient(turns: [
             MockTurn([
                 .toolCallStarted(id: "c", name: "look"), .toolCallArgumentsDelta(id: "c", delta: "{\"n\":"), .finished(.length),
             ])
         ])
-        let session = try makeSession(client, tools: [ProbeTool(name: "look", probe: probe)])
+        let session = try makeSession(
+            client, tools: [ProbeTool(name: "look", probe: probe)],
+            configuration: AgentConfiguration(model: "m", maxLengthContinuations: 0))
         #expect(ending(await runToEnd(session)) == .lengthLimit)
         #expect(toolOutputs(await session.items)["c"] == "Not run: the response hit the length limit.")
         #expect(await probe.startedCount == 0)

@@ -142,6 +142,12 @@ public struct ToolContext: Sendable {
     /// default), rather than the user approving its card. A tool that degrades gracefully (the
     /// sandbox retry) may skip asking again.
     public let preapproved: Bool
+    /// Where output too large to show is kept (see `OutputTruncation.headAndTailSaving`). `nil`: it is
+    /// cut and the middle is lost.
+    public let outputStore: (any ToolOutputStore)?
+    /// Scrubs text the way this call's output is scrubbed before it enters the history (the configured
+    /// shaper, with this call's tool name and risk). A copy saved to disk goes through it first.
+    public let redactOutput: (@Sendable (String) async -> String)?
 
     public init(
         workspace: any AgentWorkspace,
@@ -158,8 +164,12 @@ public struct ToolContext: Sendable {
         fileTouched: (@Sendable (String) -> Void)? = nil,
         redactForMemory: (@Sendable (String) async -> String)? = nil,
         spawnSubagent: (@Sendable (SubagentRequest) async -> SubagentResult)? = nil,
-        preapproved: Bool = false
+        preapproved: Bool = false,
+        outputStore: (any ToolOutputStore)? = nil,
+        redactOutput: (@Sendable (String) async -> String)? = nil
     ) {
+        self.outputStore = outputStore
+        self.redactOutput = redactOutput
         self.workspace = workspace
         self.ledger = ledger
         self.callID = callID

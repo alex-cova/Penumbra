@@ -154,8 +154,20 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private var restoredTodos: [TodoItem] = []
     @ObservationIgnored private var createdAt = Date()
 
+    /// The history as of the last step that left no tool call open, with how many transcript rows and which
+    /// checkpoint runs went with it: what a save in the middle of a run writes, so it never holds a half step.
+    @ObservationIgnored private var stepItems: [ConversationItem]?
+    @ObservationIgnored private var stepEntryCount = 0
+    @ObservationIgnored private var stepCheckpoints: [RunSnapshot] = []
+    @ObservationIgnored private var stepSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var lastStepSave = Date.distantPast
+    /// At most one save in the middle of a run per this long; a busy run would otherwise write the whole history every step.
+    static let stepSaveInterval: TimeInterval = 2
+
     /// For tests that look at the live session's state (its checklist).
     var currentSessionForTesting: AgentSession? { session }
+    /// For tests: how many history items the last finished step of the run in progress left.
+    var finishedStepItemCountForTesting: Int? { stepItems?.count }
 
     private var iterationLimit: Int { settings.iterationCap }
 
@@ -233,8 +245,9 @@ final class IDEAgentConversation: Identifiable {
         openRun(root: root, host: host) { session in
             let framed = await self.frame(context: context, body: body, entryID: entryID, root: root, session: session)
             if self.stopRequested { return nil }
-            // The new message is on its way, so the previous failure's Retry no longer applies.
+            // The new message is on its way, so the previous failure's Retry no longer applies, nor Resume.
             if let index = self.entries.lastIndex(where: \.canRetry) { self.entries[index].canRetry = false }
+            self.clearResume()
             return await session.send(framed)
         }
     }
@@ -257,6 +270,24 @@ final class IDEAgentConversation: Identifiable {
         openRun(root: root, host: host) { session in
             await session.retry()
         }
+    }
+
+    /// Carries on with a run the app was closed in the middle of. The saved history already holds its
+    /// finished steps; the session tells the model what happened. Nothing is added to the transcript.
+    func resume() {
+        guard !isRunning, !isCompacting, hasConsent, !isACPConversation, let host, let root = host.agentProjectRoot else { return }
+        guard entries.contains(where: \.canResume) else { return }
+        willSend?()
+        commandCatalog?.invalidate()
+        promptRecall.reset()
+        clearResume()
+        openRun(root: root, host: host) { session in
+            await session.resume()
+        }
+    }
+
+    private func clearResume() {
+        for index in entries.indices where entries[index].canResume { entries[index].canResume = false }
     }
 
     /// Makes the session, then runs `makeStream`. `nil` means Stop landed before anything was sent.
@@ -835,6 +866,23 @@ final class IDEAgentConversation: Identifiable {
         modelChoice = saved.modelChoice
         lastACPSessionID = nil
         status = nil
+        if saved.runInProgress { restoreInterruptedRun(queued: saved.queued) }
+    }
+
+    /// The saved file says a run was going and never ended. Its finished steps are in the history; say so,
+    /// offer to carry on (never automatically: edits apply without asking, so the user decides), give back
+    /// the messages that were waiting, and write the file again without the mark, so this appears once.
+    private func restoreInterruptedRun(queued: [String]) {
+        var notice = IDEAgentEntry(
+            kind: .error,
+            text: "The last run was interrupted when Umbra closed. The steps above were saved; Resume carries on from them.")
+        notice.canResume = true
+        entries.append(notice)
+        if !queued.isEmpty {
+            let text = queued.joined(separator: "\n\n")
+            draft = draft.isEmpty ? text : draft + "\n\n" + text
+        }
+        persist(items: restoredItems ?? [], checkpoints: restoredRuns)
     }
 
     /// The originals of the files agents changed, on disk beside this project's conversations.
@@ -851,18 +899,25 @@ final class IDEAgentConversation: Identifiable {
         return log
     }
 
-    private func persist(items: [ConversationItem], checkpoints: [RunSnapshot]) {
+    /// `interrupted` marks a save made while a run is going: if it is the last write, the run was cut off.
+    /// Then `entries` is the transcript as of the last finished step, and the queue is kept with it.
+    private func persist(
+        items: [ConversationItem], checkpoints: [RunSnapshot], entries savedEntries: ArraySlice<IDEAgentEntry>? = nil,
+        interrupted: Bool = false
+    ) {
         guard let store, let root = host?.agentProjectRoot, !items.isEmpty else { return }
         let snapshot = SessionSnapshot(
             id: conversationID, projectRoot: root.path, title: customTitle ?? SessionStore.title(from: items),
             createdAt: createdAt, updatedAt: Date(), items: items, totalUsage: usage,
             host: IDEAgentSavedTranscript.encode(
-                entries: entries, cost: cost, todos: todos, customTitle: customTitle, checkpoints: checkpoints,
-                modelChoice: modelChoice))
+                entries: savedEntries.map(Array.init) ?? entries, cost: cost, todos: todos, customTitle: customTitle,
+                checkpoints: checkpoints, modelChoice: modelChoice,
+                runInProgress: interrupted, queued: queue.map(\.text)))
         // A write failure only costs the history; it is not worth interrupting the user for.
         try? store.save(snapshot)
         // The originals are kept for the newest runs of the project; this chat's own are never the ones to go.
-        checkpointBlobs()?.prune(keeping: Set(checkpoints.map(\.id)))
+        // (Not on a save in the middle of a run: it comes every few seconds and the end of the run prunes.)
+        if !interrupted { checkpointBlobs()?.prune(keeping: Set(checkpoints.map(\.id))) }
         onPersisted?()
     }
 
@@ -882,6 +937,7 @@ final class IDEAgentConversation: Identifiable {
     /// Cancels the run and drops the session. A session that outlives its window would keep the
     /// workspace alive through its tools.
     func teardown() {
+        saveInterrupted()
         endSession()
         host = nil
     }
@@ -993,10 +1049,19 @@ final class IDEAgentConversation: Identifiable {
         let stopGatePolicies: [any TurnPolicy] = stopGateOn
             ? [StopGatePolicy(check: { [support] _ in try await Self.runTestsForStopGate(support: support) })]
             : []
+        // Output too large to show is kept beside the conversation; the sweep drops what is old.
+        let toolOutputs = store.map {
+            IDEAgentToolOutputs(store: $0, projectRoot: root.path, conversationID: conversationID)
+        }
+        if let toolOutputs {
+            let directory = toolOutputs.directory
+            Task.detached(priority: .utility) { IDEAgentToolOutputs.sweep(directory: directory) }
+        }
+        let projectNotes = IDEAgentProjectNotes.load(root: root)
         let configuration = AgentConfiguration(
             model: choice.model,
             systemPrompt: SystemPrompt.make(
-                projectRoot: workspace.rootPath, notes: IDEAgentProjectNotes.load(root: root), mode: mode,
+                projectRoot: workspace.rootPath, notes: projectNotes, mode: mode,
                 userNotes: IDEAgentProjectNotes.loadUser(settings: settings), variant: profile.promptVariant,
                 memory: memoryText),
             reasoningEffort: choice.effectiveReasoningEffort,
@@ -1017,7 +1082,10 @@ final class IDEAgentConversation: Identifiable {
             runIsOverCost: settings.runIsOverCost(for: choice),
             editTolerance: profile.editTolerance,
             policies: stopGatePolicies,
-            shapeToolOutput: { IDEAgentOutputScrubber.shape($0) })
+            shapeToolOutput: { IDEAgentOutputScrubber.shape($0) },
+            currentInstructions: { IDEAgentProjectNotes.current(root: root) },
+            instructionsBaseline: projectNotes,
+            toolOutputStore: toolOutputs)
         let created = AgentSession(
             client: client, tools: tools, workspace: workspace, configuration: configuration, history: history,
             checkpoints: await ensureCheckpointLog())
@@ -1078,11 +1146,65 @@ final class IDEAgentConversation: Identifiable {
         return IDEGradleSummary.make(input)
     }
 
+    // MARK: - Saving during a run
+
+    /// Writes down, before the first step, that a run is going. If the app closes or dies now, the
+    /// conversation reopens as interrupted (with the message in it) instead of as if it had never been
+    /// sent. The end of the run writes the same file again without the mark.
+    private func claimRun(session: AgentSession) async {
+        stepItems = await session.items
+        stepEntryCount = entries.count
+        stepCheckpoints = await session.checkpoints.snapshot()
+        lastStepSave = Date()
+        if let items = stepItems {
+            persist(items: items, checkpoints: stepCheckpoints, entries: entries.prefix(stepEntryCount), interrupted: true)
+        }
+    }
+
+    /// A step finished with no tool call left open: remember it, and save it soon.
+    private func noteStep(_ items: [ConversationItem]) {
+        flush()
+        stepItems = items
+        stepEntryCount = entries.count
+        guard stepSaveTask == nil else { return }
+        let wait = max(0, Self.stepSaveInterval - Date().timeIntervalSince(lastStepSave))
+        stepSaveTask = Task { [weak self] in
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            guard !Task.isCancelled, let self else { return }
+            self.stepSaveTask = nil
+            await self.saveStep()
+        }
+    }
+
+    private func saveStep() async {
+        guard isRunning, let session else { return }
+        let checkpoints = await session.checkpoints.snapshot()
+        // The run may have ended while the checkpoints were read: its own save is the later one.
+        guard isRunning, let items = stepItems else { return }
+        stepCheckpoints = checkpoints
+        lastStepSave = Date()
+        persist(items: items, checkpoints: checkpoints, entries: entries.prefix(stepEntryCount), interrupted: true)
+    }
+
+    /// The window is closing, or the app quitting, in the middle of a run: write the last finished step down
+    /// as interrupted before the run is cancelled and the host goes, so the conversation reopens with its
+    /// work and a Resume button rather than without the run's latest steps.
+    private func saveInterrupted() {
+        guard isRunning, !isACPConversation, let items = stepItems else { return }
+        stepSaveTask?.cancel()
+        stepSaveTask = nil
+        persist(items: items, checkpoints: stepCheckpoints, entries: entries.prefix(stepEntryCount), interrupted: true)
+    }
+
     // MARK: - Events
 
     private func consume(_ stream: AsyncStream<AgentEvent>, session: AgentSession) async {
+        await claimRun(session: session)
         for await event in stream { handle(event) }
         flush()
+        stepSaveTask?.cancel()
+        stepSaveTask = nil
+        stepItems = nil
         await appendChangeSummary(for: currentRun, session: session)
         currentRun = nil
         isRunning = false
@@ -1503,6 +1625,10 @@ final class IDEAgentConversation: Identifiable {
             if report.summarizedItems > 0 { for index in entries.indices { entries[index].itemIndex = nil } }
             if report.estimatedTokensAfter > 0 { contextTokens = report.estimatedTokensAfter }
             if let notice = Self.compactionNotice(report) { append(.init(kind: .notice, text: notice)) }
+        case .continuing(let reason, let attempt):
+            append(.init(kind: .notice, text: IDEAgentToolSummary.continuationNotice(reason, attempt: attempt)))
+        case .stepFinished(let items):
+            noteStep(items)
         case .stopGateChecked(let passed, let summary):
             // A pass is silent; a block shows why the run continues instead of ending.
             if !passed { append(.init(kind: .notice, text: summary)) }

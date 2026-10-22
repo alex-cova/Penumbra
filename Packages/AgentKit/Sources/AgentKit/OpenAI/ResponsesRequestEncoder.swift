@@ -25,6 +25,7 @@ public enum ResponsesRequestEncoder {
                 ])
             })
         }
+        if request.toolChoice == .disabled, !request.tools.isEmpty { body["tool_choice"] = "none" }
         if let effort = request.reasoningEffort {
             body["reasoning"] = ["effort": .string(effort), "summary": "auto"]
             body["include"] = ["reasoning.encrypted_content"]

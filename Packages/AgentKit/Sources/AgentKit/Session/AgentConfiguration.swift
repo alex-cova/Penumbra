@@ -55,6 +55,18 @@ public struct AgentConfiguration: Sendable {
     ///   cancel stubs. A shaper that throws falls back to the original.
     /// `nil` keeps every output as the tool wrote it.
     public var shapeToolOutput: (@Sendable (ToolOutputShapingInput) async throws -> String)?
+    /// How many times in a row a run answers a response cut off at the output limit by asking the model
+    /// to carry on, in smaller pieces, before it ends `.lengthLimit`. `0` ends at the first cut-off.
+    public var maxLengthContinuations: Int
+    /// The project instruction file as it is now, asked at every turn boundary so an edit made while
+    /// the conversation goes on reaches the model as a note holding the difference (the system prompt
+    /// never changes). Keep it cheap: it is a small file read. `nil` turns the notes off.
+    public var currentInstructions: (@Sendable () async -> InstructionSnapshot)?
+    /// The instruction text the system prompt was built from; what a note's diff starts from.
+    public var instructionsBaseline: String?
+    /// Where a tool's output too large to show is kept. With a store, the session offers
+    /// `read_tool_output`, saves an output nothing else bounded, and gives tools a way to save theirs.
+    public var toolOutputStore: (any ToolOutputStore)?
 
     public init(
         model: String,
@@ -80,8 +92,16 @@ public struct AgentConfiguration: Sendable {
         editTolerance: EditTolerance = .hosted,
         cacheFriendlySummaries: Bool = false,
         policies: [any TurnPolicy] = [],
-        shapeToolOutput: (@Sendable (ToolOutputShapingInput) async throws -> String)? = nil
+        shapeToolOutput: (@Sendable (ToolOutputShapingInput) async throws -> String)? = nil,
+        maxLengthContinuations: Int = 2,
+        currentInstructions: (@Sendable () async -> InstructionSnapshot)? = nil,
+        instructionsBaseline: String? = nil,
+        toolOutputStore: (any ToolOutputStore)? = nil
     ) {
+        self.toolOutputStore = toolOutputStore
+        self.maxLengthContinuations = maxLengthContinuations
+        self.currentInstructions = currentInstructions
+        self.instructionsBaseline = instructionsBaseline
         self.model = model
         self.systemPrompt = systemPrompt
         self.reasoningEffort = reasoningEffort
@@ -136,6 +156,7 @@ public enum SystemPrompt {
         - After changing code, call diagnostics for the files you touched and fix what you introduced.
         - Commands (run_command, gradle, run_tests) usually need the user's approval, so batch what you can and give a clear reason. When gradle and run_tests are available, use them for a Gradle build or tests: they open the Gradle tool window and console. Use run_command for anything else; it runs in the integrated terminal. Never run a destructive or irreversible command unless the user asked for it; a denial is information, so adjust instead of retrying.
         - Never write build output, version-control data or credentials. Everything you change in a run can be reverted by the user, so say what you changed.
+        - When a tool result says its full output was saved, read the part you need with read_tool_output (a pattern finds lines, an offset pages) instead of running the command again.
         - If a tool returns an error, read it and change your approach; do not repeat the same call.
         - Report only changes that a tool result confirmed. If an edit was refused or failed, say so; never describe it as done.
         """

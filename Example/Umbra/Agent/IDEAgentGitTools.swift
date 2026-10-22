@@ -183,7 +183,7 @@ struct IDEGitDiffTool: AgentTool {
                 continue
             }
             if diff.isEmpty { continue }
-            diff = OutputTruncation.headAndTail(diff, maxCharacters: Self.maxFileCharacters)
+            diff = await OutputTruncation.headAndTailSaving(diff, maxCharacters: Self.maxFileCharacters, context: context)
             total += diff.count
             output.append(diff.hasSuffix("\n") ? String(diff.dropLast()) : diff)
         }

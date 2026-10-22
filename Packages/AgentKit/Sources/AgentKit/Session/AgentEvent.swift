@@ -30,6 +30,11 @@ public enum RunEnding: Sendable, Equatable {
     case failed(String)
 }
 
+public enum ContinuationReason: Sendable, Equatable {
+    case outputLimit
+    case interrupted
+}
+
 public enum AgentEvent: Sendable, Equatable {
     /// First event of a run. Its checkpoints, if it changes files, are filed under this id.
     case runStarted(RunID)
@@ -58,6 +63,13 @@ public enum AgentEvent: Sendable, Equatable {
     case usage(TokenUsage)
     /// The conversation was shortened to fit the window. The host's transcript is unaffected.
     case compacted(CompactionReport)
+    /// The last response was cut short (the output limit, or a dropped connection after output began)
+    /// and the loop is asking the model to carry on. `attempt` counts the consecutive tries, from 1.
+    case continuing(reason: ContinuationReason, attempt: Int)
+    /// A model turn and the outputs of all its tool calls are in the history: no call is left open, so
+    /// a host can save `items` as they stand, and a run cut short here can be resumed. Emitted after
+    /// each step that ran tools (a run ending is announced by `.runEnded`).
+    case stepFinished(items: [ConversationItem])
     /// The Stop gate's check ran. `passed` is false when it blocked the ending or the cap ended it.
     case stopGateChecked(passed: Bool, summary: String)
     /// An event from a child subagent session, for progress UI. The parent's own run still ends

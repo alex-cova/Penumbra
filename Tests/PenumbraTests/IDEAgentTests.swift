@@ -434,6 +434,21 @@ final class IDEAgentControllerTests: XCTestCase {
         XCTAssertTrue(controller.entries.isEmpty)
     }
 
+    func testACutOffAnswerKeepsItsTextAndSaysTheModelIsAskedToContinue() async throws {
+        let (controller, _, _) = try makeController(turns: [])
+        controller.handle(.stateChanged(.streaming))
+        controller.handle(.textDelta("half"))
+        controller.handle(.assistantMessage("half"))
+        controller.handle(.continuing(reason: .outputLimit, attempt: 1))
+        XCTAssertEqual(controller.entries.map(\.kind), [.assistant, .notice])
+        XCTAssertEqual(controller.entries.first?.text, "half")
+        XCTAssertTrue(controller.entries.last?.text.contains("output limit") == true)
+
+        controller.handle(.continuing(reason: .interrupted, attempt: 2))
+        XCTAssertTrue(controller.entries.last?.text.contains("connection dropped") == true)
+        XCTAssertTrue(controller.entries.last?.text.contains("try 2") == true)
+    }
+
     func testClearResetsTheConversation() async throws {
         let (controller, client, _) = try makeController(turns: [.text("one"), .text("two")])
         controller.draft = "first"

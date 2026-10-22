@@ -10,7 +10,15 @@ public enum ProjectInstructions {
 
     /// The instruction file at the project root, if there is one.
     public static func loadRoot(at root: URL) -> String? {
-        load(in: root, names: fileNames)
+        rootFile(at: root)?.text
+    }
+
+    /// The same, with the name of the file that was found.
+    public static func rootFile(at root: URL) -> (name: String, text: String)? {
+        for name in fileNames {
+            if let text = loadFile(root.appendingPathComponent(name)) { return (name, text) }
+        }
+        return nil
     }
 
     /// The instruction file in a project-relative directory. `""` is the root.

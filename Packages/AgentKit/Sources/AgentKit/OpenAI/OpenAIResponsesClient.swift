@@ -3,6 +3,7 @@ import Foundation
 /// OpenAI's `/v1/responses`, stateless: see `ResponsesRequestEncoder`.
 public struct OpenAIResponsesClient: LLMClient {
     public var providerID: String { ResponsesRequestEncoder.providerID }
+    public var supportsDisabledToolChoice: Bool { true }
 
     public let endpoint: LLMEndpoint
     public let strictTools: Bool

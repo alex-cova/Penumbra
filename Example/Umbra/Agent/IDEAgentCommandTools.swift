@@ -89,7 +89,8 @@ struct IDERunCommandTool: AgentTool {
             other tools can't do, such as git and scripts. Not for reading or editing files, and not for \
             a Gradle build or tests (use gradle and run_tests; those open the Gradle tool window). \
             Interactive programs and long-lived servers will not work: anything the command starts is \
-            stopped when it ends.
+            stopped when it ends. When the output is large, the full text is saved and a preview comes \
+            back; read the rest with read_tool_output instead of piping through head or tail.
             """,
             parameters: [
                 ToolParameter("command", .string, "The shell command."),
@@ -129,7 +130,7 @@ struct IDERunCommandTool: AgentTool {
         let result = try await Self.execute(
             command: command, workingDirectory: support.root, environment: environment, timeout: timeout,
             sandboxProfile: profile, commandID: commandID, box: box, progress: progress)
-        let formatted = Self.format(command: command, result: result, timeout: timeout)
+        let formatted = await Self.format(command: command, result: result, timeout: timeout, context: context)
         let verdict = formatted.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? ""
         let separator = result.output.hasSuffix("\n") || result.output.isEmpty ? "" : "\n"
         box.showCommand(id: commandID, title: command, line: separator + verdict + "\n")
@@ -175,7 +176,7 @@ struct IDERunCommandTool: AgentTool {
             let rerun = try await execute(
                 command: command, workingDirectory: workingDirectory, environment: environment,
                 timeout: timeout, sandboxProfile: nil, commandID: commandID, box: box, progress: progress)
-            return Self.format(command: command, result: rerun, timeout: timeout)
+            return await Self.format(command: command, result: rerun, timeout: timeout, context: context)
                 + "\n" + blocked + " Retried outside the sandbox.]"
         }
         guard let ask = context.ask else { return formatted + "\n" + blocked + " Kept the sandboxed result.]" }
@@ -188,12 +189,27 @@ struct IDERunCommandTool: AgentTool {
         let rerun = try await execute(
             command: command, workingDirectory: workingDirectory, environment: environment,
             timeout: timeout, sandboxProfile: nil, commandID: commandID, box: box, progress: progress)
-        return Self.format(command: command, result: rerun, timeout: timeout)
+        return await Self.format(command: command, result: rerun, timeout: timeout, context: context)
             + "\n" + blocked + " Retried outside the sandbox.]"
     }
 
     static func format(command: String, result: AgentCommandResult, timeout: TimeInterval) -> String {
-        var output = OutputTruncation.headAndTail(result.output, maxCharacters: maxOutputCharacters)
+        compose(
+            command: command, output: OutputTruncation.headAndTail(result.output, maxCharacters: maxOutputCharacters),
+            result: result, timeout: timeout)
+    }
+
+    /// `format`, but output past the cap is saved whole when the session has a store, and the middle that
+    /// is left out says how to read it.
+    static func format(
+        command: String, result: AgentCommandResult, timeout: TimeInterval, context: ToolContext
+    ) async -> String {
+        let output = await OutputTruncation.headAndTailSaving(result.output, maxCharacters: maxOutputCharacters, context: context)
+        return compose(command: command, output: output, result: result, timeout: timeout)
+    }
+
+    private static func compose(command: String, output shown: String, result: AgentCommandResult, timeout: TimeInterval) -> String {
+        var output = shown
         if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { output = "(no output)" }
         let seconds = String(format: "%.1f", result.duration)
         let verdict: String

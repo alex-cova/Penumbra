@@ -93,4 +93,9 @@ struct IDEAgentSavedTranscript: Codable {
     var modelChoice: IDEAIModelChoice?
     /// The runs that changed files, so Revert Run still works after a relaunch (their originals are on disk).
     var checkpoints: [RunSnapshot]?
+    /// A run was going when this was written and nothing wrote the end of it: the app was closed (or
+    /// died) in the middle. Reading it back offers Resume. Absent on older files.
+    var runInProgress: Bool?
+    /// Messages written during that run and not yet delivered, so a quit does not lose them.
+    var queued: [String]?
 }

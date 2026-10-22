@@ -38,8 +38,9 @@ struct HTTPStreamClient: Sendable {
             let task = Task {
                 var attempt = 0
                 while true {
+                    let output = OutputFlag()
                     do {
-                        try await run(into: continuation)
+                        try await run(into: continuation, output: output)
                         continuation.finish()
                         return
                     } catch {
@@ -50,6 +51,12 @@ struct HTTPStreamClient: Sendable {
                         let error = Self.normalized(error)
                         guard let delay = retry.delay(for: error, attempt: attempt) else {
                             continuation.finish(throwing: error)
+                            return
+                        }
+                        // Resending would drop text and calls the consumer already has. Hand the
+                        // partial turn over instead and let the loop ask the model to carry on.
+                        if output.started {
+                            continuation.finish(throwing: LLMError.interruptedAfterOutput(error.localizedDescription))
                             return
                         }
                         attempt += 1
@@ -65,7 +72,15 @@ struct HTTPStreamClient: Sendable {
         }
     }
 
-    private func run(into continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation) async throws {
+    /// Whether one attempt has yielded anything a consumer would lose on a resend. Touched only by the
+    /// task that runs the attempt.
+    private final class OutputFlag: @unchecked Sendable {
+        var started = false
+    }
+
+    private func run(
+        into continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation, output: OutputFlag
+    ) async throws {
         let response = try await transport.open(try makeRequest())
 
         guard (200..<300).contains(response.status) else {
@@ -82,7 +97,11 @@ struct HTTPStreamClient: Sendable {
 
         func emit(_ events: [LLMEvent]) {
             for event in events {
-                if case .finished = event { finished = true }
+                switch event {
+                case .finished: finished = true
+                case .textDelta, .toolCallStarted, .toolCallArgumentsDelta, .toolCallFinished: output.started = true
+                default: break
+                }
                 continuation.yield(event)
             }
         }

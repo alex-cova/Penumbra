@@ -14,6 +14,13 @@ enum IDEAgentProjectNotes {
         ProjectInstructions.loadRoot(at: root)
     }
 
+    /// The root file as it is now, with its name. A live session asks at every turn boundary, so an
+    /// edit made mid-conversation (by the user, `/init`, a git pull) reaches the model as a note.
+    static func current(root: URL) -> InstructionSnapshot {
+        let found = ProjectInstructions.rootFile(at: root)
+        return InstructionSnapshot(name: found?.name ?? fileNames[0], text: found?.text)
+    }
+
     /// `~/.claude/CLAUDE.md` and Umbra's own file, only when the user has opted in. Missing files
     /// are skipped. There is no walk above the project folder.
     @MainActor
