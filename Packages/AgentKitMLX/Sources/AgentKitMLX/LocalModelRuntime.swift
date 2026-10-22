@@ -42,6 +42,12 @@ public actor LocalModelRuntime {
     /// release link may strip because nothing else references `MLXLLM`.
     @discardableResult
     public func load(_ model: InstalledLocalModel) async throws -> Loaded {
+        // A quantization MLX cannot run crashes its loader, so it is refused before anything
+        // loads, without needing the GPU.
+        let bits = MLXModelInspector.quantizationBits(in: model.directory)
+        if let bits, !MLXModelInspector.supportedQuantizationBits.contains(bits) {
+            throw LocalModelError.unsupportedQuantization(modelID: model.id, bits: bits)
+        }
         try Self.requireAvailable()
         if let loaded, loaded.model.id == model.id { return loaded }
         if let loading, loading.id == model.id { return try await loading.task.value }
@@ -66,6 +72,7 @@ public actor LocalModelRuntime {
         } catch {
             if loading?.id == model.id { loading = nil }
             if error is CancellationError { throw error }
+            if let modelError = error as? LocalModelError { throw modelError }
             throw LocalModelError.loadFailed(error.localizedDescription)
         }
     }

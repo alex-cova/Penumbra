@@ -35,6 +35,66 @@ import Testing
         #expect(!result.stopped)
     }
 
+    @Test func stopsAtAnInventedUserTurn() {
+        // What Umbra's export showed from a 1.5B model: no special token, just role headers.
+        let result = run(["hiogenous\nUser: hiogenous\nAssistant: Hi"])
+        #expect(result.text == "hiogenous")
+        #expect(result.stopped)
+    }
+
+    @Test func stopsAtAHeaderAtTheStartOfAChunk() {
+        let result = run(["Hello.\n", "User: more"])
+        #expect(result.text == "Hello.")
+        #expect(result.stopped)
+    }
+
+    @Test func stopsAtAHeaderOpeningTheTurn() {
+        let result = run(["Human: hi"])
+        #expect(result.text.isEmpty)
+        #expect(result.stopped)
+    }
+
+    @Test func findsAHeaderSplitAcrossChunks() {
+        let twoChunks = run(["Done.\nUs", "er: again"])
+        #expect(twoChunks.text == "Done.")
+        #expect(twoChunks.stopped)
+
+        let manyChunks = run(["Done.\n", "U", "s", "er:"])
+        #expect(manyChunks.text == "Done.")
+        #expect(manyChunks.stopped)
+
+        let opening = run(["Hu", "man:", " hi"])
+        #expect(opening.text.isEmpty)
+        #expect(opening.stopped)
+    }
+
+    @Test func stopsAtAHeaderAfterACRLFLineBreak() {
+        let whole = run(["Done.\r\nUser: again"])
+        #expect(whole.text == "Done.")
+        #expect(whole.stopped)
+
+        let split = run(["Done.\r", "\nUser:", " again"])
+        #expect(split.text == "Done.")
+        #expect(split.stopped)
+    }
+
+    @Test func passesUserMidLineAndLookalikes() {
+        let text = "Ask the User: what now?\nUsername: alex\nuser: x\nUsers: 3"
+        let result = run([text])
+        #expect(result.text == text)
+        #expect(!result.stopped)
+    }
+
+    @Test func releasesAHeldTailWhenTheStreamEnds() {
+        let newline = run(["Done.\n"])
+        #expect(newline.text == "Done.\n")
+        #expect(!newline.stopped)
+
+        let partial = run(["a\nUs"])
+        #expect(partial.text == "a\nUs")
+        #expect(!partial.stopped)
+    }
+
     @Test func leavesHTMLAndGenericsAlone() {
         let result = run(["<s>old</s> and Array<Int> a < b"])
         #expect(result.text == "<s>old</s> and Array<Int> a < b")

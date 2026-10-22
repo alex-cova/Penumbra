@@ -1,3 +1,4 @@
+import AgentKitMLX
 import XCTest
 @testable import Umbra
 
@@ -6,7 +7,14 @@ final class IDESuggestedLocalModelsTests: XCTestCase {
         let ids = IDESuggestedLocalModels.all.map(\.id)
         XCTAssertEqual(Set(ids).count, ids.count)
         XCTAssertTrue(ids.allSatisfy { $0.split(separator: "/").count == 2 })
-        XCTAssertTrue(ids.contains("prism-ml/Bonsai-27B-mlx-1bit"))
+    }
+
+    func testNoSuggestionUsesAQuantizationMLXCannotRun() {
+        for model in IDESuggestedLocalModels.all {
+            XCTAssertTrue(
+                MLXModelInspector.supportedQuantizationBits.contains(model.bits),
+                "\(model.id) is suggested but MLX cannot run \(model.bits)-bit weights")
+        }
     }
 
     func testTheSetupSheetOffersAModelThatCanUseTools() {

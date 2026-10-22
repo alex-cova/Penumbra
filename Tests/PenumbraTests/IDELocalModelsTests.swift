@@ -207,6 +207,21 @@ final class IDEAgentMLXSettingsTests: XCTestCase {
         XCTAssertNil(settings.setupHint)
     }
 
+    /// The completion model (a base model) is installed next to chat models; chat on it loops, so the hint refuses it.
+    func testABaseModelIsRefusedForChatWithAWayOut() throws {
+        guard MLXAvailability.currentStatus() == .available else { throw XCTSkip("MLX is not available in this test process") }
+        let base = "mlx-community/Qwen2.5-Coder-1.5B-4bit"
+        let settings = makeSettings(installed: [
+            try model(base, template: toolTemplate), try model("mlx-community/Qwen2.5-Coder-1.5B-Instruct-4bit", template: toolTemplate),
+        ])
+        settings.provider = .mlx
+        settings.model = base
+        XCTAssertTrue(settings.setupHint?.contains("base model") == true)
+        XCTAssertTrue(settings.setupHint?.contains("Instruct") == true)
+        settings.model = "mlx-community/Qwen2.5-Coder-1.5B-Instruct-4bit"
+        XCTAssertNil(settings.setupHint)
+    }
+
     func testAnInstalledToolModelBuildsAnMLXClientAndTheContextIsCapped() throws {
         guard MLXAvailability.currentStatus() == .available else { throw XCTSkip("MLX is not available in this test process") }
         let settings = makeSettings(installed: [try model("acme/tools-4bit", template: toolTemplate)])

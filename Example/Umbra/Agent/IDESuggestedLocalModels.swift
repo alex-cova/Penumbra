@@ -41,9 +41,6 @@ enum IDESuggestedLocalModels {
             id: "mlx-community/Qwen3-8B-4bit", blurb: "Stronger answers and tool use; needs more memory.",
             approximateBytes: 4_700_000_000, parameterBillions: 8, bits: 4, purpose: .agent, recommendedMemoryGB: 16),
         IDESuggestedLocalModel(
-            id: "prism-ml/Bonsai-27B-mlx-1bit", blurb: "A 27B model packed to 1 bit. Much larger than the others, in about 5 GB.",
-            approximateBytes: 5_100_000_000, parameterBillions: 27, bits: 1, purpose: .agent, recommendedMemoryGB: 16),
-        IDESuggestedLocalModel(
             id: "mlx-community/Llama-3.2-3B-Instruct-4bit", blurb: "A general chat model from Meta.",
             approximateBytes: 1_800_000_000, parameterBillions: 3, bits: 4, purpose: .agent, recommendedMemoryGB: nil),
         IDESuggestedLocalModel(

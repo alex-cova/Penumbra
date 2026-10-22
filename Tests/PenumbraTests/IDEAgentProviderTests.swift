@@ -216,6 +216,31 @@ final class IDEAgentProviderTests: XCTestCase {
         XCTAssertNotEqual(settings.fingerprint, before, "a new context means a new session (and a model reload)")
     }
 
+    func testAModelWithAnUnsupportedQuantizationIsNotOffered() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("umbra-models-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = LocalModelPaths(root: root)
+        try paths.createDirectories()
+        let directory = try paths.directory(for: "acme/onebit")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try #"{"model_type":"qwen3","quantization":{"group_size":128,"bits":1}}"#.write(
+            to: directory.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+        let installed = InstalledLocalModel(
+            manifest: LocalModelManifest(repositoryID: "acme/onebit", revision: "r", downloadedAt: .now, totalBytes: 1),
+            directory: directory)
+
+        let settings = IDEAgentSettings(
+            defaults: UserDefaults(suiteName: "umbra.agent.tests.\(UUID().uuidString)")!,
+            keyStore: IDEAgentMemoryKeyStore(),
+            installedModels: { [installed] })
+        settings.provider = .mlx
+        settings.setModel("acme/onebit", for: .mlx)
+        XCTAssertEqual(
+            settings.setupHint,
+            "“acme/onebit” is quantized to 1 bit, which MLX cannot run (2, 3, 4, 5, 6 or 8 bits). Choose a 4-bit model.")
+    }
+
     func testWhenOllamaIsNotRunningTheSettingsSayWhy() async throws {
         let transport = FakeOllamaTransport(tags: "{}")
         transport.unreachable = true

@@ -513,7 +513,14 @@ final class IDEAgentSettings {
             let status = MLXAvailability.currentStatus()
             if status != .available { return MLXAvailability.message(for: status) }
             if model.isEmpty { return "Download a model under Manage On-Device Models…, then choose it here." }
-            if selectedMLXModel(id: model) == nil { return "“\(model)” is not downloaded. Choose an installed model." }
+            guard let installed = selectedMLXModel(id: model) else {
+                return "“\(model)” is not downloaded. Choose an installed model."
+            }
+            if let message = MLXModelInspector.unsupportedQuantizationMessage(
+                modelID: model, bits: MLXModelInspector.quantizationBits(in: installed.directory)) {
+                return message
+            }
+            if let message = MLXModelInspector.baseModelMessage(modelID: model) { return message }
             return nil
         }
         if endpointURL(for: provider) == nil { return "Set a valid base URL in the agent settings." }

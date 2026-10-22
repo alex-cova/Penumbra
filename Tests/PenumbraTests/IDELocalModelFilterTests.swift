@@ -52,10 +52,15 @@ final class IDELocalModelFilterTests: XCTestCase {
         }
     }
 
+    func testOneBitHasNoFilterOptionBecauseMLXCannotRunIt() {
+        XCTAssertFalse(IDELocalModelFilter.Precision.allCases.contains { $0.bits == 1 })
+    }
+
     func testTheSuggestionsCanBeFiltered() {
         var filter = IDELocalModelFilter()
-        filter.precision = .oneBit
-        XCTAssertEqual(IDESuggestedLocalModels.all.filter(filter.matches).map(\.id), ["prism-ml/Bonsai-27B-mlx-1bit"])
+        filter.precision = .fourBit
+        let fourBit = IDESuggestedLocalModels.all.filter(filter.matches)
+        XCTAssertEqual(fourBit.count, IDESuggestedLocalModels.all.count, "every suggestion is 4-bit")
         filter = IDELocalModelFilter()
         filter.parameters = .under2
         XCTAssertTrue(IDESuggestedLocalModels.all.filter(filter.matches).allSatisfy { $0.parameterBillions < 2 })

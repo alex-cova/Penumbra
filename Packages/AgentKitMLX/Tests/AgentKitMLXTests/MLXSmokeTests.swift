@@ -74,6 +74,21 @@ struct MLXSmokeTests {
         #expect(usage?.cachedInputTokens == 0, "the first turn has nothing cached")
     }
 
+    /// A bare greeting with the app's default settings: a chat model answers briefly and stops. A base
+    /// model behind a chat template invents the next `User:` turn or loops instead.
+    @Test func aBareGreetingGetsAShortAnswerThatStopsOnItsOwn() async throws {
+        let model = try await Self.installedModel()
+        let client = MLXLLMClient(model: model)
+        let events = try await collect(client.stream(LLMRequest(model: model.id, items: [.user("hi")])))
+        let text = events.compactMap { if case .textDelta(let t) = $0 { t } else { nil } }.joined()
+        print("MLX-SMOKE hi -> \(model.id): \(text.debugDescription) finish=\(String(describing: events.last))")
+        #expect(!text.isEmpty)
+        #expect(text.count < 600, "a greeting should not run on: \(text)")
+        #expect(!text.contains("User:"), "the model wrote the user's next turn: \(text)")
+        let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        #expect(Set(lines).count == lines.count, "the model repeats itself (the loop guard may have cut it short): \(text)")
+    }
+
     @Test func aRealToolCallRoundTripReusesTheKVCacheOnTheSecondTurn() async throws {
         let model = try await Self.installedModel()
         let project = try TempProject(files: ["NOTES.md": "The secret word is PELICAN.\n"])

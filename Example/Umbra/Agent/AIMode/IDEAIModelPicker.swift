@@ -141,11 +141,8 @@ struct IDEAIModelPicker: View {
         Section("On This Mac") {
             if store.installed.isEmpty { Text("No models downloaded").foregroundStyle(.secondary) }
             ForEach(store.installed) { model in
-                let info = store.info(for: model)
-                let lacksTools = info.hasChatTemplate && !info.supportsTools
-                item(
-                    LocalModelFormat.shortName(model.id) + (mode == .code && lacksTools ? " (no tool support)" : ""),
-                    provider: .mlx, model: model.id, isEnabled: mode == .chat || !lacksTools)
+                let (label, enabled) = onDeviceLabel(for: model, info: store.info(for: model))
+                item(label, provider: .mlx, model: model.id, isEnabled: enabled)
             }
         }
     }
@@ -164,6 +161,20 @@ struct IDEAIModelPicker: View {
                 }
             }
         }
+    }
+
+    /// A quantization MLX cannot run is never offered; anything else follows the tool rule.
+    private func onDeviceLabel(for model: InstalledLocalModel, info: MLXModelInfo) -> (String, Bool) {
+        if MLXModelInspector.unsupportedQuantizationMessage(modelID: model.id, bits: info.quantizationBits) != nil {
+            return (LocalModelFormat.shortName(model.id) + " (unsupported quantization)", false)
+        }
+        // A base model (Qwen2.5-Coder-1.5B, the completion model) loops instead of answering.
+        if MLXModelInspector.baseModelMessage(modelID: model.id) != nil {
+            return (LocalModelFormat.shortName(model.id) + " (completion only)", false)
+        }
+        let lacksTools = info.hasChatTemplate && !info.supportsTools
+        let suffix = mode == .code && lacksTools ? " (no tool support)" : ""
+        return (LocalModelFormat.shortName(model.id) + suffix, mode == .chat || !lacksTools)
     }
 
     /// Running an external agent starts a program on this Mac, so the first use asks.

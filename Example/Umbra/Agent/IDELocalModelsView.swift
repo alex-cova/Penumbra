@@ -90,6 +90,7 @@ struct IDELocalModelsView: View {
         let info = store.info(for: model)
         let isUsed = settings.provider == .mlx && settings.model == model.id
         let isLoaded = store.loadedID == model.id
+        let baseModelMessage = MLXModelInspector.baseModelMessage(modelID: model.id)
         return HStack(spacing: IDEAppearance.Spacing.sm) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(LocalModelFormat.shortName(model.id)).font(IDEAppearance.Typography.body).lineLimit(1)
@@ -97,7 +98,11 @@ struct IDELocalModelsView: View {
                     Text(LocalModelFormat.owner(model.id))
                     Text("· \(LocalModelFormat.bytes(model.sizeBytes))")
                     if let context = info.contextLength { Text("· \(IDEAgentFormat.tokens(context)) context") }
-                    toolsBadge(info)
+                    if baseModelMessage != nil {
+                        Text("· completion only").foregroundStyle(IDEAppearance.ColorToken.error)
+                    } else {
+                        toolsBadge(info)
+                    }
                     if isLoaded { Text("· loaded").foregroundStyle(IDEAppearance.ColorToken.run) }
                 }
                 .font(IDEAppearance.Typography.caption)
@@ -114,8 +119,11 @@ struct IDELocalModelsView: View {
                     settings.model = model.id
                 }
                 .controlSize(.small)
-                .disabled(info.hasChatTemplate && !info.supportsTools)
-                .help(info.hasChatTemplate && !info.supportsTools ? "This model's chat template does not take tools." : "Run the agent with this model")
+                .disabled(baseModelMessage != nil || (info.hasChatTemplate && !info.supportsTools))
+                .help(
+                    baseModelMessage
+                        ?? (info.hasChatTemplate && !info.supportsTools
+                            ? "This model's chat template does not take tools." : "Run the agent with this model"))
             }
             if IDEPreferences.shared.inlineCompletionModelID == model.id {
                 Label("Code completion", systemImage: "checkmark.circle.fill")

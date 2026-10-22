@@ -8,11 +8,26 @@ public struct MLXGenerationSettings: Sendable, Hashable {
     public var topP: Float
     /// Local models can loop; an unbounded answer would run until memory does.
     public var maxTokens: Int
+    /// Small models at low temperature lock into repeat loops ("ACHI ACHI…"); a mild penalty
+    /// on recent tokens breaks the cycle without hurting normal text much.
+    public var repetitionPenalty: Float
+    public var repetitionContextSize: Int
 
-    public init(temperature: Float = 0.2, topP: Float = 0.95, maxTokens: Int = 8_192) {
+    public init(
+        temperature: Float = 0.2, topP: Float = 0.95, maxTokens: Int = 8_192,
+        repetitionPenalty: Float = 1.1, repetitionContextSize: Int = 64
+    ) {
         self.temperature = temperature
         self.topP = topP
         self.maxTokens = maxTokens
+        self.repetitionPenalty = repetitionPenalty
+        self.repetitionContextSize = repetitionContextSize
+    }
+
+    func generateParameters() -> GenerateParameters {
+        GenerateParameters(
+            maxTokens: maxTokens, temperature: temperature, topP: topP,
+            repetitionPenalty: repetitionPenalty, repetitionContextSize: repetitionContextSize)
     }
 }
 
@@ -141,6 +156,7 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
         }
 
         var stopFilter = StopMarkerFilter()
+        var loopDetector = RepetitionLoopDetector()
 
         streaming: for try await event in session.streamDetails(to: MLXConversation.messages(pending)) {
             try Task.checkCancellation()
@@ -149,8 +165,15 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
                 let visible = stopFilter.consume(text)
                 if !visible.isEmpty { forward(parser.consume(visible)) }
                 if stopFilter.stopped {
-                    // The model wrote an end-of-turn token as text and would carry on with an invented
-                    // turn. End here; the session's transcript holds that text, so the next request rebuilds.
+                    // The model wrote an end-of-turn token as text, or a `User:` header of its own, and would
+                    // carry on with an invented turn. End here; the session's transcript holds that text, so
+                    // the next request rebuilds.
+                    recoveredACall = true
+                    break streaming
+                }
+                if !visible.isEmpty, loopDetector.consume(visible) {
+                    // Stuck repeating one unit; the penalty did not break it. End the turn rather than
+                    // run to maxTokens, and rebuild the session next time.
                     recoveredACall = true
                     break streaming
                 }
@@ -224,7 +247,7 @@ public final class MLXLLMClient: LLMClient, @unchecked Sendable {
             loaded.container,
             instructions: request.system.isEmpty ? nil : request.system,
             history: MLXConversation.messages(split.history),
-            generateParameters: GenerateParameters(maxTokens: settings.maxTokens, temperature: settings.temperature, topP: settings.topP),
+            generateParameters: settings.generateParameters(),
             additionalContext: ["enable_thinking": key.thinking],
             tools: MLXBridge.toolSpecs(request.tools))
         return (session, split.pending, .rebuilt)

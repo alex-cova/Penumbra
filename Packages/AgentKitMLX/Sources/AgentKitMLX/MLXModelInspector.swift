@@ -19,17 +19,20 @@ public struct MLXModelInfo: Sendable, Equatable {
     public let hasChatTemplate: Bool
     /// The chat template takes `tools`, so the model can be asked to call functions.
     public let supportsTools: Bool
+    /// Bits per weight from the model's `quantization` config, if it is quantized.
+    public let quantizationBits: Int?
     /// Fill-in-the-middle format the tokenizer's vocabulary supports, if any.
     public let fimFormat: FIMFormat?
 
     public init(
         modelType: String?, contextLength: Int?, hasChatTemplate: Bool, supportsTools: Bool,
-        fimFormat: FIMFormat? = nil
+        quantizationBits: Int? = nil, fimFormat: FIMFormat? = nil
     ) {
         self.modelType = modelType
         self.contextLength = contextLength
         self.hasChatTemplate = hasChatTemplate
         self.supportsTools = supportsTools
+        self.quantizationBits = quantizationBits
         self.fimFormat = fimFormat
     }
 }
@@ -52,7 +55,51 @@ public enum MLXModelInspector {
             contextLength: context,
             hasChatTemplate: template != nil,
             supportsTools: template.map(ChatTemplate.supportsTools) ?? false,
+            quantizationBits: quantizationBits(in: config),
             fimFormat: fimFormat(modelType: modelType, tokens: tokenizerTokens(in: directory)))
+    }
+
+    /// Whether the repository name says this is a base model, which continues text instead of chatting:
+    /// it never ends a turn and writes the next `User:` line itself. Only the files of a base model
+    /// and its Instruct sibling are identical (same `config.json`, tokenizer and chat template), so the
+    /// name is the one signal. It is recognised by a `Base` or `pt` (pretrained) part, or by the
+    /// Qwen2.5 families, whose base repos carry no tag (`Qwen2.5-Coder-1.5B-4bit`) while the chat ones
+    /// say `Instruct`. Other untagged families are not guessed at: `DeepSeek-R1-Distill-Qwen-7B`
+    /// chats fine, and a model wrongly refused is worse than one that gets the loop guards.
+    public static func isBaseModelName(_ id: String) -> Bool {
+        let name = id.split(separator: "/").last.map(String.init) ?? id
+        let parts = name.lowercased().split(whereSeparator: { $0 == "-" || $0 == "_" }).map(String.init)
+        if parts.contains("base") || parts.contains("pt") { return true }
+        return name.range(of: #"^Qwen2\.5(-Coder|-Math)?-\d+(\.\d+)?B(-\d+-?bit|-bf16|-fp16)?$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// A message for the UI when the model is for completion only, else `nil`.
+    public static func baseModelMessage(modelID: String) -> String? {
+        guard isBaseModelName(modelID) else { return nil }
+        return "“\(modelID)” is a base model, not tuned to chat: it continues text and does not stop. Use it for Code Completion, or choose an Instruct model for chat."
+    }
+
+    /// What MLX's quantize accepts. Anything else crashes the loader, so it is refused first.
+    public static let supportedQuantizationBits: Set<Int> = [2, 3, 4, 5, 6, 8]
+
+    /// Bits per weight from `config.json`'s `quantization`, which multimodal and some newer
+    /// configs nest under `text_config`. `nil` when the weights are not quantized that way.
+    public static func quantizationBits(in directory: URL) -> Int? {
+        let config = (try? Data(contentsOf: directory.appendingPathComponent("config.json")))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        return quantizationBits(in: config)
+    }
+
+    /// A message for the UI when the weights' quantization cannot be loaded, else `nil`.
+    public static func unsupportedQuantizationMessage(modelID: String, bits: Int?) -> String? {
+        guard let bits, !supportedQuantizationBits.contains(bits) else { return nil }
+        return "“\(modelID)” is quantized to \(bits) bit, which MLX cannot run (2, 3, 4, 5, 6 or 8 bits). Choose a 4-bit model."
+    }
+
+    static func quantizationBits(in config: [String: Any]?) -> Int? {
+        let top = (config?["quantization"] as? [String: Any])?["bits"] as? Int
+        let nested = ((config?["text_config"] as? [String: Any])?["quantization"] as? [String: Any])?["bits"] as? Int
+        return top ?? nested
     }
 
     /// Qwen2.5-Coder FIM when the vocabulary has all three FIM tokens and the model is a

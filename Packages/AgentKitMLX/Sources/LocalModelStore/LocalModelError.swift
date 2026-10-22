@@ -15,6 +15,7 @@ public enum LocalModelError: Error, LocalizedError, Sendable, Equatable {
     case storageBookmarkStale
     case unsupportedHardware
     case notInstalled(String)
+    case unsupportedQuantization(modelID: String, bits: Int)
     case loadFailed(String)
 
     public var errorDescription: String? {
@@ -47,6 +48,8 @@ public enum LocalModelError: Error, LocalizedError, Sendable, Equatable {
             "Local models run on MLX, which needs an Apple silicon Mac."
         case .notInstalled(let id):
             "“\(id)” is not downloaded."
+        case .unsupportedQuantization(let id, let bits):
+            "“\(id)” is quantized to \(bits) bit, which MLX cannot run (2, 3, 4, 5, 6 or 8 bits). Choose a 4-bit model."
         case .loadFailed(let reason):
             "The model could not be loaded: \(reason)"
         }
@@ -76,6 +79,8 @@ public enum LocalModelError: Error, LocalizedError, Sendable, Equatable {
             "Use a Mac with an M-series chip."
         case .notInstalled:
             "Download the model first."
+        case .unsupportedQuantization:
+            "The model stays on disk; delete it in On-Device Models and download a 4-bit one."
         case .loadFailed:
             "The architecture may not be supported yet. Try a different model."
         }

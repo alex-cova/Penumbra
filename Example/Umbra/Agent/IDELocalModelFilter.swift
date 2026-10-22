@@ -5,8 +5,9 @@ import LocalModelStore
 /// search results alike. Pure, so the matching is tested without a view.
 struct IDELocalModelFilter: Equatable {
     /// How many bits a weight takes, from the `4-bit` tag the Hub puts on quantized repos.
+    /// 1-bit is left out: MLX cannot run it, so it is refused before anything loads.
     enum Precision: Int, CaseIterable, Identifiable {
-        case oneBit = 1, twoBit = 2, threeBit = 3, fourBit = 4, fiveBit = 5, sixBit = 6, eightBit = 8
+        case twoBit = 2, threeBit = 3, fourBit = 4, fiveBit = 5, sixBit = 6, eightBit = 8
         /// No bit tag: the weights are kept as published (16-bit) or use a mixed scheme.
         case full = 0
 
