@@ -51,16 +51,31 @@ enum IDEMenuCommand: CaseIterable, Hashable {
 /// column starts from the same table and applies IntelliJ IDEA's macOS keys where they differ;
 /// a `nil` entry there removes a shortcut that would clash with an IntelliJ binding.
 enum IDEMenuShortcuts {
-    static func shortcut(for command: IDEMenuCommand, in preset: KeymapPreset) -> KeyboardShortcut? {
-        switch preset {
-        case .sublime, .default_:
-            return base[command] ?? nil
-        case .intelliJ:
-            if let override = intelliJOverrides[command] {
-                return override
-            }
-            return base[command] ?? nil
+    static func shortcut(
+        for command: IDEMenuCommand,
+        in preset: KeymapPreset,
+        goToFile: GoToFileShortcut? = nil
+    ) -> KeyboardShortcut? {
+        if command == .goToFile, let custom = goToFile?.menuShortcut {
+            return custom
         }
+        let presetShortcut: KeyboardShortcut? = {
+            switch preset {
+            case .sublime, .default_:
+                return base[command] ?? nil
+            case .intelliJ:
+                if let override = intelliJOverrides[command] {
+                    return override
+                }
+                return base[command] ?? nil
+            }
+        }()
+        // The Go to File override takes its key from whatever held it: Open Folder in the
+        // Sublime column, Parameter Info in IntelliJ's.
+        if goToFile?.menuShortcut != nil, presetShortcut == goToFile?.menuShortcut {
+            return nil
+        }
+        return presetShortcut
     }
 
     private static let functionKey12 = KeyEquivalent(Character(UnicodeScalar(NSF12FunctionKey)!))
@@ -286,9 +301,21 @@ enum IDESecondaryShortcutMonitor {
     }
 }
 
+extension GoToFileShortcut {
+    /// The menu key equivalent, or `nil` for double-tap Shift (the menu keeps the preset default).
+    var menuShortcut: KeyboardShortcut? {
+        switch self {
+        case .commandP: KeyboardShortcut("p", modifiers: .command)
+        case .commandShiftO: KeyboardShortcut("o", modifiers: [.command, .shift])
+        case .optionCommandP: KeyboardShortcut("p", modifiers: [.command, .option])
+        case .doubleShift: nil
+        }
+    }
+}
+
 extension View {
     /// Applies the shortcut `command` has under `preset`, or none when the preset leaves it unbound.
     func menuShortcut(_ command: IDEMenuCommand, in preset: KeymapPreset) -> some View {
-        keyboardShortcut(IDEMenuShortcuts.shortcut(for: command, in: preset))
+        keyboardShortcut(IDEMenuShortcuts.shortcut(for: command, in: preset, goToFile: IDEPreferences.shared.goToFileShortcut))
     }
 }

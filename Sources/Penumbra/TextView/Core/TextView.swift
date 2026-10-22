@@ -60,6 +60,11 @@ public struct DocumentTextExport: Sendable {
     public var keymap: Keymap = .default_ {
         didSet { textInputView.keymap = keymap }
     }
+    /// Whether a double-tap of bare Shift opens Quick Open. Defaults to `true` (Penumbra's
+    /// historical trigger); hosts with a dedicated key for Go to File turn it off.
+    public var doubleShiftOpensQuickOpen = true {
+        didSet { textInputView.doubleShiftOpensQuickOpen = doubleShiftOpensQuickOpen }
+    }
     /// Invoked for keymap actions the editor core does not perform itself (palette, LSP
     /// navigation, formatting, surround-with). Return `true` if handled. `EditorIntelligenceController`
     /// and the command-palette controller install handlers here.

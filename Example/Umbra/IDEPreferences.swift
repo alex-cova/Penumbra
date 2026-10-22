@@ -52,6 +52,7 @@ public final class IDEPreferences {
         static let explorerShowExcludedFiles = "com.umbra.editor.explorerShowExcludedFiles"
         static let metalRendering = "com.umbra.editor.metalRendering"
         static let keymapPreset = "com.umbra.editor.keymapPreset"
+        static let goToFileShortcut = "com.umbra.editor.goToFileShortcut"
         static let openFoldersIn = "com.umbra.editor.openFoldersIn"
         static let showMethodSeparators = "com.umbra.editor.showMethodSeparators"
         static let highlightsOccurrencesOfSelection = "com.umbra.editor.highlightsOccurrencesOfSelection"
@@ -356,6 +357,13 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(keymapPreset.rawValue, forKey: Keys.keymapPreset) }
     }
 
+    /// The key that opens Go to File. One trigger at a time: picking a key replaces the
+    /// double-tap Shift trigger. Machine-local (like which folders open where), so it stays
+    /// out of the exported preferences snapshot.
+    var goToFileShortcut: GoToFileShortcut {
+        didSet { UserDefaults.standard.set(goToFileShortcut.rawValue, forKey: Keys.goToFileShortcut) }
+    }
+
     /// What opening a folder from a window that already has a project does. Not part of the
     /// preferences snapshot: it stays on this Mac.
     var openFoldersIn: IDEOpenFoldersIn {
@@ -587,7 +595,12 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(isFocusModeToolbarFadeEnabled, forKey: Keys.isFocusModeToolbarFadeEnabled) }
     }
 
-    var keymap: Keymap { keymapPreset.keymap }
+    /// The preset's bindings with the Go to File override applied.
+    var keymap: Keymap {
+        var map = keymapPreset.keymap
+        goToFileShortcut.apply(to: &map)
+        return map
+    }
 
     var hasCompletedFirstRunGuide: Bool {
         didSet { UserDefaults.standard.set(hasCompletedFirstRunGuide, forKey: Keys.hasCompletedFirstRunGuide) }
@@ -1087,6 +1100,7 @@ public final class IDEPreferences {
         isMetalRenderingEnabled = defaults.object(forKey: Keys.metalRendering) as? Bool ?? true
         let presetRaw = defaults.string(forKey: Keys.keymapPreset) ?? KeymapPreset.sublime.rawValue
         keymapPreset = KeymapPreset(rawValue: presetRaw) ?? .sublime
+        goToFileShortcut = defaults.string(forKey: Keys.goToFileShortcut).flatMap(GoToFileShortcut.init(rawValue:)) ?? .commandP
         openFoldersIn = defaults.string(forKey: Keys.openFoldersIn).flatMap(IDEOpenFoldersIn.init(rawValue:)) ?? .ask
         showMethodSeparators = defaults.object(forKey: Keys.showMethodSeparators) as? Bool ?? true
         highlightsOccurrencesOfSelection = defaults.object(forKey: Keys.highlightsOccurrencesOfSelection) as? Bool ?? true
@@ -1232,6 +1246,7 @@ public final class IDEPreferences {
         textView.isFocusModeEnabled = isFocusModeEnabled
         textView.focusModeHidesChrome = isFocusModeToolbarFadeEnabled
         textView.keymap = keymap
+        textView.doubleShiftOpensQuickOpen = goToFileShortcut.doubleShiftEnabled
         textView.theme = IDEEditorTheme.shared.current
         textView.tooltipDelay = TimeInterval(tooltipDelayMilliseconds) / 1000
         textView.inlayHintsUseEditorFont = inlayHintsUseEditorFont
@@ -1716,6 +1731,52 @@ enum IDEEditorFonts {
             return font
         }
         return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+}
+
+/// Which key opens Go to File. One trigger at a time: picking a key replaces the
+/// double-tap Shift trigger (double-Shift is detected outside the keymap, so it cannot
+/// sit beside another binding). ⌘P and ⇧⌘O match the Sublime and IntelliJ presets;
+/// ⌥⌘P is free everywhere. A key taken by something else is freed for Go to File.
+enum GoToFileShortcut: String, Codable, CaseIterable, Identifiable {
+    /// Sublime-style.
+    case commandP
+    /// IntelliJ-style.
+    case commandShiftO
+    case optionCommandP
+    /// The historical trigger: nothing is rebound.
+    case doubleShift
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .commandP: "⌘P"
+        case .commandShiftO: "⇧⌘O"
+        case .optionCommandP: "⌥⌘P"
+        case .doubleShift: "Double-tap Shift"
+        }
+    }
+
+    /// The editor keystroke, or `nil` for the hard-coded double-tap.
+    var keyStroke: KeyStroke? {
+        switch self {
+        case .commandP: KeyStroke(KeyChord("p", .command))
+        case .commandShiftO: KeyStroke(KeyChord("o", [.command, .shift]))
+        case .optionCommandP: KeyStroke(KeyChord("p", [.command, .option]))
+        case .doubleShift: nil
+        }
+    }
+
+    /// Whether double-tap Shift still opens Go to File.
+    var doubleShiftEnabled: Bool { keyStroke == nil }
+
+    /// Rebinds Go to File to ``keyStroke``, freeing the key from whatever editor action
+    /// held it (Parameter Info in the IntelliJ preset). No-op for ``doubleShift``.
+    func apply(to map: inout Keymap) {
+        guard let stroke = keyStroke else { return }
+        map.unbind(stroke)
+        map.bind(stroke, to: .quickOpenFile)
     }
 }
 

@@ -167,6 +167,7 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.smoothCaretMovement) { applyLivePreferences() }
             .onChange(of: preferences.scaleMarkdownHeadings) { applyLivePreferences() }
             .onChange(of: preferences.keymapPreset) { applyLivePreferences() }
+            .onChange(of: preferences.goToFileShortcut) { applyLivePreferences() }
     }
 
     private func editingChanges(_ view: some View) -> some View {

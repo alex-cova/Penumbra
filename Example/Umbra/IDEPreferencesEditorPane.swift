@@ -343,11 +343,16 @@ struct IDEPreferencesEditorPane: View {
 
         IDESettingsSection(
             "Keyboard",
-            footer: "Umbra defaults to Sublime Text shortcuts. Switch to IntelliJ if that is what your muscle memory expects."
+            footer: "Umbra defaults to Sublime Text shortcuts. Switch to IntelliJ if that is what your muscle memory expects. Picking a Go to File key replaces the double-tap Shift trigger."
         ) {
             IDESettingsPicker("Keymap", selection: $preferences.keymapPreset) {
                 ForEach(KeymapPreset.allCases) { preset in
                     Text(preset.title).tag(preset)
+                }
+            }
+            IDESettingsPicker("Go to File", selection: $preferences.goToFileShortcut) {
+                ForEach(GoToFileShortcut.allCases) { shortcut in
+                    Text(shortcut.title).tag(shortcut)
                 }
             }
         }

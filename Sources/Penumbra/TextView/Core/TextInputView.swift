@@ -1232,6 +1232,9 @@ final class TextInputView: EditorView {
     var keymapDispatcher = KeymapDispatcher()
     /// Detects a double tap of bare Shift for Search Everywhere.
     var doubleShiftDetector = DoubleModifierDetector()
+    /// Whether a double-tap of bare Shift opens Quick Open. Hosts with a dedicated key for
+    /// it turn this off so Shift+Shift stops firing while typing capitals.
+    var doubleShiftOpensQuickOpen = true
 
     // MARK: - Lifecycle
     init(theme: Theme) {
