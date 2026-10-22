@@ -1374,6 +1374,8 @@ public actor AgentSession {
                 plans.append(.answered(.error("Stopped: this exact call was made four times in one run.")))
             } else if !exempt, counts[key]! == 3 {
                 plans.append(.answered(.error("You have already made this exact call twice. Try a different approach instead of repeating it.")))
+            } else if let reason = Self.emptyWriteBesideRead(call, in: calls, tools: toolsByName) {
+                plans.append(.answered(.error(reason)))
             } else if let tool = toolsByName[call.name], !tool.isOffered(in: mode) {
                 plans.append(.answered(.error(mode == .plan
                     ? "\(call.name) is not available: this session is in plan mode, so nothing can be changed or run. Describe the change in your plan instead."
@@ -1674,6 +1676,39 @@ public actor AgentSession {
         } onCancel: {
             race.cancelled()
         }
+    }
+
+    // MARK: - A write that could not have seen the read beside it
+
+    static let emptyWriteMessage = "Not run: this write has empty content and was issued in the same step as a read, so it could not have used what that read returns. Read first, then write the result: issue the write again now that you have it. If you meant to create an empty file, say so and write it on its own."
+
+    /// A model that sends a read and a write in one step (parallel tool calls) has not seen the read's
+    /// result when it writes, and the content of a write that depends on it comes out empty; the model
+    /// then reports the file as written. Only that case is stopped: a file-writing call with empty
+    /// content next to a call that reads. A write with content, an empty write on its own, or one next
+    /// to another write runs as usual.
+    private static func emptyWriteBesideRead(_ call: PendingCall, in calls: [PendingCall], tools: [String: any AgentTool]) -> String? {
+        guard calls.count > 1, isFileWrite(call.name), hasEmptyContent(call.arguments) else { return nil }
+        let readsAlongside = calls.contains { $0.id != call.id && isRead($0.name, tools: tools) }
+        return readsAlongside ? emptyWriteMessage : nil
+    }
+
+    /// `write_file`, built in or from an MCP server (`mcp__files__write_file`).
+    private static func isFileWrite(_ name: String) -> Bool {
+        let last = name.components(separatedBy: "__").last ?? name
+        return last == "write_file" || last == "create_file"
+    }
+
+    /// A read tool by risk, or by the verb an MCP tool starts with (those are all `.command`).
+    private static func isRead(_ name: String, tools: [String: any AgentTool]) -> Bool {
+        if tools[name]?.risk == .read { return true }
+        let last = (name.components(separatedBy: "__").last ?? name).lowercased()
+        return ["read", "get", "list", "search", "find", "fetch", "view", "cat", "grep", "glob", "tree", "stat"].contains { last.hasPrefix($0) }
+    }
+
+    private static func hasEmptyContent(_ arguments: String) -> Bool {
+        guard let object = (try? JSONValue(parsing: arguments))?.objectValue else { return false }
+        return ["content", "contents", "text", "body", "data"].contains { object[$0]?.stringValue == "" }
     }
 
     /// The files an edit call changed, project-relative: a patch names its files, other edit tools a
