@@ -188,7 +188,13 @@ extension IDEWorkspace {
     }
 
     /// File ▸ Save All. Says what it could not save, since a silent partial save looks like success.
-    func saveAllDocuments() async {
+    ///
+    /// `namingActive` is for a keymap that puts Save on ⌘S as Save All (IntelliJ's): the active
+    /// buffer, when untitled, gets the save panel first, so ⌘S still names a new file.
+    func saveAllDocuments(namingActive: Bool = false) async {
+        if namingActive, let document = workbench.activePane.selectedDocument, document.url == nil {
+            await saveDocument(document, reason: .explicit)
+        }
         let report = await saveAll(reason: .saveAll)
         guard !report.isComplete else { return }
         var lines: [String] = []

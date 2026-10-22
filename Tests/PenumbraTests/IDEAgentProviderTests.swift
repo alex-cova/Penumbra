@@ -1,5 +1,6 @@
 import AgentKit
 import Foundation
+import LocalModelStore
 import XCTest
 @testable import Umbra
 
@@ -39,6 +40,28 @@ private final class FakeOllamaTransport: LLMTransport, @unchecked Sendable {
     }
 }
 
+/// An in-memory key store that counts reads, so tests can prove settings stay silent.
+private final class CountingKeyStore: IDEAgentKeyStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var keys: [String: String] = [:]
+    private var reads = 0
+
+    var loadCount: Int { lock.withLock { reads } }
+
+    func load(account: String) throws -> String? {
+        lock.withLock { reads += 1 }
+        return lock.withLock { keys[account] }
+    }
+
+    func save(_ key: String, account: String) throws {
+        lock.withLock { keys[account] = key }
+    }
+
+    func delete(account: String) throws {
+        lock.withLock { keys[account] = nil }
+    }
+}
+
 private let tagsJSON = """
 {"models":[
  {"name":"coder:7b","size":4000000000,"details":{"parameter_size":"7B","quantization_level":"Q4_K_M"}},
@@ -59,6 +82,25 @@ final class IDEAgentProviderTests: XCTestCase {
         IDEAgentSettings(
             defaults: UserDefaults(suiteName: "umbra.agent.tests.\(UUID().uuidString)")!,
             keyStore: IDEAgentMemoryKeyStore(), transport: transport)
+    }
+
+    func testCreatingSettingsDoesNotTouchTheKeychain() {
+        let defaults = UserDefaults(suiteName: "umbra.agent.tests.\(UUID().uuidString)")!
+        let store = CountingKeyStore()
+        try? store.save("sk-test", account: "api.openai.com")
+        try? store.save("brave-key", account: IDEAgentSettings.webSearchAccount)
+
+        let settings = IDEAgentSettings(defaults: defaults, keyStore: store)
+        XCTAssertEqual(store.loadCount, 0, "creating settings must not read the Keychain")
+
+        XCTAssertTrue(settings.hasAPIKey)
+        XCTAssertTrue(settings.hasWebSearchKey)
+        XCTAssertGreaterThan(store.loadCount, 0, "the first key question loads the flags")
+        let readsAfterFirstUse = store.loadCount
+        _ = settings.hasAPIKey
+        _ = settings.hasWebSearchKey
+        _ = settings.hasAPIKey(for: .anthropic)
+        XCTAssertEqual(store.loadCount, readsAfterFirstUse, "later reads reuse the cached flags")
     }
 
     func testEachProviderKeepsItsOwnUrlModelAndReasoning() {

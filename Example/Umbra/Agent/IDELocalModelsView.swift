@@ -18,19 +18,35 @@ struct IDELocalModelsView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.lg) {
-                    if store.availability != .available { availabilityBanner }
-                    installedSection
-                    if let download = store.download { downloadSection(download) }
-                    filterBar
-                    suggestedSection
-                    searchSection
-                    footer
+            // Pinned above the list, so a download started from anywhere in it stays in view.
+            if let download = store.download {
+                downloadSection(download)
+                    .padding(IDEAppearance.Spacing.md)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                Divider()
+            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: IDEAppearance.Spacing.lg) {
+                        if store.availability != .available { availabilityBanner }
+                        installedSection
+                        filterBar
+                        suggestedSection
+                        searchSection
+                        footer
+                    }
+                    .padding(IDEAppearance.Spacing.md)
                 }
-                .padding(IDEAppearance.Spacing.md)
+                .onChange(of: selectedID) { _, id in
+                    guard let id else { return }
+                    // After the details pane has been laid out under the row.
+                    Task { @MainActor in
+                        withAnimation { proxy.scrollTo(id, anchor: .center) }
+                    }
+                }
             }
         }
+        .animation(.default, value: store.download?.id)
         .frame(width: 600, height: 620)
         .background(IDEAppearance.ColorToken.panel)
         .task { store.prepareIfNeeded(); await store.refreshMemory() }
@@ -293,7 +309,14 @@ struct IDELocalModelsView: View {
                 Text(error).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
             }
             let shown = store.results.filter(filter.matches)
-            ForEach(shown) { result in resultRow(result) }
+            ForEach(shown) { result in
+                // The details open right under the row that was clicked, not at the end of the list.
+                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+                    resultRow(result)
+                    if selectedID == result.id { detailsPane(result) }
+                }
+                .id(result.id)
+            }
             if filter.isActive, shown.count < store.results.count {
                 Text(shown.isEmpty
                     ? "No result matches the filters. A model whose precision or size is not known is hidden while one is set."
@@ -301,14 +324,18 @@ struct IDELocalModelsView: View {
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
-            if let selectedID, let result = store.results.first(where: { $0.id == selectedID }) { detailsPane(result) }
         }
     }
 
     private func resultRow(_ result: HFModelSummary) -> some View {
-        Button {
-            selectedID = result.id
-            Task { await store.loadDetails(for: result.id) }
+        let isSelected = selectedID == result.id
+        return Button {
+            if isSelected {
+                selectedID = nil
+            } else {
+                selectedID = result.id
+                Task { await store.loadDetails(for: result.id) }
+            }
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -326,9 +353,12 @@ struct IDELocalModelsView: View {
                 if store.installed.contains(where: { $0.id == result.id }) {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(IDEAppearance.ColorToken.run)
                 }
+                Image(systemName: isSelected ? "chevron.down" : "chevron.right")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
             .padding(IDEAppearance.Spacing.sm)
-            .background(selectedID == result.id ? IDEAppearance.ColorToken.controlHover : IDEAppearance.ColorToken.card)
+            .background(isSelected ? IDEAppearance.ColorToken.controlHover : IDEAppearance.ColorToken.card)
             .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
             .contentShape(Rectangle())
         }
@@ -339,8 +369,8 @@ struct IDELocalModelsView: View {
     private func detailsPane(_ result: HFModelSummary) -> some View {
         let detail = store.details[result.id]
         let installed = store.installed.contains { $0.id == result.id }
+        let isDownloading = store.download?.id == result.id
         return VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
-            Text(result.id).font(IDEAppearance.Typography.sectionHeader)
             if let size = detail?.sizeBytes {
                 Text("Downloads \(LocalModelFormat.bytes(size)) from huggingface.co and keeps it in the models folder.")
             } else if detail == nil {
@@ -361,11 +391,11 @@ struct IDELocalModelsView: View {
             }
             if let error = store.downloadError { Text(error).foregroundStyle(IDEAppearance.ColorToken.error) }
             HStack {
-                Button(installed ? "Installed" : "Download") { store.startDownload(result.id) }
+                Button(installed ? "Installed" : isDownloading ? "Downloading…" : "Download") { store.startDownload(result.id) }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .disabled(installed || !store.canStartDownload || (result.isGated && !store.hasToken))
-                if store.download != nil && !installed {
+                    .disabled(installed || isDownloading || !store.canStartDownload || (result.isGated && !store.hasToken))
+                if store.download != nil && !installed && !isDownloading {
                     Text("One download at a time.").foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
             }

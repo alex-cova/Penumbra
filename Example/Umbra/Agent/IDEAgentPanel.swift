@@ -76,6 +76,11 @@ struct IDEAgentPanel: View {
                     expandOverEditor()
                 }
             }
+            if placement == .aiMode {
+                IDEAgentIconButton(
+                    systemImage: "square.and.arrow.up", help: "Export Chat as Markdown…", isDisabled: agent.entries.isEmpty
+                ) { agent.exportTranscript() }
+            }
             // AI mode's toolbar already has Settings.
             if placement != .aiMode {
                 IDEAgentIconButton(systemImage: "gearshape", help: "Agent Settings", isActive: isSettingsPresented) {
@@ -581,17 +586,17 @@ private struct IDEAgentErrorRow: View {
                     .disabled(agent.isRunning || agent.selected.isCompacting)
                     .help("Send this message again")
             }
-        }
-    }
-}
-
-/// One of the user's messages, with Rewind and Fork when the pointer is over it.
             if entry.canResume {
                 Button("Resume") { agent.resume() }
                     .controlSize(.small)
                     .disabled(agent.isRunning || agent.selected.isCompacting)
                     .help("Carry on from the last saved step")
             }
+        }
+    }
+}
+
+/// One of the user's messages, with Rewind and Fork when the pointer is over it.
 private struct IDEAgentUserRow: View {
     let entry: IDEAgentEntry
     @Environment(IDEWorkspace.self) private var workspace

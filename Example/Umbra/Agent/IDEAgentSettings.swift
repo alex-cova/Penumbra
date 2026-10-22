@@ -154,8 +154,13 @@ final class IDEAgentSettings {
     /// Whether the sandbox profile blocks network access. Off by default (Gradle and Maven need
     /// to resolve).
     var sandboxBlockNetwork: Bool { didSet { defaults.set(sandboxBlockNetwork, forKey: Keys.sandboxNoNet) } }
-    /// Whether a Brave Search key is saved. Held here so views never read the Keychain.
-    private(set) var hasWebSearchKey = false
+    /// Whether a Brave Search key is saved. Loaded from the Keychain on first read, so creating
+    /// settings never prompts for keychain access. Held here so views never read the Keychain.
+    private var _hasWebSearchKey = false
+    var hasWebSearchKey: Bool {
+        ensureKeyStateLoaded()
+        return _hasWebSearchKey
+    }
     /// What the agent may do without asking in a new chat (see `PermissionMode`); each chat can change its own.
     var mode: PermissionMode { didSet { defaults.set(mode.rawValue, forKey: Keys.mode) } }
     /// Model turns per message before the run pauses; `AgentConfiguration.maxIterations` when unset.
@@ -249,7 +254,10 @@ final class IDEAgentSettings {
     }
 
     /// Whether a key is saved for the current endpoint. Held here so views never read the Keychain.
-    private(set) var hasAPIKey = false
+    var hasAPIKey: Bool { hasAPIKey(for: provider) }
+    /// Key state loads from the Keychain on first use, never in `init`, so opening the app does
+    /// not prompt for keychain access. The first send, or agent key UI, triggers the load.
+    private var didLoadKeyState = false
     /// The same for every provider's endpoint, by host, so a model picker can say which are ready.
     private var savedKeyHosts: Set<String> = []
     private(set) var keyError: String?
@@ -345,8 +353,6 @@ final class IDEAgentSettings {
         acpAllowedAgentIDs = Set((defaults.stringArray(forKey: Keys.acpAllowed) ?? []).compactMap(UUID.init(uuidString:)))
         acpEnvKeys = (defaults.dictionary(forKey: Keys.acpEnvKeys) as? [String: [String]]) ?? [:]
         disclosedHosts = Set(defaults.stringArray(forKey: Keys.disclosed) ?? [])
-        refreshKeyState()
-        refreshWebSearchKeyState()
     }
 
     private func store(_ key: String, _ value: String) {
@@ -422,15 +428,26 @@ final class IDEAgentSettings {
         provider != .ollama && provider != .mlx && !isLocalEndpoint(for: provider)
     }
 
-    /// Whether a key is saved for a provider's endpoint, from the state `refreshKeyState` read.
-    func hasAPIKey(for provider: IDEAgentProvider) -> Bool { savedKeyHosts.contains(endpointHost(for: provider)) }
+    /// Whether a key is saved for a provider's endpoint, loading the cached state on first use.
+    func hasAPIKey(for provider: IDEAgentProvider) -> Bool {
+        ensureKeyStateLoaded()
+        return savedKeyHosts.contains(endpointHost(for: provider))
+    }
+
+    /// Reads the cached key flags once; later reads reuse them until a save, removal,
+    /// or provider or URL change refreshes them.
+    func ensureKeyStateLoaded() {
+        guard !didLoadKeyState else { return }
+        refreshKeyState()
+        refreshWebSearchKeyState()
+    }
 
     func refreshKeyState() {
+        didLoadKeyState = true
         do {
-            hasAPIKey = try keyStore.load(account: endpointHost)?.isEmpty == false
+            _ = try keyStore.load(account: endpointHost)
             keyError = nil
         } catch {
-            hasAPIKey = false
             keyError = error.localizedDescription
         }
         var hosts: Set<String> = []
@@ -477,7 +494,8 @@ final class IDEAgentSettings {
     static let webSearchAccount = "api.search.brave.com"
 
     func refreshWebSearchKeyState() {
-        hasWebSearchKey = (try? keyStore.load(account: Self.webSearchAccount))?.isEmpty == false
+        didLoadKeyState = true
+        _hasWebSearchKey = (try? keyStore.load(account: Self.webSearchAccount))?.isEmpty == false
     }
 
     func saveWebSearchKey(_ key: String) {

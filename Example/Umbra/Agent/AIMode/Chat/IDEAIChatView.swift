@@ -44,9 +44,19 @@ struct IDEAIChatView: View {
                     .help("Input \(conversation.usage.inputTokens) (\(conversation.usage.cachedInputTokens) cached), output \(conversation.usage.outputTokens)"
                         + (conversation.cost == nil ? "" : "\nCost is an estimate from the price table in Settings ▸ Agent."))
             }
+            IDEAgentIconButton(
+                systemImage: "square.and.arrow.up", help: "Export Chat as Markdown…", isDisabled: conversation.isEmpty
+            ) { exportChat() }
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .padding(.vertical, IDEAppearance.Spacing.sm)
+    }
+
+    private func exportChat() {
+        let title = conversation.title
+        IDEAgentController.presentSavePanel(
+            name: IDEAgentTranscriptExport.fileName(for: title),
+            text: IDEAgentTranscriptExport.markdown(title: title, entries: conversation.entries))
     }
 
     // MARK: - Empty state

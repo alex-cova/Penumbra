@@ -100,6 +100,14 @@ private struct IDEAgentCodeBlock: View {
     let code: String
     @Environment(IDEWorkspace.self) private var workspace
     @State private var didCopy = false
+    @State private var highlighted: AttributedString?
+    @State private var diagram: IDEAgentRichBlocks.Diagram?
+
+    private struct RenderKey: Hashable {
+        let code: String
+        let language: String?
+        let appearance: String
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -124,16 +132,55 @@ private struct IDEAgentCodeBlock: View {
             }
             .padding(.horizontal, IDEAppearance.Spacing.xs)
             .padding(.top, 2)
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                    .padding(IDEAppearance.Spacing.xs)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            content
         }
         .background(IDEAppearance.ColorToken.editor)
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+        .task(id: RenderKey(code: code, language: language, appearance: IDEAgentRichBlocks.appearanceKey)) {
+            if IDEAgentRichBlocks.isMermaid(language) {
+                diagram = await IDEAgentRichBlocks.diagram(code)
+            } else {
+                highlighted = await IDEAgentRichBlocks.highlight(code, language: language)
+            }
+        }
+    }
+
+    /// A diagram for a mermaid fence; otherwise the code, in the editor theme's colours once they are
+    /// ready. A diagram that cannot be drawn falls back to its source with the reason.
+    @ViewBuilder private var content: some View {
+        switch diagram {
+        case .image(let image, let size) where IDEAgentRichBlocks.isMermaid(language):
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .aspectRatio(size, contentMode: .fit)
+                .frame(maxWidth: size.width)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(IDEAppearance.Spacing.xs)
+        case .failed(let message) where IDEAgentRichBlocks.isMermaid(language):
+            codeText
+            Text("The diagram could not be drawn: \(message)")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.error)
+                .padding(.horizontal, IDEAppearance.Spacing.xs)
+                .padding(.bottom, IDEAppearance.Spacing.xs)
+        default:
+            codeText
+        }
+    }
+
+    private var codeText: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Group {
+                if let highlighted {
+                    Text(highlighted)
+                } else {
+                    Text(code).foregroundStyle(IDEAppearance.ColorToken.foreground)
+                }
+            }
+            .font(IDEAppearance.Typography.monoSmall)
+            .padding(IDEAppearance.Spacing.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private func action(_ symbol: String, help: String, perform: @escaping () -> Void) -> some View {

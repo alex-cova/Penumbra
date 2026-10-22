@@ -159,7 +159,7 @@ private struct IDEFileCommands: View {
         .menuShortcut(.save, in: preset)
         .disabled(workspace == nil)
         Button("Save All", systemImage: "square.and.arrow.down.on.square.fill") {
-            Task { await workspace?.saveAllDocuments() }
+            Task { await workspace?.saveAllDocuments(namingActive: preset == .intelliJ) }
         }
         .menuShortcut(.saveAll, in: preset)
         .disabled(workspace == nil)
