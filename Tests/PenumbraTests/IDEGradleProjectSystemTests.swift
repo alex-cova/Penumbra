@@ -59,11 +59,12 @@ final class IDEGradleProjectSystemTests: XCTestCase {
         let script = """
         #!/bin/sh
         here="$(dirname "$0")"
-        echo "$@" >> "$here/invocations.log"
+        echo "JAVA_HOME=$JAVA_HOME $@" >> "$here/invocations.log"
         out=""
         for a in "$@"; do case "$a" in -PumbraModelOutput=*) out="${a#-PumbraModelOutput=}";; esac; done
         [ -f "$here/slow" ] && exec sleep 30
         if [ -n "$out" ]; then
+          if [ -f "$here/fail-first-sync" ]; then rm "$here/fail-first-sync"; echo "Unsupported class file major version 71" >&2; exit 1; fi
           if [ -f "$here/fail-sync" ]; then echo "boom" >&2; exit 1; fi
           cp "$here/model.json" "$out"
           echo "> Task :umbraProjectModel"
@@ -241,6 +242,42 @@ final class IDEGradleProjectSystemTests: XCTestCase {
         await eventually("outcomes: \(harness.outcomes)") { harness.outcomes.count == 2 }
         XCTAssertEqual(harness.state, .synced(subprojects: 1, jars: 0))
         XCTAssertEqual(invocations.filter { $0.contains(":umbraProjectModel") }.count, 2)
+    }
+
+    /// Gradle refusing the automatic JDK (`Unsupported class file major version`) is retried on
+    /// the next-lower installed JDK instead of failing the sync.
+    func testSyncRetriesOnALowerJDKWhenGradleRefusesTheAutomaticPick() async throws {
+        guard JDKLocator().discoverAll().count >= 2 else {
+            throw XCTSkip("Needs at least two installed JDKs to retry on a lower one")
+        }
+        try makeGradleProject()
+        try flag("fail-first-sync")
+        harness.requestTrust = { _ in true }
+        harness.setRoot(project)
+
+        await eventually("state: \(harness.state)") { harness.state == .synced(subprojects: 1, jars: 0) }
+        XCTAssertEqual(harness.outcomes, [.synced(subprojects: 1, jars: 0)])
+        let modelRuns = invocations.filter { $0.contains(":umbraProjectModel") }
+        XCTAssertEqual(modelRuns.count, 2, modelRuns.joined(separator: "\n"))
+        let homes = modelRuns.map { $0.split(separator: " ").first.map(String.init) ?? "" }
+        XCTAssertNotEqual(homes.first, homes.last, "the retry must launch on a different JDK: \(homes)")
+        XCTAssertTrue(harness.consoleText.contains("retrying on JDK"), harness.consoleText)
+    }
+
+    /// A reload whose model is unchanged indexes nothing, so nothing overwrites the
+    /// "Resolving Gradle project…" status: the sync itself must clear it, or the loading
+    /// toast spins forever over an already-synced project.
+    func testReloadWithUnchangedModelClearsTheLoadingStatus() async throws {
+        try makeGradleProject()
+        harness.requestTrust = { _ in true }
+        harness.setRoot(project)
+        await eventually { harness.state == .synced(subprojects: 1, jars: 0) }
+        await eventually("status: \(harness.statusMessage ?? "nil")") { harness.statusMessage == nil }
+
+        harness.reload()
+        await eventually("outcomes: \(harness.outcomes)") { harness.outcomes.count == 2 }
+        XCTAssertEqual(harness.state, .synced(subprojects: 1, jars: 0))
+        await eventually("status after reload: \(harness.statusMessage ?? "nil")") { harness.statusMessage == nil }
     }
 
     func testAnotherWindowOpeningTheSameProjectStartsFromTheCachedModel() async throws {

@@ -85,6 +85,13 @@ final class JDKLocatorTests: XCTestCase {
         XCTAssertEqual(JDKLocator.pick(from: installations, minimumFeatureVersion: nil, maximumFeatureVersion: 17)?.featureVersion, 26)
     }
 
+    func testGradleRetryCandidatesAreBelowTheFailedVersionNewestFirst() {
+        let installations = [21, 27, 17, 26].map { synthetic(featureVersion: $0) }
+        XCTAssertEqual(JDKLocator.gradleRetryCandidates(from: installations, below: 27).map(\.featureVersion), [26, 21, 17])
+        XCTAssertEqual(JDKLocator.gradleRetryCandidates(from: installations, below: 17).map(\.featureVersion), [])
+        XCTAssertEqual(JDKLocator.gradleRetryCandidates(from: [], below: 27).map(\.featureVersion), [])
+    }
+
     func testPickReturnsNilForEmptyList() {
         XCTAssertNil(JDKLocator.pick(from: [], minimumFeatureVersion: nil))
         XCTAssertNil(JDKLocator.pick(from: [], minimumFeatureVersion: 17))

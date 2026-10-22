@@ -107,6 +107,12 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     /// Home of the JDK the last Gradle sync launched on, so a JDK change only re-syncs when Gradle
     /// would launch on a different one.
     @ObservationIgnored private var javaHomePath: String?
+    /// A lower JDK a sync fell back to after Gradle refused the automatic pick, and the key
+    /// (project root + wrapper version) it belongs to. In-memory only: a new window may pay one
+    /// failed launch again rather than trusting a stale remembered home forever.
+    @ObservationIgnored private var rememberedGradleHome: URL?
+    @ObservationIgnored private var rememberedGradleFeatureVersion: Int?
+    @ObservationIgnored private var rememberedGradleKey: String?
     /// True from the moment a sync task is scheduled until it finishes, including the trust prompt.
     /// Build-file events in that window are dropped so the save that triggered a reload doesn't
     /// immediately raise the banner again.
@@ -224,6 +230,9 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         projectGeneration += 1
         let generation = projectGeneration
         javaHomePath = nil
+        rememberedGradleHome = nil
+        rememberedGradleFeatureVersion = nil
+        rememberedGradleKey = nil
         syncTask?.cancel()
         runTask?.cancel()
         stopBuildFileWatcher()
@@ -282,6 +291,9 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         runningTasks = []
         syncInFlight = false
         stopBuildFileWatcher()
+        rememberedGradleHome = nil
+        rememberedGradleFeatureVersion = nil
+        rememberedGradleKey = nil
         projectRootURL = nil
         model = nil
     }
@@ -332,7 +344,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         let generation = projectGeneration
         guard let url = projectRootURL, isActive, IDEPreferences.shared.javaGradleAutoSync,
               trustStore.isTrusted(url), !syncState.isSyncing, !isRunningTasks else { return }
-        let gradleHome = await jdk.resolveForGradle()?.installation.home.resolvingSymlinksInPath().path
+        let gradleHome = await gradleJavaHome()?.resolvingSymlinksInPath().path
         guard isCurrent(generation), gradleHome != javaHomePath else { return }
         syncGradleProject(
             url,
@@ -345,6 +357,40 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     }
 
     private static let resolvingMessage = "Resolving Gradle project…"
+
+    private func gradleKey(for root: URL?) -> String? {
+        root.map { "\($0.standardizedFileURL.path)|\(GradleJDKCompatibility.wrapperVersion(in: $0) ?? "")" }
+    }
+
+    private struct GradleLaunch {
+        let home: URL?
+        let featureVersion: Int?
+        /// Only an automatic pick may be retried on a lower JDK; an explicit choice is the user's.
+        let isAutomatic: Bool
+    }
+
+    /// The JDK a Gradle launch should use: a remembered fallback for this project and wrapper
+    /// when the pick is automatic, otherwise what `IDEJDKSelection` resolves. Asking also drops
+    /// a remembered fallback as soon as an explicit choice exists.
+    private func gradleLaunch() async -> GradleLaunch {
+        guard let resolution = await jdk.resolveForGradle() else {
+            return GradleLaunch(home: nil, featureVersion: nil, isAutomatic: false)
+        }
+        guard resolution.source == .automatic else {
+            rememberedGradleHome = nil
+            rememberedGradleFeatureVersion = nil
+            rememberedGradleKey = nil
+            return GradleLaunch(home: resolution.installation.home, featureVersion: resolution.installation.featureVersion, isAutomatic: false)
+        }
+        if let rememberedGradleHome, rememberedGradleKey == gradleKey(for: projectRootURL) {
+            return GradleLaunch(home: rememberedGradleHome, featureVersion: rememberedGradleFeatureVersion, isAutomatic: true)
+        }
+        return GradleLaunch(home: resolution.installation.home, featureVersion: resolution.installation.featureVersion, isAutomatic: true)
+    }
+
+    private func gradleJavaHome() async -> URL? {
+        await gradleLaunch().home
+    }
 
     private func syncGradleProject(
         _ url: URL,
@@ -409,8 +455,10 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
             // Gradle itself (9.x) needs a modern JDK to launch, independent of the project's
             // source level, so with no explicit choice this is the newest installation rather than
             // the one selected for `maxLanguageLevel`.
-            let javaHome = await jdk.resolveForGradle()?.installation.home
+            let launch = await gradleLaunch()
             guard isCurrent(generation) else { return }
+            var javaHome = launch.home
+            var javaFeatureVersion = launch.featureVersion
             javaHomePath = javaHome?.resolvingSymlinksInPath().path
 
             if silent {
@@ -427,17 +475,54 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
             do {
                 let timeout = Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds))
                 let startedAt = Date()
-                let (model, result) = try await extractor.extract(
-                    projectDirectory: url,
-                    javaHome: javaHome,
-                    timeout: timeout,
-                    output: { line in
-                        Task { @MainActor in
-                            guard generation == self.projectGeneration else { return }
-                            self.console.appendProcessLine(line)
+                // Extraction only reads the project, so it can safely run again on a lower JDK
+                // when Gradle refused the automatic pick (`Unsupported class file major
+                // version`). Timeouts and cancellations are not this error and never retry.
+                var retryCandidates: [JDKInstallation]?
+                var usedFallback = false
+                var extracted: (model: JavaGradleProjectModel, result: GradleCommandResult)?
+                while extracted == nil {
+                    do {
+                        extracted = try await extractor.extract(
+                            projectDirectory: url,
+                            javaHome: javaHome,
+                            timeout: timeout,
+                            output: { line in
+                                Task { @MainActor in
+                                    guard generation == self.projectGeneration else { return }
+                                    self.console.appendProcessLine(line)
+                                }
+                            }
+                        )
+                    } catch let GradleProjectModelExtractionError.syncFailed(failed)
+                        where launch.isAutomatic
+                            && GradleJDKCompatibility.unsupportedClassFileMajorVersion(in: failed) != nil {
+                        guard isCurrent(generation) else { return }
+                        if retryCandidates == nil {
+                            retryCandidates = await jdk.gradleRetryCandidates(below: javaFeatureVersion ?? Int.max)
                         }
+                        guard let next = retryCandidates?.first else {
+                            throw GradleProjectModelExtractionError.syncFailed(failed)
+                        }
+                        retryCandidates?.removeFirst()
+                        let major = GradleJDKCompatibility.unsupportedClassFileMajorVersion(in: failed)!
+                        console.appendNote(
+                            "Gradle cannot run on JDK \(javaFeatureVersion.map(String.init) ?? "?") "
+                                + "(Unsupported class file major version \(major)); retrying on JDK \(next.featureVersion)"
+                        )
+                        console.appendNote("JAVA_HOME: \(next.home.path)")
+                        javaHome = next.home
+                        javaFeatureVersion = next.featureVersion
+                        javaHomePath = next.home.resolvingSymlinksInPath().path
+                        usedFallback = true
                     }
-                )
+                }
+                guard let (model, result) = extracted else { return }
+                if usedFallback {
+                    rememberedGradleHome = javaHome
+                    rememberedGradleFeatureVersion = javaFeatureVersion
+                    rememberedGradleKey = gradleKey(for: url)
+                }
                 guard isCurrent(generation) else { return }
                 let elapsed = Date().timeIntervalSince(startedAt)
                 console.appendNote(String(format: "Gradle exited %d in %.1fs", result.exitCode, elapsed))
@@ -460,6 +545,10 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                 await consumer?.javaModelApplied(model, previous: previousModel, logToConsole: !silent)
                 guard isCurrent(generation) else { return }
 
+                // Indexing usually overwrites this message and clears its own, but a sync whose
+                // model is unchanged indexes nothing: clear ours here, as the failure path does,
+                // or the loading toast never ends.
+                status.clear(Self.resolvingMessage)
                 syncState = .synced(modules: model.subprojects.count, dependencies: model.classpathJars.count)
                 if silent {
                     console.appendNote("Background refresh finished")
@@ -588,7 +677,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
             console.appendNote("Project: \(url.path)")
             console.appendNote("Tasks: \(taskPaths.joined(separator: " "))")
 
-            let javaHome = await jdk.resolveForGradle()?.installation.home
+            let javaHome = await gradleJavaHome()
             if let javaHome {
                 console.appendNote("JAVA_HOME: \(javaHome.path)")
             }
@@ -716,7 +805,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         console.reset()
         console.appendNote("Project: \(url.path)")
         console.appendNote("Dependency diagram: \(projectPath) (\(configuration))")
-        let javaHome = await jdk.resolveForGradle()?.installation.home
+        let javaHome = await gradleJavaHome()
         do {
             let graph = try await GradleDependencyGraphExtractor(runner: runner).extract(
                 projectDirectory: url,

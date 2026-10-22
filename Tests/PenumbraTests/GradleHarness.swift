@@ -35,6 +35,7 @@ final class GradleHarness {
     }
 
     private let gradle: IDEGradleProjectSystem
+    private let status: IDEProjectStatus
     private let java: IDEJavaSupport
     private let trustStore: GradleTrustStore
     private let mavenTrust: GradleTrustStore
@@ -65,7 +66,7 @@ final class GradleHarness {
         trustStore = other?.trustStore ?? GradleTrustStore(storeURL: base.appendingPathComponent("trust.json"))
         cacheRoot = other?.cacheRoot ?? base.appendingPathComponent("model-cache", isDirectory: true)
         let jdk = IDEJDKSelection(store: JDKSelectionStore(storeURL: base.appendingPathComponent("jdk-\(UUID().uuidString).json")))
-        let status = IDEProjectStatus()
+        status = IDEProjectStatus()
         gradle = IDEGradleProjectSystem(jdk: jdk, status: status, trustStore: trustStore, modelCacheRoot: cacheRoot)
         let mavenTrust = other?.mavenTrust ?? GradleTrustStore(storeURL: base.appendingPathComponent("maven-trust.json"))
         self.mavenTrust = mavenTrust
@@ -162,4 +163,6 @@ final class GradleHarness {
     var sourceRootPaths: Set<String> { gradle.sourceRootPaths }
     var moduleGraphComponentCount: Int? { gradle.moduleDependencyGraph?.components.count }
     var consoleText: String { gradle.console.lines.map(\.text).joined(separator: "\n") }
+    /// The window's background status line; the loading toast shows while this is non-nil.
+    var statusMessage: String? { status.message }
 }

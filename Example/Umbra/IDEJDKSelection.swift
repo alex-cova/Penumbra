@@ -91,6 +91,16 @@ final class IDEJDKSelection {
         return await resolve(minimumFeatureVersion: nil, maximumFeatureVersion: cap)
     }
 
+    /// Installed JDKs older than `featureVersion`, newest first, for retrying a Gradle launch
+    /// that refused the JDK at `featureVersion`. Callers only ask when the failed launch was an
+    /// automatic pick; an explicit choice is never retried around.
+    func gradleRetryCandidates(below featureVersion: Int) async -> [JDKInstallation] {
+        let added = store.customJDKs
+        return await Task.detached(priority: .utility) {
+            JDKLocator.gradleRetryCandidates(from: JDKLocator().discoverAll(additionalHomes: added), below: featureVersion)
+        }.value
+    }
+
     /// Re-resolves ``current`` with the project's language level.
     func refreshCurrent() async {
         let root = projectRoot

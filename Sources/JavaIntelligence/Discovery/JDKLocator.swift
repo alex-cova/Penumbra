@@ -161,6 +161,18 @@ public struct JDKLocator: Sendable {
         return installations.max { $0.featureVersion < $1.featureVersion }
     }
 
+    /// Installations older than `featureVersion`, newest first: the order a caller retries in
+    /// after a tool (Gradle) refused to run on the JDK at `featureVersion`.
+    public static func gradleRetryCandidates(from allInstallations: [JDKInstallation], below featureVersion: Int) -> [JDKInstallation] {
+        allInstallations
+            .filter { $0.featureVersion < featureVersion }
+            .sorted {
+                $0.featureVersion != $1.featureVersion
+                    ? $0.featureVersion > $1.featureVersion
+                    : $0.home.path > $1.home.path
+            }
+    }
+
     // MARK: - Sources
 
     private func javaHomeRegisteredJVMs() -> [URL] {
