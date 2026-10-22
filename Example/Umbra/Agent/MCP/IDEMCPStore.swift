@@ -2,6 +2,7 @@ import AgentKit
 import CryptoKit
 import Foundation
 import Observation
+import SwiftUI
 
 /// A server the user added in Settings. The secret half of its environment is in the Keychain.
 struct IDEMCPServerEntry: Codable, Equatable, Identifiable, Sendable {
@@ -132,6 +133,15 @@ final class IDEMCPStore {
     var hiddenMap: [String: Set<String>] { hiddenTools.mapValues(Set.init) }
 
     func loading(for server: String) -> IDEMCPLoading { loadingChoices[server].flatMap(IDEMCPLoading.init(rawValue:)) ?? .automatic }
+
+    /// Bindings for Settings rows, so views do not build `Binding(get:set:)` inline in `body`.
+    func shownBinding(tool: String, server: String) -> Binding<Bool> {
+        Binding(get: { !self.isHidden(tool, server: server) }, set: { self.setHidden(!$0, tool: tool, server: server) })
+    }
+
+    func loadingBinding(server: String) -> Binding<IDEMCPLoading> {
+        Binding(get: { self.loading(for: server) }, set: { self.setLoading($0, server: server) })
+    }
 
     func setLoading(_ choice: IDEMCPLoading, server: String) {
         loadingChoices[server] = choice == .automatic ? nil : choice.rawValue

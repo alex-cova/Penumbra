@@ -16,27 +16,31 @@ struct IDEPreferencesEditorPane: View {
     @State private var inlineModelSearchAttempted = false
     @State private var inlineTokenDraft = ""
 
-    private var commandCompletionEnabled: Binding<Bool> {
-        Binding(
-            get: { preferences.commandCompletion.isEnabled },
-            set: { preferences.commandCompletion.isEnabled = $0 }
-        )
-    }
-
-    private var commandCompletionSeparateGroup: Binding<Bool> {
-        Binding(
-            get: { preferences.commandCompletion.showsSeparateGroup },
-            set: { preferences.commandCompletion.showsSeparateGroup = $0 }
-        )
-    }
-
-    private var commandCompletionReadOnly: Binding<Bool> {
-        Binding(
-            get: { preferences.commandCompletion.readOnlyEnabled },
-            set: { preferences.commandCompletion.readOnlyEnabled = $0 }
-        )
-    }
     @AppStorage(IDEInspectionWidget.defaultsKey) private var showsInspectionWidget = true
+
+    /// Whether the caret follows the theme's text color, holding the custom color otherwise.
+    private func caretMatchesThemeBinding() -> Binding<Bool> {
+        Binding(
+            get: { preferences.caretColorHex == nil },
+            set: { matchesTheme in
+                if matchesTheme {
+                    preferences.caretColorHex = nil
+                } else if preferences.caretColorHex == nil {
+                    preferences.caretColorHex = ThemeCatalog.palette(
+                        id: preferences.themeID,
+                        fallbackDark: true
+                    ).text
+                }
+            }
+        )
+    }
+
+    private func caretColorBinding(fallback: UInt32) -> Binding<UInt32> {
+        Binding(
+            get: { preferences.caretColorHex ?? fallback },
+            set: { preferences.caretColorHex = $0 }
+        )
+    }
 
     var body: some View {
         IDESettingsSection("Theme") {
@@ -96,29 +100,14 @@ struct IDEPreferencesEditorPane: View {
 
             IDESettingsToggle(
                 "Match Theme Color",
-                isOn: Binding(
-                    get: { preferences.caretColorHex == nil },
-                    set: { matchesTheme in
-                        if matchesTheme {
-                            preferences.caretColorHex = nil
-                        } else if preferences.caretColorHex == nil {
-                            preferences.caretColorHex = ThemeCatalog.palette(
-                                id: preferences.themeID,
-                                fallbackDark: true
-                            ).text
-                        }
-                    }
-                ),
+                isOn: caretMatchesThemeBinding(),
                 detail: "Uses the theme's text color. Turn this off to pick a color."
             )
 
             if let customCaretColor = preferences.caretColorHex {
                 IDESettingsColorWell(
                     title: "Color",
-                    hex: Binding(
-                        get: { preferences.caretColorHex ?? customCaretColor },
-                        set: { preferences.caretColorHex = $0 }
-                    )
+                    hex: caretColorBinding(fallback: customCaretColor)
                 )
             }
 
@@ -298,14 +287,14 @@ struct IDEPreferencesEditorPane: View {
             "Code Completion",
             footer: "Command completion offers refactorings and editor actions after .., and as a separate group after a single dot. In a read-only file, a dot opens navigation commands instead of editing."
         ) {
-            IDESettingsToggle("Command Completion", isOn: commandCompletionEnabled)
+            IDESettingsToggle("Command Completion", isOn: $preferences.commandCompletion.isEnabled)
             IDESettingsToggle(
-                "Show Commands as a Separate Group", isOn: commandCompletionSeparateGroup,
+                "Show Commands as a Separate Group", isOn: $preferences.commandCompletion.showsSeparateGroup,
                 detail: "Commands appear in their own section at the end of the list after a single dot."
             )
             .disabled(!preferences.commandCompletion.isEnabled)
             IDESettingsToggle(
-                "Command Completion in Read-Only Files", isOn: commandCompletionReadOnly,
+                "Command Completion in Read-Only Files", isOn: $preferences.commandCompletion.readOnlyEnabled,
                 detail: "Typing a dot in a read-only file (such as attached JDK sources) filters navigation commands without editing the file."
             )
             .disabled(!preferences.commandCompletion.isEnabled)
@@ -571,6 +560,7 @@ struct IDEPreferencesEditorPane: View {
         let installed = modelsStore.installed.contains { $0.id == result.id }
         let isSelected = preferences.inlineCompletionModelID == result.id
         return HStack(alignment: .center, spacing: IDEAppearance.Spacing.sm) {
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(LocalModelFormat.shortName(result.id))
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
@@ -586,7 +576,7 @@ struct IDEPreferencesEditorPane: View {
         .padding(IDEAppearance.Spacing.sm)
         .background(
             isSelected ? IDEAppearance.ColorToken.controlHover : IDEAppearance.ColorToken.card,
-            in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous)
+            in: .rect(cornerRadius: IDEAppearance.Radius.card)
         )
     }
 

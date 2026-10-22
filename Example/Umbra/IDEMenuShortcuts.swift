@@ -78,14 +78,19 @@ enum IDEMenuShortcuts {
         return presetShortcut
     }
 
-    private static let functionKey12 = KeyEquivalent(Character(UnicodeScalar(NSF12FunctionKey)!))
-    private static let functionKey1 = KeyEquivalent(Character(UnicodeScalar(NSF1FunctionKey)!))
-    private static let functionKey2 = KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!))
-    private static let functionKey7 = KeyEquivalent(Character(UnicodeScalar(NSF7FunctionKey)!))
-    private static let functionKey8 = KeyEquivalent(Character(UnicodeScalar(NSF8FunctionKey)!))
-    private static let functionKey3 = KeyEquivalent(Character(UnicodeScalar(NSF3FunctionKey)!))
-    private static let functionKey9 = KeyEquivalent(Character(UnicodeScalar(NSF9FunctionKey)!))
-    private static let functionKey10 = KeyEquivalent(Character(UnicodeScalar(NSF10FunctionKey)!))
+    private static func functionKey(_ code: Int, name: String) -> KeyEquivalent {
+        guard let scalar = UnicodeScalar(code) else { fatalError("\(name) function key is not a valid scalar") }
+        return KeyEquivalent(Character(scalar))
+    }
+
+    private static let functionKey12 = functionKey(NSF12FunctionKey, name: "F12")
+    private static let functionKey1 = functionKey(NSF1FunctionKey, name: "F1")
+    private static let functionKey2 = functionKey(NSF2FunctionKey, name: "F2")
+    private static let functionKey7 = functionKey(NSF7FunctionKey, name: "F7")
+    private static let functionKey8 = functionKey(NSF8FunctionKey, name: "F8")
+    private static let functionKey3 = functionKey(NSF3FunctionKey, name: "F3")
+    private static let functionKey9 = functionKey(NSF9FunctionKey, name: "F9")
+    private static let functionKey10 = functionKey(NSF10FunctionKey, name: "F10")
 
     private static let base: [IDEMenuCommand: KeyboardShortcut?] = [
         .newFile: KeyboardShortcut("n"),
