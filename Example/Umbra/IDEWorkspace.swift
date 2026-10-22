@@ -5191,31 +5191,54 @@ public final class IDEWorkspace {
         refreshPresentation()
     }
 
+    /// Orders the palette's recent files: the window's open documents first, then the
+    /// global closed recents scoped to the open project. The closed list is shared by every
+    /// window, so without the project filter Search Everywhere's All tab lists files from
+    /// other projects. Open documents belong to the window and are always kept.
+    nonisolated static func paletteRecentFiles(open: [URL], closed: [URL], root: URL?) -> [URL] {
+        var seen = Set<URL>()
+        var ordered: [URL] = []
+        ordered.reserveCapacity(open.count + closed.count)
+        for url in open {
+            guard seen.insert(url).inserted else { continue }
+            ordered.append(url)
+        }
+        guard let root else {
+            for url in closed where seen.insert(url).inserted {
+                ordered.append(url)
+            }
+            return ordered
+        }
+        let rootPath = root.standardizedFileURL.path
+        let prefix = rootPath == "/" ? "/" : rootPath + "/"
+        for url in closed {
+            guard seen.insert(url).inserted else { continue }
+            let path = url.standardizedFileURL.path
+            guard path == rootPath || path.hasPrefix(prefix) else { continue }
+            ordered.append(url)
+        }
+        return ordered
+    }
+
     func configurePalette(_ palette: CommandPaletteController) {
         palette.recentFileEntriesProvider = { [weak self] in
             guard let self else { return [] }
-            var seen = Set<URL>()
             let edited = Set(self.recentlyEditedFiles)
-            let open = self.workbench.recentDocuments(limit: 30).compactMap { document -> PaletteFileEntry? in
-                guard let url = document.url else { return nil }
-                seen.insert(url)
-                return PaletteFileEntry(
+            let openDocs = self.workbench.recentDocuments(limit: 30)
+            let openURLs = openDocs.compactMap(\.url)
+            let ordered = Self.paletteRecentFiles(open: openURLs, closed: self.recentFiles, root: self.project.rootURL)
+            let docsByURL = Dictionary(
+                openDocs.compactMap { document in document.url.map { ($0, document) } },
+                uniquingKeysWith: { first, _ in first }
+            )
+            return ordered.map { url in
+                PaletteFileEntry(
                     url: url,
                     displayName: url.lastPathComponent,
-                    isEdited: document.isDirty || edited.contains(url),
+                    isEdited: (docsByURL[url]?.isDirty ?? false) || edited.contains(url),
                     status: self.paletteStatus(for: url)
                 )
             }
-            let closed = self.recentFiles.compactMap { url -> PaletteFileEntry? in
-                guard seen.insert(url).inserted else { return nil }
-                return PaletteFileEntry(
-                    url: url,
-                    displayName: url.lastPathComponent,
-                    isEdited: edited.contains(url),
-                    status: self.paletteStatus(for: url)
-                )
-            }
-            return open + closed
         }
         palette.activeDocumentURLProvider = { [weak self] in
             self?.workbench.activePane.selectedDocument?.url

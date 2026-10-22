@@ -271,6 +271,8 @@ final class IDEAgentSettings {
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let keyStore: any IDEAgentKeyStore
+    /// The MCP servers the user added, and what they said about the project's. Environment values are in the same Keychain.
+    @ObservationIgnored let mcp: IDEMCPStore
     @ObservationIgnored private let transport: any LLMTransport
     @ObservationIgnored private let installedModels: @MainActor () -> [InstalledLocalModel]
 
@@ -316,6 +318,7 @@ final class IDEAgentSettings {
     ) {
         self.defaults = defaults
         self.keyStore = keyStore
+        self.mcp = IDEMCPStore(defaults: defaults, keyStore: keyStore)
         self.transport = transport
         self.installedModels = installedModels
         provider = defaults.string(forKey: Keys.provider).flatMap(IDEAgentProvider.init(rawValue:)) ?? .openAIResponses

@@ -18,6 +18,8 @@ final class IDEAgentController {
     @ObservationIgnored let fileClaims = IDEAgentFileClaims()
     /// The commands and skills on offer.
     @ObservationIgnored private(set) var commandCatalog: IDEAgentCommandCatalog!
+    /// The window's MCP servers, shared by its chats.
+    @ObservationIgnored let mcp: IDEMCPManager
     /// Bumped by `/model`, so the panel opens its settings sheet.
     var settingsRequest = 0
     /// Set to show the rewind sheet (`/rewind`, a message's Rewind button, Esc Esc).
@@ -93,6 +95,7 @@ final class IDEAgentController {
         self.store = store
         self.appPermissionsFile = appPermissionsFile
         self.clientFactory = clientFactory
+        self.mcp = IDEMCPManager(store: settings.mcp)
         let first = IDEAgentConversation(
             settings: settings, store: store, appPermissionsFile: appPermissionsFile, clientFactory: clientFactory)
         conversations = [first]
@@ -108,6 +111,7 @@ final class IDEAgentController {
         conversation.choiceClientFactory = choiceClientFactory
         conversation.fileClaims = fileClaims
         conversation.commandCatalog = commandCatalog
+        conversation.mcp = mcp
         conversation.onPersisted = { [weak self] in
             self?.refreshHistory()
             self?.layoutChanged()
@@ -157,6 +161,7 @@ final class IDEAgentController {
     /// workspace alive through its tools.
     func teardown() {
         for conversation in conversations { conversation.teardown() }
+        mcp.shutdown()
         host = nil
     }
 

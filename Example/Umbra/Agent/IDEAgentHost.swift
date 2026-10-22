@@ -49,6 +49,9 @@ protocol IDEAgentHost: AnyObject {
     /// What the editor reports as errors in these just-changed files, as a note for the model, or
     /// `nil` when there is nothing to say. Waits up to `timeout` for the editor to analyse open files.
     func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String?
+    /// Asks the user whether these MCP servers, which the project's own files list, may run on this Mac.
+    /// Returns the fingerprints they allowed.
+    func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String>
 
     // Navigation. Both are optional (see the extension below).
     /// Java symbol navigation, or `nil` when the project has no Java to resolve.
@@ -90,6 +93,7 @@ protocol IDEAgentHost: AnyObject {
 extension IDEAgentHost {
     // Optional capabilities: a host without them simply doesn't get the tools that need them.
     func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? { nil }
+    func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> { [] }
     func agentJavaNavigator() -> (any IDEAgentNavigating)? { nil }
     func agentProjectTaskNames() -> [String] { [] }
     func agentRunProjectTask(_ name: String) async -> String { "This folder has no project tasks." }

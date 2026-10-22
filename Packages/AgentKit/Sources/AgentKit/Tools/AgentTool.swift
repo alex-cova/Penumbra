@@ -71,6 +71,10 @@ public struct ToolArguments: Sendable {
 
     public init(_ object: [String: JSONValue]) { self.object = object }
 
+    /// The arguments as they came, without the `null`s a strict-mode caller sends for what it left out:
+    /// for a tool whose schema someone else wrote (`MCPTool`), which wants a missing key, not a null.
+    public var presentValues: [String: JSONValue] { object.filter { $0.value != .null } }
+
     /// The value for `key`, or `nil` when it is absent: missing, `null`, or the empty object some
     /// models send for an optional parameter they skip.
     private func value(_ key: String) -> JSONValue? {

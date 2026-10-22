@@ -87,6 +87,8 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored var fileClaims: IDEAgentFileClaims?
     /// The window's commands and skills; the model is offered the skills.
     @ObservationIgnored var commandCatalog: IDEAgentCommandCatalog?
+    /// The window's MCP servers; their tools join the tool list.
+    @ObservationIgnored var mcp: IDEMCPManager?
     /// Called when a run ends, with whether it ended.
     @ObservationIgnored var onRunFinished: (() -> Void)?
     /// Called when the chat has something the user may want to know about while looking elsewhere.
@@ -980,13 +982,27 @@ final class IDEAgentConversation: Identifiable {
         let skills = commandCatalog.map(\.skillCatalog).flatMap { $0.skills.isEmpty ? nil : $0 }
         // Likewise the subagents `task` offers: the list is in the tool's description.
         let agents = commandCatalog?.agentCatalog ?? .builtIn
+        // MCP servers start here, on the first message that needs them, and may ask about the project's
+        // own first. Their tools are fixed for the life of the hub, and its fingerprint is in the session's.
+        var mcpTools: [any AgentTool] = []
+        var mcpFingerprint = ""
+        if let mcp {
+            let prepared = await mcp.prepare(
+                root: root, confirm: { [weak host] servers in await host?.agentConfirmMCPServers(servers) ?? [] },
+                willStart: { [weak self] in self?.status = "Starting MCP servers…" })
+            if let hub = prepared.hub {
+                mcpTools = await hub.tools
+                mcpFingerprint = await hub.fingerprint
+            }
+            for notice in prepared.notices { append(.init(kind: .notice, text: notice)) }
+        }
         // Memory loads once, at session start: a write never changes the live request, and shows
         // from the next session on (whose fingerprint then differs).
         let memoryDirectory = (settings.memoryEnabled ? store : nil)?.projectDirectory(for: root.path)
         let memoryText = memoryDirectory.flatMap { ProjectMemory.load(at: $0) }
         let choice = effectiveChoice
         let fingerprint = settings.fingerprint(for: choice) + "|" + root.path + "|" + String(host.agentIsGradleProject) + "|" + (skills?.fingerprint ?? "")
-            + "|" + agents.fingerprint + "|" + ProjectMemory.fingerprint(of: memoryText)
+            + "|" + agents.fingerprint + "|" + mcpFingerprint + "|" + ProjectMemory.fingerprint(of: memoryText)
         if let session, sessionFingerprint == fingerprint { return session }
 
         let client = modelChoice == nil ? try clientFactory(settings) : try choiceClientFactory(settings, choice)
@@ -1046,6 +1062,7 @@ final class IDEAgentConversation: Identifiable {
         tools.append(IDEDiagnosticsTool(
             problems: { await box.read(default: []) { $0.agentProblems() } },
             fresh: { await box.freshProblems(relativePaths: $0) }))
+        tools += mcpTools
         let profile = ModelProfile.choose(provider: choice.provider.rawValue, model: choice.model)
         // The blocking gate and the soft nudge are alternatives: the toggle picks the gate.
         let stopGateOn = settings.runTestsBeforeFinishing && host.agentIsGradleProject

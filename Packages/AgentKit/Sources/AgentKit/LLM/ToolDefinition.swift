@@ -28,11 +28,29 @@ public struct ToolDefinition: Sendable, Hashable {
     public let name: String
     public let description: String
     public let parameters: [ToolParameter]
+    /// A JSON Schema written by someone else (an MCP server), sent as it is in place of the one built
+    /// from `parameters`. Such a schema is not shaped for a provider's strict mode, so the tool is
+    /// never marked strict.
+    public let rawSchema: JSONValue?
 
-    public init(name: String, description: String, parameters: [ToolParameter] = []) {
+    public init(name: String, description: String, parameters: [ToolParameter] = [], rawSchema: JSONValue? = nil) {
         self.name = name
         self.description = description
         self.parameters = parameters
+        self.rawSchema = rawSchema.map(Self.objectSchema)
+    }
+
+    /// Whether the tool may be sent with a provider's `strict: true`.
+    public var supportsStrict: Bool { rawSchema == nil }
+
+    /// Every provider wants an object schema at the top, and some reject `$schema`.
+    private static func objectSchema(_ schema: JSONValue) -> JSONValue {
+        guard case .object(var object) = schema, object["type"]?.stringValue == "object" else {
+            return .object(["type": "object", "properties": .object([:])])
+        }
+        object["$schema"] = nil
+        if object["properties"] == nil { object["properties"] = .object([:]) }
+        return .object(object)
     }
 
     /// The JSON Schema for the arguments object.
@@ -41,6 +59,7 @@ public struct ToolDefinition: Sendable, Hashable {
     /// sets `additionalProperties: false`, and types optional parameters as nullable. The
     /// non-strict form lists only the required ones, for endpoints that reject nullable types.
     public func schema(strict: Bool) -> JSONValue {
+        if let rawSchema { return rawSchema }
         var properties: [String: JSONValue] = [:]
         var required: [JSONValue] = []
         for parameter in parameters {

@@ -20,8 +20,8 @@ public enum ResponsesRequestEncoder {
                     "type": "function",
                     "name": .string(tool.name),
                     "description": .string(tool.description),
-                    "parameters": tool.schema(strict: strictTools),
-                    "strict": .bool(strictTools),
+                    "parameters": tool.schema(strict: strictTools && tool.supportsStrict),
+                    "strict": .bool(strictTools && tool.supportsStrict),
                 ])
             })
         }

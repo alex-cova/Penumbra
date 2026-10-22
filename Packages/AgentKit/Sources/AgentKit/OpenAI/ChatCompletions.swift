@@ -57,9 +57,9 @@ public enum ChatCompletionsRequestEncoder {
                 var function: [String: JSONValue] = [
                     "name": .string(tool.name),
                     "description": .string(tool.description),
-                    "parameters": tool.schema(strict: capabilities.strictTools),
+                    "parameters": tool.schema(strict: capabilities.strictTools && tool.supportsStrict),
                 ]
-                if capabilities.strictTools { function["strict"] = true }
+                if capabilities.strictTools, tool.supportsStrict { function["strict"] = true }
                 return ["type": "function", "function": .object(function)]
             })
             if let parallel = capabilities.parallelToolCalls { body["parallel_tool_calls"] = .bool(parallel) }

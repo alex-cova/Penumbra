@@ -1279,6 +1279,8 @@ struct IDEAgentSettingsView: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
 
+            IDEMCPSettingsSection(store: settings.mcp, manager: agent?.mcp, projectRoot: agent?.projectRoot)
+
             Section("Behavior") {
                 Picker("Mode for new chats", selection: $settings.mode) {
                     ForEach(PermissionMode.allCases, id: \.self) { Text($0.title).tag($0) }

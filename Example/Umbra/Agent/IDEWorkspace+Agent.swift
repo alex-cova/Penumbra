@@ -315,6 +315,34 @@ extension IDEWorkspace: IDEAgentHost {
         showAgentCommand(id: id, title: title, line: line)
     }
 
+    /// One question for all the servers a project's files list, naming each command line, because
+    /// what runs is the program, with this user's permissions.
+    func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> {
+        guard !servers.isEmpty else { return [] }
+        let listing = servers.prefix(8).map { server in
+            var line = "• \(server.name): \(server.displayCommand)"
+            if !server.env.isEmpty { line += "   (sets \(server.env.keys.sorted().joined(separator: ", ")))" }
+            return line
+        }.joined(separator: "\n") + (servers.count > 8 ? "\n… and \(servers.count - 8) more" : "")
+        let allowed: Bool = await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = servers.count == 1
+                ? "This project wants to run an MCP server."
+                : "This project wants to run \(servers.count) MCP servers."
+            alert.informativeText = "\(listing)\n\nThese are programs from the project's own files. They run on this Mac with your permissions, and the agent can use what they offer (each use asks first). Allow them only if you trust this project."
+            alert.addButton(withTitle: "Allow")
+            alert.addButton(withTitle: "Not Now")
+            let finish: @Sendable (NSApplication.ModalResponse) -> Void = { continuation.resume(returning: $0 == .alertFirstButtonReturn) }
+            if let window {
+                alert.beginSheetModal(for: window) { finish($0) }
+            } else {
+                finish(alert.runModal())
+            }
+        }
+        return allowed ? Set(servers.map(IDEMCPStore.fingerprint(of:))) : []
+    }
+
     func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? {
         // Only an open file the editor already analyses has anything to report: a file written to disk,
         // or a language with no analysis, would only make this wait out its timeout.

@@ -7,8 +7,16 @@ private final class FakeAgentHost: IDEAgentHost {
     var agentProjectRoot: URL?
     var unsaved: [String: String] = [:]
     var problems: [IDEAgentProblem] = []
+    /// What the user answers when asked about the project's MCP servers; nothing by default.
+    var mcpAnswer: ([MCPServerConfig]) -> Set<String> = { _ in [] }
+    var mcpQuestions = 0
 
     init(root: URL?) { agentProjectRoot = root }
+
+    func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> {
+        mcpQuestions += 1
+        return mcpAnswer(servers)
+    }
 
     func agentUnsavedBuffers() -> [String: String] { unsaved }
     func agentEditorContext() -> String { "[Editor state, for orientation only]\nActive file: A.java\n[End editor state]" }
@@ -246,6 +254,48 @@ final class IDEAgentControllerTests: XCTestCase {
         XCTAssertEqual(client.requests[0].tools.map(\.name), ["read_file", "list_dir", "glob", "grep", "show_file", "edit_file", "write_file", "apply_patch", "run_command", "todo", "ask_user", "explore", "task", "diagnostics"])
     }
 
+    func testAProjectsMCPServerReachesTheModelOnlyAfterTheUserAllowsIt() async throws {
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        probe.arguments = ["-c", "pass"]
+        probe.standardError = Pipe()
+        guard (try? probe.run()) != nil else { throw XCTSkip("python3 is not available") }
+        probe.waitUntilExit()
+        guard probe.terminationStatus == 0 else { throw XCTSkip("python3 is not usable here") }
+
+        let project = try tempProject()
+        let server = project.appendingPathComponent("server.py")
+        try """
+        import json, sys
+        for line in sys.stdin:
+            m = json.loads(line)
+            if "id" not in m: continue
+            r = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}} if m["method"] == "initialize" else {"tools": [{"name": "ping", "description": "pings", "inputSchema": {"type": "object"}}]}
+            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}) + "\\n"); sys.stdout.flush()
+        """.write(to: server, atomically: true, encoding: .utf8)
+        try Data(#"{"mcpServers": {"pinger": {"command": "/usr/bin/python3", "args": ["\#(server.path)"]}}}"#.utf8)
+            .write(to: project.appendingPathComponent(".mcp.json"))
+
+        let (controller, client, host) = try makeController(turns: [.text("one"), .text("two")], root: project)
+        defer { controller.teardown() }
+
+        // Not allowed: the question is asked, the answer is no, and the tool never reaches the model.
+        controller.draft = "first"
+        controller.send()
+        await eventually("the first run should finish") { !controller.isRunning }
+        XCTAssertEqual(host.mcpQuestions, 1)
+        XCTAssertFalse(client.requests[0].tools.map(\.name).contains("mcp__pinger__ping"))
+
+        // The user changes their mind in Settings: the next message uses it, with no new question.
+        let config = try XCTUnwrap(IDEMCPProjectConfig.load(root: project).servers.first)
+        controller.settings.mcp.trust(config)
+        controller.draft = "second"
+        controller.send()
+        await eventually("the second run should finish") { !controller.isRunning }
+        XCTAssertEqual(host.mcpQuestions, 1)
+        XCTAssertTrue(client.requests[1].tools.map(\.name).contains("mcp__pinger__ping"), "\(client.requests[1].tools.map(\.name))")
+    }
+
     func testTheModelReadsUnsavedEditsNotTheStaleDiskCopy() async throws {
         let project = try tempProject()
         let file = project.appendingPathComponent("A.java")
@@ -361,7 +411,9 @@ final class IDEAgentControllerTests: XCTestCase {
         ])
         controller.draft = "one"
         controller.send()
-        await eventually("the failure offers retry") { controller.entries.last?.canRetry == true }
+        // The retry button appears while the run's last event is handled; the run is over a moment later,
+        // and a send before that is refused.
+        await eventually("the failure offers retry") { controller.entries.last?.canRetry == true && !controller.isRunning }
         controller.draft = "two"
         controller.send()
         await eventually("the next message finishes") { !controller.isRunning && controller.entries.last?.text == "ok" }
