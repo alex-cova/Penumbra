@@ -20,6 +20,13 @@ public enum PermissionPolicy {
             if call.honorsDenyRules, let rule = firstRule(in: rules.deny, touching: call) {
                 return .deny("Blocked by the user's permission rules (deny \(rule)). Do not try this again; ask the user or take another approach.")
             }
+            // A read that leaves the machine asks unless a rule allows it, in every mode (plan included:
+            // looking something up is not a change, but the address still goes to a server).
+            if call.asksUnlessAllowed {
+                if let verdict = await gate?.verdict(for: call), verdict != .allow { return verdict }
+                if firstRule(in: rules.ask, touching: call) != nil { return .ask(notes: []) }
+                return covers(rules.allow, call) ? .allow : .ask(notes: [])
+            }
             return .allow
         }
         if mode == .plan { return .deny("\(call.name) is not available: this session is in plan mode, so nothing can be changed or run. Describe the change in your plan instead.") }

@@ -91,12 +91,18 @@ public struct ToolCallInfo: Sendable, Equatable {
     public var subject: PermissionSubject
     /// See `AgentTool.honorsDenyRules`. Off for every read that stays on this Mac.
     public var honorsDenyRules: Bool
+    /// See `AgentTool.asksUnlessAllowed`.
+    public var asksUnlessAllowed: Bool
 
-    public init(name: String, risk: ToolRisk, subject: PermissionSubject, honorsDenyRules: Bool = false) {
+    public init(
+        name: String, risk: ToolRisk, subject: PermissionSubject, honorsDenyRules: Bool = false,
+        asksUnlessAllowed: Bool = false
+    ) {
         self.name = name
         self.risk = risk
         self.subject = subject
         self.honorsDenyRules = honorsDenyRules
+        self.asksUnlessAllowed = asksUnlessAllowed
     }
 }
 

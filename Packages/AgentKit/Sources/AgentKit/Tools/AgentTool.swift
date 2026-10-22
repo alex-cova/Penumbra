@@ -331,6 +331,9 @@ public protocol AgentTool: Sendable {
     /// True for a tool that is bounded by something else (a child's iteration cap, and Stop), so the
     /// session's per-tool timeout would only cut off work that is going well (`task`).
     var runsWithoutTimeout: Bool { get }
+    /// True for a read that sends a request off this Mac (`web_fetch`): unlike other reads it goes
+    /// through the user's rules and, unless an allow rule names the call, asks first. It runs alone.
+    var asksUnlessAllowed: Bool { get }
     /// True for an `.edit` tool that reports the files it changed itself, as they happen, instead of
     /// the session counting the call as one edit (`task`: a read-only child changed nothing).
     var reportsOwnEdits: Bool { get }
@@ -348,6 +351,7 @@ extension AgentTool {
     public var asksAfterUntrustedContent: Bool { false }
     public func noteFileTouched(_ path: String) {}
     public var runsWithoutTimeout: Bool { false }
+    public var asksUnlessAllowed: Bool { false }
     public var reportsOwnEdits: Bool { false }
 
     public func isOffered(in mode: PermissionMode) -> Bool { mode.offers(risk) }

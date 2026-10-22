@@ -1316,6 +1316,10 @@ struct IDEAgentSettingsView: View {
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
                     }
                 }
+                Toggle("Web pages", isOn: $settings.webFetchEnabled)
+                Text("Lets the agent read a web page (documentation, release notes). The address is sent to that site, so each site asks the first time; Always allow adds a rule such as web_fetch(https://docs.swift.org/*). It cannot reach this Mac or a private network, and it does not follow a redirect to another site. Off until you turn it on.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Toggle("Run tests before finishing", isOn: $settings.runTestsBeforeFinishing)
                 Text("In a Gradle project, a run that changed files must pass the tests before it may end. Off until you turn it on; turning it on is the consent to run them.")
                     .font(IDEAppearance.Typography.caption)

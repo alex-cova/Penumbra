@@ -1344,7 +1344,7 @@ public actor AgentSession {
         var isConcurrent: Bool {
             switch self {
             case .answered: true
-            case .run(let tool, _, _): tool.risk == .read && !tool.waitsForUser
+            case .run(let tool, _, _): tool.risk == .read && !tool.waitsForUser && !tool.asksUnlessAllowed
             }
         }
     }
@@ -1497,7 +1497,9 @@ public actor AgentSession {
 
         let subject = tool.permissionSubject(for: parsed)
         let verdict = await PermissionPolicy.evaluate(
-            ToolCallInfo(name: call.name, risk: tool.risk, subject: subject, honorsDenyRules: tool.honorsDenyRules),
+            ToolCallInfo(
+                name: call.name, risk: tool.risk, subject: subject, honorsDenyRules: tool.honorsDenyRules,
+                asksUnlessAllowed: tool.asksUnlessAllowed),
             mode: mode, rules: rules, gate: configuration.gate, secretPatterns: configuration.secretPatterns)
         let notes: [String]
         switch verdict {
@@ -1522,7 +1524,8 @@ public actor AgentSession {
         var request: ApprovalRequest
         let isEdit = tool.risk == .edit
         switch tool.risk {
-        case .command:
+        case .command, .read:
+            // A read only gets here when the policy asked (`asksUnlessAllowed`).
             if let asked = await tool.approvalRequest(for: parsed, context: context) {
                 request = asked
             } else if case .command(let text) = subject {
@@ -1538,8 +1541,6 @@ public actor AgentSession {
             // A call that can't be previewed (stale file, bad arguments) is left to fail on its own.
             guard let preview = await tool.editPreview(for: parsed, context: context) else { return plan }
             request = ApprovalRequest(title: "Apply edit", command: preview.summary, diff: preview.diff)
-        case .read:
-            return plan
         }
         request.notes += notes
         request.callID = call.id
@@ -1562,7 +1563,8 @@ public actor AgentSession {
             if isEdit {
                 return .answered(.error("The user rejected this edit; nothing was changed.\(reason) Do not apply it again as is; ask what they want or propose something else."))
             }
-            return .answered(.error("The user denied this command.\(reason) Do not retry it as is; adjust or ask what they want."))
+            let what = tool.risk == .read ? "request" : "command"
+            return .answered(.error("The user denied this \(what).\(reason) Do not retry it as is; adjust or ask what they want."))
         }
     }
 

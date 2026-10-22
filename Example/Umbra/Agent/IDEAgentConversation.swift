@@ -1011,6 +1011,7 @@ final class IDEAgentConversation: Identifiable {
         var tools: [any AgentTool] = ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns)
             + [IDEShowFileTool(root: root, box: box)]
         if let search = IDEAgentWebSearch.tool(settings: settings) { tools.append(search) }
+        if settings.webFetchEnabled { tools.append(WebFetchTool()) }
         // The sandbox choice is per session: resolved here, so a mid-run toggle flip never
         // touches the live run (and the fingerprint above starts a new session for it).
         let sandbox: IDEAgentSandboxChoice? = if settings.sandboxCommands, IDEAgentSandbox.isAvailable {
