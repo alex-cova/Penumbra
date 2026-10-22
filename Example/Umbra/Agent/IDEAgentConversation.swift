@@ -988,7 +988,7 @@ final class IDEAgentConversation: Identifiable {
         var mcpFingerprint = ""
         if let mcp {
             let prepared = await mcp.prepare(
-                root: root, confirm: { [weak host] servers in await host?.agentConfirmMCPServers(servers) ?? [] },
+                root: root, provider: effectiveChoice.provider.rawValue, confirm: { [weak host] servers in await host?.agentConfirmMCPServers(servers) ?? [] },
                 willStart: { [weak self] in self?.status = "Starting MCP servers…" })
             if let hub = prepared.hub {
                 mcpTools = await hub.tools

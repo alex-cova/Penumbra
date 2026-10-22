@@ -61,10 +61,8 @@ public struct TaskTool: AgentTool {
         return ToolDefinition(
             name: "task",
             description: ([
-                "Hand a self-contained task to a subagent that works in its own context window and reports back.",
-                "A new subagent knows nothing of this conversation: put everything it needs in the prompt, and say what to report.",
-                "It cannot ask the user questions or run commands. Its report comes back as this call's output, with a session id you can pass as `session` to continue that subagent.",
-                "With background=true the call returns at once and you are told when it finishes: do not poll, sleep, or repeat its work, and avoid the files it is changing.",
+                "Hand a self-contained task to a subagent with its own context. It knows nothing of this conversation: put everything it needs in the prompt and say what to report. It cannot ask the user or run commands.",
+                "Its report is the output, with a session id to pass as `session` to continue it. background=true returns at once and you are told when it finishes: do not poll, sleep or repeat its work, and avoid its files.",
                 "Use `explore` for quick read-only research.",
                 "",
                 "Available agents:",

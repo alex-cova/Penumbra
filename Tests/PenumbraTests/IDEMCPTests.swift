@@ -94,6 +94,45 @@ final class IDEMCPStoreTests: XCTestCase {
         XCTAssertFalse(store.isDeclined(server))
     }
 
+    func testHiddenToolsAndLoadingChoicesAreRememberedPerServer() {
+        let (store, defaults, keys) = makeStore()
+        XCTAssertFalse(store.isHidden("read_file", server: "files"))
+        store.setHidden(true, tool: "read_file", server: "files")
+        store.setHidden(true, tool: "write_file", server: "files")
+        store.setHidden(true, tool: "read_file", server: "other")
+        XCTAssertTrue(store.isHidden("read_file", server: "files"))
+        XCTAssertEqual(store.hiddenMap, ["files": ["read_file", "write_file"], "other": ["read_file"]])
+        store.setHidden(false, tool: "read_file", server: "other")
+        XCTAssertNil(store.hiddenMap["other"], "an empty set is not kept")
+
+        XCTAssertEqual(store.loading(for: "files"), .automatic)
+        store.setLoading(.search, server: "files")
+        store.setLoading(.listed, server: "small")
+        let reopened = IDEMCPStore(defaults: defaults, keyStore: keys)
+        XCTAssertEqual(reopened.hiddenMap, store.hiddenMap)
+        XCTAssertEqual(reopened.loading(for: "files"), .search)
+        let policy = reopened.deferral(provider: "anthropic")
+        XCTAssertEqual(policy.perServer, ["files": .always, "small": .never])
+        XCTAssertEqual(policy.provider, "anthropic")
+        reopened.setLoading(.automatic, server: "files")
+        XCTAssertEqual(reopened.deferral(provider: "x").perServer, ["small": .never])
+    }
+
+    func testHidingDuplicatesUsesWhatTheServerOfferedLastTime() {
+        let (store, defaults, keys) = makeStore()
+        store.hideDuplicates(server: "files")
+        XCTAssertNil(store.hiddenMap["files"], "nothing is known about a server that never started")
+        store.remember([
+            IDEMCPKnownTool(name: "read_text_file", tokens: 186, summary: "Read"),
+            IDEMCPKnownTool(name: "write_file", tokens: 90, summary: "Write"),
+            IDEMCPKnownTool(name: "move_file", tokens: 117, summary: "Move"),
+            IDEMCPKnownTool(name: "get_file_info", tokens: 98, summary: "Info"),
+        ], server: "files")
+        store.hideDuplicates(server: "files")
+        XCTAssertEqual(store.hiddenMap["files"], ["read_text_file", "write_file"], "moving and info are not what Umbra does")
+        XCTAssertEqual(IDEMCPStore(defaults: defaults, keyStore: keys).knownTools["files"]?.count, 4)
+    }
+
     func testProjectFilesAreReadInOrderAndALinkIsNotFollowed() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcp-project-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -208,7 +247,11 @@ final class IDEMCPManagerTests: XCTestCase {
         XCTAssertTrue(output.contains("echo: hello env=from-project"), output)
         XCTAssertTrue(output.contains("<untrusted source=\"mcp:fake\">"))
         XCTAssertTrue(processIsAlive())
-        XCTAssertEqual(manager.states.first { $0.name == "fake" }?.kind, .running(tools: 1))
+        if case .running(let count, _, _)? = manager.states.first(where: { $0.name == "fake" })?.kind {
+            XCTAssertEqual(count, 1)
+        } else {
+            XCTFail("the server should show as running")
+        }
     }
 
     func testTheSameServersAreReusedAndShutdownStopsTheProcess() async throws {
@@ -250,6 +293,52 @@ final class IDEMCPManagerTests: XCTestCase {
         let tool = try XCTUnwrap(available.first)
         let output = try await run(tool, #"{"text":"x"}"#)
         XCTAssertTrue(output.contains("env=secret-value"), output)
+    }
+
+    func testHidingAToolOrSearchOnlyLoadingChangesWhatTheHubOffersAndRestartsIt() async throws {
+        try writeProjectFile()
+        let allowAll: @MainActor ([MCPServerConfig]) async -> Set<String> = { Set($0.map(IDEMCPStore.fingerprint(of:))) }
+        let first = await manager.prepare(root: root, provider: "anthropic", confirm: allowAll, willStart: {})
+        let firstTools = await tools(of: first.hub)
+        XCTAssertEqual(firstTools.map(\.name), ["mcp__fake__echo"])
+        let rows = try XCTUnwrap(manager.toolRows["fake"])
+        XCTAssertEqual(rows.map(\.name), ["echo"])
+        XCTAssertGreaterThan(rows[0].tokens, 0)
+        guard case .running(let count, let tokens, let searchOnly)? = manager.states.first(where: { $0.name == "fake" })?.kind else {
+            return XCTFail("running state expected")
+        }
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(tokens, rows[0].tokens)
+        XCTAssertFalse(searchOnly)
+        XCTAssertEqual(store.knownTools["fake"]?.map(\.name), ["echo"], "remembered for Settings after a relaunch")
+
+        // Unchanged: the same hub.
+        let again = await manager.prepare(root: root, provider: "anthropic", confirm: allowAll, willStart: { XCTFail("no restart expected") })
+        XCTAssertTrue(first.hub === again.hub)
+
+        // Hiding the only tool: a new hub with nothing listed, and the row remembers it was hidden.
+        store.setHidden(true, tool: "echo", server: "fake")
+        let hidden = await manager.prepare(root: root, provider: "anthropic", confirm: allowAll, willStart: {})
+        XCTAssertFalse(first.hub === hidden.hub)
+        let none = await tools(of: hidden.hub)
+        XCTAssertTrue(none.isEmpty)
+        XCTAssertEqual(manager.toolRows["fake"]?.first?.isHidden, true)
+
+        // Search only: the two gateway tools stand in for the tool.
+        store.setHidden(false, tool: "echo", server: "fake")
+        store.setLoading(.search, server: "fake")
+        let deferred = await manager.prepare(root: root, provider: "anthropic", confirm: allowAll, willStart: {})
+        let gateway = await tools(of: deferred.hub)
+        XCTAssertEqual(gateway.map(\.name), ["tool_search", "tool_call"])
+        guard case .running(_, _, let nowSearchOnly)? = manager.states.first(where: { $0.name == "fake" })?.kind else {
+            return XCTFail("running state expected")
+        }
+        XCTAssertTrue(nowSearchOnly)
+
+        // The provider matters (its token counts decide Automatic), so a change of provider is a new hub.
+        store.setLoading(.automatic, server: "fake")
+        let other = await manager.prepare(root: root, provider: "responses", confirm: allowAll, willStart: {})
+        XCTAssertFalse(deferred.hub === other.hub)
     }
 
     func testTheProcessDoesNotInheritUmbrasEnvironment() async throws {

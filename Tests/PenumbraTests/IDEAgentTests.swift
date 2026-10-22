@@ -296,6 +296,28 @@ final class IDEAgentControllerTests: XCTestCase {
         XCTAssertTrue(client.requests[1].tools.map(\.name).contains("mcp__pinger__ping"), "\(client.requests[1].tools.map(\.name))")
     }
 
+    /// What every request carries before the conversation: the system prompt and the tool definitions.
+    /// Printed so a change can be judged, and bounded so a tool added without a thought for its size is
+    /// noticed (`docs/AGENT_TOOL_LOADING_PLAN.md`).
+    func testTheToolsAndSystemPromptStayWithinTheirBudget() async throws {
+        let project = try tempProject()
+        try Data("class A {}\n".utf8).write(to: project.appendingPathComponent("A.java"))
+        let (controller, client, _) = try makeController(turns: [.text("hi")], root: project)
+        controller.draft = "hello"
+        controller.send()
+        await eventually("the run should finish") { !controller.isRunning }
+        let request = try XCTUnwrap(client.requests.first)
+        var lines: [String] = []
+        for tool in request.tools.sorted(by: { ToolCost.characters(of: $0) > ToolCost.characters(of: $1) }) {
+            lines.append("  \(tool.name): \(ToolCost.tokens(of: tool, provider: "anthropic")) tokens")
+        }
+        let tools = ToolCost.tokens(of: request.tools, provider: "anthropic")
+        let system = ToolCost.tokens(ofText: request.system, provider: "anthropic")
+        print("TOOLCOST Umbra Code session: \(request.tools.count) tools ≈\(tools) tokens, system prompt ≈\(system) tokens (Anthropic counting)\n" + lines.joined(separator: "\n"))
+        XCTAssertLessThan(tools, 8_000, "the tool definitions have grown; trim them or load them on demand")
+        XCTAssertLessThan(system, 2_500, "the system prompt has grown")
+    }
+
     func testTheModelReadsUnsavedEditsNotTheStaleDiskCopy() async throws {
         let project = try tempProject()
         let file = project.appendingPathComponent("A.java")

@@ -24,6 +24,38 @@ struct IDEMCPServerEntry: Codable, Equatable, Identifiable, Sendable {
     var commandLine: String { ([command] + args).joined(separator: " ") }
 }
 
+/// A tool a server offered the last time it started, kept so Settings can list it before the next start.
+struct IDEMCPKnownTool: Codable, Equatable, Identifiable, Sendable {
+    /// The server's own name for the tool.
+    var name: String
+    /// Estimated tokens it adds to every request while it is listed.
+    var tokens: Int
+    /// The first line of the server's description.
+    var summary: String
+
+    var id: String { name }
+}
+
+/// How a server's tools reach the model.
+enum IDEMCPLoading: String, CaseIterable, Identifiable, Sendable {
+    /// Listed in every request unless the server is big, then reached by search.
+    case automatic
+    /// Always listed.
+    case listed
+    /// Never listed: found with `tool_search` and run with `tool_call`.
+    case search
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .listed: "Always listed"
+        case .search: "Search on demand"
+        }
+    }
+}
+
 /// What the user told Umbra about MCP servers: the ones they added, which of those are switched on, and
 /// which servers a project file asked for that they said yes or no to. Kept on this Mac; environment
 /// values are in the Keychain, never in `UserDefaults`.
@@ -40,12 +72,22 @@ final class IDEMCPStore {
     /// way (command, arguments, environment) has a new fingerprint and is asked about again.
     private(set) var trusted: Set<String> { didSet { defaults.set(trusted.sorted(), forKey: Keys.trusted) } }
     private(set) var declined: Set<String> { didSet { defaults.set(declined.sorted(), forKey: Keys.declined) } }
+    /// Tools the user hid, by the server's name then the tool's own name. A hidden tool is not in any
+    /// request and cannot be called.
+    private(set) var hiddenTools: [String: [String]] { didSet { persist(hiddenTools, Keys.hidden) } }
+    /// What each server offered when it last started, for the Settings list.
+    private(set) var knownTools: [String: [IDEMCPKnownTool]] { didSet { persist(knownTools, Keys.known) } }
+    /// Per server, how its tools are loaded (by name; absent means Automatic).
+    private(set) var loadingChoices: [String: String] { didSet { defaults.set(loadingChoices, forKey: Keys.loading) } }
 
     private enum Keys {
         static let servers = "umbra.agent.mcpServers"
         static let enabled = "umbra.agent.mcpEnabled"
         static let trusted = "umbra.agent.mcpTrusted"
         static let declined = "umbra.agent.mcpDeclined"
+        static let hidden = "umbra.agent.mcpHidden"
+        static let known = "umbra.agent.mcpKnownTools"
+        static let loading = "umbra.agent.mcpLoading"
     }
 
     init(defaults: UserDefaults, keyStore: any IDEAgentKeyStore) {
@@ -55,7 +97,63 @@ final class IDEMCPStore {
         enabledIDs = Set((defaults.stringArray(forKey: Keys.enabled) ?? []).compactMap(UUID.init(uuidString:)))
         trusted = Set(defaults.stringArray(forKey: Keys.trusted) ?? [])
         declined = Set(defaults.stringArray(forKey: Keys.declined) ?? [])
+        hiddenTools = defaults.data(forKey: Keys.hidden).flatMap { try? JSONDecoder().decode([String: [String]].self, from: $0) } ?? [:]
+        knownTools = defaults.data(forKey: Keys.known).flatMap { try? JSONDecoder().decode([String: [IDEMCPKnownTool]].self, from: $0) } ?? [:]
+        loadingChoices = defaults.dictionary(forKey: Keys.loading) as? [String: String] ?? [:]
     }
+
+    private func persist<T: Encodable>(_ value: T, _ key: String) {
+        if let data = try? JSONEncoder().encode(value) { defaults.set(data, forKey: key) }
+    }
+
+    // MARK: - Which tools reach the model
+
+    func isHidden(_ tool: String, server: String) -> Bool { hiddenTools[server]?.contains(tool) ?? false }
+
+    func setHidden(_ hidden: Bool, tool: String, server: String) {
+        var names = Set(hiddenTools[server] ?? [])
+        if hidden { names.insert(tool) } else { names.remove(tool) }
+        hiddenTools[server] = names.isEmpty ? nil : names.sorted()
+    }
+
+    /// Hides the tools of `server` that do what Umbra's own tools already do.
+    func hideDuplicates(server: String) {
+        let names = Set(hiddenTools[server] ?? []).union((knownTools[server] ?? []).map(\.name).filter(Self.duplicatesOfBuiltIns.contains))
+        hiddenTools[server] = names.isEmpty ? nil : names.sorted()
+    }
+
+    /// File tools that servers such as the reference filesystem server offer, matching `read_file`,
+    /// `write_file`, `edit_file`, `list_dir`, `grep` and `glob` here.
+    static let duplicatesOfBuiltIns: Set<String> = [
+        "read_file", "read_text_file", "read_multiple_files", "write_file", "create_file", "edit_file", "list_directory",
+        "list_directory_with_sizes", "directory_tree", "search_files", "list_dir", "grep", "glob",
+    ]
+
+    var hiddenMap: [String: Set<String>] { hiddenTools.mapValues(Set.init) }
+
+    func loading(for server: String) -> IDEMCPLoading { loadingChoices[server].flatMap(IDEMCPLoading.init(rawValue:)) ?? .automatic }
+
+    func setLoading(_ choice: IDEMCPLoading, server: String) {
+        loadingChoices[server] = choice == .automatic ? nil : choice.rawValue
+    }
+
+    /// The hub's rule for deferring, for the provider in use (its token counts differ).
+    func deferral(provider: String) -> MCPDeferral {
+        var perServer: [String: MCPDeferral.Mode] = [:]
+        for (server, raw) in loadingChoices {
+            switch IDEMCPLoading(rawValue: raw) {
+            case .listed: perServer[server] = .never
+            case .search: perServer[server] = .always
+            default: break
+            }
+        }
+        return MCPDeferral(mode: Self.defaultDeferral, provider: provider, perServer: perServer)
+    }
+
+    /// What "Automatic" does.
+    static let defaultDeferral: MCPDeferral.Mode = .never
+
+    func remember(_ tools: [IDEMCPKnownTool], server: String) { knownTools[server] = tools }
 
     // MARK: - Added servers
 

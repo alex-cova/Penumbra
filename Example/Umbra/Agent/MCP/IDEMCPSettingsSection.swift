@@ -38,6 +38,7 @@ struct IDEMCPSettingsSection: View {
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                         }
                         stateText(for: "user:\(entry.id)")
+                        toolList(server: entry.displayName)
                     }
                     Spacer()
                     Button {
@@ -96,6 +97,7 @@ struct IDEMCPSettingsSection: View {
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
                     }
                     stateText(for: "project:\(server.name)")
+                    toolList(server: server.name)
                 }
                 Spacer()
                 if allowed {
@@ -121,12 +123,56 @@ struct IDEMCPSettingsSection: View {
             .foregroundStyle(IDEAppearance.ColorToken.muted)
     }
 
+    /// The server's tools with what each costs, a checkbox to hide it, and how the server is loaded.
+    /// From the last start, so it is empty for a server that has never run.
+    @ViewBuilder
+    private func toolList(server: String) -> some View {
+        let live = manager?.toolRows[server]
+        let rows = live ?? (store.knownTools[server] ?? []).map {
+            IDEMCPToolRow(server: server, name: $0.name, summary: $0.summary, tokens: $0.tokens, isHidden: false, isDeferred: false)
+        }
+        if !rows.isEmpty {
+            let shown = rows.filter { !store.isHidden($0.name, server: server) }
+            let tokens = shown.reduce(0) { $0 + $1.tokens }
+            DisclosureGroup("Tools: \(shown.count) of \(rows.count) on · about \(tokens) tokens") {
+                Picker("Loading", selection: Binding(get: { store.loading(for: server) }, set: { store.setLoading($0, server: server) })) {
+                    ForEach(IDEMCPLoading.allCases) { Text($0.title).tag($0) }
+                }
+                .help("Automatic lists a small server's tools and reaches a big one by search. A listed tool costs tokens in every request; a searched one costs a search first.")
+                Button("Hide Tools That Duplicate Umbra's Own") { store.hideDuplicates(server: server) }
+                    .help("Hides read, write, edit, list and search file tools, which the agent already has.")
+                ForEach(rows) { row in
+                    Toggle(isOn: Binding(
+                        get: { !store.isHidden(row.name, server: server) },
+                        set: { store.setHidden(!$0, tool: row.name, server: server) })
+                    ) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(row.name) · \(row.tokens) tokens")
+                                .font(IDEAppearance.Typography.monoSmall)
+                            if !row.summary.isEmpty {
+                                Text(row.summary)
+                                    .font(IDEAppearance.Typography.caption)
+                                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                    .lineLimit(2)
+                            }
+                        }
+                    }
+                }
+                Text("A change applies to your next message, in a new session that keeps the conversation.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+        }
+    }
+
     @ViewBuilder
     private func stateText(for id: String) -> some View {
         if let state = manager?.states.first(where: { $0.id == id }) {
             switch state.kind {
-            case .running(let tools):
-                Text("Running · \(tools) tool\(tools == 1 ? "" : "s")")
+            case .running(let tools, let tokens, let searchOnly):
+                Text("Running · \(tools) tool\(tools == 1 ? "" : "s")" + (searchOnly
+                    ? " · found by search, not listed"
+                    : " · listed, about \(tokens) tokens per request"))
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(.green)
             case .failed(let reason):

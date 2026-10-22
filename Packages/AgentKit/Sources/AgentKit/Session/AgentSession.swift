@@ -1381,7 +1381,16 @@ public actor AgentSession {
                     ? "\(call.name) is not available: this session is in plan mode, so nothing can be changed or run. Describe the change in your plan instead."
                     : "\(call.name) is only available in plan mode, and the session is not in it.")))
             } else if let tool = toolsByName[call.name] {
-                plans.append(.run(tool, arguments: call.arguments, note: nil))
+                // A gateway call is judged as the tool it names: its rules, card and mode apply.
+                if let forwarded = tool.forwardedCall(for: (try? ToolArguments(json: call.arguments)) ?? ToolArguments([:])) {
+                    if forwarded.tool.isOffered(in: mode) {
+                        plans.append(.run(forwarded.tool, arguments: forwarded.argumentsJSON, note: nil))
+                    } else {
+                        plans.append(.answered(.error("\(forwarded.tool.name) is not available in \(mode.rawValue) mode.")))
+                    }
+                } else {
+                    plans.append(.run(tool, arguments: call.arguments, note: nil))
+                }
             } else {
                 plans.append(.answered(.error("Unknown tool \"\(call.name)\". Available tools: \(offeredTools.map(\.name).joined(separator: ", "))")))
             }
@@ -1499,7 +1508,7 @@ public actor AgentSession {
         else { return plan }
         let verdict = await PermissionPolicy.evaluate(
             ToolCallInfo(
-                name: call.name, risk: tool.risk, subject: tool.permissionSubject(for: parsed),
+                name: tool.name, risk: tool.risk, subject: tool.permissionSubject(for: parsed),
                 honorsDenyRules: true),
             mode: mode, rules: rules, gate: configuration.gate, secretPatterns: configuration.secretPatterns)
         if case .deny(let reason) = verdict { return .answered(.error(reason)) }
@@ -1518,7 +1527,7 @@ public actor AgentSession {
         let subject = tool.permissionSubject(for: parsed)
         let verdict = await PermissionPolicy.evaluate(
             ToolCallInfo(
-                name: call.name, risk: tool.risk, subject: subject, honorsDenyRules: tool.honorsDenyRules,
+                name: tool.name, risk: tool.risk, subject: subject, honorsDenyRules: tool.honorsDenyRules,
                 asksUnlessAllowed: tool.asksUnlessAllowed),
             mode: mode, rules: rules, gate: configuration.gate, secretPatterns: configuration.secretPatterns)
         let notes: [String]
@@ -1550,9 +1559,9 @@ public actor AgentSession {
                 request = asked
             } else if case .command(let text) = subject {
                 // A tool that says nothing about itself still asks when the policy says so.
-                request = ApprovalRequest(title: "Run \(call.name)", command: text, warnings: CommandWarnings.warnings(for: text))
+                request = ApprovalRequest(title: "Run \(tool.name)", command: text, warnings: CommandWarnings.warnings(for: text))
             } else {
-                request = ApprovalRequest(title: "Run \(call.name)", command: arguments)
+                request = ApprovalRequest(title: "Run \(tool.name)", command: arguments)
             }
             if case .command(let text) = subject, request.suggestedRule == nil {
                 request.suggestedRule = PermissionRule.suggestion(forCommand: text)?.description
@@ -1564,7 +1573,7 @@ public actor AgentSession {
         }
         request.notes += notes
         request.callID = call.id
-        request.toolName = call.name
+        request.toolName = tool.name
 
         out.yield(.approvalRequested(request))
         out.yield(.stateChanged(.awaitingApproval(callID: call.id)))

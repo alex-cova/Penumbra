@@ -5,7 +5,8 @@ import Observation
 /// What Settings shows for one server.
 struct IDEMCPServerState: Identifiable, Equatable {
     enum Kind: Equatable {
-        case running(tools: Int)
+        /// `tokens`: what the server's listed tools add to every request (0 when all are reached by search).
+        case running(tools: Int, tokens: Int, searchOnly: Bool)
         case failed(String)
         case waiting(String)
         case off
@@ -14,6 +15,19 @@ struct IDEMCPServerState: Identifiable, Equatable {
     var id: String
     var name: String
     var kind: Kind
+}
+
+/// One tool in the Settings list.
+struct IDEMCPToolRow: Identifiable, Equatable {
+    var server: String
+    /// The server's own name.
+    var name: String
+    var summary: String
+    var tokens: Int
+    var isHidden: Bool
+    var isDeferred: Bool
+
+    var id: String { server + "/" + name }
 }
 
 /// The window's MCP servers: which ones to use (the ones the user added and switched on, and the
@@ -26,6 +40,8 @@ final class IDEMCPManager {
     private let store: IDEMCPStore
     private(set) var project = IDEMCPProjectConfig.Loaded()
     private(set) var states: [IDEMCPServerState] = []
+    /// Every tool of every running server, hidden ones included, with what it costs, for Settings.
+    private(set) var toolRows: [String: [IDEMCPToolRow]] = [:]
 
     @ObservationIgnored private var hub: MCPHub?
     @ObservationIgnored private var hubKey = ""
@@ -63,7 +79,8 @@ final class IDEMCPManager {
     /// project servers they have not answered yet; `willStart` is called before a start that may take
     /// a while. `nil` hub: nothing to use.
     func prepare(
-        root: URL, confirm: @escaping @MainActor ([MCPServerConfig]) async -> Set<String>, willStart: @escaping @MainActor () -> Void
+        root: URL, provider: String = "", confirm: @escaping @MainActor ([MCPServerConfig]) async -> Set<String>,
+        willStart: @escaping @MainActor () -> Void
     ) async -> Prepared {
         await serialized { [self] in
             refreshProject(root: root)
@@ -75,7 +92,11 @@ final class IDEMCPManager {
                 }
             }
             let active = store.enabledConfigs() + project.servers.filter { store.isTrusted($0) }
-            let key = active.map(\.canonicalText).sorted().joined(separator: "\u{1}") + "|" + root.path
+            let hidden = store.hiddenMap
+            let deferral = store.deferral(provider: provider)
+            let key = active.map(\.canonicalText).sorted().joined(separator: "\u{1}") + "|" + root.path + "|" + provider
+                + "|" + hidden.keys.sorted().map { "\($0)=\(hidden[$0]!.sorted().joined(separator: ","))" }.joined(separator: ";")
+                + "|" + String(describing: deferral)
             if active.isEmpty {
                 await stop()
                 states = idleStates()
@@ -86,7 +107,7 @@ final class IDEMCPManager {
             await stop()
             willStart()
             let registry = self.registry
-            let newHub = MCPHub(servers: active) { config in
+            let newHub = MCPHub(servers: active, trimming: .standard, hidden: hidden, deferral: deferral) { config in
                 let environment = AgentCommandEnvironment.make(javaHome: nil, extras: config.env)
                 let definition = IDEACPDefinition(name: config.name, command: config.command, args: config.args)
                 guard definition.resolvedExecutable(pathValue: environment["PATH"] ?? "") != nil else {
@@ -101,10 +122,26 @@ final class IDEMCPManager {
             hubKey = key
             var notices: [String] = []
             var running: [String: IDEMCPServerState.Kind] = [:]
+            let summaries = await newHub.summaries
+            var rows: [String: [IDEMCPToolRow]] = [:]
+            for summary in summaries {
+                let tokens = ToolCost.tokens(of: summary.definition, provider: provider)
+                let first = summary.description.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+                rows[summary.server, default: []].append(IDEMCPToolRow(
+                    server: summary.server, name: summary.remoteName, summary: String(first.prefix(160)), tokens: tokens,
+                    isHidden: summary.isHidden, isDeferred: summary.isDeferred))
+            }
+            for (server, list) in rows {
+                store.remember(list.map { IDEMCPKnownTool(name: $0.name, tokens: $0.tokens, summary: $0.summary) }, server: server)
+            }
+            toolRows = rows
             for status in statuses {
                 switch status.state {
                 case .connected(let tools):
-                    running[status.name] = .running(tools: tools)
+                    let mine = rows[status.name] ?? []
+                    let listed = mine.filter { !$0.isHidden && !$0.isDeferred }
+                    running[status.name] = .running(
+                        tools: tools, tokens: listed.reduce(0) { $0 + $1.tokens }, searchOnly: !mine.isEmpty && mine.allSatisfy { $0.isDeferred || $0.isHidden } && mine.contains { $0.isDeferred })
                 case .failed(let reason):
                     let detail = Self.withStandardError(reason, registry.recentStandardError(for: status.name))
                     running[status.name] = .failed(detail)

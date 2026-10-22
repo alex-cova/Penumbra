@@ -147,9 +147,8 @@ public struct AskUserTool: AgentTool {
         ToolDefinition(
             name: "ask_user",
             description: """
-            Ask the user a question and wait for the answer. Use it when the request is ambiguous in a way \
-            that changes what you would build, or a decision is theirs to make (which of two designs, \
-            whether to delete something). Do not ask what you can find out with your tools. Offer short \
+            Ask the user a question and wait. Use it when the request is ambiguous in a way that changes what \
+            you would build, or a decision is theirs. Do not ask what your tools can find out. Offer short \
             `options` when the answers are a small set.
             """,
             parameters: [

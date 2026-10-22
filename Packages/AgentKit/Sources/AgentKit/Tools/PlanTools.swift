@@ -23,10 +23,9 @@ public struct ExitPlanModeTool: AgentTool {
         ToolDefinition(
             name: "exit_plan_mode",
             description: """
-            Submit your plan for the user to approve. Use it in plan mode, once you have looked at what you need to. \
-            Write the plan in Markdown: what you will change and where (file paths), in order, how you will verify it, \
-            and anything you are unsure about. The user approves it, which lets you change files, or asks for changes, \
-            in which case revise the plan and submit it again. Do not start changing anything before it is approved.
+            Submit your plan for the user to approve, in plan mode, once you have looked at what you need. Write it in \
+            Markdown: what changes and where (file paths), in order, how to verify it, and what you are unsure about. \
+            If they ask for changes, revise and submit again. Change nothing before it is approved.
             """,
             parameters: [ToolParameter("plan", .string, "The plan, in Markdown.")])
     }

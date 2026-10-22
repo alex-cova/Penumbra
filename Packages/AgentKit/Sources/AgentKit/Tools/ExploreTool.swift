@@ -26,10 +26,9 @@ public struct ExploreTool: AgentTool {
         ToolDefinition(
             name: "explore",
             description: """
-            Delegate read-only research to a child session with its own context window, such as \
-            finding where something is defined or how something works. The child can read and \
-            search but cannot change files or run commands. End your task with what you need; you \
-            get back a short summary of what it found.
+            Delegate read-only research to a child session with its own context, such as finding where \
+            something is defined or how it works. It can read and search but not change files or run \
+            commands. You get back a short summary.
             """,
             parameters: [
                 ToolParameter("task", .string, "What to research, with enough context to stand alone."),

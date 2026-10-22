@@ -235,10 +235,8 @@ struct IDEDiagnosticsTool: AgentTool {
         ToolDefinition(
             name: "diagnostics",
             description: """
-            List the compiler errors, warnings and inspections for the project. It covers files open in \
-            the editor and the last Gradle build, and compiles the Java files you changed in this run \
-            (or the one in `path`) right now, so the answer matches their current text. Run it after \
-            editing.
+            List compiler errors, warnings and inspections: files open in the editor, the last Gradle \
+            build, and the Java files you changed in this run (or `path`), compiled now. Run it after editing.
             """,
             parameters: [ToolParameter("path", .string, "Only this project-relative file, compiled now if it is Java.", optional: true)])
     }

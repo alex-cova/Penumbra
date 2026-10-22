@@ -41,6 +41,17 @@ public struct ToolError: Error, Sendable, Equatable, LocalizedError {
     public var errorDescription: String? { message }
 }
 
+/// A call that is really another tool's: see `AgentTool.forwardedCall`.
+public struct ForwardedCall: Sendable {
+    public var tool: any AgentTool
+    public var argumentsJSON: String
+
+    public init(tool: any AgentTool, argumentsJSON: String) {
+        self.tool = tool
+        self.argumentsJSON = argumentsJSON
+    }
+}
+
 /// Typed access to a call's JSON arguments. Strict mode sends `null` for an omitted optional
 /// parameter, so `null` reads as absent everywhere.
 ///
@@ -341,6 +352,10 @@ public protocol AgentTool: Sendable {
     /// For a tool with `asksUnlessAllowed`: why this call can never run, known before anything is
     /// asked. The call is answered with it and the user sees no card for something that would be refused.
     func refusalBeforeAsking(for arguments: ToolArguments) -> String?
+    /// For a tool that stands for another (`tool_call` runs a deferred MCP tool): the tool and arguments
+    /// the call really is. The session swaps them in before it decides anything, so rules, approval
+    /// cards and "always allow" apply to the real tool. `nil`: the call is the tool's own.
+    func forwardedCall(for arguments: ToolArguments) -> ForwardedCall?
     /// True for an `.edit` tool that reports the files it changed itself, as they happen, instead of
     /// the session counting the call as one edit (`task`: a read-only child changed nothing).
     var reportsOwnEdits: Bool { get }
@@ -360,6 +375,7 @@ extension AgentTool {
     public var runsWithoutTimeout: Bool { false }
     public var asksUnlessAllowed: Bool { false }
     public func refusalBeforeAsking(for arguments: ToolArguments) -> String? { nil }
+    public func forwardedCall(for arguments: ToolArguments) -> ForwardedCall? { nil }
     public var reportsOwnEdits: Bool { false }
 
     public func isOffered(in mode: PermissionMode) -> Bool { mode.offers(risk) }

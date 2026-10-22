@@ -84,13 +84,11 @@ struct IDERunCommandTool: AgentTool {
         ToolDefinition(
             name: "run_command",
             description: """
-            Run a shell command in the project root (zsh, no login shell, no stdin). The user approves \
-            each command first, and it then runs in a new integrated-terminal tab. Use it for what the \
-            other tools can't do, such as git and scripts. Not for reading or editing files, and not for \
-            a Gradle build or tests (use gradle and run_tests; those open the Gradle tool window). \
-            Interactive programs and long-lived servers will not work: anything the command starts is \
-            stopped when it ends. When the output is large, the full text is saved and a preview comes \
-            back; read the rest with read_tool_output instead of piping through head or tail.
+            Run a shell command in the project root (zsh, no stdin). The user approves each one first, and it \
+            runs in a new integrated-terminal tab. Use it for what the other tools can't do, such as git and \
+            scripts; not for reading or editing files, and not for a Gradle build or tests (use gradle and \
+            run_tests). Interactive programs and servers will not work: anything it starts stops when it \
+            ends. Large output is saved; read the rest with read_tool_output.
             """,
             parameters: [
                 ToolParameter("command", .string, "The shell command."),

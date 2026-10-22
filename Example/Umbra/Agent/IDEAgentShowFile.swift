@@ -11,9 +11,8 @@ struct IDEShowFileTool: AgentTool {
         ToolDefinition(
             name: "show_file",
             description: """
-            Open a project file in the editor so the user can see it. Pass a project-relative path, \
-            and a 1-based line when you want the caret there. This does not read or change the file; \
-            use read_file to look at its text.
+            Open a project file in the editor for the user, with the caret at a 1-based line if you pass \
+            one. It does not read or change the file; use read_file for its text.
             """,
             parameters: [
                 ToolParameter("path", .string, "Project-relative path of the file to open."),

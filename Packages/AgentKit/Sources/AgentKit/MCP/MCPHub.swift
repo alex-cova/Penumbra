@@ -15,6 +15,55 @@ public struct MCPServerStatus: Sendable, Equatable {
     }
 }
 
+/// When a server's tools are reached through `tool_search` and `tool_call` instead of being listed in
+/// every request (`MCPGateway.swift`). The listing costs tokens on every request whether or not a tool is
+/// used, and a server with dozens of tools costs more than the conversation does.
+public struct MCPDeferral: Sendable, Equatable {
+    public enum Mode: Sendable, Equatable {
+        case never
+        /// By size: over `budgetTokens` or `toolCount`.
+        case automatic
+        case always
+    }
+
+    public var mode: Mode
+    public var budgetTokens: Int
+    public var toolCount: Int
+    /// For `ToolCost`: the provider the tokens are counted for.
+    public var provider: String
+    /// A server named here (by the name the user gave it) overrides `mode`.
+    public var perServer: [String: Mode]
+
+    public init(mode: Mode = .never, budgetTokens: Int = 3_000, toolCount: Int = 20, provider: String = "", perServer: [String: Mode] = [:]) {
+        self.mode = mode
+        self.budgetTokens = budgetTokens
+        self.toolCount = toolCount
+        self.provider = provider
+        self.perServer = perServer
+    }
+
+    public static let never = MCPDeferral()
+
+    func mode(for server: String) -> Mode { perServer[server] ?? mode }
+}
+
+/// One tool of one server as the hub knows it, for Settings: what the server wrote, what is sent, and
+/// whether it is hidden or reached through the gateway.
+public struct MCPToolSummary: Sendable, Equatable, Identifiable {
+    public var id: String { name }
+    /// The server's name as the user wrote it.
+    public var server: String
+    /// The name the model sees (`mcp__server__tool`).
+    public var name: String
+    public var remoteName: String
+    /// The server's own description, untrimmed.
+    public var description: String
+    /// What a request carries for the tool when it is listed.
+    public var definition: ToolDefinition
+    public var isHidden: Bool
+    public var isDeferred: Bool
+}
+
 /// The MCP servers one window uses: connects them, offers their tools as ordinary `AgentTool`s, and
 /// routes calls. The host supplies how a server is started (`makeTransport`: it spawns the process and
 /// decides whether the user has agreed) so AgentKit starts nothing itself.
@@ -27,8 +76,13 @@ public actor MCPHub {
 
     private struct ToolSpec {
         var name: String
+        /// The server's identifier, as used in tool names.
         var server: String
+        var serverName: String
+        var original: MCPToolInfo
         var info: MCPToolInfo
+        var isHidden: Bool
+        var isDeferred: Bool
     }
 
     private struct Entry {
@@ -41,6 +95,9 @@ public actor MCPHub {
     private let makeTransport: TransportFactory
     private let connectTimeout: TimeInterval
     private let callTimeout: TimeInterval
+    private let trimming: ToolTrimming
+    private let hidden: [String: Set<String>]
+    private let deferral: MCPDeferral
     private var entries: [String: Entry] = [:]
     private var order: [String] = []
     private var specs: [ToolSpec] = []
@@ -51,11 +108,15 @@ public actor MCPHub {
 
     public init(
         servers: [MCPServerConfig], connectTimeout: TimeInterval = 30, callTimeout: TimeInterval = 120,
+        trimming: ToolTrimming = .none, hidden: [String: Set<String>] = [:], deferral: MCPDeferral = .never,
         makeTransport: @escaping TransportFactory
     ) {
         self.makeTransport = makeTransport
         self.connectTimeout = connectTimeout
         self.callTimeout = callTimeout
+        self.trimming = trimming
+        self.hidden = hidden
+        self.deferral = deferral
         // Two servers whose names clean up to the same identifier get distinct ones.
         var used = Set<String>()
         for server in servers {
@@ -72,15 +133,39 @@ public actor MCPHub {
 
     // MARK: - Tools
 
-    /// The servers' tools in a fixed order (server, then tool name), for the session's tool list.
+    /// The tools to put in the session's tool list, in a fixed order (server, then tool name): the
+    /// servers' listed tools, then `tool_search` and `tool_call` if any server is deferred. Hidden tools
+    /// are in neither.
     public var tools: [any AgentTool] {
-        specs.map { MCPTool(name: $0.name, server: $0.server, info: $0.info, hub: self) }
+        var result: [any AgentTool] = specs.filter { !$0.isHidden && !$0.isDeferred }
+            .map { MCPTool(name: $0.name, server: $0.server, info: $0.info, hub: self) }
+        let deferred = specs.filter { $0.isDeferred && !$0.isHidden }
+        if !deferred.isEmpty {
+            let catalog = MCPGatewayCatalog(entries: deferred.map {
+                MCPGatewayEntry(serverName: $0.serverName, tool: MCPTool(name: $0.name, server: $0.server, info: $0.info, hub: self))
+            })
+            result += [MCPToolSearchTool(catalog: catalog), MCPToolCallTool(catalog: catalog)]
+        }
+        return result
     }
 
-    /// Changes when a tool's name, description or schema does. A host puts it in its session
-    /// fingerprint, so a changed server starts a new session instead of changing a live request.
+    /// Every tool the servers offer, hidden ones included, for Settings.
+    public var summaries: [MCPToolSummary] {
+        specs.map {
+            MCPToolSummary(
+                server: $0.serverName, name: $0.name, remoteName: $0.original.name, description: $0.original.description,
+                definition: MCPTool(name: $0.name, server: $0.server, info: $0.info, hub: self).definition,
+                isHidden: $0.isHidden, isDeferred: $0.isDeferred)
+        }
+    }
+
+    /// Changes when a tool's name, description or schema does, or when a tool is hidden or deferred. A
+    /// host puts it in its session fingerprint, so a changed server starts a new session instead of
+    /// changing a live request.
     public var fingerprint: String {
-        let parts = specs.map { "\($0.name)\u{0}\($0.info.description)\u{0}\((try? $0.info.inputSchema.serialized()) ?? "")" }
+        let parts = specs.map {
+            "\($0.name)\u{0}\($0.info.description)\u{0}\((try? $0.info.inputSchema.serialized()) ?? "")\u{0}\($0.isHidden)\u{0}\($0.isDeferred)"
+        }
         return String(ReadLedger.hash(parts.joined(separator: "\u{1}")), radix: 16)
     }
 
@@ -135,16 +220,30 @@ public actor MCPHub {
                 continue
             }
             entries[identifier]?.client = result.client
+            let hiddenNames = hidden[config.name] ?? []
+            let infos = result.outcome.tools.sorted(by: { $0.name < $1.name })
+            let listed = infos.filter { !hiddenNames.contains($0.name) }.map { ToolDefinitionTrimmer.trim($0, trimming) }
+            let deferServer: Bool
+            switch deferral.mode(for: config.name) {
+            case .never: deferServer = false
+            case .always: deferServer = !listed.isEmpty
+            case .automatic:
+                let cost = ToolCost.tokens(of: listed.map { MCPTool(name: "x", server: identifier, info: $0, hub: self).definition }, provider: deferral.provider)
+                deferServer = cost > deferral.budgetTokens || listed.count > deferral.toolCount
+            }
             var count = 0
-            for info in result.outcome.tools.sorted(by: { $0.name < $1.name }) {
-                var name = MCPNaming.toolName(server: identifier, tool: info.name)
+            for original in infos {
+                let isHidden = hiddenNames.contains(original.name)
+                var name = MCPNaming.toolName(server: identifier, tool: original.name)
                 var suffix = 2
                 while !usedNames.insert(name).inserted {
-                    name = MCPNaming.toolName(server: identifier, tool: info.name + "_\(suffix)")
+                    name = MCPNaming.toolName(server: identifier, tool: original.name + "_\(suffix)")
                     suffix += 1
                 }
-                newSpecs.append(ToolSpec(name: name, server: identifier, info: info))
-                count += 1
+                newSpecs.append(ToolSpec(
+                    name: name, server: identifier, serverName: config.name, original: original,
+                    info: ToolDefinitionTrimmer.trim(original, trimming), isHidden: isHidden, isDeferred: deferServer))
+                if !isHidden { count += 1 }
             }
             statuses.append(MCPServerStatus(name: config.name, state: .connected(tools: count)))
         }
