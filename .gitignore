@@ -8,6 +8,7 @@ Example/Umbra/.build
 dist
 
 openai.key
+claude.key
 
 # Xcode user-specific state (shared schemes/workspace data are tracked)
 .swiftpm/xcode/**/xcuserdata/
