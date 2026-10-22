@@ -4,7 +4,19 @@ import EditorIntelligence
 import Foundation
 
 extension IDEWorkspace: IDEAgentHost {
-    var agentProjectRoot: URL? { project.rootURL }
+    /// The open project, else (in AI mode only) a scratch folder, so Code can answer without one. The
+    /// docked panel and the editor's agent entry points still need a real project.
+    var agentProjectRoot: URL? {
+        project.rootURL ?? (windowMode == .ai ? Self.agentScratchFolder : nil)
+    }
+
+    /// Where Code works when no folder is open: a plain folder in Application Support the agent may use.
+    static let agentScratchFolder: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let url = base.appendingPathComponent("com.umbra.editor/Scratch", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
 
     func toggleAgentPanel() {
         guard hasOpenProject else { return }

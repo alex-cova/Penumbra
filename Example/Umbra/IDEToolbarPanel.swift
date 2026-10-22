@@ -380,7 +380,6 @@ private struct IDEAIToolbarRow: View {
                     action: workspace.showEditorMode
                 )
                 Button {
-                    workspace.showEditorMode()
                     workspace.showSettings()
                 } label: {
                     IDEToolbarIconLabel(systemName: "gearshape", isHighlighted: isHoveringSettings)

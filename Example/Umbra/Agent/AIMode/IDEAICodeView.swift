@@ -17,6 +17,7 @@ struct IDEAICodeView: View {
             .onAppear {
                 // AI mode begins with a new session; it does not continue the project's latest one.
                 agent.startFresh()
+                agent.refreshHistory()
                 agent.isShownInAIMode = true
                 if let choice = IDEAISettings.shared.codeChoice {
                     agent.newChatChoice = choice
@@ -58,7 +59,7 @@ struct IDEAIProjectChip: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help(workspace.project.rootURL?.path ?? "Choose the folder this session works in")
+        .help(workspace.project.rootURL?.path ?? "Choose the folder this session works in (none: it uses a scratch folder)")
         .accessibilityLabel("Project: \(name)")
     }
 }

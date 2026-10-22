@@ -76,8 +76,11 @@ struct IDEAgentPanel: View {
                     expandOverEditor()
                 }
             }
-            IDEAgentIconButton(systemImage: "gearshape", help: "Agent Settings", isActive: isSettingsPresented) {
-                isSettingsPresented = true
+            // AI mode's toolbar already has Settings.
+            if placement != .aiMode {
+                IDEAgentIconButton(systemImage: "gearshape", help: "Agent Settings", isActive: isSettingsPresented) {
+                    isSettingsPresented = true
+                }
             }
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
@@ -140,8 +143,6 @@ struct IDEAgentPanel: View {
 
     private var isAIMode: Bool { placement == .aiMode }
     private var choice: IDEAIModelChoice { agent.selected.effectiveChoice }
-    /// AI mode starts sessions anywhere; they need a project to work in.
-    private var needsProject: Bool { isAIMode && agent.projectRoot == nil }
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
@@ -230,21 +231,19 @@ struct IDEAgentPanel: View {
                     systemImage: "stop.fill", help: "Stop", tint: IDEAppearance.ColorToken.error, action: agent.stop)
             } else {
                 IDEAgentIconButton(
-                    systemImage: "arrow.up.circle.fill", help: needsProject ? "Choose a project first" : "Send",
+                    systemImage: "arrow.up.circle.fill", help: "Send",
                     tint: IDEAppearance.ColorToken.accent,
-                    isDisabled: needsProject || agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, action: send)
+                    isDisabled: agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, action: send)
             }
         }
     }
 
     private var placeholder: String {
         if agent.isRunning { return "Write what to do next; it is sent at the next step…" }
-        if needsProject { return "Choose a project to start" }
         return isAIMode ? "Describe a task or ask a question" : "Ask about this project…"
     }
 
     private func send() {
-        guard !needsProject else { return }
         // A message that would be sent (not a /command) with no usable model asks for one first.
         if isAIMode, !agent.draft.hasPrefix("/"), workspace.aiModelSetupHint(for: .code) != nil {
             workspace.requestAIModelSetup(for: .code)
@@ -299,7 +298,7 @@ struct IDEAgentPanel: View {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
                 .font(.system(size: 26))
                 .foregroundStyle(IDEAppearance.ColorToken.accent)
-            Text(agent.projectRoot.map { "What should we do in \($0.lastPathComponent)?" } ?? "Let's build something")
+            Text(workspace.project.rootURL.map { "What should we do in \($0.lastPathComponent)?" } ?? "Let's build something")
                 .font(IDEAppearance.Typography.brandTitle)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .multilineTextAlignment(.center)

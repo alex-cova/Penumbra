@@ -426,6 +426,8 @@ public final class IDEWorkspace {
     }
     /// Whether AI mode's list of chats is shown.
     var showsAISidebar = true
+    /// Settings were opened from AI mode, so closing them goes back there rather than to the editor.
+    private var returnsToAIModeFromSettings = false
     /// Set while a saved window comes back, which is not a change worth saving.
     private var isRestoringAIMode = false
     /// What to do in AI mode once the folder being opened here is the project; see `applyAIOpen`.
@@ -443,6 +445,9 @@ public final class IDEWorkspace {
 
     func showSettings() {
         guard !isSettingsVisible else { return }
+        // Settings belong to the editor's side of the window; closing them returns to AI mode.
+        returnsToAIModeFromSettings = windowMode == .ai
+        if returnsToAIModeFromSettings { windowMode = .editor }
         isBottomPanelExpanded = false
         agent.dismissPage()
         isSettingsVisible = true
@@ -454,6 +459,7 @@ public final class IDEWorkspace {
     /// keystrokes must not keep going to a text view that is no longer on screen.
     func prepareForAIMode() {
         isSettingsVisible = false
+        returnsToAIModeFromSettings = false
         isBottomPanelExpanded = false
         window?.makeFirstResponder(nil)
     }
@@ -466,6 +472,10 @@ public final class IDEWorkspace {
     func hideSettings() {
         guard isSettingsVisible else { return }
         isSettingsVisible = false
+        if returnsToAIModeFromSettings {
+            showAIMode()
+            return
+        }
         focusActiveEditor()
     }
 
