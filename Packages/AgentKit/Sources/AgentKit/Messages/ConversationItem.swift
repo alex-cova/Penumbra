@@ -77,6 +77,15 @@ public struct TokenUsage: Sendable, Hashable, Codable {
         self.reasoningTokens = reasoningTokens
     }
 
+    /// What was added since `earlier`, never below zero.
+    func minus(_ earlier: TokenUsage) -> TokenUsage {
+        TokenUsage(
+            inputTokens: max(0, inputTokens - earlier.inputTokens),
+            outputTokens: max(0, outputTokens - earlier.outputTokens),
+            cachedInputTokens: max(0, cachedInputTokens - earlier.cachedInputTokens),
+            reasoningTokens: max(0, reasoningTokens - earlier.reasoningTokens))
+    }
+
     public static func + (lhs: TokenUsage, rhs: TokenUsage) -> TokenUsage {
         TokenUsage(
             inputTokens: lhs.inputTokens + rhs.inputTokens,

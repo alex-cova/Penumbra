@@ -205,6 +205,8 @@ final class IDEAIChatConversation: Identifiable {
             flushTask?.cancel()
             pendingText = ""
             if turnStart < entries.count { entries.removeSubrange(turnStart...) }
+        case .retryScheduled(let attempt, let delay):
+            status = IDEAgentToolSummary.retryStatus(attempt: attempt, delay: delay)
         case .assistantMessage(let text):
             flushPending()
             if let index = entries.indices.last, entries[index].kind == .assistant, entries[index].isStreaming {

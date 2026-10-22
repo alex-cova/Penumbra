@@ -159,6 +159,14 @@ enum IDEAgentToolSummary {
         }
     }
 
+    /// The status line while a failed request waits to be sent again.
+    static func retryStatus(attempt: Int, delay: TimeInterval) -> String {
+        let seconds = Int(delay.rounded(.up))
+        if seconds < 2 { return "Retrying…" }
+        let wait = seconds < 90 ? "\(seconds) s" : "\((seconds + 30) / 60) min"
+        return "The provider is busy or unreachable. Retrying in \(wait) (try \(attempt))…"
+    }
+
     static func endingMessage(_ ending: RunEnding, iterationLimit: Int) -> (text: String, isError: Bool)? {
         switch ending {
         case .completed: nil

@@ -19,6 +19,8 @@ public struct ExploreTool: AgentTool {
     }
 
     public var risk: ToolRisk { .read }
+    /// Bounded by the child's iteration cap and by Stop; the per-tool timeout would only cut off research that is going well.
+    public var runsWithoutTimeout: Bool { true }
 
     public var definition: ToolDefinition {
         ToolDefinition(

@@ -43,6 +43,9 @@ public enum AgentEvent: Sendable, Equatable {
     case reasoningDelta(String)
     /// The turn is being resent after a transient failure: drop the streamed text and calls of this turn.
     case turnRestarted
+    /// Follows `.turnRestarted`: the provider failed with something worth retrying and the request is
+    /// sent again after `delay` seconds. `attempt` counts the tries, from 1. A host shows the wait.
+    case retryScheduled(attempt: Int, delay: TimeInterval)
     /// The finished assistant text of a turn, once.
     case assistantMessage(String)
     case toolCallStarted(id: String, name: String)
@@ -75,5 +78,8 @@ public enum AgentEvent: Sendable, Equatable {
     /// An event from a child subagent session, for progress UI. The parent's own run still ends
     /// with exactly one top-level `.runEnded`.
     indirect case subagent(id: String, event: AgentEvent)
+    /// A subagent started with `background` finished. Its report is on its way to the model as a note
+    /// at the next turn boundary; `summary` is for the transcript.
+    case subagentFinished(sessionID: String, agent: String, description: String, summary: String, ending: RunEnding)
     case runEnded(RunEnding)
 }

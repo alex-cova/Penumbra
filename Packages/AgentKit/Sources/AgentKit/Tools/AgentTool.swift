@@ -43,14 +43,27 @@ public struct ToolError: Error, Sendable, Equatable, LocalizedError {
 
 /// Typed access to a call's JSON arguments. Strict mode sends `null` for an omitted optional
 /// parameter, so `null` reads as absent everywhere.
+///
+/// Models (local ones above all) get the shape of a value wrong in ways that cannot be misread, and
+/// the accessors know which type the caller wants, so they accept those: `"20"` for an integer,
+/// `"true"` for a boolean, a JSON array written as a string for a list, and `{}`
+/// where an optional scalar was left out. A value that could mean two things still fails with the
+/// message below, so nothing is guessed.
 public struct ToolArguments: Sendable {
     private let object: [String: JSONValue]
 
-    /// Models send `""` or `{}` for a call without arguments.
+    /// Models send `""` or `{}` for a call without arguments, and some send the object as a JSON
+    /// string inside a string.
     public init(json text: String) throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { object = [:]; return }
-        guard let value = try? JSONValue(parsing: trimmed), case .object(let object) = value else {
+        guard var value = try? JSONValue(parsing: trimmed) else {
+            throw ToolError("The arguments were not a valid JSON object.")
+        }
+        if case .string(let inner) = value, let unwrapped = try? JSONValue(parsing: inner), case .object = unwrapped {
+            value = unwrapped
+        }
+        guard case .object(let object) = value else {
             throw ToolError("The arguments were not a valid JSON object.")
         }
         self.object = object
@@ -58,26 +71,38 @@ public struct ToolArguments: Sendable {
 
     public init(_ object: [String: JSONValue]) { self.object = object }
 
+    /// The value for `key`, or `nil` when it is absent: missing, `null`, or the empty object some
+    /// models send for an optional parameter they skip.
+    private func value(_ key: String) -> JSONValue? {
+        switch object[key] {
+        case nil, .null?: return nil
+        case .object(let fields)? where fields.isEmpty: return nil
+        case let value?: return value
+        }
+    }
+
     public func string(_ key: String) throws -> String {
         guard let value = try optionalString(key) else { throw ToolError("Missing required argument \"\(key)\".") }
         return value
     }
 
     public func optionalString(_ key: String) throws -> String? {
-        switch object[key] {
-        case nil, .null: return nil
-        case .string(let value): return value
+        switch value(key) {
+        case nil: return nil
+        case .string(let value)?: return value
         default: throw ToolError("Argument \"\(key)\" must be a string.")
         }
     }
 
     public func optionalInt(_ key: String) throws -> Int? {
-        switch object[key] {
-        case nil, .null: return nil
-        case let value?:
-            guard let int = value.intValue else { throw ToolError("Argument \"\(key)\" must be an integer.") }
-            return int
+        guard let value = value(key) else { return nil }
+        if let int = value.intValue { return int }
+        if case .string(let text) = value {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if let int = Int(trimmed) { return int }
+            if let double = Double(trimmed), let int = Int(exactly: double) { return int }
         }
+        throw ToolError("Argument \"\(key)\" must be an integer.")
     }
 
     public func stringArray(_ key: String) throws -> [String] {
@@ -86,24 +111,37 @@ public struct ToolArguments: Sendable {
     }
 
     public func optionalStringArray(_ key: String) throws -> [String]? {
-        switch object[key] {
-        case nil, .null: return nil
-        case .array(let items)?:
+        guard let value = value(key) else { return nil }
+        switch value {
+        case .array(let items):
             return try items.map {
                 guard let text = $0.stringValue else { throw ToolError("Every item of \"\(key)\" must be a string.") }
                 return text
             }
+        case .string(let text):
+            // A list written as a JSON string. Any other string stays an error: for a checklist or a
+            // list of paths, "one item" and "not a list" are different mistakes.
+            if text.trimmingCharacters(in: .whitespaces).hasPrefix("["),
+               let parsed = try? JSONValue(parsing: text), case .array(let items) = parsed {
+                let strings = items.compactMap(\.stringValue)
+                if strings.count == items.count { return strings }
+            }
+            throw ToolError("Argument \"\(key)\" must be a list of strings.")
         default: throw ToolError("Argument \"\(key)\" must be a list of strings.")
         }
     }
 
     public func optionalBool(_ key: String) throws -> Bool? {
-        switch object[key] {
-        case nil, .null: return nil
-        case let value?:
-            guard let bool = value.boolValue else { throw ToolError("Argument \"\(key)\" must be true or false.") }
-            return bool
+        guard let value = value(key) else { return nil }
+        if let bool = value.boolValue { return bool }
+        if case .string(let text) = value {
+            switch text.trimmingCharacters(in: .whitespaces).lowercased() {
+            case "true": return true
+            case "false": return false
+            default: break
+            }
         }
+        throw ToolError("Argument \"\(key)\" must be true or false.")
     }
 }
 
@@ -138,6 +176,8 @@ public struct ToolContext: Sendable {
     /// Runs a child session for read-only research (`explore`). `nil` when the host session does
     /// not offer subagents. The session counts the child's tokens against this run's budget.
     public let spawnSubagent: (@Sendable (SubagentRequest) async -> SubagentResult)?
+    /// Hands a task to a subagent (`task`). `nil` when the host session does not offer them.
+    public let delegate: (@Sendable (DelegationRequest) async -> DelegationResult)?
     /// True when the permission rules already allowed this call outright (an allow rule or a safe
     /// default), rather than the user approving its card. A tool that degrades gracefully (the
     /// sandbox retry) may skip asking again.
@@ -164,6 +204,7 @@ public struct ToolContext: Sendable {
         fileTouched: (@Sendable (String) -> Void)? = nil,
         redactForMemory: (@Sendable (String) async -> String)? = nil,
         spawnSubagent: (@Sendable (SubagentRequest) async -> SubagentResult)? = nil,
+        delegate: (@Sendable (DelegationRequest) async -> DelegationResult)? = nil,
         preapproved: Bool = false,
         outputStore: (any ToolOutputStore)? = nil,
         redactOutput: (@Sendable (String) async -> String)? = nil
@@ -184,6 +225,7 @@ public struct ToolContext: Sendable {
         self.fileTouched = fileTouched
         self.redactForMemory = redactForMemory
         self.spawnSubagent = spawnSubagent
+        self.delegate = delegate
         self.preapproved = preapproved
     }
 
@@ -286,6 +328,12 @@ public protocol AgentTool: Sendable {
     var asksAfterUntrustedContent: Bool { get }
     /// A file tool touched `path`. Skills with a `paths` filter use this; other tools ignore it.
     func noteFileTouched(_ path: String)
+    /// True for a tool that is bounded by something else (a child's iteration cap, and Stop), so the
+    /// session's per-tool timeout would only cut off work that is going well (`task`).
+    var runsWithoutTimeout: Bool { get }
+    /// True for an `.edit` tool that reports the files it changed itself, as they happen, instead of
+    /// the session counting the call as one edit (`task`: a read-only child changed nothing).
+    var reportsOwnEdits: Bool { get }
 }
 
 extension AgentTool {
@@ -299,6 +347,8 @@ extension AgentTool {
     public var verifies: Bool { false }
     public var asksAfterUntrustedContent: Bool { false }
     public func noteFileTouched(_ path: String) {}
+    public var runsWithoutTimeout: Bool { false }
+    public var reportsOwnEdits: Bool { false }
 
     public func isOffered(in mode: PermissionMode) -> Bool { mode.offers(risk) }
 

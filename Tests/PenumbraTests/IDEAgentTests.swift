@@ -243,7 +243,7 @@ final class IDEAgentControllerTests: XCTestCase {
         guard case .user(let sent) = client.requests[0].items[0] else { return XCTFail("first item should be the user message") }
         XCTAssertTrue(sent.hasPrefix("[Editor state"))
         XCTAssertTrue(sent.hasSuffix("what is in A.java?"))
-        XCTAssertEqual(client.requests[0].tools.map(\.name), ["read_file", "list_dir", "glob", "grep", "show_file", "edit_file", "write_file", "apply_patch", "run_command", "todo", "ask_user", "diagnostics"])
+        XCTAssertEqual(client.requests[0].tools.map(\.name), ["read_file", "list_dir", "glob", "grep", "show_file", "edit_file", "write_file", "apply_patch", "run_command", "todo", "ask_user", "explore", "task", "diagnostics"])
     }
 
     func testTheModelReadsUnsavedEditsNotTheStaleDiskCopy() async throws {

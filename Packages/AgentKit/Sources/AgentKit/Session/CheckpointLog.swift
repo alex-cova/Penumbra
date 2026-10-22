@@ -9,6 +9,8 @@ public struct FileChange: Sendable, Hashable {
     public let path: String
     public let original: String?
     public fileprivate(set) var lastWrittenHash: UInt64?
+    /// A command removed the file. Revert writes `original` back, and only while the file is still gone.
+    public fileprivate(set) var isDeletion: Bool = false
 
     public var isCreation: Bool { original == nil }
 }
@@ -54,6 +56,8 @@ public struct ChangeSnapshot: Codable, Sendable, Hashable {
     public var path: String
     public var isCreation: Bool
     public var lastWrittenHash: UInt64?
+    /// `nil` in files saved before commands were tracked.
+    public var isDeletion: Bool? = nil
 }
 
 /// A run's checkpoint record without the texts, small enough to keep with the conversation.
@@ -127,6 +131,16 @@ public actor CheckpointLog {
         runs[index].changes[change].lastWrittenHash = ReadLedger.hash(written)
     }
 
+    /// Call after a command removed `path`, once `willChange` has recorded its text.
+    public func didDelete(run id: RunID, path: String) {
+        guard let index = runs.firstIndex(where: { $0.id == id }),
+              let change = runs[index].changes.firstIndex(where: { $0.path == path }),
+              runs[index].changes[change].original != nil
+        else { return }
+        runs[index].changes[change].isDeletion = true
+        runs[index].changes[change].lastWrittenHash = nil
+    }
+
     /// Restores a run's files, newest change first. A file whose text still matches the agent's last
     /// write goes back (a buffer in one undo group, a created file to the Trash); any other file is
     /// reported, never overwritten.
@@ -147,6 +161,23 @@ public actor CheckpointLog {
 
             if current == nil, change.isCreation {
                 report.reverted.append(change.path)
+                continue
+            }
+            if change.isDeletion, let original = change.original {
+                // Put back a file a command removed, but only while nothing has taken its place.
+                guard current == nil else {
+                    report.conflicts.append(RevertConflict(path: change.path, original: original, current: current))
+                    continue
+                }
+                do {
+                    try await workspace.createFile(path: change.path, contents: original)
+                    await ledger?.record(path: change.path, text: original)
+                    runs[index].changes[position].isDeletion = false
+                    runs[index].changes[position].lastWrittenHash = ReadLedger.hash(original)
+                    report.reverted.append(change.path)
+                } catch {
+                    report.failures[change.path] = error.localizedDescription
+                }
                 continue
             }
             guard let current, ReadLedger.hash(current) == change.lastWrittenHash else {
@@ -197,7 +228,9 @@ public actor CheckpointLog {
         runs.map { run in
             RunSnapshot(
                 id: run.id, label: run.label, startedAt: run.startedAt, isReverted: run.isReverted,
-                changes: run.changes.map { ChangeSnapshot(path: $0.path, isCreation: $0.isCreation, lastWrittenHash: $0.lastWrittenHash) })
+                changes: run.changes.map { ChangeSnapshot(
+                    path: $0.path, isCreation: $0.isCreation, lastWrittenHash: $0.lastWrittenHash,
+                    isDeletion: $0.isDeletion ? true : nil) })
         }
     }
 
@@ -211,7 +244,9 @@ public actor CheckpointLog {
             let changes: [FileChange] = snapshot.changes.compactMap { change in
                 if change.isCreation { return FileChange(path: change.path, original: nil, lastWrittenHash: change.lastWrittenHash) }
                 guard let original = blobs?.get(run: snapshot.id, path: change.path) else { return nil }
-                return FileChange(path: change.path, original: original, lastWrittenHash: change.lastWrittenHash)
+                return FileChange(
+                    path: change.path, original: original, lastWrittenHash: change.lastWrittenHash,
+                    isDeletion: change.isDeletion ?? false)
             }
             guard !changes.isEmpty else { continue }
             runs.append(RunRecord(
@@ -249,5 +284,9 @@ public struct CheckpointScope: Sendable {
 
     public func didChange(path: String, written: String) async {
         await log.didChange(run: run, path: path, written: written)
+    }
+
+    public func didDelete(path: String) async {
+        await log.didDelete(run: run, path: path)
     }
 }

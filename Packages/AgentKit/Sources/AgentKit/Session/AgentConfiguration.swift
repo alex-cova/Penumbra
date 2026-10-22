@@ -67,6 +67,9 @@ public struct AgentConfiguration: Sendable {
     /// Where a tool's output too large to show is kept. With a store, the session offers
     /// `read_tool_output`, saves an output nothing else bounded, and gives tools a way to save theirs.
     public var toolOutputStore: (any ToolOutputStore)?
+    /// Compares the project's files before and after a command, so what a command changed joins the
+    /// run's checkpoints (Revert Run, Rewind). `nil`: only the edit tools' changes are recorded.
+    public var snapshotter: (any WorkspaceSnapshotter)?
 
     public init(
         model: String,
@@ -96,9 +99,11 @@ public struct AgentConfiguration: Sendable {
         maxLengthContinuations: Int = 2,
         currentInstructions: (@Sendable () async -> InstructionSnapshot)? = nil,
         instructionsBaseline: String? = nil,
-        toolOutputStore: (any ToolOutputStore)? = nil
+        toolOutputStore: (any ToolOutputStore)? = nil,
+        snapshotter: (any WorkspaceSnapshotter)? = nil
     ) {
         self.toolOutputStore = toolOutputStore
+        self.snapshotter = snapshotter
         self.maxLengthContinuations = maxLengthContinuations
         self.currentInstructions = currentInstructions
         self.instructionsBaseline = instructionsBaseline
@@ -152,6 +157,7 @@ public enum SystemPrompt {
         - Change files with edit_file (an exact, unique old_string) or write_file (new files, or a whole rewrite). Always read a file first; if it changed since, read it again. Keep edits small and focused on what was asked.
         - When go_to_definition and find_usages are available, use them for a Java symbol's real declaration and usages instead of grep. To see what is already modified, use git_status and git_diff when they are available.
         - When web_search is available, use it for facts outside this project, such as current versions, docs, and errors you cannot resolve from the code. The query is sent to a search provider, so never put file contents, credentials, or private code in it.
+        - When explore or task is available, hand work that would fill your own context to a subagent (explore for read-only research, task for a self-contained change). A subagent knows nothing of this conversation, so put everything it needs in the prompt, and read what it reports and check what it changed before you rely on it.
         - For work with several steps, keep a checklist with todo and update it as you go. When a decision is the user's to make, or the request is ambiguous in a way that changes what you would build, use ask_user rather than guessing.
         - After changing code, call diagnostics for the files you touched and fix what you introduced.
         - Commands (run_command, gradle, run_tests) usually need the user's approval, so batch what you can and give a clear reason. When gradle and run_tests are available, use them for a Gradle build or tests: they open the Gradle tool window and console. Use run_command for anything else; it runs in the integrated terminal. Never run a destructive or irreversible command unless the user asked for it; a denial is information, so adjust instead of retrying.

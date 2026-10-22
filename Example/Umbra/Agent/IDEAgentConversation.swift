@@ -978,13 +978,15 @@ final class IDEAgentConversation: Identifiable {
     private func currentSession(root: URL, host: any IDEAgentHost) async throws -> AgentSession {
         // Skills are in the tool list, so a changed one starts a new session (which keeps the conversation).
         let skills = commandCatalog.map(\.skillCatalog).flatMap { $0.skills.isEmpty ? nil : $0 }
+        // Likewise the subagents `task` offers: the list is in the tool's description.
+        let agents = commandCatalog?.agentCatalog ?? .builtIn
         // Memory loads once, at session start: a write never changes the live request, and shows
         // from the next session on (whose fingerprint then differs).
         let memoryDirectory = (settings.memoryEnabled ? store : nil)?.projectDirectory(for: root.path)
         let memoryText = memoryDirectory.flatMap { ProjectMemory.load(at: $0) }
         let choice = effectiveChoice
         let fingerprint = settings.fingerprint(for: choice) + "|" + root.path + "|" + String(host.agentIsGradleProject) + "|" + (skills?.fingerprint ?? "")
-            + "|" + ProjectMemory.fingerprint(of: memoryText)
+            + "|" + agents.fingerprint + "|" + ProjectMemory.fingerprint(of: memoryText)
         if let session, sessionFingerprint == fingerprint { return session }
 
         let client = modelChoice == nil ? try clientFactory(settings) : try choiceClientFactory(settings, choice)
@@ -1024,7 +1026,7 @@ final class IDEAgentConversation: Identifiable {
         if !host.agentProjectTaskNames().isEmpty {
             tools.append(IDEProjectTaskTool(host: box))
         }
-        tools += [TodoTool(), AskUserTool(), ExitPlanModeTool()]
+        tools += [TodoTool(), AskUserTool(), ExitPlanModeTool(), ExploreTool(), TaskTool(catalog: agents)]
         if let memoryDirectory { tools.append(RememberTool(memoryDirectory: memoryDirectory)) }
         let git = IDEAgentGitSource(
             projectRoot: root, secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns),
@@ -1085,7 +1087,8 @@ final class IDEAgentConversation: Identifiable {
             shapeToolOutput: { IDEAgentOutputScrubber.shape($0) },
             currentInstructions: { IDEAgentProjectNotes.current(root: root) },
             instructionsBaseline: projectNotes,
-            toolOutputStore: toolOutputs)
+            toolOutputStore: toolOutputs,
+            snapshotter: IDEAgentGitSnapshotter(projectRoot: root))
         let created = AgentSession(
             client: client, tools: tools, workspace: workspace, configuration: configuration, history: history,
             checkpoints: await ensureCheckpointLog())
@@ -1576,6 +1579,8 @@ final class IDEAgentConversation: Identifiable {
         case .turnRestarted:
             entries.removeSubrange(min(turnStart, entries.count)...)
             status = "Retrying…"
+        case .retryScheduled(let attempt, let delay):
+            status = IDEAgentToolSummary.retryStatus(attempt: attempt, delay: delay)
         case .assistantMessage(let text):
             // The turn's finished text. Its streamed copy is already in the transcript, ahead of
             // any tool cards the same turn produced (a tool call closes the streaming entry), so
@@ -1636,6 +1641,11 @@ final class IDEAgentConversation: Identifiable {
             // Progress UI for a delegated child (collapsible card) plugs in here; the summary
             // already lands on the explore tool's own card.
             break
+        case .subagentFinished(_, let agent, let description, _, let ending):
+            // A background child's report goes to the model as a note; the user sees that it finished.
+            var text = "Subagent “\(description)” (\(agent)) finished in the background."
+            if case .failed(let message) = ending { text = "Subagent “\(description)” (\(agent)) failed: \(message)" }
+            append(.init(kind: .notice, text: text))
         case .usage(let turnUsage):
             // The input of the latest turn is what the window holds right now.
             if turnUsage.inputTokens > 0 { contextTokens = turnUsage.inputTokens }

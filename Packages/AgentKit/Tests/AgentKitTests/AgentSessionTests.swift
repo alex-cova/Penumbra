@@ -269,6 +269,7 @@ private func ending(_ events: [AgentEvent]) -> RunEnding? {
         let session = try makeSession(client, tools: [])
         let events = await runToEnd(session)
         #expect(events.contains(.turnRestarted))
+        #expect(events.contains(.retryScheduled(attempt: 1, delay: 0)))
         #expect(events.contains(.assistantMessage("full answer")))
         #expect(await session.items == [.user("go"), .assistant("full answer")])
     }

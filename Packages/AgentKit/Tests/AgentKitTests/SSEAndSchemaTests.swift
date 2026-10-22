@@ -79,6 +79,34 @@ import Testing
         #expect(policy.delay(for: LLMError.rateLimited(retryAfter: 600), attempt: 0) == 30)
     }
 
+    @Test func aServerAskedDelayHasItsOwnCap() {
+        let policy = RetryPolicy(maxRetries: 3, baseDelay: 1, maxDelay: 20, jitter: false, maxServerDelay: 300)
+        #expect(policy.delay(for: LLMError.rateLimited(retryAfter: 120), attempt: 0) == 120)
+        #expect(policy.delay(for: LLMError.rateLimited(retryAfter: 3600), attempt: 0) == 300)
+        // Backoff alone still stops at maxDelay.
+        #expect(policy.delay(for: LLMError.server(status: 503, message: ""), attempt: 2) == 4)
+    }
+
+    @Test func theDefaultWaitsOutAMinuteLongRateLimit() {
+        let policy = RetryPolicy(
+            maxRetries: RetryPolicy.default.maxRetries, baseDelay: RetryPolicy.default.baseDelay,
+            maxDelay: RetryPolicy.default.maxDelay, jitter: false,
+            maxServerDelay: RetryPolicy.default.maxServerDelay)
+        #expect(RetryPolicy.default.maxRetries == 8)
+        #expect(policy.delay(for: LLMError.rateLimited(retryAfter: 60), attempt: 0) == 60)
+        // Backoff: 2, 4, 8, 16, then the 20 s cap.
+        let delays = (0..<8).compactMap { policy.delay(for: LLMError.connectionLost(""), attempt: $0) }
+        #expect(delays == [2, 4, 8, 16, 20, 20, 20, 20])
+        #expect(policy.delay(for: LLMError.connectionLost(""), attempt: 8) == nil)
+    }
+
+    @Test func aTimeoutIsRetriedOnlyAFewTimes() {
+        let policy = RetryPolicy(maxRetries: 8, baseDelay: 1, maxDelay: 20, jitter: false, maxTimeoutRetries: 3)
+        #expect(policy.delay(for: URLError(.timedOut), attempt: 2) != nil)
+        #expect(policy.delay(for: URLError(.timedOut), attempt: 3) == nil)
+        #expect(policy.delay(for: URLError(.networkConnectionLost), attempt: 3) != nil)
+    }
+
     @Test func finalErrorsAreNotRetried() {
         let policy = RetryPolicy.default
         #expect(policy.delay(for: LLMError.unauthorized, attempt: 0) == nil)

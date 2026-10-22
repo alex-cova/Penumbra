@@ -14,6 +14,7 @@ final class IDEAgentCommandCatalog {
     private let home: URL?
     private let appSupport: URL?
     private var cached: (catalog: SkillCatalog, at: Date, key: String)?
+    private var cachedAgents: (catalog: AgentCatalog, at: Date, key: String)?
     private let now: () -> Date
 
     /// `home` is the user folder holding `.claude`, and `appSupport` Umbra's own; `nil` for either means
@@ -53,8 +54,20 @@ final class IDEAgentCommandCatalog {
         return catalog
     }
 
+    /// The subagents the `task` tool offers, from the same folders (`agents`), the built-in `general` last.
+    var agentCatalog: AgentCatalog {
+        let key = (root()?.path ?? "") + "|\(loadsUserFolders())"
+        if let cachedAgents, cachedAgents.key == key, now().timeIntervalSince(cachedAgents.at) < Self.lifetime { return cachedAgents.catalog }
+        let catalog = AgentCatalog.load(folders: folders("agents"))
+        cachedAgents = (catalog, now(), key)
+        return catalog
+    }
+
     /// Forget what was read, so the next ask reads again (the panel opening, a send).
-    func invalidate() { cached = nil }
+    func invalidate() {
+        cached = nil
+        cachedAgents = nil
+    }
 
     /// Built-ins first; a command or skill that reuses a built-in's name is not listed, and a skill that
     /// reuses a command's name yields to the command.
