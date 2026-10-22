@@ -39,6 +39,12 @@ jobs:
           xcodebuild -version
           xcrun --show-sdk-version
 
+      # Tests that call OpenAI, Anthropic or an Ollama server (Packages/AgentKit: the smoke tests and the
+      # evals) are opt-in by environment variable and cost money. They also refuse to run when CI is set,
+      # but a workflow must not hand them a key at all, so fail if one ever does.
+      - name: Refuse variables that enable paid-API tests
+        run: Scripts/refuse-paid-test-variables.sh
+
       # Xcode 27's default metal is a stub. Unless the separate Metal toolchain is
       # mounted, Swift Build calls that stub, it exits before writing a .dia, and
       # the log only shows a missing diagnostics file for the first shader

@@ -109,10 +109,6 @@ import Testing
         Eval.environment["AGENTKIT_EVAL_SCENARIOS"].map { Set($0.split(separator: ",").map(String.init)) }
     }
 
-    static func modelLabels() -> [String] {
-        Eval.environment["AGENTKIT_EVAL_MODELS"]?.split(separator: ",").map(String.init) ?? ["haiku-5.5", "gpt-4.1-mini", "bonsai-2"]
-    }
-
     static func run(_ scenario: Scenario, model: Eval.Model, hub: MCPHub, folder: URL) async -> Trial {
         let tools = evalBuiltInTools() + (await hub.tools)
         let session = AgentSession(
@@ -151,7 +147,20 @@ import Testing
     }
 
     @Test func matrix() async throws {
-        let models = Eval.models(Self.modelLabels())
+        let models = Eval.requestedModels
+        guard !models.isEmpty else {
+            print(Eval.requestedModelLabels.isEmpty
+                ? "EVAL nothing to run: name the models in AGENTKIT_EVAL_MODELS (haiku-5.5, sonnet-5.5, gpt-4.1-mini, gpt-5-mini, bonsai-2)"
+                : "EVAL nothing to run: none of the named models is configured")
+            return
+        }
+        let selected = Self.scenarios.filter { Self.scenarioNames?.contains($0.name) ?? true }
+        let planned = Self.variants.count * models.count * selected.count * Eval.trials
+        guard planned <= Eval.maxRuns else {
+            print("EVAL refused: \(planned) model runs planned (\(Self.variants.count) variants × \(models.count) models × \(selected.count) scenarios × \(Eval.trials) trials), over AGENTKIT_EVAL_MAX_RUNS=\(Eval.maxRuns). Narrow the run, or raise the cap to accept the cost.")
+            return
+        }
+        print("EVAL starting \(planned) model runs")
         for variant in Self.variants {
             for model in models {
                 let base = FileManager.default.temporaryDirectory.appendingPathComponent("eval-\(UUID().uuidString)").resolvingSymlinksInPath()

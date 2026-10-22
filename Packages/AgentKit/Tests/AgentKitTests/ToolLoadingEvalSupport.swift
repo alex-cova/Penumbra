@@ -2,15 +2,40 @@ import Foundation
 @testable import AgentKit
 
 /// Shared pieces of the opt-in evals that run the harness against real models and a real MCP server
-/// (`ToolLoadingEvalTests`, `ToolCostCalibrationTests`). Nothing here runs unless `AGENTKIT_EVAL` is set,
-/// and a model is used only if its key or server is configured:
+/// (`ToolLoadingEvalTests`, `ToolCostCalibrationTests`). These spend money on OpenAI and Anthropic, so
+/// three things must all be present before anything is called:
 ///
-///     AGENTKIT_EVAL=1 AGENTKIT_ANTHROPIC_KEY=sk-ant-… AGENTKIT_OPENAI_KEY=sk-… \
-///     AGENTKIT_OLLAMA_URL=http://host:11434 AGENTKIT_EVAL_TRIALS=5 swift test --filter ToolLoadingEval
+/// 1. `AGENTKIT_EVAL` is set;
+/// 2. the models to use are **named** in `AGENTKIT_EVAL_MODELS` (there is no default list, so a key that
+///    sits in your shell for the smoke tests does not start an eval);
+/// 3. each named model's key or server is configured (`AGENTKIT_ANTHROPIC_KEY`, `AGENTKIT_OPENAI_KEY`,
+///    `AGENTKIT_OLLAMA_URL`).
+///
+/// And a run is refused up front if it would start more than `AGENTKIT_EVAL_MAX_RUNS` (default 40) model
+/// runs, counted as variants × models × scenarios × trials.
+///
+///     AGENTKIT_EVAL=1 AGENTKIT_EVAL_MODELS=haiku-5.5,bonsai-2 AGENTKIT_EVAL_TRIALS=3 \
+///     AGENTKIT_EVAL_VARIANTS=trimmed AGENTKIT_EVAL_SCENARIOS=mcp-write,fetch \
+///     AGENTKIT_ANTHROPIC_KEY=sk-ant-… AGENTKIT_OLLAMA_URL=http://host:11434 swift test --filter ToolLoadingEval
 enum Eval {
     static let environment = ProcessInfo.processInfo.environment
-    static var enabled: Bool { environment["AGENTKIT_EVAL"] != nil }
+    static var enabled: Bool { PaidTests.allowed("AGENTKIT_EVAL") }
     static var trials: Int { Int(environment["AGENTKIT_EVAL_TRIALS"] ?? "") ?? 3 }
+    static var maxRuns: Int { Int(environment["AGENTKIT_EVAL_MAX_RUNS"] ?? "") ?? 40 }
+
+    /// The labels named in `AGENTKIT_EVAL_MODELS`; empty when it is not set.
+    static var requestedModelLabels: [String] {
+        (PaidTests.value("AGENTKIT_EVAL_MODELS") ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    /// The requested models that are configured, with a printed note for each one that is not.
+    static var requestedModels: [Model] {
+        requestedModelLabels.compactMap { label in
+            if let model = model(label) { return model }
+            print("EVAL skipped model \(label): unknown, or its key / server variable is not set")
+            return nil
+        }
+    }
 
     struct Model {
         var label: String
@@ -22,20 +47,20 @@ enum Eval {
     }
 
     static func model(_ label: String) -> Model? {
-        let openAI = LLMEndpoint(baseURL: LLMEndpoint.openAI.baseURL, apiKey: environment["AGENTKIT_OPENAI_KEY"])
-        let anthropic = LLMEndpoint(baseURL: LLMEndpoint.anthropic.baseURL, apiKey: environment["AGENTKIT_ANTHROPIC_KEY"])
+        let openAI = LLMEndpoint(baseURL: LLMEndpoint.openAI.baseURL, apiKey: PaidTests.value("AGENTKIT_OPENAI_KEY"))
+        let anthropic = LLMEndpoint(baseURL: LLMEndpoint.anthropic.baseURL, apiKey: PaidTests.value("AGENTKIT_ANTHROPIC_KEY"))
         switch label {
-        case "haiku-5.5" where environment["AGENTKIT_ANTHROPIC_KEY"] != nil:
+        case "haiku-5.5" where PaidTests.allowed("AGENTKIT_ANTHROPIC_KEY"):
             return Model(label: label, id: "claude-haiku-5-5", effort: "low", window: 200_000) { AnthropicMessagesClient(endpoint: anthropic) }
-        case "sonnet-5.5" where environment["AGENTKIT_ANTHROPIC_KEY"] != nil:
+        case "sonnet-5.5" where PaidTests.allowed("AGENTKIT_ANTHROPIC_KEY"):
             return Model(label: label, id: "claude-sonnet-5-5", effort: "low", window: 200_000) { AnthropicMessagesClient(endpoint: anthropic) }
-        case "gpt-4.1-mini" where environment["AGENTKIT_OPENAI_KEY"] != nil:
+        case "gpt-4.1-mini" where PaidTests.allowed("AGENTKIT_OPENAI_KEY"):
             return Model(label: label, id: "gpt-4.1-mini", effort: nil, window: 128_000) { OpenAIResponsesClient(endpoint: openAI) }
-        case "gpt-5-mini" where environment["AGENTKIT_OPENAI_KEY"] != nil:
+        case "gpt-5-mini" where PaidTests.allowed("AGENTKIT_OPENAI_KEY"):
             return Model(label: label, id: "gpt-5-mini", effort: "low", window: 128_000) { OpenAIResponsesClient(endpoint: openAI) }
-        case "bonsai-2" where environment["AGENTKIT_OLLAMA_URL"] != nil:
-            let url = URL(string: environment["AGENTKIT_OLLAMA_URL"]!)!
-            return Model(label: label, id: environment["AGENTKIT_OLLAMA_MODEL"] ?? "bonsai-2:latest", effort: nil, window: 32_768, isLocal: true) {
+        case "bonsai-2" where PaidTests.allowed("AGENTKIT_OLLAMA_URL"):
+            let url = URL(string: PaidTests.value("AGENTKIT_OLLAMA_URL")!)!
+            return Model(label: label, id: PaidTests.value("AGENTKIT_OLLAMA_MODEL") ?? "bonsai-2:latest", effort: nil, window: 32_768, isLocal: true) {
                 OllamaClient(endpoint: LLMEndpoint(baseURL: url, apiKey: nil), contextLength: 32_768, supportsThinking: true)
             }
         default:

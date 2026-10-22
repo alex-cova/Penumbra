@@ -285,11 +285,11 @@ private enum Fixture {
 }
 
 /// Opt-in: `AGENTKIT_OPENAI_KEY=sk-... swift test --filter OpenAISmokeTests`.
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["AGENTKIT_OPENAI_KEY"] != nil))
+@Suite(.enabled(if: PaidTests.allowed("AGENTKIT_OPENAI_KEY")))
 struct OpenAISmokeTests {
     @Test func streamsTextFromTheRealAPI() async throws {
-        let key = try #require(ProcessInfo.processInfo.environment["AGENTKIT_OPENAI_KEY"])
-        let model = ProcessInfo.processInfo.environment["AGENTKIT_OPENAI_MODEL"] ?? "gpt-4.1-mini"
+        let key = try #require(PaidTests.value("AGENTKIT_OPENAI_KEY"))
+        let model = PaidTests.value("AGENTKIT_OPENAI_MODEL") ?? "gpt-4.1-mini"
         let client = OpenAIResponsesClient(endpoint: LLMEndpoint(baseURL: LLMEndpoint.openAI.baseURL, apiKey: key))
         let events = try await collect(client.stream(LLMRequest(model: model, items: [.user("Reply with the single word: pong")])))
         let text = events.compactMap { event -> String? in if case .textDelta(let t) = event { t } else { nil } }.joined()

@@ -25,7 +25,9 @@ import Testing
         func characters(_ definitions: [ToolDefinition]) -> Int {
             definitions.reduce(0) { $0 + $1.name.count + $1.description.count + ((try? $1.schema(strict: false).serialized().count) ?? 0) }
         }
-        for model in Eval.models(["haiku-5.5", "gpt-4.1-mini", "bonsai-2"]) {
+        let models = Eval.requestedModels
+        if models.isEmpty { print("CALIB nothing to run: name the models in AGENTKIT_EVAL_MODELS") }
+        for model in models {
             let none = try await inputTokens(model, tools: [], system: system)
             let some = try await inputTokens(model, tools: builtIn, system: system)
             let all = try await inputTokens(model, tools: builtIn + mcp, system: system)

@@ -6,11 +6,11 @@ import Testing
 /// (`AGENTKIT_ANTHROPIC_MODEL` picks the model; the default is the cheapest current one). These spend a few
 /// cents and check the wire, not the model's intelligence: the headers, the stream, a thinking block replayed
 /// across a tool round trip, and the usage counts.
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["AGENTKIT_ANTHROPIC_KEY"] != nil), .serialized)
+@Suite(.enabled(if: PaidTests.allowed("AGENTKIT_ANTHROPIC_KEY")), .serialized)
 struct AnthropicSmokeTests {
-    private var model: String { ProcessInfo.processInfo.environment["AGENTKIT_ANTHROPIC_MODEL"] ?? "claude-haiku-5-5" }
+    private var model: String { PaidTests.value("AGENTKIT_ANTHROPIC_MODEL") ?? "claude-haiku-5-5" }
     private var client: AnthropicMessagesClient {
-        AnthropicMessagesClient(endpoint: LLMEndpoint(baseURL: LLMEndpoint.anthropic.baseURL, apiKey: ProcessInfo.processInfo.environment["AGENTKIT_ANTHROPIC_KEY"]))
+        AnthropicMessagesClient(endpoint: LLMEndpoint(baseURL: LLMEndpoint.anthropic.baseURL, apiKey: PaidTests.value("AGENTKIT_ANTHROPIC_KEY")))
     }
 
     @Test func streamsRealTextWithUsage() async throws {

@@ -4,9 +4,9 @@ import Testing
 
 /// Opt-in, against a real Ollama: `AGENTKIT_OLLAMA_MODEL=qwen-fixed:latest swift test --filter OllamaSmokeTests`.
 /// Needs a model with tool support. These check the wire, not the model's intelligence.
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["AGENTKIT_OLLAMA_MODEL"] != nil), .serialized)
+@Suite(.enabled(if: PaidTests.allowed("AGENTKIT_OLLAMA_MODEL")), .serialized)
 struct OllamaSmokeTests {
-    private var model: String { ProcessInfo.processInfo.environment["AGENTKIT_OLLAMA_MODEL"] ?? "" }
+    private var model: String { PaidTests.value("AGENTKIT_OLLAMA_MODEL") ?? "" }
     private var client: OllamaClient { OllamaClient(contextLength: 8_192, supportsThinking: false) }
 
     @Test func listsTheInstalledModelWithItsCapabilities() async throws {
