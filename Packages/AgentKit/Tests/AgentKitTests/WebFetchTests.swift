@@ -226,6 +226,36 @@ private func fail(_ tool: WebFetchTool, _ json: String) async -> String {
         return (requests, output)
     }
 
+    @Test func anAddressThatCanNeverRunIsRefusedWithoutAskingAnyone() async throws {
+        for url in ["http://localhost:11434/api/tags", "http://192.168.0.151/", "http://169.254.169.254/latest/", "http://[::1]/", "https://printer.local/", "ftp://example.com/x"] {
+            let project = try TempProject()
+            let client = MockLLMClient(turns: [
+                .toolCalls((id: "f1", name: "web_fetch", arguments: #"{"url":"\#(url)"}"#)), .text("done"),
+            ])
+            let agent = AgentSession(
+                client: client, tools: [WebFetchTool(client: FakeFetch(response: page(html("<p>reachable</p>"))))], workspace: project.workspace,
+                configuration: AgentConfiguration(model: "m", approval: .askForCommands))
+            var asked = false
+            var output: ToolOutput?
+            for await event in await agent.send("go") {
+                if case .approvalRequested = event { asked = true }
+                if case .toolCallFinished(_, _, let result) = event { output = result }
+            }
+            #expect(!asked, "\(url)")
+            #expect(output?.isError == true, "\(url)")
+            #expect(output?.text.contains("reachable") == false, "\(url)")
+        }
+    }
+
+    @Test func aPublicNameIsStillAskedAboutAndOnlyTheResolverCanRefuseItLater() async throws {
+        let tool = WebFetchTool()
+        #expect(tool.refusalBeforeAsking(for: try ToolArguments(json: #"{"url":"https://example.com/x"}"#)) == nil)
+        #expect(tool.refusalBeforeAsking(for: try ToolArguments(json: #"{"url":"https://8.8.8.8/"}"#)) == nil)
+        #expect(tool.refusalBeforeAsking(for: try ToolArguments(json: #"{"url":"not a url"}"#))?.contains("spaces") == true)
+        #expect(tool.refusalBeforeAsking(for: try ToolArguments(json: #"{"url":"ftp://example.com/x"}"#))?.contains("http and https") == true)
+        #expect(tool.refusalBeforeAsking(for: try ToolArguments(json: #"{"url":"http://10.0.0.1/"}"#))?.contains("private network") == true)
+    }
+
     @Test func theCardNamesTheAddressAndOffersAHostRule() async throws {
         let (session, _) = try session()
         let result = await drive(session) { _ in .approve }

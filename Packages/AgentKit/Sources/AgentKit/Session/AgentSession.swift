@@ -1512,6 +1512,7 @@ public actor AgentSession {
               let parsed = try? ToolArguments(json: arguments)
         else { return plan }
 
+        if tool.asksUnlessAllowed, let reason = tool.refusalBeforeAsking(for: parsed) { return .answered(.error(reason)) }
         let subject = tool.permissionSubject(for: parsed)
         let verdict = await PermissionPolicy.evaluate(
             ToolCallInfo(

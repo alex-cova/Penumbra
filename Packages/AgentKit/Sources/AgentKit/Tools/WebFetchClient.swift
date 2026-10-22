@@ -57,21 +57,8 @@ public enum WebAddressPolicy {
     /// at must be public. Known limit: the connection resolves the name again, so a host that answers
     /// differently the second time (DNS rebinding) is not caught.
     public static func validate(_ url: URL, resolver: WebHostResolver) async throws {
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
-            throw WebFetchError.refused("Only http and https addresses can be fetched.")
-        }
-        guard url.user == nil, url.password == nil else {
-            throw WebFetchError.refused("Addresses with a username or password are not fetched.")
-        }
-        guard var host = url.host(percentEncoded: false)?.lowercased(), !host.isEmpty else {
-            throw WebFetchError.refused("The address has no host.")
-        }
-        if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
-        if host.hasSuffix(".") { host.removeLast() }
-        let privateSuffixes = [".localhost", ".local", ".internal", ".localdomain", ".home.arpa", ".lan"]
-        if host == "localhost" || privateSuffixes.contains(where: host.hasSuffix) {
-            throw WebFetchError.refused("\(host) is a name for this machine or a local network, which is not fetched.")
-        }
+        if let reason = obviousRefusal(url) { throw WebFetchError.refused(reason) }
+        let host = normalizedHost(url)
         let addresses = await resolver(host)
         guard !addresses.isEmpty else { throw WebFetchError.unreachable(host) }
         if let blocked = addresses.first(where: { !isPublic($0) }) {
@@ -79,6 +66,37 @@ public enum WebAddressPolicy {
                 ? "\(host) is an address on this machine or a private network, which is not fetched."
                 : "\(host) points at \(blocked), an address on this machine or a private network, which is not fetched.")
         }
+    }
+
+    /// The host as compared: lower case, no brackets around an IPv6 literal, no trailing dot.
+    static func normalizedHost(_ url: URL) -> String {
+        var host = url.host(percentEncoded: false)?.lowercased() ?? ""
+        if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
+        if host.hasSuffix(".") { host.removeLast() }
+        return host
+    }
+
+    /// Why an address can never be fetched, when that is clear from the address alone (no lookup): the
+    /// scheme, a username, a name for this machine or a local network, or a numeric address that is not
+    /// public. A host can ask this before putting the question to the user, so nobody is asked to
+    /// approve something that will be refused anyway. `nil` means it needs the resolver's answer.
+    public static func obviousRefusal(_ url: URL) -> String? {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            return "Only http and https addresses can be fetched."
+        }
+        guard url.user == nil, url.password == nil else { return "Addresses with a username or password are not fetched." }
+        let host = normalizedHost(url)
+        guard !host.isEmpty else { return "The address has no host." }
+        let privateSuffixes = [".localhost", ".local", ".internal", ".localdomain", ".home.arpa", ".lan"]
+        if host == "localhost" || privateSuffixes.contains(where: host.hasSuffix) {
+            return "\(host) is a name for this machine or a local network, which is not fetched."
+        }
+        var v4 = in_addr()
+        var v6 = in6_addr()
+        if inet_pton(AF_INET, host, &v4) == 1 || inet_pton(AF_INET6, host, &v6) == 1, !isPublic(host) {
+            return "\(host) is an address on this machine or a private network, which is not fetched."
+        }
+        return nil
     }
 
     /// Whether a numeric address is on the public internet.

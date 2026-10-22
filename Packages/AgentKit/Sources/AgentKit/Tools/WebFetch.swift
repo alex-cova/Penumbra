@@ -39,6 +39,17 @@ public struct WebFetchTool: AgentTool {
             ])
     }
 
+    public func refusalBeforeAsking(for arguments: ToolArguments) -> String? {
+        // A malformed address, another scheme or a username is refused with the reason `run` would give.
+        do {
+            return WebAddressPolicy.obviousRefusal(try Self.normalize((try? arguments.optionalString("url")) ?? ""))
+        } catch let error as ToolError {
+            return error.message
+        } catch {
+            return nil
+        }
+    }
+
     public func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {
         let raw = (try? arguments.optionalString("url")) ?? ""
         return .text((try? Self.normalize(raw))?.absoluteString ?? raw)

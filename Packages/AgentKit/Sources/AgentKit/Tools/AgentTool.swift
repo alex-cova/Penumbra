@@ -338,6 +338,9 @@ public protocol AgentTool: Sendable {
     /// True for a read that sends a request off this Mac (`web_fetch`): unlike other reads it goes
     /// through the user's rules and, unless an allow rule names the call, asks first. It runs alone.
     var asksUnlessAllowed: Bool { get }
+    /// For a tool with `asksUnlessAllowed`: why this call can never run, known before anything is
+    /// asked. The call is answered with it and the user sees no card for something that would be refused.
+    func refusalBeforeAsking(for arguments: ToolArguments) -> String?
     /// True for an `.edit` tool that reports the files it changed itself, as they happen, instead of
     /// the session counting the call as one edit (`task`: a read-only child changed nothing).
     var reportsOwnEdits: Bool { get }
@@ -356,6 +359,7 @@ extension AgentTool {
     public func noteFileTouched(_ path: String) {}
     public var runsWithoutTimeout: Bool { false }
     public var asksUnlessAllowed: Bool { false }
+    public func refusalBeforeAsking(for arguments: ToolArguments) -> String? { nil }
     public var reportsOwnEdits: Bool { false }
 
     public func isOffered(in mode: PermissionMode) -> Bool { mode.offers(risk) }
