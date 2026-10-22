@@ -46,6 +46,9 @@ protocol IDEAgentHost: AnyObject {
     func agentCancelGradle()
     /// Compiler results for these files' current text, awaited. `unavailable` says why not.
     func agentFreshProblems(relativePaths: [String]) async -> IDEAgentFreshProblems
+    /// What the editor reports as errors in these just-changed files, as a note for the model, or
+    /// `nil` when there is nothing to say. Waits up to `timeout` for the editor to analyse open files.
+    func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String?
 
     // Navigation. Both are optional (see the extension below).
     /// Java symbol navigation, or `nil` when the project has no Java to resolve.
@@ -86,6 +89,7 @@ protocol IDEAgentHost: AnyObject {
 
 extension IDEAgentHost {
     // Optional capabilities: a host without them simply doesn't get the tools that need them.
+    func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? { nil }
     func agentJavaNavigator() -> (any IDEAgentNavigating)? { nil }
     func agentProjectTaskNames() -> [String] { [] }
     func agentRunProjectTask(_ name: String) async -> String { "This folder has no project tasks." }
@@ -170,6 +174,12 @@ final class IDEAgentHostBox: @unchecked Sendable {
     func freshProblems(relativePaths: [String]) async -> IDEAgentFreshProblems {
         guard let host else { return IDEAgentFreshProblems(unavailable: "The window is closed.") }
         return await host.agentFreshProblems(relativePaths: relativePaths)
+    }
+
+    @MainActor
+    func problemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? {
+        guard let host else { return nil }
+        return await host.agentProblemsAfterEdit(relativePaths: relativePaths, timeout: timeout)
     }
 
     @MainActor

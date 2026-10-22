@@ -70,6 +70,12 @@ public struct AgentConfiguration: Sendable {
     /// Compares the project's files before and after a command, so what a command changed joins the
     /// run's checkpoints (Revert Run, Rewind). `nil`: only the edit tools' changes are recorded.
     public var snapshotter: (any WorkspaceSnapshotter)?
+    /// Asked once per turn that changed files, with the project-relative paths the edit tools changed.
+    /// What it returns (the editor's own problems in those files, say) is added to the last edit's
+    /// output, so the model sees what it broke in the same step. `nil`, or `nil` back, adds nothing.
+    public var afterEdit: (@Sendable ([String]) async -> String?)?
+    /// How long a turn waits for `afterEdit` before going on without it.
+    public var afterEditTimeout: TimeInterval
 
     public init(
         model: String,
@@ -100,10 +106,14 @@ public struct AgentConfiguration: Sendable {
         currentInstructions: (@Sendable () async -> InstructionSnapshot)? = nil,
         instructionsBaseline: String? = nil,
         toolOutputStore: (any ToolOutputStore)? = nil,
-        snapshotter: (any WorkspaceSnapshotter)? = nil
+        snapshotter: (any WorkspaceSnapshotter)? = nil,
+        afterEdit: (@Sendable ([String]) async -> String?)? = nil,
+        afterEditTimeout: TimeInterval = 3
     ) {
         self.toolOutputStore = toolOutputStore
         self.snapshotter = snapshotter
+        self.afterEdit = afterEdit
+        self.afterEditTimeout = afterEditTimeout
         self.maxLengthContinuations = maxLengthContinuations
         self.currentInstructions = currentInstructions
         self.instructionsBaseline = instructionsBaseline

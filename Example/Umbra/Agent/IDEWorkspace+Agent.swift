@@ -203,12 +203,14 @@ extension IDEWorkspace: IDEAgentHost {
         guard current == expecting else { throw AgentWorkspaceError.changedSinceRead(relativePath) }
 
         let textEdits = try IDEAgentEditTranslator.textEdits(edits, in: expecting)
+        problems.noteAgentEdit(of: url)
         let result = await IDEWorkspaceEditApplier(host: self).apply(WorkspaceEdit(changes: [url: textEdits]))
         if let failure = result.failures[url] { throw AgentWorkspaceError.writeFailed(path: relativePath, reason: failure) }
     }
 
     func agentCreateFile(relativePath: String, contents: String) async throws {
         let url = try agentURL(relativePath)
+        problems.noteAgentEdit(of: url)
         let result = await IDEWorkspaceEditApplier(host: self).apply(WorkspaceEdit(fileCreations: [(url, contents)]))
         if let failure = result.failures[url] { throw AgentWorkspaceError.writeFailed(path: relativePath, reason: failure) }
     }
@@ -311,6 +313,25 @@ extension IDEWorkspace: IDEAgentHost {
 
     func agentShowCommand(id: UUID, title: String, line: String?) {
         showAgentCommand(id: id, title: title, line: line)
+    }
+
+    func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? {
+        // Only an open file the editor already analyses has anything to report: a file written to disk,
+        // or a language with no analysis, would only make this wait out its timeout.
+        let open = relativePaths.compactMap { path -> (path: String, url: URL)? in
+            guard let url = try? agentURL(path), openBufferText(for: url) != nil, problems.hasEditorReport(for: url) else { return nil }
+            return (path, url)
+        }
+        guard !open.isEmpty else { return nil }
+        let settled = await IDEAgentEditProblems.wait(timeout: timeout) {
+            open.allSatisfy { self.problems.hasEditorReportSinceAgentEdit(for: $0.url) }
+        }
+        let errors = open.flatMap { file in
+            problems.currentErrors(for: file.url).map {
+                IDEAgentEditProblems.Row(path: file.path, line: $0.range.start.line + 1, message: $0.message)
+            }
+        }
+        return IDEAgentEditProblems.note(errors: errors, analysed: settled)
     }
 
     func agentFreshProblems(relativePaths: [String]) async -> IDEAgentFreshProblems {

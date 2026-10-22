@@ -80,7 +80,7 @@ enum CommandChangeTracker {
     /// Captures outside the caller's cancellation: Stop kills the command, but the files it already
     /// changed are still worth recording.
     static func capture(_ snapshotter: any WorkspaceSnapshotter) async -> SnapshotToken? {
-        await withTimeout(captureTimeout) { await snapshotter.capture() } ?? nil
+        await Deadline.run(captureTimeout) { await snapshotter.capture() } ?? nil
     }
 
     static func record(
@@ -89,7 +89,7 @@ enum CommandChangeTracker {
     ) async -> Outcome {
         var outcome = Outcome()
         guard before != after,
-              let diff = await withTimeout(captureTimeout, { await snapshotter.diff(from: before, to: after) }) ?? nil
+              let diff = await Deadline.run(captureTimeout, { await snapshotter.diff(from: before, to: after) }) ?? nil
         else { return outcome }
         outcome.omitted = diff.omitted
         for change in diff.changes {
@@ -133,50 +133,5 @@ enum CommandChangeTracker {
     /// the file does not hold would only produce a conflict later; name the file instead.
     private static func matchesDisk(_ text: String, path: String, _ workspace: any AgentWorkspace) async -> Bool {
         (try? await workspace.readText(path: path)) == text
-    }
-
-    /// Runs `body` on its own task, so the caller being cancelled does not cancel it, and returns
-    /// `nil` once `seconds` have passed even if `body` ignores cancellation.
-    private static func withTimeout<T: Sendable>(
-        _ seconds: TimeInterval, _ body: @escaping @Sendable () async -> T
-    ) async -> T? {
-        await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
-            let gate = ResumeOnce(continuation)
-            gate.tasks = [
-                Task.detached { gate.resume(await body()) },
-                Task.detached {
-                    try? await Task.sleep(for: .seconds(seconds))
-                    gate.resume(nil)
-                },
-            ]
-        }
-    }
-}
-
-/// Resumes a continuation once, from whichever of two tasks gets there first, and cancels both.
-private final class ResumeOnce<T: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<T?, Never>?
-    private var cancelled: [Task<Void, Never>] = []
-    var tasks: [Task<Void, Never>] {
-        get { lock.withLock { cancelled } }
-        set {
-            let finished = lock.withLock { () -> Bool in
-                cancelled = newValue
-                return continuation == nil
-            }
-            if finished { newValue.forEach { $0.cancel() } }
-        }
-    }
-
-    init(_ continuation: CheckedContinuation<T?, Never>) { self.continuation = continuation }
-
-    func resume(_ value: T?) {
-        let (taken, toCancel) = lock.withLock { () -> (CheckedContinuation<T?, Never>?, [Task<Void, Never>]) in
-            defer { continuation = nil }
-            return (continuation, cancelled)
-        }
-        toCancel.forEach { $0.cancel() }
-        taken?.resume(returning: value)
     }
 }

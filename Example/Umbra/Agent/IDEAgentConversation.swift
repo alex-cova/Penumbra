@@ -1089,7 +1089,8 @@ final class IDEAgentConversation: Identifiable {
             currentInstructions: { IDEAgentProjectNotes.current(root: root) },
             instructionsBaseline: projectNotes,
             toolOutputStore: toolOutputs,
-            snapshotter: IDEAgentGitSnapshotter(projectRoot: root))
+            snapshotter: IDEAgentGitSnapshotter(projectRoot: root),
+            afterEdit: { paths in await box.problemsAfterEdit(relativePaths: paths, timeout: IDEAgentEditProblems.timeout) })
         let created = AgentSession(
             client: client, tools: tools, workspace: workspace, configuration: configuration, history: history,
             checkpoints: await ensureCheckpointLog())

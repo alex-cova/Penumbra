@@ -20,6 +20,10 @@ final class IDEProblemsStore {
     private var bySource: [String: [URL: [Diagnostic]]] = [:]
     private var staleByFile: [URL: Set<String>] = [:]
     private var reportedFiles: Set<URL> = []
+    /// How many editor reports have landed per file, and what that count was when the agent last
+    /// changed the file: a later count means the editor has analysed the agent's text.
+    private var editorReportCounts: [URL: Int] = [:]
+    private var agentEditBaselines: [URL: Int] = [:]
     private static let editorSource = "editor"
 
     var editorDiagnostics: [URL: [Diagnostic]] { bySource[Self.editorSource] ?? [:] }
@@ -117,6 +121,35 @@ final class IDEProblemsStore {
         replace(own, for: key, source: Self.editorSource)
         replace(diagnostics.filter { $0.source == Self.compilerSource }, for: key, source: Self.compilerSource)
         reportedFiles.insert(key)
+        editorReportCounts[key, default: 0] += 1
+    }
+
+    /// The agent is about to change this file: remember how many reports it has had.
+    func noteAgentEdit(of url: URL) {
+        let key = url.standardizedFileURL
+        agentEditBaselines[key] = editorReportCounts[key, default: 0]
+    }
+
+    /// Whether the editor has reported on the file since the agent last changed it. A file the agent
+    /// never changed counts as reported.
+    func hasEditorReportSinceAgentEdit(for url: URL) -> Bool {
+        let key = url.standardizedFileURL
+        guard let baseline = agentEditBaselines[key] else { return true }
+        return editorReportCounts[key, default: 0] > baseline
+    }
+
+    /// The errors the editor lists for one file right now, from its own analysis, the compiler results
+    /// it holds and the inspections, in line order. A source whose rows belong to older text is left
+    /// out, and so is build output (it describes the last build, not this text).
+    func currentErrors(for url: URL) -> [Diagnostic] {
+        let key = url.standardizedFileURL
+        let stale = staleByFile[key] ?? []
+        var errors: [Diagnostic] = []
+        for bucket in [Self.editorSource, Self.compilerSource, Self.inspectionSource] {
+            // `staleSources` names diagnostic sources (what a provider reports under), not buckets.
+            errors += (bySource[bucket]?[key] ?? []).filter { $0.severity == .error && !stale.contains($0.source) }
+        }
+        return errors.sorted { $0.range.start.line < $1.range.start.line }
     }
 
     /// Whether an editor report has landed for the file, even an empty one. Service

@@ -1397,6 +1397,9 @@ public actor AgentSession {
         // Consecutive read-only calls run together; edits and commands run alone, in the order sent,
         // so a read after an edit sees it. Outputs go back in call order.
         var outputs = [ToolOutput?](repeating: nil, count: calls.count)
+        /// Files the edit tools changed this turn, and the last edit call, which carries what the host says about them.
+        var turnEditedPaths: [String] = []
+        var lastEditIndex: Int?
         var start = 0
         while start < calls.count, !Task.isCancelled {
             var end = start + 1
@@ -1450,6 +1453,10 @@ public actor AgentSession {
                 guard !output.isError, case .run(let tool, let arguments, _) = plans[index] else { continue }
                 if tool.risk == .edit, !tool.reportsOwnEdits {
                     changedFiles = true
+                    lastEditIndex = index
+                    for path in Self.affectedPaths(tool, arguments: arguments) where !turnEditedPaths.contains(path) {
+                        turnEditedPaths.append(path)
+                    }
                     verifiedSinceEdit = false
                     filesEditedThisRun.append(contentsOf: Self.editedPaths(tool: tool.name, arguments: arguments))
                 }
@@ -1460,6 +1467,16 @@ public actor AgentSession {
             if changedFiles { counts.removeAll() }
             if let changed = await todoList.takeChange() { out.yield(.todosUpdated(changed)) }
             start = end
+        }
+
+        // What the editor now says about the files this turn changed, so the model sees what it broke
+        // in the same step. A host that is slow or fails adds nothing.
+        if let afterEdit = configuration.afterEdit, !turnEditedPaths.isEmpty, let index = lastEditIndex,
+           !Task.isCancelled, let output = outputs[index], !output.isError {
+            let paths = turnEditedPaths
+            if let note = await Deadline.run(configuration.afterEditTimeout, { await afterEdit(paths) }) ?? nil, !note.isEmpty {
+                outputs[index] = ToolOutput(output.text + "\n\n" + note, isError: false)
+            }
         }
 
         let cancelled = Task.isCancelled
@@ -1656,6 +1673,15 @@ public actor AgentSession {
         } onCancel: {
             race.cancelled()
         }
+    }
+
+    /// The files an edit call changed, project-relative: a patch names its files, other edit tools a
+    /// `path`. Empty when the call does not say.
+    private static func affectedPaths(_ tool: any AgentTool, arguments: String) -> [String] {
+        if let parsed = try? ToolArguments(json: arguments), case .paths(let paths) = tool.permissionSubject(for: parsed) {
+            return paths
+        }
+        return editedPaths(tool: tool.name, arguments: arguments).filter { $0 != tool.name }
     }
 
     /// A `path` argument, or the tool's name when the call names several files (a patch).
