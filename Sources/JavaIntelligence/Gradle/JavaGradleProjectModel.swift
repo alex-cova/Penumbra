@@ -58,6 +58,12 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
         public let generatedSourceDirs: [URL]
         /// Jars on the source set's `annotationProcessor` configuration (Lombok, MapStruct, …).
         public let annotationProcessorJars: [URL]
+        /// Module roots the project's `JavaCompile` passes via `--add-modules` (e.g.
+        /// `jdk.incubator.vector`). `--add-modules` is the one compile-time module flag that
+        /// composes with `--release`; `--add-exports` is rejected alongside it and
+        /// `--add-opens`/`--add-reads` are runtime-only, so only `--add-modules` is captured.
+        /// Empty for a model synced before format version 7.
+        public let addModules: [String]
 
         public init(
             name: String,
@@ -68,7 +74,8 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
             runtimeClasspathJars: [URL] = [],
             runtimeProjectDependencies: [ProjectDependency] = [],
             generatedSourceDirs: [URL] = [],
-            annotationProcessorJars: [URL] = []
+            annotationProcessorJars: [URL] = [],
+            addModules: [String] = []
         ) {
             self.name = name
             self.sourceDirs = sourceDirs
@@ -79,6 +86,7 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
             self.runtimeProjectDependencies = runtimeProjectDependencies
             self.generatedSourceDirs = generatedSourceDirs
             self.annotationProcessorJars = annotationProcessorJars
+            self.addModules = addModules
         }
 
         public init(from decoder: Decoder) throws {
@@ -92,6 +100,7 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
             runtimeProjectDependencies = try container.decodeIfPresent([ProjectDependency].self, forKey: .runtimeProjectDependencies) ?? []
             generatedSourceDirs = try container.decodeIfPresent([URL].self, forKey: .generatedSourceDirs) ?? []
             annotationProcessorJars = try container.decodeIfPresent([URL].self, forKey: .annotationProcessorJars) ?? []
+            addModules = try container.decodeIfPresent([String].self, forKey: .addModules) ?? []
         }
     }
 
@@ -124,6 +133,10 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
         public let tasks: [GradleTask]
         /// The project's `Test` tasks. Empty for a model synced before format version 6.
         public let testTasks: [GradleTestTask]
+        /// The effective main class of the project's `run` task, or `nil` when there is no `run`
+        /// task or it names none (running it fails with "No main class specified"). `nil` for a
+        /// model synced before format version 8.
+        public let runMainClass: String?
 
         public init(
             path: String,
@@ -131,7 +144,8 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
             languageLevel: Int? = nil,
             sourceSets: [SourceSet] = [],
             tasks: [GradleTask] = [],
-            testTasks: [GradleTestTask] = []
+            testTasks: [GradleTestTask] = [],
+            runMainClass: String? = nil
         ) {
             self.path = path
             self.directory = directory
@@ -139,6 +153,7 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
             self.sourceSets = sourceSets
             self.tasks = tasks
             self.testTasks = testTasks
+            self.runMainClass = runMainClass
         }
 
         public init(from decoder: Decoder) throws {
@@ -149,14 +164,17 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
             sourceSets = try container.decodeIfPresent([SourceSet].self, forKey: .sourceSets) ?? []
             tasks = try container.decodeIfPresent([GradleTask].self, forKey: .tasks) ?? []
             testTasks = try container.decodeIfPresent([GradleTestTask].self, forKey: .testTasks) ?? []
+            runMainClass = try container.decodeIfPresent(String.self, forKey: .runMainClass)
         }
 
         /// Convenience for tests that still think in main/test directories and jars. Builds a `main`
         /// source set and, when any test input is present, a `test` source set that depends on `main`.
+        /// `sourceDirs` is required (no default) so a bare `(path, directory)` still resolves to the
+        /// primary init instead of going ambiguous.
         public init(
             path: String,
             directory: URL,
-            sourceDirs: [URL] = [],
+            sourceDirs: [URL],
             testSourceDirs: [URL] = [],
             languageLevel: Int? = nil,
             compileClasspathJars: [URL] = [],

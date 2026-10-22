@@ -601,6 +601,14 @@ final class IDEJavaRunProvider: IDERunProvider {
         java.projectModel?.runtimeClasspath(forFile: file)
     }
 
+    /// `--add-modules …` the file's source set compiles with (e.g. `jdk.incubator.vector`), so
+    /// a classpath launch runs with the same module roots the Gradle build uses. Empty before a
+    /// sync or outside any source set.
+    func addModulesArguments(forFile file: URL) -> [String] {
+        let modules = java.projectModel?.sourceSet(containing: file)?.sourceSet.addModules ?? []
+        return JavacInvocationBuilder.addModulesOptions(modules)
+    }
+
     var maxLanguageLevel: Int? { java.projectModel?.maxLanguageLevel }
 
     /// Directories the debugged program's sources live in: every Gradle source set, then the

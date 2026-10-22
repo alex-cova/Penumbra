@@ -67,6 +67,9 @@ extension IDEJavaRunProvider {
         }
         var instrumentation: InstrumentationPlan?
         var extraVMArguments: [String] = []
+        if case .classpathMain(_, let sourceFile) = configuration.target {
+            extraVMArguments += addModulesArguments(forFile: URL(fileURLWithPath: sourceFile))
+        }
         if configuration.instrumentation != .none {
             switch await makeInstrumentationPlan(for: configuration, jdk: jdk) {
             case .failure(let failure):

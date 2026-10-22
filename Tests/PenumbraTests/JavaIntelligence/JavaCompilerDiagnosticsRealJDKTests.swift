@@ -80,4 +80,54 @@ final class JavaCompilerDiagnosticsRealJDKTests: XCTestCase {
         let diagnostics = try await check("public class Foo {\n    int m() { }\n}\n", jdk: jdk)
         XCTAssertEqual(diagnostics.map(\.message).first?.contains("missing return statement"), true)
     }
+
+    /// The whole cold path with a Gradle model: a source set whose `JavaCompile` passes
+    /// `--add-modules` must check clean, or every file using that module gets false
+    /// "is not visible" errors. `release 17` keeps the flag load-bearing on newer JDKs (the
+    /// incubator of the running release would resolve without it).
+    func testGradleAddModulesReachTheRealJavacCheck() async throws {
+        let jdk = try requireJavacJDK()
+        guard jdk.featureVersion >= 17 else {
+            throw XCTSkip("needs a JDK with jdk.incubator.vector")
+        }
+        let text = """
+        import jdk.incubator.vector.IntVector;
+        import jdk.incubator.vector.VectorOperators;
+        public class Vec {
+            static int sum(IntVector v) {
+                return v.reduceLanes(VectorOperators.ADD);
+            }
+        }
+        """
+        let sourceDir = root.appendingPathComponent("src/main/java", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        let file = sourceDir.appendingPathComponent("Vec.java")
+        try text.write(to: file, atomically: true, encoding: .utf8)
+        let subproject = JavaGradleProjectModel.Subproject(
+            path: ":", directory: root, languageLevel: 17,
+            sourceSets: [.init(name: "main", sourceDirs: [sourceDir], addModules: ["jdk.incubator.vector"])]
+        )
+        let model = JavaGradleProjectModel(formatVersion: 8, gradleVersion: "9.0", subprojects: [subproject])
+
+        let service = JavaCompilerDiagnosticsService()
+        let box = ResultBox()
+        await service.setResultHandler { _, diagnostics in box.append(diagnostics) }
+        await service.configure(.init(
+            kind: .gradle(model), jdk: jdk, projectRoot: root, workDirectory: root.appendingPathComponent(".work")
+        ))
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        let document = Document(
+            url: file, displayName: "Vec.java", contentSnapshot: TextSnapshot(version: 0, text: text),
+            selection: Selection(range: EditorIntelligence.TextRange(start: position, end: position)),
+            cursor: Cursor(position: position), viewport: Viewport(x: 0, y: 0, width: 1, height: 1),
+            languageIdentifier: "java"
+        )
+        await service.compileNow(document)
+        let deadline = Date().addingTimeInterval(60)
+        while box.results.isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let diagnostics = try XCTUnwrap(box.results.first, "javac never reported")
+        XCTAssertTrue(diagnostics.isEmpty, "expected no diagnostics, got \(diagnostics.map(\.message))")
+    }
 }

@@ -63,6 +63,9 @@ public enum JavaRunConfigurationValidator {
                 let task = taskName ?? "run"
                 if !subproject.tasks.isEmpty, !subproject.tasks.contains(where: { $0.name == task }) {
                     add(.target, "\(projectPath == ":" ? "The root project" : projectPath) has no task named “\(task)”.")
+                } else if task == "run", subproject.tasks.contains(where: { $0.name == "run" }),
+                          subproject.runMainClass == nil {
+                    add(.target, "\(projectPath == ":" ? "The root project" : projectPath)’s run task names no main class.")
                 }
             } else if context.gradleModel != nil {
                 add(.target, "There is no Gradle project “\(projectPath)”.")

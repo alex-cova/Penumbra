@@ -61,7 +61,8 @@ final class JavaRunConfigurationValidatorTests: XCTestCase {
         XCTAssertEqual(messages(run, context(model: synced)), ["There is no Gradle project “:nowhere”."])
     }
 
-    /// A synced model with `:` (a `build` task) and `:app` (`run` and `test`).
+    /// A synced model with `:` (a `build` task), `:app` (`run` with a main class, `test`)
+    /// and `:bare` (a `run` task that names no main class).
     private func modelWithTasks() -> JavaGradleProjectModel {
         func task(_ path: String) -> JavaGradleProjectModel.GradleTask {
             JavaGradleProjectModel.GradleTask(path: path, name: String(path.split(separator: ":").last ?? ""), group: "x")
@@ -71,7 +72,12 @@ final class JavaRunConfigurationValidatorTests: XCTestCase {
                 path: ":", directory: URL(fileURLWithPath: "/proj"), sourceSets: [], tasks: [task(":build")]
             ),
             JavaGradleProjectModel.Subproject(
-                path: ":app", directory: URL(fileURLWithPath: "/proj/app"), sourceSets: [], tasks: [task(":app:run"), task(":app:test")]
+                path: ":app", directory: URL(fileURLWithPath: "/proj/app"), sourceSets: [],
+                tasks: [task(":app:run"), task(":app:test")], runMainClass: "com.example.App"
+            ),
+            JavaGradleProjectModel.Subproject(
+                path: ":bare", directory: URL(fileURLWithPath: "/proj/bare"), sourceSets: [],
+                tasks: [task(":bare:run")]
             )
         ])
     }
@@ -90,6 +96,22 @@ final class JavaRunConfigurationValidatorTests: XCTestCase {
         XCTAssertEqual(
             messages(JavaRunConfiguration(target: .gradleRun(projectPath: ":lib")), context(model: synced)),
             ["There is no Gradle project “:lib”."]
+        )
+    }
+
+    func testAGradleRunWithoutAMainClassIsReported() {
+        let synced = modelWithTasks()
+        XCTAssertEqual(
+            messages(JavaRunConfiguration(target: .gradleRun(projectPath: ":bare")), context(model: synced)),
+            [":bare’s run task names no main class."]
+        )
+        XCTAssertEqual(
+            messages(JavaRunConfiguration(target: .gradleRun(projectPath: ":bare", taskName: "run")), context(model: synced)),
+            [":bare’s run task names no main class."]
+        )
+        XCTAssertEqual(
+            messages(JavaRunConfiguration(target: .gradleRun(projectPath: ":bare", taskName: "test")), context(model: synced)),
+            [":bare has no task named “test”."]
         )
     }
 

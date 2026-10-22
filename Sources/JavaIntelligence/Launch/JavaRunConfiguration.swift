@@ -419,19 +419,25 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
         case ask([JavaGradleProjectModel.GradleTask])
     }
 
-    /// `run` when the subproject at `projectPath` has one, else `bootRun` (a Spring Boot app), else
+    /// `run` when the subproject at `projectPath` has one that names a main class, else
+    /// `bootRun` (a Spring Boot app resolves its own main class), else
     /// ``GradleRunTaskChoice/ask(_:)`` with its tasks. ``GradleRunTaskChoice/unsynced`` without a
-    /// model or a task list for it.
+    /// model or a task list for it. A `run` task without a main class fails with "No main class
+    /// specified", so it is never offered directly; the host asks which task to run instead.
     public static func preferredGradleRunTask(
         for projectPath: String, model: JavaGradleProjectModel?
     ) -> GradleRunTaskChoice {
-        guard let tasks = model?.subprojects.first(where: { $0.path == projectPath })?.tasks, !tasks.isEmpty else {
+        guard let subproject = model?.subprojects.first(where: { $0.path == projectPath }),
+              !subproject.tasks.isEmpty else {
             return .unsynced
         }
-        for name in ["run", "bootRun"] where tasks.contains(where: { $0.name == name }) {
-            return .task(name)
+        if subproject.tasks.contains(where: { $0.name == "run" }), subproject.runMainClass != nil {
+            return .task("run")
         }
-        return .ask(tasks)
+        if subproject.tasks.contains(where: { $0.name == "bootRun" }) {
+            return .task("bootRun")
+        }
+        return .ask(subproject.tasks)
     }
 
     /// The Gradle subproject Run launches for `file`: the one whose source set holds it, else the root.

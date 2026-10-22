@@ -11,7 +11,7 @@ import Foundation
 enum GradleProjectModelScript {
     /// Bumped whenever the emitted JSON shape changes; mirrored in
     /// ``JavaGradleProjectModel/formatVersion``.
-    static let formatVersion = 6
+    static let formatVersion = 8
 
     /// Groovy, not Kotlin DSL: a Groovy init script doesn't need the `kotlin-dsl` plugin resolved
     /// first, which keeps this working on older Gradle versions with no extra project-side setup.
@@ -84,6 +84,48 @@ enum GradleProjectModelScript {
         }
     }
 
+    // The `--add-modules` roots of the source set's `JavaCompile` task (e.g.
+    // `jdk.incubator.vector`), in both `--add-modules X` and `--add-modules=X` spellings, with
+    // comma-separated lists split. Only `--add-modules` is captured: `--add-exports` is rejected
+    // alongside `--release` (which Umbra always passes), and `--add-opens`/`--add-reads` are
+    // runtime-only no-ops at compile time, so replaying them would only add noise or errors.
+    def umbraCompileAddModules = { p, ss ->
+        def modules = [] as LinkedHashSet
+        try {
+            def compileTask = p.tasks.findByName(ss.compileJavaTaskName)
+            def args = compileTask?.options?.compilerArgs
+            if (args != null) {
+                def takeNext = false
+                args.each { raw ->
+                    def arg = raw?.toString()
+                    if (arg == null || arg.isEmpty()) {
+                        takeNext = false
+                        return
+                    }
+                    if (takeNext) {
+                        takeNext = false
+                        if (!arg.startsWith('-')) {
+                            arg.split(',').each { m ->
+                                def name = m.trim()
+                                if (!name.isEmpty()) { modules.add(name) }
+                            }
+                        }
+                        return
+                    }
+                    if (arg == '--add-modules') {
+                        takeNext = true
+                    } else if (arg.startsWith('--add-modules=')) {
+                        arg.substring('--add-modules='.length()).split(',').each { m ->
+                            def name = m.trim()
+                            if (!name.isEmpty()) { modules.add(name) }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return new ArrayList(modules)
+    }
+
     def umbraDescribeSourceSet = { p, ss ->
         def described = [
             name: ss.name,
@@ -96,6 +138,7 @@ enum GradleProjectModelScript {
             generatedSourceDirs: [],
             annotationProcessorJars: [],
             annotationProcessorProjects: [],
+            addModules: umbraCompileAddModules(p, ss),
             unresolved: []
         ]
         try {
@@ -185,6 +228,32 @@ enum GradleProjectModelScript {
         return result.sort { it.path }
     }
 
+    // The effective main class of the project's `run` task (the `application` plugin's
+    // extension, unless the task sets its own), or null: a `run` task without one fails with
+    // "No main class specified". `mainClass` is a `Property` on recent Gradle versions and a
+    // plain `main` string on old ones; anything unreadable degrades to null.
+    def umbraRunMainClass = { p ->
+        try {
+            def run = p.tasks.findByName('run')
+            if (run == null) { return null }
+            try {
+                def mc = run.mainClass
+                if (mc instanceof String) { return mc }
+                if (mc != null) {
+                    try {
+                        def v = mc.getOrNull()
+                        if (v != null) { return v.toString() }
+                    } catch (Exception ignored) {}
+                }
+            } catch (Exception ignored) {}
+            try {
+                def main = run.main
+                if (main != null) { return main.toString() }
+            } catch (Exception ignored) {}
+        } catch (Exception ignored) {}
+        return null
+    }
+
     def umbraDescribeProject = { p ->
         def result = [
             path: p.path,
@@ -193,6 +262,7 @@ enum GradleProjectModelScript {
             sourceSets: [],
             tasks: umbraDescribeTasks(p),
             testTasks: [],
+            runMainClass: umbraRunMainClass(p),
             unresolved: []
         ]
 

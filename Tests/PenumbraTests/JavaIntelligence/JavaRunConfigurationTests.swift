@@ -97,16 +97,21 @@ final class JavaRunConfigurationTests: XCTestCase {
 
     func testGradleRunTaskPrefersRunThenBootRunThenAsks() {
         let file = URL(fileURLWithPath: "/proj/app/src/main/java/App.java")
-        func model(_ taskNames: [String]) -> JavaGradleProjectModel {
+        func model(_ taskNames: [String], runMainClass: String? = "com.example.App") -> JavaGradleProjectModel {
             let tasks = taskNames.map { JavaGradleProjectModel.GradleTask(path: ":app:\($0)", name: $0, group: "application") }
             let sourceSet = JavaGradleProjectModel.SourceSet(name: "main", sourceDirs: [file.deletingLastPathComponent()])
             return JavaGradleProjectModel(
                 formatVersion: 2, gradleVersion: "9.0",
-                subprojects: [.init(path: ":app", directory: root.appendingPathComponent("app"), sourceSets: [sourceSet], tasks: tasks)]
+                subprojects: [.init(
+                    path: ":app", directory: root.appendingPathComponent("app"), sourceSets: [sourceSet],
+                    tasks: tasks, runMainClass: runMainClass
+                )]
             )
         }
-        func defaultTarget(_ taskNames: [String]) -> JavaRunConfiguration.Target? {
-            JavaRunConfiguration.makeDefault(file: file, projectRoot: root, isGradleProject: true, model: model(taskNames))?.target
+        func defaultTarget(_ taskNames: [String], runMainClass: String? = "com.example.App") -> JavaRunConfiguration.Target? {
+            JavaRunConfiguration.makeDefault(
+                file: file, projectRoot: root, isGradleProject: true, model: model(taskNames, runMainClass: runMainClass)
+            )?.target
         }
 
         XCTAssertEqual(defaultTarget(["build", "run", "bootRun"]), .gradleRun(projectPath: ":app"))
@@ -118,6 +123,35 @@ final class JavaRunConfigurationTests: XCTestCase {
         XCTAssertEqual(tasks.map(\.name), ["build", "serve"])
         XCTAssertEqual(JavaRunConfiguration.preferredGradleRunTask(for: ":app", model: nil), .unsynced)
         XCTAssertEqual(JavaRunConfiguration.preferredGradleRunTask(for: ":other", model: model(["run"])), .unsynced)
+    }
+
+    func testGradleRunTaskWithoutAMainClassFallsThroughToAsking() {
+        let file = URL(fileURLWithPath: "/proj/app/src/main/java/App.java")
+        func model(_ taskNames: [String]) -> JavaGradleProjectModel {
+            let tasks = taskNames.map { JavaGradleProjectModel.GradleTask(path: ":app:\($0)", name: $0, group: "application") }
+            let sourceSet = JavaGradleProjectModel.SourceSet(name: "main", sourceDirs: [file.deletingLastPathComponent()])
+            return JavaGradleProjectModel(
+                formatVersion: 8, gradleVersion: "9.0",
+                subprojects: [.init(
+                    path: ":app", directory: root.appendingPathComponent("app"), sourceSets: [sourceSet],
+                    tasks: tasks, runMainClass: nil
+                )]
+            )
+        }
+        // `run` without a main class fails with "No main class specified": a `bootRun` still wins,
+        // otherwise the host asks which task to run instead of launching a doomed one.
+        XCTAssertEqual(
+            JavaRunConfiguration.preferredGradleRunTask(for: ":app", model: model(["build", "run", "bootRun"])),
+            .task("bootRun")
+        )
+        XCTAssertEqual(
+            JavaRunConfiguration.makeDefault(file: file, projectRoot: root, isGradleProject: true, model: model(["build", "run"]))?.target,
+            nil
+        )
+        guard case .ask(let tasks) = JavaRunConfiguration.preferredGradleRunTask(for: ":app", model: model(["build", "run"])) else {
+            return XCTFail("expected a prompt")
+        }
+        XCTAssertEqual(tasks.map(\.name), ["build", "run"])
     }
 
     func testGradleTaskNameIsOptionalInSavedConfigurations() throws {

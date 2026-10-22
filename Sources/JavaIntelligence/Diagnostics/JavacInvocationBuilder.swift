@@ -34,14 +34,17 @@ public struct JavacResolvedSettings: Sendable, Equatable {
     public let processorJars: [URL]
     public let languageLevel: Int?
     public let packageName: String?
+    /// `--add-modules` roots from the source set's `JavaCompile` (e.g. `jdk.incubator.vector`).
+    public let addModules: [String]
 
-    public init(moduleId: String, classpath: [URL], sourcepath: [URL], processorJars: [URL], languageLevel: Int?, packageName: String?) {
+    public init(moduleId: String, classpath: [URL], sourcepath: [URL], processorJars: [URL], languageLevel: Int?, packageName: String?, addModules: [String] = []) {
         self.moduleId = moduleId
         self.classpath = classpath
         self.sourcepath = sourcepath
         self.processorJars = processorJars
         self.languageLevel = languageLevel
         self.packageName = packageName
+        self.addModules = addModules
     }
 }
 
@@ -74,7 +77,8 @@ public enum JavacInvocationBuilder {
                 moduleId: "\(match.subproject.path):\(match.sourceSet.name)",
                 classpath: match.sourceSet.compileClasspathJars, sourcepath: sourcepath,
                 processorJars: match.sourceSet.annotationProcessorJars,
-                languageLevel: match.subproject.languageLevel, packageName: packageName
+                languageLevel: match.subproject.languageLevel, packageName: packageName,
+                addModules: match.sourceSet.addModules
             )
         }
     }
@@ -94,7 +98,7 @@ public enum JavacInvocationBuilder {
         return JavaAnalysisServerModule(
             moduleId: settings.moduleId, classpath: classpath, sourcepath: unique(settings.sourcepath),
             release: release(languageLevel: settings.languageLevel, jdkFeatureVersion: jdk.featureVersion),
-            processorPath: processorPath
+            processorPath: processorPath, options: addModulesOptions(settings.addModules)
         )
     }
 
@@ -134,6 +138,7 @@ public enum JavacInvocationBuilder {
         if let release = release(languageLevel: languageLevel, jdkFeatureVersion: jdk.featureVersion) {
             arguments += ["--release", String(release)]
         }
+        arguments += addModulesOptions(settings.addModules)
         let classpathJars = unique(classpath)
         if !classpathJars.isEmpty {
             arguments += ["-classpath", classpathJars.map(\.path).joined(separator: ":")]
@@ -156,6 +161,15 @@ public enum JavacInvocationBuilder {
             environment: ["JAVA_HOME": jdk.home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"],
             bufferFile: bufferFile
         )
+    }
+
+    /// `--add-modules a,b` for the source set's module roots, or nothing when there are none.
+    /// One flag pair, so the cold CLI path and the warm server's `options` share it, and Umbra's
+    /// run and debug launches reuse it for the launched JVM.
+    public static func addModulesOptions(_ addModules: [String]) -> [String] {
+        let modules = addModules.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !modules.isEmpty else { return [] }
+        return ["--add-modules", modules.joined(separator: ",")]
     }
 
     /// `--release N`, capped at what the JDK supports. Omitted when unknown, or on a JDK 8 (whose

@@ -251,6 +251,34 @@ final class JavaGradleProjectModelTests: XCTestCase {
         XCTAssertEqual(set.annotationProcessorJars.map(\.lastPathComponent), ["lombok.jar"])
     }
 
+    func testDecodesFormat8RunMainClassAndToleratesItsAbsence() throws {
+        func projectJSON(extra: String) -> Data {
+            Data("""
+            {"formatVersion": 8, "gradleVersion": "9.0", "unresolved": [], "subprojects": [
+              {"path": ":", "directory": "file:///p/" \(extra)}
+            ]}
+            """.utf8)
+        }
+        let without = try JSONDecoder().decode(JavaGradleProjectModel.self, from: projectJSON(extra: ""))
+        XCTAssertNil(without.subprojects.first?.runMainClass)
+
+        let model = try JSONDecoder().decode(
+            JavaGradleProjectModel.self, from: projectJSON(extra: #", "runMainClass": "com.example.App""#)
+        )
+        XCTAssertEqual(model.subprojects.first?.runMainClass, "com.example.App")
+    }
+
+    func testDecodesFormat7AddModulesAndToleratesTheirAbsence() throws {
+        let without = try JSONDecoder().decode(JavaGradleProjectModel.self, from: sourceSetJSON(extra: ""))
+        let old = try XCTUnwrap(without.subprojects.first?.sourceSets.first)
+        XCTAssertTrue(old.addModules.isEmpty)
+
+        let extra = ", \"addModules\": [\"jdk.incubator.vector\", \"java.sql\"]"
+        let model = try JSONDecoder().decode(JavaGradleProjectModel.self, from: sourceSetJSON(extra: extra))
+        let set = try XCTUnwrap(model.subprojects.first?.sourceSets.first)
+        XCTAssertEqual(set.addModules, ["jdk.incubator.vector", "java.sql"])
+    }
+
     func testGeneratedDirsAreReadOnlyTargetsAndVisible() throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -291,7 +319,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
             formatVersion: 1,
             gradleVersion: "9.0",
             subprojects: [
-                .init(path: ":", directory: workDir, compileClasspathJars: [JavaFixtures.jarURL])
+                .init(path: ":", directory: workDir, sourceDirs: [], compileClasspathJars: [JavaFixtures.jarURL])
             ]
         )
         let paths = JavaIndexPaths(root: workDir.appendingPathComponent("index-cache"))

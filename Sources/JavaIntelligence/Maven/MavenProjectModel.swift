@@ -208,7 +208,7 @@ public struct MavenProjectModel: Codable, Sendable, Equatable {
                 testTasks: [testTask]
             )
         }
-        return JavaGradleProjectModel(formatVersion: 6, gradleVersion: "maven", subprojects: subprojects, unresolved: unresolved)
+        return JavaGradleProjectModel(formatVersion: 8, gradleVersion: "maven", subprojects: subprojects, unresolved: unresolved)
     }
 
     /// The library graph of one module, from the native tree. No Maven process runs.

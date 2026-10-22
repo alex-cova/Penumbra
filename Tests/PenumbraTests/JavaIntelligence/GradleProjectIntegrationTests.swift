@@ -58,6 +58,10 @@ final class GradleProjectIntegrationTests: XCTestCase {
             appMain.compileClasspathJars.contains { $0.path == JavaFixtures.jarURL.path },
             "expected the fixture jar in :app main, got \(appMain.compileClasspathJars)"
         )
+        XCTAssertEqual(
+            appMain.addModules, ["jdk.incubator.vector", "java.sql"],
+            "expected both --add-modules spellings captured, got \(appMain.addModules)"
+        )
         XCTAssertFalse(
             appMain.compileClasspathJars.contains { $0.path.hasSuffix("test-only.jar") },
             "testImplementation must not be on the main compile classpath: \(appMain.compileClasspathJars)"
@@ -77,6 +81,20 @@ final class GradleProjectIntegrationTests: XCTestCase {
         XCTAssertFalse(
             appTest.compileClasspathJars.contains { $0.path.contains("/lib/build/") },
             "the test classpath must not index :lib's jar either"
+        )
+        let lib = try XCTUnwrap(model.subprojects.first { $0.path == ":lib" })
+        let libMain = try XCTUnwrap(lib.sourceSets.first { $0.name == "main" })
+        XCTAssertTrue(
+            libMain.addModules.isEmpty,
+            "a source set without compilerArgs must decode to no extra modules, got \(libMain.addModules)"
+        )
+        XCTAssertEqual(
+            app.runMainClass, "com.example.App",
+            "the application plugin's main class must be captured, got \(String(describing: app.runMainClass))"
+        )
+        XCTAssertNil(
+            lib.runMainClass,
+            "a project with no run task must decode to no main class, got \(String(describing: lib.runMainClass))"
         )
 
         // End-to-end: index the model-driven sources + jars and confirm both a project class and a
@@ -143,6 +161,7 @@ final class GradleProjectIntegrationTests: XCTestCase {
         try """
         plugins {
             id 'java'
+            id 'application'
         }
         java {
             sourceCompatibility = JavaVersion.VERSION_17
@@ -152,6 +171,12 @@ final class GradleProjectIntegrationTests: XCTestCase {
             implementation project(':lib')
             implementation files('\(fixtureJarPath)')
             testImplementation files('\(testOnlyJar.path)')
+        }
+        application {
+            mainClass = 'com.example.App'
+        }
+        tasks.withType(JavaCompile).configureEach {
+            options.compilerArgs.addAll(['--add-modules', 'jdk.incubator.vector', '--add-modules=java.sql'])
         }
         """.write(to: root.appendingPathComponent("app/build.gradle"), atomically: true, encoding: .utf8)
 

@@ -213,4 +213,60 @@ final class JavacInvocationBuilderTests: XCTestCase {
         XCTAssertEqual(JavacInvocationBuilder.packageDeclaration(in: "/* c */\n  package   a ;"), "a")
         XCTAssertNil(JavacInvocationBuilder.packageDeclaration(in: "class X { String s = \"package a;\"; }"))
     }
+
+    func testGradleAddModulesReachTheColdCommandLine() throws {
+        let jdk = try makeJDK()
+        let app = JavaGradleProjectModel.Subproject(
+            path: ":app", directory: URL(fileURLWithPath: "/p/app"),
+            sourceSets: [.init(
+                name: "main",
+                sourceDirs: [URL(fileURLWithPath: "/p/app/src/main/java")],
+                addModules: ["jdk.incubator.vector"]
+            )]
+        )
+        let invocation = try XCTUnwrap(JavacInvocationBuilder.build(
+            file: URL(fileURLWithPath: "/p/app/src/main/java/Foo.java"), text: "class Foo {}",
+            kind: .gradle(model([app])), jdk: jdk, workDirectory: work
+        ))
+        XCTAssertEqual(value(after: "--add-modules", in: invocation.arguments), "jdk.incubator.vector")
+    }
+
+    func testGradleWithoutAddModulesOmitsTheFlag() throws {
+        let jdk = try makeJDK()
+        let app = JavaGradleProjectModel.Subproject(
+            path: ":app", directory: URL(fileURLWithPath: "/p/app"),
+            sourceDirs: [URL(fileURLWithPath: "/p/app/src/main/java")]
+        )
+        let invocation = try XCTUnwrap(JavacInvocationBuilder.build(
+            file: URL(fileURLWithPath: "/p/app/src/main/java/Foo.java"), text: "class Foo {}",
+            kind: .gradle(model([app])), jdk: jdk, workDirectory: work
+        ))
+        XCTAssertNil(value(after: "--add-modules", in: invocation.arguments))
+    }
+
+    func testGradleAddModulesReachTheWarmServerModule() throws {
+        let jdk = try makeJDK(feature: 21)
+        let app = JavaGradleProjectModel.Subproject(
+            path: ":app", directory: URL(fileURLWithPath: "/p/app"), languageLevel: 17,
+            sourceSets: [.init(
+                name: "main",
+                sourceDirs: [URL(fileURLWithPath: "/p/app/src/main/java")],
+                addModules: ["jdk.incubator.vector", "java.sql"]
+            )]
+        )
+        let module = try XCTUnwrap(JavacInvocationBuilder.serverModule(
+            file: URL(fileURLWithPath: "/p/app/src/main/java/Foo.java"), text: "class Foo {}",
+            kind: .gradle(model([app])), jdk: jdk
+        ))
+        XCTAssertEqual(module.options, ["--add-modules", "jdk.incubator.vector,java.sql"])
+    }
+
+    func testAddModulesOptionsHelpers() {
+        XCTAssertEqual(JavacInvocationBuilder.addModulesOptions([]), [])
+        XCTAssertEqual(JavacInvocationBuilder.addModulesOptions(["  ", ""]), [])
+        XCTAssertEqual(
+            JavacInvocationBuilder.addModulesOptions(["jdk.incubator.vector"]),
+            ["--add-modules", "jdk.incubator.vector"]
+        )
+    }
 }

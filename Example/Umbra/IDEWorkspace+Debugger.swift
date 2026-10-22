@@ -986,9 +986,10 @@ extension IDEWorkspace {
                     runtimeClasspath: classpath,
                     jdwpPort: port,
                     projectRoot: root,
-                    extraVMArguments: JavaLaunchCommand.newLaunchProtocolArguments(
-                        usesNewLaunchProtocol: newProtocol, jdkFeatureVersion: jdk.featureVersion, sourceLaunch: false
-                    )
+                    extraVMArguments: javaRun.addModulesArguments(forFile: URL(fileURLWithPath: sourceFile))
+                        + JavaLaunchCommand.newLaunchProtocolArguments(
+                            usesNewLaunchProtocol: newProtocol, jdkFeatureVersion: jdk.featureVersion, sourceLaunch: false
+                        )
                 ) else {
                     reportRunProblem("Could not build a debug launch for “\(configuration.displayName)”.")
                     return
