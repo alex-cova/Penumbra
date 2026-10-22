@@ -5,7 +5,7 @@ import Foundation
 /// session's `shapeToolOutput`, so secrets never land in `items`, `SessionStore` or a summary; the
 /// `.toolCallFinished` event still carries the original for the live transcript. Deterministic for
 /// a given input, so prefix caching is unaffected. Command and web output are scrubbed, since those
-/// echo the outside world; file reads and edits pass through.
+/// echo the outside world, and so is a line the agent saves to its memory file; file reads and edits pass through.
 nonisolated enum IDEAgentOutputScrubber {
     static let replacement = "[redacted]"
 
@@ -28,7 +28,9 @@ nonisolated enum IDEAgentOutputScrubber {
     }
 
     static func shape(_ input: ToolOutputShapingInput) -> String {
-        guard input.risk == .command || input.toolName == "web_search" else { return input.text }
+        // A memory line leaves the history for a file that every later chat loads, so it is scrubbed
+        // whatever risk the session presents it with (`ToolContext.redactForMemory` says `.edit`).
+        guard input.risk == .command || input.toolName == "web_search" || input.toolName == "remember" else { return input.text }
         return scrub(input.text)
     }
 }
