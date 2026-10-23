@@ -256,11 +256,31 @@ extension IDEWorkspace: IDEAgentHost {
     /// Java tools are offered in a Gradle project or when a Java file is open: elsewhere they would
     /// only add to the tool list a small model has to read.
     func agentJavaNavigator() -> (any IDEAgentNavigating)? {
-        let extensions = ["java", "swift", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"]
-        let hasSource = gradle.isActive || swiftPM.isActive || xcode.isActive || npm.isActive
-            || workbench.allDocuments().contains { extensions.contains($0.url?.pathExtension.lowercased() ?? "") }
-        guard hasSource else { return nil }
+        guard hasAgentNavigableSource else { return nil }
         return IDEEngineAgentNavigator(engine: navigationEngine)
+    }
+
+    private var hasAgentNavigableSource: Bool {
+        let extensions = ["java", "swift", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"]
+        return gradle.isActive || swiftPM.isActive || xcode.isActive || npm.isActive
+            || workbench.allDocuments().contains { extensions.contains($0.url?.pathExtension.lowercased() ?? "") }
+    }
+
+    /// The closures hold the window weakly: a running session must not keep it alive.
+    func agentSymbolSearch() -> (any IDEAgentSymbolSearching)? {
+        guard hasAgentNavigableSource else { return nil }
+        return IDEIndexAgentSymbolSearch(
+            javaIndex: javaSupport.javaIndex,
+            swiftIndex: swiftSupport.index,
+            typeScriptIndex: typescriptSupport.index,
+            text: { [weak self] url in
+                if let open = await MainActor.run(body: { self?.openBufferText(for: url) }) { return open }
+                return try? String(contentsOf: url, encoding: .utf8)
+            },
+            structureProvider: { [weak self] language in
+                await MainActor.run { self?.languages.structure(for: language) }
+            },
+            status: { [weak self] in await MainActor.run { self?.projectStatus.message } })
     }
 
     func agentLineText(url: URL, line: Int) -> String? {

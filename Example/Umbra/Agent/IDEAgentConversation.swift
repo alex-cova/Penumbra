@@ -1053,6 +1053,13 @@ final class IDEAgentConversation: Identifiable {
         }
         if let navigator = host.agentJavaNavigator() {
             let lineText: @Sendable (URL, Int) async -> String? = { url, line in await box.lineText(url: url, line: line) }
+            // Name search leads: it needs no file, so it is where a question about code starts.
+            if let search = host.agentSymbolSearch() {
+                tools += [
+                    IDEFindSymbolTool(search: search),
+                    IDEExploreSymbolTool(search: search, navigator: navigator, lineText: lineText),
+                ]
+            }
             tools += [
                 IDEGoToDefinitionTool(navigator: navigator, lineText: lineText),
                 IDEFindUsagesTool(navigator: navigator, lineText: lineText),

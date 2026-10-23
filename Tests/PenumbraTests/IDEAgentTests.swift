@@ -1,4 +1,5 @@
 import AgentKit
+import EditorIntelligence
 import XCTest
 @testable import Umbra
 
@@ -10,8 +11,13 @@ private final class FakeAgentHost: IDEAgentHost {
     /// What the user answers when asked about the project's MCP servers; nothing by default.
     var mcpAnswer: ([MCPServerConfig]) -> Set<String> = { _ in [] }
     var mcpQuestions = 0
+    var navigator: (any IDEAgentNavigating)?
+    var symbolSearch: (any IDEAgentSymbolSearching)?
 
     init(root: URL?) { agentProjectRoot = root }
+
+    func agentJavaNavigator() -> (any IDEAgentNavigating)? { navigator }
+    func agentSymbolSearch() -> (any IDEAgentSymbolSearching)? { symbolSearch }
 
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> {
         mcpQuestions += 1
@@ -33,6 +39,18 @@ private final class FakeAgentHost: IDEAgentHost {
     }
     func agentCancelGradle() {}
     func agentFreshProblems(relativePaths: [String]) async -> IDEAgentFreshProblems { IDEAgentFreshProblems() }
+}
+
+private struct NoNavigation: IDEAgentNavigating {
+    func definitions(file: URL, source: String, utf16Offset: Int) async -> [IDEAgentCodeLocation] { [] }
+    func usages(file: URL, source: String, utf16Offset: Int) async -> [IDEAgentCodeLocation] { [] }
+}
+
+private struct NoSearch: IDEAgentSymbolSearching {
+    func symbols(matching query: String, exactName: Bool, limit: Int) async -> [IDEAgentSymbol] { [] }
+    func liveText(of file: URL) async -> String? { nil }
+    func structure(file: URL, source: String) async -> [StructureNode] { [] }
+    func indexStatus() async -> String? { nil }
 }
 
 @MainActor
@@ -316,6 +334,29 @@ final class IDEAgentControllerTests: XCTestCase {
         print("TOOLCOST Umbra Code session: \(request.tools.count) tools ≈\(tools) tokens, system prompt ≈\(system) tokens (Anthropic counting)\n" + lines.joined(separator: "\n"))
         XCTAssertLessThan(tools, 8_000, "the tool definitions have grown; trim them or load them on demand")
         XCTAssertLessThan(system, 2_500, "the system prompt has grown")
+    }
+
+    /// Name search comes first (a question about code starts without a file), and only where the
+    /// host can search: a session with navigation alone keeps its old tool list.
+    func testNameSearchLeadsTheNavigationToolsOnlyWhenTheHostOffersIt() async throws {
+        let withSearch = try makeController(turns: [.text("hi")])
+        withSearch.2.navigator = NoNavigation()
+        withSearch.2.symbolSearch = NoSearch()
+        withSearch.0.draft = "hello"
+        withSearch.0.send()
+        await eventually("the run should finish") { !withSearch.0.isRunning }
+        let names = try XCTUnwrap(withSearch.1.requests.first).tools.map(\.name)
+        let start = try XCTUnwrap(names.firstIndex(of: "find_symbol"), "\(names)")
+        XCTAssertEqual(Array(names[start...].prefix(4)), ["find_symbol", "explore_symbol", "go_to_definition", "find_usages"])
+
+        let navigationOnly = try makeController(turns: [.text("hi")])
+        navigationOnly.2.navigator = NoNavigation()
+        navigationOnly.0.draft = "hello"
+        navigationOnly.0.send()
+        await eventually("the run should finish") { !navigationOnly.0.isRunning }
+        let plain = try XCTUnwrap(navigationOnly.1.requests.first).tools.map(\.name)
+        XCTAssertTrue(plain.contains("go_to_definition") && plain.contains("find_usages"))
+        XCTAssertFalse(plain.contains("find_symbol") || plain.contains("explore_symbol"), "\(plain)")
     }
 
     func testTheModelReadsUnsavedEditsNotTheStaleDiskCopy() async throws {

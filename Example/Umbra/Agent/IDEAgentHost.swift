@@ -56,6 +56,8 @@ protocol IDEAgentHost: AnyObject {
     // Navigation. Both are optional (see the extension below).
     /// Java symbol navigation, or `nil` when the project has no Java to resolve.
     func agentJavaNavigator() -> (any IDEAgentNavigating)?
+    /// Name search over the project's indexes, or `nil` when there is nothing to search.
+    func agentSymbolSearch() -> (any IDEAgentSymbolSearching)?
     /// The text of 1-based `line` of a file, from its open buffer or from disk.
     func agentLineText(url: URL, line: Int) -> String?
 
@@ -95,6 +97,7 @@ extension IDEAgentHost {
     func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? { nil }
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> { [] }
     func agentJavaNavigator() -> (any IDEAgentNavigating)? { nil }
+    func agentSymbolSearch() -> (any IDEAgentSymbolSearching)? { nil }
     func agentProjectTaskNames() -> [String] { [] }
     func agentRunProjectTask(_ name: String) async -> String { "This folder has no project tasks." }
     func agentLineText(url: URL, line: Int) -> String? { nil }
