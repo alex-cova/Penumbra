@@ -26,12 +26,14 @@ struct IDEAgentPanel: View {
             if placement != .aiMode, agent.conversations.count > 1 { IDEAgentTabsBar(agent: agent) }
             if !agent.todos.isEmpty { IDEAgentTodoListView(items: agent.todos) }
             if placement == .aiMode, agent.entries.isEmpty {
-                aiEmptyState
+                aiEmptyGreeting
             } else {
                 transcript
                 if placement != .aiMode { Divider().overlay(IDEAppearance.ColorToken.border) }
-                composer
             }
+            // One composer for both states: a field that moved between the empty greeting and
+            // the transcript would be destroyed and recreated, dropping focus on the first send.
+            composer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(placement == .docked ? IDEAppearance.ColorToken.panel : Color.clear)
@@ -156,7 +158,7 @@ struct IDEAgentPanel: View {
             }
             if let status = agent.status {
                 HStack(spacing: IDEAppearance.Spacing.xs) {
-                    ProgressView().controlSize(.mini)
+                    IDEATypingDots()
                     Text(status)
                         .font(IDEAppearance.Typography.caption)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -296,8 +298,9 @@ struct IDEAgentPanel: View {
 
     // MARK: - AI mode's empty session
 
-    /// A greeting with the message field in the middle, as in a chat app's new conversation.
-    private var aiEmptyState: some View {
+    /// The greeting above the composer while the session is empty. The composer itself lives
+    /// outside this branch so the field keeps focus when the first message is sent.
+    private var aiEmptyGreeting: some View {
         VStack(spacing: IDEAppearance.Spacing.lg) {
             Spacer(minLength: 0)
             Image(systemName: "chevron.left.forwardslash.chevron.right")
@@ -307,11 +310,9 @@ struct IDEAgentPanel: View {
                 .font(IDEAppearance.Typography.brandTitle)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .multilineTextAlignment(.center)
-            composer
             if let hint = workspace.aiModelSetupHint(for: .code) {
                 IDEAISetupButton(hint: hint) { workspace.requestAIModelSetup(for: .code) }
             }
-            Spacer(minLength: 0)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

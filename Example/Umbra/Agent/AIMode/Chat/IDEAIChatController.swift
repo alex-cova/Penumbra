@@ -13,6 +13,10 @@ final class IDEAIChatController {
     private(set) var history: [SessionSummary] = []
     /// Bumped to put the caret in the message field.
     var composerFocusRequest = 0
+    /// Bumped by `/model`; the view opens the models sheet for it.
+    var modelRequest = 0
+    /// Tests replace this; the default asks where to save.
+    @ObservationIgnored var exportHandler: @MainActor (String, String) -> Void = IDEAgentController.presentSavePanel
 
     let settings: IDEAgentSettings
     @ObservationIgnored let aiSettings: IDEAISettings

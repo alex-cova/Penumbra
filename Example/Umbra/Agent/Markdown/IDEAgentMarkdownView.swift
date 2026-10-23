@@ -177,7 +177,7 @@ private struct IDEAgentCodeBlock: View {
                     Text(code).foregroundStyle(IDEAppearance.ColorToken.foreground)
                 }
             }
-            .font(IDEAppearance.Typography.monoSmall)
+            .font(IDEAppearance.Typography.mono)
             .padding(IDEAppearance.Spacing.xs)
             .frame(maxWidth: .infinity, alignment: .leading)
         }

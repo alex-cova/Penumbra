@@ -16,14 +16,17 @@ struct IDEAIChatView: View {
         VStack(spacing: 0) {
             header
             if conversation.isEmpty {
-                emptyState
+                emptyGreeting
             } else {
                 transcript
-                composerColumn
             }
+            // One composer for both states: a field that moved between the empty greeting and
+            // the transcript would be destroyed and recreated, dropping focus on the first send.
+            composerColumn
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { chat.composerFocusRequest += 1 }
+        .onChange(of: chat.modelRequest) { workspace.isAIModelsPresented = true }
     }
 
     // MARK: - Header
@@ -61,7 +64,9 @@ struct IDEAIChatView: View {
 
     // MARK: - Empty state
 
-    private var emptyState: some View {
+    /// The greeting above the composer while the chat is empty. The composer itself lives outside
+    /// this branch so the field keeps focus when the first message is sent.
+    private var emptyGreeting: some View {
         VStack(spacing: IDEAppearance.Spacing.lg) {
             Spacer(minLength: 0)
             Image(systemName: "bubbles.and.sparkles")
@@ -70,11 +75,9 @@ struct IDEAIChatView: View {
             Text("What's on your mind?")
                 .font(IDEAppearance.Typography.brandTitle)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
-            composerColumn
             if let hint = conversation.setupHint {
                 IDEAISetupButton(hint: hint) { workspace.requestAIModelSetup(for: .chat) }
             }
-            Spacer(minLength: 0)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -93,7 +96,7 @@ struct IDEAIChatView: View {
                     }
                     if let status = conversation.status {
                         HStack(spacing: IDEAppearance.Spacing.xs) {
-                            ProgressView().controlSize(.mini)
+                            IDEATypingDots()
                             Text(status)
                                 .font(IDEAppearance.Typography.caption)
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -118,7 +121,7 @@ struct IDEAIChatView: View {
         if conversation.setupHint != nil, !conversation.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             workspace.requestAIModelSetup(for: .chat)
         } else {
-            conversation.send()
+            chat.submit()
         }
     }
 
@@ -143,9 +146,10 @@ struct IDEAIChatView: View {
                         text: $conversation.draft, height: $composerHeight,
                         placeholder: "Message the model",
                         state: composerState, focusRequest: chat.composerFocusRequest, acceptRequest: acceptRequest,
-                        suggestions: { _ in [] },
+                        suggestions: { chat.suggestions(for: $0) },
                         onSend: send,
-                        onStop: { conversation.stop() })
+                        onStop: { conversation.stop() },
+                        onAccept: { chat.perform($0) })
                         .frame(height: composerHeight)
                     if conversation.isRunning {
                         IDEAgentIconButton(
@@ -195,14 +199,19 @@ private struct IDEAIChatMessageView: View {
     var body: some View {
         switch entry.kind {
         case .user:
-            Text(entry.text)
-                .font(IDEAppearance.Typography.body)
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                .textSelection(.enabled)
-                .padding(IDEAppearance.Spacing.sm)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(IDEAppearance.ColorToken.card)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+            // Yours hugs the trailing edge, as in a chat app; the model's stays full-width.
+            HStack(alignment: .top, spacing: 0) {
+                Spacer(minLength: 48)
+                Text(entry.text)
+                    .font(IDEAppearance.Typography.body)
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .textSelection(.enabled)
+                    .padding(IDEAppearance.Spacing.sm)
+                    .background(IDEAppearance.ColorToken.card)
+                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+                    .accessibilityLabel("You: \(entry.text)")
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         case .assistant:
             // Plain text while it streams; Markdown once the message is complete.
             Group {

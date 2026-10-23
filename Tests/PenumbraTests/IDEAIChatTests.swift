@@ -227,6 +227,90 @@ final class IDEAIChatTests: XCTestCase {
         XCTAssertEqual(controller.selected.effectiveChoice.provider, .anthropic, "pinned at the first send")
     }
 
+    // MARK: - Slash commands
+
+    private func slashRows(_ controller: IDEAIChatController, _ query: String) -> [IDEAgentSuggestion] {
+        controller.suggestions(for: .slash(query: query, range: NSRange(location: 0, length: query.count + 1)))
+    }
+
+    func testSlashShowsTheChatCommands() {
+        let controller = makeController([])
+        controller.choose(claude)
+        let titles = slashRows(controller, "").map(\.title)
+        for command in IDEAIChatController.chatCommands {
+            XCTAssertTrue(titles.contains("/" + command.rawValue), "expected /\(command.rawValue) in the list")
+        }
+        XCTAssertFalse(titles.contains("/mode"), "Chat has no modes to switch")
+        XCTAssertFalse(titles.contains("/plan"), "Chat has no plan mode")
+
+        let filtered = slashRows(controller, "ren").map(\.title)
+        XCTAssertEqual(filtered, ["/rename"])
+    }
+
+    func testSlashNewOpensANewChat() async throws {
+        let controller = makeController([MockLLMClient(turns: [.text("r")])])
+        controller.choose(claude)
+        await send(controller, "first")
+        controller.selected.draft = "/new"
+        controller.submit()
+        XCTAssertEqual(controller.conversations.count, 2)
+        XCTAssertTrue(controller.selected.isEmpty)
+    }
+
+    func testSlashHelpListsTheCommands() {
+        let controller = makeController([])
+        controller.choose(claude)
+        controller.selected.draft = "/help"
+        controller.submit()
+        let notice = controller.selected.entries.last { $0.kind == .notice }
+        XCTAssertTrue(notice?.text.contains("/new") == true)
+        XCTAssertFalse(controller.selected.entries.contains { $0.kind == .user }, "help answers in place; nothing is sent")
+    }
+
+    func testSlashCostReportsNothingWhenEmpty() {
+        let controller = makeController([])
+        controller.choose(claude)
+        controller.selected.draft = "/cost"
+        controller.submit()
+        XCTAssertTrue(controller.selected.entries.last?.text.contains("Nothing has been sent") == true)
+    }
+
+    func testSlashRenameNamesTheChat() {
+        let controller = makeController([])
+        controller.choose(claude)
+        controller.selected.draft = "/rename Buddy"
+        controller.submit()
+        XCTAssertEqual(controller.selected.customTitle, "Buddy")
+    }
+
+    func testSlashResumeWithNoArgsOffersThePicker() {
+        let controller = makeController([])
+        controller.choose(claude)
+        controller.selected.draft = "/resume"
+        controller.submit()
+        XCTAssertEqual(controller.selected.draft, "/resume ")
+    }
+
+    func testSlashModelAsksTheViewForTheSheet() {
+        let controller = makeController([])
+        controller.choose(claude)
+        controller.selected.draft = "/model"
+        controller.submit()
+        XCTAssertEqual(controller.modelRequest, 1)
+    }
+
+    func testUnknownSlashSendsAsAMessageWithANotice() async throws {
+        let controller = makeController([MockLLMClient(turns: [.text("answer")])])
+        controller.choose(claude)
+        controller.selected.draft = "/bogus"
+        controller.submit()
+        for _ in 0..<500 where controller.selected.isRunning { try? await Task.sleep(for: .milliseconds(10)) }
+        let texts = controller.selected.entries.map(\.text)
+        XCTAssertTrue(texts.contains { $0.contains("no command named /bogus") })
+        XCTAssertTrue(texts.contains("/bogus"), "the message still goes to the model")
+        XCTAssertTrue(texts.contains("answer"))
+    }
+
     func testTheSettingsRememberTheChoicesAndThePrompt() {
         let suite = "umbra.ai.remember.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

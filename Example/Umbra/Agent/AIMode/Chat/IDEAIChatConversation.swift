@@ -328,6 +328,8 @@ final class IDEAIChatConversation: Identifiable {
         }
     }
 
+    func appendNotice(_ text: String) { entries.append(IDEAgentEntry(kind: .notice, text: text)) }
+
     /// Names the chat; a saved one is saved again so the name outlives the window.
     func rename(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)

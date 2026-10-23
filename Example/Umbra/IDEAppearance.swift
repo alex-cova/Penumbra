@@ -80,6 +80,8 @@ enum IDEAppearance {
         static var brandTitle: Font { font(size: sized(28), weight: .semibold) }
         static var sectionHeader: Font { font(size: sized(12), weight: .semibold) }
         static var body: Font { font(size: sized(15)) }
+        /// Message-size code: fenced code reads at the same size as the prose around it.
+        static var mono: Font { font(size: sized(15)) }
         static var caption: Font { font(size: sized(12)) }
         static var monoCaption: Font { font(size: sized(12)) }
         static var monoSmall: Font { font(size: sized(11)) }
