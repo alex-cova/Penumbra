@@ -105,6 +105,7 @@ public struct JavaSyntaxAwareDiagnostics: DiagnosticProvider {
     }
 
     public func diagnostics(for document: Document) async -> [Diagnostic] {
+        guard !document.isDependencySource else { return [] }
         async let syntaxDiagnostics = syntax.diagnostics(for: document)
         async let compilerDiagnostics = compiler.diagnostics(for: document)
         guard let inspections else {
@@ -126,6 +127,7 @@ public struct JavaSyntaxAwareDiagnostics: DiagnosticProvider {
     /// marks `javac` when it covers the file: an unconfigured compiler never lands a result,
     /// so its staleness would be a permanent lie.
     public func diagnosticsWithFreshness(for document: Document) async -> (diagnostics: [Diagnostic], staleSources: Set<String>) {
+        guard !document.isDependencySource else { return ([], []) }
         let diagnostics = await diagnostics(for: document)
         var stale: Set<String> = []
         if await compiler.covers(document), await !compiler.isFresh(document) { stale.insert("javac") }

@@ -250,6 +250,29 @@ final class JavaInspectionServiceTests: XCTestCase {
         XCTAssertEqual(landedStale, [])
     }
 
+    func testDependencySourceIsNeverInspected() async throws {
+        let index = try await makeIndex()
+        let service = JavaInspectionService(index: index, enabledRules: [.unusedImport], idleDelay: .milliseconds(1))
+        let box = ResultBox()
+        await service.setResultHandler { url, diagnostics in box.append(url, diagnostics) }
+        let library = document(
+            "import java.util.Map;\n\nclass T { int x; }\n",
+            url: URL(fileURLWithPath: "/cache/JavaIndex/attached-sources/decompiled/ab12/org/x/T.java")
+        )
+        XCTAssertTrue(library.isDependencySource)
+
+        await service.analyzeNow(library, force: true)
+        await service.runProjectInspections(for: library)
+        let diagnostics = await service.diagnostics(for: library)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertTrue(diagnostics.isEmpty)
+        XCTAssertTrue(box.results.isEmpty)
+        let fresh = await service.isFresh(library)
+        XCTAssertTrue(fresh, "a dependency file is never pending, so the Problems panel never marks it stale")
+        XCTAssertFalse(document("class T {}", url: URL(fileURLWithPath: "/proj/src/T.java")).isDependencySource)
+    }
+
     func testInspectionServiceAnalyzeNowPublishesDiagnostics() async throws {
         let index = try await makeIndex()
         let service = JavaInspectionService(

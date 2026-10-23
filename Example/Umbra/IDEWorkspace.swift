@@ -171,6 +171,8 @@ public final class IDEWorkspace {
     /// Inspect Code results and which Problems tab shows.
     let inspectionRuns = IDEInspectionRunsStore()
     let project = IDEProjectModel()
+    /// The Explorer's External Libraries section: the JDK and the project's dependency jars.
+    let externalLibraries = IDEExternalLibrariesModel()
     let gitStatus = IDEGitStatusModel()
     /// Git blame in the editor gutter, per file.
     let blame = IDEBlameController()
@@ -941,16 +943,22 @@ public final class IDEWorkspace {
                 action: .showSourceControl
             )
         }
+        externalLibraries.jdkProvider = { [weak self] in
+            guard let self, self.javaSupport.isJavaBuildActive else { return nil }
+            return self.javaSupport.jdk.current?.installation
+        }
         gradle.onModelChanged = { [weak self] _ in
             guard let self else { return }
             let model = self.javaSupport.projectModel
             self.fileIndexer.setGradleModel(model)
+            self.refreshExternalLibraries()
             if model != nil { self.reloadDiagramSessions(classes: false) }
         }
         maven.onModelChanged = { [weak self] _ in
             guard let self else { return }
             let model = self.javaSupport.projectModel
             self.fileIndexer.setGradleModel(model)
+            self.refreshExternalLibraries()
             if model != nil { self.reloadDiagramSessions(classes: false) }
         }
         intelligenceServices.javaSupport.openJavaDocuments = { [weak self] in
@@ -4911,7 +4919,7 @@ public final class IDEWorkspace {
     /// looking at before the rest.
     private func openJavaDocuments() -> [EditorIntelligence.Document] {
         let activeURL = workbench.activePane.selectedDocument?.url?.standardizedFileURL
-        let documents = adapter?.openDocuments.filter { $0.languageIdentifier == "java" } ?? []
+        let documents = adapter?.openDocuments.filter { $0.languageIdentifier == "java" && !$0.isDependencySource } ?? []
         return documents.sorted { lhs, _ in lhs.url?.standardizedFileURL == activeURL }
     }
 
@@ -5604,6 +5612,7 @@ public final class IDEWorkspace {
         projectAccess.begin(url)
         inspections.setRoot(url)
         project.setRoot(url)
+        externalLibraries.clear()
         localHistory.setRoot(url)
         gitStatus.setRoot(url)
         fileIndexer.setRoot(url)

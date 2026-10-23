@@ -161,7 +161,8 @@ public actor JavaInspectionService: DiagnosticProvider {
     /// folds their findings into the file's diagnostics. Meant for a save or an index change: one
     /// usage search per declaration. The findings are dropped as soon as the text changes.
     public func runProjectInspections(for document: Document) async {
-        guard let usageProvider, document.languageIdentifier == "java", let url = document.url else { return }
+        guard let usageProvider, document.languageIdentifier == "java", let url = document.url,
+              !document.isDependencySource else { return }
         let enabled = profile.enabledRules(in: classifier.context(for: url))
         guard !enabled.isDisjoint(with: JavaInspectionRegistry.projectRules) else { return }
         let text = JavaNavigationText.fullText(of: document)
@@ -189,7 +190,7 @@ public actor JavaInspectionService: DiagnosticProvider {
     }
 
     public func diagnostics(for document: Document) async -> [Diagnostic] {
-        guard document.languageIdentifier == "java", let url = document.url else { return [] }
+        guard document.languageIdentifier == "java", let url = document.url, !document.isDependencySource else { return [] }
         let text = JavaNavigationText.fullText(of: document)
         let hash = text.hashValue
         if let cached = cache[url], cached.textHash == hash { return cached.diagnostics }
@@ -200,6 +201,7 @@ public actor JavaInspectionService: DiagnosticProvider {
     /// Whether the cached result is for exactly this text. `document.text` is empty for
     /// elided file-backed documents, so this hashes the full text like the analysis does.
     public func isFresh(_ document: Document) -> Bool {
+        if document.isDependencySource { return true }
         guard document.languageIdentifier == "java", let url = document.url else { return false }
         return cache[url]?.textHash == JavaNavigationText.fullText(of: document).hashValue
     }
@@ -216,7 +218,7 @@ public actor JavaInspectionService: DiagnosticProvider {
     }
 
     public func analyzeNow(_ document: Document, force: Bool = false) async {
-        guard document.languageIdentifier == "java", let url = document.url else { return }
+        guard document.languageIdentifier == "java", let url = document.url, !document.isDependencySource else { return }
         let text = JavaNavigationText.fullText(of: document)
         let hash = text.hashValue
         if !force, cache[url]?.textHash == hash { return }

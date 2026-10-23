@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 
 /// Reads a single `.java` file out of a JDK `src.zip` or a dependency `*-sources.jar` that is
@@ -32,6 +33,31 @@ public enum JavaAttachedSources {
         return nil
     }
 
+    /// Copies one non-class entry of a dependency jar (`META-INF/MANIFEST.MF`, a properties file) under
+    /// the cache so the editor can open it; like a source, the copy is shown read-only. Nothing is
+    /// written again while the copy is the entry's size and no older than the jar.
+    public static func extractResource(entry: String, from archive: URL, cacheRoot: URL) -> URL? {
+        guard let zip = ZipArchiveCache.shared.archive(at: archive),
+              let data = try? zip.data(for: entry) else { return nil }
+        var destination = cacheRoot
+            .appendingPathComponent("attached-sources", isDirectory: true)
+            .appendingPathComponent(stableKey(archive.path), isDirectory: true)
+            .appendingPathComponent("resources", isDirectory: true)
+        let components = entry.split(separator: "/").filter { $0 != ".." && $0 != "." }
+        guard !components.isEmpty else { return nil }
+        for component in components { destination.appendPathComponent(String(component)) }
+        if isCurrent(destination, size: data.count, archive: archive) { return destination }
+        do {
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try data.write(to: destination, options: .atomic)
+            return destination
+        } catch {
+            return nil
+        }
+    }
+
     static func relativePath(packageName: String, simpleName: String) -> String {
         if packageName.isEmpty { return "\(simpleName).java" }
         return packageName.replacingOccurrences(of: ".", with: "/") + "/\(simpleName).java"
@@ -39,7 +65,7 @@ public enum JavaAttachedSources {
 
     /// A `*-sources.jar` sitting next to `jar`, or one directory up in a sibling Gradle-cache hash
     /// directory (`.../version/<hash>/artifact.jar` beside `.../version/<other>/artifact-sources.jar`).
-    static func sourcesJar(adjacentTo jar: URL) -> URL? {
+    public static func sourcesJar(adjacentTo jar: URL) -> URL? {
         let parent = jar.deletingLastPathComponent()
         if let found = firstSourcesJar(in: parent) { return found }
         let versionDirectory = parent.deletingLastPathComponent()
@@ -105,5 +131,14 @@ public enum JavaAttachedSources {
             hash &*= 1099511628211
         }
         return String(hash, radix: 16)
+    }
+}
+
+public extension Document {
+    /// A library's source or decompiled class opened for reading (External Libraries, Go to
+    /// Definition). It is dependency code: navigation works on it, but nothing checks it, so no
+    /// compiler run, inspection, syntax error or quick fix is produced for it.
+    var isDependencySource: Bool {
+        url.map(JavaAttachedSources.isExtractedSource) ?? false
     }
 }

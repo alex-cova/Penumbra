@@ -30,6 +30,11 @@ struct IDEPreferencesProjectPane: View {
                 isOn: $preferences.explorerShowExcludedFiles,
                 detail: "Lists build outputs (build, out, target, .gradle) dimmed. Off hides them."
             )
+            IDESettingsToggle(
+                "Show External Libraries",
+                isOn: $preferences.explorerShowExternalLibraries,
+                detail: "Ends the Explorer with the JDK and the dependency jars of a Gradle or Maven project."
+            )
             IDESettingsPicker("Sort", selection: $preferences.explorerSortOrder) {
                 ForEach(IDEExplorerSortOrder.allCases) { order in
                     Text(order.title).tag(order)

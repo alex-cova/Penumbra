@@ -195,6 +195,7 @@ public actor JavaCompilerDiagnosticsService: DiagnosticProvider {
         guard configuration != nil,
               document.languageIdentifier == "java",
               let url = document.url,
+              !document.isDependencySource,
               !document.contentSnapshot.isElided else { return nil }
         return url.standardizedFileURL
     }

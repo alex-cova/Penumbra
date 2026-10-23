@@ -50,6 +50,7 @@ public final class IDEPreferences {
         static let explorerFoldersOnTop = "com.umbra.editor.explorerFoldersOnTop"
         static let explorerCompactMiddlePackages = "com.umbra.editor.explorerCompactMiddlePackages"
         static let explorerShowExcludedFiles = "com.umbra.editor.explorerShowExcludedFiles"
+        static let explorerShowExternalLibraries = "com.umbra.editor.explorerShowExternalLibraries"
         static let metalRendering = "com.umbra.editor.metalRendering"
         static let keymapPreset = "com.umbra.editor.keymapPreset"
         static let goToFileShortcut = "com.umbra.editor.goToFileShortcut"
@@ -347,6 +348,12 @@ public final class IDEPreferences {
     /// Explorer lists build outputs (dimmed). Off hides them.
     var explorerShowExcludedFiles: Bool {
         didSet { UserDefaults.standard.set(explorerShowExcludedFiles, forKey: Keys.explorerShowExcludedFiles) }
+    }
+
+    /// Explorer ends with an External Libraries section (the JDK and the dependency jars) in a Gradle
+    /// or Maven project.
+    var explorerShowExternalLibraries: Bool {
+        didSet { UserDefaults.standard.set(explorerShowExternalLibraries, forKey: Keys.explorerShowExternalLibraries) }
     }
 
     var isMetalRenderingEnabled: Bool {
@@ -1097,6 +1104,7 @@ public final class IDEPreferences {
         explorerFoldersOnTop = defaults.object(forKey: Keys.explorerFoldersOnTop) as? Bool ?? true
         explorerCompactMiddlePackages = defaults.object(forKey: Keys.explorerCompactMiddlePackages) as? Bool ?? true
         explorerShowExcludedFiles = defaults.object(forKey: Keys.explorerShowExcludedFiles) as? Bool ?? true
+        explorerShowExternalLibraries = defaults.object(forKey: Keys.explorerShowExternalLibraries) as? Bool ?? true
         isMetalRenderingEnabled = defaults.object(forKey: Keys.metalRendering) as? Bool ?? true
         let presetRaw = defaults.string(forKey: Keys.keymapPreset) ?? KeymapPreset.sublime.rawValue
         keymapPreset = KeymapPreset(rawValue: presetRaw) ?? .sublime

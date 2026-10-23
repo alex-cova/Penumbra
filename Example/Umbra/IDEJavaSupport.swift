@@ -123,6 +123,8 @@ final class IDEJavaSupport {
     /// Which indexes are building, for the agent. The toast above is not an index signal.
     let activity: IDEIndexActivity
     private let paths = JavaIndexPaths.default()
+    /// Where extracted sources and library resources are copied so the editor can open them.
+    var indexCacheRoot: URL { paths.root }
     private let scheduler = JavaIndexScheduler()
     /// One indexing run and one parsed shard per JDK for the whole app; see `JavaSharedShardHub`.
     private let shardHub: JavaSharedShardHub

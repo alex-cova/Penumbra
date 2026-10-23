@@ -74,7 +74,7 @@ public actor JavaCodeActionProvider: CodeActionProviding {
         at position: TextPosition,
         diagnostics: [Diagnostic]
     ) async -> [CodeAction] {
-        guard document.languageIdentifier == "java" else { return [] }
+        guard document.languageIdentifier == "java", !document.isDependencySource else { return [] }
         let text = JavaNavigationText.fullText(of: document)
         guard !text.isEmpty else { return [] }
         let scope = scope(for: document.url)

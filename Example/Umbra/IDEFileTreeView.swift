@@ -33,6 +33,10 @@ struct IDEFileTreeView: View {
     /// Files whose open buffer has unsaved changes, dotted like their tab (Mark Modified).
     var unsavedPaths: Set<String> = []
     var actions: IDEFileTreeActions?
+    /// The External Libraries section; `nil` leaves it out.
+    var externalLibraries: IDEExternalLibrariesModel?
+    var onOpenLibraryItem: ((IDEExternalLibraryItem) -> Void)?
+    var onCopyLibraryName: ((IDEExternalLibraryItem) -> Void)?
     /// Folders opened so a match stays visible. Collapsing one hides that branch until the query
     /// changes; it does not rewrite the project's own expansion state.
     @Binding var collapsedWhileFiltering: Set<String>
@@ -44,7 +48,8 @@ struct IDEFileTreeView: View {
                     ? IDEFlattenedPackages.flatten(root, sourceRootPaths: javaSourceRootPaths)
                     : root
                 let nodes = flattenedNodes(root: displayRoot)
-                if nodes.isEmpty {
+                let libraryRows = externalLibraries?.rows(filter: filterNeedle) ?? []
+                if nodes.isEmpty && libraryRows.isEmpty {
                     IDEFileTreeFilterEmptyState()
                 } else {
                     GeometryReader { proxy in
@@ -74,16 +79,26 @@ struct IDEFileTreeView: View {
                                     onOpen: { onOpenFile(item.node.url) }
                                 )
                             }
+                            ForEach(libraryRows) { item in
+                                IDEExternalLibraryRow(
+                                    item: item,
+                                    isSelected: project.selectedPath == nil && externalLibraries?.selectedID == item.id,
+                                    onSelect: { selectLibraryRow(item) },
+                                    onToggle: { externalLibraries?.toggle(item.id) },
+                                    onOpen: { onOpenLibraryItem?(item) },
+                                    onCopyName: { onCopyLibraryName?(item) }
+                                )
+                            }
                         }
                         .padding(.vertical, IDEAppearance.Spacing.xs)
-                        .frame(minWidth: max(proxy.size.width, contentWidth(of: nodes)), minHeight: proxy.size.height, alignment: .topLeading)
+                        .frame(minWidth: max(proxy.size.width, contentWidth(of: nodes, libraryRows: libraryRows)), minHeight: proxy.size.height, alignment: .topLeading)
                         .contentShape(Rectangle())
                         .contextMenu { creationContextMenu(for: creationDirectory) }
                     }
                     .focusable(actions != nil)
                     .focusEffectDisabled()
                     .onKeyPress(phases: [.down, .repeat]) { press in
-                        handleKey(press, nodes: nodes)
+                        handleKey(press, nodes: nodes, libraryRows: libraryRows)
                     }
                     .onChange(of: project.revealRequest) { _, request in
                         guard let request else { return }
@@ -102,26 +117,90 @@ struct IDEFileTreeView: View {
         .onChange(of: filterNeedle) { _, _ in
             collapsedWhileFiltering.removeAll()
         }
+        .onChange(of: externalLibraries?.jdkProvider()?.home) { _, _ in
+            externalLibraries?.loadMissingContents()
+        }
     }
 
     /// A `LazyVStack` only measures the rows it has realized, so the scrollable width would change
     /// while scrolling and the horizontal scroller would come and go. Size it from every row instead.
-    private func contentWidth(of nodes: [FlatNode]) -> CGFloat {
+    private func contentWidth(of nodes: [FlatNode], libraryRows: [IDEExternalLibraryItem]) -> CGFloat {
         let font = IDEUIFonts.nsFont(
             familyName: IDEUIFonts.currentFamilyName,
             size: IDEUIFonts.scaledSize(12),
             weight: .semibold
         )
         let chrome = CGFloat(12 + 14 + IDEAppearance.Spacing.xs * 2 + IDEAppearance.Spacing.sm * 2)
-        return nodes.reduce(0) { widest, item in
-            let name = (item.node.displayName ?? item.node.name) as NSString
-            let textWidth = name.size(withAttributes: [.font: font]).width.rounded(.up)
-            return max(widest, CGFloat(item.depth) * 14 + chrome + textWidth)
+        func width(_ name: String, depth: Int) -> CGFloat {
+            let textWidth = (name as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
+            return CGFloat(depth) * 14 + chrome + textWidth
+        }
+        let files = nodes.reduce(CGFloat(0)) { widest, item in
+            max(widest, width(item.node.displayName ?? item.node.name, depth: item.depth))
+        }
+        return libraryRows.reduce(files) { widest, item in
+            max(widest, width(item.title + (item.subtitle.map { " " + $0 } ?? ""), depth: item.depth))
         }
     }
 
-    private func handleKey(_ press: KeyPress, nodes: [FlatNode]) -> KeyPress.Result {
-        guard project.renamingPath == nil, !nodes.isEmpty else { return .ignored }
+    private func selectLibraryRow(_ item: IDEExternalLibraryItem) {
+        project.selectedPath = nil
+        externalLibraries?.selectedID = item.id
+    }
+
+    /// Keys while a library row is selected. Up from the first row returns to the last project row.
+    private func handleLibraryKey(
+        _ press: KeyPress, rows: [IDEExternalLibraryItem], index: Int, nodes: [FlatNode]
+    ) -> KeyPress.Result {
+        guard let externalLibraries else { return .ignored }
+        let current = rows[index]
+        func select(_ row: IDEExternalLibraryItem) {
+            selectLibraryRow(row)
+            project.requestScroll(to: row.id)
+        }
+        switch press.key {
+        case .upArrow:
+            if index > 0 {
+                select(rows[index - 1])
+            } else if let last = nodes.last {
+                externalLibraries.selectedID = nil
+                project.selectedPath = last.node.id
+                project.requestScroll(to: last.node.id)
+            }
+            return .handled
+        case .downArrow where !press.modifiers.contains(.command):
+            if index + 1 < rows.count { select(rows[index + 1]) }
+            return .handled
+        case .downArrow, .return:
+            if current.isOpenable {
+                onOpenLibraryItem?(current)
+            } else if current.canDisclose {
+                externalLibraries.toggle(current.id)
+            }
+            return .handled
+        case .rightArrow:
+            guard current.canDisclose, !current.isExpanded else { return .ignored }
+            externalLibraries.expand(current.id)
+            return .handled
+        case .leftArrow:
+            if current.canDisclose, current.isExpanded {
+                externalLibraries.collapse(current.id)
+            } else if let parent = rows[..<index].last(where: { $0.depth < current.depth }) {
+                select(parent)
+            }
+            return .handled
+        default:
+            return .ignored
+        }
+    }
+
+    private func handleKey(_ press: KeyPress, nodes: [FlatNode], libraryRows: [IDEExternalLibraryItem]) -> KeyPress.Result {
+        guard project.renamingPath == nil else { return .ignored }
+        if project.selectedPath == nil, let selected = externalLibraries?.selectedID,
+           let libraryIndex = libraryRows.firstIndex(where: { $0.id == selected }) {
+            return handleLibraryKey(press, rows: libraryRows, index: libraryIndex, nodes: nodes)
+        }
+        guard !nodes.isEmpty else { return .ignored }
         let index = nodes.firstIndex { $0.node.id == project.selectedPath }
         let current = index.map { nodes[$0] }
         let command = press.modifiers.contains(.command)
@@ -133,6 +212,11 @@ struct IDEFileTreeView: View {
             project.requestScroll(to: nodes[target].node.id)
             return .handled
         case .downArrow where !command:
+            if index == nodes.count - 1, let first = libraryRows.first {
+                selectLibraryRow(first)
+                project.requestScroll(to: first.id)
+                return .handled
+            }
             let target = index.map { min($0 + 1, nodes.count - 1) } ?? 0
             project.selectedPath = nodes[target].node.id
             project.requestScroll(to: nodes[target].node.id)
@@ -540,6 +624,97 @@ private struct IDEFileTreeRow: View {
 
 /// Borderless text field for renaming a row in place. Return commits, Esc cancels, and losing
 /// focus commits. For files only the name before the extension is preselected.
+private struct IDEExternalLibraryRow: View {
+    let item: IDEExternalLibraryItem
+    var isSelected = false
+    let onSelect: () -> Void
+    let onToggle: () -> Void
+    let onOpen: () -> Void
+    let onCopyName: () -> Void
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            if item.canDisclose {
+                Button(action: onToggle) {
+                    Image(systemName: item.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .frame(width: 12)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(item.isExpanded ? "Collapse \(item.title)" : "Expand \(item.title)")
+            } else {
+                Spacer().frame(width: 12)
+            }
+
+            if let iconName {
+                Image(systemName: iconName)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .frame(width: 14)
+            } else {
+                Spacer().frame(width: 14)
+            }
+
+            Text(item.title)
+                .fontWeight(item.kind == .section ? .semibold : .regular)
+                .foregroundStyle(item.kind == .message ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            if let subtitle = item.subtitle {
+                Text(subtitle)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, CGFloat(item.depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
+        .padding(.trailing, IDEAppearance.Spacing.sm)
+        .padding(.vertical, 4)
+        .padding(.top, item.kind == .section ? IDEAppearance.Spacing.sm : 0)
+        .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
+        .contentShape(Rectangle())
+        .accessibilityAddTraits(.isButton)
+        .onTapGesture {
+            guard item.kind != .message else { return }
+            onSelect()
+            if item.isOpenable {
+                onOpen()
+            } else if item.canDisclose {
+                onToggle()
+            }
+        }
+        .contextMenu {
+            if item.isOpenable {
+                Button("Open") { onSelect(); onOpen() }
+            }
+            if item.kind == .type {
+                Button("Copy Reference") { onCopyName() }
+            }
+            if let location = item.location {
+                Button("Copy Path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(location.path, forType: .string)
+                }
+                Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([location]) }
+            }
+        }
+    }
+
+    private var iconName: String? {
+        switch item.kind {
+        case .section: "books.vertical"
+        case .jdk: "cup.and.saucer"
+        case .library: "shippingbox"
+        case .module: "cube"
+        case .package, .folder: "folder"
+        case .type: "c.square"
+        case .resource: IDEFileIcon.systemName(forFilename: item.title)
+        case .message: nil
+        }
+    }
+}
+
 private struct IDEInlineRenameField: NSViewRepresentable {
     let initialText: String
     let selectsStemOnly: Bool

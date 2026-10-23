@@ -109,6 +109,9 @@ struct IDESidebarPanel: View {
                     showClassDiagram: { workspace.showClassDiagram(forExplorerItem: $0) },
                     inspectCode: { workspace.inspectCode(forExplorerItem: $0) }
                 ),
+                externalLibraries: preferences.explorerShowExternalLibraries ? workspace.externalLibraries : nil,
+                onOpenLibraryItem: { workspace.openExternalLibraryItem($0) },
+                onCopyLibraryName: { workspace.copyExternalLibraryItemName($0) },
                 collapsedWhileFiltering: $collapsedWhileFiltering
             )
         }
@@ -166,6 +169,7 @@ struct IDEExplorerOptionsMenu: View {
             Toggle("Hide Empty Middle Packages", isOn: $preferences.explorerCompactMiddlePackages)
                 .disabled(preferences.flattenJavaPackages)
             Toggle("Show Excluded Files", isOn: $preferences.explorerShowExcludedFiles)
+            Toggle("Show External Libraries", isOn: $preferences.explorerShowExternalLibraries)
         }
         Section("Sort") {
             Picker("Sort", selection: $preferences.explorerSortOrder) {

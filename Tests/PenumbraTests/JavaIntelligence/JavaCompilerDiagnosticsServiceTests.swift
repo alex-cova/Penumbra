@@ -127,6 +127,26 @@ final class JavaCompilerDiagnosticsServiceTests: XCTestCase {
         XCTAssertEqual((text as NSString).substring(with: range), "Strin")
     }
 
+    func testDependencySourceIsNeverCompiled() async throws {
+        let launcher = FakeJavacLauncher { _, _, _ in .init(exitCode: 1, stdout: "", stderr: "") }
+        let service = JavaCompilerDiagnosticsService(launcher: launcher, idleDelay: .milliseconds(1))
+        await service.configure(try makeConfiguration())
+        let library = makeDocument(
+            text: "class Broken {",
+            url: URL(fileURLWithPath: "/cache/JavaIndex/attached-sources/ab12/org/x/Foo.java")
+        )
+
+        await service.compileNow(library, force: true)
+        let diagnostics = await service.diagnostics(for: library)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertTrue(diagnostics.isEmpty)
+        let covered = await service.covers(library)
+        XCTAssertFalse(covered)
+        let launches = await launcher.launchCount
+        XCTAssertEqual(launches, 0)
+    }
+
     // MARK: - freshDiagnostics
 
     func testFreshDiagnosticsWaitsForTheCompileOfExactlyThisText() async throws {

@@ -135,11 +135,11 @@ final class IDEIntelligenceServices {
         hoverEngine = HoverEngine(providers: languages.hoverProviders + [
             SymbolHoverProvider(index: symbolIndex, skippingLanguages: Array(languages.identifiers(disabling: .symbolHover)))
         ])
-        diagnosticEngine = DiagnosticEngine(providers: [
+        diagnosticEngine = DiagnosticEngine(providers: ([
             DuplicateSymbolDiagnosticProvider(
                 index: symbolIndex, skippingLanguages: Array(languages.identifiers(disabling: .duplicateSymbolDiagnostics))
             )
-        ] + languages.diagnosticProviders)
+        ] + languages.diagnosticProviders).map { IDEDependencyDiagnosticsFilter(base: $0) })
         let symbolNavigationSkips = Array(languages.identifiers(disabling: .symbolNavigation))
         navigationEngine = NavigationEngine(providers: languages.navigationProviders + [
             GoToDefinitionProvider(index: symbolIndex, skippingLanguages: symbolNavigationSkips),
