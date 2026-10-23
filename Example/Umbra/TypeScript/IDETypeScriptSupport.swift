@@ -15,8 +15,10 @@ final class IDETypeScriptSupport {
     let structure = TypeScriptStructureProvider()
     let semanticTokens = TypeScriptSemanticTokenProvider()
     private var rebuild: Task<Void, Never>?
+    private let activity: IDEIndexActivity
 
-    init() {
+    init(activity: IDEIndexActivity = IDEIndexActivity()) {
+        self.activity = activity
         let index = TypeScriptIndex()
         let cache = TypeScriptAnalysis.makeCache()
         self.index = index
@@ -45,7 +47,12 @@ final class IDETypeScriptSupport {
 
     func projectDidChange(root: URL?) {
         rebuild?.cancel()
-        rebuild = Task { await index.setRoot(root) }
+        // Marked before the task starts: until the walk's first line runs the index looks empty, not unbuilt.
+        let token = activity.begin(.typeScript)
+        rebuild = Task { [activity] in
+            defer { activity.end(token) }
+            await index.setRoot(root)
+        }
     }
 
     func filesDidChange(_ urls: [URL]) {

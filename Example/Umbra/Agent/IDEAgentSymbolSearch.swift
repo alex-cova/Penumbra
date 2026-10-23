@@ -35,6 +35,50 @@ enum IDEAgentSourceLanguage {
     }
 }
 
+/// Which indexes are still building, as the tools tell the model. Pure, so the wording is tested
+/// without a window.
+struct IDEAgentIndexReadiness: Sendable, Equatable {
+    var pending: Set<IDEIndexKind> = []
+
+    static let ready = IDEAgentIndexReadiness()
+
+    var isReady: Bool { pending.isEmpty }
+
+    /// The parts a *name* lookup reads. Nothing found while one of these builds may only mean "not yet".
+    private static let nameParts: Set<IDEIndexKind> = [.javaSources, .swift, .typeScript]
+
+    /// The parts that matter for `language` (a file's `IDEAgentSourceLanguage` id), or for a name
+    /// lookup in general when it is `nil`.
+    func pending(forLanguage language: String?) -> Set<IDEIndexKind> {
+        switch language {
+        case "java": pending.intersection([.javaSources, .javaDependencies, .javaUsages])
+        case "swift": pending.intersection([.swift])
+        case "typescript", "javascript": pending.intersection([.typeScript])
+        default: pending.intersection(Self.nameParts)
+        }
+    }
+
+    /// The parts that matter for these symbols' languages (all name parts when there are none).
+    func pending(for symbols: [IDEAgentSymbol]) -> Set<IDEIndexKind> {
+        guard !symbols.isEmpty else { return pending(forLanguage: nil) }
+        return symbols.reduce(into: Set<IDEIndexKind>()) {
+            $0.formUnion(pending(forLanguage: IDEAgentSourceLanguage.identifier(forPath: $1.fileURL.path)))
+        }
+    }
+
+    /// Whether usages and implementations of a `language` symbol can be missing because an index is still building.
+    func blocksUsages(forLanguage language: String?) -> Bool {
+        switch language {
+        case "java": !pending.isDisjoint(with: [.javaSources, .javaUsages])
+        default: !pending(forLanguage: language).isEmpty
+        }
+    }
+
+    static func describe(_ parts: Set<IDEIndexKind>) -> String {
+        IDEIndexKind.allCases.filter(parts.contains).map(\.label).joined(separator: ", ")
+    }
+}
+
 /// Name search over the project's indexes, as `find_symbol` and `explore_symbol` use it. The window
 /// backs it with the Java, Swift and TypeScript indexes; tests use a fake.
 protocol IDEAgentSymbolSearching: Sendable {
@@ -45,8 +89,8 @@ protocol IDEAgentSymbolSearching: Sendable {
     func liveText(of file: URL) async -> String?
     /// Every type of the file with its members; empty for a language without a structure provider.
     func structure(file: URL, source: String) async -> [StructureNode]
-    /// `nil` when the index is ready, else a short status such as "Indexing project sources…".
-    func indexStatus() async -> String?
+    /// Which indexes are building right now.
+    func indexReadiness() async -> IDEAgentIndexReadiness
 }
 
 /// Reads line numbers out of one text without scanning it again for every offset.
@@ -91,7 +135,7 @@ struct IDEIndexAgentSymbolSearch: IDEAgentSymbolSearching {
     var typeScriptIndex: TypeScriptIndex?
     var text: @Sendable (URL) async -> String?
     var structureProvider: @Sendable (String?) async -> (any StructureProviding)?
-    var status: @Sendable () async -> String?
+    var readiness: @Sendable () async -> IDEAgentIndexReadiness
 
     /// A declaration as the index reports it, before it is found in the live text.
     private struct Candidate {
@@ -103,7 +147,7 @@ struct IDEIndexAgentSymbolSearch: IDEAgentSymbolSearching {
 
     func liveText(of file: URL) async -> String? { await text(file) }
 
-    func indexStatus() async -> String? { await status() }
+    func indexReadiness() async -> IDEAgentIndexReadiness { await readiness() }
 
     func structure(file: URL, source: String) async -> [StructureNode] {
         let language = IDEAgentSourceLanguage.identifier(forPath: file.path)

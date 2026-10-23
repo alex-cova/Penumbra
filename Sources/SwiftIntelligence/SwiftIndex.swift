@@ -142,6 +142,9 @@ public actor SwiftIndex {
 
     public var fileCount: Int { storage.fileCount }
 
+    /// A walk of the project is running, so the index is empty or still holds the previous project.
+    public var isBuilding: Bool { storage.isBuilding }
+
     public func model(for url: URL) async -> SwiftFileModel? {
         let standardized = url.standardizedFileURL
         await refresh(standardized)

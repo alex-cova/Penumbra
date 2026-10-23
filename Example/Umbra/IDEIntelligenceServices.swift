@@ -23,6 +23,8 @@ final class IDEIntelligenceServices {
     /// The window's background status line ("Indexing JDK 24…", "Resolving Gradle project…"), written
     /// by the project systems and Java's indexing.
     let projectStatus = IDEProjectStatus()
+    /// Which indexes are building, for the agent's name search (the toast above cannot say).
+    let indexActivity = IDEIndexActivity()
     /// Gradle as a project system: syncs the model Java indexes, runs tasks, keeps the console.
     let gradle: IDEGradleProjectSystem
     /// Maven, registered after Gradle. A folder with both keeps Gradle; reading a POM does not run Maven.
@@ -67,9 +69,9 @@ final class IDEIntelligenceServices {
         self.gradle = gradle
         let maven = IDEMavenProjectSystem(jdk: jdk, status: projectStatus)
         self.maven = maven
-        javaSupport = IDEJavaSupport(jdk: jdk, gradle: gradle, maven: maven, status: projectStatus)
-        typescriptSupport = IDETypeScriptSupport()
-        swiftSupport = IDESwiftSupport()
+        javaSupport = IDEJavaSupport(jdk: jdk, gradle: gradle, maven: maven, status: projectStatus, activity: indexActivity)
+        typescriptSupport = IDETypeScriptSupport(activity: indexActivity)
+        swiftSupport = IDESwiftSupport(activity: indexActivity)
         let npm = IDENpmProjectSystem(status: projectStatus)
         self.npm = npm
         let swiftPM = IDESwiftPMProjectSystem(status: projectStatus)

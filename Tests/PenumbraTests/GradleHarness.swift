@@ -37,6 +37,8 @@ final class GradleHarness {
     private let gradle: IDEGradleProjectSystem
     private let status: IDEProjectStatus
     private let java: IDEJavaSupport
+    /// Which of the window's indexes are building, as the agent reads it.
+    var indexActivity: IDEIndexActivity { java.activity }
     private let trustStore: GradleTrustStore
     private let mavenTrust: GradleTrustStore
     private let cacheRoot: URL

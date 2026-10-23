@@ -253,8 +253,13 @@ private enum SymbolOutput {
         return "\(relative):\(line): \(described)" + (symbol.movedSinceIndexing ? "  (moved since indexing)" : "")
     }
 
-    static func banner(_ status: String?) -> String? {
-        status.map { "[The index is still being built (\($0)). Results may be incomplete; grep covers what it has not reached yet.]" }
+    static func banner(_ parts: Set<IDEIndexKind>) -> String? {
+        guard !parts.isEmpty else { return nil }
+        return "[Still indexing: \(IDEAgentIndexReadiness.describe(parts)). Results for those may be incomplete; grep covers what the index has not reached.]"
+    }
+
+    static func nothingYet(_ parts: Set<IDEIndexKind>) -> String {
+        "Nothing found yet: still indexing \(IDEAgentIndexReadiness.describe(parts)). Use grep for now and try again later."
     }
 
     /// `    12\ttext`, the form `read_file` shows code in.
@@ -290,16 +295,15 @@ struct IDEFindSymbolTool: AgentTool {
         guard !query.isEmpty else { throw ToolError("Missing `query`.") }
         let limit = min(max(try arguments.optionalInt("limit") ?? Self.defaultLimit, 1), Self.maxLimit)
         let found = await search.symbols(matching: query, exactName: false, limit: limit)
-        let status = await search.indexStatus()
+        let readiness = await search.indexReadiness()
         guard !found.isEmpty else {
-            if let status {
-                return "Nothing found yet: the index is still being built (\(status)). Use grep for now and try again later."
-            }
+            let waiting = readiness.pending(forLanguage: nil)
+            if !waiting.isEmpty { return SymbolOutput.nothingYet(waiting) }
             return "No project declaration matches “\(query)”. Libraries are not searched, and this is not a text search: use grep for text."
         }
         let root = URL(fileURLWithPath: context.workspace.rootPath)
         var lines: [String] = []
-        if let banner = SymbolOutput.banner(status) { lines.append(banner) }
+        if let banner = SymbolOutput.banner(readiness.pending(for: found)) { lines.append(banner) }
         lines += found.map { SymbolOutput.row($0, root: root) }
         if found.count == limit { lines.append("Showing the first \(limit). Use a longer query to narrow it.") }
         return lines.joined(separator: "\n")
@@ -348,27 +352,28 @@ struct IDEExploreSymbolTool: AgentTool {
             matches = matches.filter { NavigationOutput.relativePath(of: $0.fileURL, root: root) == path }
         }
         if let line = try arguments.optionalInt("line") { matches = matches.filter { $0.line == line } }
-        let status = await search.indexStatus()
+        let readiness = await search.indexReadiness()
 
         guard !matches.isEmpty else {
-            if let status {
-                return "Nothing found yet: the index is still being built (\(status)). Use grep for now and try again later."
-            }
+            let waiting = readiness.pending(forLanguage: nil)
+            if !waiting.isEmpty { return SymbolOutput.nothingYet(waiting) }
             return "No project declaration is named “\(name)”. Try find_symbol with part of the name; libraries are not indexed here."
         }
         guard matches.count == 1, let symbol = matches.first else {
             var lines = ["\(matches.count) declarations match “\(name)”. Call explore_symbol again with `path` and `line` to pick one:"]
-            if let banner = SymbolOutput.banner(status) { lines.insert(banner, at: 0) }
+            if let banner = SymbolOutput.banner(readiness.pending(for: matches)) { lines.insert(banner, at: 0) }
             lines += matches.prefix(Self.maxCandidates).map { SymbolOutput.row($0, root: root) }
             if matches.count > Self.maxCandidates { lines.append("… and \(matches.count - Self.maxCandidates) more.") }
             return lines.joined(separator: "\n")
         }
-        return await describe(symbol, status: status, root: root)
+        return await describe(symbol, readiness: readiness, root: root)
     }
 
-    private func describe(_ symbol: IDEAgentSymbol, status: String?, root: URL) async -> String {
+    private func describe(_ symbol: IDEAgentSymbol, readiness: IDEAgentIndexReadiness, root: URL) async -> String {
         var out: [String] = []
-        if let banner = SymbolOutput.banner(status) { out.append(banner) }
+        let language = IDEAgentSourceLanguage.identifier(forPath: symbol.fileURL.path)
+        let waiting = readiness.pending(forLanguage: language)
+        if let banner = SymbolOutput.banner(waiting) { out.append(banner) }
         guard let offset = symbol.utf16Offset, let nameLine = symbol.line,
               let source = await search.liveText(of: symbol.fileURL),
               let relative = NavigationOutput.relativePath(of: symbol.fileURL, root: root) else {
@@ -434,7 +439,11 @@ struct IDEExploreSymbolTool: AgentTool {
 
         out.append("")
         if usages.isEmpty {
-            out.append("Usages: none found. The symbol may be unused, or the index may not have reached its callers yet.")
+            if readiness.blocksUsages(forLanguage: language) {
+                out.append("Usages: not available yet (still indexing \(IDEAgentIndexReadiness.describe(waiting))). Use grep, or ask again shortly.")
+            } else {
+                out.append("Usages: none found. The symbol may be unused, or the index may not have reached its callers yet.")
+            }
         } else {
             let files = Set(usages.compactMap { $0.fileURL?.standardizedFileURL.path }).count
             out.append("Usages (\(usages.count) in \(files) \(files == 1 ? "file" : "files")):")

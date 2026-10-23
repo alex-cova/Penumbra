@@ -280,7 +280,17 @@ extension IDEWorkspace: IDEAgentHost {
             structureProvider: { [weak self] language in
                 await MainActor.run { self?.languages.structure(for: language) }
             },
-            status: { [weak self] in await MainActor.run { self?.projectStatus.message } })
+            readiness: { [weak self] in await self?.agentIndexReadiness() ?? .ready })
+    }
+
+    /// What is building right now: the activity the language supports report, plus walks that began
+    /// outside them and a Java model that is about to replace the (still empty) source index.
+    private func agentIndexReadiness() async -> IDEAgentIndexReadiness {
+        var pending = indexActivity.active
+        if javaSupport.isLoadingJavaModel { pending.insert(.javaSources) }
+        if await swiftSupport.index.isBuilding { pending.insert(.swift) }
+        if await typescriptSupport.index.isBuilding { pending.insert(.typeScript) }
+        return IDEAgentIndexReadiness(pending: pending)
     }
 
     func agentLineText(url: URL, line: Int) -> String? {

@@ -14,7 +14,7 @@ private final class Calls: @unchecked Sendable {
 
 private struct FakeSearch: IDEAgentSymbolSearching {
     var all: [IDEAgentSymbol] = []
-    var status: String?
+    var readiness = IDEAgentIndexReadiness.ready
     var files: [URL: String] = [:]
 
     func symbols(matching query: String, exactName: Bool, limit: Int) async -> [IDEAgentSymbol] {
@@ -27,7 +27,7 @@ private struct FakeSearch: IDEAgentSymbolSearching {
         await JavaStructureProvider().allStructure(forSource: source) ?? []
     }
 
-    func indexStatus() async -> String? { status }
+    func indexReadiness() async -> IDEAgentIndexReadiness { readiness }
 }
 
 private struct FakeExploreNavigator: IDEAgentNavigating {
@@ -130,9 +130,11 @@ final class IDEAgentSymbolToolTests: XCTestCase {
     }
 
     func testAnEmptyAnswerDependsOnWhetherTheIndexIsReady() async {
-        let building = await runTool(IDEFindSymbolTool(search: FakeSearch(status: "Indexing project sources…")), root: project, #"{"query":"Zed"}"#)
+        let building = await runTool(
+            IDEFindSymbolTool(search: FakeSearch(readiness: .init(pending: [.javaSources]))), root: project, #"{"query":"Zed"}"#)
         XCTAssertFalse(building.isError)
-        XCTAssertTrue(building.text.contains("still being built") && building.text.contains("grep"), building.text)
+        XCTAssertEqual(
+            building.text, "Nothing found yet: still indexing Java project sources. Use grep for now and try again later.")
         let ready = await runTool(IDEFindSymbolTool(search: FakeSearch()), root: project, #"{"query":"Zed"}"#)
         XCTAssertTrue(ready.text.hasPrefix("No project declaration matches “Zed”"), ready.text)
         let blank = await runTool(IDEFindSymbolTool(search: FakeSearch()), root: project, #"{"query":"  "}"#)
@@ -140,9 +142,9 @@ final class IDEAgentSymbolToolTests: XCTestCase {
     }
 
     func testResultsWhileTheIndexBuildsCarryABanner() async {
-        let tool = IDEFindSymbolTool(search: FakeSearch(all: [classA()], status: "Indexing dependencies… (3/12)"))
+        let tool = IDEFindSymbolTool(search: FakeSearch(all: [classA()], readiness: .init(pending: [.javaDependencies])))
         let output = await runTool(tool, root: project, #"{"query":"A"}"#)
-        XCTAssertTrue(output.text.hasPrefix("[The index is still being built (Indexing dependencies… (3/12))."), output.text)
+        XCTAssertTrue(output.text.hasPrefix("[Still indexing: Java dependencies."), output.text)
         XCTAssertTrue(output.text.contains("src/A.java:5: class demo.A"))
     }
 
@@ -238,12 +240,80 @@ final class IDEAgentSymbolToolTests: XCTestCase {
 
     func testAnUnknownNameSaysWhetherTheIndexIsStillBuilding() async {
         let building = IDEExploreSymbolTool(
-            search: FakeSearch(status: "Indexing project sources…"), navigator: FakeExploreNavigator(), lineText: lineText)
+            search: FakeSearch(readiness: .init(pending: [.swift])), navigator: FakeExploreNavigator(), lineText: lineText)
         let output = await runTool(building, root: project, #"{"name":"Nope"}"#)
-        XCTAssertTrue(output.text.contains("still being built"), output.text)
+        XCTAssertEqual(output.text, "Nothing found yet: still indexing Swift symbols. Use grep for now and try again later.")
         let ready = IDEExploreSymbolTool(search: FakeSearch(), navigator: FakeExploreNavigator(), lineText: lineText)
         let none = await runTool(ready, root: project, #"{"name":"Nope"}"#)
         XCTAssertTrue(none.text.hasPrefix("No project declaration is named “Nope”"), none.text)
+    }
+
+    // MARK: readiness
+
+    func testTheBannerNamesOnlyTheIndexesThatMatterForTheSymbolsReturned() async {
+        // A TypeScript walk says nothing about a Java symbol; the Java usage index does.
+        let unrelated = IDEFindSymbolTool(search: FakeSearch(all: [classA()], readiness: .init(pending: [.typeScript, .javaUsages])))
+        let output = await runTool(unrelated, root: project, #"{"query":"A"}"#)
+        XCTAssertTrue(output.text.hasPrefix("[Still indexing: the Java usage index."), output.text)
+        XCTAssertFalse(output.text.contains("TypeScript"), output.text)
+
+        let none = IDEFindSymbolTool(search: FakeSearch(all: [classA()], readiness: .init(pending: [.typeScript])))
+        let quiet = await runTool(none, root: project, #"{"query":"A"}"#)
+        XCTAssertFalse(quiet.text.contains("Still indexing"), quiet.text)
+    }
+
+    func testAnEmptyAnswerIgnoresIndexesThatDoNotHoldNames() async {
+        // The usage index and the dependency jars are not read by a name lookup.
+        let tool = IDEFindSymbolTool(search: FakeSearch(readiness: .init(pending: [.javaUsages, .javaDependencies])))
+        let output = await runTool(tool, root: project, #"{"query":"Zed"}"#)
+        XCTAssertTrue(output.text.hasPrefix("No project declaration matches “Zed”"), output.text)
+    }
+
+    func testUsagesAreNotReportedAsNoneWhileTheUsageIndexBuilds() async {
+        let building = IDEExploreSymbolTool(
+            search: FakeSearch(all: [classA()], readiness: .init(pending: [.javaUsages]), files: [file: source]),
+            navigator: FakeExploreNavigator(), lineText: lineText)
+        let output = await runTool(building, root: project, #"{"name":"A"}"#)
+        XCTAssertTrue(output.text.hasPrefix("[Still indexing: the Java usage index."), output.text)
+        XCTAssertTrue(
+            output.text.contains("Usages: not available yet (still indexing the Java usage index). Use grep, or ask again shortly."),
+            output.text)
+        XCTAssertFalse(output.text.contains("none found"))
+
+        let ready = IDEExploreSymbolTool(
+            search: FakeSearch(all: [classA()], files: [file: source]), navigator: FakeExploreNavigator(), lineText: lineText)
+        let settled = await runTool(ready, root: project, #"{"name":"A"}"#)
+        XCTAssertTrue(settled.text.contains("Usages: none found."), settled.text)
+        XCTAssertFalse(settled.text.contains("Still indexing"))
+    }
+
+    func testRealUsagesAreStillListedWhileTheIndexBuilds() async {
+        let other = project.appendingPathComponent("src/B.java")
+        try? "class B { A a; }\n".write(to: other, atomically: true, encoding: .utf8)
+        let navigator = FakeExploreNavigator(usage: [IDEAgentCodeLocation(fileURL: other, line: 1, label: "", kind: "type")])
+        let tool = IDEExploreSymbolTool(
+            search: FakeSearch(all: [classA()], readiness: .init(pending: [.javaUsages]), files: [file: source]),
+            navigator: navigator, lineText: lineText)
+        let output = await runTool(tool, root: project, #"{"name":"A"}"#)
+        XCTAssertTrue(output.text.contains("Usages (1 in 1 file):"), output.text)
+        XCTAssertTrue(output.text.contains("[Still indexing"), "the rows may be incomplete, and the banner says so")
+        XCTAssertFalse(output.text.contains("not available yet"))
+    }
+
+    func testReadinessKnowsWhichIndexesMatterForWhichLanguage() {
+        let everything = IDEAgentIndexReadiness(pending: Set(IDEIndexKind.allCases))
+        XCTAssertEqual(everything.pending(forLanguage: "java"), [.javaSources, .javaDependencies, .javaUsages])
+        XCTAssertEqual(everything.pending(forLanguage: "swift"), [.swift])
+        XCTAssertEqual(everything.pending(forLanguage: "javascript"), [.typeScript])
+        XCTAssertEqual(everything.pending(forLanguage: nil), [.javaSources, .swift, .typeScript])
+        XCTAssertTrue(IDEAgentIndexReadiness.ready.isReady)
+        XCTAssertFalse(IDEAgentIndexReadiness(pending: [.javaDependencies]).blocksUsages(forLanguage: "java"), "jars alone do not hide usages")
+        XCTAssertTrue(IDEAgentIndexReadiness(pending: [.javaSources]).blocksUsages(forLanguage: "java"))
+        XCTAssertTrue(IDEAgentIndexReadiness(pending: [.swift]).blocksUsages(forLanguage: "swift"))
+        XCTAssertFalse(IDEAgentIndexReadiness(pending: [.swift]).blocksUsages(forLanguage: "java"))
+        XCTAssertEqual(
+            IDEAgentIndexReadiness.describe([.swift, .javaSources, .javaUsages]),
+            "Java project sources, the Java usage index, Swift symbols", "stable order, whatever the set's")
     }
 
     // MARK: cost
@@ -299,7 +369,7 @@ final class IDEAgentSymbolIntegrationTests: XCTestCase {
             javaIndex: environment.index,
             text: text ?? { try? String(contentsOf: $0, encoding: .utf8) },
             structureProvider: { _ in JavaStructureProvider() },
-            status: { nil })
+            readiness: { .ready })
     }
 
     func testFindSymbolFindsTypesAndEveryOverloadByNameAlone() async throws {

@@ -37,6 +37,9 @@ public actor TypeScriptIndex {
 
     public var fileCount: Int { storage.fileCount }
 
+    /// A walk of the project is running, so the index is empty or still holds the previous project.
+    public var isBuilding: Bool { storage.isBuilding }
+
     /// Rebuilds the index for `root` (or clears it). A newer call wins; a cancelled one does not publish.
     public func setRoot(_ root: URL?) async {
         if Task.isCancelled { return }

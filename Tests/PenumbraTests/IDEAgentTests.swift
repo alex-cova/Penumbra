@@ -50,7 +50,7 @@ private struct NoSearch: IDEAgentSymbolSearching {
     func symbols(matching query: String, exactName: Bool, limit: Int) async -> [IDEAgentSymbol] { [] }
     func liveText(of file: URL) async -> String? { nil }
     func structure(file: URL, source: String) async -> [StructureNode] { [] }
-    func indexStatus() async -> String? { nil }
+    func indexReadiness() async -> IDEAgentIndexReadiness { .ready }
 }
 
 @MainActor

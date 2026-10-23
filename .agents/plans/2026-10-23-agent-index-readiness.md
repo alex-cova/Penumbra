@@ -45,7 +45,7 @@ struct IDEAgentIndexReadiness: Sendable, Equatable {
 Wording changes in `IDEFindSymbolTool` / `IDEExploreSymbolTool`:
 
 - Banner (unchanged shape): `[Still indexing: Java usages. Results for those may be incomplete; grep covers what the index has not reached.]`, listing exactly the pending parts.
-- Empty `find_symbol` / unknown `explore_symbol` name: "Nothing found yet" only when a *symbol-bearing* part for that language is pending (`javaSources`, `swift`, `typeScript`); otherwise the normal "No project declaration…" text.
+- Empty `find_symbol` / unknown `explore_symbol` name: there is no symbol, so no language to filter by. "Nothing found yet" appears while *any* name-bearing part is pending (`javaSources`, `swift`, `typeScript`); the usage index and dependency jars never turn an empty answer into "not yet". This errs toward `grep`, and a Swift walk in a Java project is over in milliseconds.
 - `explore_symbol` usages and implementations: when `.javaUsages` is pending for a Java symbol (or `.swift` / `.typeScript` for theirs), print `Usages: not available yet (the usage index is still building). Use grep, or ask again shortly.` instead of `Usages: none found`. An empty result with the index ready keeps today's text.
 
 ## Steps

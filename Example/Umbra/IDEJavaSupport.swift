@@ -120,6 +120,8 @@ final class IDEJavaSupport {
     }
 
     private let status: IDEProjectStatus
+    /// Which indexes are building, for the agent. The toast above is not an index signal.
+    let activity: IDEIndexActivity
     private let paths = JavaIndexPaths.default()
     private let scheduler = JavaIndexScheduler()
     /// One indexing run and one parsed shard per JDK for the whole app; see `JavaSharedShardHub`.
@@ -183,8 +185,10 @@ final class IDEJavaSupport {
         gradle: IDEGradleProjectSystem,
         maven: IDEMavenProjectSystem,
         status: IDEProjectStatus,
+        activity: IDEIndexActivity = IDEIndexActivity(),
         shardHub: JavaSharedShardHub = IDESharedServices.shared.shards
     ) {
+        self.activity = activity
         self.shardHub = shardHub
         self.jdk = jdk
         self.gradle = gradle
@@ -614,7 +618,9 @@ final class IDEJavaSupport {
             await renameProvider.setRoots(renameRoots)
             await refactoringProvider.setRoots(renameRoots)
         }
-        nameIndexTask = Task { [nameIndex] in
+        let token = activity.begin(.javaUsages)
+        nameIndexTask = Task { [nameIndex, activity] in
+            defer { activity.end(token) }
             for await _ in await nameIndex.build(roots: roots) {
                 guard isCurrent(generation) else { return }
             }
@@ -637,7 +643,9 @@ final class IDEJavaSupport {
         }
         let adding = plan.addedNameRoots
         let removing = plan.removedNameRoots
-        nameIndexTask = Task { [nameIndex] in
+        let token = activity.begin(.javaUsages)
+        nameIndexTask = Task { [nameIndex, activity] in
+            defer { activity.end(token) }
             for await _ in await nameIndex.updateRoots(adding: adding, removing: removing) {
                 guard isCurrent(generation) else { return }
             }
@@ -691,7 +699,9 @@ final class IDEJavaSupport {
 
     private func indexWholeTree(at url: URL, generation: Int) {
         buildNameIndex(roots: [url], generation: generation)
-        projectIndexingTask = Task { [paths, scheduler] in
+        let token = activity.begin(.javaSources)
+        projectIndexingTask = Task { [paths, scheduler, activity] in
+            defer { activity.end(token) }
             let root = SourceRoot(directory: url)
             let shardURL = paths.projectSourcesShard(for: url)
             if isCurrent(generation), status.message == nil {
@@ -722,12 +732,20 @@ final class IDEJavaSupport {
         generation: Int,
         logToConsole: Bool
     ) async {
+        // Sources and dependencies count as building until this model's readers are published.
+        let sourcesToken = activity.begin(.javaSources)
+        var dependenciesToken: IDEIndexActivity.Token?
+        defer {
+            activity.end(sourcesToken)
+            if let dependenciesToken { activity.end(dependenciesToken) }
+        }
         await adoptLanguageLevelIfNeeded(model.maxLanguageLevel, generation: generation)
         guard isCurrent(generation) else { return }
 
         let diff = JavaGradleProjectModel.diff(old: previousModel, new: model)
         let sourceTargets = model.sourceIndexTargets(paths: paths)
         let jarTargets = model.jarIndexTargets(paths: paths)
+        if !jarTargets.isEmpty { dependenciesToken = activity.begin(.javaDependencies) }
         let shouldFullRebuild = previousModel == nil
             || diff.shouldForceFullRebuild(totalSourceRoots: sourceTargets.count, totalJars: jarTargets.count)
 

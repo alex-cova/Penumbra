@@ -293,6 +293,7 @@ public final class IDEWorkspace {
     }
     /// The status card's background line ("Indexing JDK 24…", "Resolving Gradle project…").
     var projectStatus: IDEProjectStatus { intelligenceServices.projectStatus }
+    var indexActivity: IDEIndexActivity { intelligenceServices.indexActivity }
     /// Every language's intelligence, routed by the active document's language.
     var languages: LanguageServiceRegistry { intelligenceServices.languages }
     var navigationEngine: NavigationEngine { intelligenceServices.navigationEngine }
