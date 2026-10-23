@@ -59,6 +59,7 @@ private struct IDEAIOllamaTab: View {
     @State private var store = IDEOllamaModelsStore.shared
     @State private var nameDraft = ""
     @State private var deleting: OllamaModel?
+    @State private var isConfirmingDelete = false
 
     var body: some View {
         @Bindable var store = store
@@ -88,6 +89,7 @@ private struct IDEAIOllamaTab: View {
                         }
                         .buttonStyle(.borderless)
                         .help("Reload the installed models")
+                        .accessibilityLabel("Reload the installed models")
                     }
                 }
                 if settings.ollamaModels.isEmpty {
@@ -137,7 +139,7 @@ private struct IDEAIOllamaTab: View {
         }
         .task { await settings.refreshOllamaModels(adjustSelection: false) }
         .confirmationDialog(
-            "Delete “\(deleting?.name ?? "")”?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            "Delete “\(deleting?.name ?? "")”?", isPresented: $isConfirmingDelete,
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
@@ -165,7 +167,7 @@ private struct IDEAIOllamaTab: View {
             if store.deletingName == model.name {
                 ProgressView().controlSize(.small)
             } else {
-                Button { deleting = model } label: { Image(systemName: "trash") }
+                Button { deleting = model; isConfirmingDelete = true } label: { Image(systemName: "trash") }
                     .buttonStyle(.borderless)
                     .help("Delete \(model.name)")
                     .accessibilityLabel("Delete \(model.name)")

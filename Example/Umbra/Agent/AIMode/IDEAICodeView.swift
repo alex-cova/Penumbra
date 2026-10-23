@@ -5,7 +5,6 @@ import SwiftUI
 /// ones the docked panel has. A new session starts empty, with the message field in the middle.
 struct IDEAICodeView: View {
     @Environment(IDEWorkspace.self) private var workspace
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var agent: IDEAgentController { workspace.agent }
 

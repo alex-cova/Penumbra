@@ -278,6 +278,7 @@ struct IDEAIChatList: View {
     let query: String
     @State private var renaming: IDEAIChatConversation?
     @State private var renameDraft = ""
+    @State private var isRenamingPresented = false
 
     private var chat: IDEAIChatController { workspace.aiChat }
 
@@ -304,6 +305,7 @@ struct IDEAIChatList: View {
                     Button("Rename…") {
                         renameDraft = conversation.title
                         renaming = conversation
+                        isRenamingPresented = true
                     }
                     if !conversation.isRunning { Button("Close") { chat.close(conversation.id) } }
                 }
@@ -320,7 +322,7 @@ struct IDEAIChatList: View {
                     .padding(.horizontal, IDEAppearance.Spacing.xs)
             }
         }
-        .alert("Rename Chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+        .alert("Rename Chat", isPresented: $isRenamingPresented) {
             TextField("Name", text: $renameDraft)
             Button("Rename") {
                 if let renaming { chat.rename(renaming.id, to: renameDraft) }

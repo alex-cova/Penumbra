@@ -128,6 +128,7 @@ private struct IDEAISessionGroupView: View {
     let query: String
     @State private var renaming: IDEAgentConversation?
     @State private var renameDraft = ""
+    @State private var isRenamingPresented = false
 
     private var agent: IDEAgentController { workspace.agent }
 
@@ -178,6 +179,7 @@ private struct IDEAISessionGroupView: View {
                     Button("Rename…") {
                         renameDraft = conversation.title
                         renaming = conversation
+                        isRenamingPresented = true
                     }
                     if !conversation.isRunning { Button("Close") { agent.close(conversation.id) } }
                 }
@@ -196,7 +198,7 @@ private struct IDEAISessionGroupView: View {
                     .padding(.horizontal, IDEAppearance.Spacing.xs)
             }
         }
-        .alert("Rename Session", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+        .alert("Rename Session", isPresented: $isRenamingPresented) {
             TextField("Name", text: $renameDraft)
             Button("Rename") {
                 if let renaming { agent.rename(renaming.id, to: renameDraft) }
