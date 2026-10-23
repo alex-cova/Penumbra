@@ -232,6 +232,7 @@ private struct IDEAIProvidersTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.lg) {
             IDEAIProviderSection(settings: settings, provider: .anthropic, modelHint: "claude-opus-5-5")
+            IDEAIProviderSection(settings: settings, provider: .meta, modelHint: "muse-spark-1.3")
             IDEAIProviderSection(settings: settings, provider: .openAIResponses, modelHint: "gpt-5")
             Text("Keys are kept in the Keychain, one per address. The first message to an address asks before anything is sent. Endpoints that speak the OpenAI Chat Completions protocol, and external agents, are set up in Settings ▸ Agent.")
                 .font(IDEAppearance.Typography.caption)
@@ -249,7 +250,7 @@ struct IDEAIProviderSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
             HStack {
-                Text(provider == .anthropic ? "Anthropic" : "OpenAI").font(IDEAppearance.Typography.sectionHeader)
+                Text(provider == .anthropic ? "Anthropic" : provider == .meta ? "Meta (Muse)" : "OpenAI").font(IDEAppearance.Typography.sectionHeader)
                 Spacer()
                 if settings.hasAPIKey(for: provider) {
                     Label("Key saved", systemImage: "checkmark.seal")

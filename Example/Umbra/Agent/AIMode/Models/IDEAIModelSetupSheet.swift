@@ -46,7 +46,7 @@ struct IDEAIModelSetupSheet: View {
             switch self {
             case .onDevice: "Private. Runs on this Mac's GPU; nothing is sent anywhere."
             case .ollama: "Use the models you run with Ollama."
-            case .apiKey: "Use Claude or OpenAI with your own key."
+            case .apiKey: "Use Claude, Muse from Meta, or OpenAI with your own key."
             }
         }
 
@@ -340,6 +340,7 @@ private struct IDEAIAPIKeySetup: View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
             Picker("", selection: $provider) {
                 Text("Anthropic").tag(IDEAgentProvider.anthropic)
+                Text("Meta").tag(IDEAgentProvider.meta)
                 Text("OpenAI").tag(IDEAgentProvider.openAIResponses)
             }
             .pickerStyle(.segmented)
@@ -347,7 +348,7 @@ private struct IDEAIAPIKeySetup: View {
 
             IDEAIProviderSection(
                 settings: settings, provider: provider,
-                modelHint: provider == .anthropic ? "claude-opus-5-5" : "gpt-5")
+                modelHint: provider == .anthropic ? "claude-opus-5-5" : provider == .meta ? "muse-spark-1.3" : "gpt-5")
                 .id(provider)
 
             HStack {

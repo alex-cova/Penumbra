@@ -31,6 +31,11 @@ struct IDEAgentPrices: Equatable {
     claude-sonnet-4-6 3.00 0.30 15.00
     claude-haiku-5 0.10 0.01 0.50
     claude-haiku-4-5 1.00 0.10 5.00
+    muse-wonder-1.0 4.00 0.20 20.00
+    muse-spark 1.25 0.15 4.25
+    muse-spark-1.3-contributor 0.10 0.002 0.20
+    muse-spark-1.2-contributor 0.10 0.002 0.20
+    muse-spark-1.1-contributor 0.10 0.002 0.20
     """
 
     /// Earlier built-in tables. A saved table equal to one of these was never edited, so it moves to the current one.
@@ -40,7 +45,21 @@ struct IDEAgentPrices: Equatable {
         gpt-5 1.25 0.125 10.00
         gpt-4.1 2.00 0.50 8.00
         gpt-4o 2.50 1.25 10.00
+        """,
         """
+        # model prefix, input, cached input, output (US dollars per million tokens)
+        gpt-5 1.25 0.125 10.00
+        gpt-4.1 2.00 0.50 8.00
+        gpt-4o 2.50 1.25 10.00
+        claude-fable-5 10.00 0.25 50.00
+        claude-opus-5-5 4.00 0.20 20.00
+        claude-opus-5 5.00 0.50 25.00
+        claude-opus-4 5.00 0.50 25.00
+        claude-sonnet-5 2.00 0.20 10.00
+        claude-sonnet-4-6 3.00 0.30 15.00
+        claude-haiku-5 0.10 0.01 0.50
+        claude-haiku-4-5 1.00 0.10 5.00
+        """,
     ]
 
     static let `default` = IDEAgentPrices(text: defaultText)

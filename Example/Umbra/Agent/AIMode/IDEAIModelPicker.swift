@@ -11,8 +11,8 @@ enum IDEAIModelPickerMode {
 }
 
 /// The model of a chat, as a menu under the message field: "Opus 5.5 High". Lists the Claude models,
-/// the configured OpenAI ones, the installed Ollama models, the on-device ones and, for Code, the
-/// external agents; reasoning effort and model management are at the bottom.
+/// the Muse models from Meta, the configured OpenAI ones, the installed Ollama models, the on-device
+/// ones and, for Code, the external agents; reasoning effort and model management are at the bottom.
 struct IDEAIModelPicker: View {
     let settings: IDEAgentSettings
     let choice: IDEAIModelChoice
@@ -25,6 +25,7 @@ struct IDEAIModelPicker: View {
     var body: some View {
         Menu {
             anthropicSection
+            metaSection
             openAISection
             ollamaSection
             onDeviceSection
@@ -40,8 +41,11 @@ struct IDEAIModelPicker: View {
         .fixedSize()
         .help(helpText)
         .accessibilityLabel("Model: \(plainLabel)")
-        // The list of Ollama models is read when the menu is first shown, not on every redraw.
-        .task { await settings.refreshOllamaModels(adjustSelection: false) }
+        // The lists of Ollama and Meta models are read when the menu is first shown, not on every redraw.
+        .task {
+            await settings.refreshOllamaModels(adjustSelection: false)
+            await settings.refreshMetaModels()
+        }
     }
 
     // MARK: - Label
@@ -105,6 +109,18 @@ struct IDEAIModelPicker: View {
             if !custom.isEmpty, !IDEAIModelNames.claude.contains(where: { $0.id == custom }) {
                 item(custom + needsKey, provider: .anthropic, model: custom)
             }
+        }
+    }
+
+    @ViewBuilder private var metaSection: some View {
+        Section("Meta (Muse)") {
+            let needsKey = settings.hasAPIKey(for: .meta) ? "" : " · add key"
+            // What the endpoint lists today (fetched above), or the shipped ids before a key
+            // is saved; a fetched id this build doesn't know shows as its raw id.
+            ForEach(settings.offeredMetaModels, id: \.self) { id in
+                item(IDEAIModelNames.display(provider: .meta, model: id) + needsKey, provider: .meta, model: id)
+            }
+            if settings.isLoadingMetaModels { Text("Loading…").foregroundStyle(.secondary) }
         }
     }
 

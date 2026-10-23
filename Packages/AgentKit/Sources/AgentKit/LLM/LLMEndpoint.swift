@@ -12,6 +12,11 @@ public struct LLMEndpoint: Sendable, Hashable {
 
     public static let openAI = LLMEndpoint(baseURL: URL(string: "https://api.openai.com/v1")!)
 
+    /// Meta's Model API (`api.meta.ai`), which serves the Muse models. It speaks the OpenAI
+    /// Responses format (and Chat Completions and Anthropic Messages) with a Bearer key, so
+    /// `OpenAIResponsesClient` drives it unchanged; this is only the address.
+    public static let meta = LLMEndpoint(baseURL: URL(string: "https://api.meta.ai/v1")!)
+
     public init(
         baseURL: URL,
         apiKey: String? = nil,

@@ -200,6 +200,12 @@ final class IDEAgentProviderTests: XCTestCase {
         settings.baseURL = "http://localhost:11434"
         settings.model = "coder:7b"
         XCTAssertTrue(try settings.makeClient() is OllamaClient)
+        settings.provider = .meta
+        settings.saveAPIKey("meta-test")
+        XCTAssertEqual(settings.baseURL, "https://api.meta.ai/v1")
+        XCTAssertEqual(settings.model, "muse-spark-1.3")
+        let meta = try XCTUnwrap(settings.makeClient() as? OpenAIResponsesClient)
+        XCTAssertEqual(meta.endpoint.baseURL.absoluteString, "https://api.meta.ai/v1")
     }
 
     func testOllamaModelsAreListedWithTheirCapabilitiesAndAUsableOneIsChosen() async throws {

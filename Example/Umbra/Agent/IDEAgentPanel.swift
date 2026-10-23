@@ -1216,7 +1216,7 @@ struct IDEAgentSettingsView: View {
             switch settings.provider {
             case .ollama: ollamaSection(settings)
             case .mlx: mlxSection(settings)
-            case .openAIResponses, .chatCompletions, .anthropic: TextField("Model", text: $settings.model)
+            case .openAIResponses, .chatCompletions, .anthropic, .meta: TextField("Model", text: $settings.model)
             }
 
             Picker("Reasoning", selection: $settings.reasoningEffort) {
@@ -1224,7 +1224,7 @@ struct IDEAgentSettingsView: View {
             }
             Text(settings.provider == .anthropic
                 ? "Off leaves the model's own default: current Claude models always think, and the effort sets how much."
-                : settings.provider == .openAIResponses || settings.provider == .chatCompletions
+                : settings.provider == .openAIResponses || settings.provider == .chatCompletions || settings.provider == .meta
                 ? "Use Off for models without reasoning; they reject the setting."
                 : "Thinking makes each step slower. It applies to models that support it.")
                 .font(IDEAppearance.Typography.caption)
@@ -1415,17 +1415,17 @@ struct IDEAgentSettingsView: View {
             Text("A run pauses when it reaches one of these. The spend limit uses the price table and only applies to a model listed there. Sending “continue” starts again with a fresh allowance.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            if settings.provider == .openAIResponses || settings.provider == .chatCompletions {
+            if settings.provider == .openAIResponses || settings.provider == .chatCompletions || settings.provider == .meta {
                 Picker("Context window", selection: $settings.contextWindowOverride) {
                     Text("Automatic").tag(0)
                     ForEach([32_768, 65_536, 131_072, 200_000, 400_000, 1_000_000], id: \.self) { Text(IDEAgentFormat.tokens($0)).tag($0) }
                 }
-                Text("Older tool output is cleared, then older messages summarized, as the conversation nears this size. Automatic knows common OpenAI models; for other models compaction starts when the server reports an overflow.")
+                Text("Older tool output is cleared, then older messages summarized, as the conversation nears this size. Automatic knows common OpenAI and Muse models; for other models compaction starts when the server reports an overflow.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
         }
-        if settings.provider == .openAIResponses || settings.provider == .chatCompletions {
+        if settings.provider == .openAIResponses || settings.provider == .chatCompletions || settings.provider == .meta {
             Section("Prices") {
                 TextEditor(text: $settings.priceTableText)
                     .font(IDEAppearance.Typography.monoSmall)

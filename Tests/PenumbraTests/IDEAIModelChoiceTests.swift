@@ -27,6 +27,22 @@ private final class ListTransport: LLMTransport, @unchecked Sendable {
     }
 }
 
+/// Answers Meta's model list from memory, so no server is needed.
+private final class MetaListTransport: LLMTransport, @unchecked Sendable {
+    var body = #"{"data":[{"id":"muse-spark-1.3"},{"id":"muse-future-9.9"}]}"#
+    func open(_ request: URLRequest) async throws -> LLMHTTPResponse {
+        let (status, data) = try await fetch(request)
+        return LLMHTTPResponse(status: status, lines: AsyncThrowingStream { continuation in
+            continuation.yield(String(decoding: data, as: UTF8.self))
+            continuation.finish()
+        })
+    }
+
+    func fetch(_ request: URLRequest) async throws -> (status: Int, data: Data) {
+        request.url?.path == "/v1/models" ? (200, Data(body.utf8)) : (404, Data())
+    }
+}
+
 @MainActor
 final class IDEAIModelChoiceTests: XCTestCase {
     private var project: URL!
@@ -69,6 +85,49 @@ final class IDEAIModelChoiceTests: XCTestCase {
         XCTAssertTrue(settings.requiresAPIKey(for: .anthropic))
         XCTAssertFalse(settings.requiresAPIKey(for: .ollama))
         XCTAssertEqual(IDEAgentProvider.allCases.map(\.rawValue).sorted(), Set(IDEAgentProvider.allCases.map(\.rawValue)).sorted())
+    }
+
+    func testMetaIsAProviderWithItsOwnEndpointModelAndClient() throws {
+        let settings = makeSettings()
+        XCTAssertEqual(settings.baseURL(for: .meta), "https://api.meta.ai/v1")
+        XCTAssertEqual(settings.model(for: .meta), "muse-spark-1.3")
+        XCTAssertEqual(settings.endpointHost(for: .meta), "api.meta.ai")
+        XCTAssertEqual(IDEAgentProvider.meta.title, "Meta (Muse)")
+        XCTAssertTrue(settings.requiresAPIKey(for: .meta))
+        XCTAssertFalse(settings.isLocalEndpoint(for: .meta))
+
+        let choice = IDEAIModelChoice(provider: .meta, model: "muse-spark-1.3")
+        XCTAssertEqual(settings.setupHint(for: choice), "Add an API key in the agent settings.")
+        XCTAssertThrowsError(try settings.makeClient(for: choice)) {
+            XCTAssertEqual($0 as? IDEAgentSettings.ConfigurationError, .missingAPIKey(host: "api.meta.ai"))
+        }
+        settings.saveAPIKey("meta-test-key", for: .meta)
+        XCTAssertTrue(settings.hasAPIKey(for: .meta))
+        XCTAssertFalse(settings.hasAPIKey(for: .anthropic), "another host's key is not this one's")
+        XCTAssertNil(settings.setupHint(for: choice))
+        // Meta speaks the Responses format, so the client is the Responses one.
+        XCTAssertEqual(try settings.makeClient(for: choice).providerID, "openai-responses")
+        XCTAssertEqual(settings.contextWindow(for: choice), 1_048_576)
+
+        let usage = TokenUsage(inputTokens: 1_000_000, outputTokens: 1_000_000, cachedInputTokens: 500_000)
+        // 500k fresh at $1.25, 500k cached at $0.15, 1M output at $4.25.
+        XCTAssertEqual(try XCTUnwrap(settings.cost(of: usage, for: choice)), 4.95, accuracy: 0.0001)
+    }
+
+    func testMetaModelsAreFetchedAndFallBackToTheShippedIds() async throws {
+        let settings = makeSettings(transport: MetaListTransport())
+        // No key yet: nothing to fetch with, so the shipped ids are offered.
+        XCTAssertEqual(settings.offeredMetaModels, IDEAIModelNames.muse.map(\.id))
+        await settings.refreshMetaModels()
+        XCTAssertEqual(settings.offeredMetaModels, IDEAIModelNames.muse.map(\.id), "still no key, still the fallback")
+
+        settings.saveAPIKey("meta-test-key", for: .meta)
+        await settings.refreshMetaModels()
+        XCTAssertNil(settings.metaError)
+        // The fetched list wins, including a model this build has never heard of.
+        XCTAssertEqual(settings.metaModels, ["muse-spark-1.3", "muse-future-9.9"])
+        XCTAssertEqual(settings.offeredMetaModels, ["muse-spark-1.3", "muse-future-9.9"])
+        XCTAssertEqual(IDEAIModelNames.display(provider: .meta, model: "muse-future-9.9"), "muse-future-9.9")
     }
 
     func testAKeyIsSavedPerProviderAndTheChoiceNeedsOneBeforeItIsReady() throws {

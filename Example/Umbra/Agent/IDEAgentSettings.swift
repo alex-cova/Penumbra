@@ -10,6 +10,9 @@ enum IDEAgentProvider: String, CaseIterable, Identifiable, Sendable, Codable {
     case chatCompletions = "chat"
     /// Claude through Anthropic's Messages API.
     case anthropic = "anthropic"
+    /// Muse from Meta through the Meta Model API (`api.meta.ai`), which speaks the OpenAI
+    /// Responses format with a Bearer key, so it reuses `OpenAIResponsesClient`.
+    case meta = "meta"
     case ollama = "ollama"
     /// Runs a downloaded model in this process on the GPU. Nothing is sent anywhere.
     case mlx = "mlx"
@@ -21,6 +24,7 @@ enum IDEAgentProvider: String, CaseIterable, Identifiable, Sendable, Codable {
         case .openAIResponses: "OpenAI (Responses)"
         case .chatCompletions: "OpenAI-compatible (Chat Completions)"
         case .anthropic: "Anthropic (Claude)"
+        case .meta: "Meta (Muse)"
         case .ollama: "Ollama"
         case .mlx: "On this Mac (MLX)"
         }
@@ -30,6 +34,7 @@ enum IDEAgentProvider: String, CaseIterable, Identifiable, Sendable, Codable {
         switch self {
         case .openAIResponses, .chatCompletions: "https://api.openai.com/v1"
         case .anthropic: "https://api.anthropic.com/v1"
+        case .meta: "https://api.meta.ai/v1"
         case .ollama: "http://localhost:11434"
         case .mlx: ""
         }
@@ -39,6 +44,7 @@ enum IDEAgentProvider: String, CaseIterable, Identifiable, Sendable, Codable {
         switch self {
         case .openAIResponses, .chatCompletions: "gpt-5"
         case .anthropic: "claude-opus-5-5"
+        case .meta: "muse-spark-1.3"
         case .ollama, .mlx: ""
         }
     }
@@ -82,6 +88,7 @@ final class IDEAgentSettings {
         ("gpt-5", 400_000), ("gpt-4.1", 1_000_000), ("gpt-4o", 128_000), ("o4", 200_000), ("o3", 200_000),
         ("claude-haiku-4", 200_000), ("claude-sonnet-4-5", 200_000), ("claude-opus-4-5", 200_000), ("claude-3", 200_000),
         ("claude-", 1_000_000),
+        ("muse-", 1_048_576),
     ]
 
     var provider: IDEAgentProvider {
@@ -268,6 +275,12 @@ final class IDEAgentSettings {
     private(set) var ollamaModels: [OllamaModel] = []
     private(set) var ollamaError: String?
     private(set) var isLoadingOllamaModels = false
+
+    // Meta: the models `api.meta.ai` lists today, fetched with the saved key. Empty until a
+    // fetch succeeds; the picker then falls back to the curated ids in `IDEAIModelNames`.
+    private(set) var metaModels: [String] = []
+    private(set) var metaError: String?
+    private(set) var isLoadingMetaModels = false
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let keyStore: any IDEAgentKeyStore
@@ -613,6 +626,36 @@ final class IDEAgentSettings {
         }
     }
 
+    // MARK: - Meta models
+
+    /// The Muse models the picker offers: what the endpoint lists today when a fetch has
+    /// succeeded, else the curated ids shipped with the app, so the menu works before a key
+    /// is saved, offline, and when the list call fails. The configured model is always kept,
+    /// so a saved choice never vanishes from its own menu.
+    var offeredMetaModels: [String] {
+        var ids = metaModels.isEmpty ? IDEAIModelNames.muse.map(\.id) : metaModels
+        let configured = model(for: .meta)
+        if !configured.isEmpty, !ids.contains(configured) { ids.append(configured) }
+        return ids
+    }
+
+    /// Fetches the models `api.meta.ai` offers (`GET /v1/models` with the saved key), so a model
+    /// released after this app was built appears without an app update. Without a key there is
+    /// nothing to ask with, and the curated fallback stays; a failed fetch keeps the last list
+    /// (or the fallback) and records why in `metaError` for Settings to show.
+    func refreshMetaModels() async {
+        guard let url = endpointURL(for: .meta), let key = apiKey(for: .meta), !key.isEmpty else { return }
+        isLoadingMetaModels = true
+        defer { isLoadingMetaModels = false }
+        do {
+            metaModels = try await HostedModelCatalog(
+                endpoint: LLMEndpoint(baseURL: url, apiKey: key), transport: transport).models()
+            metaError = metaModels.isEmpty ? "Meta listed no models." : nil
+        } catch {
+            metaError = error.localizedDescription
+        }
+    }
+
     // MARK: - Building a client
 
     enum ConfigurationError: Error, LocalizedError, Equatable {
@@ -693,6 +736,9 @@ final class IDEAgentSettings {
             return OpenAIChatCompletionsClient(endpoint: endpoint, capabilities: isOpenAI ? .openAI : .compatible)
         case .anthropic:
             return AnthropicMessagesClient(endpoint: endpoint)
+        case .meta:
+            // Meta's Model API is Responses-compatible and takes a Bearer key (see `LLMEndpoint.meta`).
+            return OpenAIResponsesClient(endpoint: endpoint)
         case .ollama:
             let info = selectedOllamaModel(named: choice.model)
             // Only refuse on what the server told us: with no list loaded, the request decides.
