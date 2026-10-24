@@ -12,6 +12,9 @@ extension IDEAgentEntry {
 /// The model's plan, with the user's decision: approve it (and in which mode), or keep planning.
 struct IDEAgentPlanCard: View {
     let entry: IDEAgentEntry
+    /// Shown in AI mode's Plan tab: the tab scrolls, so the plan is not boxed, and the transcript's own
+    /// card keeps the ⌘↩ shortcut (two views must not claim it).
+    var isInInspector = false
     @Environment(IDEWorkspace.self) private var workspace
     @State private var isRevising = false
     @State private var feedback = ""
@@ -32,11 +35,16 @@ struct IDEAgentPlanCard: View {
                 }
             }
             if let plan = entry.planText {
-                ScrollView {
+                if isInInspector {
                     IDEAgentMarkdownView(text: plan)
                         .padding(IDEAppearance.Spacing.xs)
+                } else {
+                    ScrollView {
+                        IDEAgentMarkdownView(text: plan)
+                            .padding(IDEAppearance.Spacing.xs)
+                    }
+                    .frame(maxHeight: isPending ? 420 : 220)
                 }
-                .frame(maxHeight: isPending ? 420 : 220)
             } else {
                 Text("Writing the plan…")
                     .font(IDEAppearance.Typography.caption)
@@ -74,7 +82,7 @@ struct IDEAgentPlanCard: View {
                 Button("Approve · Accept Edits") { approve(.acceptEdits) }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .keyboardShortcut(.return, modifiers: .command)
+                    .keyboardShortcut(isInInspector ? nil : KeyboardShortcut(.return, modifiers: .command))
                     .help("Carry the plan out; edits apply at once and commands ask")
                 Button("Approve · Manual") { approve(.manual) }
                     .controlSize(.small)

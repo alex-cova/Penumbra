@@ -30,7 +30,9 @@ nonisolated enum IDEAgentOutputScrubber {
     static func shape(_ input: ToolOutputShapingInput) -> String {
         // A memory line leaves the history for a file that every later chat loads, so it is scrubbed
         // whatever risk the session presents it with (`ToolContext.redactForMemory` says `.edit`).
-        guard input.risk == .command || input.toolName == "web_search" || input.toolName == "remember" else { return input.text }
+        guard input.risk == .command || input.toolName == "web_search" || input.toolName == "remember"
+            || input.toolName == IDEBrowserInspectTool.toolName
+        else { return input.text }
         return scrub(input.text)
     }
 }

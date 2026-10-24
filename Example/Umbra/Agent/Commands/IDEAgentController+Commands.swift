@@ -91,6 +91,10 @@ extension IDEAgentController {
         special("changes", "plusminus", "What git says changed")
         if host?.agentOpenFilePaths().isEmpty == false { special("open", "doc.on.doc", "The names of the open files") }
         special("terminal", "terminal", "The last lines of the terminal")
+        if host?.agentBrowserNotes().isEmpty == false {
+            special("notes", "pin", "Your notes on the Browser tab's page, with the elements they name")
+            special("element", "cursorarrow.rays", "The element you picked last in the Browser tab")
+        }
         for skill in commandCatalog.skillCatalog.skills {
             let name = "skill:" + skill.name
             guard query.isEmpty || FuzzyMatcher.match(query: query, in: name) != nil else { continue }

@@ -429,6 +429,22 @@ public final class IDEWorkspace {
     }
     /// Whether AI mode's list of chats is shown.
     var showsAISidebar = true
+    /// Whether the Changes / Plan / Browser panel shows to the right of Code's conversation, and which tab.
+    var showsAIInspector = false {
+        didSet { if oldValue != showsAIInspector { noteAIModeChanged() } }
+    }
+    var aiInspectorTab: IDEAIInspectorTab = .changes {
+        didSet { if oldValue != aiInspectorTab { noteAIModeChanged() } }
+    }
+    /// The panel's width; `IDERootView` owns the drag and mirrors it here, like `agentPanelWidth`.
+    var aiInspectorWidth = IDEAIInspector.defaultWidth
+    /// What the Changes tab has worked out per file (diffs are computed off the main actor and kept here).
+    @ObservationIgnored let aiChanges = IDEAIChangesModel()
+    /// The Browser tab's page, created when the tab first shows and dropped in `teardown()`. Observed, so
+    /// the tab redraws once `ensureAIBrowser()` has made it.
+    var aiBrowser: IDEAIBrowserModel?
+    /// The Browser tab's address, readable from anywhere before the page object exists.
+    @ObservationIgnored let aiBrowserPageInfo = IDEAIBrowserPageInfo()
     /// Settings were opened from AI mode, so closing them goes back there rather than to the editor.
     private var returnsToAIModeFromSettings = false
     /// Set while a saved window comes back, which is not a change worth saving.
@@ -1061,6 +1077,9 @@ public final class IDEWorkspace {
         breakpointPopover.dismiss()
         streamTraceWindow?.close()
         streamTraceWindow = nil
+        aiBrowser?.teardown()
+        aiBrowser = nil
+        aiChanges.reset()
         stopProjectActivity()
         terminateTerminals()
         runs.stopAll()
@@ -4171,7 +4190,10 @@ public final class IDEWorkspace {
             agentChats: agent.restorableTabs.ids,
             agentSelectedChat: agent.restorableTabs.selected,
             windowMode: windowMode,
-            aiTab: aiTab
+            aiTab: aiTab,
+            isAIInspectorVisible: showsAIInspector,
+            aiInspectorTab: aiInspectorTab,
+            aiInspectorWidth: aiInspectorWidth
         )
     }
 
@@ -4297,6 +4319,9 @@ public final class IDEWorkspace {
         isRestoringAIMode = true
         windowMode = session.windowMode ?? .editor
         aiTab = session.aiTab ?? .code
+        showsAIInspector = session.isAIInspectorVisible ?? false
+        aiInspectorTab = session.aiInspectorTab ?? .changes
+        aiInspectorWidth = session.aiInspectorWidth ?? IDEAIInspector.defaultWidth
         isRestoringAIMode = false
         if hasOpenProject {
             // Restoring is not a change worth saving: the rest of the window is not back yet.
@@ -5405,6 +5430,16 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.showAIMode(tab: .chat) }),
             EditorCommand(id: "app.aiCode", title: "AI Mode: Code", group: "View",
                           action: { [weak self] in self?.showAIMode(tab: .code) }),
+            EditorCommand(id: "app.toggleAIInspector", title: "AI Mode: Toggle Changes, Plan and Browser Panel", group: "View",
+                          action: { [weak self] in self?.toggleAIInspector() }),
+            EditorCommand(id: "app.aiChanges", title: "AI Mode: Show Changes", group: "View",
+                          action: { [weak self] in self?.toggleAIInspector(tab: .changes) }),
+            EditorCommand(id: "app.aiPlan", title: "AI Mode: Show Plan", group: "View",
+                          action: { [weak self] in self?.toggleAIInspector(tab: .plan) }),
+            EditorCommand(id: "app.aiBrowser", title: "AI Mode: Show Browser", group: "View",
+                          action: { [weak self] in self?.toggleAIInspector(tab: .browser) }),
+            EditorCommand(id: "app.aiBrowserSelect", title: "AI Mode: Select an Element in the Browser", group: "View",
+                          action: { [weak self] in self?.startAIBrowserSelecting() }),
             EditorCommand(id: "history.show", title: "Show Local History", group: "Local History",
                           action: { [weak self] in self?.showLocalHistory() }),
             EditorCommand(id: "history.recent", title: "Recent Changes", group: "Local History",

@@ -26,6 +26,9 @@ final class IDEAgentConversation: Identifiable {
     private(set) var cost: Double? = 0
     /// The model's checklist (`todo`), shown above the transcript.
     private(set) var todos: [TodoItem] = []
+    /// Whether the next message takes the Browser tab's open notes with it. The chip's ✕ turns it off for
+    /// that message only.
+    var attachesBrowserNotes = true
     var draft = ""
     /// What the agent may do without asking, in this chat. New chats start from the setting.
     private(set) var mode: PermissionMode
@@ -235,6 +238,7 @@ final class IDEAgentConversation: Identifiable {
         if isACPConversation {
             openACPRun(root: root, host: host) { acp in
                 let resolution = await IDEAgentMentionResolver.resolve(body, sources: self.mentionSources(root: root))
+                self.noteBrowserNotesSent(resolution)
                 if let index = self.entries.firstIndex(where: { $0.id == entryID }) {
                     self.entries[index].attachments = resolution.attachments.map(\.summary)
                 }
@@ -517,6 +521,7 @@ final class IDEAgentConversation: Identifiable {
     /// attached whole are recorded as read, so an edit to one needs no `read_file` first.
     private func frame(context: String, body: String, entryID: UUID, root: URL, session: AgentSession) async -> String {
         let resolution = await IDEAgentMentionResolver.resolve(body, sources: mentionSources(root: root))
+        noteBrowserNotesSent(resolution)
         if let index = entries.firstIndex(where: { $0.id == entryID }) {
             entries[index].attachments = resolution.attachments.map(\.summary)
             // Where this message will sit in the history: what rewinding cuts before.
@@ -544,6 +549,13 @@ final class IDEAgentConversation: Identifiable {
         }
     }
 
+    /// The notes this message carried are marked sent, and the next message attaches open notes again.
+    private func noteBrowserNotesSent(_ resolution: IDEAgentMentionResolution) {
+        guard !resolution.sentNoteIDs.isEmpty else { return }
+        host?.agentMarkBrowserNotesSent(resolution.sentNoteIDs)
+        attachesBrowserNotes = true
+    }
+
     private func mentionSources(root: URL) -> IDEAgentMentionSources {
         var sources = IDEAgentMentionSources(projectRoot: root)
         let secrets = SecretFilePolicy.patterns(from: settings.secretFilePatterns)
@@ -559,6 +571,11 @@ final class IDEAgentConversation: Identifiable {
         sources.problems = { [weak host] in host?.agentProblems() ?? [] }
         sources.openFiles = { [weak host] in host?.agentOpenFilePaths() ?? [] }
         sources.terminalTail = { [weak host] in host?.agentTerminalTail(lines: $0) }
+        sources.browserNotes = { [weak host] in host?.agentBrowserNotes() ?? [] }
+        sources.pendingBrowserNotes = { [weak self, weak host] in
+            guard let self, self.attachesBrowserNotes else { return [] }
+            return (host?.agentBrowserNotes() ?? []).filter { $0.status == .open }
+        }
         sources.skill = { [weak self] name in self?.commandCatalog?.skillCatalog.skill(named: name) }
         if let workspace = agentWorkspace, let host {
             let box = IDEAgentHostBox(host)
@@ -642,6 +659,7 @@ final class IDEAgentConversation: Identifiable {
         var texts: [String] = []
         for (offset, message) in batch.enumerated() {
             let resolution = await IDEAgentMentionResolver.resolve(message.text, sources: mentionSources(root: root))
+            noteBrowserNotesSent(resolution)
             var entry = IDEAgentEntry(kind: .user, text: message.text)
             entry.itemIndex = itemCount + offset
             entry.attachments = resolution.attachments.map(\.summary)
@@ -663,6 +681,10 @@ final class IDEAgentConversation: Identifiable {
     /// The files' rules and this chat's own, merged.
     private func currentRules(root: URL?) -> PermissionRules {
         var rules = IDEAgentPermissionFiles.load(projectRoot: root, appFile: appPermissionsFile).merged(with: chatRules).merged(with: runRules)
+        if settings.browserToolsEnabled {
+            // This Mac's own pages are readable without a card; a deny or ask rule of the user's still wins.
+            for rule in IDEBrowserInspectTool.loopbackRules { rules.add(rule, to: .allow) }
+        }
         if settings.memoryEnabled, !settings.saveMemoriesWithoutAsking {
             // Saving a memory asks first. (An untrusted run asks even without this rule.)
             rules.add(PermissionRule(tool: "remember"), to: .ask)
@@ -1028,6 +1050,11 @@ final class IDEAgentConversation: Identifiable {
             + [IDEShowFileTool(root: root, box: box)]
         if let search = IDEAgentWebSearch.tool(settings: settings) { tools.append(search) }
         if settings.webFetchEnabled { tools.append(WebFetchTool()) }
+        if settings.browserToolsEnabled, let info = host.agentBrowserPageInfo {
+            let access = IDEAgentBrowserAccess(host: host, info: info)
+            tools.append(IDEBrowserInspectTool(access: access))
+            tools.append(IDEBrowserActTool(access: access))
+        }
         // The sandbox choice is per session: resolved here, so a mid-run toggle flip never
         // touches the live run (and the fingerprint above starts a new session for it).
         let sandbox: IDEAgentSandboxChoice? = if settings.sandboxCommands, IDEAgentSandbox.isAvailable {
@@ -1408,6 +1435,42 @@ final class IDEAgentConversation: Identifiable {
                     report = await log.revert(run, using: workspace)
                 }
                 self.finishRevert(entryID: entryID, report: report)
+            } catch {
+                self.append(.init(kind: .error, text: error.localizedDescription))
+            }
+        }
+    }
+
+    /// Reverts the runs behind several "files changed" cards at once (the Changes tab's Revert All), newest
+    /// first so a file several runs changed ends as it was before the oldest. Cards already reverted are
+    /// skipped; files edited afterwards are left alone and named, as with a single card.
+    func revertRuns(entryIDs: [UUID]) {
+        guard !isRunning, let host, let root = host.agentProjectRoot else { return }
+        let wanted = Set(entryIDs)
+        let cards = entries.filter { wanted.contains($0.id) && $0.kind == .changes && !$0.isReverted && $0.run != nil }
+        let runs = cards.compactMap(\.run)
+        guard !runs.isEmpty else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let report: RevertReport
+                self.writeFlag.isReverting = true
+                defer { self.writeFlag.isReverting = false }
+                if let session = self.session {
+                    report = try await session.revertRuns(runs)
+                } else {
+                    let log = await self.ensureCheckpointLog()
+                    let workspace = self.agentWorkspace ?? IDEAgentWorkspace(root: root, box: IDEAgentHostBox(host))
+                    report = await log.revertRuns(runs, using: workspace)
+                }
+                for card in cards {
+                    guard let index = self.entries.firstIndex(where: { $0.id == card.id }) else { continue }
+                    let paths = Set(card.fileChanges.map(\.path))
+                    let conflicts = report.conflicts.filter { paths.contains($0.path) }
+                    self.entries[index].conflicts = conflicts.map { IDEAgentFileChange(path: $0.path, original: $0.original) }
+                    self.entries[index].isReverted = conflicts.isEmpty && report.failures.keys.allSatisfy { !paths.contains($0) }
+                }
+                self.announce(report)
             } catch {
                 self.append(.init(kind: .error, text: error.localizedDescription))
             }

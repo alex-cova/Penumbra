@@ -22,6 +22,64 @@ extension IDEWorkspace {
         if isAIMode { showEditorMode() } else { showAIMode() }
     }
 
+    /// Shows or hides the Changes / Plan / Browser panel beside Code's conversation. From the editor it
+    /// opens AI mode on Code first, since the panel is Code's.
+    func toggleAIInspector(tab: IDEAIInspectorTab? = nil) {
+        if !isAIMode || aiTab != .code { showAIMode(tab: .code) }
+        if let tab {
+            // Asking for the tab that is already showing hides the panel; any other tab switches to it.
+            if showsAIInspector, aiInspectorTab == tab { showsAIInspector = false } else {
+                aiInspectorTab = tab
+                showsAIInspector = true
+            }
+        } else {
+            showsAIInspector.toggle()
+        }
+    }
+
+    /// The notes the user wrote on the Browser tab's page that the agent has not answered, oldest first.
+    /// A note the agent pinned itself is not the user's request, so it is not here.
+    func agentBrowserNotes() -> [IDEAIAnnotation] {
+        (aiBrowser?.annotations.items ?? []).filter { $0.status != .addressed && $0.author == .user }
+    }
+
+    /// The Browser tab's page, for the agent's browser tools. Made when a tool needs it (the tab makes it too).
+    func agentBrowser() -> IDEAIBrowserModel? { ensureAIBrowser() }
+    var agentBrowserPageInfo: IDEAIBrowserPageInfo? { aiBrowserPageInfo }
+
+    /// Shows the Browser tab in AI mode so the user can watch the agent drive it. It never leaves the editor for
+    /// AI mode on the agent's say-so: from the editor this is `false` and the agent does not act.
+    func agentRevealBrowser() -> Bool {
+        guard isAIMode else { return false }
+        if aiTab != .code { aiTab = .code }
+        showsAIInspector = true
+        aiInspectorTab = .browser
+        return true
+    }
+
+    func agentMarkBrowserNotesSent(_ ids: [UUID]) {
+        guard !ids.isEmpty else { return }
+        aiBrowser?.annotations.markSent(ids)
+    }
+
+    /// Shows the Browser tab and turns on select mode, if a page is open there.
+    func startAIBrowserSelecting() {
+        showAIMode(tab: .code)
+        showsAIInspector = true
+        aiInspectorTab = .browser
+        ensureAIBrowser()?.setPicking(true)
+    }
+
+    /// The Browser tab's page, made on first use. Nil once the window is closing.
+    @discardableResult
+    func ensureAIBrowser() -> IDEAIBrowserModel? {
+        guard !isTornDown else { return nil }
+        if let aiBrowser { return aiBrowser }
+        let model = IDEAIBrowserModel(pageInfo: aiBrowserPageInfo)
+        aiBrowser = model
+        return model
+    }
+
     /// What the editor-side opens do first: a file, a diff or Settings is shown in the editor, so AI
     /// mode steps aside.
     func leaveAIModeForEditor() {

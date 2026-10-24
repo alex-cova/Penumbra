@@ -364,6 +364,15 @@ private struct IDEAIToolbarRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 2) {
+                // Changes, Plan and Browser belong to Code: Chat has no project, files or plan.
+                if workspace.aiTab == .code {
+                    IDEToolbarIconButton(
+                        systemName: "sidebar.right",
+                        isActive: workspace.showsAIInspector,
+                        help: workspace.showsAIInspector ? "Hide Changes, Plan and Browser" : "Show Changes, Plan and Browser",
+                        action: { workspace.toggleAIInspector() }
+                    )
+                }
                 IDEToolbarIconButton(systemName: "bolt", help: "Actions…", action: workspace.showCommandPalette)
                 IDEToolbarIconButton(
                     systemName: workspace.notifications.items.isEmpty ? "bell" : "bell.badge",

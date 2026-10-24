@@ -20,11 +20,16 @@ struct IDEAgentPanel: View {
 
     private var settings: IDEAgentSettings { agent.settings }
 
+    private var isChecklistInInspector: Bool {
+        placement == .aiMode && workspace.showsAIInspector && workspace.aiInspectorTab == .plan
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
             if placement != .aiMode, agent.conversations.count > 1 { IDEAgentTabsBar(agent: agent) }
-            if !agent.todos.isEmpty { IDEAgentTodoListView(items: agent.todos) }
+            // The Plan tab beside the conversation shows the checklist, so the strip would say it twice.
+            if !agent.todos.isEmpty, !isChecklistInInspector { IDEAgentTodoListView(items: agent.todos) }
             if placement == .aiMode, agent.entries.isEmpty {
                 aiEmptyGreeting
             } else {
@@ -167,6 +172,12 @@ struct IDEAgentPanel: View {
             if !agent.selected.queue.isEmpty {
                 IDEAgentQueuedMessages(queue: agent.selected.queue) { agent.selected.removeQueued($0) }
             }
+            if isAIMode, let browser = workspace.aiBrowser, !browser.annotations.userOpenItems.isEmpty {
+                IDEAgentBrowserNotesChip(
+                    notes: browser.annotations.userOpenItems, isAttached: agent.selected.attachesBrowserNotes,
+                    toggle: { agent.selected.attachesBrowserNotes.toggle() },
+                    show: { workspace.toggleAIInspector(tab: .browser) })
+            }
             if composerState.isShowingSuggestions {
                 IDEAgentSuggestionList(state: composerState) { index in
                     composerState.selectedIndex = index
@@ -261,7 +272,10 @@ struct IDEAgentPanel: View {
 
     private var chipRow: some View {
         HStack {
-            if isAIMode { IDEAIProjectChip() }
+            if isAIMode {
+                IDEAIProjectChip()
+                IDEAIBranchChip()
+            }
             IDEAgentModeChip(mode: agent.mode) { agent.selected.setMode($0) }
             if agent.selected.isACPConversation {
                 IDEACPModeChip(conversation: agent.selected)
@@ -316,6 +330,57 @@ struct IDEAgentPanel: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The Browser tab's open notes, going with the next message: "📌 3 notes · localhost:3000/dashboard". ✕ keeps
+/// them out of that message (they stay on the page); click shows the Browser tab.
+struct IDEAgentBrowserNotesChip: View {
+    let notes: [IDEAIAnnotation]
+    let isAttached: Bool
+    let toggle: () -> Void
+    let show: () -> Void
+
+    private var title: String {
+        let page = notes.first.map { "\($0.pageURL.host() ?? "page")\($0.pageURL.path)" } ?? ""
+        return "\(notes.count) note\(notes.count == 1 ? "" : "s") · \(page)"
+    }
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            Image(systemName: "pin.fill")
+                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph - 2))
+                .foregroundStyle(isAttached ? Color.orange : IDEAppearance.ColorToken.muted)
+            Button(action: show) {
+                Text(title)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground.opacity(isAttached ? 1 : 0.55))
+                    .strikethrough(!isAttached)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .buttonStyle(.plain)
+            .help("Show the notes in the Browser tab")
+            Spacer(minLength: 0)
+            Text(isAttached ? "sent with your next message" : "kept out of the next message")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            Button(action: toggle) {
+                Image(systemName: isAttached ? "xmark" : "arrow.uturn.backward")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isAttached ? "Leave these notes out of the next message" : "Send these notes with the next message")
+            .accessibilityLabel(isAttached ? "Leave browser notes out of the next message" : "Send browser notes with the next message")
+        }
+        .padding(IDEAppearance.Spacing.xs + 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IDEAppearance.ColorToken.card)
+        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -736,48 +801,6 @@ private struct IDEAgentChangesCard: View {
     }
 }
 
-/// A unified diff, additions and removals tinted, in a box of bounded height so a large edit
-/// doesn't push the buttons out of view.
-private struct IDEAgentDiffView: View {
-    let diff: String
-
-    private struct Line: Identifiable {
-        let id: Int
-        let text: String
-        let tint: Color?
-    }
-
-    private var lines: [Line] {
-        diff.split(separator: "\n", omittingEmptySubsequences: false).enumerated().map { index, raw in
-            let text = String(raw)
-            let tint: Color? = if text.hasPrefix("+++") || text.hasPrefix("---") { nil }
-            else if text.hasPrefix("+") { Color.green.opacity(0.18) }
-            else if text.hasPrefix("-") { Color.red.opacity(0.18) }
-            else { nil }
-            return Line(id: index, text: text, tint: tint)
-        }
-    }
-
-    var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(lines) { line in
-                    Text(line.text.isEmpty ? " " : line.text)
-                        .font(IDEAppearance.Typography.monoSmall)
-                        .foregroundStyle(line.text.hasPrefix("@@") ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(line.tint ?? .clear)
-                }
-            }
-            .textSelection(.enabled)
-            .padding(IDEAppearance.Spacing.xs)
-        }
-        .frame(maxHeight: 260)
-        .background(IDEAppearance.ColorToken.editor)
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-    }
-}
-
 /// The question on a command's card: what will run, where, why, and anything worth a second look.
 private struct IDEAgentApprovalView: View {
     let request: ApprovalRequest
@@ -1067,16 +1090,7 @@ private struct IDEAgentTodoListView: View {
             .buttonStyle(.plain)
             if isExpanded {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.xs) {
-                        Image(systemName: Self.symbol(item.status))
-                            .foregroundStyle(item.status == .inProgress ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
-                            .frame(width: 14)
-                        Text(item.content)
-                            .strikethrough(item.status == .completed)
-                            .foregroundStyle(item.status == .completed ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .font(IDEAppearance.Typography.caption)
+                    IDEAgentTodoRow(item: item)
                 }
             }
         }
@@ -1087,6 +1101,25 @@ private struct IDEAgentTodoListView: View {
         .background(IDEAppearance.ColorToken.card.opacity(0.6))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Checklist, \(items.filter { $0.status == .completed }.count) of \(items.count) done")
+    }
+
+}
+
+/// One item of the model's checklist: shared by the strip under the header and the Plan tab.
+struct IDEAgentTodoRow: View {
+    let item: TodoItem
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.xs) {
+            Image(systemName: Self.symbol(item.status))
+                .foregroundStyle(item.status == .inProgress ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
+                .frame(width: 14)
+            Text(item.content)
+                .strikethrough(item.status == .completed)
+                .foregroundStyle(item.status == .completed ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(IDEAppearance.Typography.caption)
     }
 
     private static func symbol(_ status: TodoItem.Status) -> String {
@@ -1321,6 +1354,10 @@ struct IDEAgentSettingsView: View {
                 }
                 Toggle("Web pages", isOn: $settings.webFetchEnabled)
                 Text("Lets the agent read a web page (documentation, release notes). The address is sent to that site, so each site asks the first time; Always allow adds a rule such as web_fetch(https://docs.swift.org/*). It cannot reach this Mac or a private network, and it does not follow a redirect to another site. Off until you turn it on.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Toggle("Browser tab tools", isOn: $settings.browserToolsEnabled)
+                Text("Lets the agent look at the page in AI mode's Browser tab (its structure and text, console errors, failed requests), read the notes you pin on elements, and, each time you allow it, click, type and navigate there while you watch (Stop ends it). What it reads goes to the model provider. Pages on this Mac (localhost) are readable at once; any other site asks the first time, and Always allow adds a rule such as browser_inspect(https://example.com/*). Input values are never read, and password fields are never typed into.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Toggle("Run tests before finishing", isOn: $settings.runTestsBeforeFinishing)

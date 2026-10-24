@@ -6,6 +6,10 @@ import SwiftUI
 struct IDEAIModeView: View {
     @Environment(IDEWorkspace.self) private var workspace
     @Binding var sidebarWidth: Double
+    @Binding var inspectorWidth: Double
+
+    /// Changes, Plan and Browser sit beside Code's conversation only.
+    private var showsInspector: Bool { workspace.aiTab == .code && workspace.showsAIInspector }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -19,6 +23,12 @@ struct IDEAIModeView: View {
             IDEAIMainView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .idePanel()
+            if showsInspector {
+                IDESidebarResizeHandle(width: $inspectorWidth, edge: .trailing)
+                IDEAIInspector()
+                    .frame(width: inspectorWidth)
+                    .idePanel()
+            }
             Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
         }
         // No status bar in this mode, so the cards need their own gap at the bottom.

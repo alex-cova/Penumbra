@@ -148,6 +148,9 @@ final class IDEAgentSettings {
     var webSearchEnabled: Bool { didSet { defaults.set(webSearchEnabled, forKey: Keys.webSearch) } }
     /// Offers `web_fetch`. Off until the user turns it on: the address of every page goes to its site.
     var webFetchEnabled: Bool { didSet { defaults.set(webFetchEnabled, forKey: Keys.webFetch) } }
+    /// The agent's `browser_inspect` (and later `browser_act`) over the Browser tab's page. On by default: pages on
+    /// this Mac are readable at once and any other site asks first.
+    var browserToolsEnabled: Bool { didSet { defaults.set(browserToolsEnabled, forKey: Keys.browserTools) } }
     /// Whether a run that changed files must pass the project's tests before it may end. Off by
     /// default; turning it on is the consent to run the tests. Only applies to Gradle projects.
     var runTestsBeforeFinishing: Bool { didSet { defaults.set(runTestsBeforeFinishing, forKey: Keys.runTestsGate) } }
@@ -300,6 +303,7 @@ final class IDEAgentSettings {
         static let userInstructions = "umbra.agent.loadsUserInstructions"
         static let webSearch = "umbra.agent.webSearch"
         static let webFetch = "umbra.agent.webFetch"
+        static let browserTools = "umbra.agent.browserTools"
         static let runTestsGate = "umbra.agent.runTestsBeforeFinishing"
         static let memory = "umbra.agent.memoryEnabled"
         static let memoryNoAsk = "umbra.agent.saveMemoriesWithoutAsking"
@@ -351,6 +355,7 @@ final class IDEAgentSettings {
         loadsUserInstructions = defaults.bool(forKey: Keys.userInstructions)
         webSearchEnabled = defaults.bool(forKey: Keys.webSearch)
         webFetchEnabled = defaults.bool(forKey: Keys.webFetch)
+        browserToolsEnabled = defaults.object(forKey: Keys.browserTools) as? Bool ?? true
         runTestsBeforeFinishing = defaults.bool(forKey: Keys.runTestsGate)
         memoryEnabled = defaults.bool(forKey: Keys.memory)
         saveMemoriesWithoutAsking = defaults.bool(forKey: Keys.memoryNoAsk)
@@ -711,7 +716,7 @@ final class IDEAgentSettings {
         let provider = choice.provider
         let local = provider.isLocal
         let prices = maxRunCostCents > 0 ? priceTableText : ""
-        return "\(provider.rawValue)|\(baseURL(for: provider))|\(choice.model)|\(choice.reasoningEffort)|\(local ? String(effectiveContextLength(for: choice)) : "")|\(iterationCap)|\(maxRunTokens)|\(maxRunSeconds)|\(maxRunCostCents)|\(prices)|\(contextWindow(for: choice) ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)|\(webFetchEnabled)|\(runTestsBeforeFinishing)|\(memoryEnabled)|\(saveMemoriesWithoutAsking)|\(sandboxCommands)|\(sandboxBlockNetwork)"
+        return "\(provider.rawValue)|\(baseURL(for: provider))|\(choice.model)|\(choice.reasoningEffort)|\(local ? String(effectiveContextLength(for: choice)) : "")|\(iterationCap)|\(maxRunTokens)|\(maxRunSeconds)|\(maxRunCostCents)|\(prices)|\(contextWindow(for: choice) ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)|\(webFetchEnabled)|\(browserToolsEnabled)|\(runTestsBeforeFinishing)|\(memoryEnabled)|\(saveMemoriesWithoutAsking)|\(sandboxCommands)|\(sandboxBlockNetwork)"
     }
 
     func makeClient() throws -> any LLMClient { try makeClient(for: currentChoice) }

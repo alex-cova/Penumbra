@@ -580,6 +580,8 @@ private struct IDEViewCommands: View {
         Button(workspace?.isAIMode == true ? "Back to the Editor" : "AI Mode", systemImage: "bubbles.and.sparkles", action: { workspace?.toggleAIMode() })
             .keyboardShortcut("i", modifiers: [.command, .control])
             .disabled(workspace == nil)
+        Button("AI Mode: Changes, Plan and Browser", systemImage: "sidebar.right", action: { workspace?.toggleAIInspector() })
+            .disabled(workspace == nil)
         Button("Show Local History", systemImage: "clock.arrow.circlepath", action: { workspace?.showLocalHistory() })
             .disabled(!(workspace?.hasOpenProject ?? false))
         Button("Recent Changes", action: { workspace?.showLocalHistory(project: true) })

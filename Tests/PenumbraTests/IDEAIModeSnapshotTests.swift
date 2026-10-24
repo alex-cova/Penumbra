@@ -51,9 +51,12 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         try? FileManager.default.removeItem(at: base)
     }
 
-    private func render(_ name: String, width: CGFloat = 1100, height: CGFloat = 720) throws {
+    private func render(_ name: String, width: CGFloat = 1100, height: CGFloat = 720) async throws {
         var sidebarWidth = 240.0
-        let view = IDEAIModeView(sidebarWidth: Binding(get: { sidebarWidth }, set: { sidebarWidth = $0 }))
+        var inspectorWidth = IDEAIInspector.defaultWidth
+        let view = IDEAIModeView(
+            sidebarWidth: Binding(get: { sidebarWidth }, set: { sidebarWidth = $0 }),
+            inspectorWidth: Binding(get: { inspectorWidth }, set: { inspectorWidth = $0 }))
             .environment(workspace)
             .frame(width: width, height: height)
             .background(IDEAppearance.ColorToken.window)
@@ -63,8 +66,9 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = host
         host.layoutSubtreeIfNeeded()
-        // Let SwiftUI run its task and onAppear work.
-        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        // Let SwiftUI run its task and onAppear work. Sleeping (not spinning the run loop) lets the
+        // main actor take the results of work a view started.
+        try? await Task.sleep(for: .milliseconds(400))
         host.layoutSubtreeIfNeeded()
         XCTAssertGreaterThan(host.fittingSize.width, 0)
         guard let directory = ProcessInfo.processInfo.environment["AI_MODE_PNG_DIR"], let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
@@ -75,7 +79,7 @@ final class IDEAIModeSnapshotTests: XCTestCase {
 
     func testChatEmptyAndWithAConversation() async throws {
         workspace.showAIMode(tab: .chat)
-        try render("chat-empty")
+        try await render("chat-empty")
 
         let settings = workspace.agent.settings
         settings.acceptDisclosure(for: .anthropic)
@@ -88,7 +92,7 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         workspace.aiChat.selected.send()
         for _ in 0..<300 where workspace.aiChat.selected.isRunning { try? await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(workspace.aiChat.selected.entries.count, 2)
-        try render("chat-conversation")
+        try await render("chat-conversation")
     }
 
     func testCodeWithASessionAndTheModelsSheet() async throws {
@@ -105,15 +109,107 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         workspace.agent.draft = "What is in this project?"
         workspace.agent.send()
         for _ in 0..<300 where workspace.agent.isRunning { try? await Task.sleep(for: .milliseconds(10)) }
-        try render("code-conversation")
+        try await render("code-conversation")
     }
 
-    func testCodeWithNoProjectAndWithAProject() throws {
+    func testCodeWithNoProjectAndWithAProject() async throws {
         workspace.showAIMode(tab: .code)
-        try render("code-no-project")
+        try await render("code-no-project")
 
         workspace.openProjectFolder(base.appendingPathComponent("MyProject"))
-        try render("code-project-empty")
+        try await render("code-project-empty")
+    }
+
+    /// Code with its Changes, Plan and Browser panel open, after a run that edited a file and kept a checklist.
+    func testTheChangesPlanAndBrowserPanel() async throws {
+        let project = base.appendingPathComponent("MyProject")
+        try "one\ntwo\nthree\n".write(to: project.appendingPathComponent("A.txt"), atomically: true, encoding: .utf8)
+        workspace.openProjectFolder(project)
+        let settings = workspace.agent.settings
+        settings.acceptDisclosure(for: .anthropic)
+        settings.saveAPIKey("sk-ant-test", for: .anthropic)
+        let client = MockLLMClient(turns: [
+            .toolCalls((id: "t", name: "todo", arguments: #"{"items":["[x] Read A.txt","[~] Change the second line","[ ] Run the tests"]}"#)),
+            .toolCalls((id: "r", name: "read_file", arguments: #"{"path":"A.txt"}"#)),
+            .toolCalls((id: "e", name: "edit_file", arguments: #"{"path":"A.txt","old_string":"two","new_string":"2"}"#)),
+            .text("Changed the second line."), .text("checked"),
+        ])
+        workspace.agent.choiceClientFactory = { _, _ in client }
+        let choice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        workspace.agent.newChatChoice = choice
+        workspace.agent.selected.modelChoice = choice
+        workspace.showAIMode(tab: .code)
+        workspace.agent.draft = "Change the second line of A.txt"
+        workspace.agent.send()
+        for _ in 0..<500 where workspace.agent.isRunning || !workspace.agent.entries.contains(where: { $0.kind == .changes }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(IDEAIChangedFiles.summarize(workspace.agent.entries).map(\.path), ["A.txt"])
+
+        workspace.showsAIInspector = true
+        for tab in IDEAIInspectorTab.allCases {
+            workspace.aiInspectorTab = tab
+            try await render("inspector-\(tab.rawValue)")
+            if tab == .changes {
+                // The tab works the diff out itself once it shows (render waits for it).
+                XCTAssertEqual(workspace.aiChanges.results["A.txt"]?.diff?.added, 1)
+                XCTAssertEqual(workspace.aiChanges.results["A.txt"]?.diff?.removed, 1)
+            }
+        }
+        XCTAssertNotNil(workspace.aiBrowser, "showing the Browser tab made its page")
+        XCTAssertEqual(workspace.aiBrowser?.hasStarted, false, "and nothing was loaded")
+    }
+
+    /// The Browser tab with notes on the page and select mode on.
+    func testTheBrowserTabWithNotes() async throws {
+        workspace.showAIMode(tab: .code)
+        workspace.showsAIInspector = true
+        workspace.aiInspectorTab = .browser
+        let model = try XCTUnwrap(workspace.ensureAIBrowser())
+        await model.load(
+            html: "<!doctype html><title>Dashboard</title><body style='font:14px sans-serif'><h1>Dashboard</h1><button id='save'>Save</button></body>",
+            baseURL: URL(string: "http://localhost:3000/dashboard")!)
+        func element(_ selector: String, _ text: String) -> IDEAIElementInfo {
+            IDEAIElementInfo(
+                selector: selector, tag: "button", id: nil, classes: ["btn", "primary"], role: "button", label: text, text: text,
+                html: "<button>", rect: .init(x: 0, y: 0, w: 10, h: 10), styles: [:], ancestors: [], redactions: 0, component: nil)
+        }
+        let url = try XCTUnwrap(model.page.url)
+        model.annotations.add(note: "Make this the primary action and right-align it", pageURL: url, pageTitle: "Dashboard", element: element("#save", "Save"))
+        let second = model.annotations.add(note: "Too close to the heading", pageURL: url, pageTitle: "Dashboard", element: element("h1", "Dashboard"))
+        model.annotations.add(note: "", pageURL: url, pageTitle: "Dashboard", element: element("#gone", "Delete account"))
+        model.annotations.markSent([try XCTUnwrap(second?.id)])
+        model.isPicking = true
+        try await render("inspector-browser-notes")
+        model.isPicking = false
+        model.teardown()
+    }
+
+    /// The Browser tab while the agent drives it, and the composer chip for the notes that go with the next message.
+    func testTheBrowserTabWhileTheAgentActsAndTheNotesChip() async throws {
+        let project = base.appendingPathComponent("MyProject")
+        workspace.openProjectFolder(project)
+        workspace.agent.settings.acceptDisclosure(for: .anthropic)
+        let choice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        workspace.agent.newChatChoice = choice
+        workspace.agent.selected.modelChoice = choice
+        workspace.showAIMode(tab: .code)
+        workspace.showsAIInspector = true
+        workspace.aiInspectorTab = .browser
+        let model = try XCTUnwrap(workspace.ensureAIBrowser())
+        await model.load(
+            html: "<!doctype html><title>Form</title><body style='font:14px sans-serif'><h1>Settings</h1><button>Save</button></body>",
+            baseURL: URL(string: "http://localhost:3000/settings")!)
+        let element = IDEAIElementInfo(
+            selector: "button", tag: "button", id: nil, classes: ["btn"], role: "button", label: "Save", text: "Save",
+            html: "<button>", rect: .init(x: 0, y: 0, w: 10, h: 10), styles: [:], ancestors: [], redactions: 0, component: nil)
+        let url = try XCTUnwrap(model.page.url)
+        model.annotations.add(note: "Make Save the primary action", pageURL: url, pageTitle: "Form", element: element)
+        model.annotations.add(note: "Heading is too small", pageURL: url, pageTitle: "Form", element: element)
+        model.agentActivity = "Clicking"
+        try await render("inspector-browser-agent-acting")
+        model.agentActivity = nil
+        model.teardown()
     }
 
     func testTheModelsSheet() async throws {

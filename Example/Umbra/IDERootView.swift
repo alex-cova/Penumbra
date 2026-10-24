@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 public struct IDERootView: View {
     @State private var agentPanelWidth: Double
+    @State private var aiInspectorWidth: Double
     @State private var swiftUIPreviewWidth: Double = 380
     @Environment(IDEWorkspace.self) private var workspace
     @State private var sidebarWidth: Double
@@ -28,6 +29,7 @@ public struct IDERootView: View {
         _sidebarWidth = State(initialValue: session.sidebarWidth)
         _projectSidebarWidth = State(initialValue: session.projectSidebarWidth)
         _agentPanelWidth = State(initialValue: session.agentPanelWidth ?? IDEAppearance.Spacing.agentPanelWidth)
+        _aiInspectorWidth = State(initialValue: session.aiInspectorWidth ?? IDEAIInspector.defaultWidth)
     }
 
     private var isAIMode: Bool { workspace.isAIMode }
@@ -184,7 +186,7 @@ public struct IDERootView: View {
             .accessibilityHidden(isAIMode)
             .overlay {
                 if isAIMode {
-                    IDEAIModeView(sidebarWidth: $sidebarWidth)
+                    IDEAIModeView(sidebarWidth: $sidebarWidth, inspectorWidth: $aiInspectorWidth)
                         .opacity(workspace.chromeOpacity)
                 }
             }
@@ -345,9 +347,12 @@ public struct IDERootView: View {
         .onChange(of: agentPanelWidth) { _, newWidth in
             workspace.agentPanelWidth = newWidth
         }
+        .onChange(of: aiInspectorWidth) { _, newWidth in
+            workspace.aiInspectorWidth = newWidth
+        }
         // Building and writing the session is far too heavy to do on every tick of a resize drag,
         // so it waits for the sizes to settle. `task(id:)` cancels the pending save on each change.
-        .task(id: PanelSizes(sidebar: sidebarWidth, gradle: projectSidebarWidth, terminal: workspace.terminalHeight, agent: agentPanelWidth)) {
+        .task(id: PanelSizes(sidebar: sidebarWidth, gradle: projectSidebarWidth, terminal: workspace.terminalHeight, agent: agentPanelWidth, aiInspector: aiInspectorWidth)) {
             // The first run is the launch state, not a change: record it and save nothing.
             guard didRecordPanelSizes else {
                 didRecordPanelSizes = true
@@ -436,6 +441,7 @@ private struct PanelSizes: Hashable {
     var gradle: Double
     var terminal: Double
     var agent: Double
+    var aiInspector: Double
 }
 
 private struct IDETerminalResizeHandle: View {

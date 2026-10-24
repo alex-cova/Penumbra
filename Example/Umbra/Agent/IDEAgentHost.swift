@@ -81,6 +81,20 @@ protocol IDEAgentHost: AnyObject {
     /// Offers to add `relativePath` to the project's `.gitignore`. `true` when the line is now in the file.
     func agentOfferGitignore(_ relativePath: String) -> Bool
 
+    // The Browser tab. Optional (see the extension below).
+    /// The notes on the Browser tab's page that the agent has not answered, oldest first.
+    func agentBrowserNotes() -> [IDEAIAnnotation]
+    /// These notes went to the agent with a message.
+    func agentMarkBrowserNotesSent(_ ids: [UUID])
+    /// The Browser tab's page, for the agent's browser tools; `nil` for a host with no Browser tab.
+    func agentBrowser() -> IDEAIBrowserModel?
+    /// The Browser tab's address, which exists before its page does; `nil` for a host with no Browser tab. The
+    /// browser tools are offered only when this is not `nil`.
+    var agentBrowserPageInfo: IDEAIBrowserPageInfo? { get }
+    /// Shows the Browser tab so the user can watch the agent work in it. `false` when it cannot be shown (the
+    /// window is in the editor, not AI mode), and then the agent does not act.
+    func agentRevealBrowser() -> Bool
+
     // Showing work. All optional (see the extension below). The model asks to open a file; a build
     // or a command reveals the panel it belongs to. None of these run anything by themselves.
     /// Opens `relativePath` in the editor. `line` and `column` are 1-based.
@@ -113,6 +127,11 @@ extension IDEAgentHost {
     func agentShowFile(relativePath: String, line: Int?, column: Int?) async throws {}
     func agentRevealGradle() {}
     func agentShowCommand(id: UUID, title: String, line: String?) {}
+    func agentBrowserNotes() -> [IDEAIAnnotation] { [] }
+    func agentMarkBrowserNotesSent(_ ids: [UUID]) {}
+    func agentBrowser() -> IDEAIBrowserModel? { nil }
+    var agentBrowserPageInfo: IDEAIBrowserPageInfo? { nil }
+    func agentRevealBrowser() -> Bool { false }
 }
 
 struct IDEAgentFreshProblems: Sendable, Equatable {

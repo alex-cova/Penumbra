@@ -32,6 +32,37 @@ struct IDEAICodeView: View {
     static let columnWidth: CGFloat = 800
 }
 
+/// The project's current git branch, as a chip next to `IDEAIProjectChip`: it opens the same popup as the
+/// titlebar's branch label (switch, create, update, push). Hidden outside a repository. Disabled while
+/// the selected chat runs, because a checkout would change files under the agent.
+struct IDEAIBranchChip: View {
+    @Environment(IDEWorkspace.self) private var workspace
+    @State private var isPresented = false
+
+    var body: some View {
+        if let branch = workspace.gitStatus.currentBranch {
+            let isBusy = workspace.agent.selected.isRunning
+            Button { isPresented.toggle() } label: {
+                Label(branch, systemImage: "arrow.triangle.branch")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 180)
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .disabled(isBusy)
+            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                IDEGitBranchPopup(isPresented: $isPresented)
+            }
+            .help(isBusy ? "Wait for the run to finish before switching branches" : "Branches: switch, create, update and push")
+            .accessibilityLabel("Git branch \(branch)")
+            .accessibilityHint("Show branches")
+        }
+    }
+}
+
 /// The project a session works in, as a chip in the message box: a menu of recent projects and Open Folder….
 struct IDEAIProjectChip: View {
     @Environment(IDEWorkspace.self) private var workspace
