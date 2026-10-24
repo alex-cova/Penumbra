@@ -511,20 +511,20 @@ public final class IDEWorkspace {
     var runFileCanRun = false
     /// True when the active editor is a Java test source file with discovered tests.
     var javaFileCanTest = false
-    private(set) var runFileURL: URL?
+    var runFileURL: URL?
     var activeJavaTestClass: JavaTestClass?
     /// Semantic colours, gutter markers and the name-index overlay painted over the editors.
     @ObservationIgnored private let overlays = IDEEditorOverlayController()
     /// The Java markers shown in each text view, with the buffer generation they were computed
     /// for; a click maps the engine marker's `id` back to its index here.
     /// The language the Type and Call Hierarchy tabs were last asked for (their items belong to it).
-    @ObservationIgnored private let javaRunAvailability = Debouncer()
+    @ObservationIgnored let javaRunAvailability = Debouncer()
     @ObservationIgnored private var structureRefreshTask: Task<Void, Never>?
     /// The last configuration Run launched in this project, restored across launches. Run Last
     /// Configuration reruns it, whatever file is active.
-    private(set) var lastRunConfiguration: JavaRunConfiguration?
+    var lastRunConfiguration: JavaRunConfiguration?
     /// Every run configuration of the project, for the toolbar picker.
-    private(set) var runConfigurations: [JavaRunConfiguration] = []
+    var runConfigurations: [JavaRunConfiguration] = []
     /// Bumped by Stop. A debug launch that is still building notices and gives up.
     @ObservationIgnored var launchEpoch = 0
     var gradleDebugActive = false
@@ -570,12 +570,12 @@ public final class IDEWorkspace {
     /// True when the active editor is an HTTP request file with a parsable request at the caret.
     var httpFileCanSend = false
     /// What the HTTP gutter's send buttons were last built for, so a caret move alone doesn't re-parse.
-    private struct HTTPGutterStamp: Equatable {
+    struct HTTPGutterStamp: Equatable {
         let view: ObjectIdentifier
         let documentID: UUID?
         let generation: UInt64
     }
-    @ObservationIgnored private var httpGutterStamp: HTTPGutterStamp?
+    @ObservationIgnored var httpGutterStamp: HTTPGutterStamp?
     struct DatabaseGutterStamp: Equatable {
         let view: ObjectIdentifier
         let documentID: UUID?
@@ -584,12 +584,12 @@ public final class IDEWorkspace {
     @ObservationIgnored var databaseGutterStamp: DatabaseGutterStamp?
     /// The `main` methods last found in a text view's buffer, so a caret move doesn't parse the
     /// file again for the gutter's run buttons.
-    private struct JavaMainLocations {
+    struct JavaMainLocations {
         let view: ObjectIdentifier
         let generation: UInt64
         let locations: [JavaMainMethodLocation]
     }
-    @ObservationIgnored private var javaMainLocations: JavaMainLocations?
+    @ObservationIgnored var javaMainLocations: JavaMainLocations?
     let httpSupport = IDEHTTPSupport()
     /// Connections, schema and query results for this window. The connection list is shared.
     let databaseSupport = IDEDatabaseSupport()
@@ -1840,132 +1840,6 @@ public final class IDEWorkspace {
         adapter.textView?.perform(.toggleReplacePanel)
     }
 
-    var runHelp: String {
-        activeRunProvider?.runHelp(fileURL: runFileURL) ?? javaRun.runHelp(fileURL: runFileURL)
-    }
-
-    var debugHelp: String {
-        (activeRunProvider ?? javaRun).debugHelp(fileURL: runFileURL, canRun: runFileCanRun)
-    }
-
-    var runFileCanDebug: Bool {
-        runFileCanRun && (activeRunProvider ?? javaRun).canDebug(fileURL: runFileURL)
-    }
-
-    var isRunActive: Bool {
-        runProviders.hasActiveWork || debugSession.isActive || dapDebugSession.isActive || runs.isAnyActive
-    }
-
-    public func buildGradleProject() {
-        guard let system = projectSystems.active, project.rootURL != nil else { return }
-        if let tab = system.consoleTab {
-            showBottomTab(tab)
-        }
-        system.build()
-    }
-
-    public func runActiveFile() {
-        startActiveFile(mode: .run)
-    }
-
-    public func debugActiveFile() {
-        guard runFileCanDebug else { return }
-        startActiveFile(mode: .debug)
-    }
-
-    /// The play and bug buttons: what the active file's run provider starts by default.
-    private func startActiveFile(mode: IDERunMode) {
-        guard runFileCanRun, let provider = activeRunProvider, let document = activeRunDocument() else { return }
-        provider.run(document, mode: mode)
-    }
-
-    func stopRunning() {
-        runProviders.stopAll()
-        runs.stopAll()
-        if debugSession.isActive || dapDebugSession.isActive || gradleDebugActive {
-            stopDebugging()
-        }
-    }
-
-    func chooseGradleRunTask(_ taskName: String) {
-        guard let prompt = gradleRunTaskPrompt else { return }
-        gradleRunTaskPrompt = nil
-        javaRun.chooseGradleRunTask(taskName, for: prompt)
-    }
-
-    func dismissGradleRunTaskPrompt() {
-        gradleRunTaskPrompt = nil
-    }
-
-    /// Reruns the last launched configuration, whatever file is active.
-    func runLastRunConfiguration() {
-        guard let lastRunConfiguration else { return }
-        launch(lastRunConfiguration)
-    }
-
-    /// Opens the run configuration sheet for the active file's launch, or for the last one when
-    /// the active file can't be launched.
-    func editRunConfiguration() {
-        runConfigurationsEditor = makeRunConfigurationsEditor(
-            highlighting: javaRun.activeRunConfiguration() ?? lastRunConfiguration
-        )
-    }
-
-    var canEditRunConfiguration: Bool {
-        project.rootURL != nil || runFileCanRun || lastRunConfiguration != nil
-    }
-
-    func dismissRunConfigurationSheet() {
-        runConfigurationsEditor = nil
-    }
-
-    func launch(_ configuration: JavaRunConfiguration) {
-        javaRun.launch(configuration)
-    }
-
-
-
-    // MARK: - Run / Debug in context
-
-    /// Runs (or debugs) what the caret is in, through the active document's run provider. Anywhere
-    /// else, and in a file with no run provider, it repeats the last configuration, so the key is
-    /// never dead.
-    func runInContext(debug: Bool) {
-        Task { @MainActor [self] in
-            if let provider = activeRunProvider, let document = activeRunDocument(),
-               await provider.runInContext(document, mode: debug ? .debug : .run) {
-                return
-            }
-            if debug { debugLastConfiguration() } else { runLastRunConfiguration() }
-        }
-    }
-
-    // MARK: - Run gutter
-
-    /// The Run / Debug / Modify menu for the gutter's play button on the `main` at `line`. Parses
-    /// fresh at click time: the buttons may be one debounce behind an edit.
-    func showMainRunMenu(atLine line: Int, file: URL, in textView: TextView) {
-        let text = textView.text
-        guard let location = JavaMainMethod.locations(in: text, fileName: file.lastPathComponent).first(where: { $0.line == line }),
-              let configuration = mainRunConfiguration(for: location, file: file, source: text) else { return }
-        let menu = IDERunGutterMenu.make(
-            title: "\(location.simpleClassName).main()",
-            keymapPreset: preferences.keymapPreset,
-            run: { [weak self] in self?.launch(configuration, mode: .run) },
-            debug: { [weak self] in self?.launch(configuration, mode: .debug) },
-            modify: { [weak self] in self?.runConfigurationDraft = configuration }
-        )
-        IDERunGutterMenu.popUp(menu, in: textView)
-    }
-
-    func launch(_ configuration: JavaRunConfiguration, mode: JavaLaunchMode) {
-        javaRun.launch(configuration, mode: mode)
-    }
-
-    func mainRunConfiguration(for location: JavaMainMethodLocation, file: URL, source: String) -> JavaRunConfiguration? {
-        javaRun.mainRunConfiguration(for: location, file: file, source: source)
-    }
-
     // MARK: - Evaluate
 
     @ObservationIgnored private let quickEvaluatePopover = IDEQuickEvaluatePopover()
@@ -2152,57 +2026,6 @@ public final class IDEWorkspace {
         }
     }
 
-    func reportRunProblem(_ message: String) {
-        if javaSupport.maven.isActive, !javaSupport.gradle.isActive {
-            maven.appendConsoleNote(message)
-            showMavenOutput()
-        } else {
-            gradle.appendConsoleNote(message)
-            showGradleOutput()
-        }
-    }
-
-    func refreshLastRunConfiguration() {
-        lastRunConfiguration = runConfigurationStore.last(forProject: project.rootURL)
-        runConfigurations = runConfigurationStore.configurations(forProject: project.rootURL)
-    }
-
-    // MARK: Run configuration picker
-
-    /// Makes `id` the selected configuration without running it.
-    func selectRunConfiguration(_ id: UUID) {
-        runConfigurationStore.select(id, forProject: project.rootURL)
-        refreshLastRunConfiguration()
-    }
-
-    /// Runs the configuration `id` from the picker, selecting it.
-    func runRunConfiguration(_ id: UUID) {
-        guard let configuration = runConfigurations.first(where: { $0.id == id }) else { return }
-        launch(configuration)
-    }
-
-    func editRunConfiguration(_ id: UUID) {
-        guard let configuration = runConfigurations.first(where: { $0.id == id }) else { return }
-        runConfigurationDraft = configuration
-    }
-
-    func newRunConfiguration() {
-        let draft = javaRun.newConfigurationDraft()
-        let editor = makeRunConfigurationsEditor(highlighting: nil)
-        editor.add(kind: draft?.kind ?? .gradle, target: draft?.target ?? .gradleRun(projectPath: ":"))
-        runConfigurationsEditor = editor
-    }
-
-    func duplicateRunConfiguration(_ id: UUID) {
-        runConfigurationStore.duplicate(id, forProject: project.rootURL)
-        refreshLastRunConfiguration()
-    }
-
-    func deleteRunConfiguration(_ id: UUID) {
-        runConfigurationStore.delete(id, forProject: project.rootURL)
-        refreshLastRunConfiguration()
-    }
-
     /// Next to `session.json` and `gradle-trust.json`: launch settings shouldn't reset with a cache.
     static var defaultRunConfigurationsURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -2231,7 +2054,7 @@ public final class IDEWorkspace {
     /// one that was sent. A file with no name yet is left alone: a save panel would interrupt the
     /// request. The request itself is read from the buffer, so it is sent even when the save is
     /// cancelled (the overwrite prompt) or fails.
-    private func saveHTTPFileBeforeSending(at url: URL?) async {
+    func saveHTTPFileBeforeSending(at url: URL?) async {
         guard let url, let (_, document) = paneAndDocument(matching: url),
               document.isDirty, document.contentKind == .text
         else { return }
@@ -5778,158 +5601,6 @@ public final class IDEWorkspace {
         statusSelectionLength = range.length
         refreshJavaRunAvailability(from: textView)
         refreshHTTPSendAvailability(from: textView)
-    }
-
-    /// Only clears the flag for a non-HTTP editor. Whether an HTTP file has a request to send comes
-    /// from `refreshHTTPGutter`, on the same debounce as the Java run button: parsing the whole
-    /// buffer on every caret move or keystroke would put document size on the typing path.
-    private func refreshHTTPSendAvailability(from textView: TextView) {
-        if workbench.activePane.selectedDocument?.languageIdentifier != "http" {
-            httpFileCanSend = false
-        }
-    }
-
-    /// Puts a `play.fill` button in the gutter on the first line of every request in an `.http`
-    /// file. Clicking one sends that request, wherever the caret is.
-    private func refreshHTTPGutter(from textView: TextView, fileURL: URL?) {
-        let stamp = HTTPGutterStamp(
-            view: ObjectIdentifier(textView),
-            documentID: workbench.activePane.selectedDocument?.id,
-            generation: textView.contentGeneration
-        )
-        guard stamp != httpGutterStamp else { return }
-        httpGutterStamp = stamp
-        let text = textView.text
-        let locations = HTTPRequestParser.requestLocations(in: text)
-        httpFileCanSend = !locations.isEmpty
-        httpSupport.prefetchSchemas(in: text, fileURL: fileURL)
-        textView.reservedLineMarkerSlots = IDEEditorOverlayController.reservedLineMarkerSlots(languageIdentifier: "http", hasMarkerProvider: false)
-        textView.setGutterDecorations(locations.map {
-            GutterDecoration(line: $0.startLine, symbolName: "play.fill", accessibilityLabel: "Send Request", placement: .lineMarkerColumn)
-        })
-        textView.gutterDecorationHandler = { [weak self, weak textView] line in
-            guard let self, let textView else { return }
-            self.sendHTTPRequest(atLine: line, from: textView, fileURL: fileURL)
-        }
-        // A Java file shown here before left its breakpoint handlers; they must not see this file.
-        textView.gutterLineClickHandler = nil
-        textView.gutterDecorationsDidMove = nil
-        textView.alwaysShowGutterDecorationColumn = false
-    }
-
-    /// Parses fresh at click time: the buttons may be one debounce behind an edit.
-    private func sendHTTPRequest(atLine line: Int, from textView: TextView, fileURL: URL?) {
-        guard HTTPRequestParser.requestLocations(in: textView.text).contains(where: { $0.startLine == line }) else {
-            return
-        }
-        showHTTPResponse()
-        Task { @MainActor [weak self, weak textView] in
-            await self?.saveHTTPFileBeforeSending(at: fileURL)
-            guard let self, let textView else { return }
-            // Parse again: the buffer may have changed while the file was being written.
-            let text = textView.text
-            guard let location = HTTPRequestParser.requestLocations(in: text).first(where: { $0.startLine == line }) else {
-                return
-            }
-            self.httpSupport.send(text: text, caretUTF16Offset: location.utf16Range.lowerBound, fileURL: fileURL)
-        }
-    }
-
-    private func refreshJavaRunAvailability(from textView: TextView) {
-        javaRunAvailability.schedule(after: .milliseconds(300)) { [weak self, weak textView] in
-            guard let self, let textView else { return }
-            self.refreshJavaRunAvailabilityNow(from: textView)
-        }
-    }
-
-    /// `containsMain` copies the whole buffer. That stays off the keystroke; the Run button
-    /// catches up once typing pauses.
-    private func refreshJavaRunAvailabilityNow(from textView: TextView) {
-        let document = workbench.activePane.selectedDocument
-        let isJava = document?.languageIdentifier == "java"
-        let fileURL = document?.url
-        if let provider = activeRunProvider {
-            runFileCanRun = provider.canRun(IDERunDocument(
-                url: fileURL, languageIdentifier: document?.languageIdentifier, text: textView.text
-            ))
-        } else {
-            runFileCanRun = false
-        }
-        runFileURL = fileURL
-        // One owner per editor for the gutter icons: query consoles get execute buttons, HTTP
-        // files get send buttons, everything else goes through the Java path, which also clears
-        // the gutter for non-Java files.
-        if let document, databaseSupport.consoles[document.id] != nil {
-            httpGutterStamp = nil
-            refreshDatabaseGutter(from: textView)
-        } else if document?.languageIdentifier == "http" {
-            databaseGutterStamp = nil
-            refreshHTTPGutter(from: textView, fileURL: fileURL)
-        } else {
-            httpGutterStamp = nil
-            databaseGutterStamp = nil
-            Task { await refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: isJava) }
-        }
-    }
-
-    /// Breakpoints on a Java file, and run buttons from the active run provider on any file. A click
-    /// on a breakpoint removes it, a click on a run button opens its Run / Debug menu, and a click
-    /// on any other Java line number adds a breakpoint. A file that is not Java gets run buttons
-    /// only, and only when its provider names locations.
-    func refreshJavaTestDecorations(from textView: TextView, fileURL: URL?, isJava: Bool) async {
-        let language = isJava ? "java" : workbench.activePane.selectedDocument?.languageIdentifier
-        let runDocument = IDERunDocument(
-            url: fileURL, languageIdentifier: language,
-            caretUTF16Offset: textView.selectedRange.location, text: textView.text
-        )
-        let provider = runProviders.provider(forLanguage: language)
-        let locations = await provider?.runnableLocations(in: runDocument) ?? []
-        let wantsBreakpoints = isJava || language == "swift" || language == "javascript" || language == "typescript"
-        guard wantsBreakpoints, let fileURL else {
-            javaFileCanTest = false
-            activeJavaTestClass = nil
-            guard let fileURL, !locations.isEmpty else {
-                textView.setGutterDecorations([])
-                textView.gutterDecorationHandler = nil
-                textView.gutterLineClickHandler = nil
-                textView.gutterDecorationsDidMove = nil
-                textView.alwaysShowGutterDecorationColumn = false
-                return
-            }
-            applyRunLocationGutter(fileURL: fileURL, locations: locations, to: textView)
-            return
-        }
-        guard isJava else {
-            javaFileCanTest = false
-            activeJavaTestClass = nil
-            applyJavaGutter(JavaGutterContent(fileURL: fileURL, locations: locations), to: textView)
-            return
-        }
-        if await javaSupport.isTestSource(file: fileURL) {
-            let testClass = await javaSupport.tests(for: fileURL)
-            activeJavaTestClass = testClass
-            javaFileCanTest = !(testClass?.methods.isEmpty ?? true)
-        } else {
-            javaFileCanTest = false
-            activeJavaTestClass = nil
-        }
-        applyJavaGutter(JavaGutterContent(fileURL: fileURL, locations: locations), to: textView)
-    }
-
-    /// The `main` methods in `textView`'s buffer, parsed off the main thread and reused until the
-    /// buffer changes. `containsMain` screens out the common file without one before parsing.
-    func mainLocations(in textView: TextView, fileName: String?) async -> [JavaMainMethodLocation] {
-        let view = ObjectIdentifier(textView)
-        let generation = textView.contentGeneration
-        if let cached = javaMainLocations, cached.view == view, cached.generation == generation {
-            return cached.locations
-        }
-        let text = textView.text
-        let locations = await Task.detached(priority: .utility) {
-            JavaMainMethod.containsMain(in: text) ? JavaMainMethod.locations(in: text, fileName: fileName) : []
-        }.value
-        javaMainLocations = JavaMainLocations(view: view, generation: generation, locations: locations)
-        return locations
     }
 
     /// Writes `textView`'s live content back into `document` and bumps `document.contentGeneration`
