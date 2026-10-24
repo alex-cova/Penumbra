@@ -13,18 +13,7 @@ struct IDEAgentEntryView: View {
         case .user:
             IDEAgentUserRow(entry: entry)
         case .assistant:
-            // Plain text while it streams; Markdown blocks once the message is complete.
-            Group {
-                if entry.isStreaming {
-                    Text(entry.text)
-                        .font(IDEAppearance.Typography.body)
-                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                        .textSelection(.enabled)
-                } else {
-                    IDEAgentMarkdownView(text: entry.text)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            IDEAgentAssistantText(entry: entry)
         case .toolCall(let name) where name == "exit_plan_mode":
             IDEAgentPlanCard(entry: entry)
         case .toolCall(let name):
@@ -32,10 +21,7 @@ struct IDEAgentEntryView: View {
         case .changes:
             IDEAgentChangesCard(entry: entry)
         case .notice:
-            Text(entry.text)
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            IDEAgentNoticeText(text: entry.text)
         case .error:
             IDEAgentErrorRow(entry: entry)
         }
@@ -206,5 +192,37 @@ struct IDEAgentDisclosureCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(IDEAppearance.ColorToken.card)
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
+    }
+}
+
+/// One assistant message: plain text while it streams, Markdown blocks once it is complete. Shared by
+/// the agent's transcript and the Chat tab's.
+struct IDEAgentAssistantText: View {
+    let entry: IDEAgentEntry
+
+    var body: some View {
+        Group {
+            if entry.isStreaming {
+                Text(entry.text)
+                    .font(IDEAppearance.Typography.body)
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .textSelection(.enabled)
+            } else {
+                IDEAgentMarkdownView(text: entry.text)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A line the transcript says on its own behalf (a summary, a stop reason): small and muted.
+struct IDEAgentNoticeText: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(IDEAppearance.Typography.caption)
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

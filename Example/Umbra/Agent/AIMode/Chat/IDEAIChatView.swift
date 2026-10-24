@@ -257,23 +257,9 @@ private struct IDEAIChatMessageView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         case .assistant:
-            // Plain text while it streams; Markdown once the message is complete.
-            Group {
-                if entry.isStreaming {
-                    Text(entry.text)
-                        .font(IDEAppearance.Typography.body)
-                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                        .textSelection(.enabled)
-                } else {
-                    IDEAgentMarkdownView(text: entry.text)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            IDEAgentAssistantText(entry: entry)
         case .notice:
-            Text(entry.text)
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            IDEAgentNoticeText(text: entry.text)
         case .error:
             VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
                 Label(entry.text, systemImage: "exclamationmark.triangle")
