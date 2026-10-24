@@ -1,5 +1,6 @@
 import AgentEvalKit
 import AgentKit
+import AgentKitApple
 import AgentKitMLX
 import Foundation
 import LocalModelStore
@@ -24,13 +25,26 @@ enum Providers {
     static let defaultLocalContext = 32_768
 
     static func make(_ options: Options) async throws -> ProviderSetup {
+        // Apple's models are not chosen by name.
+        if options.provider == "apple" { return try await apple(.onDevice, options: options) }
+        if options.provider == "apple-pcc" { return try await apple(.privateCloudCompute, options: options) }
         guard let model = options.model, !model.isEmpty else { throw ProviderError.message("--model is required.") }
         switch options.provider {
         case "ollama": return try await ollama(model: model, options: options)
         case "openai", "chat": return try remote(model: model, options: options)
         case "mlx": return try mlx(model: model, options: options)
-        default: throw ProviderError.message("Unknown provider “\(options.provider)”. Use ollama, openai, chat or mlx.")
+        default: throw ProviderError.message("Unknown provider “\(options.provider)”. Use ollama, openai, chat, mlx, apple or apple-pcc.")
         }
+    }
+
+    /// Apple's models take no `--model`.
+    private static func apple(_ kind: AppleModelKind, options: Options) async throws -> ProviderSetup {
+        if let message = AppleModelAvailability.message(for: kind) { throw ProviderError.message(message) }
+        let window = await AppleModelAvailability.contextSize(for: kind)
+        let name = kind == .onDevice ? "apple" : "apple-pcc"
+        return ProviderSetup(
+            client: AppleLLMClient(kind: kind), label: "\(name) · \(window.map { "\($0 / 1024)K context" } ?? "unknown context")",
+            contextWindow: window, isLocal: kind == .onDevice)
     }
 
     private static func endpointURL(_ options: Options, fallback: String) throws -> URL {

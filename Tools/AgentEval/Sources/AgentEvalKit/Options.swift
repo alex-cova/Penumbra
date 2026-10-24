@@ -46,6 +46,8 @@ public struct Options: Sendable {
       openai   OpenAI Responses API; key from OPENAI_API_KEY
       chat     any OpenAI-compatible Chat Completions server (--base-url, optional key)
       mlx      an on-device MLX model installed through Umbra (--model is its repository id)
+      apple    Apple's on-device foundation model (Apple Intelligence); no --model
+      apple-pcc  Apple's Private Cloud Compute model (macOS 27); no --model
 
     OPTIONS
       --model NAME          model to test (required for run)

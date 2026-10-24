@@ -1,4 +1,5 @@
 import AgentKit
+import AgentKitApple
 import Foundation
 import LocalModelStore
 import XCTest
@@ -305,5 +306,83 @@ final class IDEAgentProviderTests: XCTestCase {
         settings.provider = .ollama
         await settings.refreshOllamaModels()
         XCTAssertEqual(settings.ollamaError, "No models are installed. Run `ollama pull <model>`.")
+    }
+
+    // MARK: - Apple Intelligence
+
+    func testTheOnDeviceAppleModelNeedsNoUrlNoKeyAndNoConsent() {
+        let settings = makeSettings()
+        settings.appleStatus = { _ in .available }
+        settings.provider = .apple
+        XCTAssertNil(settings.endpointURL)
+        XCTAssertFalse(settings.requiresAPIKey)
+        XCTAssertTrue(settings.hasAcceptedDisclosure)
+        XCTAssertNil(settings.setupHint(for: IDEAIModelChoice(provider: .apple, model: "system")))
+        XCTAssertEqual(settings.model(for: .apple), "system")
+        XCTAssertTrue(settings.currentChoice.provider.isLocal)
+    }
+
+    func testPrivateCloudComputeAsksOnceBeforeAnythingLeavesTheMac() {
+        let settings = makeSettings()
+        settings.appleStatus = { _ in .available }
+        XCTAssertFalse(settings.requiresAPIKey(for: .applePCC))
+        XCTAssertNil(settings.endpointURL(for: .applePCC))
+        XCTAssertFalse(settings.hasAcceptedDisclosure(for: .applePCC))
+        XCTAssertEqual(settings.endpointHost(for: .applePCC), "Apple Private Cloud Compute")
+        settings.acceptDisclosure(for: .applePCC)
+        XCTAssertTrue(settings.hasAcceptedDisclosure(for: .applePCC))
+        XCTAssertFalse(settings.hasAcceptedDisclosure(for: .anthropic), "the consent is for Apple only")
+    }
+
+    func testTheSetupHintSaysWhyAppleIntelligenceCannotBeUsed() {
+        let settings = makeSettings()
+        let choice = IDEAIModelChoice(provider: .apple, model: "system")
+        settings.appleStatus = { _ in .appleIntelligenceNotEnabled }
+        XCTAssertEqual(settings.setupHint(for: choice), "Turn on Apple Intelligence in System Settings ▸ Apple Intelligence & Siri.")
+        settings.appleStatus = { _ in .deviceNotEligible }
+        XCTAssertEqual(settings.setupHint(for: choice), "This Mac doesn't support Apple Intelligence.")
+        settings.appleStatus = { _ in .requiresNewerOS }
+        XCTAssertEqual(
+            settings.setupHint(for: IDEAIModelChoice(provider: .applePCC, model: "pcc")), "Private Cloud Compute needs macOS 27.")
+        settings.appleStatus = { _ in .available }
+        XCTAssertNil(settings.setupHint(for: choice))
+    }
+
+    func testAnUnavailableAppleModelIsRefusedBeforeARequest() {
+        let settings = makeSettings()
+        settings.appleStatus = { _ in .modelNotReady }
+        XCTAssertThrowsError(try settings.makeClient(for: IDEAIModelChoice(provider: .apple, model: "system"))) { error in
+            XCTAssertEqual(error.localizedDescription, "Apple Intelligence is still getting its model ready. Try again in a few minutes.")
+        }
+        settings.appleStatus = { _ in .available }
+        let client = try? settings.makeClient(for: IDEAIModelChoice(provider: .applePCC, model: "pcc"))
+        XCTAssertEqual(client?.providerID, "apple-pcc")
+    }
+
+    func testASmallAppleWindowIsChatOnlyAndALargeOneCanRunCode() {
+        let settings = makeSettings()
+        settings.appleStatus = { _ in .available }
+        settings.appleContextSizes = [.onDevice: 8_192, .privateCloudCompute: 32_768]
+        let onDevice = IDEAIModelChoice(provider: .apple, model: "system")
+        let cloud = IDEAIModelChoice(provider: .applePCC, model: "pcc")
+        XCTAssertFalse(settings.appleFitsCode(.onDevice))
+        XCTAssertTrue(settings.appleFitsCode(.privateCloudCompute))
+        XCTAssertNotNil(settings.codeHint(for: onDevice))
+        XCTAssertNil(settings.codeHint(for: cloud))
+        XCTAssertNil(settings.setupHint(for: onDevice), "Chat can use it")
+        XCTAssertEqual(settings.contextWindow(for: onDevice), 8_192)
+        XCTAssertEqual(settings.contextWindow(for: cloud), 32_768)
+        XCTAssertNil(settings.cost(of: TokenUsage(inputTokens: 1_000, outputTokens: 100), for: onDevice))
+        XCTAssertNil(settings.cost(of: TokenUsage(inputTokens: 1_000, outputTokens: 100), for: cloud))
+    }
+
+    func testAppleModelsHaveNoReasoningSettingAndNoEndpoint() {
+        XCTAssertEqual(IDEAgentProvider.apple.reasoningEfforts, ["off"])
+        XCTAssertEqual(IDEAgentProvider.apple.defaultReasoning, "off")
+        XCTAssertEqual(IDEAgentProvider.applePCC.defaultReasoning, "off")
+        XCTAssertFalse(IDEAgentProvider.apple.hasEndpoint)
+        XCTAssertFalse(IDEAgentProvider.applePCC.hasEndpoint)
+        XCTAssertTrue(IDEAgentProvider.ollama.hasEndpoint)
+        XCTAssertFalse(IDEAgentProvider.mlx.hasEndpoint)
     }
 }

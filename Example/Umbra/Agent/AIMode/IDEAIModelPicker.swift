@@ -1,4 +1,5 @@
 import AgentKit
+import AgentKitApple
 import AgentKitMLX
 import LocalModelStore
 import SwiftUI
@@ -11,7 +12,7 @@ enum IDEAIModelPickerMode {
 }
 
 /// The model of a chat, as a menu under the message field: "Opus 5.5 High". Lists the Claude models,
-/// the Muse models from Meta, the configured OpenAI ones, the installed Ollama models, the on-device
+/// the Muse models from Meta, the configured OpenAI ones, Apple's models, the installed Ollama models, the on-device
 /// ones and, for Code, the external agents; reasoning effort and model management are at the bottom.
 struct IDEAIModelPicker: View {
     let settings: IDEAgentSettings
@@ -27,11 +28,12 @@ struct IDEAIModelPicker: View {
             anthropicSection
             metaSection
             openAISection
+            appleSection
             ollamaSection
             onDeviceSection
             if mode == .code { externalAgentSection }
             Divider()
-            if !choice.isACP { effortMenu }
+            if !choice.isACP, choice.provider.appleKind == nil { effortMenu }
             Button("Manage Models…", action: onManage)
         } label: {
             label
@@ -45,6 +47,7 @@ struct IDEAIModelPicker: View {
         .task {
             await settings.refreshOllamaModels(adjustSelection: false)
             await settings.refreshMetaModels()
+            await settings.refreshAppleModels()
         }
     }
 
@@ -151,6 +154,28 @@ struct IDEAIModelPicker: View {
                     provider: .ollama, model: model.name, isEnabled: usable)
             }
         }
+    }
+
+    @ViewBuilder private var appleSection: some View {
+        Section("Apple") {
+            ForEach(AppleModelKind.allCases, id: \.self) { kind in
+                let provider: IDEAgentProvider = kind == .onDevice ? .apple : .applePCC
+                let unavailable = AppleModelAvailability.message(for: settings.appleStatus(kind), kind: kind) != nil
+                let chatOnly = mode == .code && !settings.appleFitsCode(kind)
+                item(
+                    appleTitle(for: provider, unavailable: unavailable, chatOnly: chatOnly),
+                    provider: provider, model: provider.defaultModel, isEnabled: !unavailable && !chatOnly)
+            }
+        }
+    }
+
+    private func appleTitle(for provider: IDEAgentProvider, unavailable: Bool, chatOnly: Bool) -> String {
+        let name = IDEAIModelNames.display(provider: provider, model: provider.defaultModel)
+        if unavailable { return name + " (unavailable)" }
+        if chatOnly { return name + " (chat only)" }
+        // Private Cloud Compute sends the conversation to Apple, so the first use asks like any remote host.
+        if provider == .applePCC, !settings.hasAcceptedDisclosure(for: provider) { return name + " · allow…" }
+        return name
     }
 
     @ViewBuilder private var onDeviceSection: some View {

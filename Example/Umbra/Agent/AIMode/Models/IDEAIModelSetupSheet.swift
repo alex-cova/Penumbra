@@ -1,4 +1,5 @@
 import AgentKit
+import AgentKitApple
 import AgentKitMLX
 import AppKit
 import LocalModelStore
@@ -31,11 +32,12 @@ struct IDEAIModelSetupSheet: View {
     @State private var option: Option?
 
     enum Option: String, CaseIterable, Identifiable {
-        case onDevice, ollama, apiKey
+        case apple, onDevice, ollama, apiKey
         var id: String { rawValue }
 
         var title: String {
             switch self {
+            case .apple: "Apple Intelligence"
             case .onDevice: "On This Mac"
             case .ollama: "Ollama"
             case .apiKey: "API Key"
@@ -44,6 +46,7 @@ struct IDEAIModelSetupSheet: View {
 
         var detail: String {
             switch self {
+            case .apple: "Apple's model, built into macOS. Nothing to download and no key."
             case .onDevice: "Private. Runs on this Mac's GPU; nothing is sent anywhere."
             case .ollama: "Use the models you run with Ollama."
             case .apiKey: "Use Claude, Muse from Meta, or OpenAI with your own key."
@@ -52,6 +55,7 @@ struct IDEAIModelSetupSheet: View {
 
         var symbol: String {
             switch self {
+            case .apple: "apple.logo"
             case .onDevice: "cpu"
             case .ollama: "server.rack"
             case .apiKey: "key"
@@ -77,7 +81,14 @@ struct IDEAIModelSetupSheet: View {
         }
         .frame(width: 560, height: 560)
         .background(IDEAppearance.ColorToken.panel)
-        .onAppear { if option == nil { option = isOnDeviceAvailable ? .onDevice : .ollama } }
+        .onAppear {
+            guard option == nil else { return }
+            if settings.appleStatus(.onDevice) == .available {
+                option = .apple
+            } else {
+                option = isOnDeviceAvailable ? .onDevice : .ollama
+            }
+        }
     }
 
     private var header: some View {
@@ -129,6 +140,7 @@ struct IDEAIModelSetupSheet: View {
             if isOpen {
                 Divider()
                 switch item {
+                case .apple: IDEAIAppleSetup(settings: settings, mode: mode, use: use)
                 case .onDevice: IDEAIOnDeviceSetup(settings: settings, mode: mode, use: use)
                 case .ollama: IDEAIOllamaSetup(settings: settings, mode: mode, use: use)
                 case .apiKey: IDEAIAPIKeySetup(settings: settings, use: use)
@@ -148,6 +160,59 @@ struct IDEAIModelSetupSheet: View {
     private func use(_ provider: IDEAgentProvider, _ model: String) {
         onUse(IDEAIModelChoice(provider: provider, model: model, reasoningEffort: settings.reasoningEffort(for: provider)))
         dismiss()
+    }
+}
+
+// MARK: - Apple Intelligence
+
+private struct IDEAIAppleSetup: View {
+    let settings: IDEAgentSettings
+    let mode: IDEAIModelPickerMode
+    let use: (IDEAgentProvider, String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            ForEach(AppleModelKind.allCases, id: \.self) { kind in
+                row(kind)
+            }
+        }
+    }
+
+    private func row(_ kind: AppleModelKind) -> some View {
+        let provider: IDEAgentProvider = kind == .onDevice ? .apple : .applePCC
+        let status = settings.appleStatus(kind)
+        let unavailable = AppleModelAvailability.message(for: status, kind: kind)
+        let chatOnly = mode == .code && !settings.appleFitsCode(kind)
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(IDEAIModelNames.display(provider: provider, model: provider.defaultModel)).font(IDEAppearance.Typography.body)
+                Text(detail(kind, unavailable: unavailable, chatOnly: chatOnly))
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(unavailable == nil ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.error)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if status == .appleIntelligenceNotEnabled {
+                Button("Open System Settings") { Self.openSettings() }
+            }
+            Button("Use") { use(provider, provider.defaultModel) }.disabled(unavailable != nil || chatOnly)
+        }
+    }
+
+    private func detail(_ kind: AppleModelKind, unavailable: String?, chatOnly: Bool) -> String {
+        if let unavailable { return unavailable }
+        if chatOnly { return settings.codeHint(for: IDEAIModelChoice(provider: .apple, model: "system")) ?? "Too small for Code. Use it in Chat." }
+        switch kind {
+        case .onDevice: return "Private. Runs on this Mac; nothing is sent anywhere."
+        case .privateCloudCompute: return "A larger model on Apple's servers. Your messages go to Apple, and Umbra asks first."
+        }
+    }
+
+    /// Best effort: the Apple Intelligence pane when macOS knows the address, else System Settings itself.
+    private static func openSettings() {
+        let pane = URL(string: "x-apple.systempreferences:com.apple.Siri-Settings.extension")
+        if let pane, NSWorkspace.shared.open(pane) { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
     }
 }
 

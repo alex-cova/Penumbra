@@ -1142,6 +1142,15 @@ final class IDEAgentConversation: Identifiable {
             toolOutputStore: toolOutputs,
             snapshotter: IDEAgentGitSnapshotter(projectRoot: root),
             afterEdit: { paths in await box.problemsAfterEdit(relativePaths: paths, timeout: IDEAgentEditProblems.timeout) })
+        // Apple's on-device window is small. When the system prompt and tool list alone take more than half of
+        // it, the model has no room to read a file, so say so here instead of failing on the first request.
+        if let kind = choice.provider.appleKind, let window = settings.appleContextSize(for: kind) {
+            let overhead = ContextBudget.tokens(system: configuration.systemPrompt, tools: tools.map(\.definition))
+            if overhead > window / 2 {
+                throw IDEAgentError.modelWindowTooSmall(
+                    model: IDEAIModelNames.display(provider: choice.provider, model: choice.model), window: window, needed: overhead)
+            }
+        }
         let created = AgentSession(
             client: client, tools: tools, workspace: workspace, configuration: configuration, history: history,
             checkpoints: await ensureCheckpointLog())
@@ -1855,5 +1864,17 @@ enum IDEAgentShellContext {
         let recent = Array(commands.suffix(maxCommands))
         let share = max(1_000, maxCharacters / max(recent.count, 1))
         return recent.map { OutputTruncation.headAndTail($0, maxCharacters: share) }
+    }
+}
+
+/// Why a session could not be made for the chosen model.
+enum IDEAgentError: LocalizedError, Equatable {
+    case modelWindowTooSmall(model: String, window: Int, needed: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .modelWindowTooSmall(let model, let window, let needed):
+            "\(model) has a \(window.formatted())-token context, and Code's instructions and tools need about \(needed.formatted()) of it. Use it in Chat, or pick another model."
+        }
     }
 }

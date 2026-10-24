@@ -64,6 +64,8 @@ final class IDEAIChatController {
         var candidates = [global]
         if let model = settings.ollamaModels.first { candidates.append(IDEAIModelChoice(provider: .ollama, model: model.name)) }
         if let model = IDELocalModelsStore.shared.installed.first { candidates.append(IDEAIModelChoice(provider: .mlx, model: model.id)) }
+        // Nothing to download and no key, so a Mac with Apple Intelligence opens Chat on a model that works.
+        candidates.append(IDEAIModelChoice(provider: .apple, model: IDEAgentProvider.apple.defaultModel))
         for provider in [IDEAgentProvider.anthropic, .meta, .openAIResponses] where settings.hasAPIKey(for: provider) {
             candidates.append(IDEAIModelChoice(provider: provider, model: settings.model(for: provider)))
         }

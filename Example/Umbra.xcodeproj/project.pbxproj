@@ -25,6 +25,7 @@
 		000000000000000000000078 /* SubprocessKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000077 /* SubprocessKit */; };
 		00000000000000000000007A /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000079 /* AgentKit */; };
 		00000000000000000000007C /* AgentKitMLX in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007B /* AgentKitMLX */; };
+		0000000000000000000000A2 /* AgentKitApple in Frameworks */ = {isa = PBXBuildFile; productRef = 0000000000000000000000A1 /* AgentKitApple */; };
 		00000000000000000000007E /* LocalModelStore in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007D /* LocalModelStore */; };
 		000000000000000000000080 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007F /* SwiftTerm */; };
 		000000000000000000000082 /* DiagramKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000081 /* DiagramKit */; };
@@ -175,6 +176,7 @@
 				000000000000000000000078 /* SubprocessKit in Frameworks */,
 				00000000000000000000007A /* AgentKit in Frameworks */,
 				00000000000000000000007C /* AgentKitMLX in Frameworks */,
+				0000000000000000000000A2 /* AgentKitApple in Frameworks */,
 				00000000000000000000007E /* LocalModelStore in Frameworks */,
 				000000000000000000000080 /* SwiftTerm in Frameworks */,
 				000000000000000000000082 /* DiagramKit in Frameworks */,
@@ -253,6 +255,7 @@
 				000000000000000000000077 /* SubprocessKit */,
 				000000000000000000000079 /* AgentKit */,
 				00000000000000000000007B /* AgentKitMLX */,
+				0000000000000000000000A1 /* AgentKitApple */,
 				00000000000000000000007D /* LocalModelStore */,
 				00000000000000000000007F /* SwiftTerm */,
 				000000000000000000000081 /* DiagramKit */,
@@ -291,6 +294,7 @@
 				000000000000000000000064 /* XCLocalSwiftPackageReference ".." */,
 				000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */,
 				000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */,
+				0000000000000000000000A0 /* XCLocalSwiftPackageReference "../Packages/AgentKitApple" */,
 				000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				00000000000000000000006A /* XCRemoteSwiftPackageReference "DiagramKit" */,
 				000000000000000000000091 /* XCRemoteSwiftPackageReference "xcode-project-format" */,
@@ -487,6 +491,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "../Packages/AgentKitMLX";
 		};
+		0000000000000000000000A0 /* XCLocalSwiftPackageReference "../Packages/AgentKitApple" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/AgentKitApple";
+		};
 		00000000000000000000009D /* XCLocalSwiftPackageReference "../Packages/DatabaseKit" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "../Packages/DatabaseKit";
@@ -598,6 +606,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */;
 			productName = AgentKitMLX;
+		};
+		0000000000000000000000A1 /* AgentKitApple */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0000000000000000000000A0 /* XCLocalSwiftPackageReference "../Packages/AgentKitApple" */;
+			productName = AgentKitApple;
 		};
 		00000000000000000000007D /* LocalModelStore */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -1,4 +1,5 @@
 import AgentKit
+import AgentKitApple
 import AgentKitMLX
 import Foundation
 import LocalModelStore
@@ -16,6 +17,10 @@ enum IDEAgentProvider: String, CaseIterable, Identifiable, Sendable, Codable {
     case ollama = "ollama"
     /// Runs a downloaded model in this process on the GPU. Nothing is sent anywhere.
     case mlx = "mlx"
+    /// Apple's foundation model on this Mac (Apple Intelligence). Nothing is sent anywhere.
+    case apple = "apple"
+    /// Apple's larger model on Private Cloud Compute (macOS 27). The request leaves the Mac, for Apple's servers.
+    case applePCC = "apple-pcc"
 
     var id: String { rawValue }
 
@@ -27,6 +32,8 @@ enum IDEAgentProvider: String, CaseIterable, Identifiable, Sendable, Codable {
         case .meta: "Meta (Muse)"
         case .ollama: "Ollama"
         case .mlx: "On this Mac (MLX)"
+        case .apple: "Apple Intelligence (on this Mac)"
+        case .applePCC: "Apple Private Cloud Compute"
         }
     }
 
@@ -36,7 +43,7 @@ enum IDEAgentProvider: String, CaseIterable, Identifiable, Sendable, Codable {
         case .anthropic: "https://api.anthropic.com/v1"
         case .meta: "https://api.meta.ai/v1"
         case .ollama: "http://localhost:11434"
-        case .mlx: ""
+        case .mlx, .apple, .applePCC: ""
         }
     }
 
@@ -46,20 +53,35 @@ enum IDEAgentProvider: String, CaseIterable, Identifiable, Sendable, Codable {
         case .anthropic: "claude-opus-5-5"
         case .meta: "muse-spark-1.3"
         case .ollama, .mlx: ""
+        case .apple: "system"
+        case .applePCC: "pcc"
         }
     }
 
     /// Runs on this Mac, so it needs no consent and its chat template decides whether tools work.
-    var isLocal: Bool { self == .ollama || self == .mlx }
+    var isLocal: Bool { self == .ollama || self == .mlx || self == .apple }
 
-    /// What the reasoning picker offers. Claude also takes the two levels above "high".
+    /// Apple's models: no URL, no key, and a window the framework reports.
+    var appleKind: AppleModelKind? {
+        switch self {
+        case .apple: .onDevice
+        case .applePCC: .privateCloudCompute
+        default: nil
+        }
+    }
+
+    /// Whether the provider is reached at a base URL. The on-device ones are not.
+    var hasEndpoint: Bool { self != .mlx && appleKind == nil }
+
+    /// What the reasoning picker offers. Claude also takes the two levels above "high"; Apple's models have no setting.
     var reasoningEfforts: [String] {
-        self == .anthropic ? ["off", "low", "medium", "high", "xhigh", "max"] : ["off", "low", "medium", "high"]
+        if appleKind != nil { return ["off"] }
+        return self == .anthropic ? ["off", "low", "medium", "high", "xhigh", "max"] : ["off", "low", "medium", "high"]
     }
 
     var defaultReasoning: String {
         // A local model that thinks is slow per step; the user turns it on.
-        isLocal ? "off" : "medium"
+        isLocal || appleKind != nil ? "off" : "medium"
     }
 }
 
@@ -406,7 +428,7 @@ final class IDEAgentSettings {
     var isLocalEndpoint: Bool { isLocalEndpoint(for: provider) }
 
     func endpointURL(for provider: IDEAgentProvider) -> URL? {
-        guard provider != .mlx else { return nil }
+        guard provider.hasEndpoint else { return nil }
         let trimmed = baseURL(for: provider).trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), let scheme = url.scheme, ["http", "https"].contains(scheme), url.host() != nil
         else { return nil }
@@ -414,11 +436,16 @@ final class IDEAgentSettings {
     }
 
     func endpointHost(for provider: IDEAgentProvider) -> String {
-        provider == .mlx ? "this Mac" : (endpointURL(for: provider)?.host() ?? baseURL(for: provider))
+        switch provider {
+        case .mlx, .apple: "this Mac"
+        // Not a host, but the key the one-time "Allow Sending" consent is remembered under.
+        case .applePCC: "Apple Private Cloud Compute"
+        default: endpointURL(for: provider)?.host() ?? baseURL(for: provider)
+        }
     }
 
     func isLocalEndpoint(for provider: IDEAgentProvider) -> Bool {
-        if provider == .mlx { return true }
+        if provider == .mlx || provider == .apple { return true }
         guard let host = endpointURL(for: provider)?.host()?.lowercased() else { return false }
         return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" || host.hasSuffix(".localhost")
     }
@@ -450,7 +477,7 @@ final class IDEAgentSettings {
     var requiresAPIKey: Bool { requiresAPIKey(for: provider) }
 
     func requiresAPIKey(for provider: IDEAgentProvider) -> Bool {
-        provider != .ollama && provider != .mlx && !isLocalEndpoint(for: provider)
+        provider != .ollama && provider.hasEndpoint && !isLocalEndpoint(for: provider)
     }
 
     /// Whether a key is saved for a provider's endpoint, loading the cached state on first use.
@@ -476,7 +503,7 @@ final class IDEAgentSettings {
             keyError = error.localizedDescription
         }
         var hosts: Set<String> = []
-        for provider in IDEAgentProvider.allCases where provider != .mlx {
+        for provider in IDEAgentProvider.allCases where provider.hasEndpoint {
             let host = endpointHost(for: provider)
             if (try? keyStore.load(account: host))?.isEmpty == false { hosts.insert(host) }
         }
@@ -548,10 +575,11 @@ final class IDEAgentSettings {
     }
 
     /// What the panel's empty state asks for, or `nil` when the agent can be used.
-    var setupHint: String? { setupHint(for: currentChoice) }
+    var setupHint: String? { setupHint(for: currentChoice) ?? codeHint(for: currentChoice) }
 
     func setupHint(for choice: IDEAIModelChoice) -> String? {
         let provider = choice.provider, model = choice.model
+        if let kind = provider.appleKind { return AppleModelAvailability.message(for: appleStatus(kind), kind: kind) }
         if provider == .mlx {
             let status = MLXAvailability.currentStatus()
             if status != .available { return MLXAvailability.message(for: status) }
@@ -574,6 +602,42 @@ final class IDEAgentSettings {
         if model.isEmpty { return "Choose a model." }
         if requiresAPIKey(for: provider) && !hasAPIKey(for: provider) { return "Add an API key in the agent settings." }
         return nil
+    }
+
+    // MARK: - Apple Intelligence
+
+    /// Whether Apple's model can be used right now. Replaceable, so tests do not depend on the machine.
+    var appleStatus: @MainActor (AppleModelKind) -> AppleModelStatus = { AppleModelAvailability.status(for: $0) }
+
+    /// Windows read from the framework by `refreshAppleModels()`. The on-device one is also read directly.
+    var appleContextSizes: [AppleModelKind: Int] = [:]
+
+    /// Code needs the system prompt and about thirty tool definitions (about 5,000 tokens in a Java project, measured
+    /// with `ContextBudget`) and room to work, so a window under this is chat only. The on-device model's is 8,192.
+    static let minimumAppleCodeContext = 16_384
+
+    func appleContextSize(for kind: AppleModelKind) -> Int? {
+        appleContextSizes[kind] ?? (kind == .onDevice ? AppleModelAvailability.onDeviceContextSize : nil)
+    }
+
+    /// Whether Apple's model has the room Code needs. A window that is not known yet is given the benefit of the doubt
+    /// for Private Cloud Compute (its size is read asynchronously); the session still checks the real prompt.
+    func appleFitsCode(_ kind: AppleModelKind) -> Bool {
+        appleContextSize(for: kind).map { $0 >= Self.minimumAppleCodeContext } ?? (kind == .privateCloudCompute)
+    }
+
+    /// Why a choice cannot be used for Code, or `nil`. Only Apple's on-device model has such a limit.
+    func codeHint(for choice: IDEAIModelChoice) -> String? {
+        guard let kind = choice.provider.appleKind, !appleFitsCode(kind) else { return nil }
+        let size = appleContextSize(for: kind).map { "\($0.formatted()) tokens" } ?? "a small window"
+        return "Apple's on-device model has \(size), too small for Code's tools. Use it in Chat, or pick another model."
+    }
+
+    /// Reads the windows of the Apple models that can be used.
+    func refreshAppleModels() async {
+        for kind in AppleModelKind.allCases where appleStatus(kind) == .available {
+            if let size = await AppleModelAvailability.contextSize(for: kind) { appleContextSizes[kind] = size }
+        }
     }
 
     // MARK: - On-device (MLX)
@@ -605,6 +669,7 @@ final class IDEAgentSettings {
     var contextWindow: Int? { contextWindow(for: currentChoice) }
 
     func contextWindow(for choice: IDEAIModelChoice) -> Int? {
+        if let kind = choice.provider.appleKind { return appleContextSize(for: kind) }
         if choice.provider.isLocal { return effectiveContextLength(for: choice) }
         if contextWindowOverride > 0 { return contextWindowOverride }
         let name = choice.model.lowercased()
@@ -670,6 +735,7 @@ final class IDEAgentSettings {
         case modelCannotUseTools(String)
         case modelNotInstalled(String)
         case mlxUnavailable(String)
+        case appleUnavailable(String)
 
         var errorDescription: String? {
             switch self {
@@ -678,7 +744,7 @@ final class IDEAgentSettings {
             case .missingModel: "Choose a model in the agent settings."
             case .modelCannotUseTools(let name): "“\(name)” does not support tool calling, which the agent needs. Choose another model."
             case .modelNotInstalled(let name): "“\(name)” is not downloaded. Choose an installed model, or download it under Manage On-Device Models…"
-            case .mlxUnavailable(let reason): reason
+            case .mlxUnavailable(let reason), .appleUnavailable(let reason): reason
             }
         }
     }
@@ -714,7 +780,7 @@ final class IDEAgentSettings {
 
     func fingerprint(for choice: IDEAIModelChoice) -> String {
         let provider = choice.provider
-        let local = provider.isLocal
+        let local = provider.isLocal && provider.appleKind == nil
         let prices = maxRunCostCents > 0 ? priceTableText : ""
         return "\(provider.rawValue)|\(baseURL(for: provider))|\(choice.model)|\(choice.reasoningEffort)|\(local ? String(effectiveContextLength(for: choice)) : "")|\(iterationCap)|\(maxRunTokens)|\(maxRunSeconds)|\(maxRunCostCents)|\(prices)|\(contextWindow(for: choice) ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)|\(webFetchEnabled)|\(browserToolsEnabled)|\(runTestsBeforeFinishing)|\(memoryEnabled)|\(saveMemoriesWithoutAsking)|\(sandboxCommands)|\(sandboxBlockNetwork)"
     }
@@ -725,6 +791,12 @@ final class IDEAgentSettings {
     /// tools is fine, since none are offered.
     func makeClient(for choice: IDEAIModelChoice, requiresTools: Bool = true) throws -> any LLMClient {
         let provider = choice.provider
+        if let kind = provider.appleKind {
+            if let message = AppleModelAvailability.message(for: appleStatus(kind), kind: kind) {
+                throw ConfigurationError.appleUnavailable(message)
+            }
+            return AppleLLMClient(kind: kind)
+        }
         guard !choice.model.trimmingCharacters(in: .whitespaces).isEmpty else { throw ConfigurationError.missingModel }
         if provider == .mlx { return try makeMLXClient(model: choice.model, requiresTools: requiresTools) }
         guard let url = endpointURL(for: provider) else { throw ConfigurationError.invalidBaseURL }
@@ -755,6 +827,8 @@ final class IDEAgentSettings {
                 supportsThinking: info?.supportsThinking ?? false)
         case .mlx:
             return try makeMLXClient(model: choice.model, requiresTools: requiresTools)
+        case .apple, .applePCC:
+            preconditionFailure("handled above")
         }
     }
 

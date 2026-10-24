@@ -121,7 +121,8 @@ extension IDEWorkspace {
             return aiChat.selected.setupHint
         case .code:
             guard !agent.selected.isACPConversation else { return nil }
-            return agent.settings.setupHint(for: agent.selected.effectiveChoice)
+            let choice = agent.selected.effectiveChoice
+            return agent.settings.setupHint(for: choice) ?? agent.settings.codeHint(for: choice)
         }
     }
 
@@ -148,6 +149,7 @@ extension IDEWorkspace {
         guard !hasOfferedAIModelSetup else { return }
         IDELocalModelsStore.shared.prepareIfNeeded()
         await agent.settings.refreshOllamaModels(adjustSelection: false)
+        await agent.settings.refreshAppleModels()
         guard !hasOfferedAIModelSetup, isAIMode, aiModelSetup == nil, aiModelSetupHint(for: aiTab) != nil else { return }
         hasOfferedAIModelSetup = true
         aiModelSetup = aiTab

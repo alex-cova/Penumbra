@@ -1,4 +1,5 @@
 import AgentKit
+import AgentKitApple
 import Foundation
 import XCTest
 @testable import Umbra
@@ -20,6 +21,8 @@ final class IDEAIChatTests: XCTestCase {
         let settings = IDEAgentSettings(
             defaults: UserDefaults(suiteName: "umbra.ai.chat.\(UUID().uuidString)")!, keyStore: IDEAgentMemoryKeyStore())
         settings.acceptDisclosure(for: .anthropic)
+        // Whether this Mac has Apple Intelligence must not decide which model a new chat opens on.
+        settings.appleStatus = { _ in .deviceNotEligible }
         return settings
     }
 
@@ -374,5 +377,39 @@ final class IDEAISessionsTests: XCTestCase {
         XCTAssertEqual(IDEAIModelNames.display(provider: .ollama, model: ""), "Ollama")
         XCTAssertEqual(IDEAIModelNames.effortLabel("high"), "High")
         XCTAssertNil(IDEAIModelNames.effortLabel("off"))
+    }
+}
+
+@MainActor
+final class IDEAIChatAppleTests: XCTestCase {
+    private func makeSettings(apple: AppleModelStatus) -> IDEAgentSettings {
+        let settings = IDEAgentSettings(
+            defaults: UserDefaults(suiteName: "umbra.ai.chat.apple.\(UUID().uuidString)")!, keyStore: IDEAgentMemoryKeyStore())
+        settings.appleStatus = { _ in apple }
+        return settings
+    }
+
+    func testANewChatOpensOnAppleIntelligenceWhenNothingElseIsReady() {
+        let settings = makeSettings(apple: .available)
+        let ai = IDEAISettings(defaults: UserDefaults(suiteName: "umbra.ai.prefs.\(UUID().uuidString)")!)
+        XCTAssertEqual(settings.provider, .openAIResponses)
+        XCTAssertNotNil(settings.setupHint, "the global model has no key")
+        let chosen = IDEAIChatController.defaultChoice(aiSettings: ai, settings: settings)
+        XCTAssertEqual(chosen.provider, .apple)
+        XCTAssertEqual(chosen.model, "system")
+    }
+
+    func testAKeyedHostedModelIsNotPassedOverForApplesButTheUsersGlobalModelIsKept() {
+        let settings = makeSettings(apple: .available)
+        let ai = IDEAISettings(defaults: UserDefaults(suiteName: "umbra.ai.prefs.\(UUID().uuidString)")!)
+        settings.saveAPIKey("sk-test", for: .openAIResponses)
+        XCTAssertEqual(IDEAIChatController.defaultChoice(aiSettings: ai, settings: settings).provider, .openAIResponses,
+                       "a model the user already set up and that is ready comes first")
+    }
+
+    func testWithoutAppleIntelligenceTheDefaultFallsBackToTheGlobalModel() {
+        let settings = makeSettings(apple: .appleIntelligenceNotEnabled)
+        let ai = IDEAISettings(defaults: UserDefaults(suiteName: "umbra.ai.prefs.\(UUID().uuidString)")!)
+        XCTAssertEqual(IDEAIChatController.defaultChoice(aiSettings: ai, settings: settings).provider, .openAIResponses)
     }
 }

@@ -25,6 +25,11 @@ enum IDEAIModelNames {
     static func display(provider: IDEAgentProvider, model: String) -> String {
         if provider == .anthropic, let known = claude.first(where: { $0.id == model }) { return known.name }
         if provider == .meta, let known = muse.first(where: { $0.id == model }) { return known.name }
+        switch provider {
+        case .apple: return "Apple Intelligence"
+        case .applePCC: return "Private Cloud Compute"
+        default: break
+        }
         return model.isEmpty ? provider.title : model
     }
 
