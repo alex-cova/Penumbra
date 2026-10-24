@@ -388,7 +388,7 @@ public final class IDEWorkspace {
     private(set) var closedSidebarTabs: Set<IDESidebarTab> = []
     /// The project's breakpoints, mirrored from `breakpointStore` (which is not observable) for the
     /// Breakpoints tab. Refreshed by `refreshBreakpoints()` after every change to the store.
-    private(set) var breakpoints: [JavaBreakpoint] = []
+    var breakpoints: [JavaBreakpoint] = []
     /// Mute Breakpoints: every breakpoint stays, none stops. Mirrors the store, per project.
     var breakpointsMuted = false
     /// The breakpoint the Breakpoints tab shows in its detail pane.
@@ -398,6 +398,7 @@ public final class IDEWorkspace {
     /// The Frames pane hides JDK frames when set.
     var hideLibraryFrames = false
     @ObservationIgnored let breakpointPopover = IDEBreakpointPopover()
+    @ObservationIgnored let quickEvaluatePopover = IDEQuickEvaluatePopover()
     @ObservationIgnored var streamTraceWindow: IDEStreamTraceWindowController?
     var isProjectSidebarVisible = true
     /// The explorer sidebar's width. `IDERootView` owns the drag and mirrors it here so a save made
@@ -1838,192 +1839,6 @@ public final class IDEWorkspace {
 
     public func showReplace() {
         adapter.textView?.perform(.toggleReplacePanel)
-    }
-
-    // MARK: - Evaluate
-
-    @ObservationIgnored private let quickEvaluatePopover = IDEQuickEvaluatePopover()
-
-    /// Opens the Debug tool window on its Evaluate field (⌥F8), starting from the selection.
-    func showEvaluateExpression() {
-        guard isDebuggerStopped else { return }
-        let textView = host(for: workbench.activePaneID).textView
-        let range = textView.selectedRange
-        let selected = range.length > 0 ? (textView.text as NSString).substring(with: range) : nil
-        showBottomTab(.debug)
-        debugSession.requestEvaluationInput(prefilledWith: selected.flatMap { $0.contains("\n") ? nil : $0 })
-    }
-
-    /// Shows the value of the selection, or of the name at the caret, in a popover (⌥⌘F8).
-    func quickEvaluate() {
-        guard isDebuggerStopped else { return }
-        let textView = host(for: workbench.activePaneID).textView
-        let range = textView.selectedRange
-        guard let expression = IDEEvaluateExpressionScanner.expression(in: textView.text, selection: range) else {
-            host(for: workbench.activePaneID).intelligenceController?.showHint("No expression at the caret")
-            return
-        }
-        quickEvaluatePopover.present(expression: expression, session: debugSession, in: textView, at: range.location)
-    }
-
-    func debugSourceRoots() -> [URL] {
-        javaRun.debugSourceRoots()
-    }
-
-    func configureDebugSession() {
-        debugSession.onStopped = { [weak self] file, line in
-            self?.revealDebugStop(file: file, line: line, selectsLine: false)
-        }
-        debugSession.onBreakpointRemovedByHit = { [weak self] id in
-            guard let self else { return }
-            self.breakpointStore.remove(breakpointID: id, project: self.project.rootURL)
-            self.refreshBreakpoints()
-            self.refreshBreakpointGutters()
-        }
-        // An open file's imports come from its buffer, which may be ahead of the disk.
-        debugSession.importsProvider = { [weak self] path in
-            if let text = self?.openBufferText(for: URL(fileURLWithPath: path)) {
-                return JavaDebugSession.imports(inSource: text)
-            }
-            return JavaDebugSession.imports(ofFile: path)
-        }
-        debugSession.watches = watches
-        debugSession.onBreakpointVerificationChanged = { [weak self] in
-            self?.refreshBreakpointGutters()
-        }
-        debugSession.onVariablesChanged = { [weak self] in
-            self?.refreshExecutionLineBackgrounds()
-            self?.refreshInlineDebugValues()
-        }
-        dapDebugSession.onStopped = { [weak self] file, line in
-            self?.revealDebugStop(file: file, line: line, selectsLine: false)
-            self?.refreshExecutionLineBackgrounds()
-        }
-    }
-
-    /// Opens the file the program stopped in and selects the stopped line. The execution point
-    /// passes `selectsLine: false`: it puts the caret at the line's start and leaves the line to
-    /// the background band of `refreshExecutionLineBackgrounds`.
-    func revealDebugStop(file: URL, line: Int, selectsLine: Bool = true) {
-        let text = openBufferText(for: file) ?? (try? String(contentsOf: file, encoding: .utf8)) ?? ""
-        let start = TextPosition(line: max(0, line - 1), column: 0, utf16Offset: 0)
-        let end = TextPosition(line: max(0, line - 1), column: Int.max / 2, utf16Offset: 0)
-        let nsRange = ProblemLocator.nsRange(for: EditorIntelligence.TextRange(start: start, end: end), in: text)
-        let document = workbench.allDocuments().first { $0.url?.standardizedFileURL == file.standardizedFileURL }
-        _ = openNavigationLocation(Location(
-            documentID: document?.documentID ?? DocumentID(),
-            url: file,
-            range: EditorIntelligence.TextRange(
-                start: TextPosition(line: start.line, column: 0, utf16Offset: nsRange.location),
-                end: selectsLine
-                    ? TextPosition(line: start.line, column: nsRange.length, utf16Offset: nsRange.location + nsRange.length)
-                    : TextPosition(line: start.line, column: 0, utf16Offset: nsRange.location)
-            ),
-            displayName: file.lastPathComponent
-        ))
-    }
-
-    /// True while a debug session is stopped at a line, so stepping and Resume mean something.
-    var isDebuggerStopped: Bool {
-        if dapDebugSession.isStopped { return true }
-        if case .stopped = debugSession.state { return true }
-        return false
-    }
-
-    var isDebuggerRunning: Bool {
-        if dapDebugSession.state == .running { return true }
-        if case .running = debugSession.state { return true }
-        return false
-    }
-
-    private var swiftDebugIsCurrent: Bool { dapDebugSession.isActive }
-
-    func debugResume() {
-        if swiftDebugIsCurrent { dapDebugSession.resume(); return }
-        debugSession.resume()
-    }
-
-    func debugPause() {
-        if swiftDebugIsCurrent { dapDebugSession.pause(); return }
-        debugSession.pause()
-    }
-
-    func debugStepOver() {
-        if swiftDebugIsCurrent { dapDebugSession.stepOver(); return }
-        debugSession.stepOver()
-    }
-
-    func debugStepInto() {
-        if swiftDebugIsCurrent { dapDebugSession.stepInto(); return }
-        debugSession.stepInto()
-    }
-
-    func debugStepOut() {
-        if swiftDebugIsCurrent { dapDebugSession.stepOut(); return }
-        debugSession.stepOut()
-    }
-
-    func stopDebugging() {
-        if gradleDebugActive || debugSession.isGradleAttachSession {
-            gradleDebugActive = false
-            gradle.cancelTasks()
-        }
-        if dapDebugSession.isActive { dapDebugSession.stop() }
-        debugSession.stop()
-    }
-
-    /// Enabled line breakpoints, keyed by file path. Empty while breakpoints are muted.
-    func enabledLineBreakpointsByPath() -> [String: [Int]] {
-        guard !breakpointsMuted else { return [:] }
-        var lines: [String: [Int]] = [:]
-        for breakpoint in breakpoints where breakpoint.isEnabled && breakpoint.kind == .line && !breakpoint.filePath.isEmpty {
-            lines[breakpoint.filePath, default: []].append(breakpoint.line)
-        }
-        return lines
-    }
-
-    func toggleBreakpoint(atLine line: Int, file url: URL) {
-        _ = breakpointStore.toggle(atLine: line, file: url, project: project.rootURL)
-        refreshBreakpoints()
-    }
-
-    func refreshBreakpoints() {
-        breakpoints = breakpointStore.breakpoints(forProject: project.rootURL)
-        breakpointsMuted = breakpointStore.isMuted(project: project.rootURL)
-        syncBreakpointsToDebugger()
-    }
-
-    func setBreakpointEnabled(_ breakpoint: JavaBreakpoint, enabled: Bool) {
-        breakpointStore.setEnabled(enabled, breakpointID: breakpoint.id, project: project.rootURL)
-        refreshBreakpoints()
-        refreshBreakpointGutters()
-    }
-
-    func removeBreakpoint(_ breakpoint: JavaBreakpoint) {
-        breakpointStore.remove(breakpointID: breakpoint.id, project: project.rootURL)
-        refreshBreakpoints()
-        refreshBreakpointGutters()
-    }
-
-    func removeAllBreakpoints() {
-        breakpointStore.removeAll(project: project.rootURL)
-        refreshBreakpoints()
-        refreshBreakpointGutters()
-    }
-
-    func openBreakpoint(_ breakpoint: JavaBreakpoint) {
-        revealDebugStop(file: URL(fileURLWithPath: breakpoint.filePath), line: breakpoint.line)
-    }
-
-    /// Redraws the breakpoint dots of every open Java or Swift file after the Breakpoints tab changed them.
-    func refreshBreakpointGutters() {
-        for pane in workbench.panes {
-            guard let url = pane.selectedDocument?.url,
-                  let textView = hostCache.peek(pane.id)?.textView else { continue }
-            let ext = url.pathExtension.lowercased()
-            guard ["java", "swift", "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx"].contains(ext) else { continue }
-            Task { await refreshJavaTestDecorations(from: textView, fileURL: url, isJava: ext == "java") }
-        }
     }
 
     /// Next to `session.json` and `gradle-trust.json`: launch settings shouldn't reset with a cache.
