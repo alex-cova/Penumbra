@@ -1,4 +1,5 @@
 import AgentKit
+import AgentKitApple
 import AgentKitMLX
 import AppKit
 import LocalModelStore
@@ -32,8 +33,10 @@ struct IDEAgentPanel: View {
             if !agent.todos.isEmpty, !isChecklistInInspector { IDEAgentTodoListView(items: agent.todos) }
             if placement == .aiMode, agent.entries.isEmpty {
                 aiEmptyGreeting
+                    .transition(.move(edge: .top).combined(with: .opacity))
             } else {
                 transcript
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 if placement != .aiMode { Divider().overlay(IDEAppearance.ColorToken.border) }
             }
             // One composer for both states: a field that moved between the empty greeting and
@@ -42,6 +45,9 @@ struct IDEAgentPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(placement == .docked ? IDEAppearance.ColorToken.panel : Color.clear)
+        // On send the empty session's greeting slides up and out, as in Chat. The welcome
+        // backdrop lives one level up, in IDEAICodeView, so it fills the whole card.
+        .animation(placement == .aiMode ? .easeOut(duration: 0.35) : nil, value: agent.entries.isEmpty)
         .sheet(isPresented: $isSettingsPresented) {
             IDEAgentSettingsSheet(settings: settings)
         }
@@ -156,6 +162,11 @@ struct IDEAgentPanel: View {
     private var isAIMode: Bool { placement == .aiMode }
     private var choice: IDEAIModelChoice { agent.selected.effectiveChoice }
 
+    /// The composer's glint holds still with the greeting effects.
+    private var motionEnabled: Bool {
+        !reduceMotion && !workspace.preferences.welcomeAnimationDisabled
+    }
+
     private var composer: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
             if !agent.selected.hasConsent {
@@ -196,6 +207,14 @@ struct IDEAgentPanel: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous)
                         .stroke(IDEAppearance.ColorToken.border, lineWidth: 1))
+                // The same glint as Chat's field while the session is empty. Sending a
+                // message removes it with the greeting, which stops the animation.
+                .overlay {
+                    if isAIMode, agent.entries.isEmpty, motionEnabled {
+                        IDEAIMirrorBorder()
+                            .transition(.opacity)
+                    }
+                }
             } else {
                 fieldRow
                 chipRow
@@ -1241,7 +1260,7 @@ struct IDEAgentSettingsView: View {
             Picker("Provider", selection: $settings.provider) {
                 ForEach(IDEAgentProvider.allCases) { Text($0.title).tag($0) }
             }
-            if settings.provider != .mlx {
+            if settings.provider.hasEndpoint {
                 TextField("Base URL", text: $settings.baseURL)
                     .onSubmit { Task { await refreshModelsIfOllama() } }
             }
@@ -1249,9 +1268,11 @@ struct IDEAgentSettingsView: View {
             switch settings.provider {
             case .ollama: ollamaSection(settings)
             case .mlx: mlxSection(settings)
+            case .apple, .applePCC: appleSection(settings)
             case .openAIResponses, .chatCompletions, .anthropic, .meta: TextField("Model", text: $settings.model)
             }
 
+            if settings.provider.appleKind == nil {
             Picker("Reasoning", selection: $settings.reasoningEffort) {
                 ForEach(settings.provider.reasoningEfforts, id: \.self) { Text($0.capitalized).tag($0) }
             }
@@ -1262,6 +1283,7 @@ struct IDEAgentSettingsView: View {
                 : "Thinking makes each step slower. It applies to models that support it.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
 
             Section("External ACP Agents") {
                 @Bindable var settings = settings
@@ -1397,7 +1419,7 @@ struct IDEAgentSettingsView: View {
             }
             if isFullPane { advancedSections(settings) }
 
-            if settings.provider != .mlx {
+            if settings.provider.hasEndpoint {
             Section(settings.requiresAPIKey ? "API key for \(settings.endpointHost)" : "API key (optional)") {
                 SecureField(settings.hasAPIKey ? "Saved in the Keychain" : "Paste a key", text: $keyDraft)
                     .onSubmit(saveKey)
@@ -1563,6 +1585,31 @@ struct IDEAgentSettingsView: View {
         let status = MLXAvailability.currentStatus()
         if status != .available {
             Text(MLXAvailability.message(for: status)).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
+        }
+    }
+
+    @ViewBuilder private func appleSection(_ settings: IDEAgentSettings) -> some View {
+        let kind = settings.provider.appleKind ?? .onDevice
+        if let message = AppleModelAvailability.message(for: settings.appleStatus(kind), kind: kind) {
+            Text(message).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
+        }
+        if let size = settings.appleContextSize(for: kind) {
+            LabeledContent("Context", value: IDEAgentFormat.tokens(size))
+        }
+        if kind == .onDevice {
+            Label("Runs on this Mac. Nothing is sent anywhere.", systemImage: "lock.shield")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            if let hint = settings.codeHint(for: settings.currentChoice) {
+                Text(hint).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+        } else {
+            Label("Requests are processed on Apple's Private Cloud Compute servers.", systemImage: "icloud")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            if let quota = AppleModelAvailability.quotaDescription() {
+                Text(quota).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
         }
     }
 

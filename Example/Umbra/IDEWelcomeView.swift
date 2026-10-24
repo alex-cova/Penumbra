@@ -130,61 +130,6 @@ struct IDEWelcomeView: View {
     }
 }
 
-private struct IDEWelcomeBackdrop: View {
-    let kind: IDEWelcomeBackground
-    let parallax: IDEWelcomeParallax
-    let animationDisabled: Bool
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-
-    var body: some View {
-        backdrop
-            .environment(\.welcomeReduceMotion, systemReduceMotion || animationDisabled)
-    }
-
-    @ViewBuilder private var backdrop: some View {
-        switch kind {
-        case .starfield:
-            IDEWelcomeStarfield(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .deepSpace:
-            IDEWelcomeDeepSpace(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .gradientWaves:
-            IDEWelcomeGradientWaves(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .moltenMetal:
-            IDEWelcomeMoltenMetal(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .galaxy:
-            IDEWelcomeGalaxy(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .liquidChrome:
-            IDEWelcomeLiquidChrome(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .evilEye:
-            IDEWelcomeEvilEye(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .pixelSnow:
-            IDEWelcomePixelSnow(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .particles:
-            IDEWelcomeParticles(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .dotField:
-            IDEWelcomeDotField(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .aeroShards:
-            IDEWelcomeAeroShards(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .balatro:
-            IDEWelcomeBalatro(parallax: parallax)
-                .background(IDEAppearance.ColorToken.editor)
-        case .none:
-            IDEAppearance.ColorToken.editor
-        }
-    }
-}
-
 private struct IDEWelcomeBrandHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
@@ -202,7 +147,9 @@ private struct IDEWelcomeBrandHeader: View {
 
 /// Umbra's mark (`umbra.png`) beside the welcome title. `Bundle.module` holds it under SwiftPM and
 /// `Bundle.main` in the Xcode target; the old symbol stays as the fallback if neither has it.
-private struct IDEWelcomeMark: View {
+/// Shared with AI mode's Chat greeting.
+struct IDEWelcomeMark: View {
+    var size: CGFloat = 40
     private static let image: NSImage? = {
         var bundles = [Bundle.main]
         #if SWIFT_PACKAGE
@@ -222,7 +169,7 @@ private struct IDEWelcomeMark: View {
             Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 40, height: 40)
+                .frame(width: size, height: size)
         } else {
             Image(systemName: "text.alignleft")
                 .font(.title2)
@@ -565,7 +512,7 @@ final class IDEWelcomeParallax {
 /// stars laid out once per size instead of hashed per pixel, so a frame costs a few
 /// hundred fills. Layers shift away from the pointer by depth (parallax). Holds still
 /// under Reduce Motion and while the window isn't active.
-private struct IDEWelcomeStarfield: View {
+struct IDEWelcomeStarfield: View {
     let parallax: IDEWelcomeParallax
     @Environment(\.welcomeReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState

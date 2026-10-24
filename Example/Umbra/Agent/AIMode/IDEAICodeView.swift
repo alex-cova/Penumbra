@@ -5,6 +5,7 @@ import SwiftUI
 /// ones the docked panel has. A new session starts empty, with the message field in the middle.
 struct IDEAICodeView: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @State private var parallax = IDEWelcomeParallax()
 
     private var agent: IDEAgentController { workspace.agent }
 
@@ -13,6 +14,25 @@ struct IDEAICodeView: View {
             .frame(maxWidth: Self.columnWidth)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, IDEAppearance.Spacing.lg)
+            .background {
+                // The same welcome backdrop as Chat, filling the whole card behind the
+                // readability column. It fades out with the greeting on send.
+                if agent.entries.isEmpty, workspace.preferences.welcomeBackground != .none {
+                    IDEWelcomeBackdrop(
+                        kind: workspace.preferences.welcomeBackground,
+                        parallax: parallax,
+                        animationDisabled: workspace.preferences.welcomeAnimationDisabled
+                    )
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.35), value: agent.entries.isEmpty)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location): parallax.pointer = location
+                case .ended: parallax.pointer = nil
+                }
+            }
             .onAppear {
                 // AI mode begins with a new session; it does not continue the project's latest one.
                 agent.startFresh()

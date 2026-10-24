@@ -5,9 +5,16 @@ import SwiftUI
 /// transcript above the field once it has begun. The model is picked under the field.
 struct IDEAIChatView: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @State private var composerState = IDEAgentComposerState()
     @State private var composerHeight: CGFloat = 22
     @State private var acceptRequest = 0
+    @State private var parallax = IDEWelcomeParallax()
+
+    /// The greeting typing, the composer glint and the backdrop all hold still together.
+    private var motionEnabled: Bool {
+        !systemReduceMotion && !workspace.preferences.welcomeAnimationDisabled
+    }
 
     private var chat: IDEAIChatController { workspace.aiChat }
     private var conversation: IDEAIChatConversation { chat.selected }
@@ -17,14 +24,37 @@ struct IDEAIChatView: View {
             header
             if conversation.isEmpty {
                 emptyGreeting
+                    .transition(.move(edge: .top).combined(with: .opacity))
             } else {
                 transcript
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             // One composer for both states: a field that moved between the empty greeting and
             // the transcript would be destroyed and recreated, dropping focus on the first send.
             composerColumn
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // On send the greeting slides up and out while the backdrop and the composer's glint
+        // fade with it; the transcript slides in below.
+        .animation(.easeOut(duration: 0.35), value: conversation.isEmpty)
+        // The welcome backdrop fills the whole card while the chat is empty, behind the header,
+        // the greeting and the composer, and goes away with the greeting.
+        .background {
+            if conversation.isEmpty, workspace.preferences.welcomeBackground != .none {
+                IDEWelcomeBackdrop(
+                    kind: workspace.preferences.welcomeBackground,
+                    parallax: parallax,
+                    animationDisabled: workspace.preferences.welcomeAnimationDisabled
+                )
+                .transition(.opacity)
+            }
+        }
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let location): parallax.pointer = location
+            case .ended: parallax.pointer = nil
+            }
+        }
         .onAppear { chat.composerFocusRequest += 1 }
         .onChange(of: chat.modelRequest) { workspace.isAIModelsPresented = true }
     }
@@ -69,12 +99,18 @@ struct IDEAIChatView: View {
     private var emptyGreeting: some View {
         VStack(spacing: IDEAppearance.Spacing.lg) {
             Spacer(minLength: 0)
-            Image(systemName: "bubbles.and.sparkles")
-                .font(.system(size: 28))
-                .foregroundStyle(IDEAppearance.ColorToken.accent)
-            Text("What's on your mind?")
-                .font(IDEAppearance.Typography.brandTitle)
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            IDEWelcomeMark(size: 72)
+                .opacity(0.7)
+            IDEAITypewriterText(
+                messages: [
+                    "What's on your mind?",
+                    "What should we build today?",
+                    "Talk through a hard problem",
+                    "Brainstorm a new idea",
+                    "Ask me anything",
+                ],
+                animated: motionEnabled
+            )
             if let hint = conversation.setupHint {
                 IDEAISetupButton(hint: hint) { workspace.requestAIModelSetup(for: .chat) }
             }
@@ -183,6 +219,14 @@ struct IDEAIChatView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous)
                     .stroke(IDEAppearance.ColorToken.border, lineWidth: 1))
+            // A glint circling the field while the chat is empty. Sending the message
+            // removes it with the greeting, which stops the animation.
+            .overlay {
+                if conversation.isEmpty, motionEnabled {
+                    IDEAIMirrorBorder()
+                        .transition(.opacity)
+                }
+            }
         }
         .frame(maxWidth: Self.columnWidth)
         .padding(.horizontal, IDEAppearance.Spacing.md)

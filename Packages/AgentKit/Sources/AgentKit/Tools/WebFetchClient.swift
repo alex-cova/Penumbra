@@ -165,7 +165,8 @@ public enum WebAddressPolicy {
                                 ? UnsafeRawPointer(sockaddr).advanced(by: MemoryLayout<sockaddr_in6>.offset(of: \.sin6_addr)!)
                                 : nil
                         if let pointer, inet_ntop(family, pointer, &buffer, socklen_t(buffer.count)) != nil {
-                            addresses.append(String(cString: buffer))
+                            let bytes = buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+                            addresses.append(String(decoding: bytes, as: UTF8.self))
                         }
                     }
                     cursor = entry.pointee.ai_next
