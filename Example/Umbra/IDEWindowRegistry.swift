@@ -367,13 +367,8 @@ final class IDEWindowRegistry {
         ) else {
             return true
         }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Quit Umbra?"
-        alert.informativeText = text
-        alert.addButton(withTitle: "Quit")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        var alert = IDEAlert.confirm("Quit Umbra?", detail: text, confirm: "Quit")
+        return alert.confirms()
     }
 
     /// What the quit prompt says, or nil when no window has unsaved editors. `unsavedPerWindow` holds

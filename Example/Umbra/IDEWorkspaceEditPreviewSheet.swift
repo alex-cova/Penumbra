@@ -150,23 +150,8 @@ struct IDEWorkspaceEditPreviewSheet: View {
     }
 
     private func fileHeader(_ url: URL, count: Int) -> some View {
-        HStack(spacing: 6) {
-            Text(url.lastPathComponent)
-                .font(IDEAppearance.Typography.sidebarHeader)
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
-            Text(workspace.displayDirectory(of: url))
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .truncationMode(.head)
-            Spacer(minLength: 8)
-            Text("\(count)")
-                .font(IDEAppearance.Typography.monoSmall)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-        }
-        .padding(.horizontal, IDEAppearance.Spacing.md)
-        .padding(.vertical, 3)
-        .accessibilityElement(children: .combine)
+        IDEFileGroupHeader(
+            name: url.lastPathComponent, directory: workspace.displayDirectory(of: url), count: count, noun: "changes")
     }
 }
 

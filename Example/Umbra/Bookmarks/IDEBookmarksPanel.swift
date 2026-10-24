@@ -39,7 +39,7 @@ struct IDEBookmarksPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .padding(.leading, IDEAppearance.Spacing.xs)
             Spacer(minLength: 0)
-            IDEExplorerToolbarButton(systemImage: "plus", help: "New Bookmark List") {
+            IDEIconButton(systemImage: "plus", help: "New Bookmark List") {
                 workspace.createBookmarkList()
             }
         }

@@ -141,11 +141,11 @@ struct IDEDiffToolbar: View {
     }
 
     private func button(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        IDEExplorerToolbarButton(systemImage: symbol, help: help, action: action)
+        IDEIconButton(systemImage: symbol, help: help, action: action)
     }
 
     private func toggle(_ symbol: String, isOn: Bool, help: String, action: @escaping () -> Void) -> some View {
-        IDEExplorerToolbarButton(systemImage: symbol, help: help, isActive: isOn, action: action)
+        IDEIconButton(systemImage: symbol, help: help, isActive: isOn, action: action)
             .background(isOn ? IDEAppearance.ColorToken.selection : .clear)
             .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
     }

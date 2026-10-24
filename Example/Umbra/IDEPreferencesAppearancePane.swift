@@ -20,7 +20,7 @@ struct IDEPreferencesAppearancePane: View {
                 }
             }
 
-            IDEPreferencesDoubleStepper(
+            IDEPreferencesStepper(
                 title: "UI Font Size",
                 value: $preferences.uiFontSize,
                 range: 10...24,

@@ -453,9 +453,10 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
         return [IDEBottomTabContribution(
             tab: .xcode, order: IDEBottomPanelTab.Order.xcode,
             item: { workspace in
-                AnyView(IDEXcodeTabItem(
+                AnyView(IDEProjectTabItem(
+                    title: "Xcode", symbol: "hammer",
                     isSelected: workspace.isBottomTabSelected(.xcode),
-                    isRunning: workspace.xcode.isBusy,
+                    isBusy: workspace.xcode.isBusy,
                     onSelect: { [weak workspace] in workspace?.showBottomTab(.xcode) }
                 ))
             },
@@ -466,7 +467,7 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
                     fontSize: workspace.preferences.fontSize
                 ))
             },
-            controls: { _ in AnyView(IDEXcodeConsoleControls()) },
+            controls: { workspace in AnyView(IDEProjectConsoleControls(system: workspace.xcode)) },
             staysWhenLastShellCloses: true
         )]
     }
@@ -611,79 +612,3 @@ struct IDEXcodeSidebarPanel: View {
     }
 }
 
-struct IDEXcodeConsoleControls: View {
-    @Environment(IDEWorkspace.self) private var workspace
-
-    var body: some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
-            if workspace.xcode.isBusy {
-                Button("Cancel", action: { workspace.xcode.cancelTasks() })
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            } else {
-                Button(action: { workspace.xcode.reload() }) { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .help("Reload")
-                    .accessibilityLabel("Reload")
-            }
-            Button(action: copyOutput) { Image(systemName: "doc.on.doc") }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help("Copy Xcode Output")
-                .accessibilityLabel("Copy Xcode Output")
-        }
-    }
-
-    private func copyOutput() {
-        let text = workspace.xcode.console.lines.map(\.text).joined(separator: "\n")
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-    }
-}
-
-struct IDEXcodeTabItem: View {
-    let isSelected: Bool
-    let isRunning: Bool
-    let onSelect: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if isRunning {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.6)
-                    .frame(width: 12)
-            } else {
-                Image(systemName: "hammer")
-                    .font(.system(size: 10))
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .frame(width: 12)
-            }
-            Text("Xcode")
-                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(isRunning ? "Xcode, running" : "Xcode")
-        .accessibilityAddTraits(.isButton)
-        .focusable(false)
-    }
-
-    private var backgroundColor: Color {
-        if isSelected { return IDEAppearance.ColorToken.tabActive }
-        if isHovering { return IDEAppearance.ColorToken.tabHover }
-        return IDEAppearance.ColorToken.tabInactive
-    }
-}

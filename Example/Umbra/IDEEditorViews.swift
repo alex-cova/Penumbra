@@ -20,7 +20,7 @@ final class IDEEditorPaneHost: NSView {
     /// True while this pane's JSON file is covered by its diagram.
     private(set) var isJSONDiagramVisible = false
     private var jsonDiagramSession: IDEDiagramSession?
-    private var jsonRefreshTask: Task<Void, Never>?
+    private let jsonRefresh = Debouncer()
     private var editorWasSelectableBeforeJSONDiagram = true
     /// Laid over the editor while a CSV or TSV file's table preview is showing.
     let csvTableView = IDECSVTableView()
@@ -28,7 +28,7 @@ final class IDEEditorPaneHost: NSView {
     let hexViewer = IDEHexViewerView()
     /// True while this pane's CSV/TSV file is covered by its table.
     private(set) var isCSVTableVisible = false
-    private var csvRefreshTask: Task<Void, Never>?
+    private let csvRefresh = Debouncer()
     private var csvParseTask: Task<Void, Never>?
     private var editorWasSelectableBeforeCSVTable = true
     let applyGate = PenumbraStateBuilder.GenerationGate()
@@ -184,8 +184,7 @@ final class IDEEditorPaneHost: NSView {
     /// Drops the diagram. `hidingViewer` is false when another overlay is about to take the same
     /// view, so it is not hidden and shown again in one turn.
     func hideJSONDiagram(hidingViewer: Bool = true) {
-        jsonRefreshTask?.cancel()
-        jsonRefreshTask = nil
+        jsonRefresh.cancel()
         guard isJSONDiagramVisible else { return }
         isJSONDiagramVisible = false
         textView.isSelectable = editorWasSelectableBeforeJSONDiagram
@@ -196,8 +195,7 @@ final class IDEEditorPaneHost: NSView {
     /// Rebuilds the diagram from the live buffer. A first show lets the viewer start the load;
     /// later shows reload, because the viewer only loads an empty session.
     func refreshJSONDiagram() {
-        jsonRefreshTask?.cancel()
-        jsonRefreshTask = nil
+        jsonRefresh.cancel()
         guard isJSONDiagramVisible, textView.languageIdentifier == "json" else { return }
         let session = ensureJSONSession()
         session.loadJSONText = { [weak self] in self?.textView.text ?? "" }
@@ -215,14 +213,7 @@ final class IDEEditorPaneHost: NSView {
     /// Schedules a rebuild. The buffer is read once the pause has elapsed, not on the keystroke.
     func noteJSONDiagramEdited() {
         guard isJSONDiagramVisible, textView.languageIdentifier == "json" else { return }
-        jsonRefreshTask?.cancel()
-        jsonRefreshTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .milliseconds(200))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
+        jsonRefresh.schedule(after: .milliseconds(200)) { [weak self] in
             self?.refreshJSONDiagram()
         }
     }
@@ -276,8 +267,7 @@ final class IDEEditorPaneHost: NSView {
     }
 
     func hideCSVTable() {
-        csvRefreshTask?.cancel()
-        csvRefreshTask = nil
+        csvRefresh.cancel()
         csvParseTask?.cancel()
         csvParseTask = nil
         guard isCSVTableVisible else { return }
@@ -289,8 +279,7 @@ final class IDEEditorPaneHost: NSView {
     /// Re-parses the live buffer. The text is read here and parsed off the main actor; a result
     /// that a newer refresh has overtaken is dropped.
     func refreshCSVTable() {
-        csvRefreshTask?.cancel()
-        csvRefreshTask = nil
+        csvRefresh.cancel()
         csvParseTask?.cancel()
         guard isCSVTableVisible, Self.isCSV(textView.languageIdentifier) else { return }
         let text = textView.text
@@ -315,14 +304,7 @@ final class IDEEditorPaneHost: NSView {
     /// Schedules a re-parse. The buffer is read once the pause has elapsed, not on the keystroke.
     func noteCSVTableEdited() {
         guard isCSVTableVisible, Self.isCSV(textView.languageIdentifier) else { return }
-        csvRefreshTask?.cancel()
-        csvRefreshTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .milliseconds(200))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
+        csvRefresh.schedule(after: .milliseconds(200)) { [weak self] in
             self?.refreshCSVTable()
         }
     }

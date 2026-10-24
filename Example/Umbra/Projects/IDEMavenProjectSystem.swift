@@ -77,7 +77,7 @@ final class IDEMavenProjectSystem: IDEProjectSystem {
     @ObservationIgnored private let profileStore: MavenProfileStore
     @ObservationIgnored private var syncTask: Task<Void, Never>?
     @ObservationIgnored private var runTask: Task<Void, Never>?
-    @ObservationIgnored private var rereadTask: Task<Void, Never>?
+    @ObservationIgnored private let reread = Debouncer()
     @ObservationIgnored private var projectRootURL: URL?
     @ObservationIgnored private var projectGeneration = 0
     @ObservationIgnored private var readGeneration = 0
@@ -428,10 +428,8 @@ final class IDEMavenProjectSystem: IDEProjectSystem {
         let relevant = paths.filter { MavenBuildFiles.matches(path: $0, root: rootPath) }
         guard !relevant.isEmpty else { return }
         let generation = projectGeneration
-        rereadTask?.cancel()
-        rereadTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard let self, !Task.isCancelled, self.isCurrent(generation) else { return }
+        reread.schedule(after: .milliseconds(500)) { [weak self] in
+            guard let self, self.isCurrent(generation) else { return }
             let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
             var changed = false
             for path in relevant {
@@ -697,10 +695,12 @@ final class IDEMavenProjectSystem: IDEProjectSystem {
         return [IDEBottomTabContribution(
             tab: .maven, order: IDEBottomPanelTab.Order.maven,
             item: { workspace in
-                AnyView(IDEMavenTabItem(
+                AnyView(IDEProjectTabItem(
+                    title: "Maven", symbol: "shippingbox",
                     isSelected: workspace.isBottomTabSelected(.maven),
-                    isSyncing: workspace.maven.isBusy,
+                    isBusy: workspace.maven.isBusy,
                     isFailed: workspace.maven.syncState.isFailed,
+                    busyDescription: "reading", failedDescription: "read failed",
                     onSelect: { [weak workspace] in workspace?.showBottomTab(.maven) }
                 ))
             },
@@ -711,7 +711,7 @@ final class IDEMavenProjectSystem: IDEProjectSystem {
                     fontSize: workspace.preferences.fontSize
                 ))
             },
-            controls: { _ in AnyView(IDEMavenConsoleControls()) },
+            controls: { workspace in AnyView(IDEProjectConsoleControls(system: workspace.maven)) },
             staysWhenLastShellCloses: true
         )]
     }
@@ -771,8 +771,7 @@ final class IDEMavenProjectSystem: IDEProjectSystem {
         syncTask = nil
         runTask?.cancel()
         runTask = nil
-        rereadTask?.cancel()
-        rereadTask = nil
+        reread.cancel()
         readGeneration += 1
         syncInFlight = false
         isRunningGoals = false

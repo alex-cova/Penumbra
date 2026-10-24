@@ -138,37 +138,12 @@ struct IDEProblemsPanel: View {
 
     private func fileHeader(_ file: ProblemFile) -> some View {
         let isCollapsed = collapsedFiles.contains(file.url)
-        return Button {
-            if isCollapsed {
-                collapsedFiles.remove(file.url)
-            } else {
-                collapsedFiles.insert(file.url)
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .frame(width: 10)
-                Text(file.url.lastPathComponent)
-                    .font(IDEAppearance.Typography.sidebarHeader)
-                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                Text(workspace.displayDirectory(of: file.url))
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                Spacer(minLength: 8)
-                Text("\(file.rows.count)")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            }
-            .padding(.horizontal, IDEAppearance.Spacing.md)
-            .padding(.vertical, 3)
-            .contentShape(Rectangle())
+        return IDEFileGroupHeader(
+            name: file.url.lastPathComponent, directory: workspace.displayDirectory(of: file.url),
+            count: file.rows.count, noun: "problems", isCollapsed: isCollapsed
+        ) {
+            if isCollapsed { collapsedFiles.remove(file.url) } else { collapsedFiles.insert(file.url) }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(file.url.lastPathComponent), \(file.rows.count) problems")
-        .accessibilityHint(isCollapsed ? "Expand" : "Collapse")
     }
 }
 

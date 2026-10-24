@@ -193,9 +193,9 @@ struct IDEPreferencesGeneralPane: View {
             "Local History",
             footer: "Unnamed revisions older than this, and the oldest ones past the size, are removed. A revision you label is kept."
         ) {
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Keep for Days", value: $preferences.localHistoryDays, range: 1...365, valueWidth: 72, valueSuffix: " days")
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Keep up to", value: $preferences.localHistoryMegabytes, range: 50...10_000, step: 50, valueWidth: 72, valueSuffix: " MB")
         }
     }

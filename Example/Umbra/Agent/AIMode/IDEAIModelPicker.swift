@@ -221,12 +221,11 @@ struct IDEAIModelPicker: View {
     /// Running an external agent starts a program on this Mac, so the first use asks.
     private func select(agent: IDEACPDefinition) {
         if !settings.acpAllowedAgentIDs.contains(agent.id) {
-            let alert = NSAlert()
-            alert.messageText = "Allow “\(agent.displayName)” to run?"
-            alert.informativeText = "Umbra starts \(([agent.command] + agent.args).joined(separator: " ")) as a process on this Mac when you send a message. Its changes to files and commands still ask you first. Stop ends the process."
-            alert.addButton(withTitle: "Allow")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            var alert = IDEAlert.confirm(
+                "Allow “\(agent.displayName)” to run?",
+                detail: "Umbra starts \(([agent.command] + agent.args).joined(separator: " ")) as a process on this Mac when you send a message. Its changes to files and commands still ask you first. Stop ends the process.",
+                confirm: "Allow")
+            guard alert.confirms() else { return }
             settings.setACPAllowed(true, agentID: agent.id)
         }
         onSelect(IDEAIModelChoice(provider: choice.provider, model: choice.model, reasoningEffort: choice.reasoningEffort, acpAgentID: agent.id))

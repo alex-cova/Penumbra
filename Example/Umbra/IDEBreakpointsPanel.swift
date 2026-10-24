@@ -83,13 +83,13 @@ struct IDEBreakpointsPanel: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Add Breakpoint")
-            IDEExplorerToolbarButton(
+            IDEIconButton(
                 systemImage: workspace.breakpointsMuted ? "circle.slash.fill" : "circle.slash",
                 help: workspace.breakpointsMuted ? "Unmute Breakpoints" : "Mute Breakpoints"
             ) {
                 workspace.toggleBreakpointsMuted()
             }
-            IDEExplorerToolbarButton(systemImage: "trash", help: "Remove All Breakpoints") {
+            IDEIconButton(systemImage: "trash", help: "Remove All Breakpoints") {
                 workspace.removeAllBreakpoints()
             }
             .disabled(workspace.breakpoints.isEmpty)

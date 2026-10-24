@@ -77,7 +77,7 @@ struct IDEAIChatView: View {
                     .help("Input \(conversation.usage.inputTokens) (\(conversation.usage.cachedInputTokens) cached), output \(conversation.usage.outputTokens)"
                         + (conversation.cost == nil ? "" : "\nCost is an estimate from the price table in Settings ▸ Agent."))
             }
-            IDEAgentIconButton(
+            IDEIconButton(
                 systemImage: "square.and.arrow.up", help: "Export Chat as Markdown…", isDisabled: conversation.isEmpty
             ) { exportChat() }
         }
@@ -188,10 +188,10 @@ struct IDEAIChatView: View {
                         onAccept: { chat.perform($0) })
                         .frame(height: composerHeight)
                     if conversation.isRunning {
-                        IDEAgentIconButton(
+                        IDEIconButton(
                             systemImage: "stop.fill", help: "Stop", tint: IDEAppearance.ColorToken.error, action: conversation.stop)
                     } else {
-                        IDEAgentIconButton(
+                        IDEIconButton(
                             systemImage: "arrow.up.circle.fill", help: "Send", tint: IDEAppearance.ColorToken.accent,
                             isDisabled: !conversation.canSend, action: send)
                     }

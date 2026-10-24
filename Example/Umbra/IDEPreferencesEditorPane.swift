@@ -64,7 +64,7 @@ struct IDEPreferencesEditorPane: View {
                 detail: "Shows sequences like != and -> as one symbol when the font has ligatures (JetBrains Mono, Fira Code, Cascadia Code)."
             )
 
-            IDEPreferencesDoubleStepper(
+            IDEPreferencesStepper(
                 title: "Font Size",
                 value: $preferences.fontSize,
                 range: 9...32,
@@ -73,7 +73,7 @@ struct IDEPreferencesEditorPane: View {
                 valueWidth: 24
             )
 
-            IDEPreferencesDoubleStepper(
+            IDEPreferencesStepper(
                 title: "Line Height",
                 value: $preferences.lineHeightMultiplier,
                 range: 0.8...2.0,
@@ -113,7 +113,7 @@ struct IDEPreferencesEditorPane: View {
 
             IDESettingsToggle("Blink Caret", isOn: $preferences.caretBlinks)
 
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Blink Interval",
                 value: $preferences.caretBlinkIntervalMilliseconds,
                 range: 100...2000,
@@ -138,7 +138,7 @@ struct IDEPreferencesEditorPane: View {
         }
 
         IDESettingsSection("Indentation") {
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Tab Width",
                 value: $preferences.tabWidth,
                 range: 2...8,
@@ -185,7 +185,7 @@ struct IDEPreferencesEditorPane: View {
         ) {
             IDESettingsToggle("Right Margin", isOn: $preferences.showPageGuide)
 
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Margin Column",
                 value: $preferences.pageGuideColumn,
                 range: 40...200,
@@ -215,7 +215,7 @@ struct IDEPreferencesEditorPane: View {
         ) {
             IDESettingsToggle("Show Sticky Lines", isOn: $preferences.showStickyLines)
 
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Maximum Lines",
                 value: $preferences.maximumStickyLines,
                 range: 1...10,
@@ -247,7 +247,7 @@ struct IDEPreferencesEditorPane: View {
                 detail: "A badge at the top right of a Java file with its errors and warnings. Click it to open them."
             )
 
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Stripe Mark Height",
                 value: $preferences.errorStripeMarkMinHeight,
                 range: 1...8,
@@ -259,7 +259,7 @@ struct IDEPreferencesEditorPane: View {
             IDESettingsToggle("Highlight Current Scope", isOn: $preferences.highlightsCurrentScope)
             IDESettingsToggle("Documentation on Hover", isOn: $preferences.showsDocumentationOnHover)
 
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Tooltip Delay",
                 value: $preferences.tooltipDelayMilliseconds,
                 range: 0...2000,
@@ -268,7 +268,7 @@ struct IDEPreferencesEditorPane: View {
                 valueSuffix: " ms"
             )
 
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Autoreparse Delay",
                 value: $preferences.autoreparseDelayMilliseconds,
                 range: 0...3000,

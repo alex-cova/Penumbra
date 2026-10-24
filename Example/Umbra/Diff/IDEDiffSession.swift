@@ -125,7 +125,7 @@ final class IDEDiffSession {
     @ObservationIgnored private var computeGeneration = 0
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var computeTask: Task<Void, Never>?
-    @ObservationIgnored private var editTask: Task<Void, Never>?
+    @ObservationIgnored private let edit = Debouncer()
 
     init(request: IDEDiffRequest, siblings: [IDEDiffRequest], settings: IDEDiffSettings = .load()) {
         self.request = request
@@ -136,14 +136,14 @@ final class IDEDiffSession {
     func cancel() {
         loadTask?.cancel()
         computeTask?.cancel()
-        editTask?.cancel()
+        edit.cancel()
     }
 
     // MARK: Loading
 
     func reload() {
         loadTask?.cancel()
-        editTask?.cancel()
+        edit.cancel()
         loadGeneration += 1
         let generation = loadGeneration
         let request = request
@@ -190,10 +190,8 @@ final class IDEDiffSession {
     func rightTextDidChange() {
         isRightDirty = true
         isStale = true
-        editTask?.cancel()
-        editTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(200))
-            guard let self, !Task.isCancelled, let text = self.currentRightText?() else { return }
+        edit.schedule(after: .milliseconds(200)) { [weak self] in
+            guard let self, let text = self.currentRightText?() else { return }
             self.right = IDEDiffText(text)
             self.recompute()
         }

@@ -19,16 +19,16 @@ struct FindInFilesPanel: View {
     @State private var maskRerun: Task<Void, Never>?
 
     var body: some View {
-        @Bindable var workspace = workspace
+        @Bindable var model = workspace.findInFiles
         VStack(spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.sm) {
-                FindInFilesSearchField(query: $workspace.findInFilesQuery, isFocused: $queryFocused) {
+                FindInFilesSearchField(query: $model.query, isFocused: $queryFocused) {
                     workspace.runFindInFiles()
                 }
 
-                FindInFilesOptionToggle(label: "Aa", help: "Match Case", isOn: $workspace.findInFilesCaseSensitive)
-                FindInFilesOptionToggle(label: "W", help: "Whole Word", isOn: $workspace.findInFilesWholeWord)
-                FindInFilesOptionToggle(label: ".*", help: "Regular Expression", isOn: $workspace.findInFilesRegex)
+                FindInFilesOptionToggle(label: "Aa", help: "Match Case", isOn: $model.isCaseSensitive)
+                FindInFilesOptionToggle(label: "W", help: "Whole Word", isOn: $model.matchesWholeWord)
+                FindInFilesOptionToggle(label: ".*", help: "Regular Expression", isOn: $model.usesRegex)
 
                 Button(action: workspace.runFindInFiles) {
                     Image(systemName: "magnifyingglass")
@@ -39,12 +39,12 @@ struct FindInFilesPanel: View {
                 .accessibilityLabel("Search")
 
                 Button {
-                    workspace.isFindInFilesReplaceVisible.toggle()
+                    workspace.findInFiles.isReplaceVisible.toggle()
                 } label: {
                     Image(systemName: "arrow.left.arrow.right")
                 }
                 .buttonStyle(.borderless)
-                .foregroundStyle(workspace.isFindInFilesReplaceVisible ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
+                .foregroundStyle(workspace.findInFiles.isReplaceVisible ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
                 .help("Replace")
                 .accessibilityLabel("Show Replace")
 
@@ -60,10 +60,10 @@ struct FindInFilesPanel: View {
             .padding(.trailing, IDEAppearance.Spacing.md)
             .padding(.vertical, IDEAppearance.Spacing.sm)
 
-            if workspace.isFindInFilesReplaceVisible {
+            if workspace.findInFiles.isReplaceVisible {
                 HStack(spacing: IDEAppearance.Spacing.sm) {
                     FindInFilesSearchField(
-                        query: $workspace.findInFilesReplacement,
+                        query: $model.replacement,
                         isFocused: $replacementFocused,
                         placeholder: "Replace with",
                         symbol: "arrow.left.arrow.right"
@@ -72,7 +72,7 @@ struct FindInFilesPanel: View {
                     }
                     Button("Replace All…", action: workspace.replaceInFiles)
                         .controlSize(.small)
-                        .disabled(workspace.findInFilesQuery.isEmpty)
+                        .disabled(workspace.findInFiles.query.isEmpty)
                         .help("Preview the changes before anything is edited")
                 }
                 .padding(.leading, IDEAppearance.Spacing.md)
@@ -81,7 +81,7 @@ struct FindInFilesPanel: View {
             }
 
             HStack(spacing: IDEAppearance.Spacing.sm) {
-                FindInFilesMaskField(mask: $workspace.findInFilesMask)
+                FindInFilesMaskField(mask: $model.mask)
                 Menu {
                     scopeButton("Project", scope: .project)
                     Button("Directory…", action: chooseScopeDirectory)
@@ -100,7 +100,7 @@ struct FindInFilesPanel: View {
             .padding(.bottom, IDEAppearance.Spacing.sm)
 
             HStack {
-                Text(workspace.findInFilesMaskProblem ?? workspace.findInFilesStatus)
+                Text(workspace.findInFiles.maskProblem ?? workspace.findInFiles.status)
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Spacer()
@@ -109,10 +109,10 @@ struct FindInFilesPanel: View {
             .padding(.trailing, IDEAppearance.Spacing.md)
             .padding(.bottom, IDEAppearance.Spacing.xs)
 
-            if workspace.findInFilesHits.isEmpty {
-                FindInFilesEmptyState(message: emptyMessage)
+            if workspace.findInFiles.hits.isEmpty {
+                IDEEmptyState(symbol: "magnifyingglass", message: emptyMessage)
             } else {
-                List(workspace.findInFilesHits) { hit in
+                List(workspace.findInFiles.hits) { hit in
                     FindInFilesHitRow(hit: hit, label: hitLabel(hit)) {
                         workspace.openFindInFilesHit(hit)
                     }
@@ -120,16 +120,16 @@ struct FindInFilesPanel: View {
                 .listStyle(.plain)
             }
         }
-        .frame(height: workspace.isFindInFilesReplaceVisible ? 292 : 256)
+        .frame(height: workspace.findInFiles.isReplaceVisible ? 292 : 256)
         .background(IDEAppearance.ColorToken.sidebar)
         .task { queryFocused = true }
         .onExitCommand { workspace.hideFindInFiles() }
         // Results shown for one set of options would be wrong for another.
-        .onChange(of: workspace.findInFilesCaseSensitive) { rerunIfSearching() }
-        .onChange(of: workspace.findInFilesWholeWord) { rerunIfSearching() }
-        .onChange(of: workspace.findInFilesRegex) { rerunIfSearching() }
-        .onChange(of: workspace.findInFilesScope) { rerunIfSearching() }
-        .onChange(of: workspace.findInFilesMask) { scheduleMaskRerun() }
+        .onChange(of: workspace.findInFiles.isCaseSensitive) { rerunIfSearching() }
+        .onChange(of: workspace.findInFiles.matchesWholeWord) { rerunIfSearching() }
+        .onChange(of: workspace.findInFiles.usesRegex) { rerunIfSearching() }
+        .onChange(of: workspace.findInFiles.scope) { rerunIfSearching() }
+        .onChange(of: workspace.findInFiles.mask) { scheduleMaskRerun() }
     }
 
     /// Typing a mask re-runs the search once the typing pauses, not on every character.
@@ -144,14 +144,14 @@ struct FindInFilesPanel: View {
 
     private func scopeButton(_ title: String, scope: IDEFindInFilesScope) -> some View {
         Button {
-            workspace.findInFilesScope = scope
+            workspace.findInFiles.scope = scope
         } label: {
-            if workspace.findInFilesScope == scope { Label(title, systemImage: "checkmark") } else { Text(title) }
+            if workspace.findInFiles.scope == scope { Label(title, systemImage: "checkmark") } else { Text(title) }
         }
     }
 
     private var scopeTitle: String {
-        switch workspace.findInFilesScope {
+        switch workspace.findInFiles.scope {
         case .project: "Project"
         case .directory(let url): "Folder: \(url.lastPathComponent)"
         case .openFiles: "Open Files"
@@ -172,21 +172,21 @@ struct FindInFilesPanel: View {
         let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
         let path = url.resolvingSymlinksInPath().standardizedFileURL.path
         guard path == rootPath || path.hasPrefix(rootPath + "/") else {
-            workspace.findInFilesStatus = "Choose a folder inside the project"
+            workspace.findInFiles.status = "Choose a folder inside the project"
             return
         }
-        workspace.findInFilesScope = path == rootPath ? .project : .directory(url)
+        workspace.findInFiles.scope = path == rootPath ? .project : .directory(url)
     }
 
     private func rerunIfSearching() {
-        if !workspace.findInFilesQuery.isEmpty { workspace.runFindInFiles() }
+        if !workspace.findInFiles.query.isEmpty { workspace.runFindInFiles() }
     }
 
     private var emptyMessage: String {
         if workspace.project.rootURL == nil {
             return "Open a folder to search files on disk."
         }
-        if workspace.findInFilesQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if workspace.findInFiles.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Type a query and press Return."
         }
         return "No matches."
@@ -322,31 +322,13 @@ private struct FindInFilesHitRow: View {
     }
 }
 
-private struct FindInFilesEmptyState: View {
-    let message: String
-
-    var body: some View {
-        VStack(spacing: IDEAppearance.Spacing.sm) {
-            Image(systemName: "magnifyingglass")
-                .font(.title3)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-            Text(message)
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, IDEAppearance.Spacing.md)
-    }
-}
-
 #Preview {
     FindInFilesPanel()
         .environment({
             let workspace = IDEWorkspace()
-            workspace.findInFilesQuery = "TODO"
-            workspace.findInFilesStatus = "2 results"
-            workspace.findInFilesHits = [
+            workspace.findInFiles.query = "TODO"
+            workspace.findInFiles.status = "2 results"
+            workspace.findInFiles.hits = [
                 ProjectSearchResult(
                     url: URL(fileURLWithPath: "/project/src/ui/Editor.swift"),
                     line: 41,

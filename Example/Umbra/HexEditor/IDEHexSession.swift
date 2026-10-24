@@ -859,15 +859,13 @@ final class IDEHexSession {
     }
 
     private func askPasteOverflow() -> HexPasteChoice {
-        let alert = NSAlert()
-        alert.messageText = "Paste extends past the end of the file"
-        alert.informativeText = "Overwrite mode can extend the file, keep only the bytes that fit, or cancel."
-        alert.addButton(withTitle: "Extend")
-        alert.addButton(withTitle: "Truncate")
-        alert.addButton(withTitle: "Cancel")
+        var alert = IDEAlert.choice(
+            "Paste extends past the end of the file",
+            detail: "Overwrite mode can extend the file, keep only the bytes that fit, or cancel.",
+            buttons: [.init(title: "Extend"), .init(title: "Truncate"), .init(title: "Cancel")])
         switch alert.runModal() {
-        case .alertFirstButtonReturn: return .extend
-        case .alertSecondButtonReturn: return .truncate
+        case 0: return .extend
+        case 1: return .truncate
         default: return .cancel
         }
     }

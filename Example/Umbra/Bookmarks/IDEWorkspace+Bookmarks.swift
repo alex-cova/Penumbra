@@ -232,23 +232,10 @@ extension IDEWorkspace {
 
     /// One line of text in a sheet on this window; `onConfirm` gets the trimmed text.
     private func promptForText(title: String, message: String, initial: String, confirm: String, onConfirm: @escaping (String) -> Void) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.addButton(withTitle: confirm)
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.stringValue = initial
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        let finish: (NSApplication.ModalResponse) -> Void = { response in
-            guard response == .alertFirstButtonReturn else { return }
-            onConfirm(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        if let window {
-            alert.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            finish(alert.runModal())
+        Task { [weak self] in
+            guard let name = await IDEAlert.promptForText(
+                title, detail: message, initial: initial, confirm: confirm, in: self?.window) else { return }
+            onConfirm(name)
         }
     }
 }

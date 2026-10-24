@@ -160,29 +160,22 @@ extension IDEWorkspace {
 
     /// The diff viewer's version of the question: it already shows the file, so no Compare.
     static func askToOverwriteChangedFile(named name: String) -> Bool {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "\(name) changed on disk since the diff loaded it."
-        alert.informativeText = "Saving replaces the version on disk with the text in the diff."
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Overwrite")
-        alert.buttons[1].hasDestructiveAction = true
-        return alert.runModal() == .alertSecondButtonReturn
+        var alert = IDEAlert.confirm(
+            "\(name) changed on disk since the diff loaded it.",
+            detail: "Saving replaces the version on disk with the text in the diff.",
+            confirm: "Overwrite", isDestructive: true)
+        return alert.confirms()
     }
 
     static func askAboutSaveConflict(_ document: WorkbenchDocument) -> SaveConflictChoice {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "\(document.displayName) changed on disk since you opened it."
-        alert.informativeText = "Saving replaces the version on disk with yours. Compare to see what changed."
         // Cancel first, so it is the default answer to Return.
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Overwrite")
-        alert.addButton(withTitle: "Compare")
-        alert.buttons[1].hasDestructiveAction = true
+        var alert = IDEAlert.choice(
+            "\(document.displayName) changed on disk since you opened it.",
+            detail: "Saving replaces the version on disk with yours. Compare to see what changed.",
+            buttons: [.init(title: "Cancel"), .init(title: "Overwrite", isDestructive: true), .init(title: "Compare")])
         switch alert.runModal() {
-        case .alertSecondButtonReturn: return .overwrite
-        case .alertThirdButtonReturn: return .compare
+        case 1: return .overwrite
+        case 2: return .compare
         default: return .cancel
         }
     }

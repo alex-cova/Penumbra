@@ -141,12 +141,12 @@ public final class IDEWorkspace {
     /// pane shows the same document so they can be replayed there.
     @ObservationIgnored private var pendingMirrorChanges: [ObjectIdentifier: [TextContentChange]] = [:]
     /// Idle unambiguous-import insertion. A keystroke only cancels this; the buffer is read after the pause.
-    @ObservationIgnored private var javaAutoImportTask: Task<Void, Never>?
+    @ObservationIgnored private let javaAutoImport = Debouncer()
     /// Set while the import edit itself is applied, so that edit does not schedule another pass.
     @ObservationIgnored private var javaAutoImportApplying = false
     /// The pasted text of the edit that is about to be reported, when it matches the pasteboard.
     @ObservationIgnored private var javaAutoImportPaste: String?
-    private var hasPresentedMetalFailure = false
+    @ObservationIgnored var hasPresentedMetalFailure = false
     /// The recent lists are shared by every window (`IDEAppState`), so what one window opens shows
     /// in all of them.
     private var appState: IDEAppState { IDEAppState.shared }
@@ -220,7 +220,6 @@ public final class IDEWorkspace {
     let runs = IDERunSessions()
     /// Bumped by the Run tab's "Scroll to End" so the console jumps to the bottom.
     var runScrollToEndRequest = 0
-    private var nameIndexOverlayTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     /// Umbra's one file-watching engine for this window; everything that reacts to disk changes
     /// subscribes to its batches.
     let projectWatcher = IDEProjectWatcher()
@@ -514,13 +513,12 @@ public final class IDEWorkspace {
     var javaFileCanTest = false
     private(set) var runFileURL: URL?
     var activeJavaTestClass: JavaTestClass?
-    @ObservationIgnored private var semanticHighlightTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
-    @ObservationIgnored private var lineMarkerTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    /// Semantic colours, gutter markers and the name-index overlay painted over the editors.
+    @ObservationIgnored private let overlays = IDEEditorOverlayController()
     /// The Java markers shown in each text view, with the buffer generation they were computed
     /// for; a click maps the engine marker's `id` back to its index here.
-    @ObservationIgnored private var lineMarkersByEditor: [ObjectIdentifier: (generation: UInt64, markers: [LineMarker])] = [:]
     /// The language the Type and Call Hierarchy tabs were last asked for (their items belong to it).
-    @ObservationIgnored private var javaRunAvailabilityTask: Task<Void, Never>?
+    @ObservationIgnored private let javaRunAvailability = Debouncer()
     @ObservationIgnored private var structureRefreshTask: Task<Void, Never>?
     /// The last configuration Run launched in this project, restored across launches. Run Last
     /// Configuration reruns it, whatever file is active.
@@ -609,36 +607,41 @@ public final class IDEWorkspace {
     /// Standardized paths of every open document, so the Explorer can mark files open in a tab.
     private(set) var openDocumentPaths: Set<String> = []
     @ObservationIgnored private var lastAutoRevealedDocumentID: UUID?
-    var isFindInFilesVisible = false
-    var findInFilesQuery = ""
-    var findInFilesReplacement = ""
-    var findInFilesCaseSensitive = false
-    var findInFilesWholeWord = false
-    var findInFilesRegex = false
-    /// File mask (`*.java, !*Test.java`) and scope of Find and Replace in Files; session-only, like the toggles.
-    var findInFilesMask = ""
-    var findInFilesScope = IDEFindInFilesScope.project
-    /// Whether the Find in Files drawer shows its replacement row (⇧⌘R opens it that way).
-    var isFindInFilesReplaceVisible = false
-    var findInFilesHits: [ProjectSearchResult] = []
-    var findInFilesStatus = ""
-    var isTerminalVisible = false
-    /// The bottom panel covers the whole editor area instead of sitting under it. The editor stays
-    /// mounted underneath, so its layout and scroll positions are untouched. Not persisted.
-    private(set) var isBottomPanelExpanded = false
-    var terminalHeight = IDEAppearance.Spacing.terminalDefaultHeight
-    var terminalFocusRequestID: UInt64 = 0
-    var terminalTabs: [IDETerminalTab] = []
-    var selectedTerminalTabID: UUID?
-    /// Agent command id → the terminal tab displaying it. Not saved.
-    @ObservationIgnored private var agentCommandTabs: [UUID: UUID] = [:]
-    /// Output a command tab's view has not fed yet, keyed by tab id.
-    @ObservationIgnored private var agentCommandFeed: [UUID: String] = [:]
-    /// Commands whose tab should ignore anything further, including a tab the user closed.
-    @ObservationIgnored private var finishedAgentCommands: Set<UUID> = []
+    /// The Find and Replace in Files drawer (query, scope, hits); the search itself is in `IDEWorkspace+FindInFiles.swift`.
+    let findInFiles = IDEFindInFilesModel()
+    /// The bottom panel: visibility, size, selected tab and the shell tabs (`IDEBottomPanelModel`). The
+    /// properties below read through to it, so views and the session code keep their names.
+    let bottomPanel = IDEBottomPanelModel()
+    var isTerminalVisible: Bool {
+        get { bottomPanel.isVisible }
+        set { bottomPanel.isVisible = newValue }
+    }
+    private(set) var isBottomPanelExpanded: Bool {
+        get { bottomPanel.isExpanded }
+        set { bottomPanel.isExpanded = newValue }
+    }
+    var terminalHeight: Double {
+        get { bottomPanel.height }
+        set { bottomPanel.height = newValue }
+    }
+    var terminalFocusRequestID: UInt64 {
+        get { bottomPanel.focusRequestID }
+        set { bottomPanel.focusRequestID = newValue }
+    }
+    var terminalTabs: [IDETerminalTab] {
+        get { bottomPanel.tabs }
+        set { bottomPanel.tabs = newValue }
+    }
+    var selectedTerminalTabID: UUID? {
+        get { bottomPanel.selectedTabID }
+        set { bottomPanel.selectedTabID = newValue }
+    }
     /// Which tab the bottom panel is showing. Not persisted in the session -- each launch starts on
     /// a shell (or no terminal at all).
-    var selectedBottomTab: IDEBottomPanelTab = .terminal
+    var selectedBottomTab: IDEBottomPanelTab {
+        get { bottomPanel.selectedTab }
+        set { bottomPanel.selectedTab = newValue }
+    }
     /// The Run tab appears with the first program Run starts, and stays while any console is kept.
     var showsRunTab: Bool { runs.hasContent }
     /// The Type Hierarchy tab appears once a hierarchy (or a message about why there is none) has
@@ -661,7 +664,7 @@ public final class IDEWorkspace {
     var showsUsagesTab: Bool { usages.hasContent }
     var showsTestResultsTab: Bool { testResults.hasContent }
     /// True when a terminal tab (rather than one of the read-only tabs) is showing.
-    var isTerminalTabSelected: Bool { selectedBottomTab == .terminal }
+    var isTerminalTabSelected: Bool { bottomPanel.isShellSelected }
 
     /// Whether `tab` is the bottom panel's selected tab (the stripe and the strip read this).
     func isBottomTabSelected(_ tab: IDEBottomPanelTab) -> Bool {
@@ -1095,14 +1098,9 @@ public final class IDEWorkspace {
         projectSystems.stop()
         intelligenceServices.javaSupport.teardown()
         languageServerHost.stop()
-        for task in nameIndexOverlayTasks.values { task.cancel() }
-        nameIndexOverlayTasks.removeAll()
-        for task in semanticHighlightTasks.values { task.cancel() }
-        semanticHighlightTasks.removeAll()
-        for task in lineMarkerTasks.values { task.cancel() }
-        lineMarkerTasks.removeAll()
-        javaRunAvailabilityTask?.cancel()
-        javaRunAvailabilityTask = nil
+        overlays.cancelAll()
+        javaRunAvailability.cancel()
+        javaAutoImport.cancel()
         structureRefreshTask?.cancel()
         structureRefreshTask = nil
         blame.cancelAll()
@@ -1266,7 +1264,7 @@ public final class IDEWorkspace {
         languageTextView.languageIdentifier = identifier
         preferences.applySmartKeys(to: languageTextView)
         languageTextView.setLanguageMode(languageMode)
-        host(for: targetPane.id).textView.reservedLineMarkerSlots = reservedLineMarkerSlots(
+        host(for: targetPane.id).textView.reservedLineMarkerSlots = IDEEditorOverlayController.reservedLineMarkerSlots(
             languageIdentifier: identifier, hasMarkerProvider: languages.lineMarkers(for: identifier) != nil
         )
 
@@ -1327,32 +1325,26 @@ public final class IDEWorkspace {
     /// This window already has a project: ask whether `url` replaces it or opens in a new window.
     /// "Remember my choice" writes the `Open folders in` setting.
     func askHowToOpenFolder(_ url: URL) {
-        let alert = NSAlert()
-        alert.messageText = "Open “\(url.lastPathComponent)” in a new window?"
-        alert.informativeText = "This window already has “\(project.rootURL?.lastPathComponent ?? "a folder")” open."
-        alert.addButton(withTitle: "New Window")
-        alert.addButton(withTitle: "Replace This Window's Project")
-        alert.addButton(withTitle: "Cancel")
-        alert.showsSuppressionButton = true
-        alert.suppressionButton?.title = "Remember my choice"
-        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+        var alert = IDEAlert.choice(
+            "Open “\(url.lastPathComponent)” in a new window?",
+            detail: "This window already has “\(project.rootURL?.lastPathComponent ?? "a folder")” open.",
+            style: .informational,
+            buttons: [.init(title: "New Window"), .init(title: "Replace This Window's Project"), .init(title: "Cancel")])
+        alert.suppressionTitle = "Remember my choice"
+        Task { [weak self] in
+            let choice = await alert.present(in: self?.window)
             guard let self else { return }
-            let remember = alert.suppressionButton?.state == .on
-            switch response {
-            case .alertFirstButtonReturn:
+            let remember = alert.suppressionIsChecked
+            switch choice {
+            case 0:
                 if remember { self.preferences.openFoldersIn = .newWindow }
                 IDEWindowRegistry.shared.openNewWindow(urls: [url])
-            case .alertSecondButtonReturn:
+            case 1:
                 if remember { self.preferences.openFoldersIn = .replace }
                 self.replaceProject(with: url)
             default:
                 break
             }
-        }
-        if let window {
-            alert.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            finish(alert.runModal())
         }
     }
 
@@ -1523,17 +1515,7 @@ public final class IDEWorkspace {
     /// Points every shell at the directory a new tab would use (the home directory once the folder
     /// is closed) and restarts a shell that was somewhere else.
     private func resetTerminalsToDefaultDirectory() {
-        let directory = defaultTerminalDirectory()
-        let title = IDETerminalTab.defaultTitle(for: directory)
-        let home = directory.standardizedFileURL.path
-        for index in terminalTabs.indices where terminalTabs[index].agentCommandID == nil {
-            let same = terminalTabs[index].workingDirectory.standardizedFileURL.path == home
-            terminalTabs[index].workingDirectory = directory
-            terminalTabs[index].title = title
-            if !same {
-                terminalTabs[index].restartRequestID += 1
-            }
-        }
+        bottomPanel.resetShells(to: defaultTerminalDirectory())
     }
 
     public var recentFileURLs: [URL] {
@@ -1678,7 +1660,7 @@ public final class IDEWorkspace {
         _ = host(for: workbench.activePane.id).textView.perform(.safeDelete)
     }
 
-    private func presentWorkspaceEditPreview(
+    func presentWorkspaceEditPreview(
         _ plan: WorkspaceEditPlan,
         style: IDEWorkspaceEditPreviewStyle = .singleLine,
         apply: @escaping (WorkspaceEdit) async -> WorkspaceEditApplyResult
@@ -1856,72 +1838,6 @@ public final class IDEWorkspace {
 
     public func showReplace() {
         adapter.textView?.perform(.toggleReplacePanel)
-    }
-
-    public func showFindInFiles() {
-        isFindInFilesVisible = true
-        if findInFilesStatus.isEmpty {
-            findInFilesStatus = project.rootURL == nil
-                ? "Open a folder to search the project"
-                : "Enter a query and press Return"
-        }
-    }
-
-    /// Opens Find in Files with the replacement row showing (⇧⌘R in the IntelliJ keymap).
-    public func showReplaceInFiles() {
-        isFindInFilesReplaceVisible = true
-        showFindInFiles()
-    }
-
-    /// The query the drawer's field and option toggles describe.
-    var findInFilesSearchQuery: WorkspaceSearchQuery {
-        WorkspaceSearchQuery(
-            text: findInFilesQuery,
-            isCaseSensitive: findInFilesCaseSensitive,
-            matchWholeWord: findInFilesWholeWord,
-            useRegularExpression: findInFilesRegex
-        )
-    }
-
-    /// What the drawer's mask and scope describe, for both Find and Replace so they see the same files.
-    var findInFilesFilter: ProjectSearchFilter {
-        let mask = FileMask(findInFilesMask)
-        switch findInFilesScope {
-        case .project:
-            return ProjectSearchFilter(mask: mask)
-        case .directory(let url):
-            return ProjectSearchFilter(mask: mask, directory: url)
-        case .openFiles:
-            return ProjectSearchFilter(mask: mask, onlyFiles: Set(openDocumentPaths.map { URL(fileURLWithPath: $0) }))
-        case .changedFiles:
-            return ProjectSearchFilter(mask: mask, onlyFiles: Set(gitStatus.changes.map { URL(fileURLWithPath: $0.path) }))
-        }
-    }
-
-    /// Why the mask cannot be used, or nil when it is fine.
-    var findInFilesMaskProblem: String? {
-        let invalid = FileMask(findInFilesMask).invalidPatterns
-        return invalid.isEmpty ? nil : "Invalid file mask: \(invalid.joined(separator: ", "))"
-    }
-
-    /// Limits Find in Files to `directory` (the Explorer's "Find in Files Here") and opens the drawer.
-    func showFindInFiles(in directory: URL) {
-        findInFilesScope = .directory(directory)
-        showFindInFiles()
-        if !findInFilesQuery.isEmpty { runFindInFiles() }
-    }
-
-    /// A scope folder that is no longer inside the project (another folder was opened) falls back to the project.
-    private func resetStaleFindInFilesScope(root: URL) {
-        guard case .directory(let url) = findInFilesScope else { return }
-        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
-        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
-        if path != rootPath, !path.hasPrefix(rootPath + "/") { findInFilesScope = .project }
-    }
-
-    func hideFindInFiles() {
-        isFindInFilesVisible = false
-        focusActiveEditor()
     }
 
     var runHelp: String {
@@ -2443,77 +2359,31 @@ public final class IDEWorkspace {
     }
 
     func addTerminalTab(cwd: URL? = nil, saveSession: Bool = true) {
-        selectedBottomTab = .terminal
-        let tab = makeTerminalTab(cwd: cwd)
-        terminalTabs.append(tab)
-        selectedTerminalTabID = tab.id
-        if !isTerminalVisible {
-            isTerminalVisible = true
-        }
+        bottomPanel.append(makeTerminalTab(cwd: cwd))
         requestTerminalFocus()
         if saveSession {
             self.saveSession()
         }
     }
 
-    /// Opens the bottom panel on a new tab that only displays one agent command. The user's shell
-    /// tabs are left alone, and this tab is not given the keyboard.
-    private func openAgentCommandTab(commandID: UUID, title: String) -> UUID {
-        let tab = IDETerminalTab(
-            id: UUID(),
-            title: IDETerminalTab.commandTitle(for: title),
-            workingDirectory: defaultTerminalDirectory(),
-            agentCommandID: commandID
-        )
-        terminalTabs.append(tab)
-        selectedTerminalTabID = tab.id
-        selectedBottomTab = .terminal
-        if !isTerminalVisible {
-            isTerminalVisible = true
-        }
-        saveSession()
-        return tab.id
-    }
-
-    /// Appends text to the command's display tab. `nil` ends the command: a closed tab, and anything
-    /// sent after this, is dropped rather than opening another tab.
+    /// Shows an agent command's output on a tab of its own, opened on the first line and not given
+    /// the keyboard. The user's shell tabs are left alone. `nil` ends the command.
     func showAgentCommand(id: UUID, title: String, line: String?) {
-        if line == nil {
-            finishedAgentCommands.insert(id)
-            return
+        if bottomPanel.showAgentCommand(id: id, title: title, line: line, directory: defaultTerminalDirectory()) {
+            saveSession()
         }
-        guard let line, !finishedAgentCommands.contains(id) else { return }
-        let tabID: UUID
-        if let existing = agentCommandTabs[id] {
-            guard terminalTabs.contains(where: { $0.id == existing }) else { return }
-            tabID = existing
-        } else {
-            tabID = openAgentCommandTab(commandID: id, title: title)
-            agentCommandTabs[id] = tabID
-        }
-        agentCommandFeed[tabID, default: ""] += line
-        guard let index = terminalTabs.firstIndex(where: { $0.id == tabID }) else { return }
-        terminalTabs[index].agentFeedGeneration += 1
     }
 
     /// The output waiting for an agent command tab, consumed once by its view.
     func takeAgentCommandFeed(tabID: UUID) -> String {
-        let text = agentCommandFeed[tabID] ?? ""
-        agentCommandFeed[tabID] = nil
-        return text
+        bottomPanel.takeAgentCommandFeed(tabID: tabID)
     }
 
     func closeTerminalTab(_ id: UUID) {
-        guard let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
-        if let commandID = terminalTabs[index].agentCommandID {
-            agentCommandTabs[commandID] = nil
-            agentCommandFeed[id] = nil
-            finishedAgentCommands.insert(commandID)
-        }
-
-        if terminalTabs.count == 1 {
-            terminalTabs.removeAll()
-            selectedTerminalTabID = nil
+        switch bottomPanel.closeTab(id) {
+        case .notFound:
+            return
+        case .lastClosed:
             if let tab = languageModuleBottomTabs().first(where: \.staysWhenLastShellCloses)?.tab {
                 showBottomTab(tab)
             } else if showsSourceControlTab {
@@ -2521,30 +2391,14 @@ public final class IDEWorkspace {
             } else {
                 hideTerminal()
             }
-            return
+        case .removed:
+            requestTerminalFocus()
+            saveSession()
         }
-
-        let selectedIndex = terminalTabs.firstIndex(where: { $0.id == selectedTerminalTabID }) ?? 0
-        let countBeforeRemoval = terminalTabs.count
-        terminalTabs.remove(at: index)
-
-        if let newIndex = TabListEngine.selectionIndexAfterClose(
-            closing: index,
-            selected: selectedIndex,
-            count: countBeforeRemoval
-        ) {
-            selectedTerminalTabID = terminalTabs[newIndex].id
-        } else {
-            selectedTerminalTabID = terminalTabs.first?.id
-        }
-        requestTerminalFocus()
-        saveSession()
     }
 
     func selectTerminalTab(_ id: UUID) {
-        guard terminalTabs.contains(where: { $0.id == id }) else { return }
-        selectedBottomTab = .terminal
-        selectedTerminalTabID = id
+        guard bottomPanel.selectTab(id) else { return }
         requestTerminalFocus()
         saveSession()
     }
@@ -2563,10 +2417,7 @@ public final class IDEWorkspace {
     }
 
     func showGitNotice(_ title: String, _ detail: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = detail
-        alert.addButton(withTitle: "OK")
+        var alert = IDEAlert.notice(title, detail: detail)
         alert.runModal()
     }
 
@@ -2660,15 +2511,11 @@ public final class IDEWorkspace {
             showGitNotice("Nothing to Revert", "\(name) is not under version control yet, so there is no earlier version to go back to.")
             return
         }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Revert changes to \(name)?"
-        alert.informativeText = "This discards every change to \(name) since the last commit, including unsaved edits. It cannot be undone."
-        // Cancel first, so it is the default answer to Return.
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Revert")
-        alert.buttons[1].hasDestructiveAction = true
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        var alert = IDEAlert.confirm(
+            "Revert changes to \(name)?",
+            detail: "This discards every change to \(name) since the last commit, including unsaved edits. It cannot be undone.",
+            confirm: "Revert", isDestructive: true)
+        guard alert.confirms() else { return }
         gitStatus.revert(
             path: url.path,
             then: { [weak self] in self?.reloadOpenEditorsAfterGitChange(discardingEditsIn: [url.path]) },
@@ -2713,17 +2560,13 @@ public final class IDEWorkspace {
         if !skipped.isEmpty {
             detail += "\n\nNot reverted (not in the last commit): \(Self.nameList(skipped.map(\.relativePath), limit: 5))"
         }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = revertable.count == 1
-            ? "Revert changes to \(revertable[0].relativePath)?"
-            : "Revert changes to \(revertable.count) files?"
-        alert.informativeText = detail.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Cancel first, so it is the default answer to Return.
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Revert")
-        alert.buttons[1].hasDestructiveAction = true
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        var alert = IDEAlert.confirm(
+            revertable.count == 1
+                ? "Revert changes to \(revertable[0].relativePath)?"
+                : "Revert changes to \(revertable.count) files?",
+            detail: detail.trimmingCharacters(in: .whitespacesAndNewlines),
+            confirm: "Revert", isDestructive: true)
+        guard alert.confirms() else { return }
         gitStatus.revert(
             paths: revertable.map(\.path),
             then: { [weak self] reverted in self?.reloadOpenEditorsAfterGitChange(discardingEditsIn: reverted) },
@@ -3069,232 +2912,31 @@ public final class IDEWorkspace {
 
     /// Wipes the visible terminal's screen and scrollback; the shell redraws its prompt.
     func clearTerminal() {
-        guard isTerminalVisible, isTerminalTabSelected,
-              let id = selectedTerminalTabID,
-              let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
-        terminalTabs[index].clearRequestID += 1
+        bottomPanel.requestClear()
     }
 
     func restartTerminalTab(_ id: UUID?) {
-        guard let id = id ?? selectedTerminalTabID,
-              let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
-        // An agent command tab has no shell to restart. Starting one would replace the output.
-        guard terminalTabs[index].agentCommandID == nil else { return }
-        terminalTabs[index].restartRequestID += 1
-        selectedTerminalTabID = id
-        requestTerminalFocus()
+        if bottomPanel.requestRestart(id) { requestTerminalFocus() }
     }
 
     func selectNextTerminalTab() {
-        guard isTerminalVisible, !terminalTabs.isEmpty,
-              let selectedID = selectedTerminalTabID,
-              let currentIndex = terminalTabs.firstIndex(where: { $0.id == selectedID }),
-              let nextIndex = TabListEngine.nextIndex(after: currentIndex, count: terminalTabs.count) else { return }
-        selectTerminalTab(terminalTabs[nextIndex].id)
+        if let id = bottomPanel.nextTabID() { selectTerminalTab(id) }
     }
 
     func selectPreviousTerminalTab() {
-        guard isTerminalVisible, !terminalTabs.isEmpty,
-              let selectedID = selectedTerminalTabID,
-              let currentIndex = terminalTabs.firstIndex(where: { $0.id == selectedID }),
-              let previousIndex = TabListEngine.previousIndex(before: currentIndex, count: terminalTabs.count) else { return }
-        selectTerminalTab(terminalTabs[previousIndex].id)
+        if let id = bottomPanel.previousTabID() { selectTerminalTab(id) }
     }
 
     func updateTerminalTabTitle(_ id: UUID, title: String) {
-        guard let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, terminalTabs[index].title != trimmed else { return }
-        terminalTabs[index].title = trimmed
+        bottomPanel.updateTitle(id, to: title)
     }
 
     func updateTerminalTabDirectory(_ id: UUID, url: URL) {
-        guard let index = terminalTabs.firstIndex(where: { $0.id == id }) else { return }
-        guard terminalTabs[index].workingDirectory.path != url.path else { return }
-        terminalTabs[index].workingDirectory = url
+        bottomPanel.updateDirectory(id, to: url)
     }
 
     func requestTerminalFocus() {
-        terminalFocusRequestID += 1
-    }
-
-    func runFindInFiles() {
-        isFindInFilesVisible = true
-        let query = findInFilesQuery
-        guard let root = project.rootURL else {
-            findInFilesHits = []
-            findInFilesStatus = "Open a folder to search the project"
-            return
-        }
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            findInFilesHits = []
-            findInFilesStatus = "Enter a query and press Return"
-            return
-        }
-        guard let intelligenceController = host(for: workbench.activePaneID).intelligenceController else {
-            return
-        }
-        if findInFilesRegex, findInFilesSearchQuery.compiledRegularExpression() == nil {
-            findInFilesHits = []
-            findInFilesStatus = "Not a valid regular expression"
-            return
-        }
-        if let problem = findInFilesMaskProblem {
-            findInFilesHits = []
-            findInFilesStatus = problem
-            return
-        }
-        resetStaleFindInFilesScope(root: root)
-        let filter = findInFilesFilter
-        findInFilesStatus = "Searching…"
-        Task {
-            let visible = await IDEGitVisibleFiles.relativePaths(under: root)
-            let hits = await intelligenceController.searchProject(
-                query,
-                in: root,
-                isCaseSensitive: findInFilesCaseSensitive,
-                matchWholeWord: findInFilesWholeWord,
-                useRegularExpression: findInFilesRegex,
-                filter: filter,
-                visibleRelativePaths: visible
-            )
-            findInFilesHits = hits
-            if hits.isEmpty {
-                findInFilesStatus = "No results"
-            } else if hits.count == 1 {
-                findInFilesStatus = "1 result"
-            } else {
-                findInFilesStatus = "\(hits.count) results"
-            }
-        }
-    }
-
-    /// Replaces the search text with the replacement text across the project, after a preview.
-    /// Files open in an editor are edited in that editor (left unsaved, one undo step); the rest
-    /// are rewritten on disk. Nothing is changed until Apply, and a match whose text has changed
-    /// since the search is skipped rather than overwritten.
-    func replaceInFiles() {
-        isFindInFilesVisible = true
-        isFindInFilesReplaceVisible = true
-        guard let root = project.rootURL else {
-            findInFilesStatus = "Open a folder to replace in its files"
-            return
-        }
-        let query = findInFilesSearchQuery
-        guard !query.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || query.useRegularExpression && !query.text.isEmpty else {
-            findInFilesStatus = "Enter the text to replace and press Replace All"
-            return
-        }
-        guard query.compiledRegularExpression() != nil else {
-            findInFilesStatus = "Not a valid regular expression"
-            return
-        }
-        if let problem = findInFilesMaskProblem {
-            findInFilesStatus = problem
-            return
-        }
-        guard let intelligenceController = host(for: workbench.activePaneID).intelligenceController else { return }
-        resetStaleFindInFilesScope(root: root)
-        // The same filter as the search, so Replace changes exactly the files Find lists.
-        let filter = findInFilesFilter
-        let replacement = findInFilesReplacement
-        findInFilesStatus = "Preparing the replacement…"
-        Task {
-            let visible = await IDEGitVisibleFiles.relativePaths(under: root)
-            // The search only picks the files; each is then read as the editor or disk has it now.
-            let hits = await intelligenceController.searchProject(
-                query.text,
-                in: root,
-                isCaseSensitive: query.isCaseSensitive,
-                matchWholeWord: query.matchWholeWord,
-                useRegularExpression: query.useRegularExpression,
-                filter: filter,
-                visibleRelativePaths: visible
-            )
-            var urls: [URL] = []
-            var seen = Set<String>()
-            for hit in hits where seen.insert(hit.url.standardizedFileURL.path).inserted {
-                urls.append(hit.url)
-            }
-            var live: [URL: String] = [:]
-            for url in urls {
-                if let text = openBufferText(for: url) { live[url] = text }
-            }
-            // Captured by value: `urls` and `live` are vars, which a detached task must not share.
-            let planned = await Task.detached(priority: .userInitiated) { [urls, live, query, replacement] () -> (entries: [WorkspaceEditPlanEntry], unreadable: Int) in
-                var entries: [WorkspaceEditPlanEntry] = []
-                var unreadable = 0
-                for url in urls {
-                    guard let text = live[url] ?? (try? String(contentsOf: url, encoding: .utf8)) else {
-                        unreadable += 1
-                        continue
-                    }
-                    entries.append(contentsOf: ProjectReplacePlanner.entries(for: query, replacement: replacement, in: text, url: url))
-                }
-                return (entries, unreadable)
-            }.value
-            guard !planned.entries.isEmpty else {
-                findInFilesStatus = "Nothing to replace"
-                return
-            }
-            var warnings: [String] = []
-            if hits.count >= 2_000 {
-                warnings.append("The search stopped at 2,000 matches, so some files may be missing. Search again after applying.")
-            }
-            if planned.unreadable > 0 {
-                warnings.append("\(planned.unreadable) file\(planned.unreadable == 1 ? "" : "s") couldn't be read as UTF-8 text and \(planned.unreadable == 1 ? "was" : "were") skipped.")
-            }
-            if !filter.isUnrestricted {
-                warnings.append("Limited to \(findInFilesScopeDescription(filter)).")
-            }
-            if !live.isEmpty {
-                warnings.append("Files that are open are changed in their editors and left unsaved.")
-            }
-            let replacementLabel = replacement.isEmpty ? "nothing" : "“\(replacement)”"
-            let plan = WorkspaceEditPlan(
-                entries: planned.entries,
-                warnings: warnings,
-                title: "Replace “\(query.text)” with \(replacementLabel)"
-            )
-            let files = Set(planned.entries.map(\.url)).count
-            findInFilesStatus = "\(planned.entries.count) replacement\(planned.entries.count == 1 ? "" : "s") in \(files) file\(files == 1 ? "" : "s"): review and apply"
-            presentWorkspaceEditPreview(plan, style: .diff) { [weak self = self] edit in
-                await self?.applyReplacement(edit, plan: plan) ?? WorkspaceEditApplyResult()
-            }
-        }
-    }
-
-    private func findInFilesScopeDescription(_ filter: ProjectSearchFilter) -> String {
-        var parts: [String] = []
-        if !filter.mask.isEmpty { parts.append("files matching \(filter.mask.text.trimmingCharacters(in: .whitespaces))") }
-        switch findInFilesScope {
-        case .project: break
-        case .directory(let url): parts.append("the folder \(url.lastPathComponent)")
-        case .openFiles: parts.append("open files")
-        case .changedFiles: parts.append("files changed in git")
-        }
-        return parts.joined(separator: " in ")
-    }
-
-    private func applyReplacement(_ edit: WorkspaceEdit, plan: WorkspaceEditPlan) async -> WorkspaceEditApplyResult {
-        var texts: [URL: String] = [:]
-        for url in edit.changes.keys {
-            texts[url] = openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8))
-        }
-        let outcome = IDEReplaceInFilesGuard.verified(edit, against: plan, texts: texts)
-        var result = outcome.edit.changes.isEmpty
-            ? WorkspaceEditApplyResult()
-            : await historyRecordingApplier(named: "Replace in Files").apply(outcome.edit)
-        for (url, count) in outcome.staleCounts {
-            let note = "\(count) replacement\(count == 1 ? "" : "s") skipped: the file changed since the search."
-            result.failures[url] = result.failures[url].map { "\($0) \(note)" } ?? note
-        }
-        if result.failures.isEmpty {
-            let count = outcome.edit.changes.values.reduce(0) { $0 + $1.count }
-            findInFilesHits = []
-            findInFilesStatus = "Replaced \(count) occurrence\(count == 1 ? "" : "s") in \(result.appliedFiles.count) file\(result.appliedFiles.count == 1 ? "" : "s")"
-        }
-        return result
+        bottomPanel.requestFocus()
     }
 
     /// Opens a Go to Definition target. A file already open is focused without reloading it, so a
@@ -3492,12 +3134,6 @@ public final class IDEWorkspace {
         return buffers
     }
 
-    func openFindInFilesHit(_ hit: ProjectSearchResult) {
-        let length = max(0, hit.range.end.utf16Offset - hit.range.start.utf16Offset)
-        let range = NSRange(location: hit.range.start.utf16Offset, length: length)
-        Task { await openDocument(from: hit.url, selecting: range) }
-    }
-
     public func splitRight() {
         split(edge: .trailing)
     }
@@ -3688,14 +3324,6 @@ public final class IDEWorkspace {
         isProjectSidebarVisible.toggle()
         focusActiveEditor()
         saveSession()
-    }
-
-    func toggleFindInFiles() {
-        if isFindInFilesVisible {
-            hideFindInFiles()
-        } else {
-            showFindInFiles()
-        }
     }
 
     /// Whether a tool-window stripe button for `tab` should read as open: the bottom panel is
@@ -4088,30 +3716,22 @@ public final class IDEWorkspace {
               document.url != nil else { return }
         if document.contentKind == .binary {
             if document.isDirty {
-                let alert = NSAlert()
-                alert.alertStyle = .warning
-                alert.messageText = "Reload \(document.displayName) from disk?"
-                alert.informativeText = "This discards your unsaved changes to \(document.displayName). It cannot be undone."
-                alert.addButton(withTitle: "Cancel")
-                alert.addButton(withTitle: "Reload")
-                alert.buttons[1].hasDestructiveAction = true
-                guard alert.runModal() == .alertSecondButtonReturn else { return }
+                var alert = IDEAlert.confirm(
+                    "Reload \(document.displayName) from disk?",
+                    detail: "This discards your unsaved changes to \(document.displayName). It cannot be undone.",
+                    confirm: "Reload", isDestructive: true)
+                guard alert.confirms() else { return }
             }
             Task { await reloadHexFromDisk(document) }
             return
         }
         guard document.contentKind == .text else { return }
         if document.isDirty {
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = encoding.map { "Reopen \(document.displayName) as \($0.displayName)?" }
-                ?? "Reload \(document.displayName) from disk?"
-            alert.informativeText = "This discards your unsaved changes to \(document.displayName). It cannot be undone."
-            // Cancel first, so it is the default answer to Return.
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: encoding == nil ? "Reload" : "Reopen")
-            alert.buttons[1].hasDestructiveAction = true
-            guard alert.runModal() == .alertSecondButtonReturn else { return }
+            var alert = IDEAlert.confirm(
+                encoding.map { "Reopen \(document.displayName) as \($0.displayName)?" } ?? "Reload \(document.displayName) from disk?",
+                detail: "This discards your unsaved changes to \(document.displayName). It cannot be undone.",
+                confirm: encoding == nil ? "Reload" : "Reopen", isDestructive: true)
+            guard alert.confirms() else { return }
         }
         Task {
             do {
@@ -4137,17 +3757,8 @@ public final class IDEWorkspace {
         guard let pane = workbench.layout.findPane(id: paneID),
               let document = pane.documents.first(where: { $0.id == id }) else { return }
 
-        let alert = NSAlert()
-        alert.messageText = "Rename File"
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(string: document.displayName)
-        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let newName = IDEAlert.promptForText(
+            "Rename File", initial: document.displayName, confirm: "Rename", width: 260) else { return }
         guard !newName.isEmpty, newName != document.displayName else { return }
 
         if let currentURL = document.url {
@@ -4973,7 +4584,7 @@ public final class IDEWorkspace {
         javaSupport.refreshCompilerDiagnostics()
     }
 
-    // MARK: - Semantic highlighting
+    // MARK: - Editor overlays (semantic colours, gutter markers, name index)
 
     func semanticHighlightingPreferenceChanged() {
         for pane in workbench.panes {
@@ -4981,36 +4592,13 @@ public final class IDEWorkspace {
         }
     }
 
-    /// Recolours a pane's file once typing pauses, for a language with a semantic token provider. A
-    /// newer request replaces the pending one,
-    /// and the result is dropped if the text changed while it was computed, so it never paints
-    /// stale offsets and never blocks typing (the pass runs off the main actor).
-    /// `delay` debounces typing; opening a file or switching to one passes 0 so the semantic
-    /// colours land with the first frames instead of repainting the tree-sitter ones later.
+    /// Recolours a pane's file once typing pauses, for a language with a semantic token provider.
+    /// `delay` debounces typing; opening a file or switching to one passes 0 so the semantic colours
+    /// land with the first frames instead of repainting the tree-sitter ones later.
     private func scheduleSemanticHighlighting(host: IDEEditorPaneHost, languageIdentifier: String?, delay: UInt64 = 250_000_000) {
-        let key = ObjectIdentifier(host.textView)
-        semanticHighlightTasks[key]?.cancel()
-        guard preferences.semanticHighlighting, let provider = languages.semanticTokens(for: languageIdentifier) else {
-            semanticHighlightTasks[key] = nil
-            host.textView.setSemanticHighlights([])
-            return
-        }
-        semanticHighlightTasks[key] = Task { [weak host] in
-            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
-            guard !Task.isCancelled, let textView = host?.textView else { return }
-            let generation = textView.contentGeneration
-            let export = textView.exportDocumentText()
-            let highlights = await Task.detached(priority: .utility) {
-                await provider.semanticHighlights(forSource: export.materializeUTF16Text())
-            }.value
-            guard !Task.isCancelled, let highlights, textView.contentGeneration == generation else { return }
-            textView.setSemanticHighlights(highlights.map {
-                SyntaxHighlightRange(range: NSRange(location: $0.range.lowerBound, length: $0.range.count), highlightName: $0.highlightName)
-            })
-        }
+        let provider = preferences.semanticHighlighting ? languages.semanticTokens(for: languageIdentifier) : nil
+        overlays.scheduleSemanticHighlighting(for: host.textView, provider: provider, delay: .nanoseconds(delay))
     }
-
-    // MARK: - Gutter line markers
 
     /// Recomputes every pane's markers: after a preference change, or when the index changed so
     /// other files' subtypes and overrides may have too.
@@ -5020,65 +4608,24 @@ public final class IDEWorkspace {
         }
     }
 
-    /// Slots the line-marker column keeps for a language. Java reserves the most markers can take;
-    /// an `.http` file reserves one for its send buttons, so the text does not move when the first
-    /// request is detected (the buttons arrive a debounce after the file opens).
-    private func reservedLineMarkerSlots(languageIdentifier: String?, hasMarkerProvider: Bool) -> Int {
-        if hasMarkerProvider { return TextView.maximumLineMarkerSlots }
-        return languageIdentifier == "http" ? 1 : 0
-    }
-
-    /// Refreshes a pane's gutter icons once typing pauses, off the main actor, for a language with a
-    /// line marker provider. Like semantic
-    /// highlighting, a newer request replaces the pending one and a result for text that changed
-    /// meanwhile is dropped; the engine keeps the shown markers on their lines in between.
+    /// Refreshes a pane's gutter icons once typing pauses, for a language with a line marker provider.
     private func scheduleLineMarkers(host: IDEEditorPaneHost, languageIdentifier: String?, delay: UInt64 = 400_000_000) {
-        let key = ObjectIdentifier(host.textView)
-        lineMarkerTasks[key]?.cancel()
-        let kinds = preferences.enabledJavaGutterIcons
-        // The icons arrive later; their column exists from the first layout so the text stays put.
-        // Run buttons share it, so it is kept even with every marker kind turned off.
-        let provider = languages.lineMarkers(for: languageIdentifier)
-        host.textView.reservedLineMarkerSlots = reservedLineMarkerSlots(
-            languageIdentifier: languageIdentifier, hasMarkerProvider: provider != nil
-        )
-        guard let provider, !kinds.isEmpty else {
-            lineMarkerTasks[key] = nil
-            lineMarkersByEditor[key] = nil
-            host.textView.setLineMarkers([])
-            host.textView.lineMarkerHandler = nil
-            return
-        }
-        lineMarkerTasks[key] = Task { [weak self, weak host] in
-            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
-            guard !Task.isCancelled, let textView = host?.textView else { return }
-            let generation = textView.contentGeneration
-            let url = textView.documentURL
-            let export = textView.exportDocumentText()
-            let work = Task.detached(priority: .utility) {
-                await provider.lineMarkers(source: export.materializeUTF16Text(), fileURL: url, kinds: kinds)
-            }
-            let markers = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
-            guard !Task.isCancelled, let self, let markers, textView.contentGeneration == generation else { return }
-            self.lineMarkersByEditor[key] = (generation, markers)
-            textView.setLineMarkers(markers.enumerated().map { index, marker in
-                GutterLineMarker(id: index, line: marker.line, icon: marker.kind.gutterIcon, tooltip: marker.tooltip)
-            })
-            textView.lineMarkerHandler = { [weak self, weak host] marker, _ in
-                guard let self, let host else { return }
-                self.lineMarkerClicked(marker, host: host)
-            }
+        overlays.scheduleLineMarkers(
+            for: host.textView,
+            provider: languages.lineMarkers(for: languageIdentifier),
+            kinds: preferences.enabledJavaGutterIcons,
+            languageIdentifier: languageIdentifier,
+            delay: .nanoseconds(delay)
+        ) { [weak self, weak host] marker in
+            guard let self, let host else { return }
+            self.lineMarkerClicked(marker, host: host)
         }
     }
 
     /// ↑ goes to the super method, ↓ lists the implementations, and a sibling marker lists the
-    /// interface methods it implements. A click on markers older than the buffer is ignored: its
-    /// anchor offsets are stale, and fresh markers are already on the way.
-    private func lineMarkerClicked(_ marker: GutterLineMarker, host: IDEEditorPaneHost) {
+    /// interface methods it implements.
+    private func lineMarkerClicked(_ lineMarker: LineMarker, host: IDEEditorPaneHost) {
         let textView = host.textView
-        guard let entry = lineMarkersByEditor[ObjectIdentifier(textView)], entry.generation == textView.contentGeneration,
-              entry.markers.indices.contains(marker.id) else { return }
-        let lineMarker = entry.markers[marker.id]
         switch lineMarker.kind {
         case .implementing, .overriding:
             host.intelligenceController?.navigate(kind: .superMethod, atUTF16Offset: lineMarker.anchorUTF16Offset)
@@ -5105,14 +4652,10 @@ public final class IDEWorkspace {
     /// Keeps the name index's view of an open Java file in step with its buffer, so Find Usages
     /// sees unsaved edits. Debounced; the overlay is dropped when the file's last tab closes.
     private func scheduleNameIndexOverlay(for textView: TextView, delay: UInt64 = 300_000_000) {
-        guard let url = textView.documentURL, url.pathExtension == "java" else { return }
-        let key = ObjectIdentifier(textView)
-        nameIndexOverlayTasks[key]?.cancel()
+        guard textView.documentURL?.pathExtension == "java" else { return }
         let index = javaSupport.nameIndex
-        nameIndexOverlayTasks[key] = Task { [weak textView] in
-            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
-            guard !Task.isCancelled, let textView, textView.documentURL == url else { return }
-            await index.setOverlay(url, text: textView.text)
+        overlays.scheduleNameIndexOverlay(for: textView, delay: .nanoseconds(delay)) { url, text in
+            await index.setOverlay(url, text: text)
         }
     }
 
@@ -5198,7 +4741,7 @@ public final class IDEWorkspace {
 
     private func dismissProjectChrome() {
         isSidebarVisible = false
-        isFindInFilesVisible = false
+        findInFiles.isVisible = false
         closeUsages()
         closeTypeHierarchy()
         closeCallHierarchy()
@@ -6028,18 +5571,14 @@ public final class IDEWorkspace {
     func trashExplorerItem(_ url: URL) {
         guard let operations = fileOperations else { return }
         let affected = openDocuments(at: url)
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
         var details = "You can restore it from the Trash in Finder."
         let dirty = affected.filter { $0.document.isDirty }.count
         if dirty > 0 {
             details += " \(dirty) open editor\(dirty == 1 ? " has" : "s have") unsaved changes that will be lost."
         }
-        alert.informativeText = details
-        alert.addButton(withTitle: "Move to Trash")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        var alert = IDEAlert.confirm(
+            "Move “\(url.lastPathComponent)” to the Trash?", detail: details, confirm: "Move to Trash")
+        guard alert.confirms() else { return }
         do {
             try operations.trash(url)
         } catch {
@@ -6264,7 +5803,7 @@ public final class IDEWorkspace {
         let locations = HTTPRequestParser.requestLocations(in: text)
         httpFileCanSend = !locations.isEmpty
         httpSupport.prefetchSchemas(in: text, fileURL: fileURL)
-        textView.reservedLineMarkerSlots = reservedLineMarkerSlots(languageIdentifier: "http", hasMarkerProvider: false)
+        textView.reservedLineMarkerSlots = IDEEditorOverlayController.reservedLineMarkerSlots(languageIdentifier: "http", hasMarkerProvider: false)
         textView.setGutterDecorations(locations.map {
             GutterDecoration(line: $0.startLine, symbolName: "play.fill", accessibilityLabel: "Send Request", placement: .lineMarkerColumn)
         })
@@ -6297,10 +5836,8 @@ public final class IDEWorkspace {
     }
 
     private func refreshJavaRunAvailability(from textView: TextView) {
-        javaRunAvailabilityTask?.cancel()
-        javaRunAvailabilityTask = Task { @MainActor [weak self, weak textView] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled, let self, let textView else { return }
+        javaRunAvailability.schedule(after: .milliseconds(300)) { [weak self, weak textView] in
+            guard let self, let textView else { return }
             self.refreshJavaRunAvailabilityNow(from: textView)
         }
     }
@@ -6792,54 +6329,6 @@ public final class IDEWorkspace {
         }
     }
 
-    private func confirmDiscardingUnsavedChanges(
-        messageText: String,
-        confirmButtonTitle: String
-    ) -> Bool {
-        let dirtyCount = workbench.allDocuments().filter(\.isDirty).count
-        guard dirtyCount > 0 else { return true }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = messageText
-        alert.informativeText = unsavedPromptText()
-        alert.addButton(withTitle: confirmButtonTitle)
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    func presentError(_ error: Error) {
-        NSAlert(error: error).runModal()
-    }
-
-    private func promptGradleTrust(for url: URL) async -> Bool {
-        let name = url.lastPathComponent
-        return await promptProjectTrust(
-            message: "Trust and run Gradle build scripts for “\(name)”?",
-            detail: "Gradle build scripts can run arbitrary code, including code from plugins they apply. Trust this folder only if you trust its contents."
-        )
-    }
-
-    private func promptProjectTrust(message: String, detail: String) async -> Bool {
-        await withCheckedContinuation { continuation in
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = message
-            alert.informativeText = detail
-            alert.addButton(withTitle: "Trust Project")
-            alert.addButton(withTitle: "Don't Trust")
-            let finish: @Sendable (NSApplication.ModalResponse) -> Void = { response in
-                continuation.resume(returning: response == .alertFirstButtonReturn)
-            }
-            if let window {
-                alert.beginSheetModal(for: window) { response in
-                    finish(response)
-                }
-            } else {
-                finish(alert.runModal())
-            }
-        }
-    }
-
     /// What every language service reads from this window: the buffers the user has open, the editor's
     /// indentation, and the user's agreements. The closures hold the workspace weakly.
     private func languageEnvironment() -> LanguageEnvironment {
@@ -6857,70 +6346,6 @@ public final class IDEWorkspace {
         )
     }
 
-    /// Whether the user already agreed to `topic`; never prompts.
-    fileprivate func hasConsent(to topic: ConsentTopic) -> Bool {
-        switch topic {
-        case .javaDecompiler: preferences.javaDecompilerAgreementAccepted
-        default: false
-        }
-    }
-
-    /// Asks for `topic`, showing the agreement when the host has one; a topic it does not know is refused.
-    fileprivate func requestConsent(to topic: ConsentTopic) async -> Bool {
-        switch topic {
-        case .javaDecompiler: await requestDecompilerConsent()
-        default: false
-        }
-    }
-
-    /// Shown once before Umbra first decompiles a `.class` file with no attached source. Accepting
-    /// persists to ``IDEPreferences/javaDecompilerAgreementAccepted``, which the caller then treats
-    /// as standing consent — this alert should not appear again.
-    private func requestDecompilerConsent() async -> Bool {
-        let accepted = await withCheckedContinuation { continuation in
-            let alert = NSAlert()
-            alert.messageText = JavaDecompilerAgreement.title
-            alert.addButton(withTitle: "Accept")
-            alert.addButton(withTitle: "Cancel")
-            let scrollView = NSTextView.scrollableTextView()
-            scrollView.frame = NSRect(x: 0, y: 0, width: 420, height: 220)
-            if let textView = scrollView.documentView as? NSTextView {
-                textView.string = JavaDecompilerAgreement.text
-                textView.isEditable = false
-                textView.font = .systemFont(ofSize: 11)
-            }
-            alert.accessoryView = scrollView
-            let finish: @Sendable (NSApplication.ModalResponse) -> Void = { response in
-                continuation.resume(returning: response == .alertFirstButtonReturn)
-            }
-            if let window {
-                alert.beginSheetModal(for: window) { response in
-                    finish(response)
-                }
-            } else {
-                finish(alert.runModal())
-            }
-        }
-        if accepted {
-            preferences.javaDecompilerAgreementAccepted = true
-        }
-        return accepted
-    }
-
-    private func presentMetalFailureOnce(reason: String) {
-        guard !hasPresentedMetalFailure else { return }
-        hasPresentedMetalFailure = true
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Metal rendering was disabled"
-        alert.informativeText = "\(reason)\n\nThe editor has switched to Core Graphics."
-        alert.addButton(withTitle: "OK")
-        if let window {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
-    }
 }
 
 extension IDEWorkspace: IDEWorkspaceEditHost {
@@ -7036,17 +6461,11 @@ extension IDEWorkspace: TextViewDelegate {
         let policy = preferences.javaImportPolicy
         let pasting = paste != nil && policy.insertImportsOnPaste == .always
         guard policy.addUnambiguousImportsOnTheFly || pasting else { return }
-        javaAutoImportTask?.cancel()
         let delay = preferences.autoreparseDelayMilliseconds
         let documentID = textView.documentIdentifier
         let url = textView.documentURL
-        javaAutoImportTask = Task { @MainActor [weak self, weak textView] in
-            do {
-                try await Task.sleep(for: .milliseconds(delay))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled, let self, let textView else { return }
+        javaAutoImport.schedule(after: .milliseconds(delay)) { [weak self, weak textView] in
+            guard let self, let textView else { return }
             guard textView.languageIdentifier == "java",
                   textView.documentIdentifier == documentID,
                   textView.documentURL == url else { return }

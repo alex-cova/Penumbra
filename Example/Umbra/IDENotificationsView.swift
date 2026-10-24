@@ -67,19 +67,20 @@ struct IDENotificationPanel: View {
                 .font(IDEAppearance.Typography.titlebarTitle)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
             Spacer(minLength: IDEAppearance.Spacing.sm)
-            IDENotificationHeaderButton(
-                systemName: center.isMuted ? "bell.slash.fill" : "bell.slash",
-                isActive: center.isMuted,
-                help: center.isMuted ? "Turn Do Not Disturb Off" : "Do Not Disturb"
+            IDEIconButton(
+                systemImage: center.isMuted ? "bell.slash.fill" : "bell.slash",
+                help: center.isMuted ? "Turn Do Not Disturb Off" : "Do Not Disturb",
+                isActive: center.isMuted
             ) {
                 center.isMuted.toggle()
             }
             categoryMenu
-            IDENotificationHeaderButton(systemName: "trash", isActive: false, help: "Clear All") {
+            IDEIconButton(systemImage: "trash", help: "Clear All") {
                 center.clear()
             }
             .disabled(center.items.isEmpty)
         }
+        .ideIconButtonSize(.header)
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .frame(height: 40)
     }
@@ -105,34 +106,6 @@ struct IDENotificationPanel: View {
         .fixedSize()
         .help("Notification Sources")
         .accessibilityLabel("Notification Sources")
-    }
-}
-
-private struct IDENotificationHeaderButton: View {
-    let systemName: String
-    let isActive: Bool
-    let help: String
-    let action: () -> Void
-
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: IDEAppearance.IconSize.titlebarGlyph))
-                .foregroundStyle(isActive || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .frame(width: 26, height: 26)
-                .background(isHovering && isEnabled ? IDEAppearance.ColorToken.controlHover : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-                .opacity(isEnabled ? 1 : 0.4)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .help(help)
-        .accessibilityLabel(help)
-        .focusable(false)
     }
 }
 

@@ -98,16 +98,13 @@ extension IDEWorkspace {
         }
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24), pullsDown: false)
         popup.addItems(withTitles: options.map(\.displayName))
-        let alert = NSAlert()
-        alert.messageText = "Inject language"
-        alert.informativeText = "Temporarily highlight the string as the selected language, until this tab closes."
-        alert.accessoryView = popup
-        alert.addButton(withTitle: "Inject")
-        alert.addButton(withTitle: "Cancel")
-        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            guard let self, response == .alertFirstButtonReturn else {
-                return
-            }
+        var alert = IDEAlert.confirm(
+            "Inject language",
+            detail: "Temporarily highlight the string as the selected language, until this tab closes.",
+            confirm: "Inject", style: .informational)
+        alert.accessory = popup
+        Task { [weak self] in
+            guard let self, await alert.confirms(in: self.window) else { return }
             let selected = popup.indexOfSelectedItem
             guard options.indices.contains(selected), let identifier = options[selected].id else {
                 return
@@ -117,11 +114,6 @@ extension IDEWorkspace {
                 ManualLanguageInjection(utf16Range: range, languageIdentifier: identifier, source: .temporary),
                 forKey: key)
             rebuildLanguageModeForInjection(in: pane)
-        }
-        if let window {
-            alert.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            finish(alert.runModal())
         }
     }
 

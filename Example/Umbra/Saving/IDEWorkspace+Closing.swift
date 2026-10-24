@@ -112,43 +112,33 @@ extension IDEWorkspace {
     }
 
     static func askAboutClosing(_ document: WorkbenchDocument, _ prompt: IDEClosePrompt) -> IDEClosePromptChoice {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
         switch prompt {
         case .untitled:
-            alert.messageText = "Save changes to “\(document.displayName)”?"
-            alert.informativeText = "Your changes will be lost if you don't save them."
-            alert.addButton(withTitle: "Save…")
-            alert.addButton(withTitle: "Don't Save")
-            alert.addButton(withTitle: "Cancel")
-            alert.buttons[1].hasDestructiveAction = true
+            var alert = IDEAlert.choice(
+                "Save changes to “\(document.displayName)”?",
+                detail: "Your changes will be lost if you don't save them.",
+                buttons: [.init(title: "Save…"), .init(title: "Don't Save", isDestructive: true), .init(title: "Cancel")])
             switch alert.runModal() {
-            case .alertFirstButtonReturn: return .save
-            case .alertSecondButtonReturn: return .discard
+            case 0: return .save
+            case 1: return .discard
             default: return .cancel
             }
         case .couldNotSave(let reason):
-            alert.messageText = "“\(document.displayName)” could not be saved."
-            alert.informativeText = "\(reason)\nClosing the tab loses its unsaved changes."
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Close Anyway")
-            alert.buttons[1].hasDestructiveAction = true
-            return alert.runModal() == .alertSecondButtonReturn ? .discard : .cancel
+            var alert = IDEAlert.confirm(
+                "“\(document.displayName)” could not be saved.",
+                detail: "\(reason)\nClosing the tab loses its unsaved changes.",
+                confirm: "Close Anyway", isDestructive: true)
+            return alert.confirms() ? .discard : .cancel
         }
     }
 
     static func askAboutClosingFolder(_ informativeText: String) -> IDEFolderCloseChoice {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Close the open folder?"
-        alert.informativeText = informativeText
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Don't Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons[1].hasDestructiveAction = true
+        var alert = IDEAlert.choice(
+            "Close the open folder?", detail: informativeText,
+            buttons: [.init(title: "Save"), .init(title: "Don't Save", isDestructive: true), .init(title: "Cancel")])
         switch alert.runModal() {
-        case .alertFirstButtonReturn: return .save
-        case .alertSecondButtonReturn: return .discard
+        case 0: return .save
+        case 1: return .discard
         default: return .cancel
         }
     }

@@ -64,7 +64,7 @@ struct IDESwiftUIPreviewSettingsPage: View {
                 + "without a build. A simulator device Umbra started is shut down after the same time with no preview using it, "
                 + "and when Umbra quits. 0 keeps them until the panel is closed."
         ) {
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Stop an Unused Preview After", value: $idleMinutes,
                 range: IDESwiftUIPreviewSettings.idleMinutesRange, step: 5, valueWidth: 72,
                 valueSuffix: idleMinutes == 0 ? " (never)" : " min"

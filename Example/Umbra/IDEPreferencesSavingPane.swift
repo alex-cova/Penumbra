@@ -14,7 +14,7 @@ struct IDEPreferencesSavingPane: View {
                 isOn: $preferences.saveOnFocusLoss
             )
             IDESettingsToggle("Save files if the editor is idle", isOn: $preferences.saveWhenIdle)
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Idle for",
                 value: $preferences.idleSaveSeconds,
                 range: IDEPreferences.idleSaveSecondsRange,

@@ -73,10 +73,10 @@ struct IDEAgentPanel: View {
                     .padding(.trailing, IDEAppearance.Spacing.xs)
             }
             if placement != .aiMode {
-                IDEAgentIconButton(systemImage: "square.and.pencil", help: "New Chat (⌥⌘T)", isDisabled: agent.entries.isEmpty && !agent.isRunning) {
+                IDEIconButton(systemImage: "square.and.pencil", help: "New Chat (⌥⌘T)", isDisabled: agent.entries.isEmpty && !agent.isRunning) {
                     agent.newConversation()
                 }
-                IDEAgentIconButton(systemImage: "clock.arrow.circlepath", help: "Earlier Chats", isActive: isHistoryPresented) {
+                IDEIconButton(systemImage: "clock.arrow.circlepath", help: "Earlier Chats", isActive: isHistoryPresented) {
                     isHistoryPresented.toggle()
                 }
                 .popover(isPresented: $isHistoryPresented, arrowEdge: .bottom) {
@@ -85,18 +85,18 @@ struct IDEAgentPanel: View {
                 .onAppear { agent.restoreLatestIfNeeded() }
             }
             if placement == .docked {
-                IDEAgentIconButton(systemImage: "arrow.up.left.and.arrow.down.right", help: "Expand over the editor") {
+                IDEIconButton(systemImage: "arrow.up.left.and.arrow.down.right", help: "Expand over the editor") {
                     expandOverEditor()
                 }
             }
             if placement == .aiMode {
-                IDEAgentIconButton(
+                IDEIconButton(
                     systemImage: "square.and.arrow.up", help: "Export Chat as Markdown…", isDisabled: agent.entries.isEmpty
                 ) { agent.exportTranscript() }
             }
             // AI mode's toolbar already has Settings.
             if placement != .aiMode {
-                IDEAgentIconButton(systemImage: "gearshape", help: "Agent Settings", isActive: isSettingsPresented) {
+                IDEIconButton(systemImage: "gearshape", help: "Agent Settings", isActive: isSettingsPresented) {
                     isSettingsPresented = true
                 }
             }
@@ -264,10 +264,10 @@ struct IDEAgentPanel: View {
             }
 
             if agent.isRunning {
-                IDEAgentIconButton(
+                IDEIconButton(
                     systemImage: "stop.fill", help: "Stop", tint: IDEAppearance.ColorToken.error, action: agent.stop)
             } else {
-                IDEAgentIconButton(
+                IDEIconButton(
                     systemImage: "arrow.up.circle.fill", help: "Send",
                     tint: IDEAppearance.ColorToken.accent,
                     isDisabled: agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, action: send)
@@ -1637,36 +1637,6 @@ enum IDEAgentOllamaLabel {
         if model.sizeBytes > 0 { parts.append(ByteCountFormatter.string(fromByteCount: model.sizeBytes, countStyle: .file)) }
         let label = parts.joined(separator: " · ")
         return model.supportsTools ? label : label + " (no tool support)"
-    }
-}
-
-struct IDEAgentIconButton: View {
-    let systemImage: String
-    let help: String
-    var tint: Color?
-    var isActive = false
-    var isDisabled = false
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                .foregroundStyle(tint ?? IDEAppearance.ColorToken.muted)
-                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
-                .background(isActive || isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.4 : 1)
-        .onHover { isHovering = $0 }
-        .help(help)
-        .accessibilityLabel(help)
-        .focusable(false)
     }
 }
 

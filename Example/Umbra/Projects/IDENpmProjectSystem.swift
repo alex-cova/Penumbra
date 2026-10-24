@@ -334,9 +334,10 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         return [IDEBottomTabContribution(
             tab: .npm, order: IDEBottomPanelTab.Order.npm,
             item: { workspace in
-                AnyView(IDENpmTabItem(
+                AnyView(IDEProjectTabItem(
+                    title: "npm", symbol: "shippingbox",
                     isSelected: workspace.isBottomTabSelected(.npm),
-                    isRunning: workspace.npm.isBusy,
+                    isBusy: workspace.npm.isBusy,
                     onSelect: { [weak workspace] in workspace?.showBottomTab(.npm) }
                 ))
             },
@@ -347,7 +348,7 @@ final class IDENpmProjectSystem: IDEProjectSystem {
                     fontSize: workspace.preferences.fontSize
                 ))
             },
-            controls: { _ in AnyView(IDENpmConsoleControls()) },
+            controls: { workspace in AnyView(IDEProjectConsoleControls(system: workspace.npm)) },
             staysWhenLastShellCloses: true
         )]
     }
@@ -800,106 +801,3 @@ final class IDENpmScriptKeyView: NSView {
     }
 }
 
-struct IDENpmConsoleControls: View {
-    @Environment(IDEWorkspace.self) private var workspace
-
-    var body: some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
-            elapsedTimeView
-            if workspace.npm.isBusy {
-                Button("Cancel", action: { workspace.npm.cancelTasks() })
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            } else {
-                Button(action: { workspace.npm.reload() }) {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help("Reload")
-                .accessibilityLabel("Reload")
-            }
-            Button(action: copyOutput) {
-                Image(systemName: "doc.on.doc")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help("Copy npm Output")
-            .accessibilityLabel("Copy npm Output")
-        }
-    }
-
-    @ViewBuilder
-    private var elapsedTimeView: some View {
-        if let startedAt = workspace.npm.console.startedAt {
-            if workspace.npm.isBusy {
-                TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                    Text(Self.formattedElapsed(context.date.timeIntervalSince(startedAt)))
-                        .font(IDEAppearance.Typography.monoSmall)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                }
-            } else if let finishedAt = workspace.npm.console.finishedAt {
-                Text(Self.formattedElapsed(finishedAt.timeIntervalSince(startedAt)))
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            }
-        }
-    }
-
-    private func copyOutput() {
-        let text = workspace.npm.console.lines.map(\.text).joined(separator: "\n")
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-    }
-
-    private static func formattedElapsed(_ interval: TimeInterval) -> String {
-        let totalSeconds = max(0, Int(interval))
-        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
-    }
-}
-
-struct IDENpmTabItem: View {
-    let isSelected: Bool
-    let isRunning: Bool
-    let onSelect: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if isRunning {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.6)
-                    .frame(width: 12)
-            } else {
-                Image(systemName: "shippingbox")
-                    .font(.system(size: 10))
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .frame(width: 12)
-            }
-            Text("npm")
-                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(isRunning ? "npm, running" : "npm")
-        .accessibilityAddTraits(.isButton)
-        .focusable(false)
-    }
-
-    private var backgroundColor: Color {
-        if isSelected { return IDEAppearance.ColorToken.tabActive }
-        if isHovering { return IDEAppearance.ColorToken.tabHover }
-        return IDEAppearance.ColorToken.tabInactive
-    }
-}

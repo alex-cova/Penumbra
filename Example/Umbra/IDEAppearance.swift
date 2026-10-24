@@ -60,6 +60,11 @@ enum IDEAppearance {
         static let panel = 10.0
     }
 
+    enum Opacity {
+        /// A control that cannot be used right now.
+        static let disabled = 0.4
+    }
+
     enum IconSize {
         static let breadcrumbChevron = 8.0
         static let toolbarGlyph = 12.0

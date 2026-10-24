@@ -14,28 +14,28 @@ struct IDESidebarPanel: View {
                 Spacer(minLength: 0)
 
                 if workspace.project.rootNode != nil {
-                    IDEExplorerToolbarButton(
+                    IDEIconButton(
                         systemImage: "doc.badge.plus",
                         help: "New File",
                         action: { workspace.createExplorerFile() }
                     )
-                    IDEExplorerToolbarButton(
+                    IDEIconButton(
                         systemImage: "folder.badge.plus",
                         help: "New Folder",
                         action: { workspace.createExplorerFolder() }
                     )
-                    IDEExplorerToolbarButton(
+                    IDEIconButton(
                         systemImage: "scope",
                         help: "Select Opened File",
                         action: { workspace.revealActiveFileInExplorer() }
                     )
                     .disabled(workspace.workbench.activePane.selectedDocument?.url == nil)
-                    IDEExplorerToolbarButton(
+                    IDEIconButton(
                         systemImage: "rectangle.expand.vertical",
                         help: "Expand All",
                         action: expandAll
                     )
-                    IDEExplorerToolbarButton(
+                    IDEIconButton(
                         systemImage: "rectangle.compress.vertical",
                         help: "Collapse All",
                         action: collapseAll
@@ -57,7 +57,7 @@ struct IDESidebarPanel: View {
                 .help("Explorer Options")
                 .accessibilityLabel("Explorer Options")
 
-                IDEExplorerToolbarButton(
+                IDEIconButton(
                     systemImage: "magnifyingglass",
                     help: isSearchPresented ? "Hide Search" : "Search",
                     isActive: isSearchPresented,
@@ -184,41 +184,6 @@ struct IDEExplorerOptionsMenu: View {
         Section("Behavior") {
             Toggle("Always Select Opened File", isOn: $preferences.explorerAutoReveal)
         }
-    }
-}
-
-/// A small icon button for a sidebar tab's toolbar row.
-struct IDEExplorerToolbarButton: View {
-    let systemImage: String
-    let help: String
-    var isActive = false
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                .foregroundStyle(isActive || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
-                .background(buttonBackground)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .help(help)
-        .accessibilityLabel(help)
-        .accessibilityAddTraits(isActive ? .isSelected : [])
-        .focusable(false)
-    }
-
-    private var buttonBackground: Color {
-        if isActive {
-            return IDEAppearance.ColorToken.selection
-        }
-        return isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear
     }
 }
 

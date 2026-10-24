@@ -68,15 +68,7 @@ struct IDEUsagesPanel: View {
         let store = workspace.usages
         Group {
             if store.files.isEmpty {
-                VStack(spacing: IDEAppearance.Spacing.xs) {
-                    if store.isSearching {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text(store.isSearching ? "Searching for usages…" : "No usages")
-                        .font(IDEAppearance.Typography.body)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                IDEEmptyState(title: store.isSearching ? "Searching for usages…" : "No usages", isLoading: store.isSearching)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -98,33 +90,12 @@ struct IDEUsagesPanel: View {
 
     private func fileHeader(_ file: IDEUsageFile) -> some View {
         let isCollapsed = collapsedFiles.contains(file.url)
-        return Button {
+        return IDEFileGroupHeader(
+            name: file.url.lastPathComponent, directory: workspace.displayDirectory(of: file.url),
+            count: file.usages.count, noun: "usages", isCollapsed: isCollapsed
+        ) {
             if isCollapsed { collapsedFiles.remove(file.url) } else { collapsedFiles.insert(file.url) }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .frame(width: 10)
-                Text(file.url.lastPathComponent)
-                    .font(IDEAppearance.Typography.sidebarHeader)
-                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                Text(workspace.displayDirectory(of: file.url))
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                Spacer(minLength: 8)
-                Text("\(file.usages.count)")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            }
-            .padding(.horizontal, IDEAppearance.Spacing.md)
-            .padding(.vertical, 3)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(file.url.lastPathComponent), \(file.usages.count) usages")
-        .accessibilityHint(isCollapsed ? "Expand" : "Collapse")
     }
 }
 

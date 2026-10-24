@@ -215,24 +215,24 @@ struct IDETestResultsPanel: View {
 
     private func toolbar(_ store: IDETestResultsStore) -> some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
-            IDEExplorerToolbarButton(systemImage: "arrow.clockwise", help: "Rerun") {
+            IDEIconButton(systemImage: "arrow.clockwise", help: "Rerun") {
                 workspace.rerunTests(failedOnly: false)
             }
             .disabled(!store.canRerun || store.isRunning)
-            IDEExplorerToolbarButton(systemImage: "arrow.clockwise.circle", help: "Rerun Failed Tests") {
+            IDEIconButton(systemImage: "arrow.clockwise.circle", help: "Rerun Failed Tests") {
                 workspace.rerunTests(failedOnly: true, debug: false)
             }
             .disabled(!store.canRerunFailed || store.isRunning)
-            IDEExplorerToolbarButton(systemImage: "ladybug", help: "Debug Failed Tests") {
+            IDEIconButton(systemImage: "ladybug", help: "Debug Failed Tests") {
                 workspace.rerunTests(failedOnly: true, debug: true)
             }
             .disabled(store.failedScope == nil || store.isRunning)
             Divider().frame(height: 14)
-            IDEExplorerToolbarButton(systemImage: store.showsPassed ? "checkmark.circle.fill" : "checkmark.circle",
+            IDEIconButton(systemImage: store.showsPassed ? "checkmark.circle.fill" : "checkmark.circle",
                                      help: store.showsPassed ? "Hide Passed" : "Show Passed") {
                 store.showsPassed.toggle()
             }
-            IDEExplorerToolbarButton(systemImage: store.showsSkipped ? "minus.circle.fill" : "minus.circle",
+            IDEIconButton(systemImage: store.showsSkipped ? "minus.circle.fill" : "minus.circle",
                                      help: store.showsSkipped ? "Hide Ignored" : "Show Ignored") {
                 store.showsSkipped.toggle()
             }

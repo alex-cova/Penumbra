@@ -34,7 +34,7 @@ private struct IDEJavaGradleSection: View {
         ) {
             IDESettingsToggle("Sync Gradle Projects", isOn: $preferences.javaGradleAutoSync)
 
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Sync Timeout",
                 value: $preferences.javaGradleSyncTimeoutSeconds,
                 range: 30...3600,
@@ -78,7 +78,7 @@ private struct IDEJavaMavenSection: View {
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Goal Timeout",
                 value: $preferences.javaMavenGoalTimeoutSeconds,
                 range: 30...3600,
@@ -98,7 +98,7 @@ private struct IDEJavaRunSection: View {
             "Run",
             footer: "Running a class or a test from its gutter button makes a temporary run configuration. Only the newest few are kept, shown faded in the run picker; Save Configuration keeps one for good."
         ) {
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Temporary Configurations",
                 value: $preferences.runTemporaryConfigurationLimit,
                 range: 1...50,
@@ -180,21 +180,21 @@ private struct IDEJavaProfilingSection: View {
                     }
                 }
             }
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "CPU Sample Period",
                 value: $preferences.javaProfileSamplePeriod,
                 range: 0...100,
                 valueWidth: 40,
                 valueSuffix: "ms"
             )
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Stack Depth",
                 value: $preferences.javaProfileStackDepth,
                 range: 16...JavaFlightRecorder.maximumStackDepth,
                 step: 16,
                 valueWidth: 40
             )
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Allocation Samples per Second",
                 value: $preferences.javaProfileAllocationRate,
                 range: 0...5000,
@@ -202,7 +202,7 @@ private struct IDEJavaProfilingSection: View {
                 valueWidth: 48,
                 valueSuffix: "/s"
             )
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Shortest Wait Recorded",
                 value: $preferences.javaProfileWaitThreshold,
                 range: 0...1000,
@@ -222,7 +222,7 @@ private struct IDEJavaProfilingSection: View {
             )
             .onChange(of: preferences.javaProfileLineHints) { workspace.profileLineHintsPreferenceChanged() }
             IDESettingsToggle("Open the Recording After a Run", isOn: $preferences.javaProfileOpensRecording)
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Ask Before Reading Over",
                 value: $preferences.javaProfileConfirmMegabytes,
                 range: 50...5000,
@@ -527,7 +527,7 @@ private struct IDEJavaImportsSection: View {
                 workspace.applyCodeInsightPreferences()
             }
 
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Class Count to Use '*'",
                 value: $preferences.javaClassCountToUseStarImport,
                 range: 1...999,
@@ -537,7 +537,7 @@ private struct IDEJavaImportsSection: View {
                 workspace.applyCodeInsightPreferences()
             }
 
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Names Count to Use Static '*'",
                 value: $preferences.javaStaticCountToUseStarImport,
                 range: 1...999,

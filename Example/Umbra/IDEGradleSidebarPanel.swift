@@ -98,14 +98,14 @@ struct IDEGradleSidebarPanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if gradle.isBusy {
-                IDEGradleToolbarButton(
+                IDEIconButton(
                     systemImage: "stop.fill",
                     help: "Stop",
                     tint: IDEAppearance.ColorToken.error,
                     action: workspace.cancelGradleOperation
                 )
             } else {
-                IDEGradleToolbarButton(
+                IDEIconButton(
                     systemImage: "arrow.clockwise",
                     help: "Reload All Gradle Projects",
                     action: workspace.reloadProject
@@ -113,29 +113,29 @@ struct IDEGradleSidebarPanel: View {
             }
 
             if root != nil {
-                IDEGradleToolbarButton(
+                IDEIconButton(
                     systemImage: "point.3.connected.trianglepath.dotted",
                     help: "Show Module Diagram",
                     action: workspace.showGradleModuleDiagram
                 )
-                IDEGradleToolbarButton(
+                IDEIconButton(
                     systemImage: "rectangle.expand.vertical",
                     help: "Expand All",
                     action: expandAll
                 )
-                IDEGradleToolbarButton(
+                IDEIconButton(
                     systemImage: "rectangle.compress.vertical",
                     help: "Collapse All",
                     action: collapseAll
                 )
-                IDEGradleToolbarButton(
+                IDEIconButton(
                     systemImage: "play",
                     help: "Run Gradle Task…",
                     isActive: isRunFieldPresented,
                     isDisabled: gradle.isBusy,
                     action: toggleRunField
                 )
-                IDEGradleToolbarButton(
+                IDEIconButton(
                     systemImage: "magnifyingglass",
                     help: isFilterPresented ? "Hide Filter" : "Filter",
                     isActive: isFilterPresented,
@@ -143,7 +143,7 @@ struct IDEGradleSidebarPanel: View {
                 )
             }
 
-            IDEGradleToolbarButton(
+            IDEIconButton(
                 systemImage: "text.alignleft",
                 help: "Show Gradle Output",
                 action: workspace.showGradleOutput
@@ -151,6 +151,7 @@ struct IDEGradleSidebarPanel: View {
         }
         .padding(.leading, IDEAppearance.Spacing.sm)
         .padding(.trailing, IDEAppearance.Spacing.xs)
+        .ideIconButtonSize(.compact)
         .frame(height: IDEAppearance.Spacing.tabHeight + 2)
         // The buttons alone are wider than the narrowest sidebar. Without this frame the header's
         // minimum width widened the whole panel past its card, centered, so the tree's scroll view
@@ -651,47 +652,6 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
 }
 
 // MARK: - Chrome
-
-private struct IDEGradleToolbarButton: View {
-    let systemImage: String
-    let help: String
-    var tint: Color?
-    var isActive = false
-    var isDisabled = false
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph - 1, weight: .medium))
-                .foregroundStyle(foreground)
-                .frame(width: IDEAppearance.Spacing.iconButton - 2, height: IDEAppearance.Spacing.iconButton)
-                .background(background)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.4 : 1)
-        .onHover { isHovering = $0 }
-        .help(help)
-        .accessibilityLabel(help)
-        .accessibilityAddTraits(isActive ? .isSelected : [])
-        .focusable(false)
-    }
-
-    private var foreground: Color {
-        if let tint { return tint }
-        return isActive || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted
-    }
-
-    private var background: Color {
-        if isActive { return IDEAppearance.ColorToken.selection }
-        return isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear
-    }
-}
 
 private struct IDEGradleInlineField: View {
     let icon: String

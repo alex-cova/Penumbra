@@ -111,7 +111,10 @@ struct IDEFileTreeView: View {
                     }
                 }
             } else {
-                IDEFileTreeEmptyState(isRootMissing: project.isRootMissing)
+                IDEEmptyState(
+                    symbol: "folder.badge.plus",
+                    title: project.isRootMissing ? "Folder Not Found" : "No Folder Open",
+                    message: project.isRootMissing ? "The project folder was moved or deleted." : "Open a project folder to browse files.")
             }
         }
         .onChange(of: filterNeedle) { _, _ in
@@ -408,27 +411,6 @@ private struct IDEFileTreeFilterEmptyState: View {
             .padding(.horizontal, IDEAppearance.Spacing.lg)
             .padding(.top, IDEAppearance.Spacing.sm)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-}
-
-private struct IDEFileTreeEmptyState: View {
-    var isRootMissing = false
-
-    var body: some View {
-        VStack(spacing: IDEAppearance.Spacing.md) {
-            Image(systemName: "folder.badge.plus")
-                .font(.title2)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-            Text(isRootMissing ? "Folder Not Found" : "No Folder Open")
-                .font(IDEAppearance.Typography.body)
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
-            Text(isRootMissing ? "The project folder was moved or deleted." : "Open a project folder to browse files.")
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .multilineTextAlignment(.center)
-        }
-        .padding(IDEAppearance.Spacing.lg)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

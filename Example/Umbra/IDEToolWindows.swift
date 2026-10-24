@@ -63,7 +63,7 @@ extension IDEWorkspace {
             }
             windows.append(IDEToolWindow(
                 id: "find", systemImage: "magnifyingglass", title: "Find in Files", shortcut: "⌘⇧F",
-                tint: .secondary, placement: .leadingTop, isOpen: isFindInFilesVisible, toggle: toggleFindInFiles,
+                tint: .secondary, placement: .leadingTop, isOpen: findInFiles.isVisible, toggle: toggleFindInFiles,
                 order: IDEToolWindow.Order.findInFiles
             ))
             if showsSourceControlTab {

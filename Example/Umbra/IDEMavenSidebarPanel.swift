@@ -32,41 +32,42 @@ struct IDEMavenSidebarPanel: View {
 
     private var header: some View {
         HStack(spacing: 2) {
-            IDEMavenToolbarButton(systemImage: "arrow.clockwise", help: "Reload Maven Project", action: maven.reload)
-            IDEMavenToolbarButton(
+            IDEIconButton(systemImage: "arrow.clockwise", help: "Reload Maven Project", action: maven.reload)
+            IDEIconButton(
                 systemImage: "arrow.down.circle",
                 help: "Download Sources",
                 isDisabled: maven.model == nil || maven.isBusy,
                 action: downloadSources
             )
-            IDEMavenToolbarButton(
+            IDEIconButton(
                 systemImage: "play",
                 help: "Run Goal…",
                 isActive: isGoalPresented,
                 action: { isGoalPresented.toggle() }
             )
-            IDEMavenToolbarButton(
+            IDEIconButton(
                 systemImage: "forward.end",
                 help: "Skip Tests",
                 isActive: maven.skipTests,
                 action: { maven.skipTests.toggle() }
             )
-            IDEMavenToolbarButton(
+            IDEIconButton(
                 systemImage: "wifi.slash",
                 help: "Offline",
                 isActive: maven.offline,
                 action: { maven.offline.toggle() }
             )
-            IDEMavenToolbarButton(
+            IDEIconButton(
                 systemImage: "line.3.horizontal.decrease",
                 help: isFilterPresented ? "Hide Filter" : "Filter",
                 isActive: isFilterPresented,
                 action: { isFilterPresented.toggle() }
             )
-            IDEMavenToolbarButton(systemImage: "text.alignleft", help: "Show Maven Output", action: workspace.showMavenOutput)
+            IDEIconButton(systemImage: "text.alignleft", help: "Show Maven Output", action: workspace.showMavenOutput)
         }
         .padding(.leading, IDEAppearance.Spacing.sm)
         .padding(.trailing, IDEAppearance.Spacing.xs)
+        .ideIconButtonSize(.compact)
         .frame(height: IDEAppearance.Spacing.tabHeight + 2)
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .trailing)
         .clipped()
@@ -305,34 +306,6 @@ private struct IDEMavenTreeRow: View {
     }
 }
 
-private struct IDEMavenToolbarButton: View {
-    let systemImage: String
-    let help: String
-    var isActive = false
-    var isDisabled = false
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph - 1, weight: .medium))
-                .foregroundStyle(isActive || isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .frame(width: IDEAppearance.Spacing.iconButton - 2, height: IDEAppearance.Spacing.iconButton)
-                .background(isActive ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear))
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.4 : 1)
-        .onHover { isHovering = $0 }
-        .help(help)
-        .accessibilityLabel(help)
-        .focusable(false)
-    }
-}
-
 private struct IDEMavenInlineField: View {
     let icon: String
     let prompt: String
@@ -361,96 +334,3 @@ private struct IDEMavenInlineField: View {
     }
 }
 
-struct IDEMavenTabItem: View {
-    let isSelected: Bool
-    let isSyncing: Bool
-    let isFailed: Bool
-    let onSelect: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        HStack(spacing: 6) {
-            statusIcon
-                .frame(width: 12)
-            Text("Maven")
-                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .overlay(alignment: .top) {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(IDEAppearance.ColorToken.accent)
-                    .frame(height: 2)
-                    .padding(.horizontal, 6)
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(isSyncing ? "Maven, reading" : isFailed ? "Maven, read failed" : "Maven")
-        .accessibilityAddTraits(.isButton)
-        .focusable(false)
-    }
-
-    @ViewBuilder
-    private var statusIcon: some View {
-        if isSyncing {
-            ProgressView()
-                .controlSize(.small)
-                .scaleEffect(0.6)
-        } else {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 10))
-                .foregroundStyle(isFailed ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
-        }
-    }
-
-    private var backgroundColor: Color {
-        if isSelected { return IDEAppearance.ColorToken.tabActive }
-        if isHovering { return IDEAppearance.ColorToken.tabHover }
-        return IDEAppearance.ColorToken.tabInactive
-    }
-}
-
-struct IDEMavenConsoleControls: View {
-    @Environment(IDEWorkspace.self) private var workspace
-
-    var body: some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
-            if workspace.maven.isBusy {
-                Button("Cancel", action: workspace.cancelGradleOperation)
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            } else {
-                Button(action: workspace.maven.reload) {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help("Reload Maven Project")
-                .accessibilityLabel("Reload Maven Project")
-            }
-            Button(action: copyOutput) {
-                Image(systemName: "doc.on.doc")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help("Copy Maven Output")
-            .accessibilityLabel("Copy Maven Output")
-        }
-    }
-
-    private func copyOutput() {
-        let text = workspace.maven.console.lines.map(\.text).joined(separator: "\n")
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-    }
-}

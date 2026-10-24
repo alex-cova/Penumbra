@@ -942,10 +942,12 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         return [IDEBottomTabContribution(
             tab: .gradle, order: IDEBottomPanelTab.Order.gradle,
             item: { workspace in
-                AnyView(IDEGradleTabItem(
+                AnyView(IDEProjectTabItem(
+                    title: "Gradle", symbol: "hammer",
                     isSelected: workspace.isBottomTabSelected(.gradle),
-                    isSyncing: workspace.gradle.isBusy,
+                    isBusy: workspace.gradle.isBusy,
                     isFailed: workspace.gradle.syncState.isFailed,
+                    busyDescription: "syncing", failedDescription: "sync failed",
                     onSelect: { [weak workspace] in workspace?.showBottomTab(.gradle) }
                 ))
             },
@@ -956,7 +958,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                     fontSize: workspace.preferences.fontSize
                 ))
             },
-            controls: { _ in AnyView(IDEGradleConsoleControls()) },
+            controls: { workspace in AnyView(IDEProjectConsoleControls(system: workspace.gradle)) },
             staysWhenLastShellCloses: true
         )]
     }

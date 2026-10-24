@@ -655,23 +655,14 @@ extension IDEWorkspace {
     /// Force Return: asks for the value when the method returns one, then returns it.
     func debugForceReturn() {
         guard isDebuggerStopped, let window else { return }
-        let alert = NSAlert()
-        alert.messageText = "Force Return"
-        alert.informativeText = "The current method returns at once. Enter the value to return, or leave it empty for a void method."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.placeholderString = "Return value"
-        field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Return")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn, let self else { return }
-            let value = field.stringValue
-            Task {
-                if let problem = await self.debugSession.forceReturn(expression: value) {
-                    self.reportRunProblem("Force Return: \(problem)")
-                }
+        Task { [weak self] in
+            guard let value = await IDEAlert.promptForText(
+                "Force Return",
+                detail: "The current method returns at once. Enter the value to return, or leave it empty for a void method.",
+                placeholder: "Return value", confirm: "Return", isMonospaced: true, in: window),
+                let self else { return }
+            if let problem = await self.debugSession.forceReturn(expression: value) {
+                self.reportRunProblem("Force Return: \(problem)")
             }
         }
     }

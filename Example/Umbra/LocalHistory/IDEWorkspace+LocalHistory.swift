@@ -172,17 +172,10 @@ extension IDEWorkspace {
     /// Names the active file's current text so it can be found, and is kept past the usual age.
     func putLocalHistoryLabel() {
         guard let url = workbench.activePane.selectedDocument?.url, localHistory.relativePath(of: url) != nil else { return }
-        let alert = NSAlert()
-        alert.messageText = "Put Label"
-        alert.informativeText = "Name this version of \(url.lastPathComponent). It stays in Local History after older revisions are removed."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.placeholderString = "Before the big refactor"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Put Label")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let name = IDEAlert.promptForText(
+            "Put Label",
+            detail: "Name this version of \(url.lastPathComponent). It stays in Local History after older revisions are removed.",
+            placeholder: "Before the big refactor", confirm: "Put Label") else { return }
         guard !name.isEmpty, let text = openBufferText(for: url) ?? (try? String(contentsOf: url, encoding: .utf8)) else { return }
         localHistory.putLabel(name, for: url, text: text)
     }

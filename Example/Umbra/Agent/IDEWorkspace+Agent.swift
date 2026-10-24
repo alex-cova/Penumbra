@@ -64,12 +64,11 @@ extension IDEWorkspace: IDEAgentHost {
     /// must not stop on a modal; they keep the notice that tells the user to add the line.
     func agentOfferGitignore(_ relativePath: String) -> Bool {
         guard Self.isSessionPersistenceEnabled, let root = project.rootURL else { return false }
-        let alert = NSAlert()
-        alert.messageText = "Add to .gitignore"
-        alert.informativeText = "\(relativePath) holds rules for you alone. Add it to .gitignore so it stays out of a shared project."
-        alert.addButton(withTitle: "Add to .gitignore")
-        alert.addButton(withTitle: "Not Now")
-        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        var alert = IDEAlert.confirm(
+            "Add to .gitignore",
+            detail: "\(relativePath) holds rules for you alone. Add it to .gitignore so it stays out of a shared project.",
+            confirm: "Add to .gitignore", cancel: "Not Now")
+        guard alert.confirms() else { return false }
         let url = root.appendingPathComponent(".gitignore")
         let existing = try? String(contentsOf: url, encoding: .utf8)
         guard let updated = IDEAgentPermissionFiles.gitignore(adding: relativePath, to: existing) else { return true }
@@ -82,17 +81,10 @@ extension IDEWorkspace: IDEAgentHost {
     }
 
     private func promptAgentRename() {
-        let alert = NSAlert()
-        alert.messageText = "Rename Chat"
-        alert.informativeText = "Leave it empty to use the first message."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.stringValue = agent.selected.title
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        agent.rename(agent.selected.id, to: field.stringValue)
+        guard let name = IDEAlert.promptForText(
+            "Rename Chat", detail: "Leave it empty to use the first message.",
+            initial: agent.selected.title, confirm: "Rename") else { return }
+        agent.rename(agent.selected.id, to: name)
     }
 
     /// Closes the chat page and puts the caret back in the editor.
@@ -354,22 +346,13 @@ extension IDEWorkspace: IDEAgentHost {
             if !server.env.isEmpty { line += "   (sets \(server.env.keys.sorted().joined(separator: ", ")))" }
             return line
         }.joined(separator: "\n") + (servers.count > 8 ? "\n… and \(servers.count - 8) more" : "")
-        let allowed: Bool = await withCheckedContinuation { continuation in
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = servers.count == 1
+        var alert = IDEAlert.confirm(
+            servers.count == 1
                 ? "This project wants to run an MCP server."
-                : "This project wants to run \(servers.count) MCP servers."
-            alert.informativeText = "\(listing)\n\nThese are programs from the project's own files. They run on this Mac with your permissions, and the agent can use what they offer (each use asks first). Allow them only if you trust this project."
-            alert.addButton(withTitle: "Allow")
-            alert.addButton(withTitle: "Not Now")
-            let finish: @Sendable (NSApplication.ModalResponse) -> Void = { continuation.resume(returning: $0 == .alertFirstButtonReturn) }
-            if let window {
-                alert.beginSheetModal(for: window) { finish($0) }
-            } else {
-                finish(alert.runModal())
-            }
-        }
+                : "This project wants to run \(servers.count) MCP servers.",
+            detail: "\(listing)\n\nThese are programs from the project's own files. They run on this Mac with your permissions, and the agent can use what they offer (each use asks first). Allow them only if you trust this project.",
+            confirm: "Allow", cancel: "Not Now")
+        let allowed = await alert.confirms(in: window)
         return allowed ? Set(servers.map(IDEMCPStore.fingerprint(of:))) : []
     }
 

@@ -76,7 +76,7 @@ public struct IDERootView: View {
 
                 VStack(spacing: 0) {
                     VStack(spacing: 0) {
-                        if workspace.isFindInFilesVisible {
+                        if workspace.findInFiles.isVisible {
                             FindInFilesPanel()
                                 .opacity(workspace.chromeOpacity)
                                 .allowsHitTesting(workspace.chromeOpacity > 0.05)

@@ -123,12 +123,10 @@ extension IDEWorkspace {
             return .saved
         } catch HexWriteError.changedOnDisk {
             guard interactive else { return .conflict }
-            let alert = NSAlert()
-            alert.messageText = "\(document.displayName) changed on disk"
-            alert.informativeText = "The file's size or modification time changed since it was opened."
-            alert.addButton(withTitle: "Overwrite")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return .clean }
+            var alert = IDEAlert.confirm(
+                "\(document.displayName) changed on disk",
+                detail: "The file's size or modification time changed since it was opened.", confirm: "Overwrite")
+            guard alert.confirms() else { return .clean }
             return await saveHex(document, interactive: true, overwriteChanged: true)
         } catch {
             if interactive { presentError(error) }
@@ -300,13 +298,11 @@ extension IDEWorkspace {
     }
 
     func confirmMakeHexEditable(_ session: IDEHexSession) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Make this file editable?"
-        alert.informativeText = "A save rewrites the whole file. This file is larger than the editing threshold."
-        alert.addButton(withTitle: "Make Editable")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        var alert = IDEAlert.confirm(
+            "Make this file editable?",
+            detail: "A save rewrites the whole file. This file is larger than the editing threshold.",
+            confirm: "Make Editable")
+        guard alert.confirms() else { return }
         session.makeEditable(confirmed: true)
     }
 

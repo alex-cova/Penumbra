@@ -32,7 +32,7 @@ struct IDEGitSettingsSection: View {
                         UserDefaults.standard.set(protectedBranches, forKey: IDEGitPreferences.protectedBranchesKey)
                     }
             }
-            IDEPreferencesIntStepper(
+            IDEPreferencesStepper(
                 title: "Fetch Every", value: $fetchMinutes, range: 0...240, step: 5,
                 valueWidth: 56, valueSuffix: " min"
             )

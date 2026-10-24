@@ -729,10 +729,10 @@ struct IDEChangesPanel: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
-            IDEExplorerToolbarButton(systemImage: "arrow.up.left.and.arrow.down.right", help: "Open in Diff Viewer") {
+            IDEIconButton(systemImage: "arrow.up.left.and.arrow.down.right", help: "Open in Diff Viewer") {
                 openSelectedDiff()
             }
-            IDEExplorerToolbarButton(systemImage: "xmark", help: "Close Diff") {
+            IDEIconButton(systemImage: "xmark", help: "Close Diff") {
                 gitStatus.selectChange(nil)
             }
         }

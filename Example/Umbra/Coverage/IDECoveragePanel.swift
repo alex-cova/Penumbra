@@ -22,11 +22,11 @@ struct IDECoveragePanel: View {
     private func toolbar(_ controller: IDECoverageController) -> some View {
         @Bindable var controller = controller
         return HStack(spacing: IDEAppearance.Spacing.xs) {
-            IDEExplorerToolbarButton(systemImage: "arrow.up.circle", help: "Previous Uncovered Line") {
+            IDEIconButton(systemImage: "arrow.up.circle", help: "Previous Uncovered Line") {
                 workspace.goToUncoveredLine(forward: false)
             }
             .disabled(!controller.hasLiveCoverage(forFile: workspace.runFileURL))
-            IDEExplorerToolbarButton(systemImage: "arrow.down.circle", help: "Next Uncovered Line") {
+            IDEIconButton(systemImage: "arrow.down.circle", help: "Next Uncovered Line") {
                 workspace.goToUncoveredLine(forward: true)
             }
             .disabled(!controller.hasLiveCoverage(forFile: workspace.runFileURL))
