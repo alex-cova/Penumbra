@@ -53,6 +53,9 @@ public enum UntrustedContent {
 public enum UserText {
     public static let editorStateEnd = "[End editor state]"
     public static let attachmentLead = "[Attached by the user with @ mentions."
+    /// The block of notes a host attaches from a page the user marked up. The notes are the user's words, but the
+    /// block is context the editor added, so a title and a compaction treat it like an attachment.
+    public static let browserNotesLead = "[Browser notes from the user."
     public static let legacyShellEnd = "[End of the commands the user ran.]"
 
     /// `nil` when the message is an editor note or a compaction summary, not something the user typed.
@@ -63,7 +66,9 @@ public enum UserText {
         if let end = body.range(of: editorStateEnd) { body = String(body[end.upperBound...]) }
         if let end = body.range(of: legacyShellEnd) { body = String(body[end.upperBound...]) }
         body = droppingLeadingUntrusted(body)
-        if let lead = body.range(of: attachmentLead) { body = String(body[..<lead.lowerBound]) }
+        // Attachments and browser notes both follow what was typed; cut at whichever comes first.
+        let cut = [attachmentLead, browserNotesLead].compactMap { body.range(of: $0)?.lowerBound }.min()
+        if let cut { body = String(body[..<cut]) }
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }

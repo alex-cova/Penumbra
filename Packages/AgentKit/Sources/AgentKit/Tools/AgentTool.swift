@@ -341,6 +341,11 @@ public protocol AgentTool: Sendable {
     /// When true, the call asks first in a run that used web search or read untrusted content, even
     /// when the rules would allow it (`remember`, so prompt-injected text is not quietly persisted).
     var asksAfterUntrustedContent: Bool { get }
+    /// The same, decided for this call: a tool whose risk depends on what it is pointed at (`browser_act` on a
+    /// page of this Mac or on a site out there). The default is `asksAfterUntrustedContent`.
+    func asksAfterUntrustedContent(for arguments: ToolArguments) -> Bool
+    /// What the card says when `asksAfterUntrustedContent` made a call ask that a rule would have allowed.
+    var untrustedAskNote: String { get }
     /// A file tool touched `path`. Skills with a `paths` filter use this; other tools ignore it.
     func noteFileTouched(_ path: String)
     /// True for a tool that is bounded by something else (a child's iteration cap, and Stop), so the
@@ -371,6 +376,8 @@ extension AgentTool {
     public var honorsDenyRules: Bool { false }
     public var verifies: Bool { false }
     public var asksAfterUntrustedContent: Bool { false }
+    public func asksAfterUntrustedContent(for arguments: ToolArguments) -> Bool { asksAfterUntrustedContent }
+    public var untrustedAskNote: String { "This run used web search or read untrusted content, so saving asks first." }
     public func noteFileTouched(_ path: String) {}
     public var runsWithoutTimeout: Bool { false }
     public var asksUnlessAllowed: Bool { false }

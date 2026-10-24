@@ -1534,8 +1534,8 @@ public actor AgentSession {
         switch verdict {
         case .allow:
             // A run that saw untrusted content still asks before persisting what the model saw.
-            if tool.asksAfterUntrustedContent, sawUntrustedThisRun {
-                notes = ["This run used web search or read untrusted content, so saving asks first."]
+            if sawUntrustedThisRun, tool.asksAfterUntrustedContent(for: parsed) {
+                notes = [tool.untrustedAskNote]
             } else {
                 preapprovedCalls.insert(call.id)
                 return plan
