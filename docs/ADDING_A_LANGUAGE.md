@@ -115,7 +115,7 @@ BasicLanguageService(
 )
 ```
 
-Add it to the `LanguageServiceRegistry(services:)` list in `Example/Umbra/IDEIntelligenceServices.swift`. Then:
+Add it to the `LanguageServiceRegistry(services:)` list in `Example/Umbra/Intelligence/IDEIntelligenceServices.swift`. Then:
 - `completion`, `hover`, `diagnostics`, `navigation` are fed to the engines. Every provider is asked about every document, so it must answer only for its own language (guard on the identifier) and, for completion and navigation, claim it with `isPrimary(for:)`.
 - `formatting`, `signatureHelp`, `codeActions`, `rename`, `refactoring`, `codeGeneration`, `breadcrumbs`, `inlayHints` and `codeVision` are routed by `document.languageIdentifier`, so they only see your language's documents. No dispatcher to write. Two services may claim one language (Java's providers and the app's Run actions); `LanguageServiceRegistry` documents how each feature combines them. Features that keep state between calls (rename, refactoring, code generation, breadcrumbs, inlay hints, code vision) take the first service that has one.
 - `policy` replaces the old hand-kept `skippingLanguages` lists: name the generic features (`snippets`, `duplicateSymbolDiagnostics`, `symbolHover`, `symbolNavigation`) your language does better itself. Symbol and word completion stay as fallbacks through `isPrimary`.

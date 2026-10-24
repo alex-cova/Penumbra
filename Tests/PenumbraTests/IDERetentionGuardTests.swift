@@ -115,7 +115,7 @@ final class IDERetentionGuardTests: XCTestCase {
     /// hold outlives it. The menu views hold a weak handle (`IDEWorkspaceRef`) and read the
     /// workspace at the moment they use it, through an optional property.
     func testMenuViewsNeverHoldOrBindTheWorkspace() throws {
-        let lines = codeLines(try source("Example/Umbra/IDEAppCommands.swift"))
+        let lines = codeLines(try source("Example/Umbra/App/IDEAppCommands.swift"))
         var problems: [String] = []
 
         for (number, line) in lines {
@@ -162,7 +162,7 @@ final class IDERetentionGuardTests: XCTestCase {
     /// A running shell keeps its terminal view alive, so a callback that captures the workspace
     /// strongly keeps the whole window alive through it.
     func testTerminalCallbacksInThePanelCaptureTheWorkspaceWeakly() throws {
-        let lines = codeLines(try source("Example/Umbra/IDETerminalPanel.swift"))
+        let lines = codeLines(try source("Example/Umbra/Panels/IDETerminalPanel.swift"))
         let callbacks = lines.filter {
             $0.text.contains("onTitleUpdate: {")
                 || $0.text.contains("onDirectoryUpdate: {")

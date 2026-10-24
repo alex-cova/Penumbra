@@ -56,6 +56,7 @@ final class IDEAgentInteractionTests: XCTestCase {
         let entry = try XCTUnwrap(controller.entries.first { $0.question != nil })
         XCTAssertEqual(entry.question?.question, "Tabs or spaces?")
         XCTAssertEqual(entry.question?.options, ["tabs", "spaces"])
+        await waitFor("the status says so") { controller.status == "Waiting for your answer…" }
         XCTAssertEqual(controller.status, "Waiting for your answer…")
         XCTAssertTrue(controller.isRunning, "the run is paused, not finished")
 

@@ -28,7 +28,7 @@ extension IDEJavaRunProvider {
     static func coverageToolchainDirectories(
         resources: URL? = Bundle.main.resourceURL,
         executableDirectory: URL? = Bundle.main.executableURL?.deletingLastPathComponent(),
-        sourceDirectory: URL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        sourceDirectory: URL = IDEDevelopmentPaths.sourceRoot
     ) -> [URL] {
         let relative = "Tools/JaCoCo/build"
         var directories: [URL] = []

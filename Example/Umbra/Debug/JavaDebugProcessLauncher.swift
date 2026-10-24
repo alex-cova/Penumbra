@@ -22,9 +22,7 @@ struct JavaDebugProcessLauncher: Sendable {
     func adapterJarURL() -> URL? {
         let bundled = Bundle.main.url(forResource: "java-debug-adapter", withExtension: "jar")
         if let bundled, FileManager.default.fileExists(atPath: bundled.path) { return bundled }
-        let dev = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("Tools/JavaDebugAdapter/build/java-debug-adapter.jar")
+        let dev = IDEDevelopmentPaths.sourceRoot.appendingPathComponent("Tools/JavaDebugAdapter/build/java-debug-adapter.jar")
         return FileManager.default.fileExists(atPath: dev.path) ? dev : nil
     }
 

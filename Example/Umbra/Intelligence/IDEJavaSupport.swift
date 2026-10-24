@@ -488,9 +488,7 @@ final class IDEJavaSupport {
     static func analysisServerJarURL() -> URL? {
         let bundled = Bundle.main.url(forResource: "java-analysis-server", withExtension: "jar")
         if let bundled, FileManager.default.fileExists(atPath: bundled.path) { return bundled }
-        let dev = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("Tools/JavaAnalysisServer/build/java-analysis-server.jar")
+        let dev = IDEDevelopmentPaths.sourceRoot.appendingPathComponent("Tools/JavaAnalysisServer/build/java-analysis-server.jar")
         return FileManager.default.fileExists(atPath: dev.path) ? dev : nil
     }
 

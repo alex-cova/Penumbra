@@ -135,11 +135,11 @@ Update the Local History bullet in `Example/Umbra/LocalHistory/CLAUDE.md` with t
   - `IDELocalHistoryPanel.swift`
   - `IDELocalHistoryPresentation.swift`
   - `Example/Umbra/Diff/IDEDiffPatchBuilder.swift`
-  - `Example/Umbra/IDEWorkspace.swift` (milestone hooks, `onMilestone` wiring, palette entries)
-  - `Example/Umbra/IDEGitStatus.swift`
-  - `Example/Umbra/IDEAppCommands.swift`
-  - `Example/Umbra/IDEPreferences.swift`
-  - `Example/Umbra/IDEPreferencesView.swift`
+  - `Example/Umbra/Workspace/IDEWorkspace.swift` (milestone hooks, `onMilestone` wiring, palette entries)
+  - `Example/Umbra/Git/IDEGitStatus.swift`
+  - `Example/Umbra/App/IDEAppCommands.swift`
+  - `Example/Umbra/Settings/IDEPreferences.swift`
+  - `Example/Umbra/Settings/IDEPreferencesView.swift`
   - `Example/Umbra/LocalHistory/CLAUDE.md`
 - New: `Example/Umbra/LocalHistory/IDELocalHistorySelection.swift`
 

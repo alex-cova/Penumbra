@@ -765,7 +765,7 @@ private struct IDEInlineRenameField: NSViewRepresentable {
     IDEFileTreeView(
         project: {
             let project = IDEProjectModel()
-            project.setRoot(URL(fileURLWithPath: #filePath).deletingLastPathComponent())
+            project.setRoot(IDEDevelopmentPaths.sourceRoot)
             return project
         }(),
         onOpenFile: { _ in },

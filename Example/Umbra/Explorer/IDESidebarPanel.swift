@@ -241,7 +241,7 @@ private struct IDEExplorerSearchField: View {
     IDESidebarPanel()
         .environment({
             let workspace = IDEWorkspace()
-            workspace.project.setRoot(URL(fileURLWithPath: #filePath).deletingLastPathComponent())
+            workspace.project.setRoot(IDEDevelopmentPaths.sourceRoot)
             return workspace
         }())
         .frame(width: 240, height: 480)
