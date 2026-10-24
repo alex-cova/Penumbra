@@ -62,6 +62,7 @@ final class IDEAgentApprovalFlowTests: XCTestCase {
         let request = try XCTUnwrap(toolEntry(controller)?.approval)
         XCTAssertEqual(request.command, "echo hello > ran.txt; echo streamed")
         XCTAssertEqual(request.reason, "a test")
+        await waitFor("the status says so") { controller.status == "Waiting for your approval…" }
         XCTAssertEqual(controller.status, "Waiting for your approval…")
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "nothing runs before the answer")

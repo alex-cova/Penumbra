@@ -264,6 +264,8 @@ final class TreeSitterMaxSyncEditLengthTests: XCTestCase {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         let delegate = SyntaxParseFinishedDelegate()
         let finished = expectation(description: "deferred parse finished")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
         textView.setState(TextViewState(text: "# Hello\n\n**bold**\n", language: .markdown, parsePolicy: .eager))
@@ -294,6 +296,8 @@ final class TreeSitterMaxSyncEditLengthTests: XCTestCase {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         let delegate = SyntaxParseFinishedDelegate()
         let finished = expectation(description: "deferred parse finished")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
         textView.setState(TextViewState(

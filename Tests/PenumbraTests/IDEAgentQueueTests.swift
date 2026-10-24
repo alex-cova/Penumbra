@@ -406,11 +406,18 @@ final class IDEAgentNotificationTests: XCTestCase {
         await waitFor("done") { !chat.isRunning }
     }
 
+    /// The run flips `isRunning` before it saves and only then reports its ending, so a test that
+    /// expects a notification waits for it instead of for the run.
+    private func waitForNotifications(_ count: Int) async {
+        await waitFor("\(count) notification(s)") { notified.count >= count }
+    }
+
     func testAChatThatFinishesInTheBackgroundTellsYouWhatItSaid() async throws {
         let controller = makeController([.text("All done.\nSecond line.")])
         let first = controller.selected
         controller.addConversation()
         await send(first, "do it")
+        await waitForNotifications(1)
         XCTAssertEqual(notified.count, 1)
         XCTAssertEqual(notified[0].chat, first.id)
         XCTAssertEqual(notified[0].title, "“do it” finished")
@@ -430,12 +437,14 @@ final class IDEAgentNotificationTests: XCTestCase {
         let hidden = makeController([.text("done")])
         hidden.isPanelVisible = false
         await send(hidden.selected, "hello")
+        await waitForNotifications(1)
         XCTAssertEqual(notified.count, 1, "the panel is closed")
 
         notified = []
         let inactive = makeController([.text("done")], watching: false)
         inactive.isPanelVisible = true
         await send(inactive.selected, "hello")
+        await waitForNotifications(1)
         XCTAssertEqual(notified.count, 1, "the window is not the one in front")
         XCTAssertFalse(inactive.isInView(inactive.selected))
     }
@@ -492,16 +501,19 @@ final class IDEAgentNotificationTests: XCTestCase {
         await waitFor("running") { chat.isRunning }
         chat.stop()
         await waitFor("stopped") { !chat.isRunning }
+        try? await Task.sleep(for: .milliseconds(300))
         XCTAssertTrue(notified.isEmpty, "you pressed Stop, you know")
 
         let failing = makeController([MockTurn([], failure: .server(status: 500, message: "the server is down"))])
         let broken = failing.selected
         failing.addConversation()
         await send(broken, "go")
+        await waitForNotifications(1)
         XCTAssertEqual(notified.count, 1)
-        XCTAssertEqual(notified[0].title, "“go” stopped")
-        XCTAssertEqual(notified[0].severity, .error)
-        XCTAssertNotNil(notified[0].detail)
+        guard let first = notified.first else { return }
+        XCTAssertEqual(first.title, "“go” stopped")
+        XCTAssertEqual(first.severity, .error)
+        XCTAssertNotNil(first.detail)
     }
 
     func testTheWorkspacePostsToTheBellAndClickingOpensThatChat() async throws {

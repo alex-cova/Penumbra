@@ -1271,13 +1271,17 @@ final class IDEAgentConversation: Identifiable {
         stepSaveTask = nil
         stepItems = nil
         await appendChangeSummary(for: currentRun, session: session)
+        // Read before `isRunning` flips: nothing below may suspend, so a caller that sees the run
+        // stopped also sees it saved, marked unread and announced.
+        let finalItems = await session.items
+        let finalCheckpoints = await session.checkpoints.snapshot()
         currentRun = nil
         isRunning = false
         isAwaitingUser = false
         status = nil
         runRules = PermissionRules()
         fileClaims?.release(tab: id)
-        persist(items: await session.items, checkpoints: await session.checkpoints.snapshot())
+        persist(items: finalItems, checkpoints: finalCheckpoints)
         onRunFinished?()
         if let ending = lastEnding {
             let lastAnswer = entries.last(where: { $0.kind == .assistant })?.text ?? ""
@@ -1529,8 +1533,11 @@ final class IDEAgentConversation: Identifiable {
             let active = try await currentSession(root: root, host: host)
             let report = try await active.compactNow(focus: focus)
             if report.changedAnything {
+                // Read first: the notice and the save must land together, with no suspension between.
+                let items = await active.items
+                let checkpoints = await active.checkpoints.snapshot()
                 handle(.compacted(report))
-                persist(items: await active.items, checkpoints: await active.checkpoints.snapshot())
+                persist(items: items, checkpoints: checkpoints)
             } else if report.summaryFailed {
                 appendError("The summary could not be written, so the conversation was not shortened.")
             } else {

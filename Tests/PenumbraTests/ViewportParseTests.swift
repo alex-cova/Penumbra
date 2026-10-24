@@ -154,6 +154,8 @@ final class TextViewStateViewportParseTests: XCTestCase {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         let delegate = ViewportParseDelegate()
         let finished = expectation(description: "parse finished")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
 
@@ -175,6 +177,8 @@ final class TextViewStateViewportParseTests: XCTestCase {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 80))
         let delegate = ViewportParseDelegate()
         let finished = expectation(description: "parse finished")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
 
@@ -198,6 +202,8 @@ final class TextViewStateViewportParseTests: XCTestCase {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 80))
         let delegate = ViewportParseDelegate()
         let finished = expectation(description: "initial parse finished")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
 
@@ -255,6 +261,8 @@ final class TextViewStateViewportParseTests: XCTestCase {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 80))
         let delegate = ViewportParseDelegate()
         let finished = expectation(description: "initial parse finished")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
 
@@ -294,6 +302,8 @@ final class TextViewStateViewportParseTests: XCTestCase {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 80))
         let delegate = ViewportParseDelegate()
         let finished = expectation(description: "initial parse finished")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
 

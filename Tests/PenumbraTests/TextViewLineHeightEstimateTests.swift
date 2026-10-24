@@ -86,9 +86,12 @@ final class TextViewLineHeightEstimateTests: XCTestCase {
         settle(textView)
 
         textView.lineHeightMultiplier = 1.5
-        settle(textView)
-
         let expected = DefaultTheme().font.totalLineHeight * 1.5
+        // The content size lands on a later run-loop turn; a busy machine can take longer than one pause.
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            settle(textView)
+        } while abs(textView.contentSize.height - (expected * 2_000 + textView.bottomScrollPadding)) > 40 && Date() < deadline
         let lineManager = textView.lineManagerForTesting
         XCTAssertEqual(lineManager.lineInfo(atRow: 1_999).lineHeight, expected, accuracy: 0.01)
         XCTAssertEqual(lineManager.contentHeight, expected * 2_000, accuracy: 20)

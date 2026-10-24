@@ -102,7 +102,7 @@ private func emit(
                         context: context,
                         ranker: ranker
                     )
-                    continuation.yield(snapshot)
+                    state.publish(snapshot, to: continuation)
                     if update.isFinished {
                         sawFinished = true
                     }
@@ -119,7 +119,7 @@ private func emit(
                         ranker: ranker,
                         keepExistingItems: true
                     )
-                    continuation.yield(snapshot)
+                    state.publish(snapshot, to: continuation)
                 }
             }
         }
@@ -135,6 +135,10 @@ private final class CompletionMergeState: @unchecked Sendable {
     private let providerOrder: [String]
     private var advertisement: String?
     private var emptyText: String?
+    /// Counts stores. A snapshot is ranked after its store, off the lock, so a slower one can
+    /// finish after a newer one; `publish` drops it instead of letting it overwrite fresher items.
+    private var version = 0
+    private var publishedVersion = 0
 
     init(names: [String]) {
         providerOrder = names
@@ -150,7 +154,7 @@ private final class CompletionMergeState: @unchecked Sendable {
         context: CompletionContext,
         ranker: Ranker,
         keepExistingItems: Bool = false
-    ) async -> CompletionUpdate {
+    ) async -> VersionedUpdate {
         let stored = store(
             name: name, items: items, finished: isFinished, advertisement: advertisement, emptyText: emptyText,
             keepExistingItems: keepExistingItems
@@ -174,15 +178,36 @@ private final class CompletionMergeState: @unchecked Sendable {
         // Rank within a section; the command section always comes last.
         let ordered = ranked.filter { $0.item.section != .commands } + ranked.filter { $0.item.section == .commands }
         let merged = ordered.filter { $0.score > 0 }.map(\.item)
-        return CompletionUpdate(items: merged, isFinished: done, advertisement: ad, emptyText: empty)
+        return VersionedUpdate(
+            update: CompletionUpdate(items: merged, isFinished: done, advertisement: ad, emptyText: empty),
+            version: stored.version)
+    }
+
+    struct VersionedUpdate {
+        let update: CompletionUpdate
+        let version: Int
+    }
+
+    /// Yields `snapshot` unless a newer one has already gone out. A superseded snapshot never
+    /// carries `isFinished` that the newer one lacks: finished providers only accumulate.
+    func publish(
+        _ snapshot: VersionedUpdate,
+        to continuation: AsyncThrowingStream<CompletionUpdate, Error>.Continuation
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard snapshot.version > publishedVersion else { return }
+        publishedVersion = snapshot.version
+        continuation.yield(snapshot.update)
     }
 
     private func store(
         name: String, items: [CompletionItem], finished isFinished: Bool, advertisement: String?, emptyText: String?,
         keepExistingItems: Bool
-    ) -> (items: [CompletionItem], done: Bool, advertisement: String?, emptyText: String?) {
+    ) -> (items: [CompletionItem], done: Bool, advertisement: String?, emptyText: String?, version: Int) {
         lock.lock()
         defer { lock.unlock() }
+        version += 1
         if !keepExistingItems || itemsByProvider[name] == nil {
             itemsByProvider[name] = items
         }
@@ -200,6 +225,6 @@ private final class CompletionMergeState: @unchecked Sendable {
             combined.append(contentsOf: itemsByProvider[providerName] ?? [])
         }
         let done = !providerOrder.isEmpty && providerOrder.allSatisfy { finished.contains($0) }
-        return (combined, done, self.advertisement, self.emptyText)
+        return (combined, done, self.advertisement, self.emptyText, version)
     }
 }

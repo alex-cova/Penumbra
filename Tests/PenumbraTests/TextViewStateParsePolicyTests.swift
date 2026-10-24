@@ -30,6 +30,8 @@ final class TextViewStateParsePolicyTests: XCTestCase {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         let delegate = SyntaxParseDelegate()
         let finished = expectation(description: "parse finished")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
 
@@ -89,6 +91,8 @@ final class TextViewStateParsePolicyTests: XCTestCase {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         let delegate = SyntaxParseDelegate()
         let finished = expectation(description: "second parse finished")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
 
@@ -114,6 +118,8 @@ final class TextViewStateParsePolicyTests: XCTestCase {
 
         let delegate = SyntaxParseDelegate()
         let finished = expectation(description: "reparse finished")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
         textView.text = "# Replaced\n"
@@ -147,6 +153,8 @@ final class TextViewStateParsePolicyTests: XCTestCase {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         let delegate = SyntaxParseDelegate()
         let finished = expectation(description: "parse finished after edit")
+        // A later parse (viewport, deferred layout) may finish again; that is not an error here.
+        finished.assertForOverFulfill = false
         delegate.onFinish = { finished.fulfill() }
         textView.editorDelegate = delegate
 
