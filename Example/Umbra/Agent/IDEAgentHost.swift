@@ -44,6 +44,14 @@ protocol IDEAgentHost: AnyObject {
     /// the project's trust first. Ends exactly once, whatever happens.
     func agentRunGradle(tasks: [String], options: [String], timeout: TimeInterval) async -> IDEGradleRunOutcome
     func agentCancelGradle()
+    /// A Maven project (and not a Gradle one: Gradle wins when both are present).
+    var agentIsMavenProject: Bool { get }
+    /// Runs Maven goals through the window's own runner (Maven console, Problems), asking for the
+    /// project's trust first. Ends exactly once, whatever happens.
+    func agentRunMaven(goals: [String], options: [String], timeout: TimeInterval) async -> IDEMavenRunOutcome
+    func agentCancelMaven()
+    /// Shows the Maven tool window and the Maven console.
+    func agentRevealMaven()
     /// Compiler results for these files' current text, awaited. `unavailable` says why not.
     func agentFreshProblems(relativePaths: [String]) async -> IDEAgentFreshProblems
     /// What the editor reports as errors in these just-changed files, as a note for the model, or
@@ -126,6 +134,12 @@ extension IDEAgentHost {
     func agentOfferGitignore(_ relativePath: String) -> Bool { false }
     func agentShowFile(relativePath: String, line: Int?, column: Int?) async throws {}
     func agentRevealGradle() {}
+    var agentIsMavenProject: Bool { false }
+    func agentRunMaven(goals: [String], options: [String], timeout: TimeInterval) async -> IDEMavenRunOutcome {
+        .notStarted("This host cannot run Maven.")
+    }
+    func agentCancelMaven() {}
+    func agentRevealMaven() {}
     func agentShowCommand(id: UUID, title: String, line: String?) {}
     func agentBrowserNotes() -> [IDEAIAnnotation] { [] }
     func agentMarkBrowserNotesSent(_ ids: [UUID]) {}
@@ -190,6 +204,20 @@ final class IDEAgentHostBox: @unchecked Sendable {
             // Stop: end the Gradle run the host started on our behalf.
             Task { @MainActor [weak self] in self?.host?.agentCancelGradle() }
         }
+    }
+
+    @MainActor
+    func runMaven(goals: [String], options: [String], timeout: TimeInterval) async -> IDEMavenRunOutcome {
+        guard let host else { return .notStarted("The window is closed.") }
+        return await withTaskCancellationHandler {
+            await host.agentRunMaven(goals: goals, options: options, timeout: timeout)
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.host?.agentCancelMaven() }
+        }
+    }
+
+    func revealMaven() async {
+        await MainActor.run { host?.agentRevealMaven() }
     }
 
     func lineText(url: URL, line: Int) async -> String? {

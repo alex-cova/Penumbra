@@ -227,15 +227,16 @@ extension IDEWorkspace: IDEAgentHost {
     // MARK: - Commands and builds
 
     var agentIsGradleProject: Bool { gradle.isActive }
+    var agentIsMavenProject: Bool { maven.isActive && !gradle.isActive }
 
     func agentProjectTaskNames() -> [String] {
-        guard let system = projectSystems.active, system.id != "gradle" else { return [] }
+        guard let system = projectSystems.active, !["gradle", "maven"].contains(system.id) else { return [] }
         return system.tasks.map(\.path)
     }
 
     func agentRunProjectTask(_ name: String) async -> String {
-        guard let system = projectSystems.active, system.id != "gradle" else {
-            return "This folder has no project tasks. Use gradle for a Gradle build."
+        guard let system = projectSystems.active, !["gradle", "maven"].contains(system.id) else {
+            return "This folder has no project tasks. Use the gradle or maven tool for those builds."
         }
         guard system.tasks.contains(where: { $0.path == name }) else {
             let known = system.tasks.map(\.path).joined(separator: ", ")
@@ -297,7 +298,9 @@ extension IDEWorkspace: IDEAgentHost {
 
     func agentCommandEnvironment() async -> [String: String] {
         let javaHome = await javaSupport.jdk.resolveForGradle()?.installation.home
-        return AgentCommandEnvironment.make(javaHome: javaHome, extras: IDEAgentSettings.shared.commandEnvironment)
+        let loginPath = await IDELoginShellPath.shared.entries()
+        return AgentCommandEnvironment.make(
+            javaHome: javaHome, loginPath: loginPath, extras: IDEAgentSettings.shared.commandEnvironment)
     }
 
     func agentSaveBuffers(relativePaths: [String]) async {
@@ -322,6 +325,27 @@ extension IDEWorkspace: IDEAgentHost {
         // Only a run the agent started: the user's own build is not Stop's to end.
         guard agent.isGradleRunActive else { return }
         gradle.cancelTasks()
+    }
+
+    func agentRunMaven(goals: [String], options: [String], timeout: TimeInterval) async -> IDEMavenRunOutcome {
+        agent.isMavenRunActive = true
+        defer { agent.isMavenRunActive = false }
+        return await withCheckedContinuation { continuation in
+            maven.runGoals(goals, module: nil, extraArguments: options, timeout: .seconds(timeout)) { outcome in
+                continuation.resume(returning: outcome)
+            }
+        }
+    }
+
+    func agentCancelMaven() {
+        // Only a run the agent started, as for Gradle.
+        guard agent.isMavenRunActive else { return }
+        maven.cancelTasks()
+    }
+
+    func agentRevealMaven() {
+        isProjectSidebarVisible = true
+        showMavenOutput()
     }
 
     func agentShowFile(relativePath: String, line: Int?, column: Int?) async throws {

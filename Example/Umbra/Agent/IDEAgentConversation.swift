@@ -1023,7 +1023,9 @@ final class IDEAgentConversation: Identifiable {
         let memoryDirectory = (settings.memoryEnabled ? store : nil)?.projectDirectory(for: root.path)
         let memoryText = memoryDirectory.flatMap { ProjectMemory.load(at: $0) }
         let choice = effectiveChoice
-        let fingerprint = settings.fingerprint(for: choice) + "|" + root.path + "|" + String(host.agentIsGradleProject) + "|" + (skills?.fingerprint ?? "")
+        // Read the login shell's PATH now, so the first command does not wait for zsh to start.
+        Task { await IDELoginShellPath.shared.warm() }
+        let fingerprint = settings.fingerprint(for: choice) + "|" + root.path + "|" + String(host.agentIsGradleProject) + String(host.agentIsMavenProject) + "|" + (skills?.fingerprint ?? "")
             + "|" + agents.fingerprint + "|" + mcpFingerprint + "|" + ProjectMemory.fingerprint(of: memoryText)
         if let session, sessionFingerprint == fingerprint { return session }
 
@@ -1065,8 +1067,11 @@ final class IDEAgentConversation: Identifiable {
             nil
         }
         tools += EditingTools.all()
-            + [IDERunCommandTool(support: support, sandbox: sandbox)]
+            + [IDERunCommandTool(
+                support: support, sandbox: sandbox, isGradleProject: host.agentIsGradleProject,
+                isMavenProject: host.agentIsMavenProject)]
         if host.agentIsGradleProject { tools += [IDEGradleTool(support: support), IDERunTestsTool(support: support)] }
+        if host.agentIsMavenProject { tools += [IDEMavenTool(support: support), IDERunTestsTool(support: support, isMaven: true)] }
         if !host.agentProjectTaskNames().isEmpty {
             tools.append(IDEProjectTaskTool(host: box))
         }
@@ -1099,9 +1104,12 @@ final class IDEAgentConversation: Identifiable {
         tools += mcpTools
         let profile = ModelProfile.choose(provider: choice.provider.rawValue, model: choice.model)
         // The blocking gate and the soft nudge are alternatives: the toggle picks the gate.
-        let stopGateOn = settings.runTestsBeforeFinishing && host.agentIsGradleProject
+        let isMaven = host.agentIsMavenProject
+        let stopGateOn = settings.runTestsBeforeFinishing && (host.agentIsGradleProject || isMaven)
         let stopGatePolicies: [any TurnPolicy] = stopGateOn
-            ? [StopGatePolicy(check: { [support] _ in try await Self.runTestsForStopGate(support: support) })]
+            ? [StopGatePolicy(check: { [support] _ in
+                isMaven ? try await Self.runMavenTestsForStopGate(support: support) : try await Self.runTestsForStopGate(support: support)
+            })]
             : []
         // Output too large to show is kept beside the conversation; the sweep drops what is old.
         let toolOutputs = store.map {
@@ -1191,6 +1199,29 @@ final class IDEAgentConversation: Identifiable {
             return .block(reason: gateSummary(
                 commandLine: "gradle test", root: support.root, started: started,
                 exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, timedOut: false))
+        }
+    }
+
+    /// The same gate for a Maven project: `mvn test` through the Maven runner.
+    static func runMavenTestsForStopGate(support: IDEAgentCommandSupport) async throws -> StopGateVerdict {
+        await support.box.revealMaven()
+        let started = Date()
+        let outcome = await support.box.runMaven(goals: ["test"], options: [], timeout: IDEMavenTool.defaultTimeout)
+        func summary(_ result: GradleCommandResult, timedOut: Bool) -> String {
+            var input = IDEMavenSummary.Input(
+                commandLine: "mvn test", projectRoot: support.root, exitCode: timedOut ? nil : result.exitCode,
+                stdout: result.stdout, stderr: result.stderr, duration: Date().timeIntervalSince(started))
+            input.timedOut = timedOut
+            let directories = IDEMavenSummary.freshTestReportDirectories(under: support.root, since: started)
+            if !directories.isEmpty { input.tests = JUnitXMLReportParser.parseReports(in: directories, projectRoot: support.root) }
+            return IDEMavenSummary.make(input)
+        }
+        switch outcome {
+        case .notStarted, .failed: return .skip
+        case .cancelled: throw CancellationError()
+        case .timedOut(let partial): return .block(reason: summary(partial, timedOut: true))
+        case .finished(let result):
+            return result.exitCode == 0 ? .pass : .block(reason: summary(result, timedOut: false))
         }
     }
 

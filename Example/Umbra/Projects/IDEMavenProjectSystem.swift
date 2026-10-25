@@ -477,6 +477,7 @@ final class IDEMavenProjectSystem: IDEProjectSystem {
         _ goals: [String],
         module: String?,
         extraArguments: [String] = [],
+        timeout customTimeout: Duration? = nil,
         completion: (@MainActor (IDEMavenRunOutcome) -> Void)? = nil
     ) {
         guard let root = projectRootURL, Self.isMavenProject(root) else {
@@ -530,7 +531,7 @@ final class IDEMavenProjectSystem: IDEProjectSystem {
                     executableOverride: executableOverride,
                     settingsFile: settingsFile,
                     offline: offline,
-                    timeout: goalTimeout(for: reported),
+                    timeout: customTimeout ?? goalTimeout(for: reported),
                     output: consoleOutput(generation: projectGeneration)
                 )
                 let elapsed = Date().timeIntervalSince(startedAt)

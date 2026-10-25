@@ -68,6 +68,52 @@ nonisolated struct IDEAgentCommandSupport: Sendable {
     }
 }
 
+/// A plain `gradle …` / `./gradlew …` command line, as the `gradle` tool would take it. Anything a
+/// shell would interpret (pipes, `&&`, quotes, variables, globs) is not one: it stays a shell command.
+nonisolated enum IDEGradleCommandLine {
+    struct Parsed: Equatable {
+        var tasks: [String]
+        var options: [String]
+        var line: String { (["gradle"] + tasks + options).joined(separator: " ") }
+    }
+
+    static func parse(_ command: String) -> Parsed? {
+        split(command, launchers: ["gradle", "./gradlew", "gradlew"]).map { Parsed(tasks: $0.tasks, options: $0.options) }
+    }
+
+    private static let shellCharacters = CharacterSet(charactersIn: "|&;<>$`()*?\\\"'{}[]!\n\r")
+
+    /// Tasks come first, then everything from the first option on is passed on as an option (so
+    /// `--tests Foo` keeps `Foo` as its value). A line with no task, or an option before the first
+    /// task, is not split: the tool would run its default, and the shell can say so.
+    static func split(_ command: String, launchers: Set<String>) -> (tasks: [String], options: [String])? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.rangeOfCharacter(from: shellCharacters) == nil else { return nil }
+        let words = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        // A word that starts with these is a comment, a home directory or a command expansion.
+        guard !words.contains(where: { $0.hasPrefix("#") || $0.hasPrefix("~") || $0.hasPrefix("=") }),
+              let launcher = words.first, launchers.contains(launcher)
+        else { return nil }
+        let rest = Array(words.dropFirst())
+        let tasks = Array(rest.prefix { !$0.hasPrefix("-") })
+        guard !tasks.isEmpty else { return nil }
+        return (tasks, Array(rest.dropFirst(tasks.count)))
+    }
+}
+
+/// The same for `mvn …` / `./mvnw …`.
+nonisolated enum IDEMavenCommandLine {
+    struct Parsed: Equatable {
+        var goals: [String]
+        var options: [String]
+        var line: String { (["mvn"] + goals + options).joined(separator: " ") }
+    }
+
+    static func parse(_ command: String) -> Parsed? {
+        IDEGradleCommandLine.split(command, launchers: ["mvn", "./mvnw", "mvnw"]).map { Parsed(goals: $0.tasks, options: $0.options) }
+    }
+}
+
 struct IDERunCommandTool: AgentTool {
     static let defaultTimeout: TimeInterval = 120
     static let maxTimeout: TimeInterval = 600
@@ -78,6 +124,18 @@ struct IDERunCommandTool: AgentTool {
     let support: IDEAgentCommandSupport
     /// The session's sandbox choice. `nil` runs commands directly.
     var sandbox: IDEAgentSandboxChoice? = nil
+    /// In a Gradle project a plain Gradle command goes to the window's Gradle runner, like the
+    /// `gradle` tool: trust prompt, console, Problems and a summary instead of the whole log.
+    var isGradleProject = false
+    var isMavenProject = false
+
+    private func gradleRoute(_ command: String) -> IDEGradleCommandLine.Parsed? {
+        isGradleProject ? IDEGradleCommandLine.parse(command) : nil
+    }
+
+    private func mavenRoute(_ command: String) -> IDEMavenCommandLine.Parsed? {
+        isMavenProject ? IDEMavenCommandLine.parse(command) : nil
+    }
 
     var risk: ToolRisk { .command }
     var definition: ToolDefinition {
@@ -97,10 +155,29 @@ struct IDERunCommandTool: AgentTool {
             ])
     }
 
+    func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {
+        guard let command = try? arguments.optionalString("command") else { return .none }
+        if let gradle = gradleRoute(command) { return .command(gradle.line) }
+        if let maven = mavenRoute(command) { return .command(maven.line) }
+        return .command(command)
+    }
+
     func approvalRequest(for arguments: ToolArguments, context: ToolContext) async -> ApprovalRequest? {
         guard let command = try? arguments.string("command") else { return nil }
         let triage = await support.triage(context)
         var notes = support.notes(triage)
+        if let gradle = gradleRoute(command) {
+            return ApprovalRequest(
+                title: "Run Gradle", command: gradle.line, workingDirectory: support.root.path,
+                reason: try? arguments.optionalString("reason"), warnings: [],
+                notes: notes + ["Runs through Umbra's Gradle runner."])
+        }
+        if let maven = mavenRoute(command) {
+            return ApprovalRequest(
+                title: "Run Maven", command: maven.line, workingDirectory: support.root.path,
+                reason: try? arguments.optionalString("reason"), warnings: [],
+                notes: notes + ["Runs through Umbra's Maven runner."])
+        }
         if let sandbox {
             notes.append(sandbox.isConsented
                 ? "Runs sandboxed: reads stay out of credentials, writes stay in the project, temp and build caches."
@@ -115,6 +192,18 @@ struct IDERunCommandTool: AgentTool {
     func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
         let command = try arguments.string("command")
         guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ToolError("The command is empty.") }
+        if let gradle = gradleRoute(command) {
+            let timeout = try support.timeout(arguments, default: IDEGradleTool.defaultTimeout, maximum: IDEGradleTool.maxTimeout)
+            let summary = try await IDEGradleRunner.run(
+                tasks: gradle.tasks, options: gradle.options, timeout: timeout, support: support, context: context)
+            return summary + "\n[Ran through the gradle tool; call it directly next time.]"
+        }
+        if let maven = mavenRoute(command) {
+            let timeout = try support.timeout(arguments, default: IDEMavenTool.defaultTimeout, maximum: IDEMavenTool.maxTimeout)
+            let summary = try await IDEMavenRunner.run(
+                goals: maven.goals, options: maven.options, timeout: timeout, support: support, context: context)
+            return summary + "\n[Ran through the maven tool; call it directly next time.]"
+        }
         let timeout = try support.timeout(arguments, default: Self.defaultTimeout, maximum: Self.maxTimeout)
 
         await support.saveAgentBuffers(context)
@@ -277,6 +366,92 @@ struct IDEGradleTool: AgentTool {
     }
 }
 
+/// Runs Maven goals through the window's own runner, so the Maven console and Problems show them
+/// like any build the user started, and the project's trust prompt applies.
+struct IDEMavenTool: AgentTool {
+    static let defaultTimeout: TimeInterval = 300
+    static let maxTimeout: TimeInterval = 900
+
+    let support: IDEAgentCommandSupport
+
+    var risk: ToolRisk { .command }
+    var verifies: Bool { true }
+    var definition: ToolDefinition {
+        ToolDefinition(
+            name: "maven",
+            description: """
+            Run Maven goals in the project, such as compile, test-compile, test or package. `mvn` is not on \
+            the command line for this: use this tool for every Maven build. The user approves each run, and \
+            the Maven tool window and console open so they can watch it. POMs and their plugins are code. You \
+            get a summary: compiler errors, failed tests and the build's verdict, not the full log. To run \
+            tests you can also use run_tests.
+            """,
+            parameters: [
+                ToolParameter("goals", .array(of: .string), "Goals or phases, e.g. [\"test-compile\"] or [\"clean\", \"package\"]."),
+                ToolParameter("options", .array(of: .string), "Extra Maven arguments, e.g. [\"-pl\", \"app\", \"-am\"] or [\"-DskipTests\"].", optional: true),
+                ToolParameter("reason", .string, "One sentence on why, shown to the user."),
+                ToolParameter("timeout_seconds", .integer, "Default 300, at most 900.", optional: true),
+            ])
+    }
+
+    /// The command line a permission rule such as `Bash(mvn test:*)` matches.
+    func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {
+        guard let goals = try? arguments.stringArray("goals"), !goals.isEmpty else { return .none }
+        let options = (try? arguments.optionalStringArray("options")) ?? []
+        return .command((["mvn"] + goals + options).joined(separator: " "))
+    }
+
+    func approvalRequest(for arguments: ToolArguments, context: ToolContext) async -> ApprovalRequest? {
+        guard let goals = try? arguments.stringArray("goals"), !goals.isEmpty else { return nil }
+        let options = (try? arguments.optionalStringArray("options")) ?? []
+        let triage = await support.triage(context)
+        return ApprovalRequest(
+            title: "Run Maven", command: (["mvn"] + goals + options).joined(separator: " "),
+            workingDirectory: support.root.path, reason: try? arguments.optionalString("reason"),
+            warnings: [], notes: support.notes(triage))
+    }
+
+    func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
+        let goals = try arguments.stringArray("goals")
+        let options = try arguments.optionalStringArray("options") ?? []
+        guard !goals.isEmpty else { throw ToolError("Give at least one goal.") }
+        let timeout = try support.timeout(arguments, default: Self.defaultTimeout, maximum: Self.maxTimeout)
+        return try await IDEMavenRunner.run(goals: goals, options: options, timeout: timeout, support: support, context: context)
+    }
+}
+
+enum IDEMavenRunner {
+    static func run(
+        goals: [String], options: [String], timeout: TimeInterval, support: IDEAgentCommandSupport, context: ToolContext
+    ) async throws -> String {
+        await support.saveAgentBuffers(context)
+        await support.box.revealMaven()
+        let started = Date()
+        let outcome = await support.box.runMaven(goals: goals, options: options, timeout: timeout)
+        let commandLine = (["mvn"] + goals + options).joined(separator: " ")
+
+        var input = IDEMavenSummary.Input(
+            commandLine: commandLine, projectRoot: support.root, exitCode: nil, stdout: "", stderr: "",
+            duration: Date().timeIntervalSince(started))
+        switch outcome {
+        case .notStarted(let reason), .failed(let reason):
+            throw ToolError(reason)
+        case .finished(let result):
+            input.exitCode = result.exitCode; input.stdout = result.stdout; input.stderr = result.stderr
+        case .timedOut(let partial):
+            input.timedOut = true; input.stdout = partial.stdout; input.stderr = partial.stderr
+        case .cancelled(let partial):
+            input.cancelled = true; input.stdout = partial?.stdout ?? ""; input.stderr = partial?.stderr ?? ""
+        }
+
+        let directories = IDEMavenSummary.freshTestReportDirectories(under: support.root, since: started)
+        if !directories.isEmpty {
+            input.tests = JUnitXMLReportParser.parseReports(in: directories, projectRoot: support.root)
+        }
+        return IDEMavenSummary.make(input)
+    }
+}
+
 /// Runs one task the active project system lists (an npm script, a SwiftPM command). Gradle stays
 /// on the `gradle` tool.
 struct IDEProjectTaskTool: AgentTool {
@@ -318,13 +493,20 @@ struct IDEProjectTaskTool: AgentTool {
 
 struct IDERunTestsTool: AgentTool {
     let support: IDEAgentCommandSupport
+    /// Run the tests with Maven (Surefire) instead of Gradle.
+    var isMaven = false
 
     var risk: ToolRisk { .command }
     var verifies: Bool { true }
     var definition: ToolDefinition {
         ToolDefinition(
             name: "run_tests",
-            description: """
+            description: isMaven ? """
+            Run the project's tests with Maven (Surefire) and get the failures: test name, message and \
+            where it failed. Narrow it with `tests` (a class, `Class#method`, or a pattern) and `module` \
+            (as for `mvn -pl`, such as "app" or ":app"; its upstream modules are built too). The user \
+            approves each run, and the Maven tool window and console open for it.
+            """ : """
             Run the project's tests with Gradle and get the failures: test name, message and where it \
             failed. Narrow it with `tests` (a class, Class.method, or a package pattern) and `module`. \
             The user approves each run, and the Gradle tool window and console open for it.
@@ -340,20 +522,26 @@ struct IDERunTestsTool: AgentTool {
     private func command(_ arguments: ToolArguments) throws -> (tasks: [String], options: [String]) {
         let module = (try arguments.optionalString("module")) ?? ""
         let filters = try arguments.optionalStringArray("tests") ?? []
+        if isMaven {
+            var options = module.isEmpty ? [] : ["-pl", module, "-am"]
+            // A filter that matches nothing in an upstream module is not a failure.
+            if !filters.isEmpty { options += ["-Dtest=" + filters.joined(separator: ","), "-Dsurefire.failIfNoSpecifiedTests=false"] }
+            return (["test"], options)
+        }
         let task = module.isEmpty ? "test" : (module.hasSuffix(":") ? module : module + ":") + "test"
         return ([task], filters.flatMap { ["--tests", $0] })
     }
 
     func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {
         guard let command = try? command(arguments) else { return .none }
-        return .command((["gradle"] + command.tasks + command.options).joined(separator: " "))
+        return .command(([isMaven ? "mvn" : "gradle"] + command.tasks + command.options).joined(separator: " "))
     }
 
     func approvalRequest(for arguments: ToolArguments, context: ToolContext) async -> ApprovalRequest? {
         guard let command = try? command(arguments) else { return nil }
         let triage = await support.triage(context)
         return ApprovalRequest(
-            title: "Run tests", command: (["gradle"] + command.tasks + command.options).joined(separator: " "),
+            title: "Run tests", command: ([isMaven ? "mvn" : "gradle"] + command.tasks + command.options).joined(separator: " "),
             workingDirectory: support.root.path, reason: try? arguments.optionalString("reason"),
             warnings: [], notes: support.notes(triage))
     }
@@ -361,6 +549,9 @@ struct IDERunTestsTool: AgentTool {
     func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
         let (tasks, options) = try command(arguments)
         let timeout = try support.timeout(arguments, default: IDEGradleTool.defaultTimeout, maximum: IDEGradleTool.maxTimeout)
+        if isMaven {
+            return try await IDEMavenRunner.run(goals: tasks, options: options, timeout: timeout, support: support, context: context)
+        }
         return try await IDEGradleRunner.run(tasks: tasks, options: options, timeout: timeout, support: support, context: context)
     }
 }

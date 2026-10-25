@@ -83,7 +83,7 @@ nonisolated enum IDEGradleSummary {
         return result
     }
 
-    private static func describe(_ test: JavaTestCaseResult) -> [String] {
+    static func describe(_ test: JavaTestCaseResult) -> [String] {
         var lines = ["  FAILED \(test.className) > \(test.name)"]
         if let message = test.message?.split(separator: "\n").first.map(String.init), !message.isEmpty {
             lines.append("    " + String(message.prefix(300)))
@@ -95,7 +95,7 @@ nonisolated enum IDEGradleSummary {
                 .filter { frame in
                     guard frame.hasPrefix("at ") else { return false }
                     // Test runners, build tools and the JDK are not where the bug is.
-                    let noise = ["org.junit.", "junit.framework.", "org.gradle.", "worker.org.gradle.", "java.base/", "jdk.internal.", "jdk.proxy", "sun.reflect."]
+                    let noise = ["org.junit.", "junit.framework.", "org.gradle.", "worker.org.gradle.", "org.apache.maven.", "org.apache.maven.surefire.", "java.base/", "jdk.internal.", "jdk.proxy", "sun.reflect."]
                     return !noise.contains { frame.contains($0) }
                 }
             lines += frames.prefix(3).map { "    " + $0 }
@@ -117,7 +117,7 @@ nonisolated enum IDEGradleSummary {
         return joined.isEmpty ? nil : String(joined.prefix(500))
     }
 
-    private static func relative(_ path: String, to root: URL) -> String {
+    static func relative(_ path: String, to root: URL) -> String {
         let rootPath = root.standardizedFileURL.path
         let resolved = URL(fileURLWithPath: path).standardizedFileURL.path
         for prefix in [rootPath, URL(fileURLWithPath: rootPath).resolvingSymlinksInPath().path, "/private" + rootPath] {

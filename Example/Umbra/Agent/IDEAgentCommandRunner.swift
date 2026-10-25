@@ -51,14 +51,19 @@ nonisolated enum AgentCommandError: Error, LocalizedError, Equatable {
 nonisolated enum AgentCommandEnvironment {
     static let basePath = ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin", "/usr/local/bin"]
 
+    /// - Parameter loginPath: the entries of the user's login-shell `PATH` (`IDELoginShellPath`), which
+    ///   go after the JDK and before the system directories, so `gradle` from sdkman is found.
     static func make(
         javaHome: URL?,
+        loginPath: [String] = [],
         extras: [String: String] = [:],
         home: String = NSHomeDirectory(),
         temporaryDirectory: String = NSTemporaryDirectory()
     ) -> [String: String] {
-        var path = basePath
-        if let javaHome { path.insert(javaHome.appendingPathComponent("bin").path, at: 0) }
+        var path: [String] = []
+        if let javaHome { path.append(javaHome.appendingPathComponent("bin").path) }
+        var seen = Set<String>()
+        path = (path + loginPath + basePath).filter { seen.insert($0).inserted }
         var environment: [String: String] = [
             "PATH": path.joined(separator: ":"),
             "HOME": home,

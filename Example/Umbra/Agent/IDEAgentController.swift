@@ -77,6 +77,7 @@ final class IDEAgentController {
     @ObservationIgnored private var didRestore = false
     /// True while a Gradle run the agent started is going, so Stop ends that run and no other.
     @ObservationIgnored var isGradleRunActive = false
+    @ObservationIgnored var isMavenRunActive = false
 
     /// Conversations live in Application Support, readable by the user alone.
     static func appStore() -> SessionStore? {

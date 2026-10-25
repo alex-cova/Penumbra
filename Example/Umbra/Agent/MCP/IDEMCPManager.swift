@@ -107,8 +107,9 @@ final class IDEMCPManager {
             await stop()
             willStart()
             let registry = self.registry
+            let loginPath = await IDELoginShellPath.shared.entries()
             let newHub = MCPHub(servers: active, trimming: .standard, hidden: hidden, deferral: deferral) { config in
-                let environment = AgentCommandEnvironment.make(javaHome: nil, extras: config.env)
+                let environment = AgentCommandEnvironment.make(javaHome: nil, loginPath: loginPath, extras: config.env)
                 let definition = IDEACPDefinition(name: config.name, command: config.command, args: config.args)
                 guard definition.resolvedExecutable(pathValue: environment["PATH"] ?? "") != nil else {
                     throw MCPError.server(code: -32000, message: "Could not find “\(config.command)” on PATH. Install it, or give its full path.")

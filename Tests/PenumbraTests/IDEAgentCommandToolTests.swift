@@ -226,6 +226,10 @@ final class CommandHost: IDEAgentHost {
     var gradleRequests: [(tasks: [String], options: [String])] = []
     var javaHome: URL?
     var isGradle = false
+    var isMaven = false
+    var mavenOutcome: IDEMavenRunOutcome = .notStarted("not configured")
+    var mavenRequests: [(goals: [String], options: [String])] = []
+    var revealedMaven = 0
     /// When set, `agentRunGradle` runs this real executable (offline) instead of returning `gradleOutcome`.
     var gradleExecutable: String?
 
@@ -253,6 +257,12 @@ final class CommandHost: IDEAgentHost {
         for path in relativePaths { unsaved.removeValue(forKey: agentProjectRoot!.appendingPathComponent(path).path) }
     }
     var agentIsGradleProject: Bool { isGradle }
+    var agentIsMavenProject: Bool { isMaven }
+    func agentRevealMaven() { revealedMaven += 1 }
+    func agentRunMaven(goals: [String], options: [String], timeout: TimeInterval) async -> IDEMavenRunOutcome {
+        mavenRequests.append((goals, options))
+        return mavenOutcome
+    }
     var revealedGradle = 0
     var shownFiles: [(path: String, line: Int?, column: Int?)] = []
     var commandLines: [(id: UUID, line: String?)] = []
@@ -438,6 +448,182 @@ final class IDEAgentCommandToolTests: XCTestCase {
             try ToolArguments(json: #"{"tasks":["classes"],"reason":"r"}"#), context: context())
         XCTAssertTrue(output.contains("`gradle classes` failed (exit code 1)"))
         XCTAssertTrue(output.contains("Compiler errors (1):"))
+    }
+
+    func testOnlyAPlainGradleCommandLineIsParsed() {
+        XCTAssertEqual(IDEGradleCommandLine.parse("gradle build"), .init(tasks: ["build"], options: []))
+        XCTAssertEqual(
+            IDEGradleCommandLine.parse("./gradlew :app:test --tests FooTest.bar --info"),
+            .init(tasks: [":app:test"], options: ["--tests", "FooTest.bar", "--info"]))
+        XCTAssertEqual(IDEGradleCommandLine.parse("gradlew clean build"), .init(tasks: ["clean", "build"], options: []))
+        XCTAssertEqual(IDEGradleCommandLine.parse("  gradle   build  ")?.line, "gradle build")
+        XCTAssertEqual(IDEGradleCommandLine.parse("./gradlew build")?.line, "gradle build", "the permission rule sees one spelling")
+
+        for notPlain in [
+            "gradle build | tail", "gradle build && ls", "cd x && gradle build", "gradle \"$X\"", "gradle $TASK",
+            "gradle build > out.txt", "gradle build; echo", "gradlewrapper build", "gradle", "./gradlew", "gradle --info build",
+            "echo gradle build", "sudo gradle build",
+        ] {
+            XCTAssertNil(IDEGradleCommandLine.parse(notPlain), notPlain)
+        }
+    }
+
+    func testRunCommandSendsAPlainGradleCommandToTheGradleRunnerInAGradleProject() async throws {
+        host.gradleOutcome = .finished(GradleCommandResult(exitCode: 0, stdout: "BUILD SUCCESSFUL", stderr: ""))
+        let tool = IDERunCommandTool(support: support(), isGradleProject: true)
+        let arguments = try ToolArguments(json: #"{"command":"./gradlew build","reason":"compile"}"#)
+
+        let request = await tool.approvalRequest(for: arguments, context: context())
+        XCTAssertEqual(request?.title, "Run Gradle")
+        XCTAssertEqual(request?.command, "gradle build")
+        XCTAssertNil(request?.editableArgument)
+        XCTAssertEqual(tool.permissionSubject(for: arguments), .command("gradle build"))
+
+        let output = try await tool.run(arguments, context: context())
+        XCTAssertEqual(host.gradleRequests.first?.tasks, ["build"])
+        XCTAssertEqual(host.revealedGradle, 1)
+        XCTAssertTrue(output.contains("succeeded"))
+        XCTAssertTrue(output.hasSuffix("[Ran through the gradle tool; call it directly next time.]"))
+        XCTAssertTrue(host.commandLines.isEmpty, "no terminal tab: it ran in the Gradle console")
+    }
+
+    func testRunCommandKeepsEverythingElseAsAShellCommand() async throws {
+        let piped = try ToolArguments(json: #"{"command":"gradle build | tail -1","reason":"r"}"#)
+        let gradleTool = IDERunCommandTool(support: support(), isGradleProject: true)
+        let request = await gradleTool.approvalRequest(for: piped, context: context())
+        XCTAssertEqual(request?.title, "Run command")
+        XCTAssertEqual(gradleTool.permissionSubject(for: piped), .command("gradle build | tail -1"))
+
+        // Not a Gradle project: even a plain `gradle build` is the shell's business.
+        let plain = try ToolArguments(json: #"{"command":"echo gradle build","reason":"r"}"#)
+        _ = try await IDERunCommandTool(support: support(), isGradleProject: true).run(plain, context: context())
+        let tool = IDERunCommandTool(support: support())
+        let direct = try ToolArguments(json: #"{"command":"gradle build","reason":"r"}"#)
+        let output = try await tool.run(direct, context: context())
+        XCTAssertTrue(host.gradleRequests.isEmpty)
+        XCTAssertTrue(output.hasPrefix("$ gradle build\n"))
+    }
+
+    func testOnlyAPlainMavenCommandLineIsParsed() {
+        XCTAssertEqual(IDEMavenCommandLine.parse("mvn clean package -DskipTests")?.line, "mvn clean package -DskipTests")
+        XCTAssertEqual(IDEMavenCommandLine.parse("./mvnw test -Dtest=FooTest#bar")?.options, ["-Dtest=FooTest#bar"])
+        XCTAssertEqual(IDEMavenCommandLine.parse("mvnw compile")?.goals, ["compile"])
+        for notPlain in ["mvn test | tail", "mvn -q test", "mvn", "mvn test # note", "mvn ~/x", "gradle build", "mvn test && mvn verify"] {
+            XCTAssertNil(IDEMavenCommandLine.parse(notPlain), notPlain)
+        }
+    }
+
+    func testTheMavenToolRunsGoalsAndSummarizesACompileError() async throws {
+        host.mavenOutcome = .finished(GradleCommandResult(exitCode: 1, stdout: """
+            [INFO] Compiling 3 source files
+            [ERROR] COMPILATION ERROR :
+            [ERROR] \(project.path)/src/main/java/demo/Calc.java:[12,5] cannot find symbol
+            [ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.11.0:compile (default-compile) on project demo: Compilation failure
+            [ERROR] \(project.path)/src/main/java/demo/Calc.java:[12,5] cannot find symbol
+            """, stderr: ""))
+        let tool = IDEMavenTool(support: support())
+        let arguments = try ToolArguments(json: #"{"goals":["compile"],"options":["-q"],"reason":"r"}"#)
+
+        let request = await tool.approvalRequest(for: arguments, context: context())
+        XCTAssertEqual(request?.title, "Run Maven")
+        XCTAssertEqual(request?.command, "mvn compile -q")
+        XCTAssertEqual(tool.permissionSubject(for: arguments), .command("mvn compile -q"))
+
+        let output = try await tool.run(arguments, context: context())
+        XCTAssertEqual(host.mavenRequests.first?.goals, ["compile"])
+        XCTAssertEqual(host.mavenRequests.first?.options, ["-q"])
+        XCTAssertEqual(host.revealedMaven, 1)
+        XCTAssertTrue(output.contains("`mvn compile -q` failed (exit code 1)"))
+        XCTAssertTrue(output.contains("Compiler errors (1):"), "the repeated error is listed once")
+        XCTAssertTrue(output.contains("src/main/java/demo/Calc.java:12: cannot find symbol"))
+        XCTAssertFalse(output.contains("Maven reports:"), "a compile error is the reason")
+    }
+
+    func testAMavenRefusalBecomesAnOutputTheModelCanActOn() async {
+        host.mavenOutcome = .notStarted("The project is not trusted, so Maven was not run.")
+        let output = await IDEMavenTool(support: support()).execute(
+            argumentsJSON: #"{"goals":["test"],"reason":"r"}"#, context: context())
+        XCTAssertEqual(output, .error("The project is not trusted, so Maven was not run."))
+        XCTAssertEqual(host.revealedMaven, 1)
+    }
+
+    func testMavenTestFailuresComeFromTheFreshSurefireReports() async throws {
+        let reports = project.appendingPathComponent("target/surefire-reports", isDirectory: true)
+        try FileManager.default.createDirectory(at: reports, withIntermediateDirectories: true)
+        let xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuite name="demo.CalcTest" tests="2" failures="1" errors="0" skipped="0">
+              <testcase name="adds" classname="demo.CalcTest" time="0.01"/>
+              <testcase name="divides" classname="demo.CalcTest" time="0.01">
+                <failure message="expected: &lt;2&gt; but was: &lt;3&gt;" type="org.opentest4j.AssertionFailedError">org.opentest4j.AssertionFailedError: expected: &lt;2&gt; but was: &lt;3&gt;
+            \tat demo.CalcTest.divides(CalcTest.java:14)</failure>
+              </testcase>
+            </testsuite>
+            """
+        try xml.write(to: reports.appendingPathComponent("TEST-demo.CalcTest.xml"), atomically: true, encoding: .utf8)
+        host.mavenOutcome = .finished(GradleCommandResult(exitCode: 1, stdout: """
+            [INFO] Tests run: 2, Failures: 1, Errors: 0, Skipped: 0
+            [ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.1.2:test (default-test) on project demo: There are test failures.
+            """, stderr: ""))
+
+        let output = try await IDERunTestsTool(support: support(), isMaven: true).run(
+            try ToolArguments(json: #"{"tests":["CalcTest#divides"],"module":"app","reason":"r"}"#), context: context())
+        XCTAssertEqual(host.mavenRequests.last?.goals, ["test"])
+        XCTAssertEqual(host.mavenRequests.last?.options, [
+            "-pl", "app", "-am", "-Dtest=CalcTest#divides", "-Dsurefire.failIfNoSpecifiedTests=false"])
+        XCTAssertTrue(output.contains("Tests: 2 run, 1 failed, 0 skipped."), output)
+        XCTAssertTrue(output.contains("FAILED demo.CalcTest > divides"), output)
+        XCTAssertFalse(output.contains("Maven reports:"), "the failed test is the reason")
+    }
+
+    func testRunCommandSendsAPlainMvnCommandToTheMavenRunnerInAMavenProject() async throws {
+        host.mavenOutcome = .finished(GradleCommandResult(exitCode: 0, stdout: "[INFO] BUILD SUCCESS", stderr: ""))
+        let tool = IDERunCommandTool(support: support(), isMavenProject: true)
+        let arguments = try ToolArguments(json: #"{"command":"./mvnw -v","reason":"r"}"#)
+        XCTAssertEqual(tool.permissionSubject(for: arguments), .command("./mvnw -v"), "an option first stays a shell command")
+
+        let build = try ToolArguments(json: #"{"command":"./mvnw clean test","reason":"r"}"#)
+        let request = await tool.approvalRequest(for: build, context: context())
+        XCTAssertEqual(request?.title, "Run Maven")
+        XCTAssertEqual(request?.command, "mvn clean test")
+        let output = try await tool.run(build, context: context())
+        XCTAssertEqual(host.mavenRequests.first?.goals, ["clean", "test"])
+        XCTAssertTrue(output.hasSuffix("[Ran through the maven tool; call it directly next time.]"))
+    }
+
+    func testLoginPathEntriesGoAfterTheJDKAndBeforeTheSystemDirectories() {
+        let environment = AgentCommandEnvironment.make(
+            javaHome: URL(fileURLWithPath: "/jdks/21"), loginPath: ["/sdk/gradle/bin", "/usr/bin", "/jdks/21/bin"],
+            extras: ["PATH": "/extra/bin"], home: "/home/x", temporaryDirectory: "/tmp/x/")
+        XCTAssertEqual(
+            environment["PATH"],
+            "/extra/bin:/jdks/21/bin:/sdk/gradle/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin")
+    }
+
+    func testTheLoginShellPathIsParsedReadOnceAndAFailureMeansNoEntries() async {
+        let raw = "last login noise\n__UMBRA_PATH__/a/bin:relative:/a/bin:/gone:/b/bin"
+        XCTAssertEqual(IDELoginShellPath.parse(raw, directoryExists: { $0 != "/gone" }), ["/a/bin", "/b/bin"])
+        XCTAssertEqual(IDELoginShellPath.parse(nil), [])
+
+        let counter = LockedStrings()
+        let found = IDELoginShellPath(reader: { counter.append("x"); return "__UMBRA_PATH__/usr/bin" })
+        let first = await found.entries()
+        let second = await found.entries()
+        XCTAssertEqual(first, ["/usr/bin"])
+        XCTAssertEqual(second, first)
+        XCTAssertEqual(counter.joined, "x", "asked once")
+
+        let failing = IDELoginShellPath(reader: { counter.append("y"); return nil })
+        let none = await failing.entries()
+        _ = await failing.entries()
+        XCTAssertEqual(none, [])
+        XCTAssertEqual(counter.joined, "xy", "a failure is not retried either")
+    }
+
+    func testTheRealLoginShellAnswersWithAbsoluteDirectories() async throws {
+        let entries = await IDELoginShellPath.parse(IDELoginShellPath.readFromZsh())
+        XCTAssertTrue(entries.contains("/usr/bin"), "a login shell always has /usr/bin")
+        XCTAssertTrue(entries.allSatisfy { $0.hasPrefix("/") })
     }
 
     func testDiagnosticsAddsFreshCompilerResultsForTheFilesTheRunChanged() async throws {
