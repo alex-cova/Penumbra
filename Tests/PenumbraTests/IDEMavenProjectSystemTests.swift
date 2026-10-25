@@ -11,7 +11,7 @@ final class IDEMavenProjectSystemTests: XCTestCase {
     private var maven: IDEMavenProjectSystem!
     private var java: IDEJavaSupport?
     private var launcher: MavenScriptLauncher!
-    private var trust: GradleTrustStore!
+    private var trust: ProjectTrustStore!
     private var prompts: PromptCount!
 
     override func setUp() async throws {
@@ -48,7 +48,7 @@ final class IDEMavenProjectSystemTests: XCTestCase {
     private func makeSystem(download: Bool = false, indexing: Bool = false) throws -> URL {
         let home = directory.appendingPathComponent("home", isDirectory: true)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-        trust = GradleTrustStore(storeURL: directory.appendingPathComponent("maven-trust.json"))
+        trust = ProjectTrustStore(storeURL: directory.appendingPathComponent("maven-trust.json"))
         launcher = MavenScriptLauncher(repository: home.appendingPathComponent(".m2/repository", isDirectory: true))
         let jdk = IDEJDKSelection(store: JDKSelectionStore(storeURL: directory.appendingPathComponent("jdk.json")))
         let status = IDEProjectStatus()
@@ -71,7 +71,7 @@ final class IDEMavenProjectSystemTests: XCTestCase {
             return false
         }
         if indexing {
-            let gradleTrust = GradleTrustStore(storeURL: directory.appendingPathComponent("gradle-trust.json"))
+            let gradleTrust = ProjectTrustStore(storeURL: directory.appendingPathComponent("gradle-trust.json"))
             let gradle = IDEGradleProjectSystem(
                 jdk: jdk, status: status, trustStore: gradleTrust,
                 modelCacheRoot: directory.appendingPathComponent("gradle-cache", isDirectory: true)

@@ -54,8 +54,8 @@ struct IDEHierarchyPinStrip: View {
             .font(IDEAppearance.Typography.caption)
             .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
             .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(isSelected ? IDEAppearance.ColorToken.tabActive : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+            .padding(.vertical, IDEAppearance.Spacing.xxs)
+            .background(isSelected ? IDEAppearance.ColorToken.tabActive : Color.clear, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.selection))
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)

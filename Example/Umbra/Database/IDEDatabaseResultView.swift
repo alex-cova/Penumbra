@@ -15,13 +15,13 @@ struct IDEDatabaseResultView: View {
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.error)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(12)
+                    .padding(IDEAppearance.Spacing.md)
             } else if support.result.columns.isEmpty {
                 Text(support.isRunning ? "Running…" : (support.result.message ?? "Run a query to see results."))
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(12)
+                    .padding(IDEAppearance.Spacing.md)
             } else {
                 IDEDatabaseResultGrid(
                     columns: support.result.columns,
@@ -70,7 +70,7 @@ struct IDEDatabaseResultView: View {
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
     }
 
     private enum Format {

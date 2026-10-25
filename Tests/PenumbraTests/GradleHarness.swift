@@ -39,8 +39,8 @@ final class GradleHarness {
     private let java: IDEJavaSupport
     /// Which of the window's indexes are building, as the agent reads it.
     var indexActivity: IDEIndexActivity { java.activity }
-    private let trustStore: GradleTrustStore
-    private let mavenTrust: GradleTrustStore
+    private let trustStore: ProjectTrustStore
+    private let mavenTrust: ProjectTrustStore
     private let cacheRoot: URL
     /// The window's one watcher, feeding the system as `IDEWorkspace` does.
     private let watcher = IDEProjectWatcher()
@@ -65,12 +65,12 @@ final class GradleHarness {
     }
 
     init(base: URL, reusingStoresOf other: GradleHarness? = nil) {
-        trustStore = other?.trustStore ?? GradleTrustStore(storeURL: base.appendingPathComponent("trust.json"))
+        trustStore = other?.trustStore ?? ProjectTrustStore(storeURL: base.appendingPathComponent("trust.json"))
         cacheRoot = other?.cacheRoot ?? base.appendingPathComponent("model-cache", isDirectory: true)
         let jdk = IDEJDKSelection(store: JDKSelectionStore(storeURL: base.appendingPathComponent("jdk-\(UUID().uuidString).json")))
         status = IDEProjectStatus()
         gradle = IDEGradleProjectSystem(jdk: jdk, status: status, trustStore: trustStore, modelCacheRoot: cacheRoot)
-        let mavenTrust = other?.mavenTrust ?? GradleTrustStore(storeURL: base.appendingPathComponent("maven-trust.json"))
+        let mavenTrust = other?.mavenTrust ?? ProjectTrustStore(storeURL: base.appendingPathComponent("maven-trust.json"))
         self.mavenTrust = mavenTrust
         let maven = IDEMavenProjectSystem(
             jdk: jdk, status: status, trustStore: mavenTrust, environment: [:],

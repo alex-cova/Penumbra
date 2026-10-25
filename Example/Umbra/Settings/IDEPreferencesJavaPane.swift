@@ -428,7 +428,7 @@ private struct IDEPostfixCustomTemplateRow: View {
             Toggle("Use static import if possible", isOn: templateBinding(\.useStaticImport))
                 .toggleStyle(.checkbox)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
     }
 
     private func templateBinding<Value>(_ keyPath: WritableKeyPath<JavaPostfixCustomTemplate, Value>) -> Binding<Value> {

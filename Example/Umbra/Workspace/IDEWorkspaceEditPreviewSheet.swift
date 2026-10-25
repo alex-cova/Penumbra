@@ -91,14 +91,14 @@ struct IDEWorkspaceEditPreviewSheet: View {
                         Label("Move file \(rename.from.lastPathComponent) to \(rename.to.path)", systemImage: "doc.badge.gearshape")
                             .font(IDEAppearance.Typography.body)
                             .padding(.horizontal, IDEAppearance.Spacing.md)
-                            .padding(.vertical, 4)
+                            .padding(.vertical, IDEAppearance.Spacing.xs)
                     }
                     ForEach(model.plan.fileDeletions, id: \.path) { url in
                         Label("Delete file \(url.lastPathComponent)", systemImage: "trash")
                             .font(IDEAppearance.Typography.body)
                             .foregroundStyle(IDEAppearance.ColorToken.error)
                             .padding(.horizontal, IDEAppearance.Spacing.md)
-                            .padding(.vertical, 4)
+                            .padding(.vertical, IDEAppearance.Spacing.xs)
                     }
                     ForEach(model.groups, id: \.url) { group in
                         fileHeader(group.url, count: group.entries.count)
@@ -191,7 +191,7 @@ private struct IDEWorkspaceEditPreviewRow: View {
         }
         .padding(.leading, IDEAppearance.Spacing.xl)
         .padding(.trailing, IDEAppearance.Spacing.md)
-        .padding(.vertical, 2)
+        .padding(.vertical, IDEAppearance.Spacing.xxs)
         .opacity(isOn ? 1 : 0.5)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Line \(entry.range.start.line + 1): replace \(preview.removed) with \(preview.added.isEmpty ? "nothing" : preview.added)")
@@ -203,7 +203,7 @@ private struct IDEWorkspaceEditPreviewRow: View {
         if !changed.isEmpty {
             middle.font = IDEAppearance.Typography.monoSmall.bold()
             middle.foregroundColor = tint
-            middle.backgroundColor = tint.opacity(0.18)
+            middle.backgroundColor = tint.opacity(IDEAppearance.Opacity.tintWash)
         }
         text.append(middle)
         text.append(AttributedString(after))
@@ -254,7 +254,7 @@ private struct IDEWorkspaceEditPreviewRow: View {
         }
         .padding(.leading, IDEAppearance.Spacing.xl)
         .padding(.trailing, IDEAppearance.Spacing.md)
-        .padding(.vertical, 2)
+        .padding(.vertical, IDEAppearance.Spacing.xxs)
         .opacity(entry.isReadOnly ? 0.5 : 1)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Line \(entry.range.start.line + 1): \(entry.lineText.trimmingCharacters(in: .whitespaces))")

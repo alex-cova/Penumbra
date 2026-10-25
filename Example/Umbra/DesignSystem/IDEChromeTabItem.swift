@@ -31,7 +31,7 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
         .overlay(alignment: .top) {
             if isSelected {
-                RoundedRectangle(cornerRadius: 1)
+                RoundedRectangle(cornerRadius: IDEAppearance.Radius.indicator)
                     .fill(IDEAppearance.ColorToken.accent)
                     .frame(height: 2)
                     .padding(.horizontal, 6)

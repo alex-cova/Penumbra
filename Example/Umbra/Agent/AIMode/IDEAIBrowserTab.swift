@@ -155,7 +155,7 @@ private struct IDEAIBrowserContent: View {
         .font(IDEAppearance.Typography.caption)
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, IDEAppearance.Spacing.xs)
-        .background(Color.purple.opacity(0.18))
+        .background(Color.purple.opacity(IDEAppearance.Opacity.tintWash))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("The agent is controlling this page: \(activity)")
     }

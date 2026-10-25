@@ -79,9 +79,9 @@ struct IDEDebugPanel: View {
                         }
                     }
                     .font(IDEAppearance.Typography.caption)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, IDEAppearance.Spacing.sm)
                     .padding(.vertical, 3)
-                    .background(pane == candidate ? IDEAppearance.ColorToken.selection : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+                    .background(pane == candidate ? IDEAppearance.ColorToken.selection : Color.clear, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.selection))
                 }
                 .buttonStyle(.plain)
             }
@@ -375,7 +375,7 @@ struct IDEDebugPanel: View {
                     .disabled(console.isEmpty)
             }
             .padding(.horizontal, IDEAppearance.Spacing.sm)
-            .padding(.vertical, 2)
+            .padding(.vertical, IDEAppearance.Spacing.xxs)
             if console.isEmpty {
                 Text("The program's output appears here while it runs under the debugger.")
                     .font(IDEAppearance.Typography.body)
@@ -659,16 +659,12 @@ struct IDEDebugTabItem: View {
     let onSelect: () -> Void
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 4) {
-                Image(systemName: "ladybug")
-                Text("Debug")
-            }
-            .font(IDEAppearance.Typography.caption)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+        IDEChromeTabItem(title: "Debug", isSelected: isSelected, onSelect: onSelect) {
+            Image(systemName: "ladybug")
+                .font(.system(size: 10))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        } trailing: {
+            EmptyView()
         }
-        .buttonStyle(.plain)
     }
 }

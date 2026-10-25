@@ -69,7 +69,7 @@ final class IDEMavenProjectSystem: IDEProjectSystem {
 
     private let jdk: IDEJDKSelection
     private let status: IDEProjectStatus
-    @ObservationIgnored private let trustStore: GradleTrustStore
+    @ObservationIgnored private let trustStore: ProjectTrustStore
     @ObservationIgnored private let runner: MavenCommandRunner
     @ObservationIgnored private let pomStore: MavenPOMStore
     @ObservationIgnored private let userHome: URL?
@@ -88,7 +88,7 @@ final class IDEMavenProjectSystem: IDEProjectSystem {
     init(
         jdk: IDEJDKSelection,
         status: IDEProjectStatus,
-        trustStore: GradleTrustStore = IDESharedServices.shared.mavenTrust,
+        trustStore: ProjectTrustStore = IDESharedServices.shared.mavenTrust,
         runner: MavenCommandRunner? = nil,
         pomStore: MavenPOMStore = .shared,
         userHome: URL? = nil,
@@ -723,11 +723,7 @@ final class IDEMavenProjectSystem: IDEProjectSystem {
     // MARK: - Helpers
 
     private func confirmTrust(for root: URL) async -> Bool {
-        if trustStore.isTrusted(root) { return true }
-        guard let trustPrompt else { return false }
-        let trusted = await trustPrompt(root)
-        if trusted { trustStore.setTrusted(true, for: root) }
-        return trusted
+        await IDEProjectTrustGate(store: trustStore, prompt: trustPrompt).confirmTrust(for: root)
     }
 
     private var executableOverride: String? {

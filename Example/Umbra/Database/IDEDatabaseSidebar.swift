@@ -20,7 +20,7 @@ struct IDEDatabaseSidebar: View {
                             connectionBlock(connection)
                         }
                     }
-                    .padding(8)
+                    .padding(IDEAppearance.Spacing.sm)
                 }
             }
             if let banner = support.banner {
@@ -28,7 +28,7 @@ struct IDEDatabaseSidebar: View {
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.error)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+                    .padding(IDEAppearance.Spacing.sm)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -63,7 +63,7 @@ struct IDEDatabaseSidebar: View {
             Button("New Data Source") { workspace.showNewDatabaseConnection() }
                 .buttonStyle(.bordered)
         }
-        .padding(12)
+        .padding(IDEAppearance.Spacing.md)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 

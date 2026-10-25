@@ -108,7 +108,7 @@ struct IDEInspectionResultsView: View {
             .help("Export results")
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
-        .padding(.vertical, 4)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
     }
 
     private var summary: String {

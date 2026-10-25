@@ -83,7 +83,7 @@ final class IDESwiftRunProviderTests: XCTestCase {
         try "#!/bin/sh\necho \"$@\" >> \"\(log.path)\"\n\(swiftScript)\n".write(to: swift, atomically: false, encoding: .utf8)
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: swift.path)
 
-        let store = GradleTrustStore(storeURL: directory.appendingPathComponent("swiftpm-trust.json"))
+        let store = ProjectTrustStore(storeURL: directory.appendingPathComponent("swiftpm-trust.json"))
         store.setTrusted(true, for: root)
         let system = IDESwiftPMProjectSystem(status: IDEProjectStatus(), trustStore: store)
         system.launchEnvironment = ["PATH": bin.path + ":/bin:/usr/bin"]

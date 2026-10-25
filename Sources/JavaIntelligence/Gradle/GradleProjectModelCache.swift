@@ -4,7 +4,7 @@ import Foundation
 /// Persists a decoded ``JavaGradleProjectModel`` on disk so Umbra can wire up indexed dependency
 /// shards immediately on reopen without waiting for Gradle. Deliberately stored under Application
 /// Support (not `JavaIndexPaths`'s Caches root) so entries survive index-format bumps, mirroring
-/// ``GradleTrustStore``.
+/// ``ProjectTrustStore``.
 public struct GradleProjectModelCache: Sendable {
     private struct Metadata: Codable {
         var fingerprint: GradleBuildFingerprint

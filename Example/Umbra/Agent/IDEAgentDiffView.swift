@@ -20,8 +20,8 @@ struct IDEAgentDiffView: View {
         diff.split(separator: "\n", omittingEmptySubsequences: false).enumerated().map { index, raw in
             let text = String(raw)
             let tint: Color? = if hasFileHeader, text.hasPrefix("+++") || text.hasPrefix("---") { nil }
-            else if text.hasPrefix("+") { Color.green.opacity(0.18) }
-            else if text.hasPrefix("-") { Color.red.opacity(0.18) }
+            else if text.hasPrefix("+") { Color.green.opacity(IDEAppearance.Opacity.tintWash) }
+            else if text.hasPrefix("-") { Color.red.opacity(IDEAppearance.Opacity.tintWash) }
             else { nil }
             return Line(id: index, text: text, tint: tint)
         }

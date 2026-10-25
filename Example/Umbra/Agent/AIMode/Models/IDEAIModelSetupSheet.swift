@@ -153,7 +153,7 @@ struct IDEAIModelSetupSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous)
-                .stroke(isOpen ? IDEAppearance.ColorToken.accent.opacity(0.6) : .clear, lineWidth: 1))
+                .stroke(isOpen ? IDEAppearance.ColorToken.accent.opacity(IDEAppearance.Opacity.dimmed) : .clear, lineWidth: 1))
         .opacity(isEnabled ? 1 : 0.6)
     }
 

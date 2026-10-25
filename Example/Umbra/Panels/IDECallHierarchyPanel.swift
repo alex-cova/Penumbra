@@ -233,7 +233,7 @@ struct IDECallHierarchyPanel: View {
                         }
                     }
                     .padding(.horizontal, IDEAppearance.Spacing.sm)
-                    .padding(.vertical, 2)
+                    .padding(.vertical, IDEAppearance.Spacing.xxs)
                     .contentShape(Rectangle())
                     // Double-tap first, or the single tap consumes the click.
                     .onTapGesture(count: 2) { workspace.openCallHierarchyNode(row.node, in: store) }
@@ -259,17 +259,12 @@ struct IDECallHierarchyTabItem: View {
     let onSelect: () -> Void
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch")
-                Text(title)
-                    .lineLimit(1)
-            }
-            .font(IDEAppearance.Typography.caption)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+        IDEChromeTabItem(title: title, isSelected: isSelected, onSelect: onSelect) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 10))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        } trailing: {
+            EmptyView()
         }
-        .buttonStyle(.plain)
     }
 }

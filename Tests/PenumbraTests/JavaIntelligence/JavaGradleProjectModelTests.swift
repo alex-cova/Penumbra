@@ -355,7 +355,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
     func testExtractorDecodesModelWrittenByLauncher() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = GradleTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
         store.setTrusted(true, for: dir)
         let launcher = FixtureWritingLauncher(jsonToWrite: GradleFixtures.modelData("single-module"), exitCode: 0)
         let runner = GradleCommandRunner(
@@ -372,7 +372,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
     func testExtractorThrowsSyncFailedOnNonZeroExit() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = GradleTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
         store.setTrusted(true, for: dir)
         let launcher = FixtureWritingLauncher(jsonToWrite: Data(), exitCode: 1, stderr: "build script error")
         let runner = GradleCommandRunner(
@@ -392,7 +392,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
     func testExtractorThrowsMissingOutputWhenNoFileWritten() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = GradleTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
         store.setTrusted(true, for: dir)
         let launcher = NoOpLauncher(exitCode: 0)
         let runner = GradleCommandRunner(
@@ -412,7 +412,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
     func testExtractorThrowsDecodingFailedOnGarbageOutput() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = GradleTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
         store.setTrusted(true, for: dir)
         let launcher = FixtureWritingLauncher(jsonToWrite: Data("not json".utf8), exitCode: 0)
         let runner = GradleCommandRunner(

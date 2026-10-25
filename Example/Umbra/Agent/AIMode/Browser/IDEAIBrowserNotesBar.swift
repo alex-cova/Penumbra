@@ -39,7 +39,7 @@ struct IDEAIBrowserNotesBar: View {
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, IDEAppearance.Spacing.xs)
-        .background(IDEAppearance.ColorToken.card.opacity(0.6))
+        .background(IDEAppearance.ColorToken.card.opacity(IDEAppearance.Opacity.dimmed))
     }
 }
 
@@ -137,7 +137,7 @@ struct IDEAIBrowserNoteEditor: View {
             TextEditor(text: $text)
                 .font(IDEAppearance.Typography.body)
                 .scrollContentBackground(.hidden)
-                .padding(4)
+                .padding(IDEAppearance.Spacing.xs)
                 .frame(width: 280, height: 84)
                 .background(IDEAppearance.ColorToken.editor, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
                 .focused($isFocused)

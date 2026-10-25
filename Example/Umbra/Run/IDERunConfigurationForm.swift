@@ -337,7 +337,7 @@ struct IDERunConfigurationForm: View {
             .font(IDEAppearance.Typography.monoSmall)
             .frame(height: height)
             .scrollContentBackground(.hidden)
-            .padding(4)
+            .padding(IDEAppearance.Spacing.xs)
             .background(IDEAppearance.ColorToken.workbench, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control))
     }
 

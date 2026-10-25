@@ -39,7 +39,7 @@ struct IDEAgentTodoListView: View {
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, IDEAppearance.Spacing.xs)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(IDEAppearance.ColorToken.card.opacity(0.6))
+        .background(IDEAppearance.ColorToken.card.opacity(IDEAppearance.Opacity.dimmed))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Checklist, \(items.filter { $0.status == .completed }.count) of \(items.count) done")
     }

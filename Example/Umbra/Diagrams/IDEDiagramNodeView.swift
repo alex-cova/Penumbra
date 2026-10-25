@@ -83,7 +83,7 @@ struct IDEDiagramNodeView: View {
         }
         .foregroundStyle(tint)
         .frame(width: 16, height: 16)
-        .background(tint.opacity(0.18), in: Circle())
+        .background(tint.opacity(IDEAppearance.Opacity.tintWash), in: Circle())
     }
 
     private func compartment(_ lines: [String], count: Int) -> some View {

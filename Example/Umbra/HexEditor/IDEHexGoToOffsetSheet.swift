@@ -25,7 +25,7 @@ struct IDEHexGoToOffsetSheet: View {
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(16)
+        .padding(IDEAppearance.Spacing.lg)
         .frame(width: 320)
     }
 

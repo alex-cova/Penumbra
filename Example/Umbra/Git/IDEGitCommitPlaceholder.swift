@@ -48,7 +48,7 @@ private struct IDEGitCommitIllustration: View {
 
             // The "selected" row, as the list draws it.
             let selected = CGRect(x: 0, y: rowHeight + 2, width: size.width, height: rowHeight - 4)
-            context.fill(Path(roundedRect: selected, cornerRadius: 6), with: .color(IDEAppearance.ColorToken.selection))
+            context.fill(Path(roundedRect: selected, cornerRadius: IDEAppearance.Radius.control), with: .color(IDEAppearance.ColorToken.selection))
 
             // Text stand-ins: a subject line and a dimmer author line per row.
             let subjectWidths: [CGFloat] = [92, 78, 64, 86]

@@ -145,7 +145,7 @@ final class MavenToolingTests: XCTestCase {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("maven-run-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = GradleTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
         let launcher = MavenRecordingLauncher(result: GradleCommandResult(exitCode: 0, stdout: "", stderr: ""))
         let runner = MavenCommandRunner(
             trustStore: store, launcher: launcher,
@@ -167,7 +167,7 @@ final class MavenToolingTests: XCTestCase {
         let wrapper = dir.appendingPathComponent("mvnw")
         try "#!/bin/sh\n".write(to: wrapper, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: wrapper.path)
-        let store = GradleTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
         store.setTrusted(true, for: dir)
         let launcher = MavenRecordingLauncher(result: GradleCommandResult(exitCode: 0, stdout: "ok", stderr: ""))
         let runner = MavenCommandRunner(trustStore: store, launcher: launcher, resolver: MavenExecutableResolver())

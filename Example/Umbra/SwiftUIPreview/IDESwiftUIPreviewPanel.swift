@@ -222,8 +222,8 @@ struct IDESwiftUIPreviewPanel: View {
             .font(.system(size: 10))
             .lineLimit(1)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
+            .padding(.vertical, IDEAppearance.Spacing.xs)
             .background(.regularMaterial, in: Capsule())
             .padding(10)
             .help(IDESwiftUIPreviewSession.limitedInputExplanation)
@@ -240,8 +240,8 @@ struct IDESwiftUIPreviewPanel: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
         .background(.regularMaterial, in: Capsule())
         .padding(10)
         .help("The preview sets its own size. Click to keep it instead of the size chosen.")
@@ -293,7 +293,7 @@ struct IDESwiftUIPreviewPanel: View {
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 4)
-        .padding(.vertical, 2)
+        .padding(.vertical, IDEAppearance.Spacing.xxs)
         .background(.regularMaterial, in: Capsule())
         .overlay { Capsule().strokeBorder(.quaternary) }
         .padding(10)
@@ -338,7 +338,7 @@ struct IDESwiftUIPreviewPanel: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(.regularMaterial, in: Capsule())
-                .padding(12)
+                .padding(IDEAppearance.Spacing.md)
             }
         case .ready:
             EmptyView()
@@ -365,7 +365,7 @@ struct IDESwiftUIPreviewPanel: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
+                .padding(IDEAppearance.Spacing.sm)
                 .textSelection(.enabled)
         }
         .frame(height: 140)

@@ -163,7 +163,7 @@ struct IDEBreakpointsPanel: View {
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.top, IDEAppearance.Spacing.sm)
-        .padding(.bottom, 2)
+        .padding(.bottom, IDEAppearance.Spacing.xxs)
         .help(group.id)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)

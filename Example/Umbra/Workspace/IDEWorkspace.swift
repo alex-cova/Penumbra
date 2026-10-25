@@ -2894,26 +2894,6 @@ public final class IDEWorkspace {
         saveSession()
     }
 
-    func zoomIn() { changeZoom(bySteps: 1) }
-    func zoomOut() { changeZoom(bySteps: -1) }
-
-    func resetZoom() {
-        preferences.zoomPercent = 100
-        applyZoom()
-    }
-
-    private func changeZoom(bySteps steps: Int) {
-        preferences.zoomPercent = IDEPreferences.zoomed(preferences.zoomPercent, bySteps: steps)
-        applyZoom()
-    }
-
-    /// Rebuilds the editor theme at the zoomed size and repaints every editor.
-    private func applyZoom() {
-        preferences.applyTheme()
-        applyPreferencesToAllHosts()
-        host(for: workbench.activePaneID).intelligenceController?.showHint("Zoom \(preferences.zoomPercent)%")
-    }
-
     public func toggleSidebar() {
         isSidebarVisible.toggle()
         focusActiveEditor()

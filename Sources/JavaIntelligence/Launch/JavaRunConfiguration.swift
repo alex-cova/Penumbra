@@ -549,7 +549,7 @@ public struct JavaRunConfiguration: Codable, Equatable, Sendable {
 ///
 /// Reads the earlier format, one configuration per project, as a one-entry list.
 ///
-/// Like ``GradleTrustStore`` it should live in a stable, non-cache location (Umbra uses
+/// Like ``ProjectTrustStore`` it should live in a stable, non-cache location (Umbra uses
 /// `~/Library/Application Support/<bundle id>/run-configurations.json`).
 public final class JavaRunConfigurationStore: @unchecked Sendable {
     /// How many temporary configurations a project keeps unless told otherwise; the oldest go.

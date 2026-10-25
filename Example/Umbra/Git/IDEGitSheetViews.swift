@@ -354,7 +354,7 @@ struct IDEGitPushSheet: View {
                                         .font(IDEAppearance.Typography.monoSmall)
                                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                                         .padding(.leading, IDEAppearance.Spacing.xl)
-                                        .padding(.vertical, 2)
+                                        .padding(.vertical, IDEAppearance.Spacing.xxs)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .contentShape(Rectangle())
                                 }
@@ -678,7 +678,7 @@ struct IDEGitRebaseSheet: View {
             }
         }
         .font(IDEAppearance.Typography.caption)
-        .padding(.vertical, 2)
+        .padding(.vertical, IDEAppearance.Spacing.xxs)
     }
 }
 

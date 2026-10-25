@@ -136,7 +136,7 @@ struct IDESourceControlPanel: View {
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
                     }
                     .padding(.horizontal, IDEAppearance.Spacing.md)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, IDEAppearance.Spacing.xs)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(history.selectedHash == entry.commit.hash ? IDEAppearance.ColorToken.selection : Color.clear)
                     .contentShape(Rectangle())
@@ -948,7 +948,7 @@ private struct IDEUnsyncedRow: View {
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .overlay {
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                RoundedRectangle(cornerRadius: IDEAppearance.Radius.selection, style: .continuous)
                                     .strokeBorder(tint.opacity(0.85), lineWidth: 1)
                             }
                         Text(count.map(String.init) ?? "no upstream")

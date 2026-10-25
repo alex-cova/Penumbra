@@ -16,18 +16,18 @@ final class IDESharedServices {
 
     /// Which Gradle projects the user trusted to run build scripts. A decision in one window counts
     /// in all of them immediately.
-    let gradleTrust: GradleTrustStore
+    let gradleTrust: ProjectTrustStore
     /// Which folders the user trusted to run Maven. Separate from Gradle: agreeing to one does not
     /// agree to the other. Reading a POM does not consult it.
-    let mavenTrust: GradleTrustStore
+    let mavenTrust: ProjectTrustStore
     /// Which folders the user trusted to run npm scripts. Separate from Gradle trust: agreeing to
     /// one does not agree to the other.
-    let npmTrust: GradleTrustStore
+    let npmTrust: ProjectTrustStore
     /// Which folders the user trusted to evaluate `Package.swift` and run `swift` commands. Its own
     /// file, like npm's.
-    let swiftPMTrust: GradleTrustStore
+    let swiftPMTrust: ProjectTrustStore
     /// Which folders the user trusted to run `xcodebuild` (build phases can run scripts). Its own file.
-    let xcodeTrust: GradleTrustStore
+    let xcodeTrust: ProjectTrustStore
     let jdkSelection: JDKSelectionStore
     /// The run configurations kept on this Mac and the ones a project shares in `.umbra/runConfigurations`.
     let runConfigurations: JavaRunConfigurationCatalog
@@ -43,11 +43,11 @@ final class IDESharedServices {
     private let memoryPressure: DispatchSourceMemoryPressure
 
     private init() {
-        gradleTrust = GradleTrustStore(storeURL: IDEGradleProjectSystem.defaultTrustStoreURL)
-        mavenTrust = GradleTrustStore(storeURL: IDEMavenProjectSystem.defaultTrustStoreURL)
-        npmTrust = GradleTrustStore(storeURL: IDENpmProjectSystem.defaultTrustStoreURL)
-        swiftPMTrust = GradleTrustStore(storeURL: IDESwiftPMProjectSystem.defaultTrustStoreURL)
-        xcodeTrust = GradleTrustStore(storeURL: IDEXcodeProjectSystem.defaultTrustStoreURL)
+        gradleTrust = ProjectTrustStore(storeURL: IDEGradleProjectSystem.defaultTrustStoreURL)
+        mavenTrust = ProjectTrustStore(storeURL: IDEMavenProjectSystem.defaultTrustStoreURL)
+        npmTrust = ProjectTrustStore(storeURL: IDENpmProjectSystem.defaultTrustStoreURL)
+        swiftPMTrust = ProjectTrustStore(storeURL: IDESwiftPMProjectSystem.defaultTrustStoreURL)
+        xcodeTrust = ProjectTrustStore(storeURL: IDEXcodeProjectSystem.defaultTrustStoreURL)
         jdkSelection = JDKSelectionStore(storeURL: IDEJDKSelection.defaultStoreURL)
         runConfigurations = JavaRunConfigurationCatalog(
             store: JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)

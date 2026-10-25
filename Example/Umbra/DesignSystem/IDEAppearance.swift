@@ -16,6 +16,8 @@ enum IDEAppearance {
         scheme.isDark ? .dark : .light
     }
     enum Spacing {
+        /// Tightest stack gap (two-point vertical rhythm in dense rows).
+        static let xxs = 2.0
         static let xs = 4.0
         static let sm = 8.0
         static let md = 12.0
@@ -58,11 +60,19 @@ enum IDEAppearance {
         static let control = 6.0
         static let card = 8.0
         static let panel = 10.0
+        /// Selection and pill backgrounds.
+        static let selection = 4.0
+        /// Tab-strip selected indicator bar.
+        static let indicator = 1.0
     }
 
     enum Opacity {
         /// A control that cannot be used right now.
         static let disabled = 0.4
+        /// Tinted fills behind error, diff and accent badges.
+        static let tintWash = 0.18
+        /// Muted or dimmed card content.
+        static let dimmed = 0.6
     }
 
     enum IconSize {

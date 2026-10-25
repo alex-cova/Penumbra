@@ -235,7 +235,7 @@ struct IDELocalHistoryPanel: View {
             }
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
-        .padding(.vertical, 4)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
         .background(isSelected ? IDEAppearance.ColorToken.controlHover : .clear)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { workspace.localHistoryOpenDiff(event, against: .current) }
@@ -270,7 +270,7 @@ struct IDELocalHistoryPanel: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
             .padding(.horizontal, IDEAppearance.Spacing.sm)
-            .padding(.vertical, 4)
+            .padding(.vertical, IDEAppearance.Spacing.xs)
             .contentShape(Rectangle())
             .contextMenu {
                 Button("Undo This Action (\(group.events.count) \(group.events.count == 1 ? "change" : "changes"))") {

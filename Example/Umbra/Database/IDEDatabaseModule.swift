@@ -110,19 +110,14 @@ private struct IDEDatabaseResultsTabItem: View {
     let onSelect: () -> Void
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 4) {
-                if isRunning {
-                    ProgressView().controlSize(.small)
-                }
-                Text("Query Results")
+        IDEChromeTabItem(title: "Query Results", isSelected: isSelected, onSelect: onSelect) {
+            if isRunning {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.6)
             }
-            .font(IDEAppearance.Typography.panelTab)
-            .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(isSelected ? IDEAppearance.ColorToken.tabActive : Color.clear, in: Capsule())
+        } trailing: {
+            EmptyView()
         }
-        .buttonStyle(.plain)
     }
 }

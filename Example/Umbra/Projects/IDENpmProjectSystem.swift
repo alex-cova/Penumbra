@@ -40,7 +40,7 @@ final class IDENpmProjectSystem: IDEProjectSystem {
     private(set) var isRunningTasks = false
 
     @ObservationIgnored private let status: IDEProjectStatus
-    @ObservationIgnored private let trustStore: GradleTrustStore
+    @ObservationIgnored private let trustStore: ProjectTrustStore
     @ObservationIgnored private let scriptDefaults: UserDefaults
     @ObservationIgnored private var projectRootURL: URL?
     @ObservationIgnored private var manifest: IDENpmManifest?
@@ -79,7 +79,7 @@ final class IDENpmProjectSystem: IDEProjectSystem {
 
     init(
         status: IDEProjectStatus,
-        trustStore: GradleTrustStore = IDESharedServices.shared.npmTrust,
+        trustStore: ProjectTrustStore = IDESharedServices.shared.npmTrust,
         scriptDefaults: UserDefaults = .standard
     ) {
         self.status = status
@@ -177,9 +177,13 @@ final class IDENpmProjectSystem: IDEProjectSystem {
         let generation = projectGeneration
         Task { [weak self] in
             guard let self else { return }
-            let trusted = await self.trustPrompt?(root) ?? false
+            let gate = IDEProjectTrustGate(store: self.trustStore, prompt: self.trustPrompt)
+            let trusted = await gate.confirmTrust(
+                for: root,
+                recordDeclined: true,
+                isCurrent: { self.projectGeneration == generation && !Task.isCancelled }
+            )
             guard self.projectGeneration == generation, !Task.isCancelled else { return }
-            self.trustStore.setTrusted(trusted, for: root)
             guard let manifest = self.manifest else { return }
             self.syncState = trusted
                 ? .synced(modules: 1, dependencies: manifest.dependencyCount)
@@ -228,7 +232,14 @@ final class IDENpmProjectSystem: IDEProjectSystem {
             await self.environment.prepareToRun()
             guard generation == self.runGeneration, self.projectGeneration == projectToken, !Task.isCancelled else { return }
             if !self.trustStore.isTrusted(root) {
-                let answer = await prompt?(root) ?? false
+                let gate = IDEProjectTrustGate(store: self.trustStore, prompt: prompt)
+                let answer = await gate.confirmTrust(
+                    for: root,
+                    isCurrent: {
+                        generation == self.runGeneration
+                            && self.projectGeneration == projectToken && !Task.isCancelled
+                    }
+                )
                 guard generation == self.runGeneration, self.projectGeneration == projectToken, !Task.isCancelled else { return }
                 guard answer else {
                     self.console.reset()
@@ -238,7 +249,6 @@ final class IDENpmProjectSystem: IDEProjectSystem {
                     self.onActivity?()
                     return
                 }
-                self.trustStore.setTrusted(true, for: root)
                 if case .untrusted = self.syncState, let manifest = self.manifest {
                     self.syncState = .synced(modules: 1, dependencies: manifest.dependencyCount)
                 }

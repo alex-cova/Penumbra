@@ -93,7 +93,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
 
     private let jdk: IDEJDKSelection
     private let status: IDEProjectStatus
-    @ObservationIgnored private let trustStore: GradleTrustStore
+    @ObservationIgnored private let trustStore: ProjectTrustStore
     @ObservationIgnored private let modelCache: GradleProjectModelCache
     @ObservationIgnored private let runner: GradleCommandRunner
     @ObservationIgnored private let extractor: GradleProjectModelExtractor
@@ -134,7 +134,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     init(
         jdk: IDEJDKSelection,
         status: IDEProjectStatus,
-        trustStore: GradleTrustStore = IDESharedServices.shared.gradleTrust,
+        trustStore: ProjectTrustStore = IDESharedServices.shared.gradleTrust,
         modelCacheRoot: URL = IDEGradleProjectSystem.defaultModelCacheRoot
     ) {
         self.jdk = jdk
@@ -690,13 +690,13 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
             // Build scripts run arbitrary code, so an untrusted project is asked first, as a sync
             // would. On a "no" nothing runs, and it is asked again next time.
             if !trustStore.isTrusted(url) {
-                guard let requestTrust = environment.requestTrust, await requestTrust(url) else {
+                let gate = IDEProjectTrustGate(store: trustStore, prompt: environment.requestTrust)
+                guard await gate.confirmTrust(for: url) else {
                     console.appendNote("Not run: the project is not trusted")
                     console.markFinished()
                     completion?(.notStarted("The project is not trusted, so its Gradle build scripts were not run."))
                     return
                 }
-                trustStore.setTrusted(true, for: url)
             }
 
             do {
@@ -789,10 +789,10 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
             return .failure(.message("Gradle is busy with a sync or another task in this window. Reload the diagram when it finishes."))
         }
         if !trustStore.isTrusted(url) {
-            guard let requestTrust = environment.requestTrust, await requestTrust(url) else {
+            let gate = IDEProjectTrustGate(store: trustStore, prompt: environment.requestTrust)
+            guard await gate.confirmTrust(for: url) else {
                 return .failure(.message("The project is not trusted, so its Gradle build scripts were not run."))
             }
-            trustStore.setTrusted(true, for: url)
         }
 
         let taskPath = projectPath == ":" || projectPath.isEmpty ? ":umbraDependencyGraph" : projectPath + ":umbraDependencyGraph"

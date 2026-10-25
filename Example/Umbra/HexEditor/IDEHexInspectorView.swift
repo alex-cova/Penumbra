@@ -33,14 +33,14 @@ struct IDEHexInspectorView: View {
                 .font(.caption)
                 .help("Endianness of the integer and float rows")
             }
-            .padding(8)
+            .padding(IDEAppearance.Spacing.sm)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(session.inspectorFields(), id: \.name) { field in
                         row(field)
                     }
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.bottom, 8)
             }
             if let length = session.selectionLengthText() {
@@ -55,7 +55,7 @@ struct IDEHexInspectorView: View {
                         Button("Hash") { hash() }
                     }
                 }
-                .padding(8)
+                .padding(IDEAppearance.Spacing.sm)
             }
         }
         .onChange(of: session.selection) { _, _ in resetDrafts(clearHashes: true) }
@@ -76,7 +76,7 @@ struct IDEHexInspectorView: View {
                     .disabled(session.readOnly)
                     .onSubmit { commit(field, spec: spec) }
                     .help(session.readOnly ? "Read-only" : "Return writes these bytes")
-                    .background(invalid.contains(field.name) ? IDEAppearance.ColorToken.error.opacity(0.18) : Color.clear)
+                    .background(invalid.contains(field.name) ? IDEAppearance.ColorToken.error.opacity(IDEAppearance.Opacity.tintWash) : Color.clear)
             } else {
                 Text(field.text)
                     .foregroundStyle(field.available ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)

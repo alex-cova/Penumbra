@@ -21,7 +21,7 @@ struct IDEProfilerTimelineView: View {
                         Text("\(timeline.omittedLanes.formatted()) quieter threads not shown")
                             .font(IDEAppearance.Typography.caption)
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
-                            .padding(4)
+                            .padding(IDEAppearance.Spacing.xs)
                     }
                 }
             } secondary: {

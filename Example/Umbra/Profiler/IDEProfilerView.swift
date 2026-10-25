@@ -133,7 +133,7 @@ struct IDEProfilerView: View {
                         .buttonStyle(.plain)
                         .help("Stop comparing")
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.vertical, 3)
                 .background(Capsule().fill(Color.orange.opacity(0.2)))
             }
@@ -146,9 +146,9 @@ struct IDEProfilerView: View {
                         .buttonStyle(.plain)
                         .help("Show the whole recording")
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(Color.accentColor.opacity(0.18)))
+                .background(Capsule().fill(Color.accentColor.opacity(IDEAppearance.Opacity.tintWash)))
             }
             ForEach(session.transforms) { transform in
                 HStack(spacing: 4) {
@@ -159,9 +159,9 @@ struct IDEProfilerView: View {
                         .buttonStyle(.plain)
                         .help("Remove this filter")
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(IDEAppearance.ColorToken.muted.opacity(0.18)))
+                .background(Capsule().fill(IDEAppearance.ColorToken.muted.opacity(IDEAppearance.Opacity.tintWash)))
             }
             ForEach(session.classFilters) { filter in
                 HStack(spacing: 4) {
@@ -173,9 +173,9 @@ struct IDEProfilerView: View {
                         .buttonStyle(.plain)
                         .help("Show these classes again")
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(IDEAppearance.ColorToken.muted.opacity(0.18)))
+                .background(Capsule().fill(IDEAppearance.ColorToken.muted.opacity(IDEAppearance.Opacity.tintWash)))
             }
             if !session.transforms.isEmpty || !session.classFilters.isEmpty {
                 Button("Clear Filters") {

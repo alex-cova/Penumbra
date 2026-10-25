@@ -25,8 +25,8 @@ final class SharedStoreTests: XCTestCase {
     // MARK: - Gradle trust
 
     func testATrustDecisionInOneStoreIsSeenByTheOtherWithoutARestart() {
-        let windowA = GradleTrustStore(storeURL: file("trust.json"))
-        let windowB = GradleTrustStore(storeURL: file("trust.json"))
+        let windowA = ProjectTrustStore(storeURL: file("trust.json"))
+        let windowB = ProjectTrustStore(storeURL: file("trust.json"))
 
         windowA.setTrusted(true, for: project("alpha"))
 
@@ -35,8 +35,8 @@ final class SharedStoreTests: XCTestCase {
     }
 
     func testADeclineInOneStoreIsSeenByTheOther() {
-        let windowA = GradleTrustStore(storeURL: file("trust.json"))
-        let windowB = GradleTrustStore(storeURL: file("trust.json"))
+        let windowA = ProjectTrustStore(storeURL: file("trust.json"))
+        let windowB = ProjectTrustStore(storeURL: file("trust.json"))
         windowA.setTrusted(true, for: project("alpha"))
         XCTAssertTrue(windowB.isTrusted(project("alpha")))
 
@@ -47,21 +47,21 @@ final class SharedStoreTests: XCTestCase {
     }
 
     func testTrustDecisionsFromTwoStoresAreBothKept() {
-        let windowA = GradleTrustStore(storeURL: file("trust.json"))
-        let windowB = GradleTrustStore(storeURL: file("trust.json"))
+        let windowA = ProjectTrustStore(storeURL: file("trust.json"))
+        let windowB = ProjectTrustStore(storeURL: file("trust.json"))
 
         windowA.setTrusted(true, for: project("alpha"))
         windowB.setTrusted(false, for: project("beta"))
         windowA.setTrusted(true, for: project("gamma"))
 
-        let fresh = GradleTrustStore(storeURL: file("trust.json"))
+        let fresh = ProjectTrustStore(storeURL: file("trust.json"))
         XCTAssertEqual(fresh.decision(for: project("alpha")), true)
         XCTAssertEqual(fresh.decision(for: project("beta")), false)
         XCTAssertEqual(fresh.decision(for: project("gamma")), true)
     }
 
     func testAnUnreadableTrustFileKeepsWhatIsInMemory() throws {
-        let store = GradleTrustStore(storeURL: file("trust.json"))
+        let store = ProjectTrustStore(storeURL: file("trust.json"))
         store.setTrusted(true, for: project("alpha"))
 
         try Data("not json".utf8).write(to: file("trust.json"))

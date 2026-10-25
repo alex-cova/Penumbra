@@ -22,6 +22,74 @@ let umbraJaCoCoResources: [Resource] = {
     }
 }()
 
+// Per-language grammar packs migrated from Hextech's Vendor/PenumbraLanguages.
+// Each language is a trio: a C grammar target, a `*Queries` resource target,
+// and a `*Penumbra` target that adds the `TreeSitterLanguage` factory.
+// Only the deviations listed in the table differ per language; the generator
+// below emits the otherwise identical trios.
+private struct GrammarPack {
+    let stem: String
+    var extraQueryFiles: [String] = []
+    var extraPenumbraDeps: [Target.Dependency] = []
+    var exclude: [String] = []
+    var cxxSearchPath = false
+}
+
+private let grammarPacks: [GrammarPack] = [
+    GrammarPack(stem: "TOML"),
+    GrammarPack(stem: "SQL", cxxSearchPath: true),
+    GrammarPack(
+        stem: "Swift",
+        extraQueryFiles: ["highlights-swiftui.scm", "locals.scm"],
+        exclude: ["LICENSE", "VERSION", "grammar.js", "src/node-types.json"]
+    ),
+    GrammarPack(stem: "Java", extraQueryFiles: ["tags.scm"]),
+    GrammarPack(stem: "Kotlin", extraQueryFiles: ["tags.scm"]),
+    GrammarPack(stem: "Go", extraQueryFiles: ["tags.scm"]),
+    GrammarPack(stem: "Bash", cxxSearchPath: true),
+    GrammarPack(stem: "HTTP", extraQueryFiles: ["injections.scm"]),
+    GrammarPack(stem: "Mermaid"),
+    GrammarPack(stem: "Rust"),
+    GrammarPack(stem: "GitIgnore"),
+    GrammarPack(stem: "Diff"),
+    GrammarPack(stem: "C"),
+    GrammarPack(
+        stem: "Cpp",
+        extraQueryFiles: ["injections.scm"],
+        extraPenumbraDeps: ["TreeSitterCQueries"]
+    ),
+]
+
+private let grammarPackTargets: [Target] = grammarPacks.flatMap { pack -> [Target] in
+    let grammarName = "TreeSitter\(pack.stem)"
+    let queriesName = "TreeSitter\(pack.stem)Queries"
+    var queryResources: [Resource] = [.copy("highlights.scm")]
+    queryResources += pack.extraQueryFiles.map { Resource.copy($0) }
+    var penumbraDeps: [Target.Dependency] = [
+        "Penumbra",
+        .target(name: grammarName),
+        .target(name: queriesName),
+    ]
+    penumbraDeps += pack.extraPenumbraDeps
+    return [
+        .target(
+            name: grammarName,
+            exclude: pack.exclude,
+            cSettings: [.headerSearchPath("src")],
+            cxxSettings: pack.cxxSearchPath ? [.headerSearchPath("src")] : nil
+        ),
+        .target(
+            name: queriesName,
+            resources: queryResources
+        ),
+        .target(
+            name: "TreeSitter\(pack.stem)Penumbra",
+            dependencies: penumbraDeps,
+            swiftSettings: swift6
+        ),
+    ]
+}
+
 let package = Package(
     name: "Penumbra",
     defaultLocalization: "en",
@@ -335,147 +403,7 @@ let package = Package(
                 .headerSearchPath("src")
             ]
         ),
-
-        // Per-language grammar packs migrated from Hextech's Vendor/PenumbraLanguages.
-        // Each language is a trio: a C grammar target, a `*Queries` resource target,
-        // and a `*Penumbra` target that adds the `TreeSitterLanguage` factory.
-        .target(name: "TreeSitterTOML", cSettings: [.headerSearchPath("src")]),
-        .target(name: "TreeSitterTOMLQueries", resources: [.copy("highlights.scm")]),
-        .target(
-            name: "TreeSitterTOMLPenumbra",
-            dependencies: ["Penumbra", "TreeSitterTOML", "TreeSitterTOMLQueries"],
-            swiftSettings: swift6
-        ),
-        .target(
-            name: "TreeSitterSQL",
-            cSettings: [.headerSearchPath("src")],
-            cxxSettings: [.headerSearchPath("src")]
-        ),
-        .target(name: "TreeSitterSQLQueries", resources: [.copy("highlights.scm")]),
-        .target(
-            name: "TreeSitterSQLPenumbra",
-            dependencies: ["Penumbra", "TreeSitterSQL", "TreeSitterSQLQueries"],
-            swiftSettings: swift6
-        ),
-        .target(
-            name: "TreeSitterSwift",
-            exclude: ["LICENSE", "VERSION", "grammar.js", "src/node-types.json"],
-            cSettings: [.headerSearchPath("src")]
-        ),
-        .target(
-            name: "TreeSitterSwiftQueries",
-            resources: [.copy("highlights.scm"), .copy("highlights-swiftui.scm"), .copy("locals.scm")]
-        ),
-        .target(
-            name: "TreeSitterSwiftPenumbra",
-            dependencies: ["Penumbra", "TreeSitterSwift", "TreeSitterSwiftQueries"],
-            swiftSettings: swift6
-        ),
-        .target(name: "TreeSitterJava", cSettings: [.headerSearchPath("src")]),
-        .target(
-            name: "TreeSitterJavaQueries",
-            resources: [.copy("highlights.scm"), .copy("tags.scm")]
-        ),
-        .target(
-            name: "TreeSitterJavaPenumbra",
-            dependencies: ["Penumbra", "TreeSitterJava", "TreeSitterJavaQueries"],
-            swiftSettings: swift6
-        ),
-        .target(name: "TreeSitterKotlin", cSettings: [.headerSearchPath("src")]),
-        .target(
-            name: "TreeSitterKotlinQueries",
-            resources: [.copy("highlights.scm"), .copy("tags.scm")]
-        ),
-        .target(
-            name: "TreeSitterKotlinPenumbra",
-            dependencies: ["Penumbra", "TreeSitterKotlin", "TreeSitterKotlinQueries"],
-            swiftSettings: swift6
-        ),
-        .target(name: "TreeSitterGo", cSettings: [.headerSearchPath("src")]),
-        .target(
-            name: "TreeSitterGoQueries",
-            resources: [.copy("highlights.scm"), .copy("tags.scm")]
-        ),
-        .target(
-            name: "TreeSitterGoPenumbra",
-            dependencies: ["Penumbra", "TreeSitterGo", "TreeSitterGoQueries"],
-            swiftSettings: swift6
-        ),
-        .target(
-            name: "TreeSitterBash",
-            cSettings: [.headerSearchPath("src")],
-            cxxSettings: [.headerSearchPath("src")]
-        ),
-        .target(name: "TreeSitterBashQueries", resources: [.copy("highlights.scm")]),
-        .target(
-            name: "TreeSitterBashPenumbra",
-            dependencies: ["Penumbra", "TreeSitterBash", "TreeSitterBashQueries"],
-            swiftSettings: swift6
-        ),
-        .target(name: "TreeSitterHTTP", cSettings: [.headerSearchPath("src")]),
-        .target(name: "TreeSitterHTTPQueries", resources: [.copy("highlights.scm"), .copy("injections.scm")]),
-        .target(
-            name: "TreeSitterHTTPPenumbra",
-            dependencies: ["Penumbra", "TreeSitterHTTP", "TreeSitterHTTPQueries"],
-            swiftSettings: swift6
-        ),
-        .target(name: "TreeSitterMermaid", cSettings: [.headerSearchPath("src")]),
-        .target(name: "TreeSitterMermaidQueries", resources: [.copy("highlights.scm")]),
-        .target(
-            name: "TreeSitterMermaidPenumbra",
-            dependencies: ["Penumbra", "TreeSitterMermaid", "TreeSitterMermaidQueries"],
-            swiftSettings: swift6
-        ),
-        .target(name: "TreeSitterRust", cSettings: [.headerSearchPath("src")]),
-        .target(
-            name: "TreeSitterRustQueries",
-            resources: [.copy("highlights.scm")]
-        ),
-        .target(
-            name: "TreeSitterRustPenumbra",
-            dependencies: ["Penumbra", "TreeSitterRust", "TreeSitterRustQueries"],
-            swiftSettings: swift6
-        ),
-        .target(name: "TreeSitterGitIgnore", cSettings: [.headerSearchPath("src")]),
-        .target(
-            name: "TreeSitterGitIgnoreQueries",
-            resources: [.copy("highlights.scm")]
-        ),
-        .target(
-            name: "TreeSitterGitIgnorePenumbra",
-            dependencies: ["Penumbra", "TreeSitterGitIgnore", "TreeSitterGitIgnoreQueries"],
-            swiftSettings: swift6
-        ),
-        .target(name: "TreeSitterDiff", cSettings: [.headerSearchPath("src")]),
-        .target(
-            name: "TreeSitterDiffQueries",
-            resources: [.copy("highlights.scm")]
-        ),
-        .target(
-            name: "TreeSitterDiffPenumbra",
-            dependencies: ["Penumbra", "TreeSitterDiff", "TreeSitterDiffQueries"],
-            swiftSettings: swift6
-        ),
-        .target(name: "TreeSitterC", cSettings: [.headerSearchPath("src")]),
-        .target(
-            name: "TreeSitterCQueries",
-            resources: [.copy("highlights.scm")]
-        ),
-        .target(
-            name: "TreeSitterCPenumbra",
-            dependencies: ["Penumbra", "TreeSitterC", "TreeSitterCQueries"],
-            swiftSettings: swift6
-        ),
-        .target(name: "TreeSitterCpp", cSettings: [.headerSearchPath("src")]),
-        .target(
-            name: "TreeSitterCppQueries",
-            resources: [.copy("highlights.scm"), .copy("injections.scm")]
-        ),
-        .target(
-            name: "TreeSitterCppPenumbra",
-            dependencies: ["Penumbra", "TreeSitterCpp", "TreeSitterCppQueries", "TreeSitterCQueries"],
-            swiftSettings: swift6
-        ),
+    ] + grammarPackTargets + [
         .target(
             name: "PenumbraLanguages",
             dependencies: [

@@ -51,22 +51,28 @@ Measured on the same machine against the targets in the plan. Full suite: 6,787 
 
 | Metric | Baseline | Now | Target | |
 |---|---|---|---|---|
-| `IDEWorkspace.swift` lines | 7,090 | 5,995 | ≤ 3,000 | not met |
+| `IDEWorkspace.swift` lines | 7,090 | 5,975 (zoom → `IDEWorkspace+Zoom.swift`) | ≤ 3,000 | not met, stopped per plan item 3 |
 | Swift files at the root of `Example/Umbra` | 139 | 0 | (folders) | met |
 | `NSAlert()` outside `IDEAlert` | 28 | 0 | ≤ 3 | met |
 | Largest agent UI file (excluding the conversation model) | 1,700 | 439 | ≤ 600 | met |
 | Icon-button implementations | 7+ | 1 shared, 47 uses (+ titlebar and browser-toolbar buttons left) | 1 | mostly |
 | Project console controls | 5 | 1 shared (+ HTTP's own) | 1 | met |
 | Project-system tabs | 5 copies | 1 shared on `IDEChromeTabItem` | 1 | met |
-| All `…TabItem` structs | ~20 | 17 | 1 + wrappers | not met: the panel tabs have badges and menus and were left alone |
+| All `…TabItem` structs | ~20 | 19 thin wrappers, 1 chrome (`IDEChromeTabItem`) | 1 + wrappers | met: every bottom-panel body delegates to the shared chrome |
 | Inline `Task.sleep` | 59 | 52 (9 debounces moved to `Debouncer`) | ≤ 15 | not met: the rest are polling loops and delays, not debounces |
-| Literal `.font(.system(size:))` / `.padding(N)` / `cornerRadius:` | 136 / 234 / 49 | 130 / 220 / 47 | < 40 / < 100 / < 10 | not met: not worked on |
+| Literal `.font(.system(size:` / bare `.padding(N)` / numeric `cornerRadius` | 136 / 234 / 49 | 162* / 12 / 13 | < 40 / < 100 / < 10 | partly: directional paddings (60) and repeated radii/opacities converted; fonts and odd values left for a design call |
 | `UserDefaults.standard` in `IDEPreferences.swift` | 141 | 141 | ≤ 20 | dropped: `@Observable` cannot use property wrappers |
 | Conversation event handlers | 2 | 2 | 1 | dropped: the overlap is about 40 lines; the copy and events differ on purpose |
 | Enter latency (PerfHarness) | baseline | within noise | ±5 % | met (PerfHarness does not link Umbra) |
 
 New tested units: `Debouncer`, `IDEFindInFilesModel`, `IDEBottomPanelModel`, `IDEEditorOverlayController`, the
-preferences snapshot contract (nine required keys pinned).
+preferences snapshot contract (nine required keys pinned), `IDEProjectTrustGate` (8-case recording matrix).
+
+\* Font-literal counting: the plan's 130 was a subset count; a straight `grep -rn '\.font(\.system(size:'`
+over `Example/Umbra` gives 160 on the pre-pass tree and 162 after (net +2: the CallHierarchy/Debug tabs gained
+size-10 glyph icons when modernized to the shared chrome). The pass deliberately did not convert font literals —
+mapping size-10/11/9 text to scaled `Typography` tokens vs `IconSize` glyph tokens needs an owner design call,
+since literals bypass `IDEUIFonts.scaledSize`.
 
 Lessons worth keeping:
 

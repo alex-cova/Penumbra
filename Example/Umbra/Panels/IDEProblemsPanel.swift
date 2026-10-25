@@ -45,7 +45,7 @@ struct IDEProblemsPanel: View {
                         .buttonStyle(.borderless)
                         .help("Close results")
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.vertical, 3)
                 .background(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.tabActive : .clear)
                 .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
@@ -64,7 +64,7 @@ struct IDEProblemsPanel: View {
             Text(title)
                 .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
                 .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .padding(.horizontal, 8)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.vertical, 3)
                 .background(isSelected ? IDEAppearance.ColorToken.tabActive : .clear)
                 .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
@@ -248,7 +248,7 @@ private struct IDEProblemRowView: View {
                     Label("Fix with Agent", systemImage: "sparkles")
                         .font(IDEAppearance.Typography.caption)
                         .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
+                        .padding(.vertical, IDEAppearance.Spacing.xxs)
                         .background(IDEAppearance.ColorToken.card, in: Capsule())
                 }
                 .buttonStyle(.plain)
@@ -351,7 +351,7 @@ struct IDEProblemsControls: View {
                 Text("\(count)")
                     .font(IDEAppearance.Typography.monoSmall)
             }
-            .foregroundStyle(isOn ? IDEProblemStyle.color(for: severity) : IDEAppearance.ColorToken.muted.opacity(0.6))
+            .foregroundStyle(isOn ? IDEProblemStyle.color(for: severity) : IDEAppearance.ColorToken.muted.opacity(IDEAppearance.Opacity.dimmed))
         }
         .buttonStyle(.borderless)
         .help("\(isOn ? "Hide" : "Show") \(label)")
@@ -367,48 +367,23 @@ struct IDEProblemsTabItem: View {
     let warningCount: Int
     let onSelect: () -> Void
 
-    @State private var isHovering = false
-
     var body: some View {
-        HStack(spacing: 6) {
+        IDEChromeTabItem(
+            title: title,
+            isSelected: isSelected,
+            accessibilityLabel: "Problems, \(errorCount) errors, \(warningCount) warnings",
+            onSelect: onSelect
+        ) {
             Image(systemName: errorCount > 0 ? "xmark.octagon.fill" : "exclamationmark.triangle")
                 .font(.system(size: 10))
                 .foregroundStyle(errorCount > 0 ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
-                .frame(width: 12)
-            Text(title)
-                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
+        } trailing: {
+            EmptyView()
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .overlay(alignment: .top) {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(IDEAppearance.ColorToken.accent)
-                    .frame(height: 2)
-                    .padding(.horizontal, 6)
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Problems, \(errorCount) errors, \(warningCount) warnings")
-        .accessibilityAddTraits(.isButton)
-        .focusable(false)
     }
 
     private var title: String {
         let total = errorCount + warningCount
         return total > 0 ? "Problems · \(total)" : "Problems"
-    }
-
-    private var backgroundColor: Color {
-        if isSelected { return IDEAppearance.ColorToken.tabActive }
-        if isHovering { return IDEAppearance.ColorToken.tabHover }
-        return IDEAppearance.ColorToken.tabInactive
     }
 }

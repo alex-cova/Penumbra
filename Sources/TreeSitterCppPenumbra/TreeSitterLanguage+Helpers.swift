@@ -18,9 +18,4 @@ public extension TreeSitterLanguage {
             lineCommentPrefix: "//", blockCommentDelimiters: .cStyle
         )
     }
-
-    private static func combinedQuery(fromFilesAt fileURLs: [URL]) -> TreeSitterLanguage.Query? {
-        let rawQuery = fileURLs.compactMap { try? String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
-        return rawQuery.isEmpty ? nil : TreeSitterLanguage.Query(string: rawQuery)
-    }
 }

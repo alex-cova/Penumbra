@@ -271,7 +271,7 @@ struct IDEAgentToolCard: View {
                     .frame(maxHeight: 240)
             }
         }
-        .background(IDEAppearance.ColorToken.card.opacity(0.6))
+        .background(IDEAppearance.ColorToken.card.opacity(IDEAppearance.Opacity.dimmed))
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
     }
 

@@ -127,7 +127,7 @@ final class GradleDependencyGraphTests: XCTestCase {
 
     func testExtractorRunsTheScriptForTheProjectAndDecodesItsOutput() async throws {
         let launcher = ScriptedLauncher(json: sampleJSON)
-        let store = GradleTrustStore(storeURL: scratch.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: scratch.appendingPathComponent("trust.json"))
         store.setTrusted(true, for: scratch)
         let runner = GradleCommandRunner(
             trustStore: store, launcher: launcher,
@@ -155,7 +155,7 @@ final class GradleDependencyGraphTests: XCTestCase {
     func testExtractorReportsAMissingConfiguration() async throws {
         let json = #"{"project":":x","configuration":"nope","error":"Project :x has no resolvable configuration named nope"}"#
         let launcher = ScriptedLauncher(json: json)
-        let store = GradleTrustStore(storeURL: scratch.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: scratch.appendingPathComponent("trust.json"))
         store.setTrusted(true, for: scratch)
         let runner = GradleCommandRunner(
             trustStore: store, launcher: launcher,
@@ -170,7 +170,7 @@ final class GradleDependencyGraphTests: XCTestCase {
     }
 
     func testExtractorRefusesAnUntrustedProject() async throws {
-        let store = GradleTrustStore(storeURL: scratch.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: scratch.appendingPathComponent("trust.json"))
         let runner = GradleCommandRunner(trustStore: store, launcher: ScriptedLauncher(json: sampleJSON))
         do {
             _ = try await GradleDependencyGraphExtractor(runner: runner).extract(projectDirectory: scratch, javaHome: nil)
@@ -205,7 +205,7 @@ final class GradleDependencyGraphTests: XCTestCase {
         try "plugins { id 'java' }\ndependencies { implementation project(':lib') }\n"
             .write(to: root.appendingPathComponent("app/build.gradle"), atomically: true, encoding: .utf8)
 
-        let store = GradleTrustStore(storeURL: scratch.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: scratch.appendingPathComponent("trust.json"))
         store.setTrusted(true, for: root)
         let extractor = GradleDependencyGraphExtractor(runner: GradleCommandRunner(trustStore: store))
         let graph = try await extractor.extract(

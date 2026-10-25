@@ -170,8 +170,8 @@ struct IDEDiagramRootView: View {
             ProgressView()
                 .controlSize(.small)
                 .padding(IDEAppearance.Spacing.md)
-                .background(IDEAppearance.ColorToken.panel.opacity(0.9), in: .rect(cornerRadius: 8))
-                .overlay { RoundedRectangle(cornerRadius: 8).stroke(IDEAppearance.ColorToken.panelBorder) }
+                .background(IDEAppearance.ColorToken.panel.opacity(0.9), in: .rect(cornerRadius: IDEAppearance.Radius.card))
+                .overlay { RoundedRectangle(cornerRadius: IDEAppearance.Radius.card).stroke(IDEAppearance.ColorToken.panelBorder) }
         case .ready:
             EmptyView()
         case let .empty(message):

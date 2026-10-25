@@ -70,8 +70,8 @@ struct IDEHexRootView: View {
                     }
                     Spacer()
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
+                .padding(.horizontal, IDEAppearance.Spacing.sm)
+                .padding(.vertical, IDEAppearance.Spacing.xxs)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(progress)
             }
@@ -80,8 +80,8 @@ struct IDEHexRootView: View {
                     .font(.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, IDEAppearance.Spacing.sm)
+                    .padding(.vertical, IDEAppearance.Spacing.xxs)
             }
         }
         .background(IDEAppearance.ColorToken.editor)
@@ -168,7 +168,7 @@ struct IDEHexRootView: View {
                 }
             }
         }
-        .padding(8)
+        .padding(IDEAppearance.Spacing.sm)
         .frame(maxHeight: 120)
     }
 }

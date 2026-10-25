@@ -194,7 +194,7 @@ private struct IDEStatusBarBreadcrumb: View {
                     if index > 0 {
                         Image(systemName: "chevron.compact.right")
                             .font(.system(size: IDEAppearance.IconSize.breadcrumbChevron, weight: .medium))
-                            .foregroundStyle(IDEAppearance.ColorToken.muted.opacity(0.6))
+                            .foregroundStyle(IDEAppearance.ColorToken.muted.opacity(IDEAppearance.Opacity.dimmed))
                             .accessibilityHidden(true)
                     }
                     IDEStatusBarBreadcrumbSegment(
@@ -264,7 +264,7 @@ private struct IDEStatusBarBreadcrumbSegment: View {
                     .truncationMode(.tail)
                     .padding(.horizontal, 3)
                     .background(
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: IDEAppearance.Radius.selection)
                             .fill(isMenuOpen || isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear)
                     )
             }

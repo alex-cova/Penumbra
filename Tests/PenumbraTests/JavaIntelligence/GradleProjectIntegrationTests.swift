@@ -18,7 +18,7 @@ final class GradleProjectIntegrationTests: XCTestCase {
         let projectDirectory = try Self.makeMultiModuleProject()
         defer { try? FileManager.default.removeItem(at: projectDirectory) }
 
-        let store = GradleTrustStore(storeURL: projectDirectory.appendingPathComponent(".umbra-trust.json"))
+        let store = ProjectTrustStore(storeURL: projectDirectory.appendingPathComponent(".umbra-trust.json"))
         store.setTrusted(true, for: projectDirectory)
         let runner = GradleCommandRunner(trustStore: store)
         let extractor = GradleProjectModelExtractor(runner: runner)

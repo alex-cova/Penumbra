@@ -50,8 +50,8 @@ final class IDESwiftPMProjectSystemTests: XCTestCase {
         return root
     }
 
-    private func makeSystem(in directory: URL) -> (IDESwiftPMProjectSystem, GradleTrustStore) {
-        let store = GradleTrustStore(storeURL: directory.appendingPathComponent("swiftpm-trust.json"))
+    private func makeSystem(in directory: URL) -> (IDESwiftPMProjectSystem, ProjectTrustStore) {
+        let store = ProjectTrustStore(storeURL: directory.appendingPathComponent("swiftpm-trust.json"))
         return (IDESwiftPMProjectSystem(status: IDEProjectStatus(), trustStore: store), store)
     }
 
@@ -335,7 +335,7 @@ final class IDESwiftPMProjectSystemTests: XCTestCase {
         let (swiftPM, _) = makeSystem(in: directory)
         let npm = IDENpmProjectSystem(
             status: IDEProjectStatus(),
-            trustStore: GradleTrustStore(storeURL: directory.appendingPathComponent("npm-trust.json")),
+            trustStore: ProjectTrustStore(storeURL: directory.appendingPathComponent("npm-trust.json")),
             scriptDefaults: UserDefaults(suiteName: "umbra.swiftpm.tests.\(UUID().uuidString)")!
         )
         let systems = IDEProjectSystems([npm, swiftPM])

@@ -59,7 +59,7 @@ struct IDEAgentPlanCard: View {
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous)
-                .strokeBorder(isPending ? Color.teal.opacity(0.6) : .clear))
+                .strokeBorder(isPending ? Color.teal.opacity(IDEAppearance.Opacity.dimmed) : .clear))
     }
 
     @ViewBuilder private var actions: some View {

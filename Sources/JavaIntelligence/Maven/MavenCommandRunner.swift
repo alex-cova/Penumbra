@@ -63,12 +63,12 @@ public struct MavenExecutableResolver: Sendable {
 /// Runs Maven for a trusted project. Indexing never comes through here: only goals, tests and
 /// dependency downloads do. The process itself is ``SystemGradleProcessLauncher``.
 public struct MavenCommandRunner: Sendable {
-    private let trustStore: GradleTrustStore
+    private let trustStore: ProjectTrustStore
     private let launcher: GradleProcessLaunching
     private let resolver: MavenExecutableResolver
 
     public init(
-        trustStore: GradleTrustStore,
+        trustStore: ProjectTrustStore,
         launcher: GradleProcessLaunching = SystemGradleProcessLauncher(),
         resolver: MavenExecutableResolver = MavenExecutableResolver()
     ) {

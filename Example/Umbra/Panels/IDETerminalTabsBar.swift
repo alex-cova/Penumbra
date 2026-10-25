@@ -90,10 +90,13 @@ struct IDEHTTPTabItem: View {
     let isSending: Bool
     let onSelect: () -> Void
 
-    @State private var isHovering = false
-
     var body: some View {
-        HStack(spacing: 6) {
+        IDEChromeTabItem(
+            title: "HTTP",
+            isSelected: isSelected,
+            accessibilityLabel: isSending ? "HTTP, sending" : "HTTP",
+            onSelect: onSelect
+        ) {
             Group {
                 if isSending {
                     ProgressView()
@@ -105,42 +108,9 @@ struct IDEHTTPTabItem: View {
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
             }
-            .frame(width: 12)
-
-            Text("HTTP")
-                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
+        } trailing: {
+            EmptyView()
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .overlay(alignment: .top) {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(IDEAppearance.ColorToken.accent)
-                    .frame(height: 2)
-                    .padding(.horizontal, 6)
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(isSending ? "HTTP, sending" : "HTTP")
-        .accessibilityAddTraits(.isButton)
-        .focusable(false)
-    }
-
-    private var backgroundColor: Color {
-        if isSelected {
-            return IDEAppearance.ColorToken.tabActive
-        }
-        if isHovering {
-            return IDEAppearance.ColorToken.tabHover
-        }
-        return IDEAppearance.ColorToken.tabInactive
     }
 }
 
@@ -149,48 +119,18 @@ private struct IDESourceControlTabItem: View {
     let isSelected: Bool
     let onSelect: () -> Void
 
-    @State private var isHovering = false
-
     var body: some View {
-        HStack(spacing: 6) {
+        IDEChromeTabItem(
+            title: "History",
+            isSelected: isSelected,
+            accessibilityLabel: "Git History",
+            onSelect: onSelect
+        ) {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 10))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(width: 12)
-
-            Text("History")
-                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
+        } trailing: {
+            EmptyView()
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .overlay(alignment: .top) {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(IDEAppearance.ColorToken.accent)
-                    .frame(height: 2)
-                    .padding(.horizontal, 6)
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Git History")
-        .accessibilityAddTraits(.isButton)
-        .focusable(false)
-    }
-
-    private var backgroundColor: Color {
-        if isSelected {
-            return IDEAppearance.ColorToken.tabActive
-        }
-        if isHovering {
-            return IDEAppearance.ColorToken.tabHover
-        }
-        return IDEAppearance.ColorToken.tabInactive
     }
 }

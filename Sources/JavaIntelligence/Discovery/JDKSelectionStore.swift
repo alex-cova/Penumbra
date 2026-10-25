@@ -3,7 +3,7 @@ import Foundation
 /// Which JDK each project uses, a default for every project, and the JDKs the user added by hand,
 /// kept in a small JSON file so they survive a restart. Projects are keyed by the root's path.
 ///
-/// Like ``GradleTrustStore`` it should live in a stable, non-cache location (Umbra uses
+/// Like ``ProjectTrustStore`` it should live in a stable, non-cache location (Umbra uses
 /// `~/Library/Application Support/<bundle id>/jdk-selection.json`).
 public final class JDKSelectionStore: @unchecked Sendable {
     private struct File: Codable {

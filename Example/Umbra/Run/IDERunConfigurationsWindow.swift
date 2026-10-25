@@ -123,7 +123,7 @@ struct IDERunConfigurationsWindow: View {
             .foregroundStyle(IDEAppearance.ColorToken.muted)
             .padding(.horizontal, 10)
             .padding(.top, 8)
-            .padding(.bottom, 2)
+            .padding(.bottom, IDEAppearance.Spacing.xxs)
     }
 
     private func row(_ configuration: JavaRunConfiguration, indent: CGFloat) -> some View {
@@ -158,7 +158,7 @@ struct IDERunConfigurationsWindow: View {
         .opacity(configuration.isTemporary ? 0.55 : 1)
         .padding(.leading, indent)
         .padding(.trailing, 8)
-        .padding(.vertical, 4)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
         .background(isSelected ? IDEAppearance.ColorToken.accent.opacity(0.22) : Color.clear)
         .contentShape(Rectangle())
         .accessibilityAddTraits(.isButton)
@@ -182,7 +182,7 @@ struct IDERunConfigurationsWindow: View {
         }
         .padding(.leading, 18)
         .padding(.trailing, 8)
-        .padding(.vertical, 4)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
         .background(isSelected ? IDEAppearance.ColorToken.accent.opacity(0.22) : Color.clear)
         .contentShape(Rectangle())
         .accessibilityAddTraits(.isButton)

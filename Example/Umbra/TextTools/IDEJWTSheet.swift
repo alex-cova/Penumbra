@@ -17,7 +17,7 @@ struct IDEJWTSheet: View {
                         .font(IDEAppearance.Typography.monoSmall)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                         .padding(.horizontal, IDEAppearance.Spacing.sm)
-                        .padding(.vertical, 2)
+                        .padding(.vertical, IDEAppearance.Spacing.xxs)
                         .background(IDEAppearance.ColorToken.card, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control))
                 }
                 Spacer()

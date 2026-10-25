@@ -43,7 +43,7 @@ struct IDENewProjectSheet: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .background(IDEAppearance.ColorToken.sidebar, in: RoundedRectangle(cornerRadius: 6))
+        .background(IDEAppearance.ColorToken.sidebar, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control))
     }
 
     // MARK: - Form
@@ -136,7 +136,7 @@ struct IDENewProjectSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(IDEAppearance.Spacing.sm)
         }
-        .background(IDEAppearance.ColorToken.editor, in: RoundedRectangle(cornerRadius: 6))
+        .background(IDEAppearance.ColorToken.editor, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control))
     }
 
     // MARK: - Footer

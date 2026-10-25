@@ -68,7 +68,7 @@ struct IDEGitStashPanel: View {
             }
             .font(IDEAppearance.Typography.caption)
             .padding(.horizontal, IDEAppearance.Spacing.md)
-            .padding(.vertical, 4)
+            .padding(.vertical, IDEAppearance.Spacing.xs)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
             .contentShape(Rectangle())

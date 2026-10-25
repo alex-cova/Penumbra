@@ -150,7 +150,7 @@ private struct IDEGeneratePromptView: View {
     private func row<Content: View>(highlighted: Bool, @ViewBuilder content: () -> Content) -> some View {
         HStack(spacing: IDEAppearance.Spacing.xs, content: content)
             .padding(.horizontal, IDEAppearance.Spacing.xs)
-            .padding(.vertical, 4)
+            .padding(.vertical, IDEAppearance.Spacing.xs)
             .background(highlighted ? IDEAppearance.ColorToken.selection : .clear, in: RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())
     }

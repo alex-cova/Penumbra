@@ -35,8 +35,8 @@ final class IDEXcodeProjectSystemTests: XCTestCase {
         return root
     }
 
-    private func makeSystem(in directory: URL) -> (IDEXcodeProjectSystem, GradleTrustStore) {
-        let store = GradleTrustStore(storeURL: directory.appendingPathComponent("xcode-trust.json"))
+    private func makeSystem(in directory: URL) -> (IDEXcodeProjectSystem, ProjectTrustStore) {
+        let store = ProjectTrustStore(storeURL: directory.appendingPathComponent("xcode-trust.json"))
         return (IDEXcodeProjectSystem(status: IDEProjectStatus(), trustStore: store), store)
     }
 
@@ -323,7 +323,7 @@ final class IDEXcodeProjectSystemTests: XCTestCase {
         let (xcode, _) = makeSystem(in: directory)
         let swiftPM = IDESwiftPMProjectSystem(
             status: IDEProjectStatus(),
-            trustStore: GradleTrustStore(storeURL: directory.appendingPathComponent("swiftpm-trust.json"))
+            trustStore: ProjectTrustStore(storeURL: directory.appendingPathComponent("swiftpm-trust.json"))
         )
         let systems = IDEProjectSystems([swiftPM, xcode])
         defer { systems.stop() }

@@ -123,12 +123,12 @@ public struct GradleExecutableResolver: Sendable {
 /// This is the one reusable execution primitive -- everything else (subproject/dependency model
 /// extraction now, `build`/`test`/custom tasks later) is a call through it.
 public actor GradleCommandRunner {
-    private let trustStore: GradleTrustStore
+    private let trustStore: ProjectTrustStore
     private let launcher: GradleProcessLaunching
     private let resolver: GradleExecutableResolver
 
     public init(
-        trustStore: GradleTrustStore,
+        trustStore: ProjectTrustStore,
         launcher: GradleProcessLaunching = SystemGradleProcessLauncher(),
         resolver: GradleExecutableResolver = GradleExecutableResolver()
     ) {

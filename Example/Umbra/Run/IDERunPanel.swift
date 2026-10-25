@@ -63,7 +63,7 @@ private struct IDERunSessionStrip: View {
                 }
             }
             .padding(.horizontal, IDEAppearance.Spacing.sm)
-            .padding(.vertical, 2)
+            .padding(.vertical, IDEAppearance.Spacing.xxs)
         }
         .frame(height: IDEAppearance.Spacing.tabHeight)
     }

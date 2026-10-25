@@ -160,7 +160,7 @@ private struct IDETitlebarProjectTitle: View {
                         .font(IDEAppearance.Typography.caption.weight(.semibold))
                         .foregroundStyle(IDEAppearance.ColorToken.gitConflict)
                         .padding(.horizontal, IDEAppearance.Spacing.sm)
-                        .padding(.vertical, 2)
+                        .padding(.vertical, IDEAppearance.Spacing.xxs)
                         .background(IDEAppearance.ColorToken.gitConflict.opacity(0.15), in: Capsule())
                 }
                 .buttonStyle(.plain)

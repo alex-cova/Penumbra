@@ -55,12 +55,12 @@ final class GradleCommandRunnerTests: XCTestCase {
         let trustedRoot = URL(fileURLWithPath: "/tmp/some-project")
         let declinedRoot = URL(fileURLWithPath: "/tmp/other-project")
 
-        let store = GradleTrustStore(storeURL: storeURL)
+        let store = ProjectTrustStore(storeURL: storeURL)
         XCTAssertNil(store.decision(for: trustedRoot))
         store.setTrusted(true, for: trustedRoot)
         store.setTrusted(false, for: declinedRoot)
 
-        let reloaded = GradleTrustStore(storeURL: storeURL)
+        let reloaded = ProjectTrustStore(storeURL: storeURL)
         XCTAssertEqual(reloaded.decision(for: trustedRoot), true)
         XCTAssertTrue(reloaded.isTrusted(trustedRoot))
         XCTAssertEqual(reloaded.decision(for: declinedRoot), false)
@@ -68,7 +68,7 @@ final class GradleCommandRunnerTests: XCTestCase {
     }
 
     func testTrustStoreTrustOverridesEarlierDecline() {
-        let store = GradleTrustStore(storeURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let store = ProjectTrustStore(storeURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         let root = URL(fileURLWithPath: "/tmp/flip-flop")
         store.setTrusted(false, for: root)
         XCTAssertEqual(store.decision(for: root), false)
@@ -81,7 +81,7 @@ final class GradleCommandRunnerTests: XCTestCase {
     func testRunRefusesUntrustedRoot() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = GradleTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
         let launcher = RecordingLauncher(result: .init(exitCode: 0, stdout: "", stderr: ""))
         let runner = GradleCommandRunner(
             trustStore: store,
@@ -104,7 +104,7 @@ final class GradleCommandRunnerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         try makeExecutableFile(at: dir.appendingPathComponent("gradlew"))
 
-        let store = GradleTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
         store.setTrusted(true, for: dir)
         let launcher = RecordingLauncher(result: .init(exitCode: 0, stdout: "ok", stderr: ""))
         let runner = GradleCommandRunner(trustStore: store, launcher: launcher, resolver: GradleExecutableResolver())
@@ -130,7 +130,7 @@ final class GradleCommandRunnerTests: XCTestCase {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         try makeExecutableFile(at: dir.appendingPathComponent("gradlew"))
-        let store = GradleTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
+        let store = ProjectTrustStore(storeURL: dir.appendingPathComponent("trust.json"))
         store.setTrusted(true, for: dir)
         let emitted = [
             GradleOutputLine(stream: .stdout, text: "> Task :umbraProjectModel"),

@@ -61,7 +61,7 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
     private(set) var rootURL: URL?
 
     @ObservationIgnored private let status: IDEProjectStatus
-    @ObservationIgnored private let trustStore: GradleTrustStore
+    @ObservationIgnored private let trustStore: ProjectTrustStore
     @ObservationIgnored private var definitionBaseline: Data?
     @ObservationIgnored private var projectGeneration = 0
     @ObservationIgnored private var runGeneration = 0
@@ -75,7 +75,7 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
             .appendingPathComponent("xcode-trust.json")
     }
 
-    init(status: IDEProjectStatus, trustStore: GradleTrustStore = IDESharedServices.shared.xcodeTrust) {
+    init(status: IDEProjectStatus, trustStore: ProjectTrustStore = IDESharedServices.shared.xcodeTrust) {
         self.status = status
         self.trustStore = trustStore
     }
@@ -91,10 +91,9 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
     /// preview builds the target (its build phases run scripts) outside `run(_:)`, so it asks here.
     func ensureTrusted() async -> Bool {
         guard let root = rootURL else { return false }
-        if trustStore.isTrusted(root) { return true }
         let token = projectGeneration
-        guard let prompt = trustPrompt, await prompt(root), projectGeneration == token else { return false }
-        trustStore.setTrusted(true, for: root)
+        let gate = IDEProjectTrustGate(store: trustStore, prompt: trustPrompt)
+        guard await gate.confirmTrust(for: root, isCurrent: { self.projectGeneration == token }) else { return false }
         if case .untrusted = syncState, let model {
             syncState = .synced(modules: model.targets.count, dependencies: model.packageCount)
         }
@@ -296,7 +295,14 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
             await self.environment.prepareToRun()
             guard generation == self.runGeneration, self.projectGeneration == projectToken, !Task.isCancelled else { return }
             if !self.trustStore.isTrusted(root) {
-                let answer = await prompt?(root) ?? false
+                let gate = IDEProjectTrustGate(store: self.trustStore, prompt: prompt)
+                let answer = await gate.confirmTrust(
+                    for: root,
+                    isCurrent: {
+                        generation == self.runGeneration
+                            && self.projectGeneration == projectToken && !Task.isCancelled
+                    }
+                )
                 guard generation == self.runGeneration, self.projectGeneration == projectToken, !Task.isCancelled else { return }
                 guard answer else {
                     self.console.reset()
@@ -306,7 +312,6 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
                     self.onActivity?()
                     return
                 }
-                self.trustStore.setTrusted(true, for: root)
                 if case .untrusted = self.syncState, let model = self.model {
                     self.syncState = .synced(modules: model.targets.count, dependencies: model.packageCount)
                 }
@@ -550,7 +555,7 @@ struct IDEXcodeSidebarPanel: View {
             .foregroundStyle(IDEAppearance.ColorToken.muted)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.top, IDEAppearance.Spacing.sm)
-            .padding(.bottom, 2)
+            .padding(.bottom, IDEAppearance.Spacing.xxs)
     }
 
     private func taskRow(_ task: IDEProjectTask, system: IDEXcodeProjectSystem) -> some View {

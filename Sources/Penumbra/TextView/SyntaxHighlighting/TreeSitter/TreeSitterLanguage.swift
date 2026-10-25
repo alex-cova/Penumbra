@@ -96,6 +96,16 @@ public final class TreeSitterLanguage {
 }
 
 extension TreeSitterLanguage {
+    /// Combines the contents of several query files into a single query.
+    ///
+    /// Files that cannot be read are skipped. Returns `nil` when every file is missing
+    /// or empty, so callers can fall back to no query for that slot.
+    /// - Parameter fileURLs: URLs of the query files to concatenate, in order.
+    public static func combinedQuery(fromFilesAt fileURLs: [URL]) -> Query? {
+        let rawQuery = fileURLs.compactMap { try? String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
+        return rawQuery.isEmpty ? nil : Query(string: rawQuery)
+    }
+
     /// A set of patterns to be matched against the syntax tree. Queries are used for syntax highlighting and detecting injected languages.
     ///
     /// Please refer to Tree-sitter's documentation for more information on queries:

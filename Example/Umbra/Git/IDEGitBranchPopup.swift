@@ -93,7 +93,7 @@ struct IDEGitBranchPopup: View {
             }
             .font(IDEAppearance.Typography.body)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
-            .padding(.vertical, 4)
+            .padding(.vertical, IDEAppearance.Spacing.xs)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -121,7 +121,7 @@ struct IDEGitBranchPopup: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.top, IDEAppearance.Spacing.sm)
-                .padding(.bottom, 2)
+                .padding(.bottom, IDEAppearance.Spacing.xxs)
             ForEach(items) { item in
                 switch item {
                 case .branch(let branch): branchRow(branch)

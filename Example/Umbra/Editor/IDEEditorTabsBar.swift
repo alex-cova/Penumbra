@@ -70,7 +70,7 @@ private struct IDEEditorTabItem: View {
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
         .overlay(alignment: .top) {
             if tab.isSelected {
-                RoundedRectangle(cornerRadius: 1)
+                RoundedRectangle(cornerRadius: IDEAppearance.Radius.indicator)
                     .fill(IDEAppearance.ColorToken.accent)
                     .frame(height: 2)
                     .padding(.horizontal, 6)

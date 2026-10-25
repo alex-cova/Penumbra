@@ -171,7 +171,7 @@ struct IDECoverageBar: View {
                 .font(IDEAppearance.Typography.monoSmall)
                 .frame(width: 40, alignment: .trailing)
             ZStack(alignment: .leading) {
-                Capsule().fill(IDEAppearance.ColorToken.muted.opacity(0.18))
+                Capsule().fill(IDEAppearance.ColorToken.muted.opacity(IDEAppearance.Opacity.tintWash))
                 if let percent {
                     Capsule().fill(color(percent)).frame(width: 60 * CGFloat(percent) / 100)
                 }
@@ -191,37 +191,13 @@ struct IDECoverageTabItem: View {
     let isSelected: Bool
     let onSelect: () -> Void
 
-    @State private var isHovering = false
-
     var body: some View {
-        HStack(spacing: 6) {
+        IDEChromeTabItem(title: title, isSelected: isSelected, onSelect: onSelect) {
             Image(systemName: "chart.bar.doc.horizontal")
                 .font(.system(size: 10))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(width: 12)
-            Text(title)
-                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
+        } trailing: {
+            EmptyView()
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(isSelected ? IDEAppearance.ColorToken.tabActive : (isHovering ? IDEAppearance.ColorToken.tabHover : IDEAppearance.ColorToken.tabInactive))
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .overlay(alignment: .top) {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(IDEAppearance.ColorToken.accent)
-                    .frame(height: 2)
-                    .padding(.horizontal, 6)
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(.isButton)
-        .focusable(false)
     }
 }

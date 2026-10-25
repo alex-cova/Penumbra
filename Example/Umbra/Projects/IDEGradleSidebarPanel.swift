@@ -582,7 +582,7 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
         }
         .padding(.leading, CGFloat(row.depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
         .padding(.trailing, IDEAppearance.Spacing.sm)
-        .padding(.vertical, 4)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
         .background(background)
         .contentShape(Rectangle())
         .opacity(isTask && isRunDisabled && !isRunning ? 0.45 : 1)

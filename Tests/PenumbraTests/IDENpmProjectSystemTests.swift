@@ -43,8 +43,8 @@ final class IDENpmProjectSystemTests: XCTestCase {
         return (defaults, name)
     }
 
-    private func makeNpm(in directory: URL, defaults: UserDefaults) -> (IDENpmProjectSystem, GradleTrustStore) {
-        let store = GradleTrustStore(storeURL: directory.appendingPathComponent("npm-trust.json"))
+    private func makeNpm(in directory: URL, defaults: UserDefaults) -> (IDENpmProjectSystem, ProjectTrustStore) {
+        let store = ProjectTrustStore(storeURL: directory.appendingPathComponent("npm-trust.json"))
         let npm = IDENpmProjectSystem(status: IDEProjectStatus(), trustStore: store, scriptDefaults: defaults)
         return (npm, store)
     }
@@ -542,8 +542,8 @@ final class IDENpmProjectSystemTests: XCTestCase {
     func testGradleStaysActiveBesideNpm() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let gradleTrust = GradleTrustStore(storeURL: directory.appendingPathComponent("gradle-trust.json"))
-        let npmTrust = GradleTrustStore(storeURL: directory.appendingPathComponent("npm-trust.json"))
+        let gradleTrust = ProjectTrustStore(storeURL: directory.appendingPathComponent("gradle-trust.json"))
+        let npmTrust = ProjectTrustStore(storeURL: directory.appendingPathComponent("npm-trust.json"))
         let jdk = IDEJDKSelection(store: JDKSelectionStore(storeURL: directory.appendingPathComponent("jdk.json")))
         let status = IDEProjectStatus()
         let cache = directory.appendingPathComponent("model-cache", isDirectory: true)

@@ -153,7 +153,7 @@ private struct IDEStreamTraceView: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .padding(.horizontal, IDEAppearance.Spacing.sm)
-                .padding(.vertical, 4)
+                .padding(.vertical, IDEAppearance.Spacing.xs)
         }
         .frame(minWidth: 480, minHeight: 260)
     }
@@ -209,7 +209,7 @@ private struct IDEStreamTraceView: View {
                                 .padding(.horizontal, 6)
                                 .frame(width: Self.columnWidth, height: Self.rowHeight - 2, alignment: .leading)
                                 .background(isRelated ? Color.accentColor.opacity(0.25) : IDEAppearance.ColorToken.card,
-                                            in: RoundedRectangle(cornerRadius: 4))
+                                            in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.selection))
                                 .padding(.vertical, 1)
                                 .accessibilityAddTraits(.isButton)
                                 .onTapGesture { model.selection = (stage, index) }

@@ -110,7 +110,7 @@ private struct IDEBookmarkListSection: View {
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.top, IDEAppearance.Spacing.sm)
-        .padding(.bottom, 2)
+        .padding(.bottom, IDEAppearance.Spacing.xxs)
         .background(isDropTarget ? IDEAppearance.ColorToken.selection : Color.clear)
         .contentShape(Rectangle())
         .dropDestination(for: String.self) { identifiers, _ in

@@ -478,7 +478,7 @@ private struct IDEFileTreeRow: View {
         }
         .padding(.leading, CGFloat(depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
         .padding(.trailing, IDEAppearance.Spacing.sm)
-        .padding(.vertical, 4)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
         .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
         .contentShape(Rectangle())
         .accessibilityAddTraits(.isButton)
@@ -652,7 +652,7 @@ private struct IDEExternalLibraryRow: View {
         }
         .padding(.leading, CGFloat(item.depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
         .padding(.trailing, IDEAppearance.Spacing.sm)
-        .padding(.vertical, 4)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
         .padding(.top, item.kind == .section ? IDEAppearance.Spacing.sm : 0)
         .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
         .contentShape(Rectangle())

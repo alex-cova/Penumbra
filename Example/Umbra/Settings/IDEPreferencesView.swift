@@ -223,7 +223,7 @@ struct IDESettingsTabHeader: View {
                         .frame(width: 16, height: 16)
                         .background(
                             isHoveringClose ? IDEAppearance.ColorToken.controlHover : .clear,
-                            in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.selection, style: .continuous)
                         )
                         .contentShape(Rectangle())
                 }

@@ -1,16 +1,20 @@
 import Foundation
 
-/// A small, file-backed set of Gradle project roots the user has trusted (or explicitly declined)
-/// to run build scripts for. Gradle build scripts execute arbitrary code the moment any task is
+/// A small, file-backed set of project roots the user has trusted (or explicitly declined)
+/// to run build scripts for. Build scripts execute arbitrary code the moment any task is
 /// invoked, wrapper or not, so ``GradleCommandRunner`` refuses to run anything for a root that
-/// isn't in here (mirroring IntelliJ's own "Trust this project?" gate).
+/// isn't in here (mirroring IntelliJ's own "Trust this project?" gate). Although Gradle was the
+/// first client, Maven, npm, SwiftPM and Xcode share the same store through the
+/// Umbra-side trust gate in `Example/Umbra/Projects`.
 ///
 /// Deliberately independent of ``JavaIndexPaths``: that root lives under `~/Library/Caches` and is
 /// versioned by the shard format, so trust decisions stored there would silently reset whenever the
 /// index format bumps. Callers should point `storeURL` at a stable, non-cache location instead
 /// (Umbra uses `~/Library/Application Support/<bundle id>/gradle-trust.json`, alongside
 /// `session.json`).
-public final class GradleTrustStore: @unchecked Sendable {
+///
+/// The `GradleTrustStore` name is kept as a deprecated alias for out-of-tree clients.
+public final class ProjectTrustStore: @unchecked Sendable {
     private struct Snapshot: Codable {
         var trusted: [String] = []
         var declined: [String] = []
@@ -95,3 +99,8 @@ public final class GradleTrustStore: @unchecked Sendable {
         stamp.update(at: storeURL)
     }
 }
+
+/// Deprecated: renamed to ``ProjectTrustStore``. Kept for out-of-tree clients; new code uses the
+/// new name. Will be removed with the next major version.
+@available(*, deprecated, renamed: "ProjectTrustStore")
+public typealias GradleTrustStore = ProjectTrustStore

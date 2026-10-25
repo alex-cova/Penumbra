@@ -68,7 +68,7 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
     private(set) var rootURL: URL?
 
     @ObservationIgnored private let status: IDEProjectStatus
-    @ObservationIgnored private let trustStore: GradleTrustStore
+    @ObservationIgnored private let trustStore: ProjectTrustStore
     @ObservationIgnored private var manifestBaseline: Data?
     @ObservationIgnored private var projectGeneration = 0
     @ObservationIgnored private var runGeneration = 0
@@ -91,7 +91,7 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         )
     }
 
-    init(status: IDEProjectStatus, trustStore: GradleTrustStore = IDESharedServices.shared.swiftPMTrust) {
+    init(status: IDEProjectStatus, trustStore: ProjectTrustStore = IDESharedServices.shared.swiftPMTrust) {
         self.status = status
         self.trustStore = trustStore
     }
@@ -117,10 +117,9 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
     /// SwiftUI preview builds and runs the package's code outside `run(_:)`, so it asks here.
     func ensureTrusted() async -> Bool {
         guard let root = rootURL else { return false }
-        if trustStore.isTrusted(root) { return true }
         let token = projectGeneration
-        guard let prompt = trustPrompt, await prompt(root), projectGeneration == token else { return false }
-        trustStore.setTrusted(true, for: root)
+        let gate = IDEProjectTrustGate(store: trustStore, prompt: trustPrompt)
+        guard await gate.confirmTrust(for: root, isCurrent: { self.projectGeneration == token }) else { return false }
         if case .untrusted = syncState, let manifest {
             syncState = .synced(modules: manifest.targets.count, dependencies: manifest.dependencyCount)
         }
@@ -178,9 +177,13 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
         let generation = projectGeneration
         Task { [weak self] in
             guard let self else { return }
-            let trusted = await self.trustPrompt?(root) ?? false
+            let gate = IDEProjectTrustGate(store: self.trustStore, prompt: self.trustPrompt)
+            let trusted = await gate.confirmTrust(
+                for: root,
+                recordDeclined: true,
+                isCurrent: { self.projectGeneration == generation && !Task.isCancelled }
+            )
             guard self.projectGeneration == generation, !Task.isCancelled else { return }
-            self.trustStore.setTrusted(trusted, for: root)
             guard let manifest = self.manifest else { return }
             self.syncState = trusted ? .synced(modules: manifest.targets.count, dependencies: manifest.dependencyCount) : .untrusted
             if trusted { self.refineManifest(root: root) }
@@ -281,7 +284,14 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
             await self.environment.prepareToRun()
             guard generation == self.runGeneration, self.projectGeneration == projectToken, !Task.isCancelled else { return }
             if !self.trustStore.isTrusted(root) {
-                let answer = await prompt?(root) ?? false
+                let gate = IDEProjectTrustGate(store: self.trustStore, prompt: prompt)
+                let answer = await gate.confirmTrust(
+                    for: root,
+                    isCurrent: {
+                        generation == self.runGeneration
+                            && self.projectGeneration == projectToken && !Task.isCancelled
+                    }
+                )
                 guard generation == self.runGeneration, self.projectGeneration == projectToken, !Task.isCancelled else { return }
                 guard answer else {
                     self.console.reset()
@@ -291,7 +301,6 @@ final class IDESwiftPMProjectSystem: IDEProjectSystem {
                     self.onActivity?()
                     return
                 }
-                self.trustStore.setTrusted(true, for: root)
                 if case .untrusted = self.syncState, let manifest = self.manifest {
                     self.syncState = .synced(modules: manifest.targets.count, dependencies: manifest.dependencyCount)
                 }
@@ -674,7 +683,7 @@ struct IDESwiftPMSidebarPanel: View {
             .foregroundStyle(IDEAppearance.ColorToken.muted)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.top, IDEAppearance.Spacing.sm)
-            .padding(.bottom, 2)
+            .padding(.bottom, IDEAppearance.Spacing.xxs)
     }
 
     private func taskRow(_ task: IDEProjectTask, system: IDESwiftPMProjectSystem) -> some View {
