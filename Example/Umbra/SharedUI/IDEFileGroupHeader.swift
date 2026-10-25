@@ -49,13 +49,20 @@ struct IDEFileGroupHeader: View {
 }
 
 /// The small chevron that shows a group open or closed. Fixed width so titles line up either way.
+///
+/// `size`/`width` cover the real variation across call sites (8–10pt glyphs, 10–14pt columns).
+/// Pass `width: nil` where the call site never constrained the width, so adopting this changes
+/// no pixels. Deliberately not used where the size is inherited (call hierarchy rows) or scaled
+/// (local-model cards), or where the API takes a symbol name instead of a view (settings panes).
 struct IDEDisclosureChevron: View {
     let isExpanded: Bool
+    var size: CGFloat = 9
+    var width: CGFloat? = 10
 
     var body: some View {
         Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-            .font(.system(size: 9, weight: .semibold))
-            .frame(width: 10)
+            .font(.system(size: size, weight: .semibold))
+            .frame(width: width)
             .accessibilityHidden(true)
     }
 }

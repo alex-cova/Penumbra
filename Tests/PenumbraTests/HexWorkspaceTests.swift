@@ -149,7 +149,7 @@ final class HexWorkspaceTests: XCTestCase {
         session.findMode = .hex
         session.findText = "11"
         session.updateFind()
-        try await waitUntil { !session.findRunning }
+        await waitForCondition(timeout: 2) { !session.findRunning }
         XCTAssertFalse(session.matches.isEmpty)
         session.closeFindBar()
         XCTAssertFalse(session.findBarVisible)
@@ -158,14 +158,14 @@ final class HexWorkspaceTests: XCTestCase {
         session.findText = "00"
         session.beginFind()
         session.updateFind()
-        try await waitUntil { !session.findRunning }
+        await waitForCondition(timeout: 2) { !session.findRunning }
         let match = try XCTUnwrap(session.matches.first)
         session.replaceCurrent(with: "AB")
         XCTAssertEqual(session.document.byte(at: match.lowerBound), 0xAB)
 
         let opened = FileByteSource.openDescriptorCount
         await session.compareWithDisk()
-        try await waitUntil { session.diskDifferences != nil }
+        await waitForCondition(timeout: 2) { session.diskDifferences != nil }
         XCTAssertFalse(session.diskDifferences?.isEmpty ?? true)
         XCTAssertEqual(FileByteSource.openDescriptorCount, opened)
 
@@ -403,7 +403,7 @@ final class HexWorkspaceTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         var found: IDEHexCanvasView?
-        try await waitUntil {
+        await waitForCondition(timeout: 2) {
             window.layoutIfNeeded()
             host.layoutSubtreeIfNeeded()
             found = findCanvas(in: host)
@@ -453,7 +453,7 @@ final class HexWorkspaceTests: XCTestCase {
         session.findMode = .hex
         session.findText = "EE"
         session.updateFind()
-        try await waitUntil { !session.findRunning && session.matchIndex != nil }
+        await waitForCondition(timeout: 2) { !session.findRunning && session.matchIndex != nil }
         XCTAssertEqual(session.selection.lowerBound, 4094)
         XCTAssertGreaterThan(session.topRow, 0)
         assertCaretRowVisible(session, rows: session.visibleRowCount)
@@ -482,9 +482,9 @@ final class HexWorkspaceTests: XCTestCase {
             gate.release.signal()
         }
         let task = Task { await workspace.saveHexDocument(document) }
-        try await waitUntil { gate.snapshot().started }
+        await waitForCondition(timeout: 2) { gate.snapshot().started }
         let reported = gate.snapshot()
-        try await waitUntil {
+        await waitForCondition(timeout: 2) {
             session.saveProgress?.written == reported.written && session.saveProgress?.total == reported.total
         }
         XCTAssertGreaterThan(reported.written, 0)
@@ -575,7 +575,7 @@ final class HexWorkspaceTests: XCTestCase {
             gate.release.signal()
         }
         let task = Task { await workspace.saveHexDocument(document) }
-        try await waitUntil { gate.snapshot().started }
+        await waitForCondition(timeout: 2) { gate.snapshot().started }
 
         session.click(byte: keystroke, pane: .hex(lowNibble: false))
         XCTAssertTrue(session.typeNibble(0xA))
@@ -626,7 +626,7 @@ final class HexWorkspaceTests: XCTestCase {
         session.findText = "305419896"
         session.beginFind()
         session.updateFind()
-        try await waitUntil { !session.findRunning }
+        await waitForCondition(timeout: 2) { !session.findRunning }
         XCTAssertEqual(session.matches, [4..<8])
         session.replaceCurrent(with: "1")
         XCTAssertEqual(session.document.bytes(in: 4..<8), [1, 0, 0, 0])
@@ -646,7 +646,7 @@ final class HexWorkspaceTests: XCTestCase {
         session.findEncoding = .utf16LE
         session.findText = "A"
         session.updateFind()
-        try await waitUntil { !session.findRunning }
+        await waitForCondition(timeout: 2) { !session.findRunning }
         XCTAssertEqual(session.matches.first, 16..<18)
 
         session.click(byte: 0, pane: .hex(lowNibble: false))
@@ -893,12 +893,6 @@ final class HexWorkspaceTests: XCTestCase {
         return url
     }
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        for _ in 0..<200 where !condition() {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        XCTAssertTrue(condition())
-    }
 }
 
 private final class SaveGate: @unchecked Sendable {

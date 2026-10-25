@@ -270,10 +270,8 @@ struct IDETestResultsPanel: View {
             ForEach(store.groups) { group in
                 let collapsed = store.collapsedClasses.contains(group.className)
                 HStack(spacing: IDEAppearance.Spacing.xs) {
-                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
+                    IDEDisclosureChevron(isExpanded: !collapsed)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .frame(width: 10)
                     statusIcon(group.status)
                     Text(group.className.split(separator: ".").last.map(String.init) ?? group.className)
                         .font(IDEAppearance.Typography.body.weight(.medium))

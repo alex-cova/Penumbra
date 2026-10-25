@@ -39,13 +39,6 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         return controller
     }
 
-    private func waitUntil(_ condition: () -> Bool, timeout: TimeInterval = 1.5) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition(), Date() < deadline {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-    }
-
     private func labels(_ controller: EditorIntelligenceController) -> [String] {
         controller.visibleCompletionItems.map(\.label)
     }
@@ -74,8 +67,8 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         try await Task.sleep(nanoseconds: 50_000_000)
 
         textView.insertText("ap")
-        try await waitUntil { controller.isShowingCompletion }
-        try await waitUntil { controller.completionDocumentation != nil }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.completionDocumentation != nil }
         XCTAssertEqual(controller.completionDocumentation, "docs for apple")
         XCTAssertEqual(textView.text, "ap", "resolving documentation must not edit the buffer")
 
@@ -94,7 +87,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, adapter: adapter, provider: provider)
 
         textView.insertText(".")
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
 
         XCTAssertEqual(textView.text, "foo.")
         // Phase 3: a single dot also carries the command section, always last.
@@ -114,7 +107,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         XCTAssertGreaterThan(textView.contentOffset.y, 1000, "precondition: scrolled far down")
 
         textView.insertText(".")
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
 
         let frame = try XCTUnwrap(controller.completionPanelFrameInViewport)
         XCTAssertTrue(textView.bounds.contains(frame), "popup \(frame) must be inside the visible text view \(textView.bounds)")
@@ -126,7 +119,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: provider)
 
         textView.insertText("a")
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         XCTAssertEqual(labels(controller), ["apple", "apricot", "avocado"])
 
         controller.moveCompletionSelection(by: 1)
@@ -144,7 +137,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: provider)
 
         textView.insertText("g")
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         textView.insertText("N")
         XCTAssertEqual(labels(controller), ["getName", "getNumber"])
     }
@@ -155,14 +148,14 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: provider)
 
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         controller.acceptSelectedCompletion(replacingIdentifier: true)
         XCTAssertEqual(textView.text, "hello + 1")
 
         textView.text = "helXYZ + 1"
         textView.selectedRange = NSRange(location: 3, length: 0)
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         controller.acceptSelectedCompletion(replacingIdentifier: false)
         XCTAssertEqual(textView.text, "helloXYZ + 1")
     }
@@ -178,7 +171,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: StubProvider { _ in ["hello", "help"] })
 
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         send(keyEvent(keyCode: 0x24, characters: "\r", flags: .shift), to: textView)
         XCTAssertFalse(controller.isShowingCompletion)
         XCTAssertEqual(textView.text, "x = hel;\n")
@@ -186,7 +179,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         textView.text = "x = hel;"
         textView.selectedRange = NSRange(location: 7, length: 0)
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         send(keyEvent(keyCode: 0x24, characters: "\r", flags: .command), to: textView)
         XCTAssertFalse(textView.text.contains("hello") || textView.text.contains("help;"))
     }
@@ -215,7 +208,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: provider)
 
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         send(keyEvent(keyCode: 0x24, characters: "\r", flags: [.command, .shift]), to: textView)
 
         XCTAssertEqual(textView.text, "System.out.println();")
@@ -243,7 +236,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: provider)
 
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         send(keyEvent(keyCode: 0x24, characters: "\r", flags: [.command, .shift]), to: textView)
 
         XCTAssertEqual(textView.text, "System.out.flush();\n")
@@ -258,7 +251,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: provider)
 
         controller.triggerCompletion()
-        try await waitUntil { textView.text == "take()" }
+        await waitForCondition(timeout: 1.5) { textView.text == "take()" }
 
         XCTAssertEqual(textView.text, "take()")
         XCTAssertEqual(textView.selectedRange, NSRange(location: 5, length: 0))
@@ -273,7 +266,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: provider)
 
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         XCTAssertEqual(controller.selectedCompletionItem?.label, "tail")
         controller.acceptSelectedCompletion()
 
@@ -294,7 +287,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: provider)
 
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         controller.moveCompletionSelection(by: labels(controller).firstIndex(of: "ArrayList") ?? 0)
         controller.acceptSelectedCompletion()
 
@@ -308,7 +301,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: provider)
 
         textView.insertText("a")
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         textView.insertText(" ")
         XCTAssertFalse(controller.isShowingCompletion)
     }
@@ -319,7 +312,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let controller = try await makeController(textView, provider: provider)
 
         textView.insertText("a")
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         textView.deleteBackward()
         XCTAssertFalse(controller.isShowingCompletion)
     }
@@ -330,7 +323,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         textView.insertText("a")
         try await Task.sleep(nanoseconds: 120_000_000)
         XCTAssertFalse(controller.isShowingCompletion)
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         XCTAssertEqual(labels(controller), ["alpha"])
     }
 
@@ -338,8 +331,8 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         let textView = makeTextView("", caret: 0)
         let controller = try await makeController(textView, provider: HoldingProvider(second: "alpine"))
         textView.insertText("a")
-        try await waitUntil { labels(controller) == ["alpha"] }
-        try await waitUntil { labels(controller).count == 2 }
+        await waitForCondition(timeout: 1.5) { labels(controller) == ["alpha"] }
+        await waitForCondition(timeout: 1.5) { labels(controller).count == 2 }
         XCTAssertEqual(labels(controller), ["alpha", "alpine"])
     }
 
@@ -353,14 +346,14 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         })
         let controller = try await makeController(textView, provider: provider)
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         XCTAssertTrue(controller.isShowingCompletion)
 
         textView.onCaretRepositioningClick?()
         XCTAssertFalse(controller.isShowingCompletion)
 
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         let offset = textView.contentOffset
         textView.isUserInitiatedScroll = true
         textView.contentOffset = CGPoint(x: offset.x, y: max(0, offset.y - 40))
@@ -368,7 +361,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         XCTAssertFalse(controller.isShowingCompletion)
 
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         XCTAssertTrue(controller.isShowingCompletion, "programmatic scrolling keeps the popup")
         try await Task.sleep(nanoseconds: 50_000_000)
@@ -385,7 +378,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         })
         let controller = try await makeController(textView, provider: provider)
         controller.triggerCompletion()
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         XCTAssertEqual(textView.text, "Arr")
         XCTAssertEqual(labels(controller), ["ArrayList"])
     }
@@ -418,7 +411,7 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
             provider: StubProvider { _ in ["hello", "help", "helm"] }
         )
         textView.insertText("l")
-        try await waitUntil { controller.isShowingCompletion }
+        await waitForCondition(timeout: 1.5) { controller.isShowingCompletion }
         XCTAssertEqual(textView.metalPaintGeneration, beforeGeneration, "completion popup must not trigger a Metal present")
     }
 }

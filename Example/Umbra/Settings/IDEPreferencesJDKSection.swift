@@ -23,8 +23,11 @@ struct IDEPreferencesJDKSection: View {
             }
 
             if jdk.detected.isEmpty {
-                Text(jdk.isScanning ? "Looking for JDKs…" : "No JDK found. Add one with Add JDK…")
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                IDEEmptyState(
+                    title: jdk.isScanning ? "Looking for JDKs…" : "No JDK found",
+                    message: jdk.isScanning ? nil : "Add one with Add JDK…",
+                    isLoading: jdk.isScanning
+                )
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(jdk.detected.enumerated()), id: \.element.home) { index, installation in

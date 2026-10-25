@@ -437,10 +437,8 @@ private struct IDEFileTreeRow: View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
             if canDisclose {
                 Button(action: onToggle) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                    IDEDisclosureChevron(isExpanded: isExpanded, size: 10, width: 12)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .frame(width: 12)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(isExpanded ? "Collapse \(displayName)" : "Expand \(displayName)")
@@ -618,10 +616,8 @@ private struct IDEExternalLibraryRow: View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
             if item.canDisclose {
                 Button(action: onToggle) {
-                    Image(systemName: item.isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                    IDEDisclosureChevron(isExpanded: item.isExpanded, size: 10, width: 12)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .frame(width: 12)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(item.isExpanded ? "Collapse \(item.title)" : "Expand \(item.title)")

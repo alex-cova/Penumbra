@@ -21,7 +21,7 @@ public final class PenumbraWorkbenchEditorAdapter: EditorAdapter, @unchecked Sen
     private let lock = NSLock()
     private var liveDocumentID: DocumentID?
     private var cachedOpenDocuments: [Document] = []
-    private var contentRefreshTask: Task<Void, Never>?
+    private let contentRefreshDebouncer = AdapterDebouncer()
     private var pendingContentChanges: [TextEdit] = []
     /// Matches ``LSPDocumentSyncService``'s default `batchInterval`. See
     /// PERFORMANCE_AUDIT.md Phase 2 #1 — `selected.text = textView.text` is an O(document size)
@@ -148,11 +148,7 @@ public final class PenumbraWorkbenchEditorAdapter: EditorAdapter, @unchecked Sen
     /// late-firing refresh must still land on the document it was scheduled for, not whatever
     /// happens to be active 200ms later.
     private func scheduleContentRefresh(from textView: TextView, for document: WorkbenchDocument) {
-        contentRefreshTask?.cancel()
-        contentRefreshTask = Task { @MainActor [weak self] in
-            let delay = self?.contentRefreshDebounce ?? Self.defaultContentRefreshDebounce
-            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
-            guard !Task.isCancelled else { return }
+        contentRefreshDebouncer.schedule(delay: contentRefreshDebounce) { [weak self] in
             self?.refreshLiveDocumentContent(from: textView, for: document)
         }
     }
@@ -185,22 +181,9 @@ public final class PenumbraWorkbenchEditorAdapter: EditorAdapter, @unchecked Sen
                 liveDocumentID = document.documentID
             }
         }
-        eventBus.send(editsEvent(for: eipDocument))
+        eventBus.send(EditorAdapterSupport.editsEvent(draining: &pendingContentChanges, for: eipDocument))
         eventBus.send(.selectionChanged(eipDocument.id, eipDocument.selection))
         eventBus.send(.cursorMoved(eipDocument.id, eipDocument.cursor))
-    }
-
-    private func editsEvent(for document: Document) -> EditorEvent {
-        let edits = pendingContentChanges
-        pendingContentChanges = []
-        if edits.isEmpty {
-            return .documentChanged(document.id, document.contentSnapshot)
-        }
-        return .documentEdited(document.id, edits, newSnapshot: document.contentSnapshot)
-    }
-
-    deinit {
-        contentRefreshTask?.cancel()
     }
 }
 

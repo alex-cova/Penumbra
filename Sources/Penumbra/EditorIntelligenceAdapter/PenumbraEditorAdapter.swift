@@ -19,7 +19,7 @@ public final class PenumbraEditorAdapter: EditorAdapter, @unchecked Sendable {
     private let documentID: DocumentID
     private let lock = NSLock()
     private var latestDocument: Document?
-    private var refreshTask: Task<Void, Never>?
+    private let refreshDebouncer = AdapterDebouncer()
     private var pendingContentChanges: [TextEdit] = []
     /// Matches ``LSPDocumentSyncService``'s default `batchInterval` — downstream consumers of
     /// this adapter's `.documentChanged` events (`Workspace`, `LSPWorkspaceSyncBridge`,
@@ -98,27 +98,15 @@ public final class PenumbraEditorAdapter: EditorAdapter, @unchecked Sendable {
     /// one refresh per quiet period — rather than one per keystroke — is what makes typing on a
     /// large document not pay that cost per character. See PERFORMANCE_AUDIT.md Phase 2 #1.
     private func refreshDocument() {
-        refreshTask?.cancel()
-        refreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(max(refreshDebounce, 0) * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            guard let textView = textView else { return }
-            let document = makeDocument(with: textView)
-            setLatestDocument(document)
-            let edits = pendingContentChanges
-            pendingContentChanges = []
+        refreshDebouncer.schedule(delay: refreshDebounce) { [weak self] in
+            guard let self, let textView = self.textView else { return }
+            let document = self.makeDocument(with: textView)
+            self.setLatestDocument(document)
+            let event = EditorAdapterSupport.editsEvent(draining: &self.pendingContentChanges, for: document)
             PenumbraSignposts.interval("PenumbraEditorAdapter.refreshDocument") {
-                if edits.isEmpty {
-                    eventBus.send(.documentChanged(document.id, document.contentSnapshot))
-                } else {
-                    eventBus.send(.documentEdited(document.id, edits, newSnapshot: document.contentSnapshot))
-                }
+                self.eventBus.send(event)
             }
         }
-    }
-
-    deinit {
-        refreshTask?.cancel()
     }
 
     /// Builds a fresh document, re-bridging the text view's content into a new `TextSnapshot`.

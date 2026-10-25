@@ -539,8 +539,7 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
             if row.canDisclose {
                 // Not a Button: the row's simultaneous tap (`onSelect`) already toggles disclosure
                 // rows, so a Button here fired both and the row collapsed as it expanded.
-                Image(systemName: row.isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
+                IDEDisclosureChevron(isExpanded: row.isExpanded, size: 10, width: 12)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .frame(width: 12, height: 16)
                     .contentShape(Rectangle())

@@ -663,10 +663,8 @@ struct IDEChangesPanel: View {
             withAnimation(.easeOut(duration: 0.12)) { changedFilesExpanded.toggle() }
         } label: {
             HStack(spacing: IDEAppearance.Spacing.xs) {
-                Image(systemName: changedFilesExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
+                IDEDisclosureChevron(isExpanded: changedFilesExpanded)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .frame(width: 10)
                 Text("Changed files")
                     .font(IDEAppearance.Typography.tabLabel.weight(.medium))
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
@@ -935,11 +933,9 @@ private struct IDEUnsyncedRow: View {
                     if canExpand { withAnimation(.easeOut(duration: 0.12)) { isExpanded.toggle() } }
                 } label: {
                     HStack(spacing: IDEAppearance.Spacing.xs) {
-                        Image(systemName: isExpanded && canExpand ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
+                        IDEDisclosureChevron(isExpanded: isExpanded && canExpand)
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
                             .opacity(canExpand ? 1 : 0.35)
-                            .frame(width: 10)
                         Text(name)
                             .font(IDEAppearance.Typography.caption)
                             .foregroundStyle(tint)

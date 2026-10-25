@@ -324,9 +324,7 @@ private struct IDETypeHierarchyRowView: View {
         HStack(spacing: 6) {
             Color.clear.frame(width: CGFloat(row.depth) * 14, height: 1)
             Button(action: onToggle) {
-                Image(systemName: row.isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .frame(width: 10)
+                IDEDisclosureChevron(isExpanded: row.isExpanded)
                     .opacity(row.canExpand ? 1 : 0)
             }
             .buttonStyle(.plain)

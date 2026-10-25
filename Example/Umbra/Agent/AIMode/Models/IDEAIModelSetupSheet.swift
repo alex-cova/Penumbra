@@ -127,8 +127,7 @@ struct IDEAIModelSetupSheet: View {
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
                     }
                     Spacer()
-                    Image(systemName: isOpen ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                    IDEDisclosureChevron(isExpanded: isOpen, size: 10, width: nil)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
                 .contentShape(Rectangle())

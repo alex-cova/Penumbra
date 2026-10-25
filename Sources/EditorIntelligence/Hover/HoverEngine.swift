@@ -2,17 +2,19 @@ import Foundation
 
 /// Actor-isolated hover engine that queries registered providers and optionally caches results.
 ///
-/// Providers are run concurrently. The first non-nil result is returned and cached.
+/// Providers are run concurrently. The first non-nil result is returned and, when caching is
+/// enabled, remembered. Results key on document + cursor, so a cache is only valid while the
+/// document is unchanged — hosts leave it off (the default) unless they can tolerate that.
 public actor HoverEngine {
     private let providers: [HoverProvider]
-    private let cache: Cache<HoverCacheKey, HoverResult>?
+    private var resultCache: HoverResultCache?
 
     public init(
         providers: [HoverProvider],
-        cache: Cache<HoverCacheKey, HoverResult>? = nil
+        cacheMaxSize: Int? = nil
     ) {
         self.providers = providers
-        self.cache = cache
+        self.resultCache = cacheMaxSize.map(HoverResultCache.init(maxSize:))
     }
 
     /// Request hover information for the given context.
@@ -21,7 +23,7 @@ public actor HoverEngine {
     /// provider can resolve hover information for the context.
     public func hover(context: HoverContext) async -> HoverResult? {
         let key = HoverCacheKey(documentID: context.document.id, cursor: context.cursor)
-        if let cached = await cache?.get(key) {
+        if let cached = resultCache?.get(key) {
             return cached
         }
         var tasks: [Task<HoverResult?, Never>] = []
@@ -33,11 +35,44 @@ public actor HoverEngine {
                 for remaining in tasks.suffix(from: index + 1) {
                     remaining.cancel()
                 }
-                await cache?.set(result, for: key)
+                resultCache?.set(result, for: key)
                 return result
             }
         }
         return nil
+    }
+}
+
+/// Bounded least-recently-used store for hover results. It lives inside `HoverEngine` —
+/// itself an actor — so it needs no isolation of its own, and no `await` hop on the
+/// caret-rest hover path. `Cache` (the former generic actor wrapper) had no other users.
+private struct HoverResultCache {
+    private let maxSize: Int
+    private var storage: [HoverCacheKey: HoverResult] = [:]
+    private var accessOrder: [HoverCacheKey] = []
+
+    init(maxSize: Int = 100) {
+        self.maxSize = maxSize
+    }
+
+    mutating func get(_ key: HoverCacheKey) -> HoverResult? {
+        guard let value = storage[key] else { return nil }
+        recordAccess(key)
+        return value
+    }
+
+    mutating func set(_ value: HoverResult, for key: HoverCacheKey) {
+        if storage[key] == nil, storage.count >= maxSize, let oldest = accessOrder.first {
+            storage.removeValue(forKey: oldest)
+            accessOrder.removeAll { $0 == oldest }
+        }
+        storage[key] = value
+        recordAccess(key)
+    }
+
+    private mutating func recordAccess(_ key: HoverCacheKey) {
+        accessOrder.removeAll { $0 == key }
+        accessOrder.append(key)
     }
 }
 

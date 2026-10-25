@@ -66,6 +66,8 @@ struct IDEToolbarPanel: View {
         // No fill: the row sits over the traffic lights (SwiftUI's hosting view is above the
         // titlebar), so the frame color comes from `NSWindow.backgroundColor` underneath.
         .focusable(false)
+        // Titlebar glyphs and targets; panel buttons keep the shared default size.
+        .ideIconButtonSize(.titlebar)
     }
 }
 
@@ -82,25 +84,25 @@ private struct IDETitlebarPanelToggles: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            IDEToolbarIconButton(
-                systemName: "sidebar.left",
-                isActive: isLeftPanelOpen,
+            IDEIconButton(
+                systemImage: "sidebar.left",
                 help: isLeftPanelOpen ? "Hide Left Panel" : "Show Left Panel",
+                isActive: isLeftPanelOpen,
                 action: toggleLeftPanel
             )
             .disabled(!hasContent)
 
-            IDEToolbarIconButton(
-                systemName: "rectangle.bottomthird.inset.filled",
-                isActive: isBottomPanelOpen,
+            IDEIconButton(
+                systemImage: "rectangle.bottomthird.inset.filled",
                 help: isBottomPanelOpen ? "Hide Bottom Panel" : "Show Bottom Panel",
+                isActive: isBottomPanelOpen,
                 action: toggleBottomPanel
             )
 
-            IDEToolbarIconButton(
-                systemName: "sidebar.right",
-                isActive: isRightPanelOpen,
+            IDEIconButton(
+                systemImage: "sidebar.right",
                 help: isRightPanelOpen ? "Hide Right Panel" : "Show Right Panel",
+                isActive: isRightPanelOpen,
                 action: toggleRightPanel
             )
             .disabled(!hasRightPanel)
@@ -180,54 +182,51 @@ private struct IDETitlebarGlobalActions: View {
     let toggleNotifications: () -> Void
 
     @Environment(IDEWorkspace.self) private var workspace
-    @State private var isHoveringSettings = false
 
     var body: some View {
         HStack(spacing: 2) {
-            IDEToolbarIconButton(
-                systemName: "bolt",
+            IDEIconButton(
+                systemImage: "bolt",
                 help: "Actions…",
                 action: showCommandPalette
             )
 
             if showsGoToFile {
-                IDEToolbarIconButton(
-                    systemName: "magnifyingglass",
+                IDEIconButton(
+                    systemImage: "magnifyingglass",
                     help: "Go to File…",
                     action: showQuickOpen
                 )
             }
 
-            IDEToolbarIconButton(
-                systemName: hasNotifications ? "bell.badge" : "bell",
-                isActive: isNotificationsOpen,
-                tint: hasNotifications && !isNotificationsOpen ? IDEAppearance.ColorToken.accent : nil,
+            IDEIconButton(
+                systemImage: hasNotifications ? "bell.badge" : "bell",
                 help: "Notifications",
+                tint: hasNotifications && !isNotificationsOpen ? IDEAppearance.ColorToken.accent : nil,
+                isActive: isNotificationsOpen,
                 action: toggleNotifications
             )
 
-            IDEToolbarIconButton(
-                systemName: "brain",
-                isActive: workspace.agent.isPanelVisible && workspace.hasOpenProject,
+            IDEIconButton(
+                systemImage: "brain",
                 help: workspace.hasOpenProject ? "Agent" : "Open a folder to use the agent",
+                isActive: workspace.agent.isPanelVisible && workspace.hasOpenProject,
                 action: workspace.toggleAgentPanel
             )
             .disabled(!workspace.hasOpenProject)
 
-            IDEToolbarIconButton(
-                systemName: "bubbles.and.sparkles",
+            IDEIconButton(
+                systemImage: "bubbles.and.sparkles",
                 help: "AI Mode",
                 action: { workspace.showAIMode() }
             )
 
-            Button(action: workspace.showSettings) {
-                IDEToolbarIconLabel(systemName: "gearshape", isHighlighted: isHoveringSettings || workspace.isSettingsVisible)
-            }
-            .buttonStyle(.plain)
-            .onHover { isHoveringSettings = $0 }
-            .help("Settings")
-            .accessibilityLabel("Settings")
-            .focusable(false)
+            IDEIconButton(
+                systemImage: "gearshape",
+                help: "Settings",
+                isActive: workspace.isSettingsVisible,
+                action: workspace.showSettings
+            )
         }
     }
 }
@@ -242,8 +241,8 @@ private struct IDEToolbarActionCluster: View {
     var body: some View {
         HStack(spacing: 2) {
             if showsCloseGroup {
-                IDEToolbarIconButton(
-                    systemName: "rectangle.slash",
+                IDEIconButton(
+                    systemImage: "rectangle.slash",
                     help: "Close Editor Group",
                     action: closeActivePane
                 )
@@ -252,11 +251,11 @@ private struct IDEToolbarActionCluster: View {
             ForEach(items) { item in
                 switch item.content {
                 case .button(let button):
-                    IDEToolbarIconButton(
-                        systemName: button.systemImage,
-                        isActive: button.isActive,
-                        tint: button.tint,
+                    IDEIconButton(
+                        systemImage: button.systemImage,
                         help: button.help,
+                        tint: button.tint,
+                        isActive: button.isActive,
                         action: button.action
                     )
                     .disabled(!button.isEnabled)
@@ -265,59 +264,6 @@ private struct IDEToolbarActionCluster: View {
                 }
             }
         }
-    }
-}
-
-/// Shared glyph-button chrome for the titlebar: a fixed square hit target, muted by default,
-/// brightening on hover (and filled while its panel is open) so every action reads as one family.
-struct IDEToolbarIconButton: View {
-    let systemName: String
-    var isActive = false
-    var tint: Color? = nil
-    let help: String
-    let action: () -> Void
-
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            IDEToolbarIconLabel(
-                systemName: systemName,
-                isActive: isActive,
-                isHighlighted: isHovering && isEnabled,
-                tint: tint
-            )
-            .opacity(isEnabled ? 1 : 0.4)
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .help(help)
-        .accessibilityLabel(help)
-        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
-        .focusable(false)
-    }
-}
-
-struct IDEToolbarIconLabel: View {
-    let systemName: String
-    var isActive = false
-    var isHighlighted = false
-    var tint: Color? = nil
-
-    var body: some View {
-        Image(systemName: systemName)
-            .font(.system(size: IDEAppearance.IconSize.titlebarGlyph, weight: .regular))
-            .foregroundStyle(tint ?? (isActive || isHighlighted ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted))
-            .frame(width: IDEAppearance.Spacing.titlebarButton, height: IDEAppearance.Spacing.titlebarButton)
-            .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-            .contentShape(Rectangle())
-    }
-
-    private var background: Color {
-        if isActive { return IDEAppearance.ColorToken.card }
-        return isHighlighted ? IDEAppearance.ColorToken.controlHover : Color.clear
     }
 }
 
@@ -341,22 +287,21 @@ struct IDEToolbarIconLabel: View {
 /// and the way back to the editor at the trailing end.
 private struct IDEAIToolbarRow: View {
     @Environment(IDEWorkspace.self) private var workspace
-    @State private var isHoveringSettings = false
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             HStack(spacing: IDEAppearance.Spacing.xs) {
-                IDEToolbarIconButton(
-                    systemName: "sidebar.left",
-                    isActive: workspace.showsAISidebar,
+                IDEIconButton(
+                    systemImage: "sidebar.left",
                     help: workspace.showsAISidebar ? "Hide Chats" : "Show Chats",
+                    isActive: workspace.showsAISidebar,
                     action: { workspace.showsAISidebar.toggle() }
                 )
                 ForEach(IDEAITab.allCases) { tab in
-                    IDEToolbarIconButton(
-                        systemName: tab.symbolName,
-                        isActive: workspace.aiTab == tab,
+                    IDEIconButton(
+                        systemImage: tab.symbolName,
                         help: tab == .chat ? "Chat: talk to any model, no project" : "Code: an agent working in a project",
+                        isActive: workspace.aiTab == tab,
                         action: { workspace.aiTab = tab }
                     )
                 }
@@ -366,38 +311,33 @@ private struct IDEAIToolbarRow: View {
             HStack(spacing: 2) {
                 // Changes, Plan and Browser belong to Code: Chat has no project, files or plan.
                 if workspace.aiTab == .code {
-                    IDEToolbarIconButton(
-                        systemName: "sidebar.right",
-                        isActive: workspace.showsAIInspector,
+                    IDEIconButton(
+                        systemImage: "sidebar.right",
                         help: workspace.showsAIInspector ? "Hide Changes, Plan and Browser" : "Show Changes, Plan and Browser",
+                        isActive: workspace.showsAIInspector,
                         action: { workspace.toggleAIInspector() }
                     )
                 }
-                IDEToolbarIconButton(systemName: "bolt", help: "Actions…", action: workspace.showCommandPalette)
-                IDEToolbarIconButton(
-                    systemName: workspace.notifications.items.isEmpty ? "bell" : "bell.badge",
-                    isActive: workspace.notifications.isPanelPresented,
+                IDEIconButton(systemImage: "bolt", help: "Actions…", action: workspace.showCommandPalette)
+                IDEIconButton(
+                    systemImage: workspace.notifications.items.isEmpty ? "bell" : "bell.badge",
+                    help: "Notifications",
                     tint: !workspace.notifications.items.isEmpty && !workspace.notifications.isPanelPresented
                         ? IDEAppearance.ColorToken.accent : nil,
-                    help: "Notifications",
+                    isActive: workspace.notifications.isPanelPresented,
                     action: workspace.notifications.togglePanel
                 )
-                IDEToolbarIconButton(
-                    systemName: "bubbles.and.sparkles",
-                    isActive: true,
+                IDEIconButton(
+                    systemImage: "bubbles.and.sparkles",
                     help: "Back to the Editor",
+                    isActive: true,
                     action: workspace.showEditorMode
                 )
-                Button {
-                    workspace.showSettings()
-                } label: {
-                    IDEToolbarIconLabel(systemName: "gearshape", isHighlighted: isHoveringSettings)
-                }
-                .buttonStyle(.plain)
-                .onHover { isHoveringSettings = $0 }
-                .help("Settings")
-                .accessibilityLabel("Settings")
-                .focusable(false)
+                IDEIconButton(
+                    systemImage: "gearshape",
+                    help: "Settings",
+                    action: workspace.showSettings
+                )
             }
         }
         .padding(.leading, IDEAppearance.Spacing.trafficLightsInset)
@@ -405,5 +345,6 @@ private struct IDEAIToolbarRow: View {
         .frame(maxHeight: .infinity)
         .frame(maxWidth: .infinity)
         .focusable(false)
+        .ideIconButtonSize(.titlebar)
     }
 }

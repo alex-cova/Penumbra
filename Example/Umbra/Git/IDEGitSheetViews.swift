@@ -327,10 +327,8 @@ struct IDEGitPushSheet: View {
                             toggle(commit)
                         } label: {
                             HStack(spacing: IDEAppearance.Spacing.sm) {
-                                Image(systemName: expanded == commit.hash ? "chevron.down" : "chevron.right")
-                                    .font(.system(size: 9, weight: .semibold))
+                                IDEDisclosureChevron(isExpanded: expanded == commit.hash)
                                     .foregroundStyle(IDEAppearance.ColorToken.muted)
-                                    .frame(width: 10)
                                 Text(commit.subject).lineLimit(1)
                                 Spacer(minLength: 0)
                                 Text(commit.shortHash)

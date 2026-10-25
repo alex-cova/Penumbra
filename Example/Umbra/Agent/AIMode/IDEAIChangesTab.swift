@@ -174,10 +174,11 @@ struct IDEAIChangesTab: View {
                 if isExpanded { expanded.remove(file.path) } else { expanded.insert(file.path) }
             } label: {
                 HStack(spacing: IDEAppearance.Spacing.xs) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: IDEAppearance.IconSize.breadcrumbChevron, weight: .semibold))
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .frame(width: 10)
+                    IDEDisclosureChevron(
+                        isExpanded: isExpanded,
+                        size: IDEAppearance.IconSize.breadcrumbChevron
+                    )
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
                     Image(systemName: file.isCreation ? "plus.circle" : "doc.text")
                         .foregroundStyle(file.isCreation ? IDEAppearance.ColorToken.gitAdded : IDEAppearance.ColorToken.gitModified)
                     Text(file.name)

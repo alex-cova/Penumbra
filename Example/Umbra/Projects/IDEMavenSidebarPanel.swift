@@ -260,10 +260,15 @@ private struct IDEMavenTreeRow: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: row.canDisclose ? (row.isExpanded ? "chevron.down" : "chevron.right") : "circle")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(row.canDisclose ? IDEAppearance.ColorToken.muted : Color.clear)
-                .frame(width: 10)
+            if row.canDisclose {
+                IDEDisclosureChevron(isExpanded: row.isExpanded, size: 8)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            } else {
+                Image(systemName: "circle")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Color.clear)
+                    .frame(width: 10)
+            }
             Image(systemName: row.node.systemImage)
                 .font(.system(size: 11))
                 .foregroundStyle(iconColor)

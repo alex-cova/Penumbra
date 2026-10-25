@@ -111,18 +111,17 @@ final class NavigationTests: XCTestCase {
         XCTAssertEqual(results.count, 2)
     }
 
-    func testSymbolSearchEngine() async {
+    func testSymbolIndexPrefixAndExactSearch() async {
         let index = SymbolIndex()
         let documentID = DocumentID()
         let alpha = Symbol(name: "alpha", kind: .function, documentID: documentID, range: makeRange(line: 0, startColumn: 0, endColumn: 5))
         let beta = Symbol(name: "beta", kind: .function, documentID: documentID, range: makeRange(line: 0, startColumn: 0, endColumn: 4))
         await index.index([alpha, beta], for: documentID)
 
-        let engine = SymbolSearchEngine(index: index)
-        let prefixResults = await engine.search(prefix: "al")
+        let prefixResults = await index.search(prefix: "al")
         XCTAssertEqual(prefixResults.map(\.name), ["alpha"])
 
-        let exactResults = await engine.search(exact: "beta")
+        let exactResults = await index.search(exact: "beta")
         XCTAssertEqual(exactResults.map(\.name), ["beta"])
     }
 }

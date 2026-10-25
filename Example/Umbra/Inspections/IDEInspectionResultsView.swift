@@ -120,15 +120,10 @@ struct IDEInspectionResultsView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: IDEAppearance.Spacing.xs) {
-            Image(systemName: run.state == .running ? "magnifyingglass" : "checkmark.circle")
-                .font(.system(size: 18))
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-            Text(run.state == .running ? "Analyzing…" : "No problems found")
-                .font(IDEAppearance.Typography.body)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        IDEEmptyState(
+            symbol: run.state == .running ? "magnifyingglass" : "checkmark.circle",
+            title: run.state == .running ? "Analyzing…" : "No problems found"
+        )
     }
 
     private func allGroupIDs(_ nodes: [IDEInspectionResultsTree.Node]) -> [String] {
@@ -172,9 +167,7 @@ struct IDEInspectionResultsView: View {
                     .foregroundStyle(IDEProblemStyle.color(for: Self.diagnosticSeverity(node.severity)))
                     .frame(width: 14)
             } else {
-                Image(systemName: collapsed.contains(node.id) ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .frame(width: 14)
+                IDEDisclosureChevron(isExpanded: !collapsed.contains(node.id), width: 14)
                 if node.kind == .file { Image(systemName: "doc.text").font(.system(size: 10)) }
             }
             Text(node.title)

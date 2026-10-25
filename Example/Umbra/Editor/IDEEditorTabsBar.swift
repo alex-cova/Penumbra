@@ -12,15 +12,32 @@ struct IDEEditorTabsBar: View {
         workspace.activePaneID == paneID
     }
 
+    /// Fixed regardless of dirty/hover state, so the tab itself never resizes as the pointer
+    /// crosses it — only what's drawn inside this slot changes.
+    private let trailingSlotSide: CGFloat = 14
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 ForEach(tabs) { tab in
-                    IDEEditorTabItem(tab: tab, paneID: paneID) {
-                        workspace.selectTab(tab.id, in: paneID)
-                    } onClose: {
-                        workspace.requestCloseTab(tab.id, in: paneID)
-                    }
+                    IDEChromeTabItem(
+                        title: tab.title,
+                        isSelected: tab.isSelected,
+                        onSelect: { workspace.selectTab(tab.id, in: paneID) },
+                        leading: {
+                            Image(systemName: tab.symbolName ?? IDEFileIcon.systemName(forFilename: tab.title))
+                                .font(.system(size: 10))
+                                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        },
+                        trailing: {
+                            IDEEditorTabCloseButton(
+                                isDirty: tab.isDirty && workspace.preferences.markModifiedTabs,
+                                side: trailingSlotSide,
+                                onClose: { workspace.requestCloseTab(tab.id, in: paneID) }
+                            )
+                        }
+                    )
+                    .contextMenu { tabMenu(for: tab) }
                 }
             }
             .padding(.horizontal, IDEAppearance.Spacing.sm)
@@ -31,109 +48,44 @@ struct IDEEditorTabsBar: View {
         .background(IDEAppearance.ColorToken.tabBar)
         .focusable(false)
     }
-}
 
-private struct IDEEditorTabItem: View {
-    let tab: IDETabRow
-    let paneID: UUID
-    let onSelect: () -> Void
-    let onClose: () -> Void
-
-    @Environment(IDEWorkspace.self) private var workspace
-    @State private var isHovering = false
-
-    /// Fixed regardless of dirty/hover state, so the tab itself never resizes as the pointer
-    /// crosses it — only what's drawn inside this slot changes.
-    private let trailingSlotSide: CGFloat = 14
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: tab.symbolName ?? IDEFileIcon.systemName(forFilename: tab.title))
-                .font(.system(size: 10))
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(width: 12)
-
-            Text(tab.title)
-                .foregroundStyle(tab.isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .font(IDEAppearance.Typography.tabLabel.weight(tab.isSelected ? .medium : .regular))
-
-            IDEEditorTabCloseButton(
-                isDirty: tab.isDirty && workspace.preferences.markModifiedTabs,
-                side: trailingSlotSide,
-                onClose: onClose
-            )
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .overlay(alignment: .top) {
-            if tab.isSelected {
-                RoundedRectangle(cornerRadius: IDEAppearance.Radius.indicator)
-                    .fill(IDEAppearance.ColorToken.accent)
-                    .frame(height: 2)
-                    .padding(.horizontal, 6)
+    @ViewBuilder
+    private func tabMenu(for tab: IDETabRow) -> some View {
+        Button("Split Editor Right") { workspace.splitRight(in: paneID) }
+        Button("Split Editor Down") { workspace.splitDown(in: paneID) }
+        Divider()
+        Button("Rename File…") { workspace.renameTab(tab.id, in: paneID) }
+        if let document = workspace.workbench.panes.flatMap(\.documents).first(where: { $0.id == tab.id }),
+           let url = document.url {
+            if document.contentKind == .text {
+                Button("Reload from Disk") { workspace.reloadTabFromDisk(tab.id, in: paneID) }
+                Button("Reopen as Hex") { workspace.reopenDocumentAsHex(tab.id) }
             }
-        }
-        .contentShape(Rectangle())
-        .accessibilityAddTraits(.isButton)
-        .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
-        .contextMenu {
-            Button("Split Editor Right") { workspace.splitRight(in: paneID) }
-            Button("Split Editor Down") { workspace.splitDown(in: paneID) }
-            Divider()
-            Button("Rename File…") { workspace.renameTab(tab.id, in: paneID) }
-            if let document = workspace.workbench.panes.flatMap(\.documents).first(where: { $0.id == tab.id }),
-               let url = document.url {
-                if document.contentKind == .text {
-                    Button("Reload from Disk") { workspace.reloadTabFromDisk(tab.id, in: paneID) }
-                    Button("Reopen as Hex") { workspace.reopenDocumentAsHex(tab.id) }
-                }
-                if document.contentKind == .binary {
-                    Button("Reload from Disk") { workspace.reloadTabFromDisk(tab.id, in: paneID) }
-                    Button("Reopen as Text") { workspace.reopenDocumentAsText(tab.id) }
-                }
-                Button("Show History") { workspace.showLocalHistory(for: url) }
+            if document.contentKind == .binary {
+                Button("Reload from Disk") { workspace.reloadTabFromDisk(tab.id, in: paneID) }
+                Button("Reopen as Text") { workspace.reopenDocumentAsText(tab.id) }
             }
-            Divider()
-            Button("Close") { workspace.requestCloseTab(tab.id, in: paneID) }
-            Button("Close Other Tabs") { workspace.requestCloseOtherTabs(tab.id, in: paneID) }
-                .disabled(!hasOtherTabs)
-            Button("Close Tabs to the Right") { workspace.requestCloseTabsToRight(tab.id, in: paneID) }
-                .disabled(!hasTabsToRight)
-            Button("Close All") { workspace.requestCloseAllTabs(in: paneID) }
-            Divider()
-            Button("Unsplit") { workspace.unsplit(from: paneID) }
-                .disabled(!hasMultiplePanes)
+            Button("Show History") { workspace.showLocalHistory(for: url) }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .focusable(false)
-    }
-
-    private var backgroundColor: Color {
-        if tab.isSelected {
-            return IDEAppearance.ColorToken.tabActive
-        }
-        if isHovering {
-            return IDEAppearance.ColorToken.tabHover
-        }
-        return IDEAppearance.ColorToken.tabInactive
-    }
-
-    private var paneTabs: [IDETabRow] {
-        workspace.tabsByPane[paneID] ?? []
+        Divider()
+        Button("Close") { workspace.requestCloseTab(tab.id, in: paneID) }
+        Button("Close Other Tabs") { workspace.requestCloseOtherTabs(tab.id, in: paneID) }
+            .disabled(!hasOtherTabs)
+        Button("Close Tabs to the Right") { workspace.requestCloseTabsToRight(tab.id, in: paneID) }
+            .disabled(!hasTabsToRight(tab))
+        Button("Close All") { workspace.requestCloseAllTabs(in: paneID) }
+        Divider()
+        Button("Unsplit") { workspace.unsplit(from: paneID) }
+            .disabled(!hasMultiplePanes)
     }
 
     private var hasOtherTabs: Bool {
-        paneTabs.count > 1
+        tabs.count > 1
     }
 
-    private var hasTabsToRight: Bool {
-        guard let index = paneTabs.firstIndex(where: { $0.id == tab.id }) else { return false }
-        return index < paneTabs.count - 1
+    private func hasTabsToRight(_ tab: IDETabRow) -> Bool {
+        guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return false }
+        return index < tabs.count - 1
     }
 
     private var hasMultiplePanes: Bool {

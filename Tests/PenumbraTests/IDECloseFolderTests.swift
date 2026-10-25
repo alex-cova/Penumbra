@@ -31,13 +31,6 @@ final class IDECloseFolderTests: XCTestCase {
 
     private var home: URL { FileManager.default.homeDirectoryForCurrentUser }
 
-    private func waitUntil(_ message: String, seconds: Double = 3, _ condition: () -> Bool) async {
-        let deadline = Date().addingTimeInterval(seconds)
-        while !condition(), Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(15))
-        }
-        XCTAssertTrue(condition(), message)
-    }
 
     // MARK: - Session written when the window closes
 
@@ -130,7 +123,7 @@ final class IDECloseFolderTests: XCTestCase {
 
         workspace.closeFolder()
 
-        await waitUntil("the prompt never ran") { asked == 1 }
+        await waitForCondition("the prompt never ran", timeout: 3) { asked == 1 }
         try? await Task.sleep(for: .milliseconds(40))
         XCTAssertEqual(workspace.project.rootURL?.standardizedFileURL.path, directory.standardizedFileURL.path)
         XCTAssertEqual(
@@ -152,7 +145,7 @@ final class IDECloseFolderTests: XCTestCase {
 
         workspace.closeFolder()
 
-        await waitUntil("the folder never closed") { self.workspace.project.rootURL == nil }
+        await waitForCondition("the folder never closed", timeout: 3) { self.workspace.project.rootURL == nil }
         XCTAssertEqual(asked, 1)
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "old\n")
         XCTAssertFalse(workspace.hasOpenDocuments)
@@ -167,7 +160,7 @@ final class IDECloseFolderTests: XCTestCase {
 
         workspace.closeFolder()
 
-        await waitUntil("the folder never closed", seconds: 5) { self.workspace.project.rootURL == nil }
+        await waitForCondition("the folder never closed", timeout: 5) { self.workspace.project.rootURL == nil }
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "saved\n")
         assertTerminalsAreHome()
     }
@@ -178,7 +171,7 @@ final class IDECloseFolderTests: XCTestCase {
         await workspace.openDocument(from: url)
         let document = try XCTUnwrap(workspace.workbench.activePane.selectedDocument)
         let host = workspace.host(for: workspace.workbench.activePaneID)
-        await waitUntil("the editor never showed \(name)") { host.textView.text == text }
+        await waitForCondition("the editor never showed \(name)", timeout: 3) { host.textView.text == text }
         return (url, document, host)
     }
 

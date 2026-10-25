@@ -20,12 +20,26 @@ final class HoverEngineTests: XCTestCase {
 
     func testCachesResult() async {
         let provider = MockHoverProvider(name: "Counted", result: HoverResult(contents: "cached", source: "Counted"))
-        let engine = HoverEngine(providers: [provider], cache: Cache())
+        let engine = HoverEngine(providers: [provider], cacheMaxSize: 100)
         let context = makeHoverContext(text: "foo", offset: 0)
         _ = await engine.hover(context: context)
         _ = await engine.hover(context: context)
         let count = await provider.callCount
         XCTAssertEqual(count, 1)
+    }
+
+    func testCacheEvictsLeastRecentlyUsed() async {
+        let provider = MockHoverProvider(name: "Counted", result: HoverResult(contents: "cached", source: "Counted"))
+        let engine = HoverEngine(providers: [provider], cacheMaxSize: 2)
+        let documentID = DocumentID()
+        _ = await engine.hover(context: makeHoverContext(text: "foo", offset: 0, documentID: documentID))
+        _ = await engine.hover(context: makeHoverContext(text: "foo", offset: 1, documentID: documentID))
+        _ = await engine.hover(context: makeHoverContext(text: "foo", offset: 0, documentID: documentID))
+        _ = await engine.hover(context: makeHoverContext(text: "foo", offset: 2, documentID: documentID))
+        _ = await engine.hover(context: makeHoverContext(text: "foo", offset: 0, documentID: documentID))
+        _ = await engine.hover(context: makeHoverContext(text: "foo", offset: 1, documentID: documentID))
+        let count = await provider.callCount
+        XCTAssertEqual(count, 4)
     }
 }
 
@@ -45,11 +59,11 @@ private actor MockHoverProvider: HoverProvider {
     }
 }
 
-private func makeHoverContext(text: String, offset: Int) -> HoverContext {
+private func makeHoverContext(text: String, offset: Int, documentID: DocumentID = DocumentID()) -> HoverContext {
     let snapshot = TextSnapshot(version: 0, text: text)
     let position = TextPosition(line: 0, column: offset, utf16Offset: offset)
     let document = Document(
-        id: DocumentID(),
+        id: documentID,
         url: nil,
         displayName: "test",
         contentSnapshot: snapshot,

@@ -16,9 +16,10 @@ struct IDEAgentTodoListView: View {
                 isExpanded.toggle()
             } label: {
                 HStack(spacing: IDEAppearance.Spacing.xs) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: IDEAppearance.IconSize.breadcrumbChevron, weight: .semibold))
-                        .frame(width: 10)
+                    IDEDisclosureChevron(
+                        isExpanded: isExpanded,
+                        size: IDEAppearance.IconSize.breadcrumbChevron
+                    )
                     Text("Checklist")
                     Text("\(items.filter { $0.status == .completed }.count)/\(items.count)")
                         .font(IDEAppearance.Typography.monoSmall)

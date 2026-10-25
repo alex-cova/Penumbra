@@ -5,12 +5,11 @@ Loaded when working under `Sources/EditorIntelligence`. Feature catalog moved ou
 **Core**
 - Editor-agnostic `Document`, `Cursor`, `Selection`, `TextEdit`/`TextRange` types.
 - `EditorAdapter` protocol + `AsyncStream<EditorEvent>` for decoupled editor integration.
-- `DependencyContainer`, `EventBus`, `EditorContext`, typed `Request`/`Response`.
+- `EventBus`, `EditorContext`, typed `Request`/`Response`.
 
 **Parsing & indexing**
 - `LanguageParser` / `SyntaxTree` abstraction over Tree-sitter.
-- Incremental `SymbolIndex` (Trie-backed) updated by `IndexingService` on document changes.
-- `SymbolSearchEngine` for prefix and exact symbol lookup.
+- Incremental `SymbolIndex` (Trie-backed) updated by `IndexingService` on document changes; prefix and exact lookup go straight to `SymbolIndex.search(prefix:)` / `.search(exact:)`.
 
 **Completion**
 - `CompletionEngine` runs multiple `CompletionProvider`s concurrently and ranks results (`DefaultRanker`). A provider that returns `true` from `isPrimary(for:)` (e.g. `JavaCompletionProvider` for `.java`) turns the others into fallbacks: their items only show when the primary has none, and never after a member-access `.`.
@@ -35,7 +34,7 @@ Loaded when working under `Sources/EditorIntelligence`. Feature catalog moved ou
 - `NavigationEngine` with Go to Definition (`GoToDefinitionProvider`), Find References (`FindReferencesProvider`), and breadcrumbs (`BreadcrumbProvider`). `NavigationContext.kind` (`.definition`/`.implementation`/`.references`) lets one engine hold providers for all three; providers ignore contexts whose `kind` they don't serve. A provider whose `isPrimary(for:)` is true for a context (e.g. `JavaGoToDefinitionProvider` for `.java`, every kind) makes the engine ask only primary providers, so a name-matching fallback never answers for a language that has a real resolver; an empty result shows a short hint next to the caret.
 - LSP definition, implementation, references, rename, and signature-help providers (`LSPDefinitionProvider`, `LSPImplementationProvider`, `LSPReferencesProvider`, `LSPRenameProvider`, `LSPSignatureHelpProvider`); `LSPClient.requestImplementation` maps to `textDocument/implementation`.
 - `EditorIntelligenceController` wires `EditorActionID.goToDefinition`/`goToImplementation`/`findUsages`/`reformatCode` to the engines via `editorActionHandler`; `navigate(kind:)` focuses a single result or hands multiple to `onPresentNavigationChoices` (e.g. the command palette). `onOpenLocationInOtherDocument` routes cross-file targets.
-- `SymbolSearchEngine` for workspace symbol search.
+- Workspace symbol search goes straight to `SymbolIndex` (prefix/exact); the command palette layers its own fuzzy matching on top.
 
 **Diagnostics**
 - `DiagnosticEngine` aggregating multiple `DiagnosticProvider`s.

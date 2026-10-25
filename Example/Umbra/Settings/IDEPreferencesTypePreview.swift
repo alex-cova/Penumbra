@@ -28,9 +28,7 @@ struct IDEPreferencesTypePreview: View {
                             .font(IDEAppearance.Typography.sectionHeader)
                             .textCase(.uppercase)
                     } icon: {
-                        Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                            .font(.caption.weight(.semibold))
-                            .frame(width: 10)
+                        IDEDisclosureChevron(isExpanded: !isCollapsed, size: 12)
                     }
                     Spacer(minLength: 0)
                 }

@@ -84,10 +84,6 @@ public final class EditorIntelligenceController {
     public let hoverEngine: HoverEngine
     public let diagnosticEngine: DiagnosticEngine
     public let navigationEngine: NavigationEngine?
-    /// Not currently invoked from anywhere in this controller — stored for callers who drive
-    /// refactoring themselves. Rename does not go through it: see ``rename()`` and
-    /// ``RenameProviding`` (a rename is one caret position, like LSP's `textDocument/rename`).
-    public let refactoringEngine: RefactoringEngine?
 
     public let breadcrumbBarView = BreadcrumbBarView()
     public let outlineSidebarView = OutlineSidebarView()
@@ -109,11 +105,8 @@ public final class EditorIntelligenceController {
     public var showsCompletionDocumentation = true
     private var completionTask: Task<Void, Never>?
     private var signatureHelpTask: Task<Void, Never>?
-    private var outlineTask: Task<Void, Never>?
-    private var breadcrumbTask: Task<Void, Never>?
-    /// Last buffer exported for breadcrumbs, keyed by ``TextView/contentGeneration`` so a caret
-    /// move does not copy the file again.
-    private var breadcrumbSource: (generation: UInt64, text: String)?
+    private var outline: OutlineController!
+    private var breadcrumbs: BreadcrumbController!
     private var jumpToDefinitionController: JumpToDefinitionController?
 
     private let formattingProvider: (any FormattingProviding)?
@@ -122,29 +115,27 @@ public final class EditorIntelligenceController {
     private let renameProvider: (any RenameProviding)?
     private let refactoringProvider: (any RefactoringProviding)?
     private let codeGenerationProvider: (any CodeGenerationProviding)?
-    private let breadcrumbProvider: (any BreadcrumbProviding)?
-    private var inlayHintProvider: (any InlayHintProviding)?
-    private var inlayHintTask: Task<Void, Never>?
-    private var codeVisionProvider: (any CodeVisionProviding)?
-    private var codeVisionTask: Task<Void, Never>?
-    /// Vertical range of content the last code vision request covered.
-    private var codeVisionRequestedYRange: ClosedRange<CGFloat>?
+    private let inlayHints: InlayHintController
+    private let codeVision: CodeVisionRefreshController
     /// Whether lenses are shown. Off clears them; hosts flip it from a preference.
-    public var codeVisionEnabled = false {
-        didSet {
-            if codeVisionEnabled != oldValue { refreshCodeVision() }
-        }
+    /// Stored in ``CodeVisionRefreshController``; this stays as the host-facing spelling.
+    public var codeVisionEnabled: Bool {
+        get { codeVision.isEnabled }
+        set { codeVision.isEnabled = newValue }
     }
-    /// Identifies which labels the host asked the provider for. A change while lenses are on asks for
-    /// them again, since ``codeVisionEnabled`` alone does not notice.
-    public var codeVisionConfiguration = "" {
-        didSet {
-            if codeVisionConfiguration != oldValue, codeVisionEnabled { refreshCodeVision(delay: 0.1) }
-        }
+    /// Identifies which labels the host asked the provider for. Stored in ``CodeVisionRefreshController``;
+    /// this stays as the host-facing spelling.
+    public var codeVisionConfiguration: String {
+        get { codeVision.configuration }
+        set { codeVision.configuration = newValue }
     }
     /// Called when a lens label is clicked and the controller has no action of its own for it.
     /// Usage counts open Find Usages and implementation counts go to the implementations.
-    public var onCodeVisionClick: ((CodeVisionEntry, Int) -> Void)?
+    /// Stored in ``CodeVisionRefreshController``; this stays as the host-facing spelling.
+    public var onCodeVisionClick: ((CodeVisionEntry, Int) -> Void)? {
+        get { codeVision.onUnknownClick }
+        set { codeVision.onUnknownClick = newValue }
+    }
     /// Called when a code action that carries a ``CodeActionCommand`` is chosen, after its edits (if
     /// any) were applied: the host does what the command names (Run, Debug…).
     public var onCodeActionCommand: ((CodeActionCommand) -> Void)?
@@ -153,13 +144,11 @@ public final class EditorIntelligenceController {
     /// Turns a diagnostic's `(source, code)` into a readable name the hover shows before the
     /// source (an inspection's title for its rule code). `nil` result shows the source alone.
     public var diagnosticTitleProvider: ((_ source: String, _ code: String) -> String?)?
-    /// Vertical range of content the last inlay hint request covered.
-    private var inlayHintRequestedYRange: ClosedRange<CGFloat>?
     /// Whether hints are shown. Off clears them; hosts flip it from a preference.
-    public var inlayHintsEnabled = true {
-        didSet {
-            if inlayHintsEnabled != oldValue { refreshInlayHints() }
-        }
+    /// Stored in ``InlayHintController``; this stays as the host-facing spelling.
+    public var inlayHintsEnabled: Bool {
+        get { inlayHints.isEnabled }
+        set { inlayHints.isEnabled = newValue }
     }
     private let symbolIndex: SymbolIndex?
     private let symbolReferenceProvider: (any SymbolReferenceProviding)?
@@ -257,7 +246,6 @@ public final class EditorIntelligenceController {
         hoverEngine: HoverEngine,
         diagnosticEngine: DiagnosticEngine,
         navigationEngine: NavigationEngine? = nil,
-        refactoringEngine: RefactoringEngine? = nil,
         services: EditorIntelligenceServices = EditorIntelligenceServices(),
         forwardingDelegate: TextViewDelegate? = nil
     ) {
@@ -266,16 +254,14 @@ public final class EditorIntelligenceController {
         self.hoverEngine = hoverEngine
         self.diagnosticEngine = diagnosticEngine
         self.navigationEngine = navigationEngine
-        self.refactoringEngine = refactoringEngine
         self.formattingProvider = services.formattingProvider
         self.signatureHelpProvider = services.signatureHelpProvider
         self.codeActionProvider = services.codeActionProvider
         self.renameProvider = services.renameProvider
         self.refactoringProvider = services.refactoringProvider
         self.codeGenerationProvider = services.codeGenerationProvider
-        self.breadcrumbProvider = services.breadcrumbProvider
-        self.inlayHintProvider = services.inlayHintProvider
-        self.codeVisionProvider = services.codeVisionProvider
+        self.inlayHints = InlayHintController(textView: textView, provider: services.inlayHintProvider)
+        self.codeVision = CodeVisionRefreshController(textView: textView, provider: services.codeVisionProvider)
         self.symbolIndex = services.symbolIndex
         self.symbolReferenceProvider = services.symbolReferenceProvider
         self.workspace = services.workspace
@@ -317,6 +303,26 @@ public final class EditorIntelligenceController {
         inlineController.onPresentationChanged = { [weak self] in
             self?.updateInlineLinesView()
         }
+        inlayHints.makeDocument = { [weak self] in self?.liveDocument() }
+        codeVision.makeDocument = { [weak self] in self?.liveDocument() }
+        codeVision.navigate = { [weak self] kind, offset in
+            self?.navigate(kind: kind, atUTF16Offset: offset) ?? false
+        }
+        // Built after `self.adapter` resolves to the passed adapter or the default
+        // `PenumbraEditorAdapter`, so adapter-less hosts (and tests) get the same fallback
+        // the controller always had.
+        outline = OutlineController(
+            adapter: self.adapter,
+            symbolIndex: services.symbolIndex,
+            outlineSidebarView: outlineSidebarView
+        )
+        breadcrumbs = BreadcrumbController(
+            textView: textView,
+            adapter: self.adapter,
+            symbolIndex: services.symbolIndex,
+            provider: services.breadcrumbProvider
+        )
+        breadcrumbs.publish = { [weak self] in self?.publishBreadcrumbs($0) }
         inlineChipView.onChooseAcceptKey = { [weak self] key in
             self?.inlineController.settings.acceptKey = key
             self?.inlineSettingsChanged()
@@ -1097,12 +1103,8 @@ public final class EditorIntelligenceController {
         emptyCompletionHintTask?.cancel()
         eventTask?.cancel()
         hoverTask?.cancel()
-        inlayHintTask?.cancel()
-        codeVisionTask?.cancel()
         completionTask?.cancel()
         signatureHelpTask?.cancel()
-        outlineTask?.cancel()
-        breadcrumbTask?.cancel()
     }
 
     // MARK: - Public API
@@ -1314,9 +1316,17 @@ public final class EditorIntelligenceController {
         guard let document = liveDocument(), let formattingProvider, let textView else {
             return
         }
-        Task {
+        // Edits are computed against this buffer state; typing meanwhile makes their ranges
+        // stale, so applying them would garble the new text. Drop them instead — formatting
+        // is idempotent, the user can re-invoke it. Same guard as the breadcrumb path.
+        let generation = textView.contentGeneration
+        Task { [weak textView] in
             let edits = await formattingProvider.formatDocument(document)
             await MainActor.run {
+                guard let textView, textView.contentGeneration == generation else {
+                    self.showTransientHint("Document changed — formatting skipped")
+                    return
+                }
                 TextEditApplicator.apply(edits, in: textView)
             }
         }
@@ -1335,13 +1345,18 @@ public final class EditorIntelligenceController {
             formatDocument()
             return
         }
-        Task {
+        let generation = textView.contentGeneration
+        Task { [weak textView] in
             var allEdits: [EditorIntelligence.TextEdit] = []
             for range in ranges {
                 let edits = await formattingProvider.formatSelection(in: document, range: range)
                 allEdits.append(contentsOf: edits)
             }
             await MainActor.run {
+                guard let textView, textView.contentGeneration == generation else {
+                    self.showTransientHint("Document changed — formatting skipped")
+                    return
+                }
                 TextEditApplicator.apply(allEdits, in: textView)
             }
         }
@@ -1349,16 +1364,20 @@ public final class EditorIntelligenceController {
 
     /// Request code actions at the current cursor and show the action panel.
     public func requestCodeActions() {
-        guard let document = liveDocument(), let codeActionProvider else {
+        guard let document = liveDocument(), let codeActionProvider, let textView else {
             return
         }
-        Task {
+        // The panel anchors at the request-time selection; typing meanwhile moves it, so a
+        // stale panel would point at the wrong code. Same generation guard as formatting.
+        let generation = textView.contentGeneration
+        Task { [weak textView] in
             let actions = await codeActionProvider.codeActions(
                 for: document,
                 at: document.cursor.position,
                 diagnostics: latestDiagnostics
             )
             await MainActor.run {
+                guard let textView, textView.contentGeneration == generation else { return }
                 guard !actions.isEmpty else {
                     self.hideCodeActions()
                     self.showTransientHint("No context actions available")
@@ -1534,227 +1553,42 @@ public final class EditorIntelligenceController {
         }
     }
 
-    /// Refresh the outline sidebar from the symbol index.
+    /// Refresh the outline sidebar from the symbol index; the work lives in
+    /// ``OutlineController``.
     public func refreshOutline() {
-        guard let document = adapter.currentDocument, let symbolIndex else {
-            return
-        }
-        outlineTask?.cancel()
-        outlineTask = Task { [weak self] in
-            guard let self else { return }
-            let symbols = await symbolIndex.symbols(in: document.id)
-            let items = OutlineBuilder.build(from: symbols)
-            let selectedID = self.selectedOutlineItemID(for: document.cursor.position, in: items)
-            await MainActor.run {
-                self.outlineSidebarView.update(model: OutlineModel(items: items, selectedItemID: selectedID))
-            }
-        }
+        outline.refresh()
     }
 
-    /// Asks the inlay hint provider for the hints around what is on screen (a viewport above and
-    /// below included) and shows them, after a short pause so typing does not resolve every call.
-    /// Scrolling out of the requested range asks again (see ``refreshInlayHintsIfViewportLeftRange()``).
+    /// Asks the inlay hint provider for the hints around what is on screen; the work lives in
+    /// ``InlayHintController``.
     public func refreshInlayHints(delay: TimeInterval = 0.25) {
-        inlayHintTask?.cancel()
-        guard let textView else { return }
-        guard inlayHintsEnabled, let inlayHintProvider else {
-            inlayHintRequestedYRange = nil
-            if !textView.inlayHints.isEmpty { textView.inlayHints = [] }
-            return
-        }
-        inlayHintTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            let request: (Document, EditorIntelligence.TextRange, UInt64)? = await MainActor.run {
-                guard let self, let textView = self.textView, let document = self.liveDocument() else { return nil }
-                let generation = textView.contentGeneration
-                let length = textView.documentLength
-                let height = textView.bounds.height
-                let top = textView.characterIndex(at: CGPoint(x: 0, y: -height)) ?? 0
-                let bottom = textView.characterIndex(at: CGPoint(x: textView.bounds.width, y: height * 2)) ?? length
-                let start = min(max(0, top), length)
-                let end = min(max(start, bottom), length)
-                // Line and column come from the line index, not from scanning the text.
-                @MainActor
-                func position(_ offset: Int) -> TextPosition {
-                    let location = textView.textLocation(at: offset)
-                    return TextPosition(line: location?.lineNumber ?? 0, column: location?.column ?? offset, utf16Offset: offset)
-                }
-                let offsetY = textView.contentOffset.y
-                self.inlayHintRequestedYRange = (offsetY - height)...(offsetY + height * 2)
-                return (document, EditorIntelligence.TextRange(start: position(start), end: position(end)), generation)
-            }
-            guard let (document, range, generation) = request else { return }
-            let hints = await inlayHintProvider.inlayHints(for: document, in: range)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, let textView = self.textView, textView.contentGeneration == generation else { return }
-                textView.inlayHints = hints
-            }
-        }
+        inlayHints.refresh(delay: delay)
     }
 
-    /// Hints are requested for the viewport plus a screen above and below. Scrolling past that asks
-    /// again, once scrolling pauses, so hints appear in the part of the file that scrolled into view.
+    /// Asks again once scrolling pauses past the last requested range; see ``InlayHintController``.
     func refreshInlayHintsIfViewportLeftRange() {
-        guard inlayHintsEnabled, inlayHintProvider != nil, let textView else { return }
-        let top = textView.contentOffset.y
-        let bottom = top + textView.bounds.height
-        if let range = inlayHintRequestedYRange, range.contains(top), range.contains(bottom) {
-            return
-        }
-        refreshInlayHints(delay: 0.15)
+        inlayHints.refreshIfViewportLeftRange()
     }
 
     // MARK: - Code vision
 
     /// Shows the lenses above declarations in two steps: first the room for every declaration (so the
     /// text does not move when numbers arrive), then the labels for the declarations on screen (a
-    /// viewport above and below included).
+    /// viewport above and below included). The work lives in ``CodeVisionRefreshController``.
     public func refreshCodeVision(delay: TimeInterval = 0.4) {
-        codeVisionTask?.cancel()
-        guard let textView else { return }
-        guard codeVisionEnabled, let codeVisionProvider else {
-            codeVisionRequestedYRange = nil
-            if !textView.codeVisionLenses.isEmpty { textView.codeVisionLenses = [] }
-            return
-        }
-        textView.codeVisionHandler = { [weak self] entry, offset in
-            self?.handleCodeVisionClick(entry, declarationOffset: offset)
-        }
-        codeVisionTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            let request: (Document, UInt64)? = await MainActor.run {
-                guard let self, let textView = self.textView, let document = self.liveDocument() else { return nil }
-                return (document, textView.contentGeneration)
-            }
-            guard let (document, generation) = request else { return }
-            let anchors = await codeVisionProvider.codeVisionAnchors(for: document).sorted()
-            guard !Task.isCancelled else { return }
-            // Step 1: room for every declaration, keeping the labels already shown on the same lines.
-            let visible: [Int]? = await MainActor.run {
-                guard let self, let textView = self.textView, textView.contentGeneration == generation else { return nil }
-                let shownByLine = Dictionary(
-                    textView.codeVisionLenses.compactMap { lens in
-                        textView.textLocation(at: lens.utf16Offset).map { ($0.lineNumber, lens.entries) }
-                    },
-                    uniquingKeysWith: { first, _ in first }
-                )
-                textView.codeVisionLenses = anchors.map { anchor in
-                    let line = textView.textLocation(at: anchor)?.lineNumber
-                    return CodeVisionLens(utf16Offset: anchor, entries: line.flatMap { shownByLine[$0] } ?? [])
-                }
-                let height = textView.bounds.height
-                let top = textView.characterIndex(at: CGPoint(x: 0, y: -height)) ?? 0
-                let bottom = textView.characterIndex(at: CGPoint(x: textView.bounds.width, y: height * 2)) ?? textView.documentLength
-                let offsetY = textView.contentOffset.y
-                self.codeVisionRequestedYRange = (offsetY - height)...(offsetY + height * 2)
-                return anchors.filter { $0 >= top && $0 <= bottom }
-            }
-            guard let visible, !visible.isEmpty else { return }
-            // Step 2: the numbers for what is on screen.
-            let lenses = await codeVisionProvider.codeVision(for: document, anchors: visible)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, let textView = self.textView, textView.contentGeneration == generation else { return }
-                let entriesByAnchor = Dictionary(lenses.map { ($0.utf16Offset, $0.entries) }, uniquingKeysWith: { first, _ in first })
-                let shown = Dictionary(textView.codeVisionLenses.map { ($0.utf16Offset, $0) }, uniquingKeysWith: { first, _ in first })
-                textView.codeVisionLenses = anchors.map { anchor in
-                    if let entries = entriesByAnchor[anchor] { return CodeVisionLens(utf16Offset: anchor, entries: entries) }
-                    return shown[anchor] ?? CodeVisionLens(utf16Offset: anchor)
-                }
-            }
-        }
+        codeVision.refresh(delay: delay)
     }
 
     /// Labels are computed for the viewport plus a screen above and below. Scrolling past that asks
-    /// again, once scrolling pauses.
+    /// again, once scrolling pauses; see ``CodeVisionRefreshController``.
     func refreshCodeVisionIfViewportLeftRange() {
-        guard codeVisionEnabled, codeVisionProvider != nil, let textView else { return }
-        let top = textView.contentOffset.y
-        let bottom = top + textView.bounds.height
-        if let range = codeVisionRequestedYRange, range.contains(top), range.contains(bottom) {
-            return
-        }
-        refreshCodeVision(delay: 0.2)
+        codeVision.refreshIfViewportLeftRange()
     }
 
-    private func handleCodeVisionClick(_ entry: CodeVisionEntry, declarationOffset: Int) {
-        switch entry.id {
-        case "usages":
-            navigate(kind: .references, atUTF16Offset: declarationOffset)
-        case "implementations":
-            navigate(kind: .implementation, atUTF16Offset: declarationOffset)
-        default:
-            onCodeVisionClick?(entry, declarationOffset)
-        }
-    }
-
-    /// Refresh breadcrumb segments for the current cursor.
+    /// Refresh breadcrumb segments for the current cursor; the work lives in
+    /// ``BreadcrumbController``.
     public func refreshBreadcrumbs() {
-        guard textView?.languageConfiguration.showsBreadcrumbs ?? true else {
-            publishBreadcrumbs([])
-            return
-        }
-        guard symbolIndex != nil || breadcrumbProvider != nil else {
-            publishBreadcrumbs([])
-            return
-        }
-        // `liveDocument()` used to copy the whole file here, on the caret, and Java then parsed
-        // that copy. The outline only needs to catch up after typing pauses.
-        breadcrumbTask?.cancel()
-        breadcrumbTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 80_000_000)
-            guard !Task.isCancelled, let self else { return }
-            guard let document = await self.breadcrumbDocument() else { return }
-            var segments = await self.breadcrumbProvider?.breadcrumbs(for: document)
-            if segments == nil, let symbolIndex = self.symbolIndex {
-                let symbols = await symbolIndex.symbols(in: document.id)
-                let cursorOffset = document.cursor.position.utf16Offset
-                let locations = BreadcrumbProvider.breadcrumbLocations(from: symbols, cursorOffset: cursorOffset)
-                segments = locations.map { BreadcrumbSegment(title: $0.displayName, range: $0.range) }
-            }
-            guard !Task.isCancelled else { return }
-            self.publishBreadcrumbs(BreadcrumbBarModel.capped(segments ?? []))
-        }
-    }
-
-    /// The on-screen buffer for a breadcrumb pass. A piece-tree file is copied off the main actor.
-    private func breadcrumbDocument() async -> Document? {
-        guard let textView, let base = adapter.currentDocument else { return nil }
-        let generation = textView.contentGeneration
-        let caret = textView.selectedRange.location
-        let location = textView.textLocation(at: caret)
-        let position = TextPosition(
-            line: location?.lineNumber ?? 0,
-            column: location?.column ?? caret,
-            utf16Offset: caret
-        )
-        let text: String
-        if let cached = breadcrumbSource, cached.generation == generation {
-            text = cached.text
-        } else if textView.pieceTreeContentSnapshot() != nil {
-            let export = textView.exportDocumentText()
-            text = await Task.detached(priority: .utility) {
-                export.materializeUTF16Text()
-            }.value
-            guard !Task.isCancelled, textView.contentGeneration == generation else { return nil }
-            breadcrumbSource = (generation, text)
-        } else {
-            text = textView.text
-            breadcrumbSource = (generation, text)
-        }
-        return Document(
-            id: base.id,
-            url: textView.documentURL ?? base.url,
-            displayName: base.displayName,
-            contentSnapshot: TextSnapshot(version: base.version, text: text),
-            selection: Selection(range: EditorIntelligence.TextRange(start: position, end: position)),
-            cursor: Cursor(position: position),
-            viewport: base.viewport,
-            languageIdentifier: base.languageIdentifier ?? textView.languageIdentifier
-        )
+        breadcrumbs.refresh()
     }
 
     private func publishBreadcrumbs(_ segments: [BreadcrumbSegment]) {
@@ -3153,23 +2987,6 @@ public final class EditorIntelligenceController {
     private func focusWorkspaceResult(_ result: WorkspaceSearchResult) {
         focus(range: result.range)
         hideWorkspaceSearch()
-    }
-
-    private func selectedOutlineItemID(for position: TextPosition, in items: [OutlineItem]) -> UUID? {
-        let offset = position.utf16Offset
-        var match: OutlineItem?
-        func walk(_ items: [OutlineItem]) {
-            for item in items {
-                let start = min(item.range.start.utf16Offset, item.range.end.utf16Offset)
-                let end = max(item.range.start.utf16Offset, item.range.end.utf16Offset)
-                if start <= offset, offset <= end {
-                    match = item
-                    walk(item.children)
-                }
-            }
-        }
-        walk(items)
-        return match?.id
     }
 
     // MARK: - Keyboard

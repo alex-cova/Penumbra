@@ -26,12 +26,6 @@ final class IDEDiffTabTests: XCTestCase {
         )
     }
 
-    private func waitUntil(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
-        for _ in 0 ..< 200 where !condition() {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        XCTAssertTrue(condition(), "timed out", file: file, line: line)
-    }
 
     private func diffDocuments(_ workspace: IDEWorkspace) -> [WorkbenchDocument] {
         workspace.workbench.allDocuments().filter { $0.contentKind == .diff }
@@ -47,7 +41,7 @@ final class IDEDiffTabTests: XCTestCase {
         let document = try XCTUnwrap(diffDocuments(workspace).first)
         XCTAssertEqual(document.displayName, "a.txt (Test)")
         let session = try XCTUnwrap(workspace.diffSessions[document.id])
-        try await waitUntil { session.chunks.count == 2 }
+        await waitForCondition(timeout: 2) { session.chunks.count == 2 }
         XCTAssertEqual(session.chunks.map(\.kind), [.modified, .inserted])
 
         workspace.openDiff(diff)
@@ -93,12 +87,12 @@ final class IDEDiffTabTests: XCTestCase {
             }
         }
         viewer.show(session, preferences: IDEPreferences.shared)
-        try await waitUntil { session.chunks.count == 1 }
+        await waitForCondition(timeout: 2) { session.chunks.count == 1 }
         XCTAssertTrue(viewer.rightTextView.isEditable)
 
         viewer.applyLeftToRight(chunk: 0, append: false)
         XCTAssertEqual(viewer.rightTextView.text, "one\ntwo\nthree\n")
-        try await waitUntil { session.chunks.isEmpty }
+        await waitForCondition(timeout: 2) { session.chunks.isEmpty }
 
         session.save()
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "one\ntwo\nthree\n")
@@ -136,7 +130,7 @@ final class IDEDiffTabTests: XCTestCase {
         session.confirmOverwrite = { _ in asked += 1; return answer }
         viewer.show(session, preferences: IDEPreferences.shared)
         defer { viewer.detach(session) }
-        try await waitUntil { session.chunks.count == 1 }
+        await waitForCondition(timeout: 2) { session.chunks.count == 1 }
 
         viewer.applyLeftToRight(chunk: 0, append: false)
         try "someone else\n".write(to: file, atomically: true, encoding: .utf8)
@@ -159,7 +153,7 @@ final class IDEDiffTabTests: XCTestCase {
             return .failed("")
         }
         session.reload()
-        try await waitUntil { session.chunks.count == 1 }
+        await waitForCondition(timeout: 2) { session.chunks.count == 1 }
         // "b" (left line 1) became x, y, z (right lines 1-3); "c" moves from 2 to 4.
         XCTAssertEqual(session.mapLine(0, fromRight: false), 0)
         XCTAssertEqual(session.mapLine(1, fromRight: false), 1)
@@ -178,7 +172,7 @@ final class IDEDiffTabTests: XCTestCase {
             workspace.openDiff(request("a", "b"))
             let document = try XCTUnwrap(diffDocuments(workspace).first)
             weakSession = workspace.diffSessions[document.id]
-            try await waitUntil { weakSession?.chunks.count == 1 }
+            await waitForCondition(timeout: 2) { weakSession?.chunks.count == 1 }
             workspace.teardown()
         }
         for _ in 0 ..< 50 where weakWorkspace != nil || weakSession != nil {
