@@ -21,6 +21,17 @@ struct IDEAIModelChoice: Codable, Hashable, Sendable {
         self.acpAgentID = acpAgentID
     }
 
+    /// A model key as an agent's `model:` names it: `provider:model`, such as
+    /// `ollama:qwen3-coder:30b` or `mlx:my-org/my-model`. `nil` for anything else.
+    init?(parsing key: String) {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let colon = trimmed.firstIndex(of: ":") else { return nil }
+        let provider = IDEAgentProvider(rawValue: String(trimmed[..<colon]))
+        let model = String(trimmed[trimmed.index(after: colon)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let provider, !model.isEmpty, !model.hasPrefix("-") else { return nil }
+        self.init(provider: provider, model: model)
+    }
+
     /// The effort to send, or `nil` for "off".
     var effectiveReasoningEffort: String? { reasoningEffort == "off" ? nil : reasoningEffort }
 

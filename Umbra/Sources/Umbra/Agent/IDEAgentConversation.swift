@@ -1075,7 +1075,9 @@ final class IDEAgentConversation: Identifiable {
         if !host.agentProjectTaskNames().isEmpty {
             tools.append(IDEProjectTaskTool(host: box))
         }
-        tools += [TodoTool(), AskUserTool(), ExitPlanModeTool(), ExploreTool(), TaskTool(catalog: agents)]
+        // `explore` runs on the helper model when one is set; `task` agents name theirs in `model:`.
+        let exploreModel: String? = settings.helperChoice == nil ? nil : "helper"
+        tools += [TodoTool(), AskUserTool(), ExitPlanModeTool(), ExploreTool(model: exploreModel), TaskTool(catalog: agents)]
         if let memoryDirectory { tools.append(RememberTool(memoryDirectory: memoryDirectory)) }
         let git = IDEAgentGitSource(
             projectRoot: root, secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns),
@@ -1120,6 +1122,8 @@ final class IDEAgentConversation: Identifiable {
             Task.detached(priority: .utility) { IDEAgentToolOutputs.sweep(directory: directory) }
         }
         let projectNotes = IDEAgentProjectNotes.load(root: root)
+        // Child sessions resolve their model through this snapshot, off the main actor.
+        let resolver = settings.clientFactory()
         let configuration = AgentConfiguration(
             model: choice.model,
             systemPrompt: SystemPrompt.make(
@@ -1149,7 +1153,9 @@ final class IDEAgentConversation: Identifiable {
             instructionsBaseline: projectNotes,
             toolOutputStore: toolOutputs,
             snapshotter: IDEAgentGitSnapshotter(projectRoot: root),
-            afterEdit: { paths in await box.problemsAfterEdit(relativePaths: paths, timeout: IDEAgentEditProblems.timeout) })
+            afterEdit: { paths in await box.problemsAfterEdit(relativePaths: paths, timeout: IDEAgentEditProblems.timeout) },
+            makeChildClient: { [resolver] key in try resolver.childClient(for: key) },
+            summaryClient: try? resolver.childClient(for: "helper"))
         // Apple's on-device window is small. When the system prompt and tool list alone take more than half of
         // it, the model has no room to read a file, so say so here instead of failing on the first request.
         if let kind = choice.provider.appleKind, let window = settings.appleContextSize(for: kind) {

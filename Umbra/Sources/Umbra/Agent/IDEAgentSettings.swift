@@ -188,6 +188,51 @@ final class IDEAgentSettings {
     /// Whether the sandbox profile blocks network access. Off by default (Gradle and Maven need
     /// to resolve).
     var sandboxBlockNetwork: Bool { didSet { defaults.set(sandboxBlockNetwork, forKey: Keys.sandboxNoNet) } }
+    /// The helper model for chores (`explore`, summaries): a cheaper or local model whose output
+    /// a wrong answer barely hurts. `nil` runs everything on the chat's model.
+    var helperChoice: IDEAIModelChoice? {
+        didSet {
+            if let helperChoice, let data = try? JSONEncoder().encode(helperChoice) {
+                defaults.set(data, forKey: Keys.helperModel)
+            } else {
+                defaults.removeObject(forKey: Keys.helperModel)
+            }
+        }
+    }
+
+    /// Whether a helper model is set, for the settings toggle. Enabling picks the Ollama default;
+    /// the provider and model rows below refine it.
+    var helperEnabled: Bool {
+        get { helperChoice != nil }
+        set {
+            if newValue, helperChoice == nil {
+                helperChoice = IDEAIModelChoice(provider: .ollama, model: selectedOllamaModel(named: model(for: .ollama))?.name ?? "")
+            } else if !newValue {
+                helperChoice = nil
+            }
+        }
+    }
+
+    var helperProvider: IDEAgentProvider {
+        get { helperChoice?.provider ?? .ollama }
+        set {
+            var choice = helperChoice ?? IDEAIModelChoice(provider: .ollama, model: "")
+            if choice.provider != newValue { choice.model = "" }
+            choice.provider = newValue
+            choice.reasoningEffort = newValue.defaultReasoning
+            choice.acpAgentID = nil
+            helperChoice = choice
+        }
+    }
+
+    var helperModelName: String {
+        get { helperChoice?.model ?? "" }
+        set {
+            var choice = helperChoice ?? IDEAIModelChoice(provider: .ollama, model: "")
+            choice.model = newValue
+            helperChoice = choice
+        }
+    }
     /// Whether a Brave Search key is saved. Loaded from the Keychain on first read, so creating
     /// settings never prompts for keychain access. Held here so views never read the Keychain.
     private var _hasWebSearchKey = false
@@ -338,6 +383,7 @@ final class IDEAgentSettings {
         static let runSeconds = "umbra.agent.maxRunSeconds"
         static let runCost = "umbra.agent.maxRunCostCents"
         static let contextOverride = "umbra.agent.contextWindowOverride"
+        static let helperModel = "umbra.agent.helperModel"
         static let acpAgents = "umbra.agent.acpAgents"
         static let acpActive = "umbra.agent.acpActive"
         static let acpAllowed = "umbra.agent.acpAllowed"
@@ -400,6 +446,7 @@ final class IDEAgentSettings {
         acpAllowedAgentIDs = Set((defaults.stringArray(forKey: Keys.acpAllowed) ?? []).compactMap(UUID.init(uuidString:)))
         acpEnvKeys = (defaults.dictionary(forKey: Keys.acpEnvKeys) as? [String: [String]]) ?? [:]
         disclosedHosts = Set(defaults.stringArray(forKey: Keys.disclosed) ?? [])
+        helperChoice = defaults.data(forKey: Keys.helperModel).flatMap { try? JSONDecoder().decode(IDEAIModelChoice.self, from: $0) }
     }
 
     private func store(_ key: String, _ value: String) {
@@ -427,28 +474,11 @@ final class IDEAgentSettings {
     /// A server on this Mac: nothing leaves it, so it needs no consent and no key.
     var isLocalEndpoint: Bool { isLocalEndpoint(for: provider) }
 
-    func endpointURL(for provider: IDEAgentProvider) -> URL? {
-        guard provider.hasEndpoint else { return nil }
-        let trimmed = baseURL(for: provider).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed), let scheme = url.scheme, ["http", "https"].contains(scheme), url.host() != nil
-        else { return nil }
-        return url
-    }
+    func endpointURL(for provider: IDEAgentProvider) -> URL? { clientFactory().endpointURL(for: provider) }
 
-    func endpointHost(for provider: IDEAgentProvider) -> String {
-        switch provider {
-        case .mlx, .apple: "this Mac"
-        // Not a host, but the key the one-time "Allow Sending" consent is remembered under.
-        case .applePCC: "Apple Private Cloud Compute"
-        default: endpointURL(for: provider)?.host() ?? baseURL(for: provider)
-        }
-    }
+    func endpointHost(for provider: IDEAgentProvider) -> String { clientFactory().endpointHost(for: provider) }
 
-    func isLocalEndpoint(for provider: IDEAgentProvider) -> Bool {
-        if provider == .mlx || provider == .apple { return true }
-        guard let host = endpointURL(for: provider)?.host()?.lowercased() else { return false }
-        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" || host.hasSuffix(".localhost")
-    }
+    func isLocalEndpoint(for provider: IDEAgentProvider) -> Bool { clientFactory().isLocalEndpoint(for: provider) }
 
     /// The effort to send, or `nil` for "off".
     var effectiveReasoningEffort: String? { reasoningEffort == "off" ? nil : reasoningEffort }
@@ -476,9 +506,7 @@ final class IDEAgentSettings {
     /// (Ollama behind a proxy may want a bearer token).
     var requiresAPIKey: Bool { requiresAPIKey(for: provider) }
 
-    func requiresAPIKey(for provider: IDEAgentProvider) -> Bool {
-        provider != .ollama && provider.hasEndpoint && !isLocalEndpoint(for: provider)
-    }
+    func requiresAPIKey(for provider: IDEAgentProvider) -> Bool { clientFactory().requiresAPIKey(for: provider) }
 
     /// Whether a key is saved for a provider's endpoint, loading the cached state on first use.
     func hasAPIKey(for provider: IDEAgentProvider) -> Bool {
@@ -536,9 +564,7 @@ final class IDEAgentSettings {
 
     func apiKey() -> String? { apiKey(for: provider) }
 
-    func apiKey(for provider: IDEAgentProvider) -> String? {
-        try? keyStore.load(account: endpointHost(for: provider))
-    }
+    func apiKey(for provider: IDEAgentProvider) -> String? { clientFactory().apiKey(for: provider) }
 
     // MARK: - Web search
 
@@ -617,7 +643,7 @@ final class IDEAgentSettings {
     static let minimumAppleCodeContext = 16_384
 
     func appleContextSize(for kind: AppleModelKind) -> Int? {
-        appleContextSizes[kind] ?? (kind == .onDevice ? AppleModelAvailability.onDeviceContextSize : nil)
+        clientFactory().appleWindow(for: kind)
     }
 
     /// Whether Apple's model has the room Code needs. A window that is not known yet is given the benefit of the doubt
@@ -658,10 +684,7 @@ final class IDEAgentSettings {
     var effectiveContextLength: Int { effectiveContextLength(for: currentChoice) }
 
     func effectiveContextLength(for choice: IDEAIModelChoice) -> Int {
-        let limit: Int? = choice.provider == .mlx
-            ? selectedMLXModel(id: choice.model).flatMap { MLXModelInspector.inspect(directory: $0.directory).contextLength }
-            : selectedOllamaModel(named: choice.model)?.contextLength
-        return min(localContextLength, limit ?? localContextLength)
+        clientFactory().effectiveContextLength(for: choice)
     }
 
     /// The window compaction measures against. Local models use what was requested from them; a hosted
@@ -669,11 +692,7 @@ final class IDEAgentSettings {
     var contextWindow: Int? { contextWindow(for: currentChoice) }
 
     func contextWindow(for choice: IDEAIModelChoice) -> Int? {
-        if let kind = choice.provider.appleKind { return appleContextSize(for: kind) }
-        if choice.provider.isLocal { return effectiveContextLength(for: choice) }
-        if contextWindowOverride > 0 { return contextWindowOverride }
-        let name = choice.model.lowercased()
-        return Self.hostedContextWindows.first { name.hasPrefix($0.prefix) }?.tokens
+        clientFactory().contextWindow(for: choice)
     }
 
     /// Loads the installed models from the Ollama endpoint. `adjustSelection: false` leaves the global
@@ -736,6 +755,8 @@ final class IDEAgentSettings {
         case modelNotInstalled(String)
         case mlxUnavailable(String)
         case appleUnavailable(String)
+        case noHelperModel
+        case unknownModel(String)
 
         var errorDescription: String? {
             switch self {
@@ -745,6 +766,8 @@ final class IDEAgentSettings {
             case .modelCannotUseTools(let name): "“\(name)” does not support tool calling, which the agent needs. Choose another model."
             case .modelNotInstalled(let name): "“\(name)” is not downloaded. Choose an installed model, or download it under Manage On-Device Models…"
             case .mlxUnavailable(let reason), .appleUnavailable(let reason): reason
+            case .noHelperModel: "No helper model is set. Choose one in the agent settings."
+            case .unknownModel(let key): "“\(key)” is not a model this host understands (helper, or provider:model)."
             }
         }
     }
@@ -782,63 +805,28 @@ final class IDEAgentSettings {
         let provider = choice.provider
         let local = provider.isLocal && provider.appleKind == nil
         let prices = maxRunCostCents > 0 ? priceTableText : ""
-        return "\(provider.rawValue)|\(baseURL(for: provider))|\(choice.model)|\(choice.reasoningEffort)|\(local ? String(effectiveContextLength(for: choice)) : "")|\(iterationCap)|\(maxRunTokens)|\(maxRunSeconds)|\(maxRunCostCents)|\(prices)|\(contextWindow(for: choice) ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)|\(webFetchEnabled)|\(browserToolsEnabled)|\(runTestsBeforeFinishing)|\(memoryEnabled)|\(saveMemoriesWithoutAsking)|\(sandboxCommands)|\(sandboxBlockNetwork)"
+        let helper = helperChoice.map { "\($0.provider.rawValue)|\($0.model)|\($0.reasoningEffort)" } ?? "none"
+        return "\(provider.rawValue)|\(baseURL(for: provider))|\(choice.model)|\(choice.reasoningEffort)|\(local ? String(effectiveContextLength(for: choice)) : "")|\(iterationCap)|\(maxRunTokens)|\(maxRunSeconds)|\(maxRunCostCents)|\(prices)|\(contextWindow(for: choice) ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)|\(webFetchEnabled)|\(browserToolsEnabled)|\(runTestsBeforeFinishing)|\(memoryEnabled)|\(saveMemoriesWithoutAsking)|\(sandboxCommands)|\(sandboxBlockNetwork)|\(helper)"
     }
 
     func makeClient() throws -> any LLMClient { try makeClient(for: currentChoice) }
 
     /// `requiresTools: false` is plain chat: a model the server or its chat template says cannot call
-    /// tools is fine, since none are offered.
+    /// tools is fine, since none are offered. Built through the client factory, so the main chat
+    /// and child sessions share one construction path.
     func makeClient(for choice: IDEAIModelChoice, requiresTools: Bool = true) throws -> any LLMClient {
-        let provider = choice.provider
-        if let kind = provider.appleKind {
-            if let message = AppleModelAvailability.message(for: appleStatus(kind), kind: kind) {
-                throw ConfigurationError.appleUnavailable(message)
-            }
-            return AppleLLMClient(kind: kind)
-        }
-        guard !choice.model.trimmingCharacters(in: .whitespaces).isEmpty else { throw ConfigurationError.missingModel }
-        if provider == .mlx { return try makeMLXClient(model: choice.model, requiresTools: requiresTools) }
-        guard let url = endpointURL(for: provider) else { throw ConfigurationError.invalidBaseURL }
-        let key = apiKey(for: provider).flatMap { $0.isEmpty ? nil : $0 }
-        if requiresAPIKey(for: provider), key == nil { throw ConfigurationError.missingAPIKey(host: endpointHost(for: provider)) }
-        let endpoint = LLMEndpoint(baseURL: url, apiKey: key)
-
-        switch provider {
-        case .openAIResponses:
-            return OpenAIResponsesClient(endpoint: endpoint)
-        case .chatCompletions:
-            // The real OpenAI takes strict tools and a cache key; other servers get the conservative subset.
-            let isOpenAI = endpointHost(for: provider) == "api.openai.com"
-            return OpenAIChatCompletionsClient(endpoint: endpoint, capabilities: isOpenAI ? .openAI : .compatible)
-        case .anthropic:
-            return AnthropicMessagesClient(endpoint: endpoint)
-        case .meta:
-            // Meta's Model API is Responses-compatible and takes a Bearer key (see `LLMEndpoint.meta`).
-            return OpenAIResponsesClient(endpoint: endpoint)
-        case .ollama:
-            let info = selectedOllamaModel(named: choice.model)
-            // Only refuse on what the server told us: with no list loaded, the request decides.
-            if requiresTools, let info, !info.capabilities.isEmpty, !info.supportsTools {
-                throw ConfigurationError.modelCannotUseTools(info.name)
-            }
-            return OllamaClient(
-                endpoint: endpoint, contextLength: effectiveContextLength(for: choice),
-                supportsThinking: info?.supportsThinking ?? false)
-        case .mlx:
-            return try makeMLXClient(model: choice.model, requiresTools: requiresTools)
-        case .apple, .applePCC:
-            preconditionFailure("handled above")
-        }
+        try clientFactory().client(for: choice, requiresTools: requiresTools)
     }
 
-    private func makeMLXClient(model: String, requiresTools: Bool) throws -> MLXLLMClient {
-        let status = MLXAvailability.currentStatus()
-        guard status == .available else { throw ConfigurationError.mlxUnavailable(MLXAvailability.message(for: status)) }
-        guard let installed = selectedMLXModel(id: model) else { throw ConfigurationError.modelNotInstalled(model) }
-        // The template decides whether the model can be asked to call a function at all.
-        let info = MLXModelInspector.inspect(directory: installed.directory)
-        if requiresTools, info.hasChatTemplate, !info.supportsTools { throw ConfigurationError.modelCannotUseTools(installed.id) }
-        return MLXLLMClient(model: installed, settings: MLXGenerationSettings())
+    /// A snapshot builder for model clients, safe to use off the main actor (child sessions).
+    func clientFactory() -> IDEAgentClientFactory {
+        IDEAgentClientFactory(
+            baseURLs: Dictionary(uniqueKeysWithValues: IDEAgentProvider.allCases.map { ($0, baseURL(for: $0)) }),
+            keyStore: keyStore, transport: transport, ollamaModels: ollamaModels,
+            installedMLXModels: installedModels(), localContextLength: localContextLength,
+            contextWindowOverride: contextWindowOverride,
+            appleStatuses: Dictionary(uniqueKeysWithValues: AppleModelKind.allCases.map { ($0, appleStatus($0)) }),
+            appleWindows: appleContextSizes, hostedContextWindows: Self.hostedContextWindows,
+            helper: helperChoice)
     }
 }

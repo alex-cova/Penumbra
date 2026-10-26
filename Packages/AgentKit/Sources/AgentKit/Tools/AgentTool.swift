@@ -263,12 +263,16 @@ public struct SubagentRequest: Sendable {
     /// When set, the child asks this client instead of sharing the parent's. Tests use one scripted
     /// client per side; production shares the parent's client, model and permission rules.
     public var client: (any LLMClient)?
+    /// A model key the host resolves (`helper`, or a `provider:model` id). `nil` shares the
+    /// parent's model. An unknown or unavailable key falls back to the parent's.
+    public var model: String?
 
-    public init(id: String, task: String, maxIterations: Int, client: (any LLMClient)? = nil) {
+    public init(id: String, task: String, maxIterations: Int, client: (any LLMClient)? = nil, model: String? = nil) {
         self.id = id
         self.task = task
         self.maxIterations = maxIterations
         self.client = client
+        self.model = model
     }
 }
 
@@ -278,11 +282,14 @@ public struct SubagentResult: Sendable {
     public var summary: String
     public var usage: TokenUsage
     public var ending: RunEnding
+    /// Why the child did not run on the model asked for (unknown or unavailable key), if it didn't.
+    public var note: String?
 
-    public init(summary: String, usage: TokenUsage, ending: RunEnding) {
+    public init(summary: String, usage: TokenUsage, ending: RunEnding, note: String? = nil) {
         self.summary = summary
         self.usage = usage
         self.ending = ending
+        self.note = note
     }
 }
 

@@ -29,8 +29,9 @@ public struct DelegationRequest: Sendable {
 }
 
 public enum DelegationResult: Sendable {
-    /// The child ran to the end. `summary` is its last message.
-    case finished(sessionID: String, summary: String, ending: RunEnding)
+    /// The child ran to the end. `summary` is its last message; `note` says why it did not run
+    /// on the model asked for, when it didn't.
+    case finished(sessionID: String, summary: String, ending: RunEnding, note: String? = nil)
     /// The child runs in the background; its report arrives later as a note.
     case started(sessionID: String)
     /// Not run, for a reason the model can act on.
@@ -57,7 +58,9 @@ public struct TaskTool: AgentTool {
     public var reportsOwnEdits: Bool { true }
 
     public var definition: ToolDefinition {
-        let agents = catalog.agents.map { "- \($0.name)\($0.editsFiles ? " (can change files)" : " (read-only)"): \($0.description)" }
+        let agents = catalog.agents.map {
+            "- \($0.name)\($0.editsFiles ? " (can change files)" : " (read-only)")\($0.model.map { " [runs on model \"\($0)\"]" } ?? ""): \($0.description)"
+        }
         return ToolDefinition(
             name: "task",
             description: ([
@@ -101,7 +104,7 @@ public struct TaskTool: AgentTool {
                 "Do not sleep, poll for progress, ask it for status, or repeat its work, and avoid the files and topics it is using.",
                 "Work on something that does not overlap, or tell the user what you started and end your turn.",
             ].joined(separator: "\n")
-        case .finished(let sessionID, let summary, let ending):
+        case .finished(let sessionID, let summary, let ending, let modelNote):
             switch ending {
             case .stopped:
                 throw CancellationError()
@@ -113,7 +116,9 @@ public struct TaskTool: AgentTool {
             let text = summary.trimmingCharacters(in: .whitespacesAndNewlines)
             let report = text.isEmpty ? "The subagent finished without a report." : text
             let note = ending == .completed ? "" : " It stopped early (\(ending))."
-            return "Subagent \(agent.name), session \(sessionID).\(note)\n" + UntrustedContent.wrap(String(report.prefix(8 * 1024)), source: "subagent")
+            var output = "Subagent \(agent.name), session \(sessionID).\(note)\n" + UntrustedContent.wrap(String(report.prefix(8 * 1024)), source: "subagent")
+            if let modelNote { output += "\n" + modelNote }
+            return output
         }
     }
 }

@@ -9,6 +9,7 @@ import Foundation
 /// tools: [read_file, grep, git_diff]
 /// mode: read-only
 /// max-iterations: 12
+/// model: helper
 /// ---
 /// Review the change the task names. Report only real defects, each with path:line.
 /// ```
@@ -22,19 +23,23 @@ public struct AgentDefinition: Sendable, Equatable, Hashable {
     /// in a mode that applies edits without asking.
     public var editsFiles: Bool
     public var maxIterations: Int
+    /// The model the child runs on: a key the host resolves (`helper`, or a `provider:model` id).
+    /// `nil` shares the parent's model.
+    public var model: String?
     /// Added to the child's system prompt.
     public var instructions: String
     public var source: String
 
     public init(
         name: String, description: String, tools: [String] = [], editsFiles: Bool = false,
-        maxIterations: Int = 15, instructions: String = "", source: String = ""
+        maxIterations: Int = 15, model: String? = nil, instructions: String = "", source: String = ""
     ) {
         self.name = name
         self.description = description
         self.tools = tools
         self.editsFiles = editsFiles
         self.maxIterations = maxIterations
+        self.model = model
         self.instructions = instructions
         self.source = source
     }
@@ -54,11 +59,14 @@ public struct AgentDefinition: Sendable, Equatable, Hashable {
         let mode = document.text("mode")?.lowercased()
         let edits = mode == "edit" || mode == "write"
         let iterations = document.text("max-iterations").flatMap { Int($0) }.map { min(max($0, 1), 60) } ?? (edits ? 25 : 15)
+        let rawModel = document.text("model")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = rawModel?.isEmpty == false ? rawModel : nil
         return AgentDefinition(
             name: name,
             description: document.text("description") ?? CommandTemplate.firstLine(of: document.body),
             tools: document.list("tools").filter { !$0.isEmpty },
-            editsFiles: edits, maxIterations: iterations, instructions: document.body, source: source)
+            editsFiles: edits, maxIterations: iterations, model: model,
+            instructions: document.body, source: source)
     }
 }
 
@@ -82,10 +90,10 @@ public struct AgentCatalog: Sendable, Equatable {
         agents.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
-    /// Changes when an agent's name, description, tools or text does, so a host can start a new session for it.
+    /// Changes when an agent's name, description, tools, model or text does, so a host can start a new session for it.
     public var fingerprint: String {
         let parts = agents.map {
-            "\($0.name)\u{0}\($0.description)\u{0}\($0.tools.joined(separator: ","))\u{0}\($0.editsFiles)\u{0}\($0.maxIterations)\u{0}\(ReadLedger.hash($0.instructions))"
+            "\($0.name)\u{0}\($0.description)\u{0}\($0.tools.joined(separator: ","))\u{0}\($0.editsFiles)\u{0}\($0.maxIterations)\u{0}\($0.model ?? "")\u{0}\(ReadLedger.hash($0.instructions))"
         }
         return String(ReadLedger.hash(parts.joined(separator: "\u{1}")), radix: 16)
     }

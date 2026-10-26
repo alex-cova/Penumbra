@@ -83,6 +83,56 @@ struct IDEAgentSettingsView: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
 
+            Section("Helper model") {
+                @Bindable var settings = settings
+                Toggle("Use a helper model for chores", isOn: $settings.helperEnabled)
+                if settings.helperChoice != nil {
+                    Picker("Provider", selection: $settings.helperProvider) {
+                        ForEach(IDEAgentProvider.allCases) { Text($0.title).tag($0) }
+                    }
+                    switch settings.helperProvider {
+                    case .ollama:
+                        HStack {
+                            Picker("Model", selection: $settings.helperModelName) {
+                                if settings.helperModelName.isEmpty { Text("Choose…").tag("") }
+                                ForEach(settings.ollamaModels) { model in
+                                    Text(IDEAgentOllamaLabel.title(model)).tag(model.name).disabled(!model.supportsTools)
+                                }
+                                if !settings.helperModelName.isEmpty, settings.selectedOllamaModel(named: settings.helperModelName) == nil {
+                                    Text(settings.helperModelName).tag(settings.helperModelName)
+                                }
+                            }
+                            Button { Task { await settings.refreshOllamaModels(adjustSelection: false) } } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Reload the installed models")
+                            .accessibilityLabel("Reload the installed models")
+                        }
+                    case .mlx:
+                        Picker("Model", selection: $settings.helperModelName) {
+                            if settings.helperModelName.isEmpty { Text("Choose…").tag("") }
+                            ForEach(IDELocalModelsStore.shared.installed) { model in
+                                let info = IDELocalModelsStore.shared.info(for: model)
+                                Text(LocalModelFormat.shortName(model.id) + (info.hasChatTemplate && !info.supportsTools ? " (no tool support)" : ""))
+                                    .tag(model.id)
+                                    .disabled(info.hasChatTemplate && !info.supportsTools)
+                            }
+                            if !settings.helperModelName.isEmpty, settings.selectedMLXModel(id: settings.helperModelName) == nil {
+                                Text(settings.helperModelName).tag(settings.helperModelName)
+                            }
+                        }
+                    case .apple, .applePCC:
+                        EmptyView()
+                    case .openAIResponses, .chatCompletions, .anthropic, .meta:
+                        TextField("Model", text: $settings.helperModelName)
+                    }
+                }
+                Text("Read-only research, summaries, and agents that say model: helper run on this model instead of the chat's. Pick a cheaper or local one.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+
             Section("External ACP Agents") {
                 @Bindable var settings = settings
                 if settings.acpAgents.isEmpty {

@@ -1,5 +1,20 @@
 import Foundation
 
+/// A client for a child session: what to ask, which model id to request, and the window to
+/// compact against. The host builds it from a model key (`makeChildClient`); AgentKit never
+/// interprets the key itself.
+public struct ChildClient: Sendable {
+    public var client: any LLMClient
+    public var model: String
+    public var contextWindow: Int?
+
+    public init(client: any LLMClient, model: String, contextWindow: Int? = nil) {
+        self.client = client
+        self.model = model
+        self.contextWindow = contextWindow
+    }
+}
+
 public struct AgentConfiguration: Sendable {
     public var model: String
     public var systemPrompt: String
@@ -76,6 +91,14 @@ public struct AgentConfiguration: Sendable {
     public var afterEdit: (@Sendable ([String]) async -> String?)?
     /// How long a turn waits for `afterEdit` before going on without it.
     public var afterEditTimeout: TimeInterval
+    /// Resolves a model key to a client for a child session: an agent's `model:`, `explore`'s
+    /// model, or `helper`. Throw when the key is unknown or unavailable; the child then falls
+    /// back to the parent's client and the tool output says so. `nil` shares the parent always.
+    public var makeChildClient: (@Sendable (String) throws -> ChildClient)?
+    /// The resolved helper client for the non-cache summary path (a tool call during a cached
+    /// summary, or a forced pass after overflow). `nil` summarizes on the parent's model, and the
+    /// cached-prefix path always stays on the parent's model.
+    public var summaryClient: ChildClient?
 
     public init(
         model: String,
@@ -108,12 +131,16 @@ public struct AgentConfiguration: Sendable {
         toolOutputStore: (any ToolOutputStore)? = nil,
         snapshotter: (any WorkspaceSnapshotter)? = nil,
         afterEdit: (@Sendable ([String]) async -> String?)? = nil,
-        afterEditTimeout: TimeInterval = 3
+        afterEditTimeout: TimeInterval = 3,
+        makeChildClient: (@Sendable (String) throws -> ChildClient)? = nil,
+        summaryClient: ChildClient? = nil
     ) {
         self.toolOutputStore = toolOutputStore
         self.snapshotter = snapshotter
         self.afterEdit = afterEdit
         self.afterEditTimeout = afterEditTimeout
+        self.makeChildClient = makeChildClient
+        self.summaryClient = summaryClient
         self.maxLengthContinuations = maxLengthContinuations
         self.currentInstructions = currentInstructions
         self.instructionsBaseline = instructionsBaseline

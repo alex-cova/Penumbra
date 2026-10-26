@@ -11,11 +11,15 @@ public struct ExploreTool: AgentTool {
     /// When set, the child asks this client instead of sharing the parent's. Tests use one scripted
     /// client per side; production shares the parent's client, model and permission rules.
     public var childClient: (any LLMClient)?
+    /// A model key the host resolves (`helper`, or a `provider:model` id). `nil` shares the
+    /// parent's model. An unknown or unavailable key falls back to the parent's.
+    public var model: String?
 
-    public init(maxIterations: Int = 15, summaryMaxCharacters: Int = 6 * 1024, childClient: (any LLMClient)? = nil) {
+    public init(maxIterations: Int = 15, summaryMaxCharacters: Int = 6 * 1024, childClient: (any LLMClient)? = nil, model: String? = nil) {
         self.maxIterations = maxIterations
         self.summaryMaxCharacters = summaryMaxCharacters
         self.childClient = childClient
+        self.model = model
     }
 
     public var risk: ToolRisk { .read }
@@ -43,7 +47,7 @@ public struct ExploreTool: AgentTool {
             throw ToolError("This host does not support subagents.")
         }
         let result = await spawn(SubagentRequest(
-            id: context.callID, task: task, maxIterations: maxIterations, client: childClient))
+            id: context.callID, task: task, maxIterations: maxIterations, client: childClient, model: model))
         if Task.isCancelled { throw CancellationError() }
         switch result.ending {
         case .completed:
@@ -57,10 +61,11 @@ public struct ExploreTool: AgentTool {
         }
         let summary = String(result.summary.prefix(summaryMaxCharacters))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !summary.isEmpty else {
-            return UntrustedContent.wrap("Explore finished without findings.", source: "explore")
+        let report = summary.isEmpty ? "Explore finished without findings." : summary
+        if let note = result.note {
+            return UntrustedContent.wrap(report, source: "explore") + "\n" + note
         }
-        return UntrustedContent.wrap(summary, source: "explore")
+        return UntrustedContent.wrap(report, source: "explore")
     }
 
 }
