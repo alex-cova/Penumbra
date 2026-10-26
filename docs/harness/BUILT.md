@@ -134,6 +134,14 @@ Apple's foundation model as a provider, on device and (macOS 27) on Private Clou
 - Decisions: Chat always, Code only where the window is large enough (the on-device 8K is chat only; gate 16,384); PCC included, behind the usual per-host consent; no reasoning setting; one package, not folded into AgentKitMLX (different deployment target, no MLX dependency).
 - Open: confirm PCC generation from the app (`ModelManagerError 1046` from the test host), map reasoning effort to macOS 27's `ReasoningLevel`, an `explore`/`task` child on Apple's model, and re-measure Code's overhead if the tool list grows.
 
+## 10. Helper read-task measurements (plan 8 phase-3 gate, local side 2026-10-26)
+
+The plan's gate references `Tools/AgentEval/Tasks/*read*`, which did not exist, so two read tasks were created: `trace-default` (which file/constant/value sets a default) and `find-callers` (every caller of `charge()`, with a `recharge_account` decoy and an aliased import). Both fail untouched and pass with their reference `answer.md`; protected globs cover `shop/**` so only `answer.md` may change.
+
+- `Tools/AgentEval/Results/2026-10-26-helper-read-27b.json`: Qwen3.8-27B via Ollama, 5 trials × 2 tasks, 10/10 pass, ~27 s/trial. No wrong or missing answers; every `find-callers` report explicitly excluded the decoy.
+- `Tools/AgentEval/Results/2026-10-26-helper-read-qwen-fixed.json`: qwen-fixed, 5 × 2, 10/10 pass, ~35 s/trial, same quality.
+- File citations in every report; line numbers in about half. Still missing: the hosted baseline (no hosted key on this machine), so the gate's local-vs-hosted comparison is not decided; phase 3 stays unshipped.
+
 ## Docs to update as phases land
 
 `Packages/AgentKit/CLAUDE.md` (retries, arguments, snapshot seam, early start, `task`, `web_fetch`, MCP), `Umbra/Sources/Umbra/Agent/CLAUDE.md` (snapshotter, background subagent UI, MCP pane, web fetch toggle), and the memory note `agent-harness-decisions`.

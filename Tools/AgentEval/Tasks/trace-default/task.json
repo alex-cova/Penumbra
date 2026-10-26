@@ -1,0 +1,10 @@
+{
+  "check": "test -f answer.md && grep -q \"defaults.py\" answer.md && grep -q \"MAX_RETRIES\" answer.md && grep -qw \"7\" answer.md",
+  "protected": [
+    "shop/**"
+  ],
+  "timeoutSeconds": 300,
+  "title": "Trace where a default retry count is set",
+  "difficulty": "easy",
+  "prompt": "A customer asks: when no settings are passed to Client, what value does it use for retries, which file sets that number, and what is the constant called? Read the code in shop/ and write the file name, the constant and the number to answer.md in the project root, one fact per line. Do not modify any code."
+}

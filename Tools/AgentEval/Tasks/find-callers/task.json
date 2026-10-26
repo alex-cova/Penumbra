@@ -1,0 +1,10 @@
+{
+  "check": "test -f answer.md && grep -q \"issue_refund\" answer.md && grep -q \"refunds.py\" answer.md && grep -q \"finalize\" answer.md && grep -q \"invoices.py\" answer.md",
+  "protected": [
+    "shop/**"
+  ],
+  "timeoutSeconds": 300,
+  "title": "Find every caller of charge()",
+  "difficulty": "medium",
+  "prompt": "Which functions call `charge()`, and in which files are they defined? Read the code in shop/ (note the import styles differ per file) and write each calling function and its file to answer.md in the project root, one per line. Do not modify any code."
+}
