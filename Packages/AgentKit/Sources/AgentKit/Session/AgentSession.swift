@@ -1781,6 +1781,10 @@ public actor AgentSession {
     private static func canonical(_ arguments: String) -> String {
         (try? JSONValue(parsing: arguments).serialized()) ?? arguments
     }
+
+    /// The session's tools and configuration, for tests.
+    @_spi(HelperTesting) public var toolsForTesting: [any AgentTool] { tools }
+    @_spi(HelperTesting) public var configurationForTesting: AgentConfiguration { configuration }
 }
 
 /// First result wins between a tool call, its timeout, and the run's cancellation. The losers are

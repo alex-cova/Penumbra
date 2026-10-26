@@ -1,13 +1,43 @@
-import AgentKit
+@_spi(HelperTesting) import AgentKit
 import Foundation
 import XCTest
 @testable import Umbra
 
 @MainActor
 final class IDEAgentHelperModelTests: XCTestCase {
+    private var project: URL!
+    private var storeDirectory: URL!
+    private var workspace: IDEWorkspace!
+
+    override func setUpWithError() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("agent-helper-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        project = base.appendingPathComponent("project", isDirectory: true)
+        storeDirectory = base.appendingPathComponent("store", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        workspace = IDEWorkspace()
+        workspace.project.setRoot(project)
+    }
+
+    override func tearDownWithError() throws {
+        workspace.teardown()
+        workspace = nil
+        IDEWorkspace.isSessionPersistenceEnabled = true
+        if let base = project?.deletingLastPathComponent() { try? FileManager.default.removeItem(at: base) }
+    }
+
+    private func send(_ controller: IDEAgentController, _ message: String) async {
+        controller.draft = message
+        controller.send()
+        for _ in 0..<500 where controller.isRunning { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(controller.isRunning, "the run should have finished")
+    }
     private func makeSettings() -> (IDEAgentSettings, UserDefaults) {
         let defaults = UserDefaults(suiteName: "umbra.agent.helper.tests.\(UUID().uuidString)")!
         let settings = IDEAgentSettings(defaults: defaults, keyStore: IDEAgentMemoryKeyStore())
+        settings.saveAPIKey("sk-test")
+        settings.acceptDisclosure()
         return (settings, defaults)
     }
 
@@ -66,6 +96,46 @@ final class IDEAgentHelperModelTests: XCTestCase {
         let resolved = try settings.clientFactory().childClient(for: "ollama:qwen3-coder:30b")
         XCTAssertTrue(resolved.client is OllamaClient)
         XCTAssertEqual(resolved.model, "qwen3-coder:30b")
+    }
+
+    func testExploreUsesTheHelperWhenItIsOn() async throws {
+        let (settings, _) = makeSettings()
+        settings.helperChoice = IDEAIModelChoice(provider: .ollama, model: "qwen3-coder:30b")
+        let client = MockLLMClient(turns: [.text("hi")])
+        let controller = IDEAgentController(
+            settings: settings, store: SessionStore(directory: storeDirectory), clientFactory: { _ in client })
+        controller.attach(host: workspace)
+        await send(controller, "hi")
+
+        let session = try XCTUnwrap(controller.currentSessionForTesting)
+        let tools = await session.toolsForTesting
+        let explore = try XCTUnwrap(tools.compactMap({ $0 as? ExploreTool }).first)
+        XCTAssertEqual(explore.model, "helper", "explore is delegated to the helper when it is on")
+        let configuration = await session.configurationForTesting
+        let resolved = try configuration.makeChildClient?("helper")
+        XCTAssertTrue(resolved?.client is OllamaClient, "the helper key resolves without touching the network")
+        XCTAssertEqual(resolved?.model, "qwen3-coder:30b")
+        XCTAssertNotNil(configuration.summaryClient, "summaries use the helper too")
+    }
+
+    func testExploreSharesTheParentWhenItIsOff() async throws {
+        let (settings, _) = makeSettings()
+        XCTAssertNil(settings.helperChoice)
+        let client = MockLLMClient(turns: [.text("hi")])
+        let controller = IDEAgentController(
+            settings: settings, store: SessionStore(directory: storeDirectory), clientFactory: { _ in client })
+        controller.attach(host: workspace)
+        await send(controller, "hi")
+
+        let session = try XCTUnwrap(controller.currentSessionForTesting)
+        let tools = await session.toolsForTesting
+        let explore = try XCTUnwrap(tools.compactMap({ $0 as? ExploreTool }).first)
+        XCTAssertNil(explore.model, "explore shares the parent model when the helper is off")
+        let configuration = await session.configurationForTesting
+        XCTAssertThrowsError(try configuration.makeChildClient?("helper")) { error in
+            XCTAssertEqual(error as? IDEAgentSettings.ConfigurationError, .noHelperModel)
+        }
+        XCTAssertNil(configuration.summaryClient)
     }
 
     func testResolverErrors() {
