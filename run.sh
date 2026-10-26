@@ -4,4 +4,4 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$root"
 
-exec swift run Umbra "$@"
+exec swift run --package-path Umbra Umbra "$@"

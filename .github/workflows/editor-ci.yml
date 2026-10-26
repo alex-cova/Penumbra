@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'Example/**'
+      - 'Umbra/**'
       - 'Sources/Penumbra/**'
       - 'Sources/EditorIntelligence/**'
       - 'Sources/JavaIntelligence/**'
@@ -13,7 +13,7 @@ on:
       - 'Scripts/check-ios-carryover.sh'
   pull_request:
     paths:
-      - 'Example/**'
+      - 'Umbra/**'
       - 'Sources/Penumbra/**'
       - 'Sources/EditorIntelligence/**'
       - 'Sources/JavaIntelligence/**'
@@ -67,5 +67,10 @@ jobs:
       - name: Check for legacy iOS carryover
         run: bash Scripts/check-ios-carryover.sh
 
+      # The library package must build on its own (macOS 14, no app dependencies), so an Umbra-only
+      # import cannot leak into Penumbra or the intelligence libraries.
+      - name: Build the libraries
+        run: swift build --build-tests
+
       - name: Build Umbra
-        run: swift build -c release --product Umbra
+        run: swift build --package-path Umbra -c release --product Umbra

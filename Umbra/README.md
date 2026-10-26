@@ -1,0 +1,198 @@
+# Umbra
+
+Umbra is a lightweight macOS code editor — Sublime Text–class basics without the weight of a full IDE. It is built on the [Penumbra](https://github.com/alex-cova/Penumbra) text engine (tree-sitter highlighting, multi-cursor editing, optional Metal rendering) and ships as a native AppKit app from this repository.
+
+## Download
+
+Pre-built releases are published on [GitHub Releases](https://github.com/alex-cova/Penumbra/releases) as `Umbra-<version>-macOS.zip`.
+
+1. Download and unzip the archive.
+2. Move `Umbra.app` to Applications (or anywhere you like).
+3. Open Umbra. Signed/notarized builds launch without Gatekeeper workarounds.
+
+Release builds check for updates automatically (Application menu ▸ Check for Updates…, or Settings ▸ General ▸ Updates). Updates are delivered through [Sparkle](https://sparkle-project.org/) from the stable feed at `https://alex-cova.github.io/Penumbra/appcast.xml`.
+
+## Features
+
+**Editing**
+- Tree-sitter syntax highlighting (Swift, JS/TS, Python, JSON, YAML, HTML, Markdown, and more)
+- Line numbers, code folding, word wrap, minimap
+- Multi-cursor editing, column selection, find/replace
+- Optional Metal renderer for large documents
+
+**Project & files**
+- Open Folder with a file-tree explorer sidebar
+- New / Open / Save / Save As, recent files, drag-and-drop
+- Quick Open (⌘P) searches project files and open tabs
+- Git status in the explorer, plus a source-control panel (stage, commit, diff, history) backed by the `GitIntelligence` package
+- `.http` request files: the in-app HTTP client (`Umbra/Sources/Umbra/HTTP/`) sends the request at the caret and shows the response in the bottom panel
+
+**Intelligence (no LSP)**
+- Symbol index–driven completion, hover, and diagnostics
+- Go to Symbol (⌘R) and symbol-based go to definition
+- Snippet and in-buffer word completion
+
+**Workbench**
+- Split editors (horizontal/vertical), tabbed panes
+- Command palette (⌘⇧P), go to line (⌘G)
+- Multiple windows, one project each, optionally merged into native macOS tabs
+- Session restore: tabs, splits, caret, and the project folder of the window you used last
+
+## Keyboard shortcuts
+
+Umbra uses the **Sublime** keymap by default (change in Settings → Keymap).
+
+| Shortcut | Action |
+|----------|--------|
+| ⌘N | New file |
+| ⌘⇧N | New window |
+| ⌘O | Open file |
+| ⌘⇧O | Open folder |
+| ⌘S / ⌘⇧S | Save / Save As |
+| ⌘W | Close tab |
+| ⌘P | Go to file |
+| ⌘⇧P | Command palette |
+| ⌘L | Go to line |
+| ⌘R | Go to symbol |
+| ⌘F / ⌘⌥F | Find / Replace |
+| ⌘\\ | Split editor right |
+| ⌘B | Toggle sidebar |
+| ⌘, | Settings |
+
+## Windows and projects
+
+Each window holds one project, with its own tabs, sidebar, terminal and index. File ▸ New Window (⌘⇧N) opens another; File ▸ New Window Tab, or Window ▸ Merge All Windows, puts them in one native tab bar (the system "Prefer tabs" setting applies to new windows).
+
+Opening a folder, from File ▸ Open Folder…, Open Recent, or by dropping it on a window:
+
+- A folder that is already open brings its window forward instead of opening a second copy.
+- An empty window (the Welcome screen) takes it.
+- A window that already has a project asks whether to open the folder in a new window or replace this window's project. "Remember my choice" sets Settings ▸ Project ▸ Open Folders; you can change it there later.
+- Folders and files opened from the Dock, Finder or `open -a Umbra <path>` get a new window without asking. A file opens in the window whose project contains it.
+
+Closing a window closes only its project. Quitting asks once if any window has unsaved editors. On the next launch Umbra restores the window you used last; your other projects are in File ▸ Open Recent.
+
+## Development
+
+Umbra is its own SwiftPM package (this folder) on top of the library package at the repository root, so
+run SwiftPM from this folder, or use the scripts at the repository root:
+
+```bash
+swift run Umbra                                    # from Umbra/
+swift run Umbra --open path/to/file.swift
+swift test                                         # Umbra's tests; the library tests run from the repository root
+../run.sh                                          # same as `swift run Umbra`
+../run-metal.sh                                    # release build + Metal renderer
+```
+
+`swift run` is convenient for hacking on the editor, but it does not install the app icon or bundle metadata — use the release build script for a real `.app`.
+
+### Project layout
+
+```
+Umbra/
+├── Package.swift         # The app's package (macOS 26); depends on the root library package (`..`)
+├── Sources/Umbra/        # App source — SwiftUI shell, views, IDEWorkspace, and UmbraApp.swift (@main)
+├── Sources/UmbraACP/     # Umbra as an ACP agent on stdio
+├── Tests/UmbraTests/     # App tests (library tests stay in ../Tests/PenumbraTests)
+├── Umbra.xcodeproj/      # Thin Xcode project for Previews/Run/Debug (dev convenience, not for release)
+├── UmbraIcon.icon/       # App icon (Icon Composer); compiled at build time
+├── umbra.png             # The mark on the welcome page and the `swift run` Dock icon
+└── Resources/            # Info.plist, entitlements
+```
+
+The SPM executable target is named `Umbra` in `Umbra/Package.swift`; it's what
+`Scripts/build-app.sh` and CI build for release.
+
+### SwiftUI Previews
+
+A SwiftUI Preview hosted inside a SwiftPM executable target fails with *"needs the build setting
+`ENABLE_DEBUG_DYLIB` set to `YES`"*, because SwiftPM executables can't produce the debug-dylib split
+Previews require — regardless of which file you're previewing. To preview any view in `Umbra/Sources/Umbra/`
+(e.g. `IDEPreferencesView.swift`), open **`Umbra/Umbra.xcodeproj`** and select the `Umbra` scheme —
+a thin Xcode app project that compiles the same source folder directly as a real app target (new Swift files are picked up without editing the project), which gets
+`ENABLE_DEBUG_DYLIB` for free. It also gives you ⌘R to run/debug a real bundle. It's a dev convenience
+only — it doesn't build or ship the release `.app`.
+
+Previews fail under the package's `Umbra` scheme by design — both run the
+SwiftPM executable.
+
+## Building `Umbra.app`
+
+```bash
+./Scripts/build-app.sh
+```
+
+This script:
+
+1. Builds the `Umbra` target in release configuration.
+2. Assembles `dist/Umbra.app` (bundle ID `com.umbra.editor`).
+3. Compiles `Umbra/UmbraIcon.icon` via `actool` into `Assets.car` (macOS 26+ Liquid Glass) and `UmbraIcon.icns` (fallback).
+4. Writes `dist/Umbra-<version>-macOS.zip`.
+
+Open the result:
+
+```bash
+open dist/Umbra.app
+```
+
+### App icon
+
+The icon lives at [`UmbraIcon.icon`](UmbraIcon.icon/) (Apple Icon Composer format). Edit it in Icon Composer, then rebuild — `build-app.sh` picks it up automatically. Do not hand-edit generated `Assets.car` or `UmbraIcon.icns` in `dist/`.
+
+### Code signing and notarization
+
+For local signed builds, set:
+
+| Variable | Purpose |
+|----------|---------|
+| `CODESIGN_IDENTITY` | Developer ID Application identity |
+| `APPLE_ID` | Apple ID for notarization |
+| `APPLE_NOTARIZATION_PASSWORD` | App-specific password |
+| `APPLE_TEAM_ID` | Team ID |
+
+CI releases use `.github/workflows/release-app.yml` with the secrets documented in the table above (`APPLE_CERTIFICATE_BASE64`, `KEYCHAIN_PASSWORD`, etc.).
+
+### Automatic updates (Sparkle)
+
+Release CI also regenerates `website/appcast.xml` and delta patches under `website/updates/`, then pushes them to `main` so GitHub Pages serves the feed.
+
+One-time signing key setup (run after `swift build --product Umbra` in this folder so Sparkle tools are available):
+
+```bash
+Umbra/.build/artifacts/sparkle/Sparkle/bin/generate_keys
+```
+
+This prints the `SUPublicEDKey` value for [`Umbra/Resources/Info.plist`](Resources/Info.plist) and stores the private key in your login keychain. Export the private key for CI and add it as the `SPARKLE_ED_PRIVATE_KEY` repository secret:
+
+```bash
+.build/artifacts/sparkle/Sparkle/bin/generate_keys -x /path/to/sparkle-ed-private.key
+```
+
+Trigger a release by pushing an unprefixed semver tag (this repo does not use a `v` prefix):
+
+```bash
+./Scripts/push-version.sh          # bump VERSION, commit, tag, and push
+# or:
+git tag 1.6.0
+git push origin 1.6.0
+```
+
+## Settings & session
+
+Preferences (⌘,) persist font size, tab width, wrap, line numbers, folding, minimap, Metal renderer, and keymap preset.
+
+Editor state is saved under `~/Library/Application Support/com.umbra.editor/`:
+
+- `app.json` — preferences and the recent files and projects, shared by every window.
+- `last-window.json` — the project, tabs and panel layout of the window you used last; it is the one window restored at launch.
+- `session.json` — the single file older versions wrote. It is migrated once on first launch and then left untouched.
+
+## System requirements
+
+- macOS 12.0 or later
+- Xcode command-line tools (for `swift build` and `actool` when building the app icon)
+
+## License
+
+Umbra is part of the Penumbra repository; see the root [LICENSE](../LICENSE) and [README](../README.md) for the library and its terms.

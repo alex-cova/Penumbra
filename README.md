@@ -1,30 +1,30 @@
-# Penumbra
+<p align="center">
+  <img src="Screenshots/banner.png" alt="Umbra & Penumbra — Next-Generation Native macOS Code Editor" width="100%">
+</p>
 
-**Repository:** [github.com/alex-cova/Penumbra](https://github.com/alex-cova/Penumbra) · **Website:** [alex-cova.github.io/Penumbra](https://alex-cova.github.io/Penumbra)
+# Umbra & Penumbra
 
-This monorepo ships **Umbra**, a fast macOS code editor with a built-in coding agent, and **Penumbra**, the AppKit text engine and IDE-intelligence libraries underneath it. Use Umbra as your daily editor; embed Penumbra when you are building your own macOS editing surface.
+**Umbra** is a fast macOS code editor with a built-in coding agent. **Penumbra** is the AppKit text engine and IDE-intelligence libraries underneath it. Use Umbra as your daily editor; embed Penumbra when you are building your own macOS editing surface.
 
-| | |
-| --- | --- |
-| **Try the app** | [Download Umbra](https://github.com/alex-cova/Penumbra/releases) · `swift run Umbra` |
-| **Use the framework** | [Installation](#installation) · [Quick start](#quick-start) |
+[Download Umbra](https://github.com/alex-cova/Penumbra/releases) · [Website](https://alex-cova.github.io/Penumbra) · [Build from source](#build-from-source) · [Embed Penumbra](#installation)
+
+> ### Meta Global AI Developer Hackathon
+>
+> Umbra is an entry in the [Meta Global AI Developer Hackathon](https://dev.meta.ai/events/global-hackathon), run by Meta in October–November 2026. Umbra's coding agent talks to Meta's Model API (`api.meta.ai`) and can run on the Muse models: choose **Meta (Muse)** as the provider in the model picker and add your API key (it is stored in the Keychain). See [Coding agent](#coding-agent).
+>
+> Meta and Muse are trademarks of Meta Platforms, Inc. Umbra is an independent project.
+
+## Contents
+
+1. [Umbra](#umbra) — [Highlights](#highlights) · [Coding agent](#coding-agent) · [Build from source](#build-from-source)
+2. [Penumbra](#penumbra) — [Modules](#modules) · [Installation](#installation) · [Quick start](#quick-start) · [Keymaps](#keymaps)
+3. [Repository](#repository) — [Layout](#layout) · [Development](#development) · [Community](#community) · [License](#license)
 
 ---
 
-## Table of contents
+# Umbra
 
-1. [Umbra — editor & AI harness](#umbra--editor--ai-harness)
-2. [Penumbra — framework & libraries](#penumbra--framework--libraries)
-
----
-
-# Umbra — editor & AI harness
-
-**Umbra** is the macOS app in this repo: a **Sublime Text–style** editor that stays light, opens real project folders, and ships a **full coding-agent harness** beside your buffers—not a webview bolt-on.
-
-Open a folder, edit with tree-sitter highlighting and multi-cursor power, run and debug Java (and more), review git diffs in-editor, and pair with an agent that can read the tree, edit files with approval, run Gradle, and revert whole runs when you change your mind.
-
-### Screenshots
+A **Sublime Text–style** editor that stays light, opens real project folders, and ships a **full coding-agent harness** beside your buffers, not a webview bolt-on.
 
 | Java editing | Class diagram blueprint |
 | :---: | :---: |
@@ -34,142 +34,94 @@ Open a folder, edit with tree-sitter highlighting and multi-cursor power, run an
 | :---: |
 | ![Umbra editing SwiftUI with an iOS Simulator preview in a device frame beside the editor](Screenshots/swiftui.png) |
 
-### Why developers pick Umbra
+## Highlights
 
-- **Fast editing first** — Metal rendering, mmap-backed large files, minimap, folding, column selection, and a Sublime-style keymap out of the box.
-- **Project-native** — Explorer, split panes, session restore, command palette, Problems panel, and git workflow (stage, commit, diff tabs, local history) without leaving the app.
-- **Java & Gradle without a JVM IDE** — Sync, completion, inspections, run configurations, test gutter, JDI debugger, class and dependency diagrams when you need depth—not for every buffer.
-- **Agent that respects the repo** — Plan mode, per-edit approval, permission rules (`AGENTS.md`, `.umbra/settings.json`), checkpoints with revert, rewind/fork, `@file` mentions, and tools wired to your real workspace (including unsaved buffers).
-- **Your models** — OpenAI-compatible APIs, Ollama on localhost, or on-device models via MLX; keys in Keychain; explicit consent before data leaves the Mac.
+- **Fast editing first.** Metal rendering, mmap-backed large files, minimap, folding, multi-cursor and column selection, and a Sublime-style keymap out of the box.
+- **Project-native.** Explorer, split panes, tabs, multiple windows (one project each), session restore, command palette, Problems panel, and a git workflow (stage, commit, diff tabs, change markers, local history).
+- **Java and Gradle without a JVM IDE.** Sync, completion, inspections, run configurations, test gutter, JDI debugger, coverage and profiling, class and dependency diagrams. Maven, SwiftPM and npm projects are recognised too.
+- **Intelligence.** Symbol-index completion, hover, go to definition, find usages, rename with preview, inlay hints and code vision. The libraries are LSP-ready; Umbra bundles native Java, TypeScript and Swift intelligence.
+- **Built-in tools.** Integrated terminal, run and debug tool windows (Java via JDI, Swift and JS via DAP), hex editor, CSV table preview, Markdown and JSON diagram preview, an `.http` client with variables and cookies, and text tools (encode/decode, JSON format, JWT decode, hashes).
+- **Tree-sitter highlighting** for Swift, Java, Kotlin, Go, Rust, JS/TS, Python, JSON, YAML, HTML, Markdown, SQL, HTTP and more.
 
-### Editing & workbench
+## Coding agent
 
-- Tree-sitter highlighting for Swift, Java, JS/TS, Python, JSON, YAML, HTML, Markdown, HTTP, and more
-- Multi-cursor, semantic selection, find/replace with regex, sticky scroll, inlay hints, and code vision (optional)
-- Horizontal/vertical splits, tabs, multiple windows (one project each), native tab merging
-- Hex editor for binary files; CSV table preview; Markdown/JSON diagram preview
-- Built-in `.http` client with variables, cookies, and response history
-- Text tools (encode/decode, JSON format, case transforms, JWT decode, hashes) from the palette or context menu
+Dock the chat beside the editor or expand it full-width. The agent is [AgentKit](Packages/AgentKit/CLAUDE.md), wired to your real workspace, including unsaved buffers.
 
-### Project intelligence
+| | |
+| --- | --- |
+| **Explore** | `read_file`, `list_dir`, `glob`, `grep` (respecting git-visible files), `git_status` / `git_diff`, diagnostics |
+| **Change code** | `edit_file` / `write_file` with diffs, applied to open tabs so undo works, and **Revert run** from checkpoints |
+| **Execute** | Shell commands (with approval), Gradle and test tasks, optional web search |
+| **Stay in control** | Plan / ask / auto permission modes, per-edit approval, rewind and fork, `@file` mentions, slash commands and project skills, context meter and `/compact` |
 
-- Symbol index completion, hover, go to definition, find usages, rename with preview
-- LSP-ready stack in the libraries; Umbra emphasizes native Java, TypeScript, and Swift intelligence where bundled
-- Diff viewer with stage/unstage hunks; change markers in the gutter; UML and Gradle dependency diagrams
-- Integrated terminal, run tool window, and debug UI (Java JDI, Swift/JS via DAP)
+Project instructions load from `AGENTS.md` (or `CLAUDE.md`, `.cursorrules`) at the root and in nested folders; permission rules live in `.umbra/settings.json`.
 
-### Coding agent (AgentKit)
+**Models.** Bring your own:
 
-Dock the chat beside the editor or expand it full-width. The agent can:
+- **Meta (Muse)** through the Meta Model API
+- OpenAI-compatible APIs
+- Ollama on localhost
+- On-device models via MLX or Apple Intelligence
 
-- **Explore** — `read_file`, `list_dir`, `glob`, `grep` (respecting git-visible files), `git_status` / `git_diff`, diagnostics
-- **Change code** — `edit_file` / `write_file` with diffs, undo-friendly application to open tabs, and **Revert run** from checkpoint blobs
-- **Execute** — Shell commands (with approval), Gradle and test tasks in Gradle projects, optional web search (Brave API)
-- **Stay in control** — Permission modes (plan / ask / auto), slash commands and project skills, queued messages, context meter and `/compact`, conversation history and export
+Keys stay in the Keychain, and nothing leaves the Mac without your consent.
 
-Project instructions load from `AGENTS.md` (or `CLAUDE.md`, `.cursorrules`) at the root and nested folders. See `docs/AGENT_HARNESS_PLAN.md` and `Packages/AgentKit/CLAUDE.md` for harness design.
-
-### Get Umbra
-
-**Download:** [GitHub Releases](https://github.com/alex-cova/Penumbra/releases) — `Umbra-<version>-macOS.zip`. Signing, notarization, and Sparkle updates: [Example/README.md](Example/README.md).
-
-**From source:**
+## Build from source
 
 ```bash
-swift run Umbra              # debug
-swift run Umbra --no-metal   # Core Graphics renderer (Metal is the default)
-./Scripts/build-app.sh       # release app bundle
+./run.sh                     # debug (swift run --package-path Umbra Umbra)
+./run.sh --no-metal          # Core Graphics renderer (Metal is the default)
+./Scripts/build-app.sh       # release app bundle in dist/
 ```
 
-**Requirements:** macOS 14+ (Sonoma). Release builds target macOS 26 where DiagramKit requires it; see [Requirements](#requirements).
-
-More shortcuts and day-to-day usage: [Example/README.md](Example/README.md).
+Releases are `Umbra-<version>-macOS.zip` on [GitHub Releases](https://github.com/alex-cova/Penumbra/releases). Building Umbra needs macOS 26 and Xcode 26+ (Swift 6.2). Signing, notarization, Sparkle updates, shortcuts and day-to-day usage: [Umbra/README.md](Umbra/README.md).
 
 ---
 
-# Penumbra — framework & libraries
+# Penumbra
 
-**Penumbra** is a high-performance plain-text and code **editor framework for macOS (AppKit)**. It extends the [Runestone](https://github.com/simonbs/Runestone) lineage (originally iOS/UIKit) with native macOS porting, **Metal** glyph rendering, **piece-tree** storage for large files, a multi-pane **workbench**, and the **Editor Intelligence Platform (EIP)**—completion, tree-sitter parsing, indexing, navigation, diagnostics, refactoring, and LSP/AI hooks.
+A high-performance plain-text and code **editor framework for macOS (AppKit)**. It extends the [Runestone](https://github.com/simonbs/Runestone) lineage (originally iOS/UIKit) with native macOS porting, **Metal** glyph rendering, **piece-tree** storage for large files, a multi-pane **workbench**, and the **Editor Intelligence Platform (EIP)**: completion, tree-sitter parsing, indexing, navigation, diagnostics, refactoring, and LSP/AI hooks.
 
-Umbra is the reference app; **Penumbra stays App Store–safe** (public APIs, sandbox-compatible patterns, no `Process` in library targets). Host apps spawn tools (Gradle, agents) at the app layer.
+Penumbra stays **App Store–safe**: public APIs only, sandbox-compatible patterns, and no `Process` in library targets. Host apps (like Umbra) spawn tools such as Gradle at the app layer.
 
-### What's in the package
+## Modules
+
+These are the products of the root `Package.swift`. It targets macOS 14 and pulls in none of the app's dependencies (Sparkle, SwiftTerm, the agent packages).
 
 | Module | Role |
 | --- | --- |
 | **Penumbra** | `TextView` engine, gutter, themes, folding, minimap, workbench, EditorChrome views |
-| **EditorIntelligence** | Editor-agnostic EIP: completion, hover, navigation, diagnostics, snippets, workspace |
+| **EditorIntelligence** | Editor-agnostic EIP: completion, hover, navigation, diagnostics, snippets, workspace. No dependency on `Penumbra` |
 | **EditorIntelligenceLSP** | LSP client (ChimeHQ LanguageClient) |
-| **PenumbraLanguages** + grammar targets | Tree-sitter factories for common languages |
-| **JavaIntelligence** | Native Java index, completion, Gradle model (no Penumbra dependency) |
-| **HexKit** | Hex editor byte model (used by Umbra) |
-| **AgentKit** / **AgentKitMLX** | Agent loop and tools; MLX local models (Umbra-only wiring) |
-| **GitIntelligence** / **SubprocessKit** | Git CLI and child-process spawning |
+| **PenumbraLanguages** + grammar targets | Tree-sitter factories for common languages; dedicated `PenumbraGraphQLLanguage` and `PenumbraMarkdownLanguage` |
+| **JavaIntelligence** | Native Java index, completion, navigation, diagnostics, refactoring, Gradle model |
+| **SwiftIntelligence** / **TypeScriptIntelligence** | Syntactic Swift and TypeScript engines |
+| **HexKit** | Hex editor byte model |
+| **GitIntelligence** / **SubprocessKit** | Git CLI wrapper and child-process spawning |
 
-The engine and EIP connect only through `PenumbraEditorAdapter` (`EditorAdapter` protocol, `AsyncStream<EditorEvent>`).
+The engine and the EIP connect only through `PenumbraEditorAdapter` (the `EditorAdapter` protocol and an `AsyncStream<EditorEvent>`). Third-party attributions: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-### Key features
+### Engine features
 
-#### Text editor engine (`Penumbra`)
+- **AppKit-native.** `NSTextInputClient`, IME, smooth scrolling, configurable `Keymap` (`.default_`, `.sublime`, `.intelliJ`).
+- **Metal rendering** via `TextView.isMetalRenderingEnabled` (on by default), with a Core Graphics fallback.
+- **Large files.** mmap-backed `PieceTree` for buffers over 256 KB and `TextViewState.load`.
+- **Multi-cursor and column selection.** Option-click carets, occurrence selection, block selection, semantic expand/shrink, synchronized typing and undo.
+- **Tree-sitter highlighting.** Incremental and async, with language injection (for example CSS/JS in HTML). `TextViewState` parses off the main thread.
+- **Display and editing.** Folding, minimap, focus mode, typewriter scrolling, line numbers, page guide, invisibles, character pairs, smart indent, line and statement moves, surround-with, timed undo coalescing.
+- **Search and replace.** `SearchQuery`, regex captures, batch replace, find panel.
+- **Diagnostics and navigation history.** Squiggles and bounded back/forward (⌘[ / ⌘]).
 
-* **macOS-native AppKit** — `NSTextInputClient`, IME, smooth scrolling, configurable `Keymap` (`.default_`, `.sublime`, `.intelliJ`).
-* **Metal rendering** — GPU glyphs via `TextView.isMetalRenderingEnabled` (on by default); Core Graphics fallback when Metal is unavailable or disabled.
-* **Large files** — mmap-backed `PieceTree` for buffers over 256 KB and `TextViewState.load`.
-* **Multi-cursor & column selection** — Option-click carets, occurrence selection, block selection, sticky column mode, semantic expand/shrink, synchronized typing and undo.
-* **Tree-sitter highlighting** — Incremental, async, with language injection (e.g. CSS/JS in HTML).
-* **Folding, minimap, focus mode, typewriter scrolling** — Ribbons, viewport overview, dimming, caret anchoring.
-* **Editing** — Character pairs, smart indent, line/statement moves, surround-with, timed undo coalescing.
-* **Gutter & display** — Line numbers, page guide, invisibles, `Theme` / `DefaultTheme`.
-* **Search & replace** — `SearchQuery`, regex captures, batch replace, find panel.
-* **Background prep** — `TextViewState` parses off the main thread.
-* **Diagnostics & navigation history** — Squiggles, bounded back/forward (⌘[ / ⌘]).
+### Editor Intelligence Platform
 
-#### Editor Intelligence Platform (`EditorIntelligence`)
+- **Decoupled core.** `EditorAdapter`, a symbol `Trie` index, and a concurrent `CompletionEngine` with ranking.
+- **Providers.** Symbols, words, snippets, LSP and AI, with ghost text and multi-cursor apply.
+- **Navigation.** Hover, definition, references, implementations, rename, outline, breadcrumbs.
+- **Diagnostics and refactoring.** Built-in analyzers plus LSP aggregation.
+- **Workspace.** Multi-document actor, cross-file search, file watching.
+- **LSP.** Document sync, completion, hover, definition, references, rename, formatting, code actions, signature help, semantic tokens.
+- **Workbench and chrome.** Split layouts, tab groups (preview/pinned), session restoration, a command palette, and AppKit views for completion, hover, ghost text, parameter hints, breadcrumbs, outline, code actions and workspace search.
 
-* **Decoupled** — `EditorAdapter`, symbol `Trie` index, concurrent `CompletionEngine` with ranking.
-* **Providers** — Symbols, words, snippets, LSP, AI; ghost text; multi-cursor apply.
-* **Hover, navigation, outline, breadcrumbs** — Definition, references, implementations, rename.
-* **Diagnostics & refactoring** — Built-in analyzers + LSP aggregation.
-* **Workspace** — Multi-document actor, cross-file search, file watching.
-
-#### LSP (`EditorIntelligenceLSP`)
-
-Document sync, completion, hover, definition, references, rename, formatting, code actions, signature help, semantic tokens (ChimeHQ stack).
-
-#### Workbench & chrome
-
-Split layouts, tab groups (preview/pinned), session restoration, command palette (Search Everywhere), and AppKit views: completion panel, hover, ghost text, parameter hints, breadcrumbs, outline, code actions, workspace search.
-
-#### Language packs
-
-`PenumbraLanguages` (CSS, HTML, JS, JSON, Python, TypeScript, YAML, TOML, SQL, Swift, Java, Kotlin, Go, Bash, HTTP, Mermaid, …), plus dedicated GraphQL and Markdown packages. Attributions: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-### Architecture
-
-```
-Penumbra/
-├── Sources/
-│   ├── Penumbra/                  # TextView, Workbench, EditorChrome, Tree-sitter wrapper
-│   ├── EditorIntelligence/        # EIP (no Penumbra dependency)
-│   ├── JavaIntelligence/          # Java index & Gradle integration
-│   ├── EditorIntelligenceLSP/
-│   ├── PenumbraLanguages/         # TreeSitterLanguage factories
-│   └── …                          # Per-language TreeSitter C/Swift targets
-├── Example/Umbra/                 # Reference macOS app
-├── Packages/                      # TreeSitter, AgentKit, GitIntelligence, SubprocessKit, …
-├── Tools/PerfHarness/             # Release performance CLI
-└── Tests/PenumbraTests/           # 1,050+ tests
-```
-
-Deeper internals: [CLAUDE.md](CLAUDE.md), [Sources/Penumbra/CLAUDE.md](Sources/Penumbra/CLAUDE.md), [Sources/EditorIntelligence/CLAUDE.md](Sources/EditorIntelligence/CLAUDE.md).
-
-### Requirements
-
-* **macOS:** 14.0 (Sonoma) or later for libraries; Umbra release line follows macOS 26 where required by DiagramKit
-* **Swift:** 6.2+ / Xcode 26+ for the root package (Swift 6 language mode)
-* **Dependencies:** vendored [Tree-sitter](https://github.com/tree-sitter/tree-sitter), [ChimeHQ/LanguageClient](https://github.com/ChimeHQ/LanguageClient), and related ChimeHQ packages (see `Package.swift`)
-
-### Installation
+## Installation
 
 Add Penumbra to your `Package.swift`:
 
@@ -193,9 +145,11 @@ dependencies: [
 )
 ```
 
-### Quick start
+**Requirements:** macOS 14+, Swift 6.0+ (Swift 6 language mode). Dependencies are vendored [Tree-sitter](https://github.com/tree-sitter/tree-sitter), [ChimeHQ/LanguageClient](https://github.com/ChimeHQ/LanguageClient) and related ChimeHQ packages.
 
-#### Basic `TextView`
+## Quick start
+
+### Basic `TextView`
 
 ```swift
 import AppKit
@@ -223,7 +177,7 @@ class EditorViewController: NSViewController {
 }
 ```
 
-#### Async state with Tree-sitter
+### Async state with Tree-sitter
 
 ```swift
 import Penumbra
@@ -249,7 +203,7 @@ let state = try await TextViewState.load(
 textView.setState(state)
 ```
 
-#### Multi-cursor
+### Multi-cursor
 
 ```swift
 textView.selectNextOccurrence()      // ⌘⇧D
@@ -258,7 +212,7 @@ textView.addCaretAbove()             // ⌥⌘↑
 textView.duplicateSelectedLines()    // ⌘D
 ```
 
-#### Editor intelligence controller
+### Editor intelligence controller
 
 ```swift
 import Penumbra
@@ -278,7 +232,7 @@ let intelligenceController = EditorIntelligenceController(
 )
 ```
 
-#### Workbench
+### Workbench
 
 ```swift
 let workbench = EditorWorkbench()
@@ -287,9 +241,9 @@ let rightPane = workbench.splitActivePane(edge: .trailing)
 let state = workbench.makeRestorationState()
 ```
 
-### Keyboard shortcuts (`.default_` keymap)
+## Keymaps
 
-Umbra defaults to **`.sublime`**. Three presets ship: `.default_`, `.sublime`, `.intelliJ`. Bindings map to `EditorActionID` and `textView.perform(_:)`.
+Three presets ship: `.default_`, `.sublime` (Umbra's default) and `.intelliJ`. Bindings map to `EditorActionID` and `textView.perform(_:)`. Palette and LSP actions need a `CommandPaletteController` and an `EditorIntelligenceController` attached to the text view.
 
 | Shortcut | Action |
 | :--- | :--- |
@@ -302,7 +256,7 @@ Umbra defaults to **`.sublime`**. Three presets ship: `.default_`, `.sublime`, `
 | **⌘ + Click** | Go to definition |
 | **⌘[ / ⌘]** | Navigation history |
 
-#### `.intelliJ` keymap (differences from `.default_`)
+**`.intelliJ` differences from `.default_`:**
 
 | Shortcut | Action |
 | :--- | :--- |
@@ -315,24 +269,50 @@ Umbra defaults to **`.sublime`**. Three presets ship: `.default_`, `.sublime`, `
 | **⌥⌘L** | Reformat code (LSP or fallback) |
 | **⌘B** / **⌥⌘B** | Go to definition / implementation |
 
-Palette and LSP actions need `CommandPaletteController` and `EditorIntelligenceController` attached to the text view.
+---
 
-### Development
+# Repository
 
-```bash
-swift build
-swift test                               # full suite (display on; see CLAUDE.md)
-swift test --filter ClassName
-swift run -c release PerfHarness enter-session synthetic --lines 20000
-swift run PerfHarness --help
+## Layout
+
+The repo holds two Swift packages, plus the agent packages and tools they share.
+
+```
+Penumbra/
+├── Package.swift                  # The libraries (macOS 14): Penumbra, EditorIntelligence, language packs, …
+├── Sources/                       # Library sources, one folder per module
+├── Tests/PenumbraTests/           # Library tests
+├── Umbra/                         # The app: its own package (macOS 26) that depends on the root package
+│   ├── Package.swift
+│   ├── Sources/Umbra/             # The editor
+│   ├── Sources/UmbraACP/          # Umbra as an ACP agent on stdio
+│   ├── Tests/UmbraTests/          # App tests
+│   └── Umbra.xcodeproj            # For SwiftUI Previews and run/debug
+├── Packages/                      # AgentKit(+MLX, Apple), DatabaseKit, GitIntelligence, SubprocessKit, TreeSitter, Luna
+├── Tools/PerfHarness/             # Release performance CLI
+└── Tools/AgentEval/               # Agent evaluator (its own package)
 ```
 
-Performance rules: [docs/PERFORMANCE_RULES.md](docs/PERFORMANCE_RULES.md). SwiftLint: `.swiftlint.yml`.
+Deeper internals: [CLAUDE.md](CLAUDE.md), [Umbra/CLAUDE.md](Umbra/CLAUDE.md), [Sources/Penumbra/CLAUDE.md](Sources/Penumbra/CLAUDE.md), [Sources/EditorIntelligence/CLAUDE.md](Sources/EditorIntelligence/CLAUDE.md).
 
-### Testing
+## Development
 
-1,050+ unit and integration tests across line management, multi-cursor editing, tree-sitter, Metal, completion, workbench, LSP bridges, and more.
+```bash
+swift build                              # libraries (repository root)
+swift test                               # library tests; needs a live display, see CLAUDE.md
+swift test --package-path Umbra          # Umbra's tests
+swift run -c release PerfHarness enter-session synthetic --lines 20000
+```
 
-### License
+Performance rules: [docs/PERFORMANCE_RULES.md](docs/PERFORMANCE_RULES.md). SwiftLint: `.swiftlint.yml`. The suites hold 6,800+ tests across line management, multi-cursor editing, tree-sitter, Metal, completion, workbench, LSP bridges, the agent, and the app itself.
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+## Community
+
+- [Contributing](CONTRIBUTING.md): setup, tests, the rules that protect the libraries, and how to open a pull request
+- [Support](SUPPORT.md): where to ask, and what a useful bug report contains
+- [Code of Conduct](CODE_OF_CONDUCT.md): Contributor Covenant 2.1
+- [Security policy](SECURITY.md): report vulnerabilities privately through GitHub, not in a public issue
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE). Contributions are accepted under the same license (Apache-2.0 section 5); there is no CLA.

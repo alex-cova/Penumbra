@@ -30,7 +30,7 @@ enum ParityTestSupport {
         let build = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Example/Umbra/Tools/JavaAnalysisServer/build.sh")
+            .appendingPathComponent("Umbra/Sources/Umbra/Tools/JavaAnalysisServer/build.sh")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = [build.path]

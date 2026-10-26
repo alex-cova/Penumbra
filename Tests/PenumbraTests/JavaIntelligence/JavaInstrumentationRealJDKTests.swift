@@ -45,13 +45,13 @@ final class JavaInstrumentationRealJDKTests: XCTestCase {
     private var toolchain: JavaCoverageToolchain? {
         let dev = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Example/Umbra/Tools/JaCoCo/build")
+            .appendingPathComponent("Umbra/Sources/Umbra/Tools/JaCoCo/build")
         return try? JavaCoverageToolchain.locate(in: [dev])
     }
 
     func testCoverageOfAPlainMainEndToEnd() async throws {
         let jdk = try requireJDK()
-        let toolchain = try XCTUnwrap(toolchain, "run Example/Umbra/Tools/JaCoCo/fetch.sh") as JavaCoverageToolchain
+        let toolchain = try XCTUnwrap(toolchain, "run Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh") as JavaCoverageToolchain
         if let reason = JavaCoverageToolchain.unsupportedLanguageLevel(jdk.featureVersion) { throw XCTSkip(reason) }
         let classes = try await compile("""
         package app;
@@ -99,7 +99,7 @@ final class JavaInstrumentationRealJDKTests: XCTestCase {
 
     func testReportWithoutExecutionDataSaysSo() async throws {
         let jdk = try requireJDK()
-        let toolchain = try XCTUnwrap(toolchain, "run Example/Umbra/Tools/JaCoCo/fetch.sh") as JavaCoverageToolchain
+        let toolchain = try XCTUnwrap(toolchain, "run Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh") as JavaCoverageToolchain
         let classes = directory.appendingPathComponent("classes", isDirectory: true)
         try FileManager.default.createDirectory(at: classes, withIntermediateDirectories: true)
         do {

@@ -123,7 +123,7 @@ and no cancellation**, on whatever thread calls it (the find panel, i.e. main th
 appears to be newer infrastructure not yet wired into the built-in find UI.
 
 ### 9. Saving
-No save path exists anywhere in Penumbra or `Example/Umbra` (`grep` for `write(to:`,
+No save path exists anywhere in Penumbra or `Umbra/Sources/Umbra` (`grep` for `write(to:`,
 `FileManager` write APIs, `atomically`, and `NSDocument` all came back empty). Saving is entirely the host
 application's responsibility; there is nothing to audit here beyond "the host app must not do a naive full
 rewrite if the goal is fast-save on a multi-GB file" (see Phase 4).

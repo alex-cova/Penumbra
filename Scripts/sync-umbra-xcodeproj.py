@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Rewrites the file exclusions of Example/Umbra.xcodeproj from what is on disk.
+"""Rewrites the file exclusions of Umbra/Umbra.xcodeproj from what is on disk.
 
-The project compiles Example/Umbra through a file-system-synchronized group, so new Swift files
+The project compiles Umbra/Sources/Umbra through a file-system-synchronized group, so new Swift files
 need no entry. What Xcode cannot do is exclude a *folder* from the target (membershipExceptions
 takes files only): without an entry per file it copies the debug adapter's .class and .java files
 into the app's Resources. Run this after the adapter is rebuilt (Tools/JavaDebugAdapter/build.sh) or
@@ -15,15 +15,14 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCES = ROOT / "Example" / "Umbra"
-PROJECT = ROOT / "Example" / "Umbra.xcodeproj" / "project.pbxproj"
+SOURCES = ROOT / "Umbra" / "Sources" / "Umbra"
+PROJECT = ROOT / "Umbra" / "Umbra.xcodeproj" / "project.pbxproj"
 
-# Mirrors `exclude:` of the Umbra target in Package.swift (paths relative to Example/Umbra); a
+# Mirrors `exclude:` of the Umbra target in Package.swift (paths relative to Umbra/Sources/Umbra); a
 # folder stands for every file under it. The jar is excluded too, because the project copies it
 # into Resources through an explicit reference (a synchronized group skips file types it does not
 # know, so it would never be copied on its own).
 EXCLUDED = [
-    "CLAUDE.md",
     "SplitView/LICENSE",
     "SplitView/README.md",
     "Tools/JavaDebugAdapter/build.sh",
@@ -46,7 +45,8 @@ EXCLUDED = [
 
 
 def excluded_files():
-    files = set()
+    # Every folder's CLAUDE.md is agent guidance, not an app resource (Package.swift lists them one by one).
+    files = {p.relative_to(SOURCES).as_posix() for p in SOURCES.rglob("CLAUDE.md")}
     for entry in EXCLUDED:
         path = SOURCES / entry
         if path.is_dir():
@@ -69,7 +69,7 @@ def main():
     updated = pattern.sub(lambda m: m.group(1) + block + m.group(3), text, count=1)
     if "--check" in sys.argv:
         if updated != text:
-            sys.exit("Example/Umbra.xcodeproj is out of date: run Scripts/sync-umbra-xcodeproj.py")
+            sys.exit("Umbra/Umbra.xcodeproj is out of date: run Scripts/sync-umbra-xcodeproj.py")
         return
     if updated != text:
         PROJECT.write_text(updated)

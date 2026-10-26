@@ -9,4 +9,4 @@ cd "$root"
 defaults delete com.umbra.editor com.umbra.editor.hasCompletedFirstRunGuide 2>/dev/null || true
 defaults delete Umbra com.umbra.editor.hasCompletedFirstRunGuide 2>/dev/null || true
 
-exec swift run -c release Umbra --metal "$@"
+exec swift run --package-path Umbra -c release Umbra --metal "$@"

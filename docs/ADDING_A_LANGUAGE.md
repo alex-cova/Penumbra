@@ -99,7 +99,7 @@ Start with completion and diagnostics; they carry most of the value. For an exte
 - **Guard on the language**: return nothing unless `document.languageIdentifier` is yours. Every Java provider does this.
 - **Never block typing.** Completion, diagnostics, parsing and indexing are scheduled from a keystroke, never awaited on it; drop a result when the document moved on (`docs/PERFORMANCE_RULES.md`).
 - **Work is bounded** by visible rows or edit size, never by document size. Measure with `swift run -c release PerfHarness enter-session synthetic --lines 20000` (and `120000`).
-- **No `Process`, no network, no telemetry** in a library target (root `CLAUDE.md` ▸ App Store safety). A tool you need to run (a compiler, a language server) is started by the app in `Example/Umbra`, through `SubprocessKit`, with explicit user consent, the way Gradle and the JDK are.
+- **No `Process`, no network, no telemetry** in a library target (root `CLAUDE.md` ▸ App Store safety). A tool you need to run (a compiler, a language server) is started by the app in `Umbra/Sources/Umbra`, through `SubprocessKit`, with explicit user consent, the way Gradle and the JDK are.
 - **Read other files through an injected lookup**, not the disk, so unsaved buffers are seen (`setOpenBufferLookup` on the Java providers).
 
 ### 2.3 Wire it into Umbra
@@ -115,7 +115,7 @@ BasicLanguageService(
 )
 ```
 
-Add it to the `LanguageServiceRegistry(services:)` list in `Example/Umbra/Intelligence/IDEIntelligenceServices.swift`. Then:
+Add it to the `LanguageServiceRegistry(services:)` list in `Umbra/Sources/Umbra/Intelligence/IDEIntelligenceServices.swift`. Then:
 - `completion`, `hover`, `diagnostics`, `navigation` are fed to the engines. Every provider is asked about every document, so it must answer only for its own language (guard on the identifier) and, for completion and navigation, claim it with `isPrimary(for:)`.
 - `formatting`, `signatureHelp`, `codeActions`, `rename`, `refactoring`, `codeGeneration`, `breadcrumbs`, `inlayHints` and `codeVision` are routed by `document.languageIdentifier`, so they only see your language's documents. No dispatcher to write. Two services may claim one language (Java's providers and the app's Run actions); `LanguageServiceRegistry` documents how each feature combines them. Features that keep state between calls (rename, refactoring, code generation, breadcrumbs, inlay hints, code vision) take the first service that has one.
 - `policy` replaces the old hand-kept `skippingLanguages` lists: name the generic features (`snippets`, `duplicateSymbolDiagnostics`, `symbolHover`, `symbolNavigation`) your language does better itself. Symbol and word completion stay as fallbacks through `isPrimary`.
@@ -132,7 +132,7 @@ An actor test per provider, plus a "returns nothing for a foreign language" test
 
 ## 3. IDE features
 
-Everything that is UI or project state. A language adds its chrome as an `IDELanguageModule` (`Example/Umbra/Languages/`), a stateless value; `IDEHTTPModule` is the small worked example (two palette commands, a menu, one tool window), `IDEJavaModule` the large one. Add it to `IDELanguageModules.shipped` (or call `IDELanguageModules.register(_:)` before a window opens, as `IDEModuleContributionTests` does with a fake Ruby module).
+Everything that is UI or project state. A language adds its chrome as an `IDELanguageModule` (`Umbra/Sources/Umbra/Languages/`), a stateless value; `IDEHTTPModule` is the small worked example (two palette commands, a menu, one tool window), `IDEJavaModule` the large one. Add it to `IDELanguageModules.shipped` (or call `IDELanguageModules.register(_:)` before a window opens, as `IDEModuleContributionTests` does with a fake Ruby module).
 
 | Feature | How |
 |---|---|
@@ -151,7 +151,7 @@ Everything that is UI or project state. A language adds its chrome as an `IDELan
 | Diagram | `loadDiagram(_:settings:workspace:)` on the module or the project system. Return nil for a request that is not yours. The workspace tries Java and Gradle, then each module and system. Two requests with the same id share a tab |
 | Symbol palette | `symbolPaletteSources(for:)` returns `SearchEverywhereProvider`s. The Symbols tab lists them after Java's members. Read an in-memory index; do not walk the disk on the query |
 | Semantic highlighting, gutter markers, Structure outline, type and call hierarchy | return a `SemanticTokenProviding`, `LineMarkerProviding`, `StructureProviding`, `TypeHierarchyProviding` or `CallHierarchyProviding` in your `LanguageProviders`; the workspace asks the registry for the active language's provider (`IDEWorkspace.scheduleSemanticHighlighting`, `scheduleLineMarkers`, `refreshStructure`, `showTypeHierarchy`), so there is nothing to wire. A language with no provider gets no gutter column, tab content or outline |
-| Agent tools | `Example/Umbra/Agent/` (`IDEAgentNavigationTools.swift` for navigation) |
+| Agent tools | `Umbra/Sources/Umbra/Agent/` (`IDEAgentNavigationTools.swift` for navigation) |
 
 Rules for this layer:
 - A module holds no workspace and no per-window state; take the workspace from the call, capture it weakly in closures, and keep per-window state on the workspace.
@@ -159,7 +159,7 @@ Rules for this layer:
 - App-wide state (trust decisions, selections, stores) goes in `IDESharedServices`; do not construct a per-window copy.
 - Nothing may retain the workspace past `IDEWorkspace.teardown()` (menu closures, callbacks owned by long-lived views).
 - Tests that create a workspace set `IDEWorkspace.isSessionPersistenceEnabled = false`.
-- Document the feature in `Example/Umbra/CLAUDE.md`.
+- Document the feature in `Umbra/CLAUDE.md`.
 
 ---
 

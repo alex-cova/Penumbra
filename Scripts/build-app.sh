@@ -10,16 +10,18 @@ VERSION="$(tr -d '[:space:]' < VERSION)"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-$root/dist}"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
-ENTITLEMENTS="$root/Example/Resources/Umbra.entitlements"
-INFO_PLIST_TEMPLATE="$root/Example/Resources/Info.plist"
-ICON_SOURCE="$root/Example/UmbraIcon.icon"
+ENTITLEMENTS="$root/Umbra/Resources/Umbra.entitlements"
+INFO_PLIST_TEMPLATE="$root/Umbra/Resources/Info.plist"
+ICON_SOURCE="$root/Umbra/UmbraIcon.icon"
 
 # The generated `Bundle.module` accessor depends on the build system. The native one only looks in
 # `Bundle.main.bundleURL` (the .app root, where codesign rejects loose bundles) and then in the build
 # directory baked into the binary, so every resource lookup traps on a user's machine (1.6.11 shipped
 # this way from CI and crashed opening a .rs file). Swift Build looks in `Contents/Resources`.
 BUILD_SYSTEM="${BUILD_SYSTEM:-swiftbuild}"
-BUILD_ARGS=(-c "$CONFIGURATION" --build-system "$BUILD_SYSTEM" --product Umbra)
+# Umbra is its own package (Umbra/Package.swift) on top of the root library package.
+PACKAGE_PATH="$root/Umbra"
+BUILD_ARGS=(--package-path "$PACKAGE_PATH" -c "$CONFIGURATION" --build-system "$BUILD_SYSTEM" --product Umbra)
 
 echo "==> Building Umbra ($CONFIGURATION, $BUILD_SYSTEM)…"
 swift build "${BUILD_ARGS[@]}"
@@ -39,9 +41,9 @@ fi
 cp "$BINARY" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
-SPARKLE_FRAMEWORK="$(find "$root/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework" -path '*/Sparkle.framework' -print -quit)"
+SPARKLE_FRAMEWORK="$(find "$PACKAGE_PATH/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework" -path '*/Sparkle.framework' -print -quit)"
 if [[ -z "$SPARKLE_FRAMEWORK" || ! -d "$SPARKLE_FRAMEWORK" ]]; then
-  echo "error: Sparkle.framework not found; run 'swift build -c $CONFIGURATION --product Umbra' first" >&2
+  echo "error: Sparkle.framework not found; run 'swift build --package-path Umbra -c $CONFIGURATION --product Umbra' first" >&2
   exit 1
 fi
 mkdir -p "$APP_DIR/Contents/Frameworks"

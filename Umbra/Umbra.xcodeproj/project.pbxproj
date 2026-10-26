@@ -1,0 +1,648 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		000000000000000000000093 /* jacocoagent.jar in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000095 /* jacocoagent.jar */; };
+		000000000000000000000094 /* jacococli.jar in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000096 /* jacococli.jar */; };
+		000000000000000000000017 /* java-debug-adapter.jar in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000016 /* java-debug-adapter.jar */; };
+		00000000000000000000009C /* java-analysis-server.jar in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000009B /* java-analysis-server.jar */; };
+		00000000000000000000006C /* Penumbra in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006B /* Penumbra */; };
+		00000000000000000000006E /* PenumbraLanguages in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006D /* PenumbraLanguages */; };
+		000000000000000000000070 /* PenumbraMarkdownLanguage in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000006F /* PenumbraMarkdownLanguage */; };
+		000000000000000000000072 /* JavaIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000071 /* JavaIntelligence */; };
+		00000000000000000000008E /* HexKit in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000008F /* HexKit */; };
+		000000000000000000000084 /* SwiftIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000083 /* SwiftIntelligence */; };
+		000000000000000000000088 /* LanguageSyntax in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000087 /* LanguageSyntax */; };
+		000000000000000000000086 /* TypeScriptIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000085 /* TypeScriptIntelligence */; };
+		000000000000000000000074 /* EditorIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000073 /* EditorIntelligence */; };
+		00000000000000000000008A /* EditorIntelligenceLSP in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000008B /* EditorIntelligenceLSP */; };
+		000000000000000000000076 /* GitIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000075 /* GitIntelligence */; };
+		000000000000000000000078 /* SubprocessKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000077 /* SubprocessKit */; };
+		00000000000000000000007A /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000079 /* AgentKit */; };
+		00000000000000000000007C /* AgentKitMLX in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007B /* AgentKitMLX */; };
+		0000000000000000000000A2 /* AgentKitApple in Frameworks */ = {isa = PBXBuildFile; productRef = 0000000000000000000000A1 /* AgentKitApple */; };
+		00000000000000000000007E /* LocalModelStore in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007D /* LocalModelStore */; };
+		000000000000000000000080 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007F /* SwiftTerm */; };
+		000000000000000000000082 /* DiagramKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000081 /* DiagramKit */; };
+		00000000000000000000009A /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000099 /* Sparkle */; };
+		00000000000000000000009F /* DatabaseKit in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000009E /* DatabaseKit */; };
+		000000000000000000000090 /* XcodeProjectFormat in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000092 /* XcodeProjectFormat */; };
+		00000000000000000000000E /* umbra.png in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000D /* umbra.png */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		000000000000000000000095 /* jacocoagent.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = jacocoagent.jar; path = Sources/Umbra/Tools/JaCoCo/build/jacocoagent.jar; sourceTree = "<group>"; };
+		000000000000000000000096 /* jacococli.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = jacococli.jar; path = Sources/Umbra/Tools/JaCoCo/build/jacococli.jar; sourceTree = "<group>"; };
+		000000000000000000000016 /* java-debug-adapter.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = java-debug-adapter.jar; path = Sources/Umbra/Tools/JavaDebugAdapter/build/java-debug-adapter.jar; sourceTree = "<group>"; };
+		00000000000000000000009B /* java-analysis-server.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = java-analysis-server.jar; path = Sources/Umbra/Tools/JavaAnalysisServer/build/java-analysis-server.jar; sourceTree = "<group>"; };
+		000000000000000000000004 /* Umbra.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Umbra.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		00000000000000000000000B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		00000000000000000000000C /* Umbra.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Umbra.entitlements; sourceTree = "<group>"; };
+		00000000000000000000000D /* umbra.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = umbra.png; path = umbra.png; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		00000000000000000000000F /* Exceptions for "Umbra" folder in "Umbra" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Agent/CLAUDE.md,
+				Bookmarks/CLAUDE.md,
+				Coverage/CLAUDE.md,
+				Diagrams/CLAUDE.md,
+				Diff/CLAUDE.md,
+				Git/CLAUDE.md,
+				HTTP/CLAUDE.md,
+				Inspections/CLAUDE.md,
+				Languages/CLAUDE.md,
+				LocalHistory/CLAUDE.md,
+				Profiler/CLAUDE.md,
+				ProjectWizard/CLAUDE.md,
+				Projects/CLAUDE.md,
+				Run/CLAUDE.md,
+				Saving/CLAUDE.md,
+				SplitView/LICENSE,
+				SplitView/README.md,
+				Swift/CLAUDE.md,
+				SwiftUIPreview/CLAUDE.md,
+				TextTools/CLAUDE.md,
+				Tools/JaCoCo/build/jacocoagent.jar,
+				Tools/JaCoCo/build/jacococli.jar,
+				Tools/JaCoCo/fetch.sh,
+				Tools/JavaAnalysisServer/build.sh,
+				Tools/JavaAnalysisServer/build/classes/com/umbra/analysis/JavaAnalysisServer$DiscardingOutputs$1.class,
+				Tools/JavaAnalysisServer/build/classes/com/umbra/analysis/JavaAnalysisServer$DiscardingOutputs.class,
+				Tools/JavaAnalysisServer/build/classes/com/umbra/analysis/JavaAnalysisServer$MemorySource.class,
+				Tools/JavaAnalysisServer/build/classes/com/umbra/analysis/JavaAnalysisServer$Module.class,
+				Tools/JavaAnalysisServer/build/classes/com/umbra/analysis/JavaAnalysisServer.class,
+				Tools/JavaAnalysisServer/build/classes/com/umbra/analysis/Json$Parser.class,
+				Tools/JavaAnalysisServer/build/classes/com/umbra/analysis/Json.class,
+				Tools/JavaAnalysisServer/build/java-analysis-server.jar,
+				Tools/JavaAnalysisServer/build/sources.txt,
+				Tools/JavaAnalysisServer/src/main/java/com/umbra/analysis/JavaAnalysisServer.java,
+				Tools/JavaAnalysisServer/src/main/java/com/umbra/analysis/Json.java,
+				Tools/JavaDebugAdapter/build.sh,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$1.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Cache.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Invocation.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Output$1.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Output.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Parameter.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$SignatureReader.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator$Source.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/CompilingEvaluator.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter$Breakpoint.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter$Hit.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter$Kind.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter$OutputForwarder.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter$Stop.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/DebugAdapter.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$ArrayInit.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Assign.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Binary.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Call.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Cast.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Compiler.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Conditional.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Converted.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$ConvertedArgs.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$EvaluationException.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Index.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$InstanceOf.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Invocation.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Kind.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Lexer.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Literal.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Member.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Name.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$NeedsCompilation.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$New.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$NewArray.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Node.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Parser.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Pinned.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$This.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Token.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Unary.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator$Unparsed.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Evaluator.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Json$Parser.class,
+				Tools/JavaDebugAdapter/build/classes/com/umbra/debug/Json.class,
+				Tools/JavaDebugAdapter/build/java-debug-adapter.jar,
+				Tools/JavaDebugAdapter/build/sources.txt,
+				Tools/JavaDebugAdapter/build/test-classes/com/umbra/debug/JsonTest.class,
+				Tools/JavaDebugAdapter/build/test-sources.txt,
+				Tools/JavaDebugAdapter/src/main/java/com/umbra/debug/CompilingEvaluator.java,
+				Tools/JavaDebugAdapter/src/main/java/com/umbra/debug/DebugAdapter.java,
+				Tools/JavaDebugAdapter/src/main/java/com/umbra/debug/Evaluator.java,
+				Tools/JavaDebugAdapter/src/main/java/com/umbra/debug/Json.java,
+				Tools/JavaDebugAdapter/src/test/java/com/umbra/debug/JsonTest.java,
+			);
+			target = 000000000000000000000005 /* Umbra */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		000000000000000000000009 /* Umbra */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				00000000000000000000000F /* Exceptions for "Umbra" folder in "Umbra" target */,
+			);
+			path = Sources/Umbra;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		000000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				00000000000000000000006C /* Penumbra in Frameworks */,
+				00000000000000000000006E /* PenumbraLanguages in Frameworks */,
+				000000000000000000000070 /* PenumbraMarkdownLanguage in Frameworks */,
+				000000000000000000000072 /* JavaIntelligence in Frameworks */,
+				00000000000000000000008E /* HexKit in Frameworks */,
+				000000000000000000000084 /* SwiftIntelligence in Frameworks */,
+				000000000000000000000088 /* LanguageSyntax in Frameworks */,
+				000000000000000000000086 /* TypeScriptIntelligence in Frameworks */,
+				000000000000000000000074 /* EditorIntelligence in Frameworks */,
+				00000000000000000000008A /* EditorIntelligenceLSP in Frameworks */,
+				000000000000000000000076 /* GitIntelligence in Frameworks */,
+				000000000000000000000078 /* SubprocessKit in Frameworks */,
+				00000000000000000000007A /* AgentKit in Frameworks */,
+				00000000000000000000007C /* AgentKitMLX in Frameworks */,
+				0000000000000000000000A2 /* AgentKitApple in Frameworks */,
+				00000000000000000000007E /* LocalModelStore in Frameworks */,
+				000000000000000000000080 /* SwiftTerm in Frameworks */,
+				000000000000000000000082 /* DiagramKit in Frameworks */,
+				000000000000000000000090 /* XcodeProjectFormat in Frameworks */,
+				00000000000000000000009A /* Sparkle in Frameworks */,
+				00000000000000000000009F /* DatabaseKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		000000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000009 /* Umbra */,
+				00000000000000000000000A /* Resources */,
+				00000000000000000000000D /* umbra.png */,
+				000000000000000000000016 /* java-debug-adapter.jar */,
+				00000000000000000000009B /* java-analysis-server.jar */,
+				000000000000000000000095 /* jacocoagent.jar */,
+				000000000000000000000096 /* jacococli.jar */,
+				000000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		000000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000004 /* Umbra.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		00000000000000000000000A /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				00000000000000000000000B /* Info.plist */,
+				00000000000000000000000C /* Umbra.entitlements */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		000000000000000000000005 /* Umbra */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000000000013 /* Build configuration list for PBXNativeTarget "Umbra" */;
+			buildPhases = (
+				000000000000000000000097 /* Fetch JaCoCo */,
+				000000000000000000000006 /* Sources */,
+				000000000000000000000007 /* Frameworks */,
+				000000000000000000000008 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				000000000000000000000009 /* Umbra */,
+			);
+			name = Umbra;
+			packageProductDependencies = (
+				00000000000000000000006B /* Penumbra */,
+				00000000000000000000006D /* PenumbraLanguages */,
+				00000000000000000000006F /* PenumbraMarkdownLanguage */,
+				000000000000000000000071 /* JavaIntelligence */,
+				00000000000000000000008F /* HexKit */,
+				000000000000000000000083 /* SwiftIntelligence */,
+				000000000000000000000087 /* LanguageSyntax */,
+				000000000000000000000085 /* TypeScriptIntelligence */,
+				000000000000000000000073 /* EditorIntelligence */,
+				00000000000000000000008B /* EditorIntelligenceLSP */,
+				000000000000000000000075 /* GitIntelligence */,
+				000000000000000000000077 /* SubprocessKit */,
+				000000000000000000000079 /* AgentKit */,
+				00000000000000000000007B /* AgentKitMLX */,
+				0000000000000000000000A1 /* AgentKitApple */,
+				00000000000000000000007D /* LocalModelStore */,
+				00000000000000000000007F /* SwiftTerm */,
+				000000000000000000000081 /* DiagramKit */,
+				000000000000000000000092 /* XcodeProjectFormat */,
+				000000000000000000000099 /* Sparkle */,
+				00000000000000000000009E /* DatabaseKit */,
+			);
+			productName = Umbra;
+			productReference = 000000000000000000000004 /* Umbra.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		000000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					000000000000000000000005 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+				};
+			};
+			buildConfigurationList = 000000000000000000000010 /* Build configuration list for PBXProject "Umbra" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 000000000000000000000002;
+			packageReferences = (
+				000000000000000000000064 /* XCLocalSwiftPackageReference ".." */,
+				000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */,
+				000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */,
+				0000000000000000000000A0 /* XCLocalSwiftPackageReference "../Packages/AgentKitApple" */,
+				000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				00000000000000000000006A /* XCRemoteSwiftPackageReference "DiagramKit" */,
+				000000000000000000000091 /* XCRemoteSwiftPackageReference "xcode-project-format" */,
+				000000000000000000000098 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				00000000000000000000009D /* XCLocalSwiftPackageReference "../Packages/DatabaseKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 000000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				000000000000000000000005 /* Umbra */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		000000000000000000000008 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				00000000000000000000000E /* umbra.png in Resources */,
+				000000000000000000000017 /* java-debug-adapter.jar in Resources */,
+				00000000000000000000009C /* java-analysis-server.jar in Resources */,
+				000000000000000000000093 /* jacocoagent.jar in Resources */,
+				000000000000000000000094 /* jacococli.jar in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		000000000000000000000097 /* Fetch JaCoCo */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Fetch JaCoCo";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# The coverage agent and CLI are not committed; fetch.sh downloads the pinned releases (SHA-256 checked) and does nothing when they are there.\n\"${SRCROOT}/Sources/Umbra/Tools/JaCoCo/fetch.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		000000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		000000000000000000000011 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		000000000000000000000012 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		000000000000000000000014 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Resources/Umbra.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_DEBUG_DYLIB = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.umbra.editor;
+				PRODUCT_NAME = Umbra;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		000000000000000000000015 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Resources/Umbra.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.umbra.editor;
+				PRODUCT_NAME = Umbra;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		000000000000000000000010 /* Build configuration list for PBXProject "Umbra" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000000011 /* Debug */,
+				000000000000000000000012 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		000000000000000000000013 /* Build configuration list for PBXNativeTarget "Umbra" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000000014 /* Debug */,
+				000000000000000000000015 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		000000000000000000000064 /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "..";
+		};
+		000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/AgentKit";
+		};
+		000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/AgentKitMLX";
+		};
+		0000000000000000000000A0 /* XCLocalSwiftPackageReference "../Packages/AgentKitApple" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/AgentKitApple";
+		};
+		00000000000000000000009D /* XCLocalSwiftPackageReference "../Packages/DatabaseKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/DatabaseKit";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.20.0;
+			};
+		};
+		00000000000000000000006A /* XCRemoteSwiftPackageReference "DiagramKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/alex-cova/DiagramKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.1.0;
+			};
+		};
+		000000000000000000000091 /* XCRemoteSwiftPackageReference "xcode-project-format" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/xcode-project-format";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.1.0;
+			};
+		};
+		000000000000000000000098 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.6.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		00000000000000000000006B /* Penumbra */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = Penumbra;
+		};
+		00000000000000000000006D /* PenumbraLanguages */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = PenumbraLanguages;
+		};
+		00000000000000000000006F /* PenumbraMarkdownLanguage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = PenumbraMarkdownLanguage;
+		};
+		000000000000000000000071 /* JavaIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = JavaIntelligence;
+		};
+		00000000000000000000008F /* HexKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = HexKit;
+		};
+		000000000000000000000083 /* SwiftIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = SwiftIntelligence;
+		};
+		000000000000000000000087 /* LanguageSyntax */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = LanguageSyntax;
+		};
+		000000000000000000000085 /* TypeScriptIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = TypeScriptIntelligence;
+		};
+		000000000000000000000073 /* EditorIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = EditorIntelligence;
+		};
+		00000000000000000000008B /* EditorIntelligenceLSP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = EditorIntelligenceLSP;
+		};
+		000000000000000000000075 /* GitIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = GitIntelligence;
+		};
+		000000000000000000000077 /* SubprocessKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;
+			productName = SubprocessKit;
+		};
+		000000000000000000000079 /* AgentKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */;
+			productName = AgentKit;
+		};
+		00000000000000000000007B /* AgentKitMLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */;
+			productName = AgentKitMLX;
+		};
+		0000000000000000000000A1 /* AgentKitApple */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0000000000000000000000A0 /* XCLocalSwiftPackageReference "../Packages/AgentKitApple" */;
+			productName = AgentKitApple;
+		};
+		00000000000000000000007D /* LocalModelStore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */;
+			productName = LocalModelStore;
+		};
+		00000000000000000000007F /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+		000000000000000000000081 /* DiagramKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 00000000000000000000006A /* XCRemoteSwiftPackageReference "DiagramKit" */;
+			productName = DiagramKit;
+		};
+		000000000000000000000092 /* XcodeProjectFormat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000091 /* XCRemoteSwiftPackageReference "xcode-project-format" */;
+			productName = XcodeProjectFormat;
+		};
+		000000000000000000000099 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000098 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+		00000000000000000000009E /* DatabaseKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 00000000000000000000009D /* XCLocalSwiftPackageReference "../Packages/DatabaseKit" */;
+			productName = DatabaseKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 000000000000000000000001 /* Project object */;
+}

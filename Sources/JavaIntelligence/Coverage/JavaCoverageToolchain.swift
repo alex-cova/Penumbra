@@ -2,7 +2,7 @@ import Foundation
 
 /// The JaCoCo agent and CLI jars Umbra ships next to the debug adapter.
 ///
-/// They are fetched by `Example/Umbra/Tools/JaCoCo/fetch.sh` (pinned, SHA-256 checked) and are
+/// They are fetched by `Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh` (pinned, SHA-256 checked) and are
 /// not in the repository, so a build can lack them; ``locate(in:fileExists:)`` says so in a
 /// sentence instead of failing in the middle of a run.
 public struct JavaCoverageToolchain: Equatable, Sendable {
@@ -36,7 +36,7 @@ public struct JavaCoverageToolchain: Equatable, Sendable {
             switch self {
             case .notBundled(let missing):
                 return "Coverage needs \(missing.joined(separator: " and ")), which this build of Umbra does not include. "
-                    + "Run Example/Umbra/Tools/JaCoCo/fetch.sh and rebuild."
+                    + "Run Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh and rebuild."
             }
         }
     }

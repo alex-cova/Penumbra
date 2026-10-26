@@ -9,7 +9,7 @@ import JavaIntelligence
 ///   swift run -c release PerfHarness java-analysis-server synthetic [--lines N] [--samples N]
 ///   swift run -c release PerfHarness java-analysis-server /path/to/Big.java
 ///
-/// The server jar is the one `Example/Umbra/Tools/JavaAnalysisServer/build.sh` builds; when it
+/// The server jar is the one `Umbra/Sources/Umbra/Tools/JavaAnalysisServer/build.sh` builds; when it
 /// is missing the profile builds it into a temporary directory first.
 enum JavaAnalysisServerProfile {
     static func run(pathOrSynthetic: String, lines: Int, samples: Int) throws {
@@ -62,10 +62,10 @@ enum JavaAnalysisServerProfile {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
-        let built = root.appendingPathComponent("Example/Umbra/Tools/JavaAnalysisServer/build/java-analysis-server.jar")
+        let built = root.appendingPathComponent("Umbra/Sources/Umbra/Tools/JavaAnalysisServer/build/java-analysis-server.jar")
         if FileManager.default.fileExists(atPath: built.path) { return built }
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("perf-analysis-server-build-\(UUID().uuidString)")
-        let build = root.appendingPathComponent("Example/Umbra/Tools/JavaAnalysisServer/build.sh")
+        let build = root.appendingPathComponent("Umbra/Sources/Umbra/Tools/JavaAnalysisServer/build.sh")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = [build.path]

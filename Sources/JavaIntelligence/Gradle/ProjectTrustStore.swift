@@ -5,7 +5,7 @@ import Foundation
 /// invoked, wrapper or not, so ``GradleCommandRunner`` refuses to run anything for a root that
 /// isn't in here (mirroring IntelliJ's own "Trust this project?" gate). Although Gradle was the
 /// first client, Maven, npm, SwiftPM and Xcode share the same store through the
-/// Umbra-side trust gate in `Example/Umbra/Projects`.
+/// Umbra-side trust gate in `Umbra/Sources/Umbra/Projects`.
 ///
 /// Deliberately independent of ``JavaIndexPaths``: that root lives under `~/Library/Caches` and is
 /// versioned by the shard format, so trust decisions stored there would silently reset whenever the

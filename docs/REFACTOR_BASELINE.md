@@ -6,7 +6,7 @@ Measured 2026-10-24 on the parent state of the Umbra architecture refactor (plan
 
 `caffeinate -u -d -i -s swift test` (display on): 6,756 XCTest cases, 40 skipped, about 13 minutes. Swift Testing: 21 tests in 7 suites.
 
-Needs the JaCoCo jars: run `Example/Umbra/Tools/JaCoCo/fetch.sh` once (git-ignored `build/`). Without them six coverage tests fail with `notBundled`.
+Needs the JaCoCo jars: run `Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh` once (git-ignored `build/`). Without them six coverage tests fail with `notBundled`.
 
 Flaky tests found and fixed while taking this baseline (all passed alone, failed under load or crashed the run):
 
@@ -42,7 +42,7 @@ Pass criterion for later phases: Enter medians within ±5 % and live handle coun
 
 ## Size
 
-`Example/Umbra`: 489 files, about 118k lines. `IDEWorkspace.swift`: 7,090 lines. `IDEAgentPanel.swift`: 1,700 lines.
+`Umbra/Sources/Umbra`: 489 files, about 118k lines. `IDEWorkspace.swift`: 7,090 lines. `IDEAgentPanel.swift`: 1,700 lines.
 
 ## End state (after plan phases 1-8)
 
@@ -52,7 +52,7 @@ Measured on the same machine against the targets in the plan. Full suite: 6,787 
 | Metric | Baseline | Now | Target | |
 |---|---|---|---|---|
 | `IDEWorkspace.swift` lines | 7,090 | 5,975 (zoom → `IDEWorkspace+Zoom.swift`) | ≤ 3,000 | not met, stopped per plan item 3 |
-| Swift files at the root of `Example/Umbra` | 139 | 0 | (folders) | met |
+| Swift files at the root of `Umbra/Sources/Umbra` | 139 | 0 | (folders) | met |
 | `NSAlert()` outside `IDEAlert` | 28 | 0 | ≤ 3 | met |
 | Largest agent UI file (excluding the conversation model) | 1,700 | 439 | ≤ 600 | met |
 | Icon-button implementations | 7+ | 1 shared, 47 uses (+ titlebar and browser-toolbar buttons left) | 1 | mostly |
@@ -69,7 +69,7 @@ New tested units: `Debouncer`, `IDEFindInFilesModel`, `IDEBottomPanelModel`, `ID
 preferences snapshot contract (nine required keys pinned), `IDEProjectTrustGate` (8-case recording matrix).
 
 \* Font-literal counting: the plan's 130 was a subset count; a straight `grep -rn '\.font(\.system(size:'`
-over `Example/Umbra` gives 160 on the pre-pass tree and 162 after (net +2: the CallHierarchy/Debug tabs gained
+over `Umbra/Sources/Umbra` gives 160 on the pre-pass tree and 162 after (net +2: the CallHierarchy/Debug tabs gained
 size-10 glyph icons when modernized to the shared chrome). The pass deliberately did not convert font literals —
 mapping size-10/11/9 text to scaled `Typography` tokens vs `IconSize` glyph tokens needs an owner design call,
 since literals bypass `IDEUIFonts.scaledSize`.

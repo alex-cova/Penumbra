@@ -1,26 +1,13 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 //
 // Swift 6 language mode is enabled on library, test, harness, and example targets.
 // Do not set `defaultIsolation: MainActor` (SE-0476): EIP actors, background parse,
 // and off-main search must stay nonisolated by default.
 
-import Foundation
 import PackageDescription
 
 let swift6: [SwiftSetting] = [.swiftLanguageMode(.v6)]
-
-/// The JaCoCo agent and CLI that `Example/Umbra/Tools/JaCoCo/fetch.sh` downloads. They are not
-/// committed, and a missing resource fails the whole build, so a checkout that has not run the
-/// script just builds an Umbra that says "not bundled" for Run with Coverage.
-let umbraJaCoCoResources: [Resource] = {
-    let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        .appendingPathComponent("Example/Umbra/Tools/JaCoCo/build")
-    return ["jacocoagent.jar", "jacococli.jar"].compactMap { name in
-        FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path)
-            ? .copy("Tools/JaCoCo/build/\(name)") : nil
-    }
-}()
 
 // Per-language grammar packs migrated from Hextech's Vendor/PenumbraLanguages.
 // Each language is a trio: a C grammar target, a `*Queries` resource target,
@@ -94,7 +81,7 @@ let package = Package(
     name: "Penumbra",
     defaultLocalization: "en",
     platforms: [
-        .macOS(.v26)
+        .macOS(.v14)
     ],
     products: [
         .library(name: "Penumbra", targets: ["Penumbra"]),
@@ -114,18 +101,10 @@ let package = Package(
         .library(name: "GitIntelligence", targets: ["GitIntelligence"])
     ],
     dependencies: [
-        .package(path: "Packages/AgentKit"),
-        .package(path: "Packages/AgentKitMLX"),
-        .package(path: "Packages/AgentKitApple"),
-        .package(path: "Packages/DatabaseKit"),
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
         .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
         .package(url: "https://github.com/ChimeHQ/JSONRPC", from: "0.9.0"),
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0"),
-        .package(url: "https://github.com/alex-cova/sunflower", from: "1.0.0"),
-        .package(url: "https://github.com/alex-cova/DiagramKit", from: "1.1.0"),
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
-        .package(url: "https://github.com/apple/xcode-project-format", from: "0.1.0")
+        .package(url: "https://github.com/alex-cova/sunflower", from: "1.0.0")
     ],
     targets: [
         .target(
@@ -262,114 +241,6 @@ let package = Package(
             path: "Tools/PerfHarness/Sources",
             swiftSettings: swift6
         ),
-        // The agent evaluator: scripted tasks, a real model, a verdict from the project's own tests.
-        .target(
-            name: "AgentEvalKit",
-            dependencies: [
-                .product(name: "AgentKit", package: "AgentKit"),
-                "SubprocessKit"
-            ],
-            path: "Tools/AgentEval/Sources/AgentEvalKit",
-            swiftSettings: swift6
-        ),
-        .executableTarget(
-            name: "AgentEval",
-            dependencies: [
-                "AgentEvalKit",
-                .product(name: "AgentKit", package: "AgentKit"),
-                .product(name: "AgentKitMLX", package: "AgentKitMLX"),
-                .product(name: "LocalModelStore", package: "AgentKitMLX"),
-                .product(name: "AgentKitApple", package: "AgentKitApple"),
-            ],
-            path: "Tools/AgentEval/Sources/AgentEval",
-            swiftSettings: swift6
-        ),
-        // Umbra as an ACP agent on stdio (docs/ACP_PLAN.md Phase 2): any ACP client can drive
-        // an AgentSession built from the user's configured provider.
-        .executableTarget(
-            name: "UmbraACP",
-            dependencies: [
-                .product(name: "AgentKit", package: "AgentKit"),
-                .product(name: "AgentKitMLX", package: "AgentKitMLX"),
-                .product(name: "LocalModelStore", package: "AgentKitMLX"),
-            ],
-            path: "Example/UmbraACP",
-            swiftSettings: swift6
-        ),
-        .testTarget(
-            name: "AgentEvalTests",
-            dependencies: ["AgentEvalKit", .product(name: "AgentKit", package: "AgentKit")],
-            path: "Tools/AgentEval/Tests/AgentEvalTests",
-            swiftSettings: swift6
-        ),
-        .executableTarget(
-            name: "Umbra",
-            dependencies: [
-                "Penumbra",
-                "PenumbraLanguages",
-                "PenumbraMarkdownLanguage",
-                "JavaIntelligence",
-                "SwiftIntelligence",
-                "TypeScriptIntelligence",
-                "EditorIntelligenceLSP",
-                "TreeSitter",
-                "TreeSitterHTTP",
-                "TreeSitterTypeScript",
-                "TreeSitterSwift",
-                "GitIntelligence",
-                "SubprocessKit",
-                .product(name: "AgentKit", package: "AgentKit"),
-                .product(name: "AgentKitMLX", package: "AgentKitMLX"),
-                .product(name: "LocalModelStore", package: "AgentKitMLX"),
-                .product(name: "AgentKitApple", package: "AgentKitApple"),
-                .product(name: "SwiftTerm", package: "SwiftTerm"),
-                .product(name: "DiagramKit", package: "DiagramKit"),
-                .product(name: "Sparkle", package: "Sparkle"),
-                .product(name: "XcodeProjectFormat", package: "xcode-project-format"),
-                .product(name: "DatabaseKit", package: "DatabaseKit"),
-                "HexKit"
-            ],
-            path: "Example/Umbra",
-            exclude: [
-                "CLAUDE.md",
-                "Agent/CLAUDE.md",
-                "Coverage/CLAUDE.md",
-                "Diagrams/CLAUDE.md",
-                "Diff/CLAUDE.md",
-                "Git/CLAUDE.md",
-                "HTTP/CLAUDE.md",
-                "Inspections/CLAUDE.md",
-                "Languages/CLAUDE.md",
-                "LocalHistory/CLAUDE.md",
-                "Profiler/CLAUDE.md",
-                "Projects/CLAUDE.md",
-                "ProjectWizard/CLAUDE.md",
-                "Run/CLAUDE.md",
-                "Saving/CLAUDE.md",
-                "Swift/CLAUDE.md",
-                "SwiftUIPreview/CLAUDE.md",
-                "TextTools/CLAUDE.md",
-                "SplitView/LICENSE",
-                "SplitView/README.md",
-                "Tools/JavaDebugAdapter/build.sh",
-                "Tools/JavaDebugAdapter/build/classes",
-                "Tools/JavaDebugAdapter/build/test-classes",
-                "Tools/JavaDebugAdapter/build/test-sources.txt",
-                "Tools/JavaDebugAdapter/build/sources.txt",
-                "Tools/JavaDebugAdapter/src",
-                "Tools/JavaAnalysisServer/build.sh",
-                "Tools/JavaAnalysisServer/build/classes",
-                "Tools/JavaAnalysisServer/build/sources.txt",
-                "Tools/JavaAnalysisServer/src",
-                "Tools/JaCoCo/fetch.sh"
-            ],
-            resources: [
-                .copy("Tools/JavaDebugAdapter/build/java-debug-adapter.jar"),
-                .copy("Tools/JavaAnalysisServer/build/java-analysis-server.jar"),
-                .copy("../umbra.png")
-            ] + umbraJaCoCoResources,
-            swiftSettings: swift6
-        ),
         .target(name: "TestTreeSitterLanguages"),
         .target(name: "TreeSitterGraphQL", cSettings: [
             .headerSearchPath("src")
@@ -459,15 +330,8 @@ let package = Package(
             "SwiftIntelligence",
             "TypeScriptIntelligence",
             "HexKit",
-            "Umbra",
             "GitIntelligence",
-            .product(name: "XcodeProjectFormat", package: "xcode-project-format"),
-            .product(name: "AgentKit", package: "AgentKit"),
-            .product(name: "AgentKitMLX", package: "AgentKitMLX"),
-            .product(name: "LocalModelStore", package: "AgentKitMLX"),
-            .product(name: "AgentKitApple", package: "AgentKitApple"),
-            .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol"),
-            .product(name: "DatabaseKit", package: "DatabaseKit")
+            .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
         ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JavaNavigationCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus"), .copy("Fixtures/JavaCommandCorpus"), .copy("MermaidCorpus")], swiftSettings: swift6)
     ]
 )

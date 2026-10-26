@@ -4,18 +4,19 @@
 .idea
 .DS_Store
 Tools/PerfHarness/Fixtures/
-Example/Umbra/.build
+Umbra/.build
 dist
 
 openai.key
 claude.key
+meta.key
 
 # Xcode user-specific state (shared schemes/workspace data are tracked)
 .swiftpm/xcode/**/xcuserdata/
 .swiftpm/xcode/package.xcworkspace/xcuserdata/
-Example/Umbra.xcodeproj/xcuserdata/
-Example/Umbra.xcodeproj/project.xcworkspace/xcuserdata/
+Umbra/Umbra.xcodeproj/xcuserdata/
+Umbra/Umbra.xcodeproj/project.xcworkspace/xcuserdata/
 # Planning notes under docs/ (AGENT_HARNESS_PLAN.md, GIT_CLIENT_PLAN.md, …)
 docs/**/*PLAN.md
-# JaCoCo agent and CLI, fetched by Example/Umbra/Tools/JaCoCo/fetch.sh
-Example/Umbra/Tools/JaCoCo/build/
+# JaCoCo agent and CLI, fetched by Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh
+Umbra/Sources/Umbra/Tools/JaCoCo/build/

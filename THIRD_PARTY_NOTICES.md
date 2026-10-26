@@ -41,7 +41,7 @@ and is the user's to accept; gated models need the user's own access token.
 
 Run with Coverage starts the user's program or tests with the JaCoCo agent and reads the report the
 JaCoCo command line tool writes. Both jars are resources of the Umbra app, fetched at build time by
-`Example/Umbra/Tools/JaCoCo/fetch.sh` (pinned release, SHA-256 checked) from Maven Central, run as
+`Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh` (pinned release, SHA-256 checked) from Maven Central, run as
 child processes, and never linked into `Penumbra`, `EditorIntelligence` or `JavaIntelligence`.
 
 | Component | Source | License |
@@ -53,14 +53,14 @@ Profiling uses Java Flight Recorder and the `jfr` tool of the user's own JDK, an
 
 ## Umbra split views
 
-Umbra's split panes (`Example/Umbra/SplitView/`) are vendored from
+Umbra's split panes (`Umbra/Sources/Umbra/SplitView/`) are vendored from
 [stevengharris/SplitView](https://github.com/stevengharris/SplitView), MIT (see
-`Example/Umbra/SplitView/LICENSE`), by way of the Hextech app. They are compiled into the Umbra
+`Umbra/Sources/Umbra/SplitView/LICENSE`), by way of the Hextech app. They are compiled into the Umbra
 app only, not into `Penumbra`.
 
 ## Umbra welcome backgrounds (React Bits)
 
-Umbra's welcome-page animated backgrounds (`Example/Umbra/WelcomeBackgrounds/`) are
+Umbra's welcome-page animated backgrounds (`Umbra/Sources/Umbra/WelcomeBackgrounds/`) are
 native Metal and SwiftUI ports inspired by [davidhdev/react-bits](https://github.com/davidhdev/react-bits)
 (MIT + Commons Clause; see upstream `LICENSE.md`). The ported shaders and effects are used
 inside the Umbra app only, not redistributed as a standalone component library. Aero Shards
@@ -74,8 +74,8 @@ license file accompanies the original shader.
 
 ## Umbra project wizard (Xcode project format)
 
-Umbra's New Project wizard and Xcode project system (`Example/Umbra/ProjectWizard/`,
-`Example/Umbra/Projects/IDEXcodeProject*.swift`) read and write Xcode 27's `project.xcproj` with
+Umbra's New Project wizard and Xcode project system (`Umbra/Sources/Umbra/ProjectWizard/`,
+`Umbra/Sources/Umbra/Projects/IDEXcodeProject*.swift`) read and write Xcode 27's `project.xcproj` with
 [apple/xcode-project-format](https://github.com/apple/xcode-project-format) (`XcodeProjectFormat`).
 It is fetched as a SwiftPM dependency of the `Umbra` target only, not of `Penumbra` or
 `EditorIntelligence`.

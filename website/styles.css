@@ -216,6 +216,33 @@ button:focus-visible {
   text-decoration: none;
 }
 
+.site-banner-wrapper {
+  max-width: var(--max-width);
+  margin: 1.75rem auto 0;
+  padding: 0 1.5rem;
+}
+
+.site-banner-container {
+  overflow: hidden;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+  transition: transform 0.3s var(--ease), box-shadow 0.3s var(--ease);
+}
+
+.site-banner-container:hover {
+  box-shadow: var(--shadow-strong);
+}
+
+.site-banner-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+
 .hero {
   max-width: var(--max-width);
   margin: 0 auto;

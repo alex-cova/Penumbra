@@ -4,7 +4,7 @@ import Foundation
 /// Configuration for one ``JavaAnalysisServerClient``: where the server jar lives and which
 /// `java` runs it. The host app injects both — the library ships no jar and picks no JDK.
 public struct JavaAnalysisServerConfiguration: Sendable {
-    /// The `java-analysis-server.jar` built by `Example/Umbra/Tools/JavaAnalysisServer/build.sh`.
+    /// The `java-analysis-server.jar` built by `Umbra/Sources/Umbra/Tools/JavaAnalysisServer/build.sh`.
     public let jarURL: URL
     /// The JDK's `bin/java` executable. The server needs a JDK 17 or newer.
     public let javaExecutable: URL
