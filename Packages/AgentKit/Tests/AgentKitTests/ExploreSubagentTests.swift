@@ -209,4 +209,17 @@ private func wrapped(_ events: [AgentEvent]) -> [AgentEvent] {
     @Test func theChildHasAHardIterationCap() {
         #expect(ExploreTool().maxIterations == 15)
     }
+
+    @Test func theChildKeepsTheParentsCacheKey() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let probe = Probe()
+        let child = MockLLMClient(turns: [.text("the login lives in Auth.swift")])
+        let agent = AgentSession(
+            client: MockLLMClient(turns: [exploreCall(), .text("thanks")]),
+            tools: parentTools(child, probe: probe),
+            workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m", cacheKey: "parent-key"))
+        _ = await runParent(agent)
+        #expect(child.requests[0].cacheKey == "parent-key")
+    }
 }

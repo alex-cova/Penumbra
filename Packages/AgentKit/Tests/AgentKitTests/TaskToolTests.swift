@@ -227,6 +227,62 @@ private func sessionID(in text: String) -> String? {
         #expect(result.isError)
         #expect(result.text.contains("general"))
     }
+
+    @Test func aClaimsGateAsksAboutAChildsEdit() async throws {
+        struct ClaimsGate: PermissionGate {
+            func verdict(for call: ToolCallInfo) async -> PermissionVerdict? {
+                guard call.risk == .edit, call.name != "task" else { return nil }
+                return .ask(notes: ["Chat 'Refactor' is changing this file in its current run."])
+            }
+        }
+        let project = try TempProject(files: ["A.txt": "x"])
+        let child = MockLLMClient(turns: [writeCall("Made.txt", "made by the child"), .text("tried to write it")])
+        let parent = MockLLMClient(turns: [taskCall(), .text("done")])
+        let session = AgentSession(
+            client: parent,
+            tools: ReadOnlyTools.all() + EditingTools.all() + [TaskTool(childClient: child)],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m", approval: .askForCommands, gate: ClaimsGate()))
+        let events = await run(session)
+        let asked = events.compactMap { event -> ApprovalRequest? in
+            if case .subagent(_, let inner) = event, case .approvalRequested(let request) = inner { return request }
+            return nil
+        }
+        #expect(asked.count == 1)
+        #expect(asked.first?.notes == ["Chat 'Refactor' is changing this file in its current run."])
+        #expect(disk(project, "Made.txt") == nil, "the refused edit never lands")
+        #expect(ending(events) == .completed)
+    }
+
+    @Test func aChildsEditCarriesTheHostsAfterEditNote() async throws {
+        let project = try TempProject()
+        let child = MockLLMClient(turns: [writeCall("Kid.txt", "hi", id: "w1"), .text("wrote it")])
+        let parent = MockLLMClient(turns: [taskCall(), .text("done")])
+        let session = AgentSession(
+            client: parent,
+            tools: ReadOnlyTools.all() + EditingTools.all() + [TaskTool(childClient: child)],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(
+                model: "m", approval: .approveAll, afterEdit: { _ in "Problems after this edit: none" }))
+        _ = await run(session)
+        // The live `.toolCallFinished` was already sent, so the note only reaches the child's
+        // next request, as the model's tool output.
+        let seen = outputs(child.requests[1])
+        #expect(seen.contains { $0.contains("Problems after this edit: none") })
+        #expect(disk(project, "Kid.txt") == "hi")
+    }
+
+    @Test func aChildRequestCarriesTheParentsCacheKey() async throws {
+        let project = try TempProject()
+        let child = MockLLMClient(turns: [.text("report")])
+        let parent = MockLLMClient(turns: [taskCall(), .text("done")])
+        _ = await run(AgentSession(
+            client: parent,
+            tools: ReadOnlyTools.all() + EditingTools.all() + [TaskTool(childClient: child)],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m", cacheKey: "parent-key", approval: .approveAll)))
+        #expect(child.requests[0].cacheKey == "parent-key")
+    }
 }
 
 @Suite struct TaskToolContinueTests {
