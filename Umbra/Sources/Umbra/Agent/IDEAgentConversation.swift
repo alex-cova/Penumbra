@@ -1075,8 +1075,16 @@ final class IDEAgentConversation: Identifiable {
         if !host.agentProjectTaskNames().isEmpty {
             tools.append(IDEProjectTaskTool(host: box))
         }
-        // `explore` runs on the helper model when one is set; `task` agents name theirs in `model:`.
-        let exploreModel: String? = settings.helperChoice == nil ? nil : "helper"
+        // `explore` runs on the helper model when one is set and passes the gate; `task` agents
+        // name theirs in `model:`. A saved choice that stopped passing (a deleted model, a window
+        // below the floor) is ignored with a notice, and children fall back to the main model.
+        let resolver = settings.clientFactory()
+        let helperIssue = resolver.helperIssue()
+        if settings.helperChoice != nil, let helperIssue {
+            append(.init(kind: .notice, text: helperIssue))
+        }
+        let helperOK = settings.helperChoice != nil && helperIssue == nil
+        let exploreModel: String? = helperOK ? "helper" : nil
         tools += [TodoTool(), AskUserTool(), ExitPlanModeTool(), ExploreTool(model: exploreModel), TaskTool(catalog: agents)]
         if let memoryDirectory { tools.append(RememberTool(memoryDirectory: memoryDirectory)) }
         let git = IDEAgentGitSource(
@@ -1122,8 +1130,8 @@ final class IDEAgentConversation: Identifiable {
             Task.detached(priority: .utility) { IDEAgentToolOutputs.sweep(directory: directory) }
         }
         let projectNotes = IDEAgentProjectNotes.load(root: root)
-        // Child sessions resolve their model through this snapshot, off the main actor.
-        let resolver = settings.clientFactory()
+        // `resolver` is the snapshot built above: child sessions resolve their model through it,
+        // off the main actor.
         let configuration = AgentConfiguration(
             model: choice.model,
             systemPrompt: SystemPrompt.make(

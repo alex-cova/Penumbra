@@ -128,6 +128,11 @@ struct IDEAgentSettingsView: View {
                         TextField("Model", text: $settings.helperModelName)
                     }
                 }
+                if let issue = settings.helperIssue {
+                    Text(issue)
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.error)
+                }
                 Text("Read-only research, summaries, and agents that say model: helper run on this model instead of the chat's. Pick a cheaper or local one.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)

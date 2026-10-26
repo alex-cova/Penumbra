@@ -1,4 +1,4 @@
-@_spi(HelperTesting) import AgentKit
+@_spi(HelperTesting) @testable import AgentKit
 import Foundation
 import XCTest
 @testable import Umbra
@@ -136,6 +136,65 @@ final class IDEAgentHelperModelTests: XCTestCase {
             XCTAssertEqual(error as? IDEAgentSettings.ConfigurationError, .noHelperModel)
         }
         XCTAssertNil(configuration.summaryClient)
+    }
+
+    private func makeFactory(
+        ollamaModels: [OllamaModel] = [],
+        helper: IDEAIModelChoice? = IDEAIModelChoice(provider: .ollama, model: "qwen3-coder:30b")
+    ) -> IDEAgentClientFactory {
+        IDEAgentClientFactory(
+            baseURLs: [:], keyStore: IDEAgentMemoryKeyStore(), transport: URLSessionTransport(),
+            ollamaModels: ollamaModels, installedMLXModels: [], localContextLength: 32_768,
+            contextWindowOverride: 0, appleStatuses: [:], appleWindows: [:],
+            hostedContextWindows: IDEAgentSettings.hostedContextWindows, helper: helper)
+    }
+
+    func testGateRefusesAModelWithoutToolSupport() {
+        let factory = makeFactory(ollamaModels: [OllamaModel(
+            name: "qwen3-coder:30b", parameterSize: nil, quantization: nil, sizeBytes: 0,
+            capabilities: ["completion"], contextLength: 32_768)])
+        let issue = factory.helperIssue()
+        XCTAssertNotNil(issue)
+        XCTAssertTrue(issue?.contains("no tool support") == true, issue ?? "")
+        XCTAssertThrowsError(try factory.childClient(for: "helper")) { error in
+            XCTAssertEqual(error as? IDEAgentSettings.ConfigurationError, .helperUnavailable(issue ?? ""))
+        }
+    }
+
+    func testGateRefusesASmallWindow() {
+        let factory = makeFactory(ollamaModels: [OllamaModel(
+            name: "qwen3-coder:30b", parameterSize: nil, quantization: nil, sizeBytes: 0,
+            capabilities: ["tools"], contextLength: 8_192)])
+        let issue = factory.helperIssue()
+        XCTAssertNotNil(issue)
+        XCTAssertTrue(issue?.contains("below") == true, issue ?? "")
+        XCTAssertThrowsError(try factory.childClient(for: "helper"))
+    }
+
+    func testGateAcceptsAnUnknownModel() throws {
+        let factory = makeFactory()
+        XCTAssertNil(factory.helperIssue(), "with no list loaded, the request decides")
+        XCTAssertTrue(try factory.childClient(for: "helper").client is OllamaClient)
+    }
+
+    func testADeletedHelperFallsBackWithANotice() async throws {
+        let (settings, _) = makeSettings()
+        settings.helperChoice = IDEAIModelChoice(provider: .mlx, model: "deleted-model-xyz")
+        XCTAssertNotNil(settings.helperIssue, "a model that was never downloaded fails the gate")
+        let client = MockLLMClient(turns: [.text("hi")])
+        let controller = IDEAgentController(
+            settings: settings, store: SessionStore(directory: storeDirectory), clientFactory: { _ in client })
+        controller.attach(host: workspace)
+        await send(controller, "hi")
+
+        let entries = controller.selected.entries
+        let notice = entries.first { $0.kind == .notice && $0.text.contains("Helper model") }
+        XCTAssertNotNil(notice, "the session says the helper is ignored")
+        let session = try XCTUnwrap(controller.currentSessionForTesting)
+        let tools = await session.toolsForTesting
+        XCTAssertNil(tools.compactMap({ $0 as? ExploreTool }).first?.model, "explore shares the parent")
+        let deletedConfiguration = await session.configurationForTesting
+        XCTAssertNil(deletedConfiguration.summaryClient)
     }
 
     func testResolverErrors() {

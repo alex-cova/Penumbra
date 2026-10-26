@@ -233,6 +233,9 @@ final class IDEAgentSettings {
             helperChoice = choice
         }
     }
+
+    /// Why the helper cannot be used, for the settings caption and the session notice.
+    var helperIssue: String? { clientFactory().helperIssue() }
     /// Whether a Brave Search key is saved. Loaded from the Keychain on first read, so creating
     /// settings never prompts for keychain access. Held here so views never read the Keychain.
     private var _hasWebSearchKey = false
@@ -757,6 +760,7 @@ final class IDEAgentSettings {
         case appleUnavailable(String)
         case noHelperModel
         case unknownModel(String)
+        case helperUnavailable(String)
 
         var errorDescription: String? {
             switch self {
@@ -768,6 +772,7 @@ final class IDEAgentSettings {
             case .mlxUnavailable(let reason), .appleUnavailable(let reason): reason
             case .noHelperModel: "No helper model is set. Choose one in the agent settings."
             case .unknownModel(let key): "“\(key)” is not a model this host understands (helper, or provider:model)."
+            case .helperUnavailable(let issue): issue
             }
         }
     }

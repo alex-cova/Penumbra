@@ -153,13 +153,58 @@ struct IDEAgentClientFactory: Sendable {
 
     // MARK: - Child resolution
 
+    /// The smallest window a helper may have: the 6 KB explore report and 15 iterations need room.
+    static let helperWindowFloor = 16_384
+
+    /// Why the helper cannot be used: no tool support, a window below the floor, a model that is
+    /// gone, or a backend that is down. `nil` when none is set or it passes. A model that fails
+    /// stays selectable in Settings (so the reason shows there); sessions ignore it.
+    func helperIssue() -> String? {
+        guard let helper else { return nil }
+        let name = "“\(helper.model)”"
+        let suffix = "Explore and summaries run on the main model."
+        switch helper.provider {
+        case .ollama:
+            if let info = selectedOllamaModel(named: helper.model),
+               !info.capabilities.isEmpty, !info.supportsTools {
+                return "Helper model \(name) is not usable: it has no tool support. \(suffix)"
+            }
+        case .mlx:
+            let status = MLXAvailability.currentStatus()
+            guard status == .available else {
+                return "Helper model \(name) is not usable: \(MLXAvailability.message(for: status)) \(suffix)"
+            }
+            guard let installed = selectedMLXModel(id: helper.model) else {
+                return "Helper model \(name) is not usable: it is not downloaded. \(suffix)"
+            }
+            let info = MLXModelInspector.inspect(directory: installed.directory)
+            if info.hasChatTemplate, !info.supportsTools {
+                return "Helper model \(name) is not usable: it has no tool support. \(suffix)"
+            }
+        case .apple, .applePCC:
+            guard let kind = helper.provider.appleKind else { return nil }
+            if let message = AppleModelAvailability.message(
+                for: appleStatuses[kind] ?? .unavailable("Apple Intelligence is not available."), kind: kind) {
+                return "Helper model \(name) is not usable: \(message) \(suffix)"
+            }
+        default:
+            break
+        }
+        if let window = contextWindow(for: helper), window < Self.helperWindowFloor {
+            return "Helper model \(name) is not usable: its \(window.formatted())-token window is below the \(Self.helperWindowFloor.formatted())-token floor. \(suffix)"
+        }
+        return nil
+    }
+
     /// Resolves a model key to a client for a child session: `helper`, or a `provider:model` id
     /// such as `ollama:qwen3-coder:30b` or `mlx:my-org/my-model`. Throws when the key names no
-    /// helper or no usable model; the session then runs the child on the parent's model.
+    /// helper, a helper that fails the gate, or no usable model; the session then runs the child
+    /// on the parent's model.
     func childClient(for key: String) throws -> ChildClient {
         let choice: IDEAIModelChoice
         if key == "helper" {
             guard let helper else { throw IDEAgentSettings.ConfigurationError.noHelperModel }
+            if let issue = helperIssue() { throw IDEAgentSettings.ConfigurationError.helperUnavailable(issue) }
             choice = helper
         } else if let parsed = IDEAIModelChoice(parsing: key) {
             choice = parsed
