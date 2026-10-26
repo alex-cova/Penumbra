@@ -1,6 +1,6 @@
 # Harness gap plans
 
-Seven plans for bringing Umbra's agent harness level with Claude Code and OpenCode. Written 2026-10-26 and checked against the code the same day. Background and what is already built: `docs/harness/BUILT.md` and the `CLAUDE.md` files under `Packages/AgentKit` and `Umbra/Sources/Umbra/Agent`.
+Eight plans for bringing Umbra's agent harness level with Claude Code and OpenCode and for making better use of local models. Written 2026-10-26 and checked against the code the same day. Background and what is already built: `docs/harness/BUILT.md` and the `CLAUDE.md` files under `Packages/AgentKit` and `Umbra/Sources/Umbra/Agent`.
 
 | # | Plan | Status | Size |
 |---|---|---|---|
@@ -11,6 +11,7 @@ Seven plans for bringing Umbra's agent harness level with Claude Code and OpenCo
 | 5 | [`agent-harness-5.md`](agent-harness-5.md) Git tools and worktrees | open | S to L |
 | 6 | [`agent-harness-6.md`](agent-harness-6.md) Shared agent library, `umbra-agent` CLI, `UmbraACP` parity | open | M to L |
 | 7 | [`agent-harness-7.md`](agent-harness-7.md) Smaller items: measurement, export, LSP tools, `/loop` | open | S each |
+| 8 | [`agent-harness-8.md`](agent-harness-8.md) Local models as helpers for hosted ones: helper model, `model:` per agent, capability gate, accounting | open | S to M |
 
 ## Suggested order
 
@@ -20,6 +21,7 @@ Plans 1, 2 and 3 are what a Claude Code user misses first and extend code that e
 
 - **2:** approval routing (phase 1) comes before giving children command tools.
 - **6 before 3, if both are planned.** The shared library gives hooks, permission files and the command runner one home for the app, `UmbraACP` and the CLI.
+- **8 needs 2 phase 2** (per-agent model) and is measured with 7 item 1 (saved AgentEval results).
 - **5:** the per-chat root (phase 3) comes before worktrees (phases 4 and 5).
 - **7 item 1 needs 6 phase 1** for Anthropic and Meta in AgentEval.
 - **3 and 7 (plugins) contradict** the "Not planned" line in `docs/harness/BUILT.md`; **4** touches its "image pruning (AI mode is text-only)" note. Update that line when one of them is approved.
