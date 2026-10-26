@@ -162,11 +162,6 @@ struct IDEAgentPanel: View {
     private var isAIMode: Bool { placement == .aiMode }
     private var choice: IDEAIModelChoice { agent.selected.effectiveChoice }
 
-    /// The composer's glint holds still with the greeting effects.
-    private var motionEnabled: Bool {
-        !reduceMotion && !workspace.preferences.welcomeAnimationDisabled
-    }
-
     private var composer: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
             if !agent.selected.hasConsent {
@@ -207,14 +202,6 @@ struct IDEAgentPanel: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous)
                         .stroke(IDEAppearance.ColorToken.border, lineWidth: 1))
-                // The same glint as Chat's field while the session is empty. Sending a
-                // message removes it with the greeting, which stops the animation.
-                .overlay {
-                    if isAIMode, agent.entries.isEmpty, motionEnabled {
-                        IDEAIMirrorBorder()
-                            .transition(.opacity)
-                    }
-                }
             } else {
                 fieldRow
                 chipRow
