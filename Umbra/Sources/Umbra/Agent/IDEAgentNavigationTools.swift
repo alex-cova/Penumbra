@@ -198,7 +198,7 @@ struct IDEGoToDefinitionTool: AgentTool {
         let query = try await SymbolQuery(arguments, context: context)
         let found = await navigator.definitions(file: query.url, source: query.source, utf16Offset: query.offset)
         guard !found.isEmpty else {
-            return "No definition found. The symbol may be unresolved (check `diagnostics`), or the Java index is still building."
+            return "No definition found. The symbol may be unresolved (check `diagnostics`), or the index is still building."
         }
         let lines = await NavigationOutput.render(found, root: URL(fileURLWithPath: context.workspace.rootPath), lineText: lineText)
         return lines.joined(separator: "\n")
@@ -225,7 +225,7 @@ struct IDEFindUsagesTool: AgentTool {
         let query = try await SymbolQuery(arguments, context: context)
         let found = await navigator.usages(file: query.url, source: query.source, utf16Offset: query.offset)
         guard !found.isEmpty else {
-            return "No usages found. The symbol may be unused, unresolved (check `diagnostics`), or the Java index is still building."
+            return "No usages found. The symbol may be unused, unresolved (check `diagnostics`), or the index is still building."
         }
         let lines = await NavigationOutput.render(found, root: URL(fileURLWithPath: context.workspace.rootPath), lineText: lineText)
         return "\(found.count) \(found.count == 1 ? "usage" : "usages"):\n" + lines.joined(separator: "\n")
@@ -513,7 +513,7 @@ struct IDEEngineAgentNavigator: IDEAgentNavigating {
     }
 
     private func locate(file: URL, source: String, utf16Offset: Int, kind: NavigationKind) async -> [IDEAgentCodeLocation] {
-        let position = IDEJavaAgentNavigator.position(in: source, utf16Offset: utf16Offset)
+        let position = Self.position(in: source, utf16Offset: utf16Offset)
         let range = TextRange(start: position, end: position)
         let document = Document(
             url: file, displayName: file.lastPathComponent,
@@ -538,42 +538,6 @@ struct IDEEngineAgentNavigator: IDEAgentNavigating {
                 isAmbiguous: location.usage?.isAmbiguous ?? false)
         }
     }
-}
-
-struct IDEJavaAgentNavigator: IDEAgentNavigating {
-    let definitionProvider: JavaGoToDefinitionProvider
-    let usageProvider: JavaFindUsagesProvider
-
-    func definitions(file: URL, source: String, utf16Offset: Int) async -> [IDEAgentCodeLocation] {
-        let position = Self.position(in: source, utf16Offset: utf16Offset)
-        let range = TextRange(start: position, end: position)
-        let document = Document(
-            url: file, displayName: file.lastPathComponent,
-            contentSnapshot: TextSnapshot(version: 0, text: source),
-            selection: Selection(range: range), cursor: Cursor(position: position),
-            viewport: Viewport(x: 0, y: 0, width: 0, height: 0), languageIdentifier: "java")
-        let context = NavigationContext(
-            document: document, cursor: document.cursor, selection: document.selection, trigger: .idle, kind: .definition)
-        let locations: [Location]
-        switch await definitionProvider.provide(context: context) {
-        case .single(let location)?: locations = [location]
-        case .multiple(let found)?: locations = found
-        case nil: locations = []
-        }
-        return locations.map { location in
-            IDEAgentCodeLocation(
-                fileURL: location.url ?? (location.documentID == document.id ? file : nil),
-                line: location.range.start.line + 1, label: location.displayName)
-        }
-    }
-
-    func usages(file: URL, source: String, utf16Offset: Int) async -> [IDEAgentCodeLocation] {
-        await usageProvider.findUsages(source: source, url: file, utf16Offset: utf16Offset).map { usage in
-            IDEAgentCodeLocation(
-                fileURL: usage.url, line: usage.line + 1, label: usage.lineText,
-                kind: String(describing: usage.kind), isAmbiguous: usage.confidence == .ambiguous)
-        }
-    }
 
     static func position(in text: String, utf16Offset: Int) -> TextPosition {
         let ns = text as NSString
@@ -592,3 +556,8 @@ struct IDEJavaAgentNavigator: IDEAgentNavigating {
         return TextPosition(line: line, column: end - lineStart, utf16Offset: end)
     }
 }
+
+/// The Java-backed navigator used to live here; only tests drive the Java providers
+/// directly now, so it lives in the test target
+/// (`Umbra/Tests/UmbraTests/Support/IDEAgentTestNavigator.swift`). Production navigation
+/// goes through ``IDEEngineAgentNavigator`` above.

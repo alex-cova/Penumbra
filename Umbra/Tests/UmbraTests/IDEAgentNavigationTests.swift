@@ -381,7 +381,7 @@ final class IDEAgentJavaNavigationIntegrationTests: XCTestCase {
         let output = await run(definition, fixture, #"{"path":"src/Main.java","line":6,"symbol":"println"}"#)
         XCTAssertFalse(output.isError, output.text)
         XCTAssertEqual(
-            output.text, "No definition found. The symbol may be unresolved (check `diagnostics`), or the Java index is still building.",
+            output.text, "No definition found. The symbol may be unresolved (check `diagnostics`), or the index is still building.",
             "println is in the JDK, which this fixture does not index")
     }
 }
