@@ -26,11 +26,13 @@ struct IDESwiftLanguageService: LanguageService {
         let lookup = environment.openBufferText
         let index = await MainActor.run { support?.index }
         await index?.setOpenBufferLookup(lookup)
+        await MainActor.run { support?.setIndentUnitProvider(environment.indentUnit) }
     }
 
     func stop() async {
         let index = await MainActor.run { support?.index }
         await index?.setOpenBufferLookup(nil)
+        await MainActor.run { support?.setIndentUnitProvider(nil) }
         await MainActor.run { support?.cancelIndexing() }
     }
 

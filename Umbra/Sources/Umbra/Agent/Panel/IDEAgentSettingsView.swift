@@ -22,16 +22,16 @@ struct IDEAgentSettingsSheet: View {
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
-            .padding(IDEAppearance.Spacing.md)
+                .padding(IDEAppearance.Spacing.md)
             Divider().overlay(IDEAppearance.ColorToken.border)
             IDEAgentSettingsView(settings: settings, width: nil, manageModels: { isModelsPresented = true })
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(width: 460, height: 560)
-        .background(IDEAppearance.ColorToken.panel)
-        .preferredColorScheme(IDEAppearance.preferredColorScheme)
-        .onExitCommand { dismiss() }
-        .sheet(isPresented: $isModelsPresented) {
+            .frame(width: 460, height: 560)
+            .background(IDEAppearance.ColorToken.panel)
+            .preferredColorScheme(IDEAppearance.preferredColorScheme)
+            .onExitCommand { dismiss() }
+            .sheet(isPresented: $isModelsPresented) {
             IDELocalModelsView(store: .shared, settings: settings)
                 .preferredColorScheme(IDEAppearance.preferredColorScheme)
         }
@@ -61,26 +61,44 @@ struct IDEAgentSettingsView: View {
             if settings.provider.hasEndpoint {
                 TextField("Base URL", text: $settings.baseURL)
                     .onSubmit { Task { await refreshModelsIfOllama() } }
+
+                Section(settings.requiresAPIKey ? "API key for \(settings.endpointHost)" : "API key (optional)") {
+                    SecureField(settings.hasAPIKey ? "Saved in the Keychain" : "Paste a key", text: $keyDraft)
+                        .onSubmit(saveKey)
+                    HStack {
+                        Button("Save Key", action: saveKey).disabled(keyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                        Button("Remove Key") { settings.removeAPIKey() }.disabled(!settings.hasAPIKey)
+                    }
+                    if let error = settings.keyError {
+                        Text(error).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
+                    }
+                    if settings.isLocalEndpoint {
+                        Label("This server runs on this Mac: nothing is sent elsewhere.", systemImage: "lock.shield")
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    }
+
+                }
             }
 
             switch settings.provider {
-            case .ollama: ollamaSection(settings)
-            case .mlx: mlxSection(settings)
-            case .apple, .applePCC: appleSection(settings)
-            case .openAIResponses, .chatCompletions, .anthropic, .meta: TextField("Model", text: $settings.model)
+                case .ollama: ollamaSection(settings)
+                case .mlx: mlxSection(settings)
+                case .apple, .applePCC: appleSection(settings)
+                case .openAIResponses, .chatCompletions, .anthropic, .meta: TextField("Model", text: $settings.model)
             }
 
             if settings.provider.appleKind == nil {
-            Picker("Reasoning", selection: $settings.reasoningEffort) {
-                ForEach(settings.provider.reasoningEfforts, id: \.self) { Text($0.capitalized).tag($0) }
-            }
-            Text(settings.provider == .anthropic
-                ? "Off leaves the model's own default: current Claude models always think, and the effort sets how much."
-                : settings.provider == .openAIResponses || settings.provider == .chatCompletions || settings.provider == .meta
-                ? "Use Off for models without reasoning; they reject the setting."
-                : "Thinking makes each step slower. It applies to models that support it.")
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Picker("Reasoning", selection: $settings.reasoningEffort) {
+                    ForEach(settings.provider.reasoningEfforts, id: \.self) { Text($0.capitalized).tag($0) }
+                }
+                Text(settings.provider == .anthropic
+                    ? "Off leaves the model's own default: current Claude models always think, and the effort sets how much."
+                    : settings.provider == .openAIResponses || settings.provider == .chatCompletions || settings.provider == .meta
+                    ? "Use Off for models without reasoning; they reject the setting."
+                    : "Thinking makes each step slower. It applies to models that support it.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
 
             Section("Helper model") {
@@ -91,41 +109,41 @@ struct IDEAgentSettingsView: View {
                         ForEach(IDEAgentProvider.allCases) { Text($0.title).tag($0) }
                     }
                     switch settings.helperProvider {
-                    case .ollama:
-                        HStack {
+                        case .ollama:
+                            HStack {
                             Picker("Model", selection: $settings.helperModelName) {
-                                if settings.helperModelName.isEmpty { Text("Choose…").tag("") }
-                                ForEach(settings.ollamaModels) { model in
-                                    Text(IDEAgentOllamaLabel.title(model)).tag(model.name).disabled(!model.supportsTools)
+                            if settings.helperModelName.isEmpty { Text("Choose…").tag("") }
+                            ForEach(settings.ollamaModels) { model in
+                            Text(IDEAgentOllamaLabel.title(model)).tag(model.name).disabled(!model.supportsTools)
                                 }
-                                if !settings.helperModelName.isEmpty, settings.selectedOllamaModel(named: settings.helperModelName) == nil {
-                                    Text(settings.helperModelName).tag(settings.helperModelName)
+                            if !settings.helperModelName.isEmpty, settings.selectedOllamaModel(named: settings.helperModelName) == nil {
+                            Text(settings.helperModelName).tag(settings.helperModelName)
                                 }
                             }
                             Button { Task { await settings.refreshOllamaModels(adjustSelection: false) } } label: {
-                                Image(systemName: "arrow.clockwise")
+                            Image(systemName: "arrow.clockwise")
                             }
-                            .buttonStyle(.borderless)
-                            .help("Reload the installed models")
-                            .accessibilityLabel("Reload the installed models")
+                                .buttonStyle(.borderless)
+                                .help("Reload the installed models")
+                                .accessibilityLabel("Reload the installed models")
                         }
-                    case .mlx:
-                        Picker("Model", selection: $settings.helperModelName) {
+                        case .mlx:
+                            Picker("Model", selection: $settings.helperModelName) {
                             if settings.helperModelName.isEmpty { Text("Choose…").tag("") }
                             ForEach(IDELocalModelsStore.shared.installed) { model in
-                                let info = IDELocalModelsStore.shared.info(for: model)
-                                Text(LocalModelFormat.shortName(model.id) + (info.hasChatTemplate && !info.supportsTools ? " (no tool support)" : ""))
-                                    .tag(model.id)
-                                    .disabled(info.hasChatTemplate && !info.supportsTools)
+                            let info = IDELocalModelsStore.shared.info(for: model)
+                            Text(LocalModelFormat.shortName(model.id) + (info.hasChatTemplate && !info.supportsTools ? " (no tool support)" : ""))
+                                .tag(model.id)
+                                .disabled(info.hasChatTemplate && !info.supportsTools)
                             }
                             if !settings.helperModelName.isEmpty, settings.selectedMLXModel(id: settings.helperModelName) == nil {
-                                Text(settings.helperModelName).tag(settings.helperModelName)
+                            Text(settings.helperModelName).tag(settings.helperModelName)
                             }
                         }
-                    case .apple, .applePCC:
-                        EmptyView()
-                    case .openAIResponses, .chatCompletions, .anthropic, .meta:
-                        TextField("Model", text: $settings.helperModelName)
+                        case .apple, .applePCC:
+                            EmptyView()
+                        case .openAIResponses, .chatCompletions, .anthropic, .meta:
+                            TextField("Model", text: $settings.helperModelName)
                     }
                 }
                 if let issue = settings.helperIssue {
@@ -166,9 +184,9 @@ struct IDEAgentSettingsView: View {
                         } label: {
                             Label("Use", systemImage: isUsed ? "checkmark.square" : "square")
                         }
-                        .buttonStyle(.borderless)
-                        .help("Allow running this agent and use it for new chats. Umbra asks through the existing approval cards before it changes files or runs commands.")
-                        .accessibilityLabel(isUsed ? "Stop using \(definition.displayName)" : "Use \(definition.displayName)")
+                            .buttonStyle(.borderless)
+                            .help("Allow running this agent and use it for new chats. Umbra asks through the existing approval cards before it changes files or runs commands.")
+                            .accessibilityLabel(isUsed ? "Stop using \(definition.displayName)" : "Use \(definition.displayName)")
                         Button("Remove") { settings.removeACPAgent(id: definition.id) }
                     }
                 }
@@ -182,7 +200,7 @@ struct IDEAgentSettingsView: View {
                     acpNameDraft = ""
                     acpCommandDraft = ""
                 }
-                .disabled(acpCommandDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(acpCommandDraft.trimmingCharacters(in: .whitespaces).isEmpty)
                 Text("Turning on “Use” is the consent to run that command. Nothing is spawned until you send a message, and Stop kills the process group.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -264,38 +282,19 @@ struct IDEAgentSettingsView: View {
                         Button("Open file") {
                             if let url = agent?.memoryFile { NSWorkspace.shared.open(url) }
                         }
-                        .disabled(agent?.memoryFile == nil)
+                            .disabled(agent?.memoryFile == nil)
                         Button("Delete memories") { agent?.deleteMemories() }
                             .disabled(agent?.memoryFile == nil)
                     }
                 }
             }
             if isFullPane { advancedSections(settings) }
-
-            if settings.provider.hasEndpoint {
-            Section(settings.requiresAPIKey ? "API key for \(settings.endpointHost)" : "API key (optional)") {
-                SecureField(settings.hasAPIKey ? "Saved in the Keychain" : "Paste a key", text: $keyDraft)
-                    .onSubmit(saveKey)
-                HStack {
-                    Button("Save Key", action: saveKey).disabled(keyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-                    Button("Remove Key") { settings.removeAPIKey() }.disabled(!settings.hasAPIKey)
-                }
-                if let error = settings.keyError {
-                    Text(error).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
-                }
-                if settings.isLocalEndpoint {
-                    Label("This server runs on this Mac: nothing is sent elsewhere.", systemImage: "lock.shield")
-                        .font(IDEAppearance.Typography.caption)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                }
-            }
-            }
         }
-        .formStyle(.grouped)
-        .frame(width: width)
-        .onChange(of: settings.baseURL) { settings.refreshKeyState() }
-        .onChange(of: settings.provider) { Task { await refreshModelsIfOllama() } }
-        .task { await refreshModelsIfOllama() }
+            .formStyle(.grouped)
+            .frame(width: width)
+            .onChange(of: settings.baseURL) { settings.refreshKeyState() }
+            .onChange(of: settings.provider) { Task { await refreshModelsIfOllama() } }
+            .task { await refreshModelsIfOllama() }
     }
 
     @ViewBuilder private func advancedSections(_ settings: IDEAgentSettings) -> some View {
@@ -374,8 +373,8 @@ struct IDEAgentSettingsView: View {
             Section("History") {
                 Button("Clear History for This Project…", role: .destructive) { isConfirmingClear = true }
                     .confirmationDialog("Delete every saved agent conversation for this project?", isPresented: $isConfirmingClear) {
-                        Button("Delete Conversations", role: .destructive) { agent.clearHistory() }
-                    }
+                    Button("Delete Conversations", role: .destructive) { agent.clearHistory() }
+                }
                 Text("Conversations are saved on this Mac, in Application Support, so they can be resumed.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)

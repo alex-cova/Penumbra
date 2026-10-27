@@ -9,9 +9,15 @@ enum IDESourceKitServer {
     static let id = "sourcekit-lsp"
     static let pathKey = "umbra.swift.sourcekitPath"
 
+    /// Not `.formatting` and not `.semanticTokens`: the semantic tier outranks the native one while
+    /// the server is connected, so claiming them would hand both away from `SwiftFormattingProvider`
+    /// and `SwiftSemanticTokenProvider`. The LSP semantic-token provider asks the server about a
+    /// document it never opened (`untitled:…`, error -32001), so it can never answer and the colours
+    /// freeze; and SourceKit's formatter is swift-format with its own style, not the editor's
+    /// indentation settings.
     static let features: Set<LanguageFeature> = [
         .completion, .hover, .signatureHelp, .definition, .implementation, .typeDefinition, .references,
-        .rename, .codeActions, .formatting, .diagnostics, .semanticTokens, .inlayHints, .structure,
+        .rename, .codeActions, .diagnostics, .inlayHints, .structure,
         .typeHierarchy, .callHierarchy
     ]
 

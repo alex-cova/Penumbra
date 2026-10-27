@@ -1,6 +1,9 @@
 @preconcurrency import AppKit
 import PenumbraLanguages
+import EditorIntelligence
 import PenumbraMarkdownLanguage
+import SwiftIntelligence
+import TreeSitterSwiftPenumbra
 import XCTest
 @testable import Penumbra
 
@@ -28,11 +31,15 @@ final class IncrementalHighlightConsistencyTests: XCTestCase {
         let make: () -> TreeSitterLanguage
         let provider: TreeSitterLanguageProvider?
         var configuration: LanguageConfiguration = .generic
+        /// Off for long-lined code: a wrapped line's height is only known once it has been laid out,
+        /// so a live view and a fresh one disagree about the rows above the viewport.
+        var wrapsLines = true
 
         static var markdown: Language { Language(make: { .markdown }, provider: MarkdownLanguageProvider()) }
         static var javaScript: Language { Language(make: { .javaScript }, provider: nil, configuration: .javaScript) }
         static var html: Language { Language(make: { .html }, provider: BundledLanguageProvider()) }
         static var http: Language { Language(make: { .http }, provider: BundledLanguageProvider()) }
+        static var swift: Language { Language(make: { .swift }, provider: nil, configuration: .swift, wrapsLines: false) }
     }
 
     // MARK: - HTTP
@@ -67,6 +74,110 @@ final class IncrementalHighlightConsistencyTests: XCTestCase {
 
         """
         assertConsistent(text, .http, edits: [.replace(NSRange(location: offset(of: "1,", in: text), length: 1), with: "{{id}}")])
+    }
+
+    // MARK: - Swift
+
+    /// Moving a block of a SwiftUI view up a few dozen lines, as `IDEAgentSettingsView.swift` was
+    /// edited: the committed text goes through the line removals and insertions that turn it into
+    /// the current file, and every displayed line must match a fresh open of the result.
+    func testMovingASwiftUIBlockLeavesNoStaleColours() {
+        let before = AgentSettingsFixture.headSource
+        let after = AgentSettingsFixture.source
+        let edits = Self.lineEdits(from: before, to: after)
+        XCTAssertFalse(edits.isEmpty)
+        for fraction in [0, 0.15, 0.3, 0.6] as [CGFloat] {
+            print("swift block move: scroll \(fraction)")
+            assertConsistent(before, .swift, modes: [false], edits: edits + [.scroll(fraction)])
+        }
+    }
+
+    /// Semantic tokens must paint the characters they name. The provider's offsets and the view's
+    /// are different bookkeeping (UTF-8 bytes through `SourceTextMap` against UTF-16 line spans), so
+    /// this checks the colours actually displayed, over the file with its non-ASCII characters.
+    func testSemanticTokensPaintTheCharactersTheyName() async throws {
+        let text = AgentSettingsFixture.source
+        let (view, window) = makeView(text: text, language: .swift, policy: .eager)
+        defer { window.orderOut(nil) }
+        let provided = await SwiftSemanticTokenProvider().semanticHighlights(forSource: view.text)
+        let tokens = try XCTUnwrap(provided)
+        view.setSemanticHighlights(tokens.map {
+            SyntaxHighlightRange(range: NSRange(location: $0.range.lowerBound, length: $0.range.count), highlightName: $0.highlightName)
+        })
+        settleFully(view)
+        let ns = view.text as NSString
+        var lineStarts = [0]
+        for index in 0 ..< ns.length where ns.character(at: index) == 0x0A { lineStarts.append(index + 1) }
+        var wrong: [String] = []
+        var checked = 0
+        var rowsSeen = Set<Int>()
+        for fraction in stride(from: 0.0, through: 1.0, by: 0.1) {
+            let maxY = max(view.contentSize.height - view.bounds.height, 0)
+            view.contentOffset = CGPoint(x: 0, y: (maxY * CGFloat(fraction)).rounded())
+            settleFully(view)
+            for row in view.visibleRowsForTesting where rowsSeen.insert(row).inserted {
+                guard row < lineStarts.count, let displayed = view.displayedLineForTesting(row: row) else { continue }
+                let lineRange = NSRange(location: lineStarts[row], length: displayed.string.length)
+                for token in tokens {
+                    let range = NSRange(location: token.range.lowerBound, length: token.range.count)
+                    guard let overlap = range.intersection(lineRange), overlap.length > 0,
+                          let color = view.theme.textColor(for: token.highlightName) else { continue }
+                    checked += 1
+                    let local = overlap.location - lineRange.location
+                    let painted = displayed.string.attribute(.foregroundColor, at: local, effectiveRange: nil) as? NSColor
+                    if painted != color {
+                        wrong.append("row \(row + 1): \(token.highlightName) '\(ns.substring(with: overlap))'")
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(rowsSeen.count, 300, "the scroll did not cover the file")
+        XCTAssertGreaterThan(checked, 20, "nothing was checked")
+        XCTAssertTrue(wrong.isEmpty, "\(wrong.count) of \(checked) tokens not painted:\n" + wrong.prefix(25).joined(separator: "\n"))
+    }
+
+    /// Edits turning `old` into `new`, one `.replace` per contiguous run of removed or inserted
+    /// lines, in an order where each range is valid for the text the earlier edits left.
+    static func lineEdits(from old: String, to new: String) -> [Edit] {
+        let oldLines = old.components(separatedBy: "\n")
+        let newLines = new.components(separatedBy: "\n")
+        var lines = oldLines
+        func location(ofLine index: Int) -> Int {
+            lines[..<index].reduce(0) { $0 + ($1 as NSString).length + 1 }
+        }
+        var edits: [Edit] = []
+        var removals: [(offset: Int, element: String)] = []
+        var insertions: [(offset: Int, element: String)] = []
+        for change in newLines.difference(from: oldLines) {
+            switch change {
+            case let .remove(offset, element, _): removals.append((offset, element))
+            case let .insert(offset, element, _): insertions.append((offset, element))
+            }
+        }
+        // Removals bottom to top, each run as one replace; then insertions top to bottom.
+        var index = 0
+        while index < removals.count {
+            var end = index
+            while end + 1 < removals.count, removals[end + 1].offset == removals[end].offset - 1 { end += 1 }
+            let first = removals[end].offset, last = removals[index].offset
+            let start = location(ofLine: first)
+            let length = location(ofLine: last + 1) - start
+            edits.append(.replace(NSRange(location: start, length: length), with: ""))
+            lines.removeSubrange(first ... last)
+            index = end + 1
+        }
+        index = 0
+        while index < insertions.count {
+            var end = index
+            while end + 1 < insertions.count, insertions[end + 1].offset == insertions[end].offset + 1 { end += 1 }
+            let run = insertions[index ... end]
+            let text = run.map { $0.element + "\n" }.joined()
+            edits.append(.replace(NSRange(location: location(ofLine: run.first!.offset), length: 0), with: text))
+            lines.insert(contentsOf: run.map(\.element), at: run.first!.offset)
+            index = end + 1
+        }
+        precondition(lines == newLines, "line edits do not reproduce the new text")
+        return edits
     }
 
     // MARK: - Markdown
@@ -380,6 +491,7 @@ final class IncrementalHighlightConsistencyTests: XCTestCase {
             palette: ThemeCatalog.palette(id: ThemeCatalog.defaultDarkID, fallbackDark: true),
             postscriptName: "Menlo-Regular"
         )
+        textView.isLineWrappingEnabled = language.wrapsLines
         textView.showMinimap = true
         textView.isLineFoldingEnabled = true
         textView.showMethodSeparators = true

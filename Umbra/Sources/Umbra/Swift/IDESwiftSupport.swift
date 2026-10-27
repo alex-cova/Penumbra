@@ -13,6 +13,7 @@ final class IDESwiftSupport {
     let diagnostics: SwiftDiagnosticProvider
     let rename: SwiftRenameProvider
     let signatureHelp: SwiftSignatureHelpProvider
+    let formatting = SwiftFormattingProvider()
     let lineMarkers: SwiftLineMarkerProvider
     let typeHierarchy: SwiftTypeHierarchyProvider
     let callHierarchy: SwiftCallHierarchyProvider
@@ -47,6 +48,7 @@ final class IDESwiftSupport {
                 hover: [hover],
                 diagnostics: [diagnostics],
                 navigation: [navigation],
+                formatting: formatting,
                 signatureHelp: signatureHelp,
                 codeActions: SwiftCodeActionProvider(),
                 rename: rename,
@@ -91,5 +93,10 @@ final class IDESwiftSupport {
     func cancelIndexing() {
         rebuild?.cancel()
         rebuild = nil
+    }
+
+    /// The indentation unit the formatter lays code out with, from the editor's settings.
+    func setIndentUnitProvider(_ provider: (@Sendable () async -> String)?) {
+        Task { await formatting.setIndentUnitProvider(provider) }
     }
 }

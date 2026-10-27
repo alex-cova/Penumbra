@@ -60,7 +60,10 @@ public struct SwiftSemanticTokenProvider: SemanticTokenProviding {
                     case .function: add(bytes: use.bytes, name: use.isCall ? "function.call" : nil)
                     case .type: add(bytes: use.bytes, name: binding.symbolKind.highlightName)
                     }
-                } else if use.isCall {
+                } else if use.isCall, !Self.isTypeLikeName(use.name) {
+                    // An uppercase callee (`Text(…)`, `Section(…)`) is a type construction or a
+                    // type-like DSL use: the grammar already colors it (SwiftUI views as types),
+                    // so a function color here would paint over that.
                     add(bytes: use.bytes, name: "function.call")
                 } else if let highlight = kinds[use.name] ?? nil {
                     add(bytes: use.bytes, name: highlight)
@@ -69,6 +72,12 @@ public struct SwiftSemanticTokenProvider: SemanticTokenProviding {
         }
         tokens.sort { $0.range.lowerBound < $1.range.lowerBound }
         return tokens
+    }
+
+    /// Whether `name` reads as a type where it is used: an uppercase first letter, the way
+    /// Swift spells types, view constructors and type-like DSL calls.
+    private static func isTypeLikeName(_ name: String) -> Bool {
+        name.first?.isUppercase ?? false
     }
 
     private static func highlight(_ kind: SwiftFileModel.Kind) -> String? {

@@ -26,23 +26,23 @@ struct IDEAgentTodoListView: View {
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                     Spacer(minLength: 0)
                 }
-                .font(IDEAppearance.Typography.sectionHeader)
-                .contentShape(Rectangle())
+                    .font(IDEAppearance.Typography.sectionHeader)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
             if isExpanded {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     IDEAgentTodoRow(item: item)
                 }
             }
         }
-        .foregroundStyle(IDEAppearance.ColorToken.foreground)
-        .padding(.horizontal, IDEAppearance.Spacing.sm)
-        .padding(.vertical, IDEAppearance.Spacing.xs)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(IDEAppearance.ColorToken.card.opacity(IDEAppearance.Opacity.dimmed))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Checklist, \(items.filter { $0.status == .completed }.count) of \(items.count) done")
+            .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
+            .padding(.vertical, IDEAppearance.Spacing.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(IDEAppearance.ColorToken.card.opacity(IDEAppearance.Opacity.dimmed))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Checklist, \(items.filter { $0.status == .completed }.count) of \(items.count) done")
     }
 
 }
@@ -61,14 +61,14 @@ struct IDEAgentTodoRow: View {
                 .foregroundStyle(item.status == .completed ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .font(IDEAppearance.Typography.caption)
+            .font(IDEAppearance.Typography.caption)
     }
 
     private static func symbol(_ status: TodoItem.Status) -> String {
         switch status {
-        case .pending: "circle"
-        case .inProgress: "circle.dotted.circle"
-        case .completed: "checkmark.circle.fill"
+            case .pending: "circle"
+            case .inProgress: "circle.dotted.circle"
+            case .completed: "checkmark.circle.fill"
         }
     }
 }
