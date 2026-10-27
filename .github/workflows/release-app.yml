@@ -11,9 +11,31 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-latest
+    runs-on: xcode-27
+    env:
+      # AgentKitApple uses macOS 27 SDK types (Private Cloud Compute); Xcode 26.6 on macos-latest lacks them.
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          xcodebuild -version
+          xcrun --show-sdk-version
+
+      # Xcode 27's default metal is a stub; MLX's shaders need the separate Metal toolchain (see editor-ci.yml).
+      - name: Install Metal toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -downloadComponent MetalToolchain
+          metal="$(xcrun -f metal)"
+          case "${metal}" in
+            *XcodeDefault.xctoolchain*)
+              echo "error: xcrun metal is the Xcode stub; the Metal toolchain is not mounted" >&2
+              exit 1
+              ;;
+          esac
+          "${metal}" --version
 
       # Hand-made tags once shipped Umbra-1.6.8-macOS.zip as 1.6.9/1.6.10, which generate_appcast then
       # treated as a duplicate version. A release tag must match VERSION.
