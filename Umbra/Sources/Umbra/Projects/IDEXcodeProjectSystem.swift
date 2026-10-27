@@ -46,6 +46,11 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
     @ObservationIgnored var onActivity: (@MainActor () -> Void)?
     /// The child's whole environment. Nil inherits. Tests set a PATH that holds only a fake `xcodebuild`.
     @ObservationIgnored var launchEnvironment: [String: String]?
+    /// The project was read, re-read or closed: its model and folder (both nil when closed).
+    @ObservationIgnored var onModelChanged: (@MainActor (IDEXcodeProjectModel?, URL?) -> Void)?
+    /// Reload re-read the project file. The build settings behind the language server's compilation
+    /// database may have changed with it, so the window restarts the server, which regenerates it.
+    @ObservationIgnored var onDefinitionReloaded: (@MainActor () -> Void)?
     /// Receives the compiler problems of a finished build, per file, replacing the previous set.
     @ObservationIgnored var onBuildDiagnostics: (@MainActor ([URL: [Diagnostic]]) -> Void)?
     /// The text of an open buffer, so a compiler column lands in what the editor shows.
@@ -136,6 +141,7 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
         guard let root = rootURL else { return }
         hasConfigurationChanges = false
         loadModel(root: root)
+        onDefinitionReloaded?()
     }
 
     func dismissConfigurationChanges() {
@@ -196,6 +202,7 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
     private func setModel(_ new: IDEXcodeProjectModel?) {
         model = new
         tasks = Self.tasks(for: new)
+        onModelChanged?(new, rootURL)
     }
 
     static func tasks(for model: IDEXcodeProjectModel?) -> [IDEProjectTask] {
@@ -401,7 +408,7 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
     }
 
     /// The first executable named `xcodebuild` on PATH, else `/usr/bin/xcodebuild` (the developer-tools shim).
-    static func resolveXcodebuild(environment: [String: String]?) -> String? {
+    nonisolated static func resolveXcodebuild(environment: [String: String]?) -> String? {
         let path = environment?["PATH"] ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
         let fileManager = FileManager.default
         for directory in path.split(separator: ":") where !directory.isEmpty {

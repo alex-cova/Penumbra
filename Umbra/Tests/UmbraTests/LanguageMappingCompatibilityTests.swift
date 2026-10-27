@@ -17,7 +17,7 @@ final class LanguageMappingCompatibilityTests: XCTestCase {
             "xml": "xml", "plist": "xml", "xsd": "xml", "xsl": "xml", "xslt": "xml",
             "yaml": "yaml", "yml": "yaml",
             "toml": "toml",
-            "swift": "swift",
+            "swift": "swift", "swiftinterface": "swift",
             "java": "java",
             "kt": "kotlin", "kts": "kotlin",
             "gradle": "groovy",

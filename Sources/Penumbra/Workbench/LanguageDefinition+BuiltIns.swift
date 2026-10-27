@@ -21,7 +21,7 @@ public extension LanguageDefinition {
         LanguageDefinition(id: "yaml", displayName: "YAML", fileExtensions: ["yaml", "yml"],
                            fenceAliases: ["yml"], isSelectable: true),
         LanguageDefinition(id: "toml", displayName: "TOML", fileExtensions: ["toml"], isSelectable: true),
-        LanguageDefinition(id: "swift", displayName: "Swift", fileExtensions: ["swift"],
+        LanguageDefinition(id: "swift", displayName: "Swift", fileExtensions: ["swift", "swiftinterface"],
                            configuration: .swift, isSelectable: true),
         LanguageDefinition(id: "java", displayName: "Java", fileExtensions: ["java"],
                            configuration: .java, isSelectable: true),

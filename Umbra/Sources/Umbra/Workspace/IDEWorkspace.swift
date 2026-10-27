@@ -1,5 +1,6 @@
 import AppKit
 import EditorIntelligence
+import EditorIntelligenceLSP
 import JavaIntelligence
 import Observation
 import Penumbra
@@ -262,6 +263,8 @@ public final class IDEWorkspace {
     var typescriptSupport: IDETypeScriptSupport { intelligenceServices.typescriptSupport }
     /// The window's Swift index. The symbol palette and the SwiftPM project system use it.
     var swiftSupport: IDESwiftSupport { intelligenceServices.swiftSupport }
+    /// Where SourceKit-LSP's client appears once the host has started it for a trusted folder.
+    var sourceKitConnection: LSPConnectionBox { intelligenceServices.sourceKitConnection }
     /// The run providers language modules contributed, one per window, made on first use.
     var runProviders: IDERunProviders {
         if let runProvidersStorage { return runProvidersStorage }
@@ -941,6 +944,7 @@ public final class IDEWorkspace {
                 self.showProblems()
             }
         }
+        languageServerHost.documentWorkspace = workspaceBridge.workspace
         languageServerHost.requestTrust = { [weak self] definition, url in
             guard let self, self.window != nil else { return false }
             let name = url.lastPathComponent
@@ -953,6 +957,15 @@ public final class IDEWorkspace {
             guard let self else { return }
             let resolver = manifest.flatMap { manifest in root.map { manifest.moduleResolver(root: $0) } }
             self.swiftSupport.setModuleResolver(resolver)
+        }
+        // A package's targets win when a folder has both a package and a project.
+        xcode.onModelChanged = { [weak self] model, _ in
+            guard let self, !self.swiftPM.isActive else { return }
+            self.swiftSupport.setModuleResolver(model?.moduleResolver())
+        }
+        xcode.onDefinitionReloaded = { [weak self] in
+            guard let self, let root = self.project.rootURL else { return }
+            self.languageServerHost.projectDidChange(root: root, connections: self.intelligenceServices.languageServerConnections)
         }
         gitStatus.onActionReport = { [weak self] message, isFailure in
             self?.notifications.post(
@@ -3723,6 +3736,15 @@ public final class IDEWorkspace {
         openClassDeclaration(in: url, utf8NameRange: utf8NameRange, inRightSplit: inRightSplit)
     }
 
+    /// Opens `url` with the caret at a place a language server named: a zero-based line and a UTF-16
+    /// offset in it, as `workspace/symbol` reports them.
+    func openServerSymbol(in url: URL, line: Int, character: Int, inRightSplit: Bool) {
+        Task {
+            let range = await Task.detached { Self.utf16Range(ofLine: line + 1, column: character + 1, in: url) }.value
+            await openDocument(from: url, selecting: range, inRightSplit: inRightSplit)
+        }
+    }
+
     private func openClassDeclaration(in url: URL, utf8NameRange: Range<Int>, inRightSplit: Bool) {
         Task {
             let range = await Task.detached { Self.utf16Range(fromUTF8: utf8NameRange, in: url) }.value
@@ -5574,8 +5596,10 @@ public final class IDEWorkspace {
         host.lastSelectedRange = nil
         host.lastScrollOffset = nil
         preferences.apply(to: host.textView)
-        let attachedSource = document.url.map { JavaAttachedSources.isExtractedSource($0) } ?? false
-        host.textView.isEditable = !attachedSource
+        let readOnlySource = document.url.map {
+            JavaAttachedSources.isExtractedSource($0) || DependencySourceLocation.isGeneratedInterface($0)
+        } ?? false
+        host.textView.isEditable = !readOnlySource
         host.loadedDocumentID = document.id
         host.loadedGeneration = document.contentGeneration
         host.loadedBufferGeneration = host.textView.contentGeneration

@@ -1,0 +1,185 @@
+# Swift code intelligence at Java's level (roadmap)
+
+## Context
+
+Swift intelligence today has two tiers:
+
+- **Native.** `Sources/SwiftIntelligence`, about 7.8k lines against Java's 59k. A tree-sitter parse feeds `SwiftModelWalker`, `SwiftFileModel`, `SwiftIndex` and `SwiftResolver`. It is syntactic only: no generics, no overloads, and no SDK beyond the hand-written `SwiftStandardLibrary` table.
+- **Semantic.** SourceKit-LSP (`Umbra/Sources/Umbra/LanguageServers/IDESourceKitServer.swift`). It outranks the native tier through `LanguageServiceRegistry` once it is ready.
+
+Java got to its level by reimplementing typing natively (`JavaTypeSystem`, `JavaMemberLookup`, stubs). That route doesn't carry over to Swift: protocol witnesses, constrained extensions, type-driven overloads, result builders and macros need the compiler.
+
+The approach is therefore:
+
+1. Measure Swift against the compiler the way `docs/JAVA_PARITY.md` measures Java against `javac`.
+2. Make SourceKit-LSP the truth for anything typed, and make it work on Xcode projects as well as SwiftPM.
+3. Give the native tier exact syntax through **swift-syntax** (decided), for the instant, structural work: inspections, refactorings and scopes.
+4. Match Java's remaining tooling: coverage and profiling.
+
+Gaps found while exploring:
+
+- SourceKit-LSP is relevant only when a `Package.swift` exists (`isRelevantToProject`), so Xcode projects get no semantic tier. `IDEXcodeProjectSystem` builds them but gives the server no compiler arguments.
+- The LSP client sends `window: nil` capabilities, so there is no `$/progress` and indexing is invisible. Nothing handles `sourcekit-lsp://` reference documents (SDK generated interfaces, macro expansions).
+- The completion corpus is 4 cases (`Tests/PenumbraTests/Fixtures/SwiftCorpus`). There is no diagnostics parity corpus.
+- The Inspect Code UI (`Umbra/Sources/Umbra/Inspections/IDEInspectionRun.swift`) and coverage (`IDECoverageController`) are typed on `JavaInspection` and `JavaCoverageReport`.
+- `Umbra/Sources/Umbra/Swift/CLAUDE.md` points at `docs/LANGUAGE_PARITY_PLAN.md`, which does not exist.
+
+Each phase lands separately, with the scorecard updated. Phase 0 comes first because every later phase is judged by it.
+
+---
+
+## Phase 0: Scorecard (oracle: `swiftc` and SourceKit-LSP)
+
+1. **Roadmap doc.** Write this roadmap to `docs/SWIFT_INTELLIGENCE_ROADMAP.md`. Fix the dead pointer in `Umbra/Sources/Umbra/Swift/CLAUDE.md` to name it.
+2. **Diagnostics parity**, in `Tests/PenumbraTests/SwiftIntelligence/Parity/`, mirroring `Tests/PenumbraTests/JavaIntelligence/Parity/JavaParityCorpusTests.swift`:
+   - `SwiftParityMutator.swift`: typo-member, typo-type, typo-name, drop-arg, swap-labels, drop-return, drop-try, drop-await, drop-import, enum-case, wrong-optional.
+   - `SwiftParityCorpusTests.swift` runs only with `SWIFT_PARITY=1`. Its oracle is `xcrun swiftc -typecheck -sdk $(xcrun --show-sdk-path) -Xfrontend -debug-diagnostic-names`, with keys like `[cannot_find_in_scope]`. The native side is `SwiftDiagnosticProvider`.
+   - Metrics are the Java ones: recall and precision per key, plus false positives on the valid corpus, gated at 0.
+   - `UPDATE_SWIFT_PARITY_BASELINE=1` rewrites `Fixtures/SwiftParityCorpus/baseline.json` and regenerates **`docs/SWIFT_PARITY.md`**.
+   - A `SWIFT_PARITY_CASE` prefix filter works as in Java.
+3. **Valid corpus.** Use self-contained files under `Fixtures/SwiftParityCorpus/valid/`. Copy `fetch-external.sh` to pull a few permissively licensed packages for an optional larger run.
+4. **Completion corpus.** Grow `Fixtures/SwiftCorpus/cases` from 4 to about 100 cases with gap tags, reusing `CompletionCorpusRunner` and `NativeCompletionCorpusTests.testSwiftCorpus`. Cover:
+   - generics
+   - protocol extensions
+   - optional chaining
+   - closures and `$0`
+   - result builders
+   - `self.` inside closures
+   - SDK types
+   - implicit members
+5. **Semantic ceiling.** A second run of the same completion corpus goes through `LSPLanguageService` against a real `sourcekit-lsp`, and skips when none is found. It produces two columns per case, native and SourceKit, so "Java level" has a number.
+
+**Status (Phase 0).** Steps 1–5 are done: `docs/SWIFT_PARITY.md` is generated. First numbers: native diagnostics 0% recall on 16 type errors; completion 37/54 native against 50/54 through sourcekit-lsp (3 inconclusive on its 200-item page, 1 label-format mismatch). SourceKit also answers the cases tagged `self-member`, `switch-pattern` and `access-control`, so those are native defects, not compiler needs. Findings for later phases: the Phase 1 client should read `isIncomplete` (it does not), and `sourcekit-lsp --help` describes `--compilation-db-search-path` as relative to the workspace root, so the Phase 2 spike must check whether an absolute path outside the workspace is accepted.
+
+## Phase 1: SourceKit-LSP depth (Umbra and `EditorIntelligenceLSP`)
+
+1. **Progress.**
+   - Advertise `window.workDoneProgress` in `Sources/EditorIntelligenceLSP/LanguageServerClient.swift`, which today sends `window: nil`.
+   - Handle `window/workDoneProgress/create` and `$/progress`.
+   - Show the progress in the status bar through `IDELanguageServerHost` (see the status note below).
+2. **Background indexing.** Confirm it is on by default in the 6.4 toolchain. Otherwise pass `{"backgroundIndexing": true}` through `IDELanguageServerDefinition.initializationOptions` (`IDESourceKitServer.definition()`). Usages, rename and call hierarchy then cover the whole project.
+3. **Fix-its as quick fixes.** Check that `LSPLanguageService`'s code-action path sends `context.diagnostics` and maps `quickfix` actions. Compiler fix-its should then appear under ⌥↩, and the `.codeActions` feature is already claimed. Add a fake-server test in `Tests/PenumbraTests/LSPFakeServerTests.swift` style.
+4. **Reference documents.**
+   - Handle `sourcekit-lsp://` URIs in definition and implementation results by calling `workspace/getReferenceDocument`.
+   - Open the result read-only and mark it as a dependency source, as Java's attached sources and decompiled classes are (`Document.isDependencySource`, `IDEDependencyDiagnosticsFilter`).
+   - This gives Go to Definition into SDK interfaces, the Swift counterpart of Java's decompile path, and macro expansion through the server's "Expand Macro" action.
+5. **Workspace symbols.** Feed Search Everywhere and Go to Symbol from `workspace/symbol` (already in `LanguageServerClient.swift:405`) while connected, with the native index as fallback.
+6. **Tests.** Extend `Umbra/Tests/UmbraTests/IDESourceKitRoutingTests.swift` so the native tier still owns formatting and semantic tokens, and still answers whenever the server is untrusted or not ready.
+
+**Status (Phase 1).** All five steps and the `isIncomplete` follow-up are implemented, plus a prerequisite the plan did not have (document sync, below). The last pieces (request-driven sync, `isIncomplete`, workspace symbols) were written without running their tests; they compile, and the tests are in the tree. First thing to do: `swift test --filter "LSPFakeServerTests|LSPWorkProgressTests"`, `swift test --package-path Umbra --filter "IDEServerSymbolSourceTests|IDELanguageServerHostTests"`, then `SWIFT_PARITY=1 UPDATE_SWIFT_PARITY_BASELINE=1 swift test --filter "SwiftSourceKitCeilingTests|SwiftParityCorpusTests"` to refresh `sourcekit-baseline.json` and `docs/SWIFT_PARITY.md`, whose ceiling numbers predate the narrowing. What the work found, which corrects the plan above:
+
+- **Document sync (step 0).** The app never told any language server about any buffer: nothing sent `didOpen`, `didChange` or `didClose` (`LanguageServerClient.syncHandlers()` and `LSPWorkspaceSyncBridge` existed but nothing used them), and a real `sourcekit-lsp` answers hover, definition and completion for a file it was never sent with `-32001 No language service … found`. So no SourceKit feature could answer for an edited Swift file, whatever else was fixed. `LSPWorkspaceDocumentSync` now follows the window's EIP `Workspace` (the stream the indexer and Java support already read; `IDELanguageServerHost.documentWorkspace`) and sends `didOpen`, the whole text after each change, and `didClose`, for documents in the server's languages. Full text, not increments, by decision: the adapter already debounces and copies the text once per pause, and any later change heals a missed one. Known limits: a `.documentChanged` with the same UTF-16 length as before is treated as a re-announcement (a same-length reload from disk is missed until the next edit); files over 2,000,000 UTF-16 units and documents without a file URL are not sent; every server start adds one small continuation to the `EventBus` that is only dropped with the workspace. Seen in a probe, not in the app: SourceKit-LSP returns its open completion session for a request at the same position even after the text above it changed, so a completion repeated at an unmoved caret after an edit elsewhere can be stale (`documentSymbol` shows the edit applied).
+
+- **A request first sends the text (found while reading the completion path).** The adapter debounces text by 200 ms, but the controller asks the server on every keystroke of an identifier, so a request made right after typing reached a server that had not been sent that keystroke. `LanguageServerClient` now owns what the server holds of each document it opened (`sent`: version and UTF-16 length) and `ensureSynced` resends the whole text before any request about a document whose length differs (`syncFullText(of:force:)`); `LSPWorkspaceDocumentSync` only decides which documents the server gets and delegates versions to the client, so the event-driven and request-driven syncs cannot send the same version twice. A same-length difference is not seen by the request path (only by an edit event).
+- **`isIncomplete` (follow-up).** SourceKit-LSP returns a page of 200 items and marks the list incomplete; the answer to the rest is asking again with more typed, which the controller already does per keystroke (`handleTextInsertion` → `refilterCompletion` + `requestCompletion`). `LanguageServerClient.requestCompletionList` returns `LSPCompletionList(items, isIncomplete)`; `requestCompletions` is unchanged. The ceiling harness uses it: a case that misses a `contains` name on an incomplete list types the first three characters of each missing name (closing and reopening the document each time, since SourceKit reuses a completion session for an unmoved position) and asks again, so the three formerly inconclusive cases get a real answer; a failure on an incomplete list with no name to type stays inconclusive.
+- **Workspace symbols (5).** `IDEServerSymbolSource` (Umbra) is the Swift Symbols section for Search Everywhere and `@`: SourceKit-LSP's `workspace/symbol` while connected and answering, else the native `IDESwiftPaletteSource`. From a probe of the real server: the results are the project's only (no SDK `String`), case-insensitive substring matches with signature-style names (`boxed()`, `makeBox()`), a zero-width range at the name, nothing for an empty query, and nothing until background indexing has run; so an empty query, a missing or untrusted server and an index still building all fall back to the native source. `IDEWorkspace.openServerSymbol` opens a zero-based line and UTF-16 character.
+- **Progress (1).** Done: the client advertises `window.workDoneProgress`, answers `window/workDoneProgress/create` (`InitializingServer` does not, so a server that asked would wait), folds `$/progress` in `LSPWorkProgressTracker` and reports changes through `onProgress`. The status bar text comes from `IDELanguageServerHost.serverWork` (`SourceKit-LSP: Indexing: 3 / 10 (30%)`), not from `IDEIndexActivity`: that type only tells the agent which indexes are building, and the toast reads `IDEProjectStatus`.
+- **Background indexing (2).** Nothing to enable: with Swift 6.4 a real SwiftPM package gets `Indexing: 0 / 2 (0%)` and its end with no options (`SwiftSourceKitCeilingTests.testSourceKitReportsBackgroundIndexingProgress`).
+- **Fix-its (3).** They never worked, for a reason the plan did not name: SourceKit-LSP answers every `textDocument/codeAction` with an empty list unless the client advertises `codeActionLiteralSupport` (it still advertises `codeActionProvider: true`). The client now does. Two more facts from probing the server directly: it finds a fix-it by the context diagnostic's range, message, severity **and source** together (the editor's copy carries its own provider name as the source, so the client now sends the server's published diagnostics that contain the position and falls back to the caller's list), and it only answers when the request position is inside the diagnostic's range (some warnings, like "never mutated", are zero-width). Actions that need `workspace/executeCommand` or edit other files are dropped for now; they would do nothing or change the wrong text. Refactorings that finish through the server's `workspace/applyEdit` (Extract Method) are a follow-up.
+- **Not yet verified in the app.** Sync, fix-its and progress are tested end to end against a real `sourcekit-lsp`, including through `IDELanguageServerHost` (`testTheHostSendsTheOpenBufferToARealSourceKit`), but nobody has used them in the running Umbra: open a SwiftPM package, trust the server, type, press ⌥↩. This also turns the semantic tier on for real, so SourceKit's completion, hover and diagnostics now take precedence over the native ones; look at latency and at whether its diagnostics are too noisy.
+- **Reference documents (4).** With this client SourceKit-LSP does not use `sourcekit-lsp://` URIs: Go to Definition on `String` returns an ordinary `file://` path to a generated interface (`$TMPDIR/sourcekit-lsp/GeneratedInterfaces/<hash>/Swift.String.swiftinterface`, 1.4 MB for `String`), and the spelling can be `/var/…` or `/private/var/…`. The server answers inside such a file only after it is synced like any other document. Done on Umbra's side: `DependencySourceLocation.isGeneratedInterface` (EditorIntelligence; path components `sourcekit-lsp/GeneratedInterfaces`, so both spellings and no other `.swiftinterface`) is part of `Document.isDependencySource` (no diagnostics, inspections or quick fixes, through the existing `IDEDependencyDiagnosticsFilter`) and of the editor's read-only rule in `IDEWorkspace`; `.swiftinterface` maps to the Swift language (highlighting; the native index still only reads `.swift`, so `String` does not become a project symbol); and `LSPWorkspaceDocumentSync` sends these files up to 16,000,000 UTF-16 units (ordinary files stop at 2,000,000; `Foundation`'s interface is 2.3 MB), once, since they never change. Tested against a real server: `testGoToDefinitionIntoTheSDKLandsInAnInterfaceTheServerCanAnswerInside` (definition of `String` → interface → hover and Go to Definition inside it). Not done: the interface is not yet shown in the Explorer, and the native Swift providers also see it as a Swift document. Whether `workspace/getReferenceDocument` (`sourcekit-lsp://`) is better than the on-disk file is open; the file works and needs no client capability.
+
+## Phase 2: Xcode projects get a semantic tier
+
+1. **Spike first.** Find out whether SourceKit-LSP accepts a compilation database outside the workspace, through `initializationOptions.compilationDatabase.searchPaths` with an absolute path in Umbra's caches. Decision gate:
+   - If yes, go ahead with steps 2 to 4.
+   - If no, the fallback is a `buildServer.json` written only after an explicit user consent prompt. The project folder is never touched silently.
+2. **Compile arguments.** After trust, `IDEXcodeProjectSystem` runs `xcodebuild -showBuildSettingsForIndex -json -project … -scheme …` through SubprocessKit. A new `IDEXcodeIndexSettings.swift` (pure, tested with captured JSON) turns each file's `swiftASTCommandArguments` into `compile_commands.json` under `~/Library/Caches/com.umbra.editor/sourcekit/<root-hash>/`.
+3. **Activation.** `IDESourceKitServer.isRelevantToProject` becomes true for `IDEXcodeProjectModel.findProject(in:)` as well as for `Package.swift`. `initializationOptions(root)` points at the cache folder.
+4. **Regeneration.** Regenerate when the project definition changes (`IDEXcodeProjectSystem.filesDidChange`), then notify the server with `workspace/didChangeWatchedFiles` or restart it.
+5. **Native modules.** The native tier gets real module boundaries for Xcode targets: a `SwiftIndex` `moduleResolver` built from `IDEXcodeProjectModel.targets(containing:)`, as SwiftPM already supplies one.
+6. **Tests.** Extend `Umbra/Tests/UmbraTests/IDEXcodeProjectSystemTests.swift` and `IDELanguageServerRelevanceTests.swift`, using a fake `xcodebuild` on `PATH` as the existing tests do.
+
+**Status (Phase 2).** All six steps are implemented and tested, including an end-to-end test on a real Xcode project (`IDEXcodeIndexDatabaseTests.testARealXcodeProjectGivesTheServerKnowledgeOfItsOtherFiles`: the app's own template → `xcodebuild` → database → real `sourcekit-lsp` → a member declared in *another file* completes in the open buffer). What the spike and the work found, which corrects the plan above:
+
+- **The spike (step 1).** An absolute `searchPaths` entry outside the workspace is ignored, through `initializationOptions` and through `--compilation-db-search-path` alike; a **relative** one that climbs out with `..` works through both. So the database lives in the cache folder (`~/Library/Caches/com.umbra.editor/sourcekit/<hash of the project path>`, nothing is written into the project) and the server is told its path relative to the project. Two traps found only by running it: (1) the server resolves the project folder's symlinks *before* applying `..`, so the path is counted between `realpath`s (a project under `/var` or `/tmp` is one level short otherwise); (2) Foundation rewrites `/private/var/…` back to `/var/…` in `standardizedFileURL` *and* `resolvingSymlinksInPath()`, so `relativePath` is purely lexical and the real spelling comes from `realpath(3)`.
+- **The database (step 2).** `xcodebuild -project … -alltargets -showBuildSettingsForIndex -json -skipPackageUpdates` prints `{target: {file: {swiftASTCommandArguments, swiftASTModuleName, …}}}`, and every file's arguments repeat the module's whole source list, which is quadratic in a module's size. SourceKit-LSP expands `@response-file` arguments (tested), so each distinct argument list is written once as `<Module>-<12 hex>.rsp` and each file's entry is `["swiftc", "@file"]`: the database is linear. A file is found by the spelling the editor opens it under, so every entry is written under every spelling of the project folder (`/tmp/x` and `/private/tmp/x` are different keys). A file in two targets belongs to the first non-test target.
+- **Activation (step 3).** `IDESourceKitServer.isRelevantToProject` is true for an Xcode project too, and `IDELanguageServerDefinition` has a `prepare` step (run after trust and discovery, before the process starts, at every restart) that can veto the launch: for an Xcode-only folder it generates the database, and if that fails and no earlier database exists the server is **not** started (`IDEServerPreparation.unavailable`, status "project not indexed"), because in single-file mode SourceKit sees no other file and, ranked above the native tier, would answer worse than it. A folder with a `Package.swift` is left to SourceKit-LSP's own SwiftPM handling. Trust is the existing SourceKit-LSP prompt ("It can read this folder and run the project's tools"); the separate Xcode build trust (`xcode-trust.json`) is not asked for, since `-showBuildSettingsForIndex` runs no build phase.
+- **Regeneration (step 4).** `IDEXcodeProjectSystem.onDefinitionReloaded` (fired by Reload, not by the first read) makes the window restart the servers, which runs `prepare` again. A change to the project file raises the existing reload banner; the database follows the user's Reload, not the file watcher.
+- **Native modules (step 5).** `IDEXcodeProjectSystem.onModelChanged` gives the native index `IDEXcodeProjectModel.moduleResolver()` (the target a file is compiled in), unless a `Package.swift` is active.
+- **Not done / known limits.** Workspaces (`.xcworkspace`), schemes and a chosen configuration are not used (`-alltargets` in the project's default configuration, and only an `.xcodeproj` directly in the folder, as for the rest of the Xcode support); C-family files are skipped (the server needs `clangd` for them); the first `xcodebuild` run on a large project can take a while with the server shown as starting, and nothing bounds the size of its output; Xcode's own build-time generated sources (SwiftGen, asset symbols) exist for the server only if `xcodebuild` has run before; nobody has tried this on a large real app in the running Umbra.
+
+## Phase 3: swift-syntax in `SwiftIntelligence`
+
+1. **Dependency.**
+   - Root `Package.swift` gets `.package(url: "https://github.com/swiftlang/swift-syntax.git", from: "603.0.0")`, matching the 603.0.2 already resolved in `Umbra/Package.resolved` so the two graphs agree.
+   - Only the `SwiftIntelligence` target depends on it: `SwiftSyntax`, `SwiftParser`, `SwiftOperators`, `SwiftRefactor`, plus `SwiftLexicalLookup` if 603 ships it as public API (check; otherwise keep scopes in `SwiftModelWalker`).
+   - `Penumbra` and `EditorIntelligence` stay free of it.
+   - Add the license to `THIRD_PARTY_NOTICES.md`.
+2. **Parse cache.** A new `SwiftSyntaxDocument.swift` parses off the main actor and is memoized per document version, like `JavaScopeTreeCache`. It never runs on a keystroke.
+3. **Tree-sitter stays.** It keeps highlighting, `SwiftSite` and `SwiftCallSite` (dangling-dot recovery) and the keystroke paths, as `docs/PERFORMANCE_RULES.md` requires.
+4. **Scope parity, then migration.** Bindings from swift-syntax lookup must agree with `SwiftFileModel.bindings` on the `SwiftModelTests` fixtures and on this repository's Swift files. Move `SwiftResolver`'s scope lookup over only once they do.
+5. **Perf gate.** Add `PerfHarness swift-syntax-parse synthetic --lines 2000` in `Tools/PerfHarness`, compared on the parent commit and the change, Release only.
+
+## Phase 4: Swift inspections
+
+1. **Engine.** `Sources/SwiftIntelligence/Inspections/` follows the shape of `Sources/JavaIntelligence/Inspections/`:
+   - `SwiftInspectionRule` and `SwiftInspectionGroup`
+   - `SwiftInspectionContext`: the swift-syntax tree, `SwiftFileModel` and `SwiftIndex`
+   - `SwiftInspectionPipeline`
+   - suppression: `// umbra:disable:<rule>`, also honouring `swiftlint:disable`
+   - fixes as `WorkspaceEdit`s
+2. **First rules (about 30),** only ones the compiler does not already report:
+   - force unwrap, force try and force cast
+   - empty `catch`
+   - `count == 0` → `isEmpty`
+   - `filter{}.first` → `first(where:)`
+   - `== true` and `== false`
+   - redundant `?? nil`
+   - `fallthrough`
+   - non-`weak` delegate
+   - leftover `print`
+   - naming conventions
+   - function length and cyclomatic complexity
+   - unused closure parameters
+   - redundant `return` in a single-expression body
+   - unused imports, through `SwiftImportOrganizer`
+3. **Gate.** Every shipped rule has 0 false positives on the Phase 0 valid corpus.
+4. **Umbra side.** Generalize `IDEInspectionRun`, `IDEInspectionResultsTree` and `IDEInspectionProfiles` from `JavaInspection` and `JavaInspectionRule` to a language-agnostic finding (`IDEInspectionFinding`: rule id, group, severity, range, fixes). Java's behaviour and tests (`IDEInspectionRunTests`, `IDEInspectionProfilesTests`) stay unchanged. Register Swift as a provider.
+
+## Phase 5: Refactorings
+
+1. **Native,** built on `SwiftRefactor` and swift-syntax:
+   - introduce variable
+   - inline local
+   - change signature (labels and order, call sites from the index)
+   - move member to extension
+   - convert between `if let` and `guard let`
+   - add explicit type
+
+   They surface through the existing `SwiftCodeActionProvider` and `SwiftCodeGenerationProvider`.
+2. **Semantic.** SourceKit's own refactor actions (extract method, add `Codable`, convert to `async`) come through Phase 1's code-action path.
+3. **Compile-rate gate.** Add it to the scorecard: apply each refactoring to the corpus, then `swiftc -typecheck` must pass. Same metric as Java's planned Phase 8.
+
+## Phase 6: Coverage and profiling
+
+1. **Coverage, SwiftPM.** `swift test --enable-code-coverage`, then `swift test --show-codecov-path` gives llvm-cov export JSON. A new `Sources/SwiftIntelligence/Coverage/LLVMCoverageJSONParser.swift` maps it onto the existing `JavaCoverageReport` model (module as package, file as class). That type is already shared with Umbra's coverage UI, and SwiftIntelligence already depends on JavaIntelligence. Renaming it is out of scope.
+2. **Coverage, Xcode.** `xcodebuild test -enableCodeCoverage YES` then `xcrun xccov view --report --json`. Wire both into `IDESwiftRunProvider` and `IDEXcodeProjectSystem` as "Run with Coverage".
+3. **Profiling.** `xcrun xctrace record --template 'Time Profiler' --launch -- <exe>`, then `xctrace export`, parsed into `JavaProfileTree` for the existing flame graph (`Umbra/Sources/Umbra/Profiler`).
+
+---
+
+## Reuse (do not rebuild)
+
+- **Parity scaffolding:** `JavaParityCorpusTests`, `ParityTestSupport` (skip-not-fail pattern) and `fetch-external.sh`.
+- **Completion corpus:** `CompletionCorpusRunner` and `NativeCompletionCorpusTests` (case format `/*|*/`, `//! contains:`).
+- **Tier routing:** `LanguageServiceRegistry`. The top ready tier answers and a nil result falls through, so the native tier stays the fallback for free.
+- **Process spawning:** `SubprocessKit` for every process, and `IDEProjectTrustGate` and the trust stores for consent.
+- **Xcode project model:** `IDEXcodeProjectModel` (targets, source roots, `targets(containing:)`).
+- **Dependency documents:** `Document.isDependencySource` and `IDEDependencyDiagnosticsFilter` for read-only interface documents.
+
+## Verification
+
+- **Scorecard:** `SWIFT_PARITY=1 caffeinate -u -d -i -s swift test --filter SwiftParityCorpusTests`, then `UPDATE_SWIFT_PARITY_BASELINE=1 …` regenerates `docs/SWIFT_PARITY.md`. Each phase must move a column, and none may regress.
+- **Completion:** `swift test --filter NativeCompletionCorpusTests` ratchets `SwiftCorpus/baseline.json`.
+- **Suites:** `caffeinate -u -d -i -s swift test` (root) and `caffeinate -u -d -i -s swift test --package-path Umbra` (app) after each phase.
+- **Performance (Phase 3 and later):** `swift run -c release PerfHarness enter-session synthetic --lines 20000` (and 120000) on the parent commit and the change. Enter latency must not move, and the new `swift-syntax-parse` subcommand stays within budget.
+- **Manual (`./run.sh`):**
+  - Open this repository (SwiftPM) and an `.xcodeproj` sample.
+  - Check:
+    - the indexing toast
+    - Find Usages across files
+    - Go to Definition on `String`, which should open the SDK interface read-only
+    - a compiler fix-it under ⌥↩
+    - Inspect Code on a Swift folder
+    - Run with Coverage on a SwiftPM test target

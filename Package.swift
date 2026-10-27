@@ -332,6 +332,6 @@ let package = Package(
             "HexKit",
             "GitIntelligence",
             .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
-        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/TypeScriptCorpus", "Fixtures/SwiftViews"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JavaNavigationCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus"), .copy("Fixtures/JavaCommandCorpus"), .copy("MermaidCorpus")], swiftSettings: swift6)
+        ], exclude: ["Fixtures/SwiftCorpus", "Fixtures/SwiftParityCorpus", "Fixtures/TypeScriptCorpus", "Fixtures/SwiftViews"], resources: [.copy("Fixtures/Java"), .copy("Fixtures/Gradle"), .copy("Fixtures/JavaCompletionCorpus"), .copy("Fixtures/JavaNavigationCorpus"), .copy("Fixtures/JUnit"), .copy("Fixtures/JavaCoverage"), .copy("Fixtures/JavaProfiling"), .copy("Fixtures/JavaParityCorpus"), .copy("Fixtures/JavaCommandCorpus"), .copy("MermaidCorpus")], swiftSettings: swift6)
     ]
 )

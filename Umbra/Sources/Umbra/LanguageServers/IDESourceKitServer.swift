@@ -33,13 +33,30 @@ enum IDESourceKitServer {
             ),
             isRelevantToProject: isRelevantToProject,
             discover: { await executable(in: $0) },
+            initializationOptions: { IDEXcodeIndexDatabase.initializationOptions(for: $0) },
+            prepare: { await prepare(root: $0) },
             trustFile: "sourcekit-lsp-trust.json"
         )
     }
 
-    /// A SwiftPM package at the project root, the same signal as ``IDESwiftPMProjectSystem``.
+    /// A SwiftPM package at the project root (the same signal as ``IDESwiftPMProjectSystem``) or an Xcode
+    /// project, whose build settings come from ``IDEXcodeIndexDatabase``.
     static func isRelevantToProject(root: URL) -> Bool {
         FileManager.default.fileExists(atPath: root.appendingPathComponent("Package.swift").path)
+            || IDEXcodeProjectModel.findProject(in: root) != nil
+    }
+
+    /// A package needs nothing. An Xcode-only folder needs its compilation database: without it the server
+    /// sees one file at a time and, ranked above the native tier, would answer worse than it. A database
+    /// left by an earlier run is good enough when the new one cannot be made.
+    static func prepare(root: URL) async -> IDEServerPreparation {
+        guard IDEXcodeIndexDatabase.isXcodeOnly(root: root) else { return .ready }
+        let outcome = await IDEXcodeIndexDatabase.generate(root: root)
+        if outcome.isUsable || IDEXcodeIndexDatabase.initializationOptions(for: root) != nil { return .ready }
+        switch outcome {
+        case .generated: return .ready
+        case .unavailable(let reason), .failed(let reason): return .unavailable(reason)
+        }
     }
 
     static func executable(in context: IDEServerDiscoveryContext) async -> IDEServerExecutable? {

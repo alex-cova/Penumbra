@@ -66,10 +66,18 @@ struct IDESwiftModule: IDELanguageModule {
     }
 
     func symbolPaletteSources(for workspace: IDEWorkspace) -> [any SearchEverywhereProvider] {
-        [IDESwiftPaletteSource(
+        let native = IDESwiftPaletteSource(
             index: workspace.swiftSupport.index,
             onOpen: { [weak workspace] url, range, inRightSplit in
                 workspace?.openIndexedDeclaration(in: url, utf8NameRange: range, inRightSplit: inRightSplit)
+            }
+        )
+        // SourceKit-LSP's workspace symbols while it is connected and has an answer, else the native index.
+        return [IDEServerSymbolSource(
+            connection: workspace.sourceKitConnection,
+            fallback: native,
+            onOpen: { [weak workspace] url, line, character, inRightSplit in
+                workspace?.openServerSymbol(in: url, line: line, character: character, inRightSplit: inRightSplit)
             }
         )]
     }

@@ -12,10 +12,29 @@ public actor LanguageServerClient: LSPClient {
     /// Diagnostics the server pushed with `textDocument/publishDiagnostics`. An empty push clears the file.
     private var publishedDiagnostics = LSPPublishedDiagnostics()
     private var cachedCapabilities: ServerCapabilities?
+    /// Server work that reports progress, such as background indexing.
+    private var workProgress = LSPWorkProgressTracker()
+    /// What the server holds of each document this client opened: the version last sent and its UTF-16
+    /// length. The client owns the version numbers, so the events that sync a document and the requests
+    /// that find it stale cannot send the same one twice.
+    private var sent: [DocumentID: SentDocument] = [:]
 
-    public init(server: InitializingServer, documentURI: @escaping @Sendable (Document) -> String) {
+    private struct SentDocument {
+        var version: Int
+        var utf16Length: Int
+    }
+    private let onProgress: (@Sendable ([LSPWorkProgress]) -> Void)?
+
+    /// `onProgress` receives the work running now each time it changes, from this client's event
+    /// loop. It is called with an empty list when the last piece ends.
+    public init(
+        server: InitializingServer,
+        documentURI: @escaping @Sendable (Document) -> String,
+        onProgress: (@Sendable ([LSPWorkProgress]) -> Void)? = nil
+    ) {
         self.server = server
         self.documentURI = documentURI
+        self.onProgress = onProgress
         Task { await self.consumeServerEvents() }
     }
 
@@ -27,7 +46,8 @@ public actor LanguageServerClient: LSPClient {
         read: AsyncStream<Data>,
         documentURI: @escaping @Sendable (Document) -> String,
         workspaceRoot: URL? = nil,
-        initializationOptions: Data? = nil
+        initializationOptions: Data? = nil,
+        onProgress: (@Sendable ([LSPWorkProgress]) -> Void)? = nil
     ) -> LanguageServerClient {
         let channel = DataChannel(writeHandler: write, dataSequence: read)
         let connection = JSONRPCServerConnection(dataChannel: channel)
@@ -43,13 +63,30 @@ public actor LanguageServerClient: LSPClient {
                 rootUri: workspaceRoot?.absoluteString,
                 initializationOptions: initializationOptions.flatMap { try? JSONDecoder().decode(LSPAny.self, from: $0) },
                 capabilities: ClientCapabilities(
-                    workspace: nil, textDocument: nil, window: nil, general: nil, experimental: nil
+                    workspace: nil,
+                    // Without literal support SourceKit-LSP answers every `textDocument/codeAction` with an
+                    // empty list (it advertises `codeActionProvider: true` all the same), so no fix-it or
+                    // refactoring ever reached the editor. Only the kinds the mapping below can apply.
+                    textDocument: TextDocumentClientCapabilities(
+                        codeAction: CodeActionClientCapabilities(
+                            dynamicRegistration: false,
+                            codeActionLiteralSupport: .init(codeActionKind: ValueSet(valueSet: [
+                                CodeActionKind.Quickfix, CodeActionKind.Refactor, CodeActionKind.RefactorExtract,
+                                CodeActionKind.RefactorInline, CodeActionKind.RefactorRewrite,
+                            ])),
+                            isPreferredSupport: true
+                        )
+                    ),
+                    // Advertised because `consumeServerEvents` answers `window/workDoneProgress/create`;
+                    // a server that asked and got no answer would wait for it.
+                    window: WindowClientCapabilities(workDoneProgress: true, showMessage: nil, showDocument: nil),
+                    general: nil, experimental: nil
                 ),
                 trace: nil,
                 workspaceFolders: folders
             )
         }
-        return LanguageServerClient(server: server, documentURI: documentURI)
+        return LanguageServerClient(server: server, documentURI: documentURI, onProgress: onProgress)
     }
 
     /// Features the server advertised. Runs `initialize` if it has not happened yet.
@@ -69,6 +106,7 @@ public actor LanguageServerClient: LSPClient {
 
     public func requestHover(for document: Document, at position: TextPosition) async throws -> EditorIntelligence.LSPHover? {
         guard await allows(.hover) else { return nil }
+        await ensureSynced(document)
         let params = TextDocumentPositionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position)
@@ -83,20 +121,29 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func requestCompletions(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPCompletionItem] {
-        guard await allows(.completion) else { return [] }
+        try await requestCompletionList(for: document, at: position).items
+    }
+
+    /// The server's answer with its `isIncomplete` flag. SourceKit-LSP stops at a page of 200 items and
+    /// marks the list incomplete: the rest comes from asking again once more has been typed, which the
+    /// editor does on each keystroke of an identifier, so a caller that wants a name that is not on the
+    /// first page narrows the request by typing its first characters.
+    public func requestCompletionList(for document: Document, at position: TextPosition) async throws -> LSPCompletionList {
+        guard await allows(.completion) else { return LSPCompletionList(items: [], isIncomplete: false) }
+        await ensureSynced(document)
         let params = CompletionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position),
             context: CompletionContext(triggerKind: .invoked, triggerCharacter: nil)
         )
         guard let result = try await server.completion(params) else {
-            return []
+            return LSPCompletionList(items: [], isIncomplete: false)
         }
         switch result {
         case .optionA(let items):
-            return items.map(eipCompletionItem(from:))
+            return LSPCompletionList(items: items.map(eipCompletionItem(from:)), isIncomplete: false)
         case .optionB(let list):
-            return list.items.map(eipCompletionItem(from:))
+            return LSPCompletionList(items: list.items.map(eipCompletionItem(from:)), isIncomplete: list.isIncomplete)
         }
     }
 
@@ -118,6 +165,7 @@ public actor LanguageServerClient: LSPClient {
         for document: Document, at position: TextPosition
     ) async throws -> [LSPHierarchySymbol] {
         guard await allows(.callHierarchy) else { return [] }
+        await ensureSynced(document)
         let params = CallHierarchyPrepareParams(textDocument: textDocument(for: document), position: lspPosition(from: position))
         let items = try await server.prepareCallHierarchy(params) ?? []
         return items.compactMap(LSPHierarchySymbol.init(call:))
@@ -139,6 +187,7 @@ public actor LanguageServerClient: LSPClient {
         for document: Document, at position: TextPosition
     ) async throws -> [LSPHierarchySymbol] {
         guard await allows(.typeHierarchy) else { return [] }
+        await ensureSynced(document)
         let params = TypeHierarchyPrepareParams(textDocument: textDocument(for: document), position: lspPosition(from: position))
         let items = try await server.prepareTypeHeirarchy(params) ?? []
         return items.compactMap(LSPHierarchySymbol.init(type:))
@@ -158,6 +207,7 @@ public actor LanguageServerClient: LSPClient {
 
     public func requestDefinition(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPLocation] {
         guard await allows(.definition) else { return [] }
+        await ensureSynced(document)
         let params = TextDocumentPositionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position)
@@ -170,6 +220,7 @@ public actor LanguageServerClient: LSPClient {
 
     public func requestReferences(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPLocation] {
         guard await allows(.references) else { return [] }
+        await ensureSynced(document)
         let params = ReferenceParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position),
@@ -183,6 +234,7 @@ public actor LanguageServerClient: LSPClient {
 
     public func requestImplementation(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPLocation] {
         guard await allows(.implementation) else { return [] }
+        await ensureSynced(document)
         let params = TextDocumentPositionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position)
@@ -195,6 +247,7 @@ public actor LanguageServerClient: LSPClient {
 
     public func requestTypeDefinition(for document: Document, at position: TextPosition) async throws -> [EditorIntelligence.LSPLocation] {
         guard await allows(.typeDefinition) else { return [] }
+        await ensureSynced(document)
         let params = TextDocumentPositionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position)
@@ -207,6 +260,7 @@ public actor LanguageServerClient: LSPClient {
 
     public func requestRename(for document: Document, at position: TextPosition, to newName: String) async throws -> EditorIntelligence.LSPWorkspaceEdit? {
         guard await allows(.rename) else { return nil }
+        await ensureSynced(document)
         let params = RenameParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position),
@@ -220,6 +274,7 @@ public actor LanguageServerClient: LSPClient {
 
     public func requestFormatting(for document: Document, in range: EditorIntelligence.TextRange?) async throws -> [EditorIntelligence.LSPTextEdit] {
         guard await allows(.formatting) else { return [] }
+        await ensureSynced(document)
         let options = FormattingOptions(tabSize: 4, insertSpaces: true)
         if let range {
             let params = DocumentRangeFormattingParams(
@@ -248,14 +303,21 @@ public actor LanguageServerClient: LSPClient {
         diagnostics: [EditorIntelligence.LSPDiagnostic]
     ) async throws -> [EditorIntelligence.LSPCodeAction] {
         guard await allows(.codeActions) else { return [] }
+        await ensureSynced(document)
+        // The context is what the server published, not what the editor made of it: SourceKit-LSP finds a
+        // fix-it by the diagnostic's range, message, severity and `source` together, and the editor's own
+        // copy carries its provider name as the source. A server that publishes nothing here (or pulls
+        // diagnostics instead) gets the caller's list.
+        let spot: LanguageServerProtocol.Position = lspPosition(from: position)
+        let published = publishedDiagnostics.diagnostics(for: documentURI(document)).filter { contains($0.range, spot) }
         let params = CodeActionParams(
             textDocument: textDocument(for: document),
             range: LSPRange(
-                start: lspPosition(from: position),
-                end: lspPosition(from: position)
+                start: spot,
+                end: spot
             ),
             context: CodeActionContext(
-                diagnostics: diagnostics.map(lspDiagnostic(from:)),
+                diagnostics: (published.isEmpty ? diagnostics : published).map(lspDiagnostic(from:)),
                 only: nil,
                 triggerKind: CodeActionTriggerKind.invoked
             )
@@ -263,11 +325,13 @@ public actor LanguageServerClient: LSPClient {
         guard let response = try await server.codeAction(params) else {
             return []
         }
-        return response.compactMap(eipCodeAction(from:))
+        let uri = documentURI(document)
+        return response.compactMap { eipCodeAction(from: $0, documentURI: uri) }
     }
 
     public func requestSignatureHelp(for document: Document, at position: TextPosition) async throws -> EditorIntelligence.LSPSignatureHelp? {
         guard await allows(.signatureHelp) else { return nil }
+        await ensureSynced(document)
         let params = TextDocumentPositionParams(
             textDocument: textDocument(for: document),
             position: lspPosition(from: position)
@@ -286,6 +350,7 @@ public actor LanguageServerClient: LSPClient {
         guard await allows(.semanticTokens) else {
             return EditorIntelligence.LSPSemanticTokens(resultId: nil, data: [])
         }
+        await ensureSynced(document)
         let params = SemanticTokensParams(textDocument: textDocument(for: document))
         guard let tokens = try await server.semanticTokensFull(params) else {
             return EditorIntelligence.LSPSemanticTokens(resultId: nil, data: [])
@@ -297,6 +362,7 @@ public actor LanguageServerClient: LSPClient {
         guard await allows(.semanticTokens) else {
             return EditorIntelligence.LSPSemanticTokensDelta(resultId: nil, data: [])
         }
+        await ensureSynced(document)
         let params = SemanticTokensDeltaParams(
             textDocument: textDocument(for: document),
             previousResultId: previousResultId
@@ -343,6 +409,7 @@ public actor LanguageServerClient: LSPClient {
         let uri = documentURI(document)
         uris[document.id] = uri
         let snapshot = document.contentSnapshot
+        sent[document.id] = SentDocument(version: version, utf16Length: snapshot.utf16Length)
         let text = snapshot.substring(utf16Offset: 0, length: snapshot.utf16Length)
         let params = LSPDocumentSyncMapper.openParams(
             uri: uri,
@@ -359,6 +426,8 @@ public actor LanguageServerClient: LSPClient {
             guard let uri = uris[documentID] else {
                 continue
             }
+            // Whoever sends increments keeps the server in step itself; a length kept here would go stale.
+            sent[documentID] = nil
             let params = LSPDocumentSyncMapper.incrementalParams(uri: uri, changes: batch)
             try? await server.textDocumentDidChange(params)
         }
@@ -368,9 +437,28 @@ public actor LanguageServerClient: LSPClient {
         let uri = uris[document.id] ?? documentURI(document)
         uris[document.id] = uri
         let snapshot = document.contentSnapshot
+        sent[document.id] = SentDocument(version: version, utf16Length: snapshot.utf16Length)
         let text = snapshot.substring(utf16Offset: 0, length: snapshot.utf16Length)
         let params = LSPDocumentSyncMapper.fullChangeParams(uri: uri, version: version, text: text)
         try? await server.textDocumentDidChange(params)
+    }
+
+    /// Sends `document`'s whole text as the next version when the server may not have it. Only for a
+    /// document this client opened. Without `force` it sends only when the length differs from what
+    /// the server holds, which is how a re-announcement of an unchanged document costs nothing and how
+    /// a request made before the editor's debounce fired finds the text it is about to ask about.
+    /// Returns whether it sent.
+    @discardableResult
+    public func syncFullText(of document: Document, force: Bool = false) async -> Bool {
+        guard let state = sent[document.id] else { return false }
+        guard force || document.contentSnapshot.utf16Length != state.utf16Length else { return false }
+        await notifyFullChange(document, version: state.version + 1)
+        return true
+    }
+
+    /// Called before a request about `document`, so the server answers about the text on screen.
+    private func ensureSynced(_ document: Document) async {
+        await syncFullText(of: document)
     }
 
     public func notifySaved(_ document: Document, text: String?) async {
@@ -389,6 +477,7 @@ public actor LanguageServerClient: LSPClient {
 
     public func requestDocumentSymbols(for document: Document) async throws -> [LSPOutlineSymbol] {
         guard await allows(.structure) else { return [] }
+        await ensureSynced(document)
         guard let response = try await server.documentSymbol(DocumentSymbolParams(textDocument: textDocument(for: document))) else {
             return []
         }
@@ -415,6 +504,7 @@ public actor LanguageServerClient: LSPClient {
 
     public func requestInlayHints(for document: Document, in range: EditorIntelligence.TextRange) async throws -> [LSPRenderedInlayHint] {
         guard await allows(.inlayHints) else { return [] }
+        await ensureSynced(document)
         let hints = try await server.inlayHint(InlayHintParams(
             textDocument: textDocument(for: document),
             range: lspRange(from: range)
@@ -423,6 +513,7 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func notifyClosed(documentID: DocumentID) async {
+        sent[documentID] = nil
         guard let uri = uris.removeValue(forKey: documentID) else {
             return
         }
@@ -447,8 +538,16 @@ public actor LanguageServerClient: LSPClient {
 
     private func consumeServerEvents() async {
         for await event in server.eventSequence {
-            guard case .notification(.textDocumentPublishDiagnostics(let params)) = event else { continue }
-            publishedDiagnostics.apply(params)
+            switch event {
+            case .notification(.textDocumentPublishDiagnostics(let params)):
+                publishedDiagnostics.apply(params)
+            case .notification(.protocolProgress(let params)):
+                if workProgress.apply(params) { onProgress?(workProgress.active) }
+            case .request(_, .windowWorkDoneProgressCreate(_, let respond)):
+                await respond(nil)
+            default:
+                break
+            }
         }
     }
 }
@@ -592,22 +691,47 @@ private func lspDiagnostic(from diagnostic: EditorIntelligence.LSPDiagnostic) ->
     )
 }
 
-private func eipCodeAction(from action: TwoTypeOption<Command, LanguageServerProtocol.CodeAction>) -> EditorIntelligence.LSPCodeAction? {
-    switch action {
-    case .optionA(let command):
-        return EditorIntelligence.LSPCodeAction(
-            title: command.title,
-            kind: command.command,
-            edits: [],
-            isPreferred: false
-        )
-    case .optionB(let codeAction):
-        let edits = codeAction.edit.map { LSPWorkspaceEditMapping.changes(from: $0).values.flatMap { $0 } } ?? []
-        return EditorIntelligence.LSPCodeAction(
-            title: codeAction.title,
-            kind: codeAction.kind,
-            edits: edits,
-            isPreferred: codeAction.isPreferred ?? false
-        )
+/// Whether `position` is in `range`, both ends included (a zero-width range holds its own position).
+private func contains(_ range: EditorIntelligence.LSPRange, _ position: LanguageServerProtocol.Position) -> Bool {
+    let spot = (position.line, position.character)
+    return (range.start.line, range.start.character) <= spot && spot <= (range.end.line, range.end.character)
+}
+
+/// An action the editor can apply to `documentURI`: its edits are all in that document. A command
+/// (`workspace/executeCommand`, answered by the server's own `workspace/applyEdit`) and an edit that
+/// reaches other files are dropped: chosen, they would do nothing, or change the wrong text.
+func eipCodeAction(
+    from action: TwoTypeOption<Command, LanguageServerProtocol.CodeAction>, documentURI: String
+) -> EditorIntelligence.LSPCodeAction? {
+    guard case .optionB(let codeAction) = action, let edit = codeAction.edit else { return nil }
+    let changes = LSPWorkspaceEditMapping.changes(from: edit)
+    guard !changes.isEmpty, changes.keys.allSatisfy({ sameDocument($0, documentURI) }) else { return nil }
+    let edits = changes.values.flatMap { $0 }
+    guard !edits.isEmpty else { return nil }
+    return EditorIntelligence.LSPCodeAction(
+        title: codeAction.title,
+        kind: codeAction.kind,
+        edits: edits,
+        isPreferred: codeAction.isPreferred ?? false
+    )
+}
+
+/// Two spellings of one file URI: the server echoes what it was sent, but a `file:///private/…` and a
+/// `file:///…` of the same path are the same document.
+private func sameDocument(_ lhs: String, _ rhs: String) -> Bool {
+    if lhs == rhs { return true }
+    guard let left = URL(string: lhs), let right = URL(string: rhs), left.isFileURL, right.isFileURL else { return false }
+    return left.standardizedFileURL.path == right.standardizedFileURL.path
+}
+
+/// A completion answer: the items, and whether the server cut the list short.
+public struct LSPCompletionList: Sendable, Equatable {
+    public var items: [EditorIntelligence.LSPCompletionItem]
+    /// True when asking again with more of the word typed would return items this list leaves out.
+    public var isIncomplete: Bool
+
+    public init(items: [EditorIntelligence.LSPCompletionItem], isIncomplete: Bool) {
+        self.items = items
+        self.isIncomplete = isIncomplete
     }
 }

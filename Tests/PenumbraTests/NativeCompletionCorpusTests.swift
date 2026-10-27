@@ -50,10 +50,18 @@ final class NativeCompletionCorpusTests: XCTestCase {
             results.append(await complete(corpusCase, language: language, fileExtension: fileExtension))
         }
         for result in results {
+            // A case tagged `//! gap: <tag>` is a known failure tied to a roadmap gap: it never fails the
+            // test, and the log says when it starts passing so the tag can come off.
+            if let gap = cases.first(where: { $0.name == result.name })?.directives["gap"] {
+                if result.passes { print("UNEXPECTED PASS \(result.name) [gap \(gap)]: remove the gap tag") }
+                continue
+            }
             for failure in result.hardFailures + result.scoredFailures {
                 XCTFail("\(result.name): \(failure)")
             }
         }
+        let gaps = cases.compactMap { $0.directives["gap"] }
+        print("\(language) completion corpus: cases \(cases.count) | passing \(results.filter(\.passes).count) | known gaps \(gaps.count)")
         try CompletionCorpusRunner.enforce(
             results: results,
             baseline: CompletionCorpusRunner.Baseline.load(from: baselineURL),

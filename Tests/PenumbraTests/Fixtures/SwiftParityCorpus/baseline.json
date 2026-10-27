@@ -1,0 +1,101 @@
+{
+  "compiler" : "6.4",
+  "keys" : {
+    "argument_out_of_order_unnamed_named" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "async_expr_without_await" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "cannot_convert_argument_value" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "cannot_convert_to_return_type" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "cannot_find_in_scope" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 3,
+      "oracleMatched" : 0
+    },
+    "cannot_find_type_in_scope" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "could_not_find_type_member" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 2,
+      "oracleMatched" : 0
+    },
+    "could_not_find_value_member" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "missing_argument_named" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "missing_return_decl" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "optional_not_unwrapped" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "throwing_call_without_try" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    },
+    "type_does_not_conform" : {
+      "native" : 0,
+      "nativeMatched" : 0,
+      "oracle" : 1,
+      "oracleMatched" : 0
+    }
+  },
+  "mutations" : [
+    "change-declared-type",
+    "drop-arg",
+    "drop-await",
+    "drop-import",
+    "drop-return",
+    "drop-try",
+    "enum-case",
+    "missing-witness",
+    "static-typo",
+    "swap-labels",
+    "typo-member",
+    "typo-name",
+    "typo-type",
+    "wrong-argument-type",
+    "wrong-optional"
+  ],
+  "validFalsePositives" : 0
+}

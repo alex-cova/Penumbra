@@ -136,9 +136,10 @@ public enum JavaAttachedSources {
 
 public extension Document {
     /// A library's source or decompiled class opened for reading (External Libraries, Go to
-    /// Definition). It is dependency code: navigation works on it, but nothing checks it, so no
-    /// compiler run, inspection, syntax error or quick fix is produced for it.
+    /// Definition), or an interface a language server generated for an SDK symbol
+    /// (``DependencySourceLocation``). It is dependency code: navigation works on it, but nothing
+    /// checks it, so no compiler run, inspection, syntax error or quick fix is produced for it.
     var isDependencySource: Bool {
-        url.map(JavaAttachedSources.isExtractedSource) ?? false
+        url.map { JavaAttachedSources.isExtractedSource($0) || DependencySourceLocation.isGeneratedInterface($0) } ?? false
     }
 }

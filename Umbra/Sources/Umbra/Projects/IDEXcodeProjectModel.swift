@@ -78,6 +78,13 @@ struct IDEXcodeProjectModel: Equatable, Sendable {
         return names
     }
 
+    /// A source file to the target it is compiled in: the native index's module boundaries, as
+    /// ``IDESwiftPMManifest`` supplies them for a package. Nil for a file no non-test target holds.
+    func moduleResolver() -> @Sendable (URL) -> String? {
+        let model = self
+        return { model.targets(containing: $0).first }
+    }
+
     /// `<root>/Name.xcodeproj`.
     var projectURL: URL
     var format: Format

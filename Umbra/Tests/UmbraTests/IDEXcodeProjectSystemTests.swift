@@ -83,6 +83,49 @@ final class IDEXcodeProjectSystemTests: XCTestCase {
         XCTAssertEqual(system.buildConfiguration, "Debug")
     }
 
+    /// The native index's module boundaries for an Xcode project: the target a source file is compiled in,
+    /// the way a package manifest supplies them. The model reaches the window through `onModelChanged`.
+    func testTheModelReachesTheWindowAndNamesTheTargetOfAFile() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = try makeApp(in: directory)
+        let (system, _) = makeSystem(in: directory)
+        defer { system.stop() }
+        var received: [(IDEXcodeProjectModel?, URL?)] = []
+        system.onModelChanged = { model, url in received.append((model, url)) }
+        system.projectDidChange(root: root)
+
+        XCTAssertEqual(received.count, 1)
+        let model = try XCTUnwrap(received.first?.0)
+        XCTAssertEqual(received.first?.1, root.standardizedFileURL)
+        let resolver = model.moduleResolver()
+        XCTAssertEqual(resolver(root.appendingPathComponent("My_App/ContentView.swift")), "My_App")
+        XCTAssertEqual(resolver(root.appendingPathComponent("My_App/New/Deeper/File.swift")), "My_App", "a synchronized folder holds everything under it")
+        XCTAssertNil(resolver(root.appendingPathComponent("Elsewhere/File.swift")))
+
+        system.stop()
+        XCTAssertNil(received.last?.0, "closing the folder clears the model")
+    }
+
+    /// Reload re-reads the project file, and the build settings behind the language server's database may
+    /// have changed with it; the window restarts the server on this. The first read does not ask for that.
+    func testOnlyAReloadAsksForTheLanguageServerToBeRestarted() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = try makeApp(in: directory)
+        let (system, _) = makeSystem(in: directory)
+        defer { system.stop() }
+        var reloads = 0
+        system.onDefinitionReloaded = { reloads += 1 }
+        system.projectDidChange(root: root)
+        XCTAssertEqual(reloads, 0, "opening the folder starts the server by itself")
+        system.reload()
+        XCTAssertEqual(reloads, 1)
+        system.stop()
+        system.reload()
+        XCTAssertEqual(reloads, 1, "a closed project has nothing to reload")
+    }
+
     func testALegacyPbxprojIsReadAsAPropertyList() throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

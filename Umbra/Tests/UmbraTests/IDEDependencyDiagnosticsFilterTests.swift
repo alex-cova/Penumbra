@@ -24,6 +24,16 @@ final class IDEDependencyDiagnosticsFilterTests: XCTestCase {
         )
     }
 
+    func testAGeneratedSwiftInterfaceGetsNoDiagnostics() async {
+        let filter = IDEDependencyDiagnosticsFilter(base: AlwaysWarns())
+        let interface = document("/var/T/sourcekit-lsp/GeneratedInterfaces/1/Swift.String.swiftinterface")
+        let own = document("/proj/Sources/Lib/Box.swift")
+        let interfaceRows = await filter.diagnostics(for: interface)
+        let ownRows = await filter.diagnostics(for: own)
+        XCTAssertTrue(interfaceRows.isEmpty, "an SDK interface is read, never checked")
+        XCTAssertEqual(ownRows.count, 1)
+    }
+
     func testDependencySourcesGetNoDiagnosticsFromAnyProvider() async {
         let filter = IDEDependencyDiagnosticsFilter(base: AlwaysWarns())
         let library = document("/cache/JavaIndex/attached-sources/decompiled/ab/T.java")

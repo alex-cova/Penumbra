@@ -14,6 +14,8 @@ final class IDELanguageServerHost {
         case stopped
         case untrusted
         case missing
+        /// The folder could not be made ready for the server (``IDEServerPreparation/unavailable(_:)``).
+        case unprepared
         case starting
         case ready
         case restarting
@@ -28,6 +30,9 @@ final class IDELanguageServerHost {
     /// Shown in the status bar. Nil when no server is in play.
     private(set) var summary: String?
     private(set) var statuses: [ServerStatus] = []
+    /// What each ready server reports it is doing (`Indexing: 3 / 10 (30%)`), by definition id. Cleared
+    /// when the server leaves `ready`, so a crash never leaves a stale percentage in the status bar.
+    private(set) var serverWork: [String: [LSPWorkProgress]] = [:]
     /// How many times a server exited on its own and the native tier was left in front.
     private(set) var nativeFallbacks = 0
 
@@ -38,6 +43,10 @@ final class IDELanguageServerHost {
     /// Asked once when a folder is not yet trusted. Returning true records trust and starts the server.
     /// Nil means "do not ask and do not start".
     var requestTrust: (@MainActor (IDELanguageServerDefinition, URL) async -> Bool)?
+
+    /// The workspace whose documents the servers are told about (`LSPWorkspaceDocumentSync`). Set by the
+    /// window; nil starts servers that are never sent a file, which answer nothing about an edited buffer.
+    var documentWorkspace: Workspace?
 
     private let trustDirectory: URL
     private var sessions: [String: Session] = [:]
@@ -83,12 +92,14 @@ final class IDELanguageServerHost {
         generation += 1
         for session in sessions.values {
             session.featuresTask?.cancel()
+            session.stopSync()
             session.handle.terminate()
             session.finishReading()
             session.connection.setCurrent(nil)
         }
         sessions = [:]
         statuses = []
+        serverWork = [:]
         summary = nil
     }
 
@@ -114,6 +125,12 @@ final class IDELanguageServerHost {
             return
         }
         guard generation == token else { return }
+        if case .unavailable = await definition.prepare(root) {
+            guard generation == token else { return }
+            setStatus(definition, .unprepared)
+            return
+        }
+        guard generation == token else { return }
 
         let (stream, continuation) = AsyncStream<Data>.makeStream()
         let bridge = OutputBridge(continuation: continuation)
@@ -122,7 +139,12 @@ final class IDELanguageServerHost {
             read: stream,
             documentURI: { document in document.url?.absoluteString ?? "untitled:\(document.id)" },
             workspaceRoot: root,
-            initializationOptions: definition.initializationOptions(root)
+            initializationOptions: definition.initializationOptions(root),
+            onProgress: { [weak self] work in
+                Task { @MainActor in
+                    self?.noteWork(work, definition: definition, token: token, attempt: attempt)
+                }
+            }
         )
         var request = SubprocessRequest(executable: executable.url.path, arguments: definition.arguments(root))
         request.standardInput = .interactive
@@ -150,6 +172,12 @@ final class IDELanguageServerHost {
         let session = Session(definition: definition, connection: connection, handle: handle, bridge: bridge, attempt: attempt)
         sessions[definition.id] = session
         connection.setCurrent(client)
+        if let workspace = documentWorkspace {
+            session.startSync(
+                LSPWorkspaceDocumentSync(client: client, languages: definition.configuration.languageIdentifiers),
+                workspace: workspace
+            )
+        }
 
         let featuresTask = Task { [weak self] in
             let features = await client.advertisedFeatures()
@@ -180,6 +208,7 @@ final class IDELanguageServerHost {
     ) {
         guard generation == token, sessions[definition.id]?.attempt == attempt else { return }
         sessions[definition.id]?.featuresTask?.cancel()
+        sessions[definition.id]?.stopSync()
         sessions[definition.id] = nil
         connection.setCurrent(nil)
         connection.setSupportedFeatures(nil)
@@ -193,22 +222,41 @@ final class IDELanguageServerHost {
         }
     }
 
+    /// Progress from a server's `$/progress`. Dropped when it comes from a session this host has since
+    /// stopped or replaced.
+    private func noteWork(_ work: [LSPWorkProgress], definition: IDELanguageServerDefinition, token: Int, attempt: Int) {
+        guard generation == token, sessions[definition.id]?.attempt == attempt else { return }
+        serverWork[definition.id] = work.isEmpty ? nil : work
+        summary = Self.summary(statuses: statuses, work: serverWork)
+    }
+
     private func setStatus(_ definition: IDELanguageServerDefinition, _ phase: Phase) {
         statuses.removeAll { $0.id == definition.id }
         if phase != .stopped {
             statuses.append(ServerStatus(id: definition.id, name: definition.configuration.name, phase: phase))
         }
-        summary = statuses.map { status in
+        if phase != .ready { serverWork[definition.id] = nil }
+        summary = Self.summary(statuses: statuses, work: serverWork)
+    }
+
+    /// The status-bar text: one entry per server, `·` between them. A ready server shows its first piece
+    /// of work (and how many more run beside it) instead of just its name.
+    static func summary(statuses: [ServerStatus], work: [String: [LSPWorkProgress]]) -> String? {
+        let text = statuses.map { status -> String in
             switch status.phase {
             case .stopped: return ""
             case .untrusted: return "\(status.name): not trusted"
             case .missing: return "\(status.name): not found"
+            case .unprepared: return "\(status.name): project not indexed"
             case .starting: return "\(status.name): starting"
-            case .ready: return status.name
             case .restarting: return "\(status.name): restarting"
+            case .ready:
+                guard let running = work[status.id], let first = running.first else { return status.name }
+                let more = running.count > 1 ? " +\(running.count - 1)" : ""
+                return "\(status.name): \(first.summary)\(more)"
             }
         }.filter { !$0.isEmpty }.sorted().joined(separator: " · ")
-        if summary?.isEmpty == true { summary = nil }
+        return text.isEmpty ? nil : text
     }
 
     private static func defaultTrustDirectory() -> URL {
@@ -224,6 +272,7 @@ final class IDELanguageServerHost {
         let bridge: OutputBridge
         let attempt: Int
         var featuresTask: Task<Void, Never>?
+        private var sync: LSPWorkspaceDocumentSync?
 
         init(
             definition: IDELanguageServerDefinition, connection: LSPConnectionBox,
@@ -237,6 +286,18 @@ final class IDELanguageServerHost {
         }
 
         func finishReading() { bridge.finish() }
+
+        /// Tells the server about the open documents and keeps doing so until ``stopSync()``.
+        func startSync(_ sync: LSPWorkspaceDocumentSync, workspace: Workspace) {
+            self.sync = sync
+            Task { await sync.start(workspace: workspace) }
+        }
+
+        func stopSync() {
+            guard let sync else { return }
+            self.sync = nil
+            Task { await sync.stop() }
+        }
     }
 }
 
