@@ -24,6 +24,18 @@ final class IDESourceKitRoutingTests: XCTestCase {
         XCTAssertNil(sourceKit.providers.semanticTokens)
     }
 
+    /// Same defect, same fix: the TypeScript server must not claim semantic tokens either. It keeps
+    /// formatting, because the native TypeScript service has no formatter to lose.
+    func testTheTypeScriptServerLeavesSemanticTokensToTheNativeService() {
+        let server = LSPLanguageService(
+            configuration: IDETypeScriptServer.definition().configuration, connections: LSPConnectionBox()
+        )
+        XCTAssertNil(server.providers.semanticTokens)
+        XCTAssertNotNil(server.providers.formatting)
+        let registry = LanguageServiceRegistry(services: [IDETypeScriptSupport().languageService, server])
+        XCTAssertEqual(registry.capabilities(for: "typescript").features[.semanticTokens]?.service, "typescript")
+    }
+
     func testTheNativeSwiftServiceOwnsFormattingAndSemanticTokens() {
         let (registry, _) = makeRegistry()
         let features = registry.capabilities(for: "swift").features
