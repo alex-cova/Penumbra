@@ -1,5 +1,4 @@
 import AppKit
-import SwiftTerm
 import SwiftUI
 
 // MARK: - Shell helpers
@@ -38,9 +37,10 @@ private enum IDETerminalShell {
 
 @MainActor
 final class IDETerminalHostView: NSView {
-    private let terminalView = LocalProcessTerminalView(frame: .zero)
+    /// The child view that owns the shell and the keyboard.
+    private let ghosttyView = GhosttyTerminalView(frame: .zero)
     /// The terminal got the keyboard: IntelliJ saves files "when switching to … a built-in terminal".
-    /// SwiftTerm's `becomeFirstResponder` is not open to override, so the window's first responder
+    /// The view's `becomeFirstResponder` is not open to override, so the window's first responder
     /// is watched instead.
     var onFocus: (() -> Void)?
     private var firstResponderObservation: NSKeyValueObservation?
@@ -50,11 +50,10 @@ final class IDETerminalHostView: NSView {
         firstResponderObservation = window?.observe(\.firstResponder, options: [.new]) { [weak self] _, change in
             guard let self, let responder = change.newValue ?? nil else { return }
             MainActor.assumeIsolated {
-                if responder === self.terminalView { self.onFocus?() }
+                if responder === self.ghosttyView { self.onFocus?() }
             }
         }
     }
-    private let coordinator = TerminalCoordinator()
     private var isActive = false
     /// Set once `terminateProcess()` ran. The window is closing, but SwiftUI can still update this view
     /// (tearing down changes the state it reads) and ask it to become active again, which would start a
@@ -70,12 +69,7 @@ final class IDETerminalHostView: NSView {
 
     /// The last `lines` non-empty lines of the screen and scrollback, as text.
     func recentText(lines: Int) -> String? {
-        let data = terminalView.getTerminal().getBufferAsData()
-        let all = String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
-        var end = all.count
-        while end > 0, all[end - 1].allSatisfy(\.isWhitespace) { end -= 1 }
-        let tail = all[max(0, end - lines)..<end]
-        return tail.isEmpty ? nil : tail.joined(separator: "\n")
+        ghosttyView.recentText(lines: lines)
     }
 
     var workingDirectory: URL?
@@ -84,15 +78,16 @@ final class IDETerminalHostView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        coordinator.host = self
-        terminalView.processDelegate = coordinator
-        terminalView.translatesAutoresizingMaskIntoConstraints = false
-        terminalView.nativeBackgroundColor = IDEAppearance.NSToken.editor
-        terminalView.nativeForegroundColor = IDEAppearance.NSToken.foreground
-        terminalView.caretColor = IDEAppearance.NSToken.accent
-        terminalView.layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
-        terminalView.getTerminal().setCursorStyle(.steadyBar)
-        terminalView.optionAsMetaKey = true
+        let child: NSView = ghosttyView
+        ghosttyView.onTitleUpdate = { [weak self] in self?.onTitleUpdate?($0) }
+        ghosttyView.onDirectoryUpdate = { [weak self] in self?.onDirectoryUpdate?($0) }
+        ghosttyView.onProcessTerminated = { [weak self] in self?.handleProcessTerminated() }
+        ghosttyView.translatesAutoresizingMaskIntoConstraints = false
+        ghosttyView.optionAsMeta = true
+        ghosttyView.applyColors(
+            background: IDEAppearance.NSToken.editor,
+            foreground: IDEAppearance.NSToken.foreground,
+            cursor: IDEAppearance.NSToken.accent)
         applyEditorFont(
             name: IDEPreferences.shared.fontName,
             size: IDEPreferences.shared.fontSize
@@ -101,12 +96,12 @@ final class IDETerminalHostView: NSView {
         // the terminal's background so the inset reads as part of the terminal.
         wantsLayer = true
         layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
-        addSubview(terminalView)
+        addSubview(child)
         NSLayoutConstraint.activate([
-            terminalView.topAnchor.constraint(equalTo: topAnchor),
-            terminalView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: IDEAppearance.Spacing.sm),
-            terminalView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            terminalView.bottomAnchor.constraint(equalTo: bottomAnchor)
+            child.topAnchor.constraint(equalTo: topAnchor),
+            child.leadingAnchor.constraint(equalTo: leadingAnchor, constant: IDEAppearance.Spacing.sm),
+            child.trailingAnchor.constraint(equalTo: trailingAnchor),
+            child.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
     }
 
@@ -133,16 +128,17 @@ final class IDETerminalHostView: NSView {
     }
 
     func applyUIColorScheme() {
-        terminalView.nativeBackgroundColor = IDEAppearance.NSToken.editor
-        terminalView.nativeForegroundColor = IDEAppearance.NSToken.foreground
-        terminalView.caretColor = IDEAppearance.NSToken.accent
-        terminalView.layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
+        ghosttyView.applyColors(
+            background: IDEAppearance.NSToken.editor,
+            foreground: IDEAppearance.NSToken.foreground,
+            cursor: IDEAppearance.NSToken.accent)
+        ghosttyView.setNeedsDisplay(ghosttyView.bounds)
         layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
-        terminalView.setNeedsDisplay(terminalView.bounds)
     }
 
     func setMirrorsOutput(_ mirror: Bool) {
         mirrorsOutput = mirror
+        ghosttyView.setMirrorsOutput(mirror)
     }
 
     func setActive(_ active: Bool) {
@@ -154,11 +150,12 @@ final class IDETerminalHostView: NSView {
     }
 
     func applyEditorFont(name: String, size: Double) {
-        terminalView.font = IDEEditorFonts.nsFont(familyName: name, size: CGFloat(size))
+        let font = IDEEditorFonts.nsFont(familyName: name, size: CGFloat(size))
+        ghosttyView.applyFont(font)
     }
 
     func requestFocus() {
-        window?.makeFirstResponder(terminalView)
+        window?.makeFirstResponder(ghosttyView)
     }
 
     func scheduleFocus() {
@@ -177,12 +174,14 @@ final class IDETerminalHostView: NSView {
 
     func restartProcess() {
         guard !mirrorsOutput, !isShutDown else { return }
-        // `terminate()` sends SIGTERM, which an interactive shell ignores. SIGHUP is what actually
-        // ends it, so the next start uses the working directory just set (closing a folder retargets
-        // the shell at the home directory).
-        if terminalView.process.running {
-            let pid = terminalView.process.shellPid
-            terminalView.terminate()
+        // SIGHUP is what actually ends an interactive shell (SIGTERM is ignored),
+        // so the next start uses the working directory just set (closing a folder
+        // retargets the shell at the home directory). The backend already SIGHUPs
+        // (plus a tty hangup) inside terminate; the extra kill here is a harmless
+        // no-op for it.
+        if ghosttyView.isProcessRunning {
+            let pid = ghosttyView.shellPid
+            ghosttyView.terminateProcess()
             if pid > 0 {
                 kill(pid, SIGHUP)
             }
@@ -199,21 +198,21 @@ final class IDETerminalHostView: NSView {
 
     private func flushMirror() {
         guard mirrorsOutput, !pendingMirror.isEmpty, bounds.width > 1, bounds.height > 1 else { return }
-        terminalView.feed(text: pendingMirror)
+        ghosttyView.feedOutput(pendingMirror)
         pendingMirror.removeAll(keepingCapacity: true)
     }
 
     /// Wipes the screen and scrollback, then sends Ctrl-L so the shell draws its prompt again.
     func clearScreen() {
-        terminalView.feed(text: "\u{1B}[H\u{1B}[2J\u{1B}[3J")
-        terminalView.send(txt: "\u{0C}")
+        ghosttyView.feedOutput("\u{1B}[H\u{1B}[2J\u{1B}[3J")
+        ghosttyView.send(Data([0x0C]))
     }
 
     /// ⌘K clears the terminal, as in Terminal.app and IntelliJ's terminal. It is claimed only while
     /// this terminal has the keyboard: in an editor ⌘K starts the ⌘K ⌘D chord.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if window?.firstResponder === terminalView, modifiers == .command,
+        if window?.firstResponder === ghosttyView, modifiers == .command,
            event.charactersIgnoringModifiers?.lowercased() == "k" {
             clearScreen()
             return true
@@ -221,15 +220,14 @@ final class IDETerminalHostView: NSView {
         return super.performKeyEquivalent(with: event)
     }
 
-    /// Ends the shell. SwiftTerm's `terminate()` closes the terminal's side and sends SIGTERM, which an
-    /// interactive shell ignores, so the shell would live on after its window closed; SIGHUP is what a
-    /// closing terminal sends, and shells (and their foreground jobs) exit on it.
+    /// Ends the shell. SIGHUP is what a closing terminal sends, and shells
+    /// (and their foreground jobs) exit on it.
     func terminateProcess() {
         isActive = false
         isShutDown = true
-        guard terminalView.process.running else { return }
-        let pid = terminalView.process.shellPid
-        terminalView.terminate()
+        guard ghosttyView.isProcessRunning else { return }
+        let pid = ghosttyView.shellPid
+        ghosttyView.terminateProcess()
         if pid > 0 {
             kill(pid, SIGHUP)
         }
@@ -239,49 +237,20 @@ final class IDETerminalHostView: NSView {
         guard !mirrorsOutput else { return }
         guard isActive, !isShutDown else { return }
         guard bounds.width > 1, bounds.height > 1 else { return }
-        guard !terminalView.process.running else { return }
+        guard !ghosttyView.isProcessRunning else { return }
 
         let shell = IDETerminalShell.resolvedShell()
         let cwd = (workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser).path
-        terminalView.startProcess(
+        ghosttyView.startProcess(
             executable: shell,
-            args: [],
-            environment: nil,
             execName: IDETerminalShell.loginExecName(for: shell),
-            currentDirectory: cwd
-        )
+            currentDirectory: cwd)
     }
 
     func handleProcessTerminated() {
         guard isActive, !mirrorsOutput else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             self?.startProcessIfNeeded()
-        }
-    }
-
-    private final class TerminalCoordinator: NSObject, LocalProcessTerminalViewDelegate {
-        weak var host: IDETerminalHostView?
-
-        nonisolated func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-
-        nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-            Task { @MainActor [weak host] in
-                host?.onTitleUpdate?(title)
-            }
-        }
-
-        nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
-            guard let directory, !directory.isEmpty else { return }
-            let url = URL(fileURLWithPath: directory, isDirectory: true)
-            Task { @MainActor [weak host] in
-                host?.onDirectoryUpdate?(url)
-            }
-        }
-
-        nonisolated func processTerminated(source: TerminalView, exitCode: Int32?) {
-            Task { @MainActor [weak host] in
-                host?.handleProcessTerminated()
-            }
         }
     }
 }

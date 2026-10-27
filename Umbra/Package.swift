@@ -35,12 +35,15 @@ let package = Package(
         .package(path: "../Packages/AgentKitMLX"),
         .package(path: "../Packages/AgentKitApple"),
         .package(path: "../Packages/DatabaseKit"),
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0"),
         .package(url: "https://github.com/alex-cova/DiagramKit", from: "1.1.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
         .package(url: "https://github.com/apple/xcode-project-format", from: "0.1.0")
     ],
     targets: [
+        // Prebuilt libghostty-vt (Ghostty commit 4a4fc017940bec38c93b278c10c6a18c591f3e63,
+        // Zig 0.17.0, macOS arm64+x86_64 only). Rebuild procedure and gate
+        // resolutions live in .agents/plans/2026-10-27-ghostty-terminal.md (G1).
+        .binaryTarget(name: "GhosttyVt", path: "Vendor/GhosttyVt.xcframework"),
         // Umbra as an ACP agent on stdio (docs/ACP_PLAN.md Phase 2): any ACP client can drive
         // an AgentSession built from the user's configured provider.
         .executableTarget(
@@ -70,7 +73,7 @@ let package = Package(
                 .product(name: "AgentKitMLX", package: "AgentKitMLX"),
                 .product(name: "LocalModelStore", package: "AgentKitMLX"),
                 .product(name: "AgentKitApple", package: "AgentKitApple"),
-                .product(name: "SwiftTerm", package: "SwiftTerm"),
+                "GhosttyVt",
                 .product(name: "DiagramKit", package: "DiagramKit"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "XcodeProjectFormat", package: "xcode-project-format"),

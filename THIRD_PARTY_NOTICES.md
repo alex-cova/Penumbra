@@ -72,6 +72,19 @@ shader by localthunk ([playbalatro.com](https://www.playbalatro.com)), kept with
 original colours and constants and credited in `IDEWelcomeShaderMetalSource.swift`. No
 license file accompanies the original shader.
 
+## Umbra terminal (Ghostty libghostty-vt)
+
+Umbra's terminal backend links `libghostty-vt`, the VT parser/emulator core of
+[ghostty-org/ghostty](https://github.com/ghostty-org/ghostty) (MIT, (c) 2024
+Mitchell Hashimoto and Ghostty contributors), as a prebuilt
+`Umbra/Vendor/GhosttyVt.xcframework` binary target of the `Umbra` target only —
+never of `Penumbra` or `EditorIntelligence`. Build: Ghostty commit
+`4a4fc017940bec38c93b278c10c6a18c591f3e63` with Zig 0.17.0
+(`zig build -Demit-lib-vt`, macOS arm64 + x86_64 slices only; see
+`.agents/plans/2026-10-27-ghostty-terminal.md` for the rebuild procedure and
+the iOS-slice note). PTY spawning, grid rendering and key encoding are Umbra's
+own code (`Umbra/Sources/Umbra/Terminal/`).
+
 ## Umbra project wizard (Xcode project format)
 
 Umbra's New Project wizard and Xcode project system (`Umbra/Sources/Umbra/ProjectWizard/`,

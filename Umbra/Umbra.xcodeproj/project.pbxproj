@@ -27,11 +27,11 @@
 		00000000000000000000007C /* AgentKitMLX in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007B /* AgentKitMLX */; };
 		0000000000000000000000A2 /* AgentKitApple in Frameworks */ = {isa = PBXBuildFile; productRef = 0000000000000000000000A1 /* AgentKitApple */; };
 		00000000000000000000007E /* LocalModelStore in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007D /* LocalModelStore */; };
-		000000000000000000000080 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000007F /* SwiftTerm */; };
 		000000000000000000000082 /* DiagramKit in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000081 /* DiagramKit */; };
 		00000000000000000000009A /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000099 /* Sparkle */; };
 		00000000000000000000009F /* DatabaseKit in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000009E /* DatabaseKit */; };
 		000000000000000000000090 /* XcodeProjectFormat in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000092 /* XcodeProjectFormat */; };
+		0000000000000000000000B1 /* GhosttyVt.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000B0 /* GhosttyVt.xcframework */; };
 		00000000000000000000000E /* umbra.png in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000D /* umbra.png */; };
 /* End PBXBuildFile section */
 
@@ -40,6 +40,7 @@
 		000000000000000000000096 /* jacococli.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = jacococli.jar; path = Sources/Umbra/Tools/JaCoCo/build/jacococli.jar; sourceTree = "<group>"; };
 		000000000000000000000016 /* java-debug-adapter.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = java-debug-adapter.jar; path = Sources/Umbra/Tools/JavaDebugAdapter/build/java-debug-adapter.jar; sourceTree = "<group>"; };
 		00000000000000000000009B /* java-analysis-server.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = java-analysis-server.jar; path = Sources/Umbra/Tools/JavaAnalysisServer/build/java-analysis-server.jar; sourceTree = "<group>"; };
+		0000000000000000000000B0 /* GhosttyVt.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GhosttyVt.xcframework; path = Vendor/GhosttyVt.xcframework; sourceTree = "<group>"; };
 		000000000000000000000004 /* Umbra.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Umbra.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		00000000000000000000000B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		00000000000000000000000C /* Umbra.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Umbra.entitlements; sourceTree = "<group>"; };
@@ -178,8 +179,8 @@
 				00000000000000000000007C /* AgentKitMLX in Frameworks */,
 				0000000000000000000000A2 /* AgentKitApple in Frameworks */,
 				00000000000000000000007E /* LocalModelStore in Frameworks */,
-				000000000000000000000080 /* SwiftTerm in Frameworks */,
-				000000000000000000000082 /* DiagramKit in Frameworks */,
+				0000000000000000000000B1 /* GhosttyVt.xcframework in Frameworks */,
+		000000000000000000000082 /* DiagramKit in Frameworks */,
 				000000000000000000000090 /* XcodeProjectFormat in Frameworks */,
 				00000000000000000000009A /* Sparkle in Frameworks */,
 				00000000000000000000009F /* DatabaseKit in Frameworks */,
@@ -199,6 +200,7 @@
 				00000000000000000000009B /* java-analysis-server.jar */,
 				000000000000000000000095 /* jacocoagent.jar */,
 				000000000000000000000096 /* jacococli.jar */,
+				0000000000000000000000B0 /* GhosttyVt.xcframework */,
 				000000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -257,7 +259,6 @@
 				00000000000000000000007B /* AgentKitMLX */,
 				0000000000000000000000A1 /* AgentKitApple */,
 				00000000000000000000007D /* LocalModelStore */,
-				00000000000000000000007F /* SwiftTerm */,
 				000000000000000000000081 /* DiagramKit */,
 				000000000000000000000092 /* XcodeProjectFormat */,
 				000000000000000000000099 /* Sparkle */,
@@ -295,7 +296,6 @@
 				000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */,
 				000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */,
 				0000000000000000000000A0 /* XCLocalSwiftPackageReference "../Packages/AgentKitApple" */,
-				000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				00000000000000000000006A /* XCRemoteSwiftPackageReference "DiagramKit" */,
 				000000000000000000000091 /* XCRemoteSwiftPackageReference "xcode-project-format" */,
 				000000000000000000000098 /* XCRemoteSwiftPackageReference "Sparkle" */,
@@ -502,14 +502,6 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.20.0;
-			};
-		};
 		00000000000000000000006A /* XCRemoteSwiftPackageReference "DiagramKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/alex-cova/DiagramKit";
@@ -616,11 +608,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */;
 			productName = LocalModelStore;
-		};
-		00000000000000000000007F /* SwiftTerm */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 000000000000000000000069 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
-			productName = SwiftTerm;
 		};
 		000000000000000000000081 /* DiagramKit */ = {
 			isa = XCSwiftPackageProductDependency;
