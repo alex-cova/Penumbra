@@ -1,0 +1,97 @@
+import EditorIntelligence
+import Foundation
+
+/// Runs the native Swift inspections for the editor and remembers the last answers, so the squiggles
+/// (``SwiftInspectionDiagnosticProvider``) and the ⌥↩ fixes (``SwiftCodeActionProvider``) of one text share
+/// one analysis.
+///
+/// The options come from the host through ``init(options:)`` and are read for every analysis, so a rule
+/// switched off in Settings takes effect on the next pass without restarting anything.
+public final class SwiftInspectionService: @unchecked Sendable {
+    public typealias OptionsSource = @Sendable () -> SwiftInspectionOptions
+
+    /// The largest text analysed. A file this size is almost always generated, and the parse is not incremental.
+    public static let maximumUTF8Length = 1_500_000
+
+    private struct Key: Hashable {
+        let length: Int
+        let hash: Int
+        let options: SwiftInspectionOptions
+    }
+
+    private let options: OptionsSource
+    private let cache: SwiftSyntaxParseCache
+    private let lock = NSLock()
+    private var recent: [(key: Key, analysis: SwiftInspectionPipeline.Analysis)] = []
+
+    public init(options: @escaping OptionsSource = { .standard }, cache: SwiftSyntaxParseCache = .shared) {
+        self.options = options
+        self.cache = cache
+    }
+
+    public var currentOptions: SwiftInspectionOptions { options() }
+
+    /// The analysis of `text` under the current options; the two most recent are kept.
+    public func analysis(of text: String) -> SwiftInspectionPipeline.Analysis {
+        guard text.utf8.count <= Self.maximumUTF8Length else { return .empty(for: "") }
+        let options = options()
+        let key = Key(length: text.utf8.count, hash: text.hashValue, options: options)
+        if let hit = lock.withLock({ recent.first { $0.key == key }?.analysis }) { return hit }
+        let analysis = SwiftInspectionPipeline.analyze(text: text, options: options, cache: cache)
+        lock.withLock {
+            recent.removeAll { $0.key == key }
+            recent.append((key, analysis))
+            if recent.count > 2 { recent.removeFirst() }
+        }
+        return analysis
+    }
+
+    /// Findings for a document, or none for one the inspections do not apply to.
+    func analysis(for document: Document) -> SwiftInspectionPipeline.Analysis? {
+        guard document.languageIdentifier == SwiftAnalysis.languageIdentifier,
+              !document.contentSnapshot.isElided else { return nil }
+        if let url = document.url, DependencySourceLocation.isGeneratedInterface(url) { return nil }
+        return analysis(of: document.text)
+    }
+}
+
+/// The inspections' squiggles. Findings are `Diagnostic`s with the source `swift-inspection` and the rule id
+/// as their code.
+public struct SwiftInspectionDiagnosticProvider: DiagnosticProvider {
+    public let name = SwiftInspection.diagnosticSource
+    private let service: SwiftInspectionService
+
+    public init(service: SwiftInspectionService) {
+        self.service = service
+    }
+
+    public func diagnostics(for document: Document) async -> [Diagnostic] {
+        guard let analysis = service.analysis(for: document), !Task.isCancelled else { return [] }
+        return analysis.findings.map { $0.asDiagnostic(map: analysis.map) }
+    }
+}
+
+extension SwiftInspectionService {
+    /// The quick fixes for the findings at `position`: each finding's own fixes, then a suppression comment.
+    func codeActions(for document: Document, at position: TextPosition) -> [CodeAction] {
+        guard let analysis = analysis(for: document) else { return [] }
+        var actions: [CodeAction] = []
+        for finding in analysis.findings {
+            let range = analysis.map.range(bytes: finding.bytes)
+            guard Self.contains(range, position) else { continue }
+            for (index, fix) in finding.fixes.enumerated() {
+                actions.append(fix.codeAction(map: analysis.map, isPreferred: index == 0))
+            }
+            if let suppression = SwiftInspectionPipeline.suppressionFix(for: finding, in: analysis) {
+                actions.append(suppression.codeAction(map: analysis.map))
+            }
+        }
+        return actions
+    }
+
+    /// Whether `position` is in `range`, both ends included (a caret at the end of a word is on it).
+    private static func contains(_ range: EditorIntelligence.TextRange, _ position: TextPosition) -> Bool {
+        let point = (position.line, position.column)
+        return (range.start.line, range.start.column) <= point && point <= (range.end.line, range.end.column)
+    }
+}

@@ -1,9 +1,14 @@
 import EditorIntelligence
 import Foundation
 
-/// The native Swift organize-imports action. SourceKit-LSP does not provide one.
+/// The native Swift code actions: the quick fixes of the inspections at the caret
+/// (``SwiftInspectionService``) and organize imports, which SourceKit-LSP does not provide.
 public struct SwiftCodeActionProvider: CodeActionProviding {
-    public init() {}
+    private let inspections: SwiftInspectionService?
+
+    public init(inspections: SwiftInspectionService? = nil) {
+        self.inspections = inspections
+    }
 
     public func codeActions(
         for document: Document,
@@ -11,8 +16,11 @@ public struct SwiftCodeActionProvider: CodeActionProviding {
         diagnostics: [Diagnostic]
     ) async -> [CodeAction] {
         guard document.languageIdentifier == SwiftAnalysis.languageIdentifier else { return [] }
+        var actions = inspections?.codeActions(for: document, at: position) ?? []
         let edits = SwiftImportOrganizer.edits(in: document.text)
-        guard !edits.isEmpty else { return [] }
-        return [CodeAction(title: "Organize Imports", kind: CodeAction.organizeImportsKind, edits: edits)]
+        if !edits.isEmpty {
+            actions.append(CodeAction(title: "Organize Imports", kind: CodeAction.organizeImportsKind, edits: edits))
+        }
+        return actions
     }
 }

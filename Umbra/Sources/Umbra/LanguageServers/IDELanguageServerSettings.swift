@@ -38,6 +38,7 @@ private struct IDESwiftServerSettings: View {
             IDESettingsToggle("Use SourceKit-LSP", isOn: $enabled)
             IDEServerPathField(title: "sourcekit-lsp", path: $path)
         }
+        IDESwiftInspectionsSettings()
     }
 }
 

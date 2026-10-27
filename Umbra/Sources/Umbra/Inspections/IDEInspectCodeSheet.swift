@@ -1,5 +1,6 @@
 import AppKit
 import JavaIntelligence
+import SwiftIntelligence
 import SwiftUI
 
 /// Code ▸ Inspect Code… (and the second step of Run Inspection by Name…): which files, with
@@ -13,6 +14,7 @@ struct IDEInspectCodeSheet: View {
         case project, module, directory, currentFile, selectedFiles, uncommitted, openFiles
     }
 
+    @State private var language: IDEInspectionLanguage = .java
     @State private var choice: Choice = .project
     @State private var modulePath = ""
     @State private var directory: URL?
@@ -31,40 +33,41 @@ struct IDEInspectCodeSheet: View {
     }
 
     private var openFiles: [URL] {
-        workspace.workbench.allDocuments().compactMap(\.url).filter { $0.pathExtension == "java" }
+        workspace.workbench.allDocuments().compactMap(\.url).filter { $0.pathExtension == language.fileExtension }
     }
 
     private var uncommittedFiles: [URL] {
         guard let root = workspace.project.rootURL else { return [] }
         return workspace.gitStatus.changes
             .map { URL(fileURLWithPath: $0.path, relativeTo: root).standardizedFileURL }
-            .filter { $0.pathExtension == "java" }
+            .filter { $0.pathExtension == language.fileExtension }
     }
 
-    private var scope: JavaInspectionScope? {
-        let kind: JavaInspectionScope.Kind
+    /// What the chosen option covers, before it becomes one language's scope type.
+    private var scopeKind: (java: JavaInspectionScope.Kind, swift: SwiftInspectionScope.Kind)? {
         switch choice {
-        case .project: kind = .project
+        case .project: return (.project, .project)
         case .module:
             guard let match = modules.first(where: { $0.path == modulePath }) else { return nil }
-            kind = .module(directory: match.directory)
+            return (.module(directory: match.directory), .project)
         case .directory:
             guard let target = directory ?? workspace.project.rootURL else { return nil }
-            kind = .directory(target)
+            return (.directory(target), .directory(target))
         case .currentFile:
             guard let file = request.currentFile else { return nil }
-            kind = .files([file])
+            return (.files([file]), .files([file]))
         case .selectedFiles:
             guard !request.selectedFiles.isEmpty else { return nil }
-            kind = .files(request.selectedFiles)
-        case .uncommitted: kind = .uncommitted(uncommittedFiles)
-        case .openFiles: kind = .openFiles(openFiles)
+            return (.files(request.selectedFiles), .files(request.selectedFiles))
+        case .uncommitted: return (.uncommitted(uncommittedFiles), .uncommitted(uncommittedFiles))
+        case .openFiles: return (.openFiles(openFiles), .openFiles(openFiles))
         }
-        return JavaInspectionScope(kind: kind, includeTests: includeTests, fileMasks: masks)
     }
 
+    private var isScopeComplete: Bool { scopeKind != nil }
+
     private var title: String {
-        request.rule.map { "Run Inspection: \($0.title)" } ?? "Inspect Code"
+        request.rule.map { "Run Inspection: \($0.title)" } ?? "Inspect \(language.title) Code"
     }
 
     var body: some View {
@@ -76,9 +79,16 @@ struct IDEInspectCodeSheet: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if !request.isLanguageFixed {
+                Picker("Language", selection: $language) {
+                    Text("Java").tag(IDEInspectionLanguage.java)
+                    Text("Swift").tag(IDEInspectionLanguage.swift)
+                }
+                .pickerStyle(.segmented)
+            }
             Picker("Scope", selection: $choice) {
                 Text("Whole project").tag(Choice.project)
-                if !modules.isEmpty { Text("Module").tag(Choice.module) }
+                if language == .java, !modules.isEmpty { Text("Module").tag(Choice.module) }
                 Text("Directory").tag(Choice.directory)
                 if request.currentFile != nil { Text("Current file").tag(Choice.currentFile) }
                 if !request.selectedFiles.isEmpty { Text("Selected files (\(request.selectedFiles.count))").tag(Choice.selectedFiles) }
@@ -103,19 +113,25 @@ struct IDEInspectCodeSheet: View {
             Toggle("Include test sources", isOn: $includeTests)
             HStack {
                 Text("File masks")
-                TextField("*.java, !**/generated/**", text: $masks)
+                TextField(language == .java ? "*.java, !**/generated/**" : "*.swift, !**/Generated/**", text: $masks)
                     .textFieldStyle(.roundedBorder)
             }
-            Toggle("Include project-wide inspections (slower)", isOn: $includeProjectRules)
-                .help("Unused declaration, weaker access, void return and constant parameter checks search the whole project")
-            Picker("Profile", selection: $source) {
-                if inspections.hasProjectProfile { Text("Project").tag(IDEWorkspaceInspections.Source.project) }
-                ForEach(inspections.store.names, id: \.self) { Text($0).tag(IDEWorkspaceInspections.Source.global($0)) }
+            if language == .java {
+                Toggle("Include project-wide inspections (slower)", isOn: $includeProjectRules)
+                    .help("Unused declaration, weaker access, void return and constant parameter checks search the whole project")
+                Picker("Profile", selection: $source) {
+                    if inspections.hasProjectProfile { Text("Project").tag(IDEWorkspaceInspections.Source.project) }
+                    ForEach(inspections.store.names, id: \.self) { Text($0).tag(IDEWorkspaceInspections.Source.global($0)) }
+                }
+            } else {
+                Text("Uses the inspections switched on in Settings ▸ Swift.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
             HStack {
                 Button("Configure Profile…") {
                     close()
-                    workspace.requestedSettingsDomain = .java
+                    workspace.requestedSettingsDomain = language.settingsDomain
                     workspace.showSettings()
                 }
                 Spacer()
@@ -123,19 +139,21 @@ struct IDEInspectCodeSheet: View {
                     .keyboardShortcut(.cancelAction)
                 if let rule = request.rule, rule.hasQuickFix {
                     Button("Fix All") { fixAll(rule: rule) }
-                        .disabled(scope == nil || isBusy)
+                        .disabled(!isScopeComplete || isBusy)
                 }
                 Button("Analyze") { analyze() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(scope == nil || isBusy)
+                    .disabled(!isScopeComplete || isBusy)
             }
         }
         .padding(IDEAppearance.Spacing.lg)
         .frame(width: 460)
         .onAppear { configureDefaults() }
+        .onChange(of: language) { if language == .swift, choice == .module { choice = .project } }
     }
 
     private func configureDefaults() {
+        language = request.language
         source = inspections.activeSource
         modulePath = modules.first?.path ?? ""
         directory = request.directory
@@ -161,12 +179,23 @@ struct IDEInspectCodeSheet: View {
     }
 
     private func launch() -> IDEInspectionLaunch? {
-        guard let scope else { return nil }
-        let profile = inspections.profile(for: source) ?? inspections.activeProfile
-        return IDEInspectionLaunch(
-            scope: scope, profile: profile, profileName: inspections.title(for: source),
-            onlyRules: request.rule.map { [$0] }, includeProjectRules: includeProjectRules
-        )
+        guard let kind = scopeKind else { return nil }
+        switch language {
+        case .java:
+            let profile = inspections.profile(for: source) ?? inspections.activeProfile
+            return IDEInspectionLaunch(
+                scope: JavaInspectionScope(kind: kind.java, includeTests: includeTests, fileMasks: masks), profile: profile,
+                profileName: inspections.title(for: source),
+                onlyRules: request.rule.flatMap { JavaInspectionRule(code: $0.code) }.map { [$0] },
+                includeProjectRules: includeProjectRules
+            )
+        case .swift:
+            return IDEInspectionLaunch(
+                swiftScope: SwiftInspectionScope(kind: kind.swift, includeTests: includeTests, fileMasks: masks),
+                options: IDESwiftInspectionSettings.current(),
+                onlyRules: request.rule.flatMap { SwiftInspectionRule(code: $0.code) }.map { [$0] }
+            )
+        }
     }
 
     private func analyze() {
@@ -175,16 +204,20 @@ struct IDEInspectCodeSheet: View {
         workspace.startInspection(launch)
     }
 
-    private func fixAll(rule: JavaInspectionRule) {
+    private func fixAll(rule: IDEInspectionRuleInfo) {
         guard let launch = launch() else { return }
         isBusy = true
         let root = workspace.project.rootURL
+        let roots = root.map { [$0] } ?? []
         let classifier = JavaInspectionFileClassifier(projectRoot: root, testRoots: workspace.javaTestSourceRoots)
         Task {
-            let files = await Task.detached(priority: .userInitiated) {
-                launch.scope.resolve(projectRoots: root.map { [$0] } ?? [], classifier: classifier)
+            let files = await Task.detached(priority: .userInitiated) { () -> [URL] in
+                switch launch.backend {
+                case .java(let scope, _, _, _): scope.resolve(projectRoots: roots, classifier: classifier)
+                case .swift(let scope, _, _): scope.resolve(projectRoots: roots)
+                }
             }.value
-            let outcome = await workspace.fixAll(rules: [rule], in: files)
+            let outcome = await workspace.fixAll(ruleCodes: [rule.code], language: launch.language, in: files)
             close()
             if outcome.fixedCount == 0 {
                 workspace.notifications.post("Nothing to fix", detail: rule.title)
@@ -203,14 +236,15 @@ struct IDEInspectCodeSheet: View {
 struct IDEInspectionByNameSheet: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var query = ""
-    @State private var highlighted: JavaInspectionRule?
+    @State private var language: IDEInspectionLanguage = .java
+    @State private var highlighted: IDEInspectionRuleInfo?
 
-    private var matches: [JavaInspectionRule] {
+    private var matches: [IDEInspectionRuleInfo] {
         let words = query.lowercased().split(separator: " ").map(String.init)
-        let all = JavaInspectionRule.allCases
+        let all = language.rules
         guard !words.isEmpty else { return all.sorted { $0.title < $1.title } }
         return all.filter { rule in
-            let haystack = (rule.title + " " + rule.code + " " + rule.group.title).lowercased()
+            let haystack = (rule.title + " " + rule.code + " " + rule.groupTitle).lowercased()
             return words.allSatisfy { haystack.contains($0) }
         }
         .sorted { $0.title < $1.title }
@@ -219,6 +253,12 @@ struct IDEInspectionByNameSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
             Text("Run Inspection by Name").font(IDEAppearance.Typography.sidebarHeader)
+            Picker("Language", selection: $language) {
+                Text("Java").tag(IDEInspectionLanguage.java)
+                Text("Swift").tag(IDEInspectionLanguage.swift)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: language) { highlighted = nil }
             TextField("Inspection name", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { pick(highlighted ?? matches.first) }
@@ -227,7 +267,7 @@ struct IDEInspectionByNameSheet: View {
                     HStack {
                         Text(rule.title)
                         Spacer()
-                        Text(rule.group.title)
+                        Text(rule.groupTitle)
                             .font(IDEAppearance.Typography.caption)
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
                     }
@@ -259,14 +299,12 @@ struct IDEInspectionByNameSheet: View {
         }
         .padding(IDEAppearance.Spacing.lg)
         .frame(width: 640)
+        .onAppear { language = workspace.inspectionRuns.nameQueryLanguage }
     }
 
-    private func pick(_ rule: JavaInspectionRule?) {
+    private func pick(_ rule: IDEInspectionRuleInfo?) {
         guard let rule else { return }
         workspace.inspectionRuns.isNamePickerPresented = false
-        workspace.inspectionRuns.pendingScopeRequest = IDEInspectCodeRequest(
-            rule: rule,
-            currentFile: workspace.workbench.activePane.selectedDocument?.url.flatMap { $0.pathExtension == "java" ? $0 : nil }
-        )
+        workspace.presentRunInspectionByName(rule: rule)
     }
 }

@@ -351,6 +351,14 @@ final class IDEWindowRegistry {
         }
     }
 
+    /// A Swift inspection was switched, re-graded or re-limited in Settings; every window re-runs the
+    /// inspections of its open editors.
+    func swiftInspectionPreferencesChangedInAllWindows() {
+        for workspace in workspaces {
+            workspace.swiftInspectionPreferencesChanged()
+        }
+    }
+
     /// Whether any window has an editor with unsaved changes.
     var hasUnsavedDocuments: Bool { workspaces.contains { $0.hasUnsavedDocuments } }
 

@@ -70,6 +70,10 @@ on every line insert/removal.
   result must not touch the document or the UI (`InteractivePathTests`).
 - Repeated background updates to UI (console output, status, progress) are batched (≈100 ms), not
   posted per item.
+- A parse that is not incremental is O(file) and runs after a pause, a save or on demand, never on a
+  keystroke or in a completion/hover request. That is swift-syntax (`SwiftSyntaxDocument`): about 3 ms
+  for 2,000 lines and 28 ms for 20,000, plus about 8 µs per identifier reference for a scope lookup
+  (`swift-syntax-parse`). Keystroke paths keep tree-sitter, which reuses the previous tree.
 
 ## 5. Line controllers and memory stay bounded
 
@@ -130,6 +134,7 @@ swift run -c release PerfHarness enter-session synthetic --lines 20000
 swift run -c release PerfHarness enter-session synthetic --lines 120000
 swift run -c release PerfHarness keystroke-budget <file> --lang java
 swift run -c release PerfHarness java-completion synthetic   # completion changes
+swift run -c release PerfHarness swift-syntax-parse synthetic --lines 2000   # anything using swift-syntax
 ```
 
 - Run the harness on the parent commit and on your change back to back (timings drift between

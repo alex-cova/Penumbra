@@ -2,42 +2,100 @@ import AppKit
 import EditorIntelligence
 import Foundation
 import JavaIntelligence
+import SwiftIntelligence
 
 /// What an Inspect Code run was asked: kept with the run so Rerun repeats it.
 struct IDEInspectionLaunch {
-    var scope: JavaInspectionScope
-    var profile: JavaInspectionProfile
+    /// What each language needs to run: Java's profile and project-wide rules, Swift's options.
+    enum Backend {
+        case java(scope: JavaInspectionScope, profile: JavaInspectionProfile, onlyRules: Set<JavaInspectionRule>?, includeProjectRules: Bool)
+        case swift(scope: SwiftInspectionScope, options: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>?)
+    }
+
+    var backend: Backend
     var profileName: String
-    var onlyRules: Set<JavaInspectionRule>?
-    var includeProjectRules: Bool
+
+    init(backend: Backend, profileName: String) {
+        self.backend = backend
+        self.profileName = profileName
+    }
+
+    /// A Java run, which is what the workflow was first written for.
+    init(
+        scope: JavaInspectionScope, profile: JavaInspectionProfile, profileName: String,
+        onlyRules: Set<JavaInspectionRule>?, includeProjectRules: Bool
+    ) {
+        self.init(
+            backend: .java(scope: scope, profile: profile, onlyRules: onlyRules, includeProjectRules: includeProjectRules),
+            profileName: profileName
+        )
+    }
+
+    init(swiftScope: SwiftInspectionScope, options: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>?) {
+        self.init(backend: .swift(scope: swiftScope, options: options, onlyRules: onlyRules), profileName: "Swift settings")
+    }
+
+    var language: IDEInspectionLanguage {
+        switch backend {
+        case .java: .java
+        case .swift: .swift
+        }
+    }
+
+    var scopeTitle: String {
+        switch backend {
+        case .java(let scope, _, _, _): scope.title
+        case .swift(let scope, _, _): scope.title
+        }
+    }
+
+    var onlyRuleCodes: Set<String>? {
+        switch backend {
+        case .java(_, _, let only, _): only.map { Set($0.map(\.code)) }
+        case .swift(_, _, let only): only.map { Set($0.map(\.code)) }
+        }
+    }
+
+    var includeProjectRules: Bool {
+        if case .java(_, _, _, let include) = backend { return include }
+        return false
+    }
 }
 
 /// A request to ask the user for a scope (Inspect Code…) or a rule and then a scope.
 struct IDEInspectCodeRequest: Identifiable {
     let id = UUID()
+    /// The language the sheet starts on; it can be changed while no rule, file or selection fixes it.
+    var language: IDEInspectionLanguage = .java
     /// Set by Run Inspection by Name once a rule was picked.
-    var rule: JavaInspectionRule?
+    var rule: IDEInspectionRuleInfo?
     /// Files to offer as "Selected files" (the Explorer's selection) or "Current file".
     var selectedFiles: [URL] = []
     var currentFile: URL?
     var directory: URL?
+
+    /// Whether the language is part of what was asked, so the sheet does not offer the other one.
+    var isLanguageFixed: Bool { rule != nil || !selectedFiles.isEmpty }
 }
 
 extension IDEWorkspace {
     // MARK: - Presenting
 
     /// Code ▸ Inspect Code…: asks which files, then analyses them.
-    func presentInspectCode(selectedFiles: [URL] = [], directory: URL? = nil) {
+    func presentInspectCode(language: IDEInspectionLanguage = .java, selectedFiles: [URL] = [], directory: URL? = nil) {
         inspectionRuns.pendingScopeRequest = IDEInspectCodeRequest(
-            selectedFiles: selectedFiles, currentFile: activeJavaFile, directory: directory
+            language: language, selectedFiles: selectedFiles, currentFile: activeFile(of: language), directory: directory
         )
     }
 
     /// Code ▸ Run Inspection by Name…: pick a rule, then the scope.
-    func presentRunInspectionByName(rule: JavaInspectionRule? = nil) {
+    func presentRunInspectionByName(language: IDEInspectionLanguage = .java, rule: IDEInspectionRuleInfo? = nil) {
         if let rule {
-            inspectionRuns.pendingScopeRequest = IDEInspectCodeRequest(rule: rule, currentFile: activeJavaFile)
+            inspectionRuns.pendingScopeRequest = IDEInspectCodeRequest(
+                language: rule.language, rule: rule, currentFile: activeFile(of: rule.language)
+            )
         } else {
+            inspectionRuns.nameQueryLanguage = language
             inspectionRuns.isNamePickerPresented = true
         }
     }
@@ -47,22 +105,29 @@ extension IDEWorkspace {
         var isDirectory: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
         if isDirectory.boolValue {
-            presentInspectCode(directory: url)
-        } else {
-            presentInspectCode(selectedFiles: [url])
+            // A folder may hold either language: start on the active file's.
+            let language = Self.inspectionLanguage(of: workbench.activePane.selectedDocument?.url) ?? .java
+            presentInspectCode(language: language, directory: url)
+        } else if let language = Self.inspectionLanguage(of: url) {
+            presentInspectCode(language: language, selectedFiles: [url])
         }
     }
 
-    /// The editor's right-click ▸ Inspect Code… for a Java file.
+    /// The editor's right-click ▸ Inspect Code… for a Java or Swift file.
     func inspectionContextMenuItems(url: URL?) -> [NSMenuItem] {
-        guard let url, url.pathExtension.lowercased() == "java" else { return [] }
+        guard let url, let language = Self.inspectionLanguage(of: url) else { return [] }
         return [IDEClosureMenuItem(title: "Inspect Code…") { [weak self] in
-            self?.presentInspectCode(selectedFiles: [url])
+            self?.presentInspectCode(language: language, selectedFiles: [url])
         }]
     }
 
-    private var activeJavaFile: URL? {
-        guard let url = workbench.activePane.selectedDocument?.url, url.pathExtension == "java" else { return nil }
+    /// The language Inspect Code has for a file, by its extension.
+    static func inspectionLanguage(of url: URL?) -> IDEInspectionLanguage? {
+        url.flatMap { IDEInspectionLanguage(rawValue: $0.pathExtension.lowercased()) }
+    }
+
+    private func activeFile(of language: IDEInspectionLanguage) -> URL? {
+        guard let url = workbench.activePane.selectedDocument?.url, Self.inspectionLanguage(of: url) == language else { return nil }
         return url
     }
 
@@ -72,8 +137,8 @@ extension IDEWorkspace {
     @discardableResult
     func startInspection(_ launch: IDEInspectionLaunch) -> IDEInspectionRun {
         let run = IDEInspectionRun(
-            scope: launch.scope, onlyRules: launch.onlyRules, includeProjectRules: launch.includeProjectRules,
-            profileName: launch.profileName
+            language: launch.language, scopeTitle: launch.scopeTitle, onlyRuleCodes: launch.onlyRuleCodes,
+            includeProjectRules: launch.includeProjectRules, profileName: launch.profileName
         )
         run.launch = launch
         inspectionRuns.add(run)
@@ -91,28 +156,47 @@ extension IDEWorkspace {
         guard let launch = run.launch else { return }
         run.begin(total: 0)
         let root = project.rootURL
-        let classifier = JavaInspectionFileClassifier(projectRoot: root, testRoots: javaTestSourceRoots)
-        let inspector = javaSupport.makeBatchInspector()
-        let options = JavaBatchInspector.Options(
-            profile: launch.profile, classifier: classifier, onlyRules: launch.onlyRules,
-            includeProjectRules: launch.includeProjectRules
-        )
-        run.task = Task { [weak self, weak run] in
-            let scope = launch.scope
-            let files = await Task.detached(priority: .userInitiated) {
-                scope.resolve(projectRoots: root.map { [$0] } ?? [], classifier: classifier)
-            }.value
-            guard let self, let run else { return }
-            let text = self.inspectionTextSource()
-            for await event in inspector.run(files: files, options: options, text: text) {
-                switch event {
-                case .started(let total): run.progress(done: 0, total: total)
-                case .file(let url, let findings): run.record(findings, for: url)
-                case .progress(let done, let total): run.progress(done: done, total: total)
-                case .finished(let cancelled): run.finish(cancelled: cancelled)
+        switch launch.backend {
+        case .java(let scope, let profile, let onlyRules, let includeProjectRules):
+            let classifier = JavaInspectionFileClassifier(projectRoot: root, testRoots: javaTestSourceRoots)
+            let inspector = javaSupport.makeBatchInspector()
+            let options = JavaBatchInspector.Options(
+                profile: profile, classifier: classifier, onlyRules: onlyRules, includeProjectRules: includeProjectRules
+            )
+            run.task = Task { [weak self, weak run] in
+                let files = await Task.detached(priority: .userInitiated) {
+                    scope.resolve(projectRoots: root.map { [$0] } ?? [], classifier: classifier)
+                }.value
+                guard let self, let run else { return }
+                let text = self.inspectionTextSource()
+                for await event in inspector.run(files: files, options: options, text: text) {
+                    switch event {
+                    case .started(let total): run.progress(done: 0, total: total)
+                    case .file(let url, let findings): run.record(findings, for: url)
+                    case .progress(let done, let total): run.progress(done: done, total: total)
+                    case .finished(let cancelled): run.finish(cancelled: cancelled)
+                    }
                 }
+                if run.state == .running { run.finish(cancelled: Task.isCancelled) }
             }
-            if run.state == .running { run.finish(cancelled: Task.isCancelled) }
+        case .swift(let scope, let inspection, let onlyRules):
+            let options = SwiftBatchInspector.Options(inspection: inspection, onlyRules: onlyRules)
+            run.task = Task { [weak self, weak run] in
+                let files = await Task.detached(priority: .userInitiated) {
+                    scope.resolve(projectRoots: root.map { [$0] } ?? [])
+                }.value
+                guard let self, let run else { return }
+                let text = self.inspectionTextSource()
+                for await event in SwiftBatchInspector().run(files: files, options: options, text: text) {
+                    switch event {
+                    case .started(let total): run.progress(done: 0, total: total)
+                    case .file(let url, let findings): run.record(findings.map(IDEInspectionFinding.init), for: url)
+                    case .progress(let done, let total): run.progress(done: done, total: total)
+                    case .finished(let cancelled): run.finish(cancelled: cancelled)
+                    }
+                }
+                if run.state == .running { run.finish(cancelled: Task.isCancelled) }
+            }
         }
     }
 
@@ -129,15 +213,31 @@ extension IDEWorkspace {
     /// The fixes and Suppress actions for one result, from the file's current text.
     func quickFixes(for entry: IDEInspectionRun.Entry) async -> [CodeAction] {
         guard let text = await inspectionTextSource()(entry.url) else { return [] }
-        let style: JavaSuppressionStyle = preferences.javaSuppressWithComment ? .comment : .annotation
-        return JavaInspectionQuickFixes.actions(for: entry.inspection, in: text, suppressionStyle: style)
+        switch entry.inspection.origin {
+        case .java(let inspection):
+            let style: JavaSuppressionStyle = preferences.javaSuppressWithComment ? .comment : .annotation
+            return JavaInspectionQuickFixes.actions(for: inspection, in: text, suppressionStyle: style)
+        case .swift(let located):
+            return SwiftInspectionQuickFixes.actions(for: located, in: text, options: IDESwiftInspectionSettings.current())
+        }
     }
 
     /// The fixes and Suppress actions for a Problems row from an inspection.
     func quickFixes(for row: ProblemRow) async -> [CodeAction] {
-        guard row.diagnostic.source == "java-inspection", let text = await inspectionTextSource()(row.url) else { return [] }
-        let style: JavaSuppressionStyle = preferences.javaSuppressWithComment ? .comment : .annotation
-        return JavaInspectionQuickFixes.actions(for: row.diagnostic, in: text, suppressionStyle: style)
+        guard let text = await inspectionTextSource()(row.url) else { return [] }
+        switch row.diagnostic.source {
+        case "java-inspection":
+            let style: JavaSuppressionStyle = preferences.javaSuppressWithComment ? .comment : .annotation
+            return JavaInspectionQuickFixes.actions(for: row.diagnostic, in: text, suppressionStyle: style)
+        case SwiftInspection.diagnosticSource:
+            guard let code = row.diagnostic.code else { return [] }
+            return SwiftInspectionQuickFixes.actions(
+                ruleCode: code, range: row.diagnostic.range, message: row.diagnostic.message, in: text,
+                options: IDESwiftInspectionSettings.current()
+            )
+        default:
+            return []
+        }
     }
 
     /// Applies a fix chosen for a Problems row.
@@ -187,38 +287,57 @@ extension IDEWorkspace {
 
     /// Applies the preferred fix of every result of `rule` in the run (or only `urls`).
     func applyInspectionFixAll(rule: JavaInspectionRule, in run: IDEInspectionRun, urls: Set<URL>? = nil) async {
+        await applyInspectionFixAll(ruleCode: rule.code, in: run, urls: urls)
+    }
+
+    /// The same for either language's rule, by code.
+    func applyInspectionFixAll(ruleCode: String, in run: IDEInspectionRun, urls: Set<URL>? = nil) async {
+        let title = run.language.rule(code: ruleCode)?.title ?? ruleCode
         let entries = run.entries.filter {
-            $0.inspection.id == rule.code && !run.excludedKeys.contains($0.key) && (urls?.contains($0.url) ?? true)
+            $0.inspection.id == ruleCode && !run.excludedKeys.contains($0.key) && (urls?.contains($0.url) ?? true)
         }
         guard !entries.isEmpty else { return }
         let touched = Array(Set(entries.map(\.url)))
-        let outcome = await fixAll(rules: [rule], in: touched)
+        let outcome = await fixAll(ruleCodes: [ruleCode], language: run.language, in: touched)
         guard outcome.fixedCount > 0 else {
-            notifications.post("Nothing to fix", detail: "'\(rule.title)' has no automatic fix for these results.", category: .general)
+            notifications.post("Nothing to fix", detail: "'\(title)' has no automatic fix for these results.", category: .general)
             return
         }
         await reinspect(touched, in: run, handled: entries)
         notifications.post(
             "Fixed \(outcome.fixedCount) problem\(outcome.fixedCount == 1 ? "" : "s") in \(outcome.fileCount) file\(outcome.fileCount == 1 ? "" : "s")",
-            detail: rule.title, category: .general, action: .showProblems
+            detail: title, category: .general, action: .showProblems
         )
     }
 
     /// Fixes every finding of `rules` in `files` (Run Inspection by Name ▸ Fix All) as one action.
     func fixAll(rules: Set<JavaInspectionRule>, in files: [URL]) async -> (fixedCount: Int, fileCount: Int) {
-        let index = javaSupport.javaIndex
+        await fixAll(ruleCodes: Set(rules.map(\.code)), language: .java, in: files)
+    }
+
+    func fixAll(ruleCodes: Set<String>, language: IDEInspectionLanguage, in files: [URL]) async -> (fixedCount: Int, fileCount: Int) {
         let source = inspectionTextSource()
         var changes: [URL: [TextEdit]] = [:]
         var fixed = 0
         for url in files {
             if Task.isCancelled { break }
             guard let text = await source(url) else { continue }
-            let result = await JavaBatchFixer.fixAll(
-                rules: rules, in: text, url: url, index: index, languageLevel: javaSupport.inspectionLanguageLevel(url)
-            )
-            guard !result.isEmpty, !result.edits.isEmpty else { continue }
-            changes[url] = result.edits
-            fixed += result.fixedCount
+            let found: (edits: [TextEdit], count: Int)
+            switch language {
+            case .java:
+                let rules = Set(ruleCodes.compactMap(JavaInspectionRule.init(code:)))
+                let result = await JavaBatchFixer.fixAll(
+                    rules: rules, in: text, url: url, index: javaSupport.javaIndex, languageLevel: javaSupport.inspectionLanguageLevel(url)
+                )
+                found = (result.edits, result.fixedCount)
+            case .swift:
+                let rules = Set(ruleCodes.compactMap(SwiftInspectionRule.init(code:)))
+                let result = SwiftBatchFixer.fixAll(rules: rules, in: text, options: IDESwiftInspectionSettings.current())
+                found = (result.edits, result.fixedCount)
+            }
+            guard !found.edits.isEmpty else { continue }
+            changes[url] = found.edits
+            fixed += found.count
         }
         guard !changes.isEmpty else { return (0, 0) }
         let result = await historyRecordingApplier(named: "Inspection Fix All").apply(WorkspaceEdit(changes: changes))
@@ -230,16 +349,25 @@ extension IDEWorkspace {
 
     private func reinspect(_ urls: [URL], in run: IDEInspectionRun, handled: [IDEInspectionRun.Entry]) async {
         guard let launch = run.launch else { return }
-        let inspector = javaSupport.makeBatchInspector()
-        let options = JavaBatchInspector.Options(
-            profile: launch.profile,
-            classifier: JavaInspectionFileClassifier(projectRoot: project.rootURL, testRoots: javaTestSourceRoots),
-            onlyRules: launch.onlyRules, includeProjectRules: launch.includeProjectRules
-        )
         let text = inspectionTextSource()
-        for url in urls {
-            let fresh = await inspector.inspect(url: url, options: options, text: text)
-            run.markResolved(handled.filter { $0.url == url }, newFindings: fresh, for: url)
+        switch launch.backend {
+        case .java(_, let profile, let onlyRules, let includeProjectRules):
+            let inspector = javaSupport.makeBatchInspector()
+            let options = JavaBatchInspector.Options(
+                profile: profile,
+                classifier: JavaInspectionFileClassifier(projectRoot: project.rootURL, testRoots: javaTestSourceRoots),
+                onlyRules: onlyRules, includeProjectRules: includeProjectRules
+            )
+            for url in urls {
+                let fresh = await inspector.inspect(url: url, options: options, text: text)
+                run.markResolved(handled.filter { $0.url == url }, newFindings: fresh.map(IDEInspectionFinding.init), for: url)
+            }
+        case .swift(_, let inspection, let onlyRules):
+            let options = SwiftBatchInspector.Options(inspection: inspection, onlyRules: onlyRules)
+            for url in urls {
+                let fresh = await SwiftBatchInspector().inspect(url: url, options: options, text: text)
+                run.markResolved(handled.filter { $0.url == url }, newFindings: fresh.map(IDEInspectionFinding.init), for: url)
+            }
         }
     }
 
@@ -249,15 +377,43 @@ extension IDEWorkspace {
         openProblem(ProblemRow(url: entry.url, diagnostic: entry.inspection.asDiagnostic()))
     }
 
-    /// Disables the rule in the active profile and drops its results from the run.
+    /// Opens a result's file at its first line (a file row has no problem of its own to jump to).
+    func openInspectionFile(_ url: URL) {
+        let zero = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        openProblem(ProblemRow(url: url, diagnostic: Diagnostic(
+            severity: .information, message: "", range: EditorIntelligence.TextRange(start: zero, end: zero),
+            source: "inspect-code"
+        )))
+    }
+
+    /// Disables the rule in the active profile (Java) or in Settings ▸ Swift, and drops its results from the run.
     func disableInspection(_ rule: JavaInspectionRule) {
         inspections.edit { $0.setEnabled(false, for: rule) }
+    }
+
+    func disableInspection(code: String, language: IDEInspectionLanguage) {
+        switch language {
+        case .java:
+            if let rule = JavaInspectionRule(code: code) { disableInspection(rule) }
+        case .swift:
+            if let rule = SwiftInspectionRule(code: code) { IDESwiftInspectionModel().setEnabled(false, for: rule) }
+        }
+    }
+
+    func showInspectionSettings(code: String, language: IDEInspectionLanguage) {
+        switch language {
+        case .java:
+            if let rule = JavaInspectionRule(code: code) { showInspectionSettings(for: rule) }
+        case .swift:
+            requestedSettingsDomain = .swift
+            showSettings()
+        }
     }
 
     // MARK: - Commit check
 
     /// Inspects staged files with the active profile (no project-wide rules) and counts what a
-    /// reader would call a problem: errors and warnings.
+    /// reader would call a problem: errors and warnings. Java only: the commit check has no Swift profile.
     func analyzeForCommit(_ files: [URL]) async -> IDEGitCommitFacts.CodeAnalysis {
         let inspector = javaSupport.makeBatchInspector()
         let options = JavaBatchInspector.Options(
@@ -296,7 +452,7 @@ extension IDEWorkspace {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "inspection-results.\(format.fileExtension)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let report = JavaInspectionReport(title: run.title, results: run.results, root: project.rootURL)
+        let report = Self.inspectionReport(for: run, root: project.rootURL)
         let data = format == .sarif ? report.sarif() : Data(report.html().utf8)
         do {
             try data.write(to: url, options: .atomic)
@@ -304,6 +460,24 @@ extension IDEWorkspace {
         } catch {
             notifications.post("Could not export results", detail: error.localizedDescription, category: .general, severity: .error)
         }
+    }
+
+    /// A run's findings in the report's own terms (paths relative to the project, 1-based positions).
+    static func inspectionReport(for run: IDEInspectionRun, root: URL?) -> JavaInspectionReport {
+        let prefix = root.map { $0.standardizedFileURL.path + "/" }
+        var entries: [JavaInspectionReport.Entry] = []
+        for (url, findings) in run.results {
+            let path = url.standardizedFileURL.path
+            let shown = prefix.flatMap { path.hasPrefix($0) ? String(path.dropFirst($0.count)) : nil } ?? path
+            for finding in findings {
+                entries.append(JavaInspectionReport.Entry(
+                    path: shown, ruleCode: finding.id, message: finding.message, severity: finding.severity.java,
+                    line: finding.range.start.line + 1, column: finding.range.start.column + 1
+                ))
+            }
+        }
+        entries.sort { ($0.path, $0.line, $0.column, $0.ruleCode) < ($1.path, $1.line, $1.column, $1.ruleCode) }
+        return JavaInspectionReport(title: run.title, entries: entries)
     }
 }
 

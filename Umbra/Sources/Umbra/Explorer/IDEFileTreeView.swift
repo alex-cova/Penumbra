@@ -521,7 +521,7 @@ private struct IDEFileTreeRow: View {
             if node.isDirectory || node.url.pathExtension.lowercased() == "java" {
                 Button("Show Class Diagram") { selectAndRun { actions.showClassDiagram(node.url) } }
             }
-            if node.isDirectory || node.url.pathExtension.lowercased() == "java" {
+            if node.isDirectory || ["java", "swift"].contains(node.url.pathExtension.lowercased()) {
                 Button("Inspect Code…") { selectAndRun { actions.inspectCode(node.url) } }
             }
             if node.isDirectory {

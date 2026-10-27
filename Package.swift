@@ -104,7 +104,11 @@ let package = Package(
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
         .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
         .package(url: "https://github.com/ChimeHQ/JSONRPC", from: "0.9.0"),
-        .package(url: "https://github.com/alex-cova/sunflower", from: "1.0.0")
+        .package(url: "https://github.com/alex-cova/sunflower", from: "1.0.0"),
+        // Exact Swift syntax for SwiftIntelligence only (inspections, refactoring edits, scopes), off the
+        // keystroke path. Penumbra and EditorIntelligence must not link it. 603.0.2 is the version
+        // Umbra's Package.resolved already holds, so the two graphs agree.
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "603.0.0")
     ],
     targets: [
         .target(
@@ -205,7 +209,11 @@ let package = Package(
             dependencies: [
                 "EditorIntelligence",
                 "LanguageSyntax",
-                "TreeSitterSwift"
+                "TreeSitterSwift",
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+                .product(name: "SwiftParser", package: "swift-syntax"),
+                .product(name: "SwiftOperators", package: "swift-syntax"),
+                .product(name: "SwiftLexicalLookup", package: "swift-syntax")
             ],
             swiftSettings: swift6
         ),

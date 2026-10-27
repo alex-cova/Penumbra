@@ -848,6 +848,9 @@ public final class SwiftModelWalker {
         inner.depth += 1
         inner.calleeLabels = nil
         var pendingName: SyntaxNode?
+        // `if let x = value` has an `=` after the name; `if let x, other` does not, and what follows it is
+        // the next clause, which already sees `x`.
+        var pendingHasInitializer = false
         var sawValueBinding = false
         func flushShorthand() {
             guard let name = pendingName else { return }
@@ -861,10 +864,14 @@ public final class SwiftModelWalker {
         var work: [Work] = []
         for (index, entry) in children.enumerated() {
             let child = entry.node
-            guard child.isNamed else { continue }
+            guard child.isNamed else {
+                if child.type == "=", pendingName != nil { pendingHasInitializer = true }
+                continue
+            }
             if entry.field == "bound_identifier" {
                 flushShorthand()
                 pendingName = child
+                pendingHasInitializer = false
                 continue
             }
             if entry.field == "condition" {
@@ -884,13 +891,17 @@ public final class SwiftModelWalker {
                     continue
                 }
                 if let name = pendingName {
-                    addBinding(
-                        name: name.text, nameBytes: name.byteRange, scopeStart: child.endByte, scopeEnd: scopeEnd,
-                        symbolKind: .local, typeName: nil,
-                        source: SwiftChain(base: makeChain(child).base, steps: makeChain(child).steps + [.unwrap]),
-                        isConstant: true
-                    )
-                    pendingName = nil
+                    if pendingHasInitializer {
+                        addBinding(
+                            name: name.text, nameBytes: name.byteRange, scopeStart: child.endByte, scopeEnd: scopeEnd,
+                            symbolKind: .local, typeName: nil,
+                            source: SwiftChain(base: makeChain(child).base, steps: makeChain(child).steps + [.unwrap]),
+                            isConstant: true
+                        )
+                        pendingName = nil
+                    } else {
+                        flushShorthand()
+                    }
                 }
             }
             var next = inner

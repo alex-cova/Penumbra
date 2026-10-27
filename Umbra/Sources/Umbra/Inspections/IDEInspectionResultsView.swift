@@ -1,6 +1,5 @@
 import AppKit
 import EditorIntelligence
-import JavaIntelligence
 import SwiftUI
 
 /// One Inspect Code run's tab in Problems: a grouped tree (inspection › file › problem), a
@@ -19,7 +18,7 @@ struct IDEInspectionResultsView: View {
     private var options: IDEInspectionResultsTree.Options {
         IDEInspectionResultsTree.Options(
             grouping: grouping, hidesResolved: hidesResolved, showsExcluded: showsExcluded, filter: filter,
-            projectRoot: workspace.project.rootURL
+            projectRoot: workspace.project.rootURL, language: run.language
         )
     }
 
@@ -216,7 +215,7 @@ struct IDEInspectionResultsView: View {
         if collapsed.contains(node.id) { collapsed.remove(node.id) } else { collapsed.insert(node.id) }
     }
 
-    private static func diagnosticSeverity(_ severity: JavaInspection.Severity?) -> DiagnosticSeverity {
+    private static func diagnosticSeverity(_ severity: IDEInspectionSeverity?) -> DiagnosticSeverity {
         switch severity {
         case .error: .error
         case .warning: .warning
@@ -239,9 +238,9 @@ struct IDEInspectionResultsView: View {
             } else {
                 Button("Exclude") { run.exclude([entry.key]) }
             }
-            if let rule = JavaInspectionRule(code: entry.inspection.id) {
-                Button("Disable Inspection \u{201C}\(rule.title)\u{201D}") { workspace.disableInspection(rule) }
-                Button("Edit Inspection Settings…") { workspace.showInspectionSettings(for: rule) }
+            if let rule = run.language.rule(code: entry.inspection.id) {
+                Button("Disable Inspection \u{201C}\(rule.title)\u{201D}") { workspace.disableInspection(code: rule.code, language: rule.language) }
+                Button("Edit Inspection Settings…") { workspace.showInspectionSettings(code: rule.code, language: rule.language) }
                 Button("Run Inspection on…") { workspace.presentRunInspectionByName(rule: rule) }
             }
             Divider()
@@ -252,20 +251,22 @@ struct IDEInspectionResultsView: View {
             Button("Fix with Agent", systemImage: "sparkles") {
                 workspace.fixProblemWithAgent(ProblemRow(url: entry.url, diagnostic: entry.inspection.asDiagnostic()))
             }
-        } else if node.kind == .group, let code = node.ruleCode, let rule = JavaInspectionRule(code: code) {
+        } else if node.kind == .group, let code = node.ruleCode, let rule = run.language.rule(code: code) {
             if rule.hasQuickFix {
                 Button("Apply Fix to \(node.count) Problem\(node.count == 1 ? "" : "s")") {
-                    Task { await workspace.applyInspectionFixAll(rule: rule, in: run) }
+                    Task { await workspace.applyInspectionFixAll(ruleCode: rule.code, in: run) }
                 }
             }
             Button("Exclude All") { run.exclude(keys(in: node)) }
             Button("Include All") { run.include(keys(in: node)) }
             Divider()
-            Button("Disable Inspection") { workspace.disableInspection(rule) }
-            Button("Edit Inspection Settings…") { workspace.showInspectionSettings(for: rule) }
+            Button("Disable Inspection") { workspace.disableInspection(code: rule.code, language: rule.language) }
+            Button("Edit Inspection Settings…") { workspace.showInspectionSettings(code: rule.code, language: rule.language) }
             Button("Run Inspection on…") { workspace.presentRunInspectionByName(rule: rule) }
         } else if node.kind == .file, let url = node.url {
-            Button("Open File") { workspace.openInspectionResult(firstEntry(in: node) ?? fallbackEntry(url)) }
+            Button("Open File") {
+                if let entry = firstEntry(in: node) { workspace.openInspectionResult(entry) } else { workspace.openInspectionFile(url) }
+            }
             Button("Exclude All") { run.exclude(keys(in: node)) }
             Button("Include All") { run.include(keys(in: node)) }
         }
@@ -277,14 +278,6 @@ struct IDEInspectionResultsView: View {
 
     private func firstEntry(in node: IDEInspectionResultsTree.Node) -> IDEInspectionRun.Entry? {
         IDEInspectionResultsTree.problems(in: [node]).first?.entry
-    }
-
-    private func fallbackEntry(_ url: URL) -> IDEInspectionRun.Entry {
-        let zero = TextPosition(line: 0, column: 0, utf16Offset: 0)
-        let inspection = JavaInspection(
-            id: "", message: "", severity: .info, range: EditorIntelligence.TextRange(start: zero, end: zero)
-        )
-        return IDEInspectionRun.Entry(key: url.path, url: url, inspection: inspection)
     }
 
     /// Loads the fixes of a result (they need its file's text) and shows them as a menu at the pointer.
@@ -304,9 +297,9 @@ struct IDEInspectionResultsView: View {
         let selected = selection.flatMap { id in find(id, in: nodes) }
         ScrollView {
             VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
-                if let selected, let code = selected.ruleCode, let rule = JavaInspectionRule(code: code) {
+                if let selected, let code = selected.ruleCode, let rule = run.language.rule(code: code) {
                     Text(rule.title).font(IDEAppearance.Typography.sidebarHeader)
-                    Text(rule.group.title).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.muted)
+                    Text(rule.groupTitle).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.muted)
                     Text(rule.summary).font(IDEAppearance.Typography.body)
                     if let entry = selected.entry {
                         Text(entry.inspection.message).font(IDEAppearance.Typography.body)
@@ -327,7 +320,7 @@ struct IDEInspectionResultsView: View {
     }
 
     @ViewBuilder
-    private func actions(for node: IDEInspectionResultsTree.Node, rule: JavaInspectionRule) -> some View {
+    private func actions(for node: IDEInspectionResultsTree.Node, rule: IDEInspectionRuleInfo) -> some View {
         let count = node.kind == .problem ? 1 : node.count
         VStack(alignment: .leading, spacing: 6) {
             if let entry = node.entry {
@@ -335,11 +328,11 @@ struct IDEInspectionResultsView: View {
             }
             if rule.hasQuickFix {
                 Button("Apply Fix to All \(run.entries.filter { $0.inspection.id == rule.code }.count) Problems of This Kind") {
-                    Task { await workspace.applyInspectionFixAll(rule: rule, in: run) }
+                    Task { await workspace.applyInspectionFixAll(ruleCode: rule.code, in: run) }
                 }
             }
-            Button("Disable Inspection") { workspace.disableInspection(rule) }
-            Button("Edit Inspection Settings…") { workspace.showInspectionSettings(for: rule) }
+            Button("Disable Inspection") { workspace.disableInspection(code: rule.code, language: rule.language) }
+            Button("Edit Inspection Settings…") { workspace.showInspectionSettings(code: rule.code, language: rule.language) }
             Button("Run Inspection on…") { workspace.presentRunInspectionByName(rule: rule) }
             Text("\(count) problem\(count == 1 ? "" : "s") selected")
                 .font(IDEAppearance.Typography.caption)

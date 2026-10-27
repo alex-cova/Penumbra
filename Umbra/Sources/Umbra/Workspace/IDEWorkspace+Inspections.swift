@@ -2,6 +2,7 @@ import AppKit
 import EditorIntelligence
 import Foundation
 import JavaIntelligence
+import SwiftIntelligence
 import Penumbra
 
 // MARK: - ⌥↩ inspection commands
@@ -64,8 +65,11 @@ extension IDEWorkspace {
     /// The readable name of a diagnostic's code for the editor's hover ("java-inspection" +
     /// "string-comparison-identity" → the rule's title).
     nonisolated static func diagnosticTitle(source: String, code: String) -> String? {
-        guard source == "java-inspection" else { return nil }
-        return JavaInspectionRule(code: code)?.title
+        switch source {
+        case "java-inspection": return JavaInspectionRule(code: code)?.title
+        case SwiftInspection.diagnosticSource: return SwiftInspectionRule(code: code)?.title
+        default: return nil
+        }
     }
 }
 

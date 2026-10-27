@@ -2,6 +2,7 @@ import EditorIntelligence
 import Foundation
 import JavaIntelligence
 import Observation
+import SwiftIntelligence
 
 /// One Inspect Code (or Run Inspection by Name) run: what was asked, the findings so far, and the
 /// user's marks on them. Never persisted.
@@ -19,13 +20,16 @@ final class IDEInspectionRun: Identifiable {
     struct Entry: Identifiable, Hashable {
         let key: String
         let url: URL
-        let inspection: JavaInspection
+        let inspection: IDEInspectionFinding
         var id: String { key }
     }
 
     let id = UUID()
-    let scope: JavaInspectionScope
-    let onlyRules: Set<JavaInspectionRule>?
+    let language: IDEInspectionLanguage
+    /// The scope's short name, which the tab shows.
+    let scopeTitle: String
+    /// The rules a run by name was limited to, by code.
+    let onlyRuleCodes: Set<String>?
     let includeProjectRules: Bool
     let profileName: String
     let createdAt = Date()
@@ -34,7 +38,7 @@ final class IDEInspectionRun: Identifiable {
     private(set) var done = 0
     private(set) var total = 0
     /// Findings by file, in the order they were reported.
-    private(set) var results: [URL: [JavaInspection]] = [:]
+    private(set) var results: [URL: [IDEInspectionFinding]] = [:]
     /// Entries a fix or a suppression took care of; shown struck through until hidden.
     private(set) var resolved: [Entry] = []
     var excludedKeys: Set<String> = []
@@ -43,16 +47,30 @@ final class IDEInspectionRun: Identifiable {
     /// What was asked, so Rerun can repeat it.
     @ObservationIgnored var launch: IDEInspectionLaunch?
 
-    init(scope: JavaInspectionScope, onlyRules: Set<JavaInspectionRule>?, includeProjectRules: Bool, profileName: String) {
-        self.scope = scope
-        self.onlyRules = onlyRules
+    init(
+        language: IDEInspectionLanguage, scopeTitle: String, onlyRuleCodes: Set<String>?, includeProjectRules: Bool,
+        profileName: String
+    ) {
+        self.language = language
+        self.scopeTitle = scopeTitle
+        self.onlyRuleCodes = onlyRuleCodes
         self.includeProjectRules = includeProjectRules
         self.profileName = profileName
     }
 
+    /// A Java run, which is what the workflow was first written for.
+    convenience init(scope: JavaInspectionScope, onlyRules: Set<JavaInspectionRule>?, includeProjectRules: Bool, profileName: String) {
+        self.init(
+            language: .java, scopeTitle: scope.title, onlyRuleCodes: onlyRules.map { Set($0.map(\.code)) },
+            includeProjectRules: includeProjectRules, profileName: profileName
+        )
+    }
+
     var title: String {
-        if let onlyRules, onlyRules.count == 1, let rule = onlyRules.first { return "\(rule.title): \(scope.title)" }
-        return "Inspection: \(scope.title)"
+        if let onlyRuleCodes, onlyRuleCodes.count == 1, let code = onlyRuleCodes.first {
+            return "\(language.rule(code: code)?.title ?? code): \(scopeTitle)"
+        }
+        return "Inspection: \(scopeTitle)"
     }
 
     /// Every unresolved finding, flat, with keys.
@@ -66,7 +84,7 @@ final class IDEInspectionRun: Identifiable {
 
     var problemCount: Int { results.values.reduce(0) { $0 + $1.count } }
 
-    static func entries(for url: URL, findings: [JavaInspection]) -> [Entry] {
+    static func entries(for url: URL, findings: [IDEInspectionFinding]) -> [Entry] {
         var seen: [String: Int] = [:]
         return findings.map { finding in
             let base = "\(url.standardizedFileURL.path)|\(finding.id)|\(finding.message)"
@@ -86,8 +104,12 @@ final class IDEInspectionRun: Identifiable {
         resolved = []
     }
 
-    func record(_ findings: [JavaInspection], for url: URL) {
+    func record(_ findings: [IDEInspectionFinding], for url: URL) {
         results[url] = findings
+    }
+
+    func record(_ findings: [JavaInspection], for url: URL) {
+        record(findings.map(IDEInspectionFinding.init), for: url)
     }
 
     func progress(done: Int, total: Int) {
@@ -110,7 +132,7 @@ final class IDEInspectionRun: Identifiable {
     func include(_ keys: some Sequence<String>) { excludedKeys.subtract(keys) }
 
     /// A fix or suppression handled `entries`; `fresh` is what the file's inspection says now.
-    func markResolved(_ handled: [Entry], newFindings fresh: [JavaInspection], for url: URL) {
+    func markResolved(_ handled: [Entry], newFindings fresh: [IDEInspectionFinding], for url: URL) {
         resolved.append(contentsOf: handled)
         if fresh.isEmpty { results[url] = nil } else { results[url] = fresh }
     }
@@ -131,6 +153,8 @@ final class IDEInspectionRunsStore {
     /// Inspect Code… / Run Inspection by Name… waiting for the user's scope choice.
     var pendingScopeRequest: IDEInspectCodeRequest?
     var isNamePickerPresented = false
+    /// The language Run Inspection by Name starts on.
+    var nameQueryLanguage: IDEInspectionLanguage = .java
 
     private(set) var runs: [IDEInspectionRun] = []
     var selection: Tab = .project

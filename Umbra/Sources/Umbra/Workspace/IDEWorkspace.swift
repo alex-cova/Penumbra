@@ -3008,6 +3008,14 @@ public final class IDEWorkspace {
         IDEWindowRegistry.shared.applyCodeInsightPreferencesToAllWindows(including: self)
     }
 
+    /// The Swift inspection options changed (they are read when an analysis runs), so each open editor
+    /// asks for its diagnostics again.
+    func swiftInspectionPreferencesChanged() {
+        for pane in workbench.panes {
+            host(for: pane.id).intelligenceController?.refreshDiagnostics()
+        }
+    }
+
     /// Applies the preferences to the editors of this window.
     func applyPreferencesToOwnHosts() {
         for pane in workbench.panes {

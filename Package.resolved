@@ -1,5 +1,5 @@
 {
-  "originHash" : "7ffa5540a8eea524d9b2210cb6a9c71d32956188a7e4f951f5d439fec877e311",
+  "originHash" : "e613fddf11acd87f93c1535c5af2adeb952131e97b2ba29fb46039498ed77121",
   "pins" : [
     {
       "identity" : "fseventswrapper",
@@ -80,6 +80,15 @@
       "state" : {
         "revision" : "07ba6f47d903a0b1b59f12ca70d6de9949b975d6",
         "version" : "0.2.0"
+      }
+    },
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "state" : {
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
       }
     }
   ],

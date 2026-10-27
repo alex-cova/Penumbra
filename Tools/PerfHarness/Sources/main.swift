@@ -45,6 +45,7 @@ func printUsageAndExit() -> Never {
       java-goto-definition synthetic [--lines N] [--samples N]
       java-profile-import synthetic [--samples N] [--depth N] [--stacks N]
       java-coverage-bands synthetic [--lines N]
+      swift-syntax-parse <path|synthetic> [--lines N] [--samples N]
       swift-index <path|synthetic> [--files N]
       swift-completion <path|synthetic> [--files N] [--lines N]
       ts-index <path|synthetic> [--files N]
@@ -94,7 +95,7 @@ let options = Commands.Options(
     language: flagValue("--lang", in: rest)
 )
 
-let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition"
+let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
     || command == "java-profile-import" || command == "java-coverage-bands"
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
@@ -168,6 +169,12 @@ do {
             pathOrSynthetic: path,
             lines: Int(flagValue("--lines", in: rest) ?? "") ?? 2_000,
             samples: Int(flagValue("--samples", in: rest) ?? "") ?? 5
+        )
+    case "swift-syntax-parse":
+        try SwiftSyntaxProfile.run(
+            pathOrSynthetic: path,
+            lines: Int(flagValue("--lines", in: rest) ?? "") ?? 2_000,
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 9
         )
     case "java-profile-import":
         JavaInstrumentationProfile.runProfileImport(

@@ -20,6 +20,14 @@ struct IDESwiftModule: IDELanguageModule {
                 action: { [weak workspace] in workspace?.showSwiftClassDiagram() }
             ),
             EditorCommand(
+                id: "swift.inspectCode", title: "Swift: Inspect Code…", group: "Swift",
+                action: { [weak workspace] in workspace?.presentInspectCode(language: .swift) }
+            ),
+            EditorCommand(
+                id: "swift.runInspectionByName", title: "Swift: Run Inspection by Name…", group: "Swift",
+                action: { [weak workspace] in workspace?.presentRunInspectionByName(language: .swift) }
+            ),
+            EditorCommand(
                 id: "swift.toggleSwiftUIPreview", title: "Swift: Toggle SwiftUI Preview", group: "Swift",
                 action: { [weak workspace] in workspace?.toggleSwiftUIPreview() }
             ),

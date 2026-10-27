@@ -1,5 +1,4 @@
 import Foundation
-import JavaIntelligence
 
 /// Turns a run's findings into the tree its tab shows. Pure: no view and no disk.
 enum IDEInspectionResultsTree {
@@ -23,7 +22,7 @@ enum IDEInspectionResultsTree {
         let subtitle: String?
         /// Problems below (1 for a problem).
         let count: Int
-        let severity: JavaInspection.Severity?
+        let severity: IDEInspectionSeverity?
         let ruleCode: String?
         let url: URL?
         let entry: IDEInspectionRun.Entry?
@@ -38,9 +37,10 @@ enum IDEInspectionResultsTree {
         var showsExcluded = false
         var filter = ""
         var projectRoot: URL?
+        var language: IDEInspectionLanguage = .java
     }
 
-    static func severityRank(_ severity: JavaInspection.Severity) -> Int {
+    static func severityRank(_ severity: IDEInspectionSeverity) -> Int {
         switch severity {
         case .error: 0
         case .warning: 1
@@ -50,7 +50,7 @@ enum IDEInspectionResultsTree {
         }
     }
 
-    static func severityTitle(_ severity: JavaInspection.Severity) -> String {
+    static func severityTitle(_ severity: IDEInspectionSeverity) -> String {
         switch severity {
         case .error: "Errors"
         case .warning: "Warnings"
@@ -72,7 +72,7 @@ enum IDEInspectionResultsTree {
         items = items.filter { item in
             if !options.showsExcluded, excluded.contains(item.entry.key) { return false }
             guard !query.isEmpty else { return true }
-            let rule = JavaInspectionRule(code: item.entry.inspection.id)?.title ?? item.entry.inspection.id
+            let rule = options.language.rule(code: item.entry.inspection.id)?.title ?? item.entry.inspection.id
             return item.entry.inspection.message.localizedCaseInsensitiveContains(query)
                 || rule.localizedCaseInsensitiveContains(query)
                 || item.entry.url.lastPathComponent.localizedCaseInsensitiveContains(query)
@@ -115,14 +115,14 @@ enum IDEInspectionResultsTree {
                 let id = "\(parent)/rule:\(code)"
                 let members = byRule[code]!
                 return Node(
-                    id: id, kind: .group, title: title(of: code), subtitle: JavaInspectionRule(code: code)?.group.title,
+                    id: id, kind: .group, title: title(of: code), subtitle: options.language.rule(code: code)?.groupTitle,
                     count: members.count, severity: nil, ruleCode: code, url: nil, entry: nil,
                     isResolved: false, isExcluded: false, children: fileNodes(members, parent: id)
                 )
             }
         }
 
-        func title(of code: String) -> String { JavaInspectionRule(code: code)?.title ?? code }
+        func title(of code: String) -> String { options.language.rule(code: code)?.title ?? code }
 
         switch options.grouping {
         case .inspection:

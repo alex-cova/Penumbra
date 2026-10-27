@@ -97,6 +97,17 @@ It is fetched as a SwiftPM dependency of the `Umbra` target only, not of `Penumb
 | --- | --- | --- |
 | XcodeProjectFormat | [apple/xcode-project-format](https://github.com/apple/xcode-project-format) | Apache License 2.0 with Runtime Library Exception |
 
+## Swift intelligence (swift-syntax)
+
+`SwiftIntelligence` parses Swift with [swiftlang/swift-syntax](https://github.com/swiftlang/swift-syntax)
+(`SwiftSyntax`, `SwiftParser`, `SwiftLexicalLookup`) for the work that must be exact about the grammar:
+scope lookup, and later inspections and refactoring edits. It is a SwiftPM dependency of that one target;
+`Penumbra`, `EditorIntelligence` and the other libraries do not link it, and it never runs on a keystroke.
+
+| Component | Source | License |
+| --- | --- | --- |
+| swift-syntax | [swiftlang/swift-syntax](https://github.com/swiftlang/swift-syntax) | Apache License 2.0 with Runtime Library Exception |
+
 ## Bundled Tree-sitter grammars
 
 The `PenumbraLanguages`, `PenumbraGraphQLLanguage`, and `PenumbraMarkdownLanguage`

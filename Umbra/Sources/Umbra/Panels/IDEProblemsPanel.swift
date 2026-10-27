@@ -1,5 +1,6 @@
 import EditorIntelligence
 import JavaIntelligence
+import SwiftIntelligence
 import SwiftUI
 
 /// The bottom panel's Problems tab: diagnostics grouped by file, errors first. Clicking a row opens
@@ -91,7 +92,7 @@ struct IDEProblemsPanel: View {
                                         row: row,
                                         onOpen: { workspace.openProblem(row) },
                                         onFix: { workspace.fixProblemWithAgent(row) },
-                                        onQuickFixes: row.diagnostic.source == IDEProblemsStore.inspectionSource ? { showQuickFixes(for: row) } : nil,
+                                        onQuickFixes: [IDEProblemsStore.inspectionSource, SwiftInspection.diagnosticSource].contains(row.diagnostic.source) ? { showQuickFixes(for: row) } : nil,
                                         rule: inspectionRule(for: row),
                                         onDisableRule: { workspace.disableInspection($0) },
                                         onQuietRule: { rule in workspace.inspections.edit { $0.setSeverity(.noHighlighting, for: rule) } },

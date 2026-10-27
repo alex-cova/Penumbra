@@ -17,9 +17,9 @@ struct IDEJavaModule: IDELanguageModule {
             EditorCommand(id: "app.java.buildGradleProject", title: "Java: Build Project", group: "Java",
                           action: { [weak workspace] in workspace?.buildGradleProject() }),
             EditorCommand(id: "app.java.inspectCode", title: "Java: Inspect Code…", group: "Java",
-                          action: { [weak workspace] in workspace?.presentInspectCode() }),
+                          action: { [weak workspace] in workspace?.presentInspectCode(language: .java) }),
             EditorCommand(id: "app.java.runInspectionByName", title: "Java: Run Inspection by Name…", group: "Java",
-                          action: { [weak workspace] in workspace?.presentRunInspectionByName() }),
+                          action: { [weak workspace] in workspace?.presentRunInspectionByName(language: .java) }),
             EditorCommand(id: "app.java.runTests", title: "Java: Run Tests", group: "Java",
                           action: { [weak workspace] in workspace?.runActiveJavaTests() }),
             EditorCommand(id: "app.java.runLastConfiguration", title: "Java: Run Last Configuration", group: "Java",
@@ -278,9 +278,9 @@ private struct IDEJavaCommands: View {
         Button("Move Class…", action: { workspace?.moveClass() })
         Button("Safe Delete", action: { workspace?.safeDelete() })
         Button("Reformat Code", action: { workspace?.reformatCode() })
-        Button("Inspect Code…", action: { workspace?.presentInspectCode() })
+        Button("Inspect Code…", action: { workspace?.presentInspectCode(language: .java) })
             .menuShortcut(.inspectCode, in: preset)
-        Button("Run Inspection by Name…", action: { workspace?.presentRunInspectionByName() })
+        Button("Run Inspection by Name…", action: { workspace?.presentRunInspectionByName(language: .java) })
             .menuShortcut(.runInspectionByName, in: preset)
         Button("Type Hierarchy") { workspace?.showTypeHierarchy() }
         Button("Call Hierarchy") { workspace?.showCallHierarchy() }
