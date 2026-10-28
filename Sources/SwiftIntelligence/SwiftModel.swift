@@ -104,6 +104,10 @@ public struct SwiftFileModel: Sendable {
     public struct Import: Sendable, Equatable {
         public var module: String
         public var isTestable: Bool
+        /// `@_exported import X`: the module is used through its re-exports.
+        public var isExported: Bool = false
+        /// `import struct X.Y`: only part of the module is imported.
+        public var isScoped: Bool = false
         public var bytes: Range<Int>
     }
 
@@ -155,6 +159,9 @@ public struct SwiftFileModel: Sendable {
     public var bindings: [Binding] = []
     public var uses: [Use] = []
     public var errors: [SyntaxProblem] = []
+    /// The file declares an operator, a precedence group or an operator function: importing its
+    /// module may be for the operator alone, which no name mentions.
+    public var declaresOperators: Bool = false
     /// Every identifier-shaped token in the file, to pick the files that can mention a name.
     public var identifiers: Set<String> = []
 

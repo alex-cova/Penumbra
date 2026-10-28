@@ -5,9 +5,13 @@ import XCTest
 
 /// `unused-declaration`, the Swift inspection that needs the rest of the project: a name written nowhere else.
 final class SwiftProjectInspectionTests: XCTestCase {
-    private struct Lookup: SwiftProjectNameLookup {
+    private struct Lookup: SwiftModuleSurfaceLookup {
         var files: [String: Set<URL>] = [:]
+        var surfaces: [String: SwiftModuleSurface] = [:]
+        var modules: [URL: String] = [:]
         func filesMentioning(_ name: String) async -> Set<URL> { files[name] ?? [] }
+        func moduleSurface(_ module: String) async -> SwiftModuleSurface? { surfaces[module] }
+        func module(ofFile url: URL) async -> String? { modules[url.standardizedFileURL] }
     }
 
     private let file = URL(fileURLWithPath: "/proj/Sources/App/A.swift")
@@ -133,14 +137,232 @@ final class SwiftProjectInspectionTests: XCTestCase {
     }
 }
 
+/// `unused-import`: an import whose module the index knows and nothing in the file mentions —
+/// not in code, comments or strings. Conservative by construction: its own module, `@testable`,
+/// `@_exported`, scoped imports and unknown, re-exporting, operator-declaring or retroactively
+/// conforming modules are never reported. Removal deletes the line, batched from Inspect Code.
+final class SwiftUnusedImportTests: XCTestCase {
+    private var root: URL!
+    private var index: SwiftIndex!
+
+    private func setUpProject(_ files: [String: String]) async throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "swift-unused-import-\(UUID().uuidString)", isDirectory: true)
+        for (path, text) in files {
+            let url = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        index = SwiftIndex()
+        await index.setModuleResolver { url in
+            let components = url.pathComponents
+            guard let i = components.lastIndex(of: "Sources"), i + 1 < components.count else { return nil }
+            return components[i + 1]
+        }
+        await index.setRoot(root)
+    }
+
+    override func tearDown() async throws {
+        if let root { try? FileManager.default.removeItem(at: root) }
+        try await super.tearDown()
+    }
+
+    private func main() -> URL {
+        root.appendingPathComponent("Sources/App/Main.swift")
+    }
+
+    private func unusedImports(_ text: String, url: URL) async -> [SwiftInspection] {
+        let analysis = await SwiftInspectionPipeline.analyze(
+            text: text, options: SwiftInspectionOptions().only([.unusedImport]), url: url, lookup: index)
+        return analysis.findings
+    }
+
+    private func kitApp(_ mainText: String) async throws -> (main: URL, findings: [SwiftInspection]) {
+        try await setUpProject([
+            "Sources/Kit/Kit.swift": "public struct Widget {}\npublic func make() -> Widget { Widget() }\n",
+            "Sources/App/Main.swift": mainText,
+        ])
+        let url = main()
+        return (url, await unusedImports(mainText, url: url))
+    }
+
+    func testUnusedImportIsReportedWithARemoveImportFix() async throws {
+        let (url, findings) = try await kitApp("import Kit\n")
+        XCTAssertEqual(findings.map(\.id), ["unused-import"])
+        XCTAssertEqual(findings.map(\.message), ["import Kit is never used in this file."])
+        let fix = try XCTUnwrap(findings.first?.fixes.first)
+        XCTAssertEqual(fix.title, "Remove import")
+        var bytes = Array("import Kit\n".utf8)
+        for edit in fix.edits.sorted(by: { $0.bytes.lowerBound > $1.bytes.lowerBound }) {
+            bytes.replaceSubrange(edit.bytes, with: Array(edit.replacement.utf8))
+        }
+        let fixed = String(decoding: bytes, as: UTF8.self)
+        XCTAssertEqual(fixed, "")
+        // The fixed file is clean.
+        let refound = await unusedImports(fixed, url: url)
+        XCTAssertTrue(refound.isEmpty)
+    }
+
+    func testUsedNameIsQuiet() async throws {
+        let (_, findings) = try await kitApp("import Kit\nlet widget = Widget()\n")
+        XCTAssertTrue(findings.isEmpty)
+        let (_, usedFunc) = try await kitApp("import Kit\nlet widget = make()\n")
+        XCTAssertTrue(usedFunc.isEmpty)
+    }
+
+    func testMentionInCommentOrStringIsQuiet() async throws {
+        let (_, commented) = try await kitApp("import Kit\n// Widget shapes the layout\n")
+        XCTAssertTrue(commented.isEmpty)
+        let (_, stringed) = try await kitApp("import Kit\nlet name = \"make\"\n")
+        XCTAssertTrue(stringed.isEmpty)
+    }
+
+    func testOwnModuleIsQuiet() async throws {
+        try await setUpProject([
+            "Sources/Kit/Kit.swift": "public struct Widget {}\n",
+            "Sources/Kit/Other.swift": "import Kit\n",
+        ])
+        let url = root.appendingPathComponent("Sources/Kit/Other.swift")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let clean = await unusedImports(text, url: url)
+        XCTAssertTrue(clean.isEmpty)
+    }
+
+    func testExportedImportIsQuiet() async throws {
+        try await setUpProject([
+            "Sources/Kit/Kit.swift": "public struct Widget {}\n",
+            "Sources/Reexp/Reexp.swift": "@_exported import Kit\n",
+            "Sources/App/Main.swift": "import Reexp\n",
+        ])
+        let url = main()
+        let surface = await index.moduleSurface("Reexp")
+        XCTAssertEqual(surface?.hasReexports, true)
+        let clean = await unusedImports("import Reexp\n", url: url)
+        XCTAssertTrue(clean.isEmpty)
+    }
+
+    func testExtensionMemberOnlyIsQuiet() async throws {
+        try await setUpProject([
+            "Sources/Ext/Ext.swift": "extension String {\n    public func shout() -> String { self }\n}\n",
+            "Sources/App/Main.swift": "import Ext\nlet loud = \"hi\".shout()\n",
+        ])
+        let surface = await index.moduleSurface("Ext")
+        XCTAssertTrue(surface?.names.contains("shout") ?? false)
+        let url = main()
+        let clean = await unusedImports("import Ext\nlet loud = \"hi\".shout()\n", url: url)
+        XCTAssertTrue(clean.isEmpty)
+    }
+
+    func testOperatorModuleIsQuiet() async throws {
+        try await setUpProject([
+            "Sources/Ops/Ops.swift": "precedencegroup P { associativity: left }\ninfix operator <>: P\n",
+            "Sources/OpsF/OpsF.swift": "public func <> (lhs: Int, rhs: Int) -> Int { lhs }\n",
+            "Sources/App/Main.swift": "import Ops\nimport OpsF\n",
+        ])
+        let ops = await index.moduleSurface("Ops")
+        XCTAssertEqual(ops?.declaresOperators, true)
+        let opsF = await index.moduleSurface("OpsF")
+        XCTAssertEqual(opsF?.declaresOperators, true)
+        let url = main()
+        let clean = await unusedImports("import Ops\nimport OpsF\n", url: url)
+        XCTAssertTrue(clean.isEmpty)
+    }
+
+    func testRetroactiveConformanceIsQuiet() async throws {
+        try await setUpProject([
+            "Sources/Kit/Kit.swift": "public struct Widget {}\n",
+            "Sources/Retro/Retro.swift": "extension Widget: CustomStringConvertible {\n    public var description: String { \"widget\" }\n}\n",
+            "Sources/App/Main.swift": "import Retro\n",
+        ])
+        let retro = await index.moduleSurface("Retro")
+        XCTAssertEqual(retro?.hasRetroactiveConformances, true)
+        let url = main()
+        let clean = await unusedImports("import Retro\n", url: url)
+        XCTAssertTrue(clean.isEmpty)
+    }
+
+    func testUnknownScopedAndTestableImportsAreQuiet() async throws {
+        try await setUpProject([
+            "Sources/Kit/Kit.swift": "public struct Widget {}\n",
+            "Sources/App/Main.swift": "import Foundation\nimport struct Kit.Widget\n@testable import Kit\n",
+        ])
+        let foundation = await index.moduleSurface("Foundation")
+        XCTAssertNil(foundation)
+        let url = main()
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let clean = await unusedImports(text, url: url)
+        XCTAssertTrue(clean.isEmpty)
+    }
+
+    func testBatchRunsUnusedImportWithoutTheProjectWideTick() async throws {
+        try await setUpProject([
+            "Sources/Kit/Kit.swift": "public struct Widget {}\n",
+            "Sources/App/Main.swift": "import Kit\nfunc orphan() {}\n",
+        ])
+        let url = main()
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let options = SwiftBatchInspector.Options(inspection: SwiftInspectionOptions(), projectLookup: index)
+        let found = await SwiftBatchInspector().inspect(url: url, options: options, text: { _ in text })
+        XCTAssertEqual(found.map(\.inspection.id), ["unused-import"])
+    }
+
+    func testBatchFixRemovesTheUnusedImportLine() async throws {
+        try await setUpProject([
+            "Sources/Kit/Kit.swift": "public struct Widget {}\n",
+            "Sources/App/Main.swift": "import Kit\nlet number = 1\n",
+        ])
+        let url = main()
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let result = await SwiftBatchFixer.fixAll(
+            rules: [.unusedImport], in: text, url: url, lookup: index)
+        XCTAssertEqual(result.fixedCount, 1)
+        XCTAssertEqual(result.edits.count, 1)
+        // The single fix deletes the first line.
+        let map = SourceTextMap(text)
+        var bytes = Array(text.utf8)
+        for edit in result.edits.sorted(by: { $0.range.start.utf16Offset > $1.range.start.utf16Offset }) {
+            let span = map.byteOffset(utf16: edit.range.start.utf16Offset) ..< map.byteOffset(utf16: edit.range.end.utf16Offset)
+            bytes.replaceSubrange(span, with: Array(edit.replacement.utf8))
+        }
+        XCTAssertEqual(String(decoding: bytes, as: UTF8.self), "let number = 1\n")
+    }
+}
+
+/// The tree-sitter model flags `unused-import` and the surface builder read.
+final class SwiftImportModelTests: XCTestCase {
+    func testImportFlags() {
+        let model = SwiftAnalysis.parseModel(
+            "@_exported import Foo\nimport struct Bar.Baz\n@testable import Qux\nimport Plain\n")
+        let byModule = Dictionary(uniqueKeysWithValues: (model?.imports ?? []).map { ($0.module, $0) })
+        XCTAssertEqual(byModule["Foo"]?.isExported, true)
+        XCTAssertEqual(byModule["Foo"]?.isTestable, false)
+        XCTAssertEqual(byModule["Bar"]?.isScoped, true)
+        XCTAssertEqual(byModule["Qux"]?.isTestable, true)
+        XCTAssertEqual(byModule["Qux"]?.isExported, false)
+        XCTAssertEqual(byModule["Plain"]?.isExported, false)
+        XCTAssertEqual(byModule["Plain"]?.isScoped, false)
+    }
+
+    func testDeclaresOperators() {
+        let plain = SwiftAnalysis.parseModel("public struct Widget {}\n")
+        XCTAssertEqual(plain?.declaresOperators, false)
+        let operators = SwiftAnalysis.parseModel(
+            "precedencegroup P { associativity: left }\ninfix operator <>: P\npublic func <> (lhs: Int, rhs: Int) -> Int { lhs }\n")
+        XCTAssertEqual(operators?.declaresOperators, true)
+    }
+}
+
 /// The editor's index-backed pass: findings merge into the synchronous analysis by text hash,
 /// the next edit drops them, and a stale entry still shows (shifted) instead of flickering.
 final class SwiftIndexInspectionServiceTests: XCTestCase {
     private let file = URL(fileURLWithPath: "/proj/Sources/App/A.swift")
 
-    private struct Lookup: SwiftProjectNameLookup {
+    private struct Lookup: SwiftModuleSurfaceLookup {
         var files: [String: Set<URL>] = [:]
+        var surfaces: [String: SwiftModuleSurface] = [:]
         func filesMentioning(_ name: String) async -> Set<URL> { files[name] ?? [] }
+        func moduleSurface(_ module: String) async -> SwiftModuleSurface? { surfaces[module] }
+        func module(ofFile url: URL) async -> String? { nil }
     }
 
     private final class Pushed: @unchecked Sendable {

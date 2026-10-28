@@ -52,13 +52,14 @@ public struct SwiftBatchInspector: Sendable {
         public var optionsForFile: (@Sendable (URL) -> SwiftInspectionOptions)?
         /// Run the project-wide rules too (they ask the rest of the project, so they cost more per file).
         public var includeProjectRules: Bool
-        /// Where the project-wide rules look names up; without it they do not run.
-        public var projectLookup: (any SwiftProjectNameLookup)?
+        /// Where the index-backed rules ask their questions (names for the project-wide ones, module
+        /// surfaces for `unused-import`); without it only the file-local rules run.
+        public var projectLookup: (any SwiftModuleSurfaceLookup)?
 
         public init(
             inspection: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>? = nil, maxConcurrentFiles: Int = 4,
             optionsForFile: (@Sendable (URL) -> SwiftInspectionOptions)? = nil,
-            includeProjectRules: Bool = false, projectLookup: (any SwiftProjectNameLookup)? = nil
+            includeProjectRules: Bool = false, projectLookup: (any SwiftModuleSurfaceLookup)? = nil
         ) {
             self.inspection = inspection
             self.onlyRules = onlyRules
@@ -128,8 +129,14 @@ public struct SwiftBatchInspector: Sendable {
 
     private static func inspect(url: URL, options: Options, text: @Sendable (URL) async -> String?) async -> [SwiftLocatedInspection] {
         guard !Task.isCancelled, let source = await text(url) else { return [] }
-        let effective = options.effective(for: url)
-        guard options.includeProjectRules, let lookup = options.projectLookup, effective.isEnabled(.unusedDeclaration),
+        var effective = options.effective(for: url)
+        if !options.includeProjectRules {
+            // Project-wide rules stay off without the tick; plain index rules run regardless.
+            effective.disabled.formUnion(effective.enabledRules.filter(\.isProjectWide).map(\.code))
+        }
+        // The index-backed rules run whenever the lookup is there and one of them is on.
+        let runsIndexRules = effective.enabledRules.contains(where: { $0.needsIndex })
+        guard runsIndexRules, let lookup = options.projectLookup,
               source.utf8.count <= SwiftInspectionService.maximumUTF8Length else {
             return located(in: source, effectiveOptions: effective)
         }

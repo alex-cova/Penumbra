@@ -200,6 +200,11 @@ public final class SwiftModelWalker {
             visitAssociatedType(node, frame)
         case "import_declaration":
             visitImport(node)
+        case "operator_declaration", "precedence_group_declaration":
+            // An operator or precedence group is used without naming it: the file's module may be
+            // imported for the operator alone.
+            model.declaresOperators = true
+            pushChildren(of: node, frame: frame)
         case "lambda_literal":
             visitLambda(node, frame)
         case "if_statement", "while_statement":
@@ -526,6 +531,7 @@ public final class SwiftModelWalker {
                     if kind == .function, name.isEmpty, child.type == "simple_identifier" || child.type == "custom_operator" {
                         name = child.text
                         nameBytes = child.byteRange
+                        if child.type == "custom_operator" { model.declaresOperators = true }
                     } else if Self.typeNodeTypes.contains(child.type) {
                         returnType = child
                     }
@@ -779,9 +785,14 @@ public final class SwiftModelWalker {
         attach(declaration, frame: frame)
     }
 
+    /// The `import` kinds (`import struct X.Y`): only part of the module comes in.
+    private static let importKinds: Set<String> = ["typealias", "struct", "class", "enum", "protocol", "let", "var", "func"]
+
     private func visitImport(_ node: SyntaxNode) {
         var module: String?
         var isTestable = false
+        var isExported = false
+        var isScoped = false
         node.enumerateChildren { child, _ in
             if child.type == "identifier", module == nil {
                 var first: String?
@@ -791,10 +802,15 @@ public final class SwiftModelWalker {
                 module = first ?? child.text
             } else if child.type == "modifiers" {
                 isTestable = child.text.contains("testable")
+                isExported = child.text.contains("_exported")
+            } else if Self.importKinds.contains(child.type) {
+                isScoped = true
             }
         }
         if let module {
-            model.imports.append(SwiftFileModel.Import(module: module, isTestable: isTestable, bytes: node.byteRange))
+            model.imports.append(SwiftFileModel.Import(
+                module: module, isTestable: isTestable, isExported: isExported, isScoped: isScoped, bytes: node.byteRange
+            ))
         }
     }
 

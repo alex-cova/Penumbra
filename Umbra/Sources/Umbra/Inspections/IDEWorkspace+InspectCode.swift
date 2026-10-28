@@ -204,17 +204,18 @@ extension IDEWorkspace {
                 if run.state == .running { run.finish(cancelled: Task.isCancelled) }
             }
         case .swift(let scope, let inspection, let onlyRules, let resolver, let includeProjectRules):
+            let passesIndex = self.passesSwiftIndex(inspection: inspection, includeProjectRules: includeProjectRules)
             let options = SwiftBatchInspector.Options(
                 inspection: inspection, onlyRules: onlyRules, optionsForFile: resolver,
-                includeProjectRules: includeProjectRules, projectLookup: includeProjectRules ? swiftSupport.index : nil
+                includeProjectRules: includeProjectRules, projectLookup: passesIndex ? swiftSupport.index : nil
             )
             run.task = Task { [weak self, weak run] in
                 let files = await Task.detached(priority: .userInitiated) {
                     scope.resolve(projectRoots: root.map { [$0] } ?? [])
                 }.value
                 guard let self, let run else { return }
-                // The project-wide rules ask the index, which must have read the project first.
-                if includeProjectRules { await self.swiftSupport.waitForIndex() }
+                // The index-backed rules ask the index, which must have read the project first.
+                if passesIndex { await self.swiftSupport.waitForIndex() }
                 let text = self.inspectionTextSource()
                 for await event in SwiftBatchInspector().run(files: files, options: options, text: text) {
                     switch event {
@@ -361,7 +362,9 @@ extension IDEWorkspace {
                 found = (result.edits, result.fixedCount)
             case .swift:
                 let rules = Set(ruleCodes.compactMap(SwiftInspectionRule.init(code:)))
-                let result = SwiftBatchFixer.fixAll(rules: rules, in: text, options: swiftInspectionOptions(for: url))
+                let result = await SwiftBatchFixer.fixAll(
+                    rules: rules, in: text, options: swiftInspectionOptions(for: url), url: url, lookup: swiftSupport.index
+                )
                 found = (result.edits, result.fixedCount)
             }
             guard !found.edits.isEmpty else { continue }
@@ -374,6 +377,12 @@ extension IDEWorkspace {
             notifications.post("Could not fix \(url.lastPathComponent)", detail: message, category: .general, severity: .error)
         }
         return (fixed, result.appliedFiles.count)
+    }
+
+    /// Whether an Inspect Code run consults the Swift index: the project-wide tick, or any index
+    /// rule being on (`unused-import` runs without the tick).
+    private func passesSwiftIndex(inspection: SwiftInspectionOptions, includeProjectRules: Bool) -> Bool {
+        includeProjectRules || inspection.enabledRules.contains { $0.needsIndex }
     }
 
     private func reinspect(_ urls: [URL], in run: IDEInspectionRun, handled: [IDEInspectionRun.Entry]) async {
@@ -392,10 +401,12 @@ extension IDEWorkspace {
                 run.markResolved(handled.filter { $0.url == url }, newFindings: fresh.map(IDEInspectionFinding.init), for: url)
             }
         case .swift(_, let inspection, let onlyRules, let resolver, let includeProjectRules):
+            let passesIndex = self.passesSwiftIndex(inspection: inspection, includeProjectRules: includeProjectRules)
             let options = SwiftBatchInspector.Options(
                 inspection: inspection, onlyRules: onlyRules, optionsForFile: resolver,
-                includeProjectRules: includeProjectRules, projectLookup: includeProjectRules ? swiftSupport.index : nil
+                includeProjectRules: includeProjectRules, projectLookup: passesIndex ? swiftSupport.index : nil
             )
+            if passesIndex { await self.swiftSupport.waitForIndex() }
             for url in urls {
                 let fresh = await SwiftBatchInspector().inspect(url: url, options: options, text: text)
                 run.markResolved(handled.filter { $0.url == url }, newFindings: fresh.map(IDEInspectionFinding.init), for: url)

@@ -55,6 +55,12 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
     case unusedPrivateMember = "unused-private-member"
     /// Needs the whole project: asks the index whether the name is mentioned anywhere else. Run by Inspect Code.
     case unusedDeclaration = "unused-declaration"
+    // Redundant code
+    /// Needs the index: reports an import whose module is known and shows nothing the file mentions.
+    /// Conservative by construction (re-exports, operators, retroactive conformances, testable,
+    /// scoped and unknown modules are never reported), and runs from a save, an open or a profile
+    /// change as well as from Inspect Code.
+    case unusedImport = "unused-import"
     // Metrics
     case longFunction = "long-function"
     case highComplexity = "high-complexity"
@@ -69,7 +75,8 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
         case .emptyCatch, .identicalOperands, .duplicateConditions, .delegateNotWeak, .forceUnwrap, .forceTry, .forceCast:
             .probableBugs
         case .redundantReturn, .redundantParentheses, .redundantOptionalInitialization,
-             .redundantVoidReturn, .unneededBreak, .unusedClosureParameter, .emptyStatementBody, .explicitInit:
+             .redundantVoidReturn, .unneededBreak, .unusedClosureParameter, .emptyStatementBody, .explicitInit,
+             .unusedImport:
             .redundantCode
         case .countIsZero, .filterFirst, .sortedFirst, .firstWhereNil, .leftoverPrint:
             .idioms
@@ -108,6 +115,7 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
         case .memberNameCase: "Member name starts with an uppercase letter"
         case .unusedPrivateMember: "Unused private declaration"
         case .unusedDeclaration: "Unused declaration"
+        case .unusedImport: "Unused import"
         case .longFunction: "Long function"
         case .highComplexity: "Function is too complex"
         case .manyParameters: "Function has too many parameters"
@@ -141,6 +149,7 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
         case .memberNameCase: "Properties and functions are named in lowerCamelCase."
         case .unusedPrivateMember: "A `private` or `fileprivate` function, property or type whose name appears nowhere else in its file, where nothing outside the file can use it."
         case .unusedDeclaration: "An internal type, function or property whose name appears nowhere else in the project. Public API, attributed declarations, overrides, tests and protocol witnesses are left alone. Searches the whole project, so it runs from Inspect Code."
+        case .unusedImport: "An `import` whose module the index knows and nothing in the file mentions — not in code, comments or strings. Its own module, `@testable`, `@_exported`, scoped (`import struct X.Y`), re-exporting, operator-declaring, retroactively conforming and unknown (SDK, dependencies) modules are never reported. Offers Remove import, also batched from Inspect Code."
         case .longFunction: "A function longer than the limit."
         case .highComplexity: "A function with more decision points than the limit."
         case .manyParameters: "A function with more parameters than the limit."
@@ -193,6 +202,7 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
         case .identicalOperands: "identical_operands"
         case .duplicateConditions: "duplicate_conditions"
         case .unusedPrivateMember, .unusedDeclaration: "unused_declaration"
+        case .unusedImport: "unused_import"
         case .emptyStatementBody, .redundantParentheses: nil
         }
     }
@@ -203,14 +213,14 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
     /// Rules that ask the index about the rest of the project. They run from Inspect Code and from
     /// a save, an open or a profile change — never on a keystroke — with one pass per document in
     /// flight and a newer save cancelling the older one.
-    public var needsIndex: Bool { self == .unusedDeclaration }
+    public var needsIndex: Bool { self == .unusedDeclaration || self == .unusedImport }
 
     /// Whether the rule offers a quick fix at all.
     public var hasFixes: Bool {
         switch self {
         case .redundantReturn, .redundantParentheses, .redundantOptionalInitialization,
              .redundantVoidReturn, .unneededBreak, .unusedClosureParameter, .explicitInit,
-             .countIsZero, .filterFirst, .sortedFirst, .firstWhereNil:
+             .countIsZero, .filterFirst, .sortedFirst, .firstWhereNil, .unusedImport:
             true
         default:
             false

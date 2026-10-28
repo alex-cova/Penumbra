@@ -70,7 +70,7 @@ final class SwiftInspectionRepositoryTests: XCTestCase {
     }
 
     /// Not a test of its own: with the variable set, writes the fixed sources so they can be compiled.
-    func testApplyEveryFixToACopy() throws {
+    func testApplyEveryFixToACopy() async throws {
         guard let target = ProcessInfo.processInfo.environment["SWIFT_INSPECTION_APPLY_FIXES_TO"] else {
             throw XCTSkip("set SWIFT_INSPECTION_APPLY_FIXES_TO to a copy of the repository")
         }
@@ -78,14 +78,24 @@ final class SwiftInspectionRepositoryTests: XCTestCase {
         // `count-is-zero` is opt-in because its fix does not compile for a type with a `count` and no
         // `isEmpty` declared in another file (this repository has two); the others' fixes must build.
         let options = Self.everyRuleOptions(except: [.countIsZero])
+        // The index-backed fixes (`unused-import`) ask the copy's own index, built with the same
+        // directory-names-are-modules convention the app's target models use.
+        let index = SwiftIndex()
+        await index.setModuleResolver { Self.module(of: $0) }
+        await index.applyFileChanges(swiftFiles(under: copy))
+        let importOptions = SwiftInspectionOptions(disabled: Set(
+            SwiftInspectionRule.allCases.filter { $0 != .unusedImport }.map(\.code)))
         var applied = 0
         for file in swiftFiles(under: copy) {
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
-            let findings = SwiftInspectionPipeline.analyze(text: text, options: options, cache: SwiftSyntaxParseCache(capacity: 1)).findings
+            let sync = SwiftInspectionPipeline.analyze(text: text, options: options, cache: SwiftSyntaxParseCache(capacity: 1)).findings
+            let indexed = await SwiftInspectionPipeline.analyze(
+                text: text, options: importOptions, url: file, lookup: index,
+                cache: SwiftSyntaxParseCache(capacity: 1)).findings
             // One fix per finding, last in the file first, skipping any that touches an earlier-applied range.
             var bytes = Array(text.utf8)
             var taken: [Range<Int>] = []
-            for finding in findings.reversed() {
+            for finding in (sync + indexed).sorted(by: { $0.bytes.lowerBound < $1.bytes.lowerBound }).reversed() {
                 guard let fix = finding.fixes.first else { continue }
                 let span = (fix.edits.map(\.bytes.lowerBound).min() ?? 0) ..< (fix.edits.map(\.bytes.upperBound).max() ?? 0)
                 guard !taken.contains(where: { $0.overlaps(span) || $0.contains(span.lowerBound) || span.contains($0.lowerBound) }) else { continue }
@@ -96,5 +106,13 @@ final class SwiftInspectionRepositoryTests: XCTestCase {
             if !taken.isEmpty { try Data(bytes).write(to: file) }
         }
         print("SwiftInspectionRepositoryTests: applied \(applied) fixes under \(copy.path)")
+    }
+
+    /// The module of a file by layout convention (`Sources/<Module>/`, as in the repository and in
+    /// a copy of it): the last `Sources` wins, so the copy may live anywhere.
+    static func module(of url: URL) -> String? {
+        let components = url.pathComponents
+        guard let i = components.lastIndex(of: "Sources"), i + 1 < components.count else { return nil }
+        return components[i + 1]
     }
 }

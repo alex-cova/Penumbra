@@ -25,6 +25,29 @@ public enum SwiftBatchFixer {
         let analysis = SwiftInspectionPipeline.analyze(
             text: original, options: options.only(fixable), cache: SwiftSyntaxParseCache(capacity: 1)
         )
+        return pick(from: analysis, original: original)
+    }
+
+    /// The same, plus the index-backed fixes (`unused-import`): the analysis also asks `lookup`
+    /// about the rest of the project. For Inspect Code's Fix all, which runs after the index is ready.
+    public static func fixAll(
+        rules: Set<SwiftInspectionRule>, in original: String, options: SwiftInspectionOptions = .standard,
+        url: URL, lookup: (any SwiftModuleSurfaceLookup)
+    ) async -> SwiftFixAllResult {
+        let fixable = rules.filter(\.hasFixes)
+        guard !fixable.isEmpty, original.utf8.count <= SwiftInspectionService.maximumUTF8Length else {
+            return SwiftFixAllResult(edits: [], fixedCount: 0)
+        }
+        let analysis = await SwiftInspectionPipeline.analyze(
+            text: original, options: options.only(fixable), url: url, isTest: SwiftInspectionScope.isTest(url),
+            lookup: lookup, cache: SwiftSyntaxParseCache(capacity: 1)
+        )
+        return pick(from: analysis, original: original)
+    }
+
+    private static func pick(
+        from analysis: SwiftInspectionPipeline.Analysis, original: String
+    ) -> SwiftFixAllResult {
         var taken: [Range<Int>] = []
         var chosen: [SwiftInspectionFix.Edit] = []
         var count = 0

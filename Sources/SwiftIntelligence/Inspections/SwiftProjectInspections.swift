@@ -14,6 +14,12 @@ extension SwiftIndex: SwiftProjectNameLookup {
     }
 }
 
+extension SwiftIndex: SwiftModuleSurfaceLookup {
+    public func module(ofFile url: URL) async -> String? {
+        module(of: url)
+    }
+}
+
 /// `unused-declaration`: an internal type, function or property whose name is written nowhere else in the project.
 ///
 /// It goes by names, not by resolved uses, so it can miss an unused declaration whose name something else shares
@@ -56,6 +62,137 @@ enum SwiftProjectInspections {
             ))
         }
         return findings
+    }
+
+    /// `unused-import`: an import whose module the index knows and nothing in the file mentions.
+    ///
+    /// Conservative by construction, so a hit is safe to delete: the module must have a surface, must
+    /// not be the file's own, the import must be plain (no `@testable`, `@_exported`, `import struct`
+    /// scoping), the surface must show no re-exports, operators or retroactive conformances, and none
+    /// of the surface's names may appear in the file — in code, comments or strings, which all err
+    /// toward "used". The import's own line does not count (it names the module).
+    static func unusedImports(
+        in tree: SourceFileSyntax, text: String, url: URL?, lookup: any SwiftModuleSurfaceLookup
+    ) async -> [SwiftInspection] {
+        var imports: [(module: String, node: ImportDeclSyntax)] = []
+        for statement in tree.statements {
+            guard let node = statement.item.as(ImportDeclSyntax.self),
+                  let module = node.path.first?.name.text, !module.isEmpty,
+                  node.importKindSpecifier == nil, !hasAttribute(node, named: "testable"),
+                  !hasAttribute(node, named: "_exported") else { continue }
+            imports.append((module, node))
+        }
+        guard !imports.isEmpty else { return [] }
+        let ownModule: String?
+        if let url { ownModule = await lookup.module(ofFile: url) } else { ownModule = nil }
+        let words = wordsOf(text: text, excludingImports: imports.map(\.node))
+        var known: [String: SwiftModuleSurface] = [:]
+        var unknown: Set<String> = []
+        var findings: [SwiftInspection] = []
+        for (module, node) in imports {
+            if let own = ownModule, module == own { continue }
+            let surface: SwiftModuleSurface?
+            if let cached = known[module] {
+                surface = cached
+            } else if unknown.contains(module) {
+                surface = nil
+            } else if let built = await lookup.moduleSurface(module) {
+                known[module] = built
+                surface = built
+            } else {
+                unknown.insert(module)
+                surface = nil
+            }
+            guard let surface, !surface.hasReexports, !surface.declaresOperators,
+                  !surface.hasRetroactiveConformances,
+                  !surface.names.contains(where: { words.contains($0) }) else { continue }
+            let start = node.positionAfterSkippingLeadingTrivia.utf8Offset
+            let end = node.endPositionBeforeTrailingTrivia.utf8Offset
+            guard let line = Self.lineDeleting(start ..< end, in: text) else { continue }
+            findings.append(SwiftInspection(
+                id: SwiftInspectionRule.unusedImport.code,
+                message: "import \(module) is never used in this file.",
+                severity: SwiftInspectionRule.unusedImport.defaultSeverity,
+                bytes: start ..< end,
+                fixes: [SwiftInspectionFix(title: "Remove import", edits: [.init(bytes: line, replacement: "")])]
+            ))
+        }
+        return findings
+    }
+
+    private static func hasAttribute(_ node: ImportDeclSyntax, named name: String) -> Bool {
+        node.attributes.contains {
+            guard case let .attribute(attribute) = $0,
+                  let type = attribute.attributeName.as(IdentifierTypeSyntax.self) else { return false }
+            return type.name.text == name
+        }
+    }
+
+    /// Every identifier-like word in the file — code, comments and strings — except inside the import
+    /// declarations themselves (an import names its own module). Scalar by scalar, so multibyte
+    /// identifiers stay whole.
+    private static func wordsOf(text: String, excludingImports imports: [ImportDeclSyntax]) -> Set<String> {
+        let excluded = imports.map {
+            $0.positionAfterSkippingLeadingTrivia.utf8Offset ..< $0.endPosition.utf8Offset
+        }
+        var words: Set<String> = []
+        var current = ""
+        func flush() {
+            if !current.isEmpty { words.insert(current) }
+            current = ""
+        }
+        var offset = 0
+        for scalar in text.unicodeScalars {
+            let inside = excluded.contains { offset >= $0.lowerBound && offset < $0.upperBound }
+            if !inside, scalar.value == 95 || Character(scalar).isLetter || Character(scalar).isNumber {
+                current.unicodeScalars.append(scalar)
+            } else {
+                flush()
+            }
+            offset += scalar.utf8.count
+        }
+        flush()
+        return words
+    }
+
+    /// The whole line holding `range`, through its line break (or to the file's end), for the Remove
+    /// import fix. `nil` when other code shares the line (`import Foo; bar()`): deleting the line
+    /// would delete code. A trailing comment goes with the import, as organize-imports does.
+    private static func lineDeleting(_ range: Range<Int>, in text: String) -> Range<Int>? {
+        let utf8 = Array(text.utf8)
+        guard !utf8.isEmpty, range.lowerBound <= utf8.count, range.upperBound <= utf8.count else { return nil }
+        var start = range.lowerBound
+        while start > 0, utf8[start - 1] != 10, utf8[start - 1] != 13 { start -= 1 }
+        var end = range.upperBound
+        while end < utf8.count, utf8[end] != 10, utf8[end] != 13 { end += 1 }
+        let line = String(decoding: utf8[start..<end], as: UTF8.self)
+        // The import's own text is on this line by construction; anything else must be whitespace or
+        // a trailing comment.
+        let before = line.prefix(range.lowerBound - start)
+        guard before.allSatisfy({ $0 == " " || $0 == "\t" }) else { return nil }
+        let after = line.suffix(end - range.upperBound).trimmingCharacters(in: .whitespaces)
+        guard isTrailingCommentOnly(after) else { return nil }
+        if end < utf8.count {
+            if utf8[end] == 13, end + 1 < utf8.count, utf8[end + 1] == 10 {
+                end += 2
+            } else {
+                end += 1
+            }
+        } else if start > 0 {
+            start -= 1
+        }
+        return start ..< end
+    }
+
+    /// Whitespace, a `//` comment (which runs to the line's end), or a `/* … */` comment followed by
+    /// whitespace only: anything else is code the fix must not delete.
+    private static func isTrailingCommentOnly(_ after: String) -> Bool {
+        if after.isEmpty { return true }
+        if after.hasPrefix("//") { return true }
+        if after.hasPrefix("/*"), let end = after.range(of: "*/") {
+            return after[end.upperBound...].allSatisfy { $0 == " " || $0 == "\t" }
+        }
+        return false
     }
 
     /// `pad`, `pad4`, `_padding0`: a field that only keeps a GPU or C layout aligned.

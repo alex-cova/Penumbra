@@ -56,6 +56,9 @@ public actor SwiftIndex {
     private var subtypesByName: [String: [TypeRef]] = [:]
     private var names: [String: Set<URL>] = [:]
     private var symbolsByFile: [URL: [PaletteSymbol]] = [:]
+    /// Module surfaces by module name: built on demand from the indexed models, and dropped on
+    /// every mutation (a file's declarations, imports or operators may have changed).
+    private var surfaceCache: [String: SwiftModuleSurface] = [:]
 
     // MARK: Configuration
 
@@ -74,6 +77,22 @@ public actor SwiftIndex {
 
     public func module(of url: URL) -> String? {
         moduleByFile[url.standardizedFileURL]
+    }
+
+    /// What `module` shows the rest of the project, or `nil` when the index does not know it (the
+    /// SDK, dependencies, anything outside the module resolver). Built from the indexed models and
+    /// cached until the next mutation.
+    public func moduleSurface(_ module: String) -> SwiftModuleSurface? {
+        if let cached = surfaceCache[module] { return cached }
+        var files: [SwiftFileModel] = []
+        for (url, name) in moduleByFile where name == module {
+            guard let model = storage.file(at: url) else { continue }
+            files.append(model)
+        }
+        guard !files.isEmpty else { return nil }
+        let surface = SwiftModuleSurface.build(files: files)
+        surfaceCache[module] = surface
+        return surface
     }
 
     // MARK: Building
@@ -357,6 +376,7 @@ public actor SwiftIndex {
         names = [:]
         symbolsByFile = [:]
         moduleByFile = [:]
+        surfaceCache = [:]
     }
 
     private func replaceAll(_ models: [URL: SwiftFileModel]) {
@@ -369,6 +389,7 @@ public actor SwiftIndex {
     private func add(_ url: URL, _ full: SwiftFileModel) {
         let model = full.indexed()
         storage.insert(url, model)
+        surfaceCache = [:]
         let module = moduleResolver?(url)
         moduleByFile[url] = module
         for declaration in model.declarations {
@@ -384,6 +405,7 @@ public actor SwiftIndex {
 
     private func remove(_ url: URL) {
         guard case .removed(_, let old)? = storage.remove(url) else { return }
+        surfaceCache = [:]
         moduleByFile[url] = nil
         symbolsByFile[url] = nil
         for name in old.identifiers {

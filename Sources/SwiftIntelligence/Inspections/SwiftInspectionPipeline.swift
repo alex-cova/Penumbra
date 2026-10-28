@@ -30,18 +30,26 @@ public enum SwiftInspectionPipeline {
         return finish(parsed, options: options, extra: [])
     }
 
-    /// The same, plus the project-wide rules (`unused-declaration`), which ask `lookup` where else a name is written.
-    /// For Inspect Code: it searches the project, so it is not for the editor's pass.
+    /// The same, plus the index-backed rules (`unused-declaration`, and `unused-import` when the
+    /// lookup knows module surfaces), which ask `lookup` about the rest of the project. For Inspect
+    /// Code: it searches the project, so it is not for the editor's pass.
     public static func analyze(
         text: String, options: SwiftInspectionOptions, url: URL?, isTest: Bool = false,
-        lookup: (any SwiftProjectNameLookup)?, cache: SwiftSyntaxParseCache = .shared
+        lookup: (any SwiftModuleSurfaceLookup)?, cache: SwiftSyntaxParseCache = .shared
     ) async -> Analysis {
         guard let parsed = walk(text: text, options: options, cache: cache) else { return .empty(for: text) }
         var extra: [SwiftInspection] = []
-        if let lookup, options.isEnabled(.unusedDeclaration) {
-            extra = await SwiftProjectInspections.unusedDeclarations(
-                in: parsed.folded, url: url, isTest: isTest, treatsPublicApiAsUsed: options.treatsPublicApiAsUsed, lookup: lookup
-            )
+        if let lookup {
+            if options.isEnabled(.unusedDeclaration) {
+                extra += await SwiftProjectInspections.unusedDeclarations(
+                    in: parsed.folded, url: url, isTest: isTest, treatsPublicApiAsUsed: options.treatsPublicApiAsUsed, lookup: lookup
+                )
+            }
+            if options.isEnabled(.unusedImport) {
+                extra += await SwiftProjectInspections.unusedImports(
+                    in: parsed.folded, text: text, url: url, lookup: lookup
+                )
+            }
         }
         return finish(parsed, options: options, extra: extra)
     }

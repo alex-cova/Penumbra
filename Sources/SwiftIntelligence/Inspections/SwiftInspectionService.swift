@@ -29,7 +29,7 @@ public final class SwiftInspectionService: @unchecked Sendable {
     /// or a profile change; never a keystroke). The synchronous pass merges them when the hash
     /// matches, so the next edit drops them.
     private var indexFindings: [URL: (textHash: Int, findings: [SwiftInspection])] = [:]
-    private var indexLookup: (any SwiftProjectNameLookup)?
+    private var indexLookup: (any SwiftModuleSurfaceLookup)?
     private var indexResultHandler: (@Sendable (URL, [Diagnostic]) -> Void)?
 
     public init(options: @escaping OptionsSource = { .standard }, cache: SwiftSyntaxParseCache = .shared) {
@@ -45,7 +45,7 @@ public final class SwiftInspectionService: @unchecked Sendable {
     public var currentOptions: SwiftInspectionOptions { options(nil) }
 
     /// What the index-backed rules ask the rest of the project. `nil` until the host sets it.
-    public func setIndexLookup(_ lookup: (any SwiftProjectNameLookup)?) {
+    public func setIndexLookup(_ lookup: (any SwiftModuleSurfaceLookup)?) {
         lock.withLock { indexLookup = lookup }
     }
 
