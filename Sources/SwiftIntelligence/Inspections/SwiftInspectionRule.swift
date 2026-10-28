@@ -200,6 +200,11 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
     /// Rules that need the rest of the project, and so run from Inspect Code and not as you type.
     public var isProjectWide: Bool { self == .unusedDeclaration }
 
+    /// Rules that ask the index about the rest of the project. They run from Inspect Code and from
+    /// a save, an open or a profile change — never on a keystroke — with one pass per document in
+    /// flight and a newer save cancelling the older one.
+    public var needsIndex: Bool { self == .unusedDeclaration }
+
     /// Whether the rule offers a quick fix at all.
     public var hasFixes: Bool {
         switch self {

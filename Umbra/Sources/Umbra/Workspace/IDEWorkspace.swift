@@ -999,6 +999,12 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.openJavaDocuments = { [weak self] in
             self?.openJavaDocuments() ?? []
         }
+        intelligenceServices.swiftSupport.openSwiftDocuments = { [weak self] in
+            self?.openSwiftDocuments() ?? []
+        }
+        intelligenceServices.swiftSupport.onInspectionDiagnostics = { [weak self] url, diagnostics in
+            self?.applySwiftInspectionDiagnostics(diagnostics, for: url)
+        }
         intelligenceServices.javaSupport.onCompilerDiagnostics = { [weak self] url, diagnostics in
             self?.applyCompilerDiagnostics(diagnostics, for: url)
         }
@@ -3016,8 +3022,11 @@ public final class IDEWorkspace {
     }
 
     /// The Swift inspection options changed (they are read when an analysis runs), so each open editor
-    /// asks for its diagnostics again.
+    /// asks for its diagnostics again. The stored index findings were computed under the old
+    /// profile, so they go and every open Swift document gets a fresh pass.
     func swiftInspectionPreferencesChanged() {
+        swiftSupport.inspections.clearIndexFindings()
+        swiftSupport.runIndexInspections(openSwiftDocuments())
         for pane in workbench.panes {
             host(for: pane.id).intelligenceController?.refreshDiagnostics()
         }
@@ -3726,6 +3735,20 @@ public final class IDEWorkspace {
                 await workspaceBridge.syncWorkbench(workbench)
             }
             refreshPresentation()
+            // A newly opened Swift file gets its project-wide findings once the index is ready
+            // (an index still being built would make everything look unused).
+            if url.pathExtension == "swift" {
+                let opened = url.standardizedFileURL
+                Task { [weak self] in
+                    await self?.swiftSupport.waitForIndex()
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.swiftSupport.runIndexInspections(self.openSwiftDocuments().filter {
+                            $0.url?.standardizedFileURL == opened
+                        })
+                    }
+                }
+            }
         } catch {
             presentError(error)
         }
@@ -4043,6 +4066,27 @@ public final class IDEWorkspace {
         let activeURL = workbench.activePane.selectedDocument?.url?.standardizedFileURL
         let documents = adapter?.openDocuments.filter { $0.languageIdentifier == "java" && !$0.isDependencySource } ?? []
         return documents.sorted { lhs, _ in lhs.url?.standardizedFileURL == activeURL }
+    }
+
+    /// Open Swift documents with the active one first. A save runs the index-backed inspections
+    /// for all of them (another file can change what is unused here), never on a keystroke.
+    private func openSwiftDocuments() -> [EditorIntelligence.Document] {
+        let activeURL = workbench.activePane.selectedDocument?.url?.standardizedFileURL
+        let documents = adapter?.openDocuments.filter {
+            $0.languageIdentifier == SwiftAnalysis.languageIdentifier && !$0.isDependencySource
+        } ?? []
+        return documents.sorted { lhs, _ in lhs.url?.standardizedFileURL == activeURL }
+    }
+
+    /// An index pass finished for `url`: the editor's own report carries the `swift-inspection`
+    /// rows, so refresh the panes showing the file (a save changes no text, so nothing would
+    /// otherwise re-ask). The Swift twin of `applyInspectionDiagnostics`.
+    private func applySwiftInspectionDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
+        let key = url.standardizedFileURL
+        for pane in workbench.panes {
+            guard pane.selectedDocument?.url?.standardizedFileURL == key else { continue }
+            host(for: pane.id).intelligenceController?.refreshDiagnostics()
+        }
     }
 
     /// A save drops that file's build-output problems (the in-editor check takes over) and tells

@@ -25,6 +25,12 @@ public final class SwiftInspectionService: @unchecked Sendable {
     private let cache: SwiftSyntaxParseCache
     private let lock = NSLock()
     private var recent: [(key: Key, analysis: SwiftInspectionPipeline.Analysis)] = []
+    /// Project-wide findings per file, valid for the text they were computed from (a save, an open
+    /// or a profile change; never a keystroke). The synchronous pass merges them when the hash
+    /// matches, so the next edit drops them.
+    private var indexFindings: [URL: (textHash: Int, findings: [SwiftInspection])] = [:]
+    private var indexLookup: (any SwiftProjectNameLookup)?
+    private var indexResultHandler: (@Sendable (URL, [Diagnostic]) -> Void)?
 
     public init(options: @escaping OptionsSource = { .standard }, cache: SwiftSyntaxParseCache = .shared) {
         self.options = { _ in options() }
@@ -38,19 +44,111 @@ public final class SwiftInspectionService: @unchecked Sendable {
 
     public var currentOptions: SwiftInspectionOptions { options(nil) }
 
+    /// What the index-backed rules ask the rest of the project. `nil` until the host sets it.
+    public func setIndexLookup(_ lookup: (any SwiftProjectNameLookup)?) {
+        lock.withLock { indexLookup = lookup }
+    }
+
+    /// Called with the merged diagnostics of each finished index pass. The host refreshes the
+    /// file's editors (a save changes no text, so no refresh would otherwise happen).
+    public func setIndexResultHandler(_ handler: (@Sendable (URL, [Diagnostic]) -> Void)?) {
+        lock.withLock { indexResultHandler = handler }
+    }
+
+    /// Drops every stored index finding (the options changed, so they were computed stale).
+    public func clearIndexFindings() {
+        lock.withLock {
+            indexFindings.removeAll()
+            recent.removeAll()
+        }
+    }
+
     /// The analysis of `text` (the file `url`, when it is one) under the current options; the two most recent are kept.
+    /// Index findings merge in when they belong to exactly this text.
     public func analysis(of text: String, url: URL? = nil) -> SwiftInspectionPipeline.Analysis {
         guard text.utf8.count <= Self.maximumUTF8Length else { return .empty(for: "") }
         let options = options(url)
         let key = Key(length: text.utf8.count, hash: text.hashValue, options: options)
         if let hit = lock.withLock({ recent.first { $0.key == key }?.analysis }) { return hit }
-        let analysis = SwiftInspectionPipeline.analyze(text: text, options: options, cache: cache)
+        var analysis = SwiftInspectionPipeline.analyze(text: text, options: options, cache: cache)
+        let (stored, stale) = storedFindings(for: url, textHash: text.hashValue, options: options)
+        if !stale, !stored.isEmpty {
+            analysis.findings.append(contentsOf: stored)
+            analysis.findings.sort { $0.bytes.lowerBound < $1.bytes.lowerBound }
+        }
         lock.withLock {
             recent.removeAll { $0.key == key }
             recent.append((key, analysis))
             if recent.count > 2 { recent.removeFirst() }
         }
         return analysis
+    }
+
+    /// The analysis for display plus whether its index findings belong to older text. A stale entry
+    /// still merges (its byte ranges clamp onto the new text), so the markers stay shifted instead
+    /// of flickering until the next save.
+    func analysisAllowingStale(of text: String, url: URL?) -> (analysis: SwiftInspectionPipeline.Analysis, indexStale: Bool) {
+        guard text.utf8.count <= Self.maximumUTF8Length else { return (.empty(for: ""), false) }
+        let options = options(url)
+        let (_, stale) = storedFindings(for: url, textHash: text.hashValue, options: options)
+        // Fresh or absent findings go through the cached pass; only a stale entry recomputes.
+        guard stale else { return (analysis(of: text, url: url), false) }
+        var analysis = SwiftInspectionPipeline.analyze(text: text, options: options, cache: cache)
+        let (stored, _) = storedFindings(for: url, textHash: text.hashValue, options: options)
+        if !stored.isEmpty {
+            analysis.findings.append(contentsOf: stored)
+            analysis.findings.sort { $0.bytes.lowerBound < $1.bytes.lowerBound }
+        }
+        return (analysis, true)
+    }
+
+    /// The stored index findings for `url` that the current options still enable, and whether they
+    /// belong to older text.
+    private func storedFindings(
+        for url: URL?, textHash: Int, options: SwiftInspectionOptions
+    ) -> (findings: [SwiftInspection], stale: Bool) {
+        guard let url else { return ([], false) }
+        let key = url.standardizedFileURL
+        guard let stored = lock.withLock({ indexFindings[key] }) else { return ([], false) }
+        let enabled = stored.findings.filter { finding in
+            guard let rule = SwiftInspectionRule(code: finding.id) else { return false }
+            return rule.needsIndex && options.isEnabled(rule)
+        }
+        if enabled.isEmpty { return ([], false) }
+        return (enabled, stored.textHash != textHash)
+    }
+
+    /// Runs the index-backed rules for one file (a save, an open or a profile change — never a
+    /// keystroke) and stores the findings under the analyzed text's hash. A cancelled pass stores
+    /// and pushes nothing; the caller keeps one pass per document in flight, so a newer save
+    /// cancels the older one before it lands.
+    public func runIndexInspections(for url: URL, text: String) async {
+        let key = url.standardizedFileURL
+        let options = options(url)
+        let lookup = lock.withLock({ indexLookup })
+        guard options.enabledRules.contains(where: { $0.needsIndex }) else {
+            lock.withLock {
+                indexFindings.removeValue(forKey: key)
+                recent.removeAll()
+            }
+            return
+        }
+        // No up-to-date shortcut: another file's save can change what is unused here, so every
+        // trigger re-asks the index (never on a keystroke, and one pass per document in flight).
+        let analysis = await SwiftInspectionPipeline.analyze(
+            text: text, options: options, url: url, isTest: SwiftInspectionScope.isTest(url), lookup: lookup
+        )
+        guard !Task.isCancelled else { return }
+        let extra = analysis.findings.filter { SwiftInspectionRule(code: $0.id)?.needsIndex == true }
+        let diagnostics = extra.filter { $0.severity != .noHighlighting }.map { $0.asDiagnostic(map: analysis.map) }
+        let handler = lock.withLock { () -> (@Sendable (URL, [Diagnostic]) -> Void)? in
+            indexFindings[key] = (text.hashValue, extra)
+            // The cached synchronous analyses predate these findings; drop them so the next
+            // editor refresh merges.
+            recent.removeAll()
+            return indexResultHandler
+        }
+        handler?(url, diagnostics)
     }
 
     /// Findings for a document, or none for one the inspections do not apply to.
@@ -86,6 +184,20 @@ public struct SwiftInspectionDiagnosticProvider: DiagnosticProvider {
         guard let analysis = service.analysis(for: document), !Task.isCancelled else { return [] }
         // "No highlighting" findings are not drawn or listed; their fixes stay on ⌥↩.
         return analysis.findings.filter { $0.severity != .noHighlighting }.map { $0.asDiagnostic(map: analysis.map) }
+    }
+
+    /// The diagnostics plus `swift-inspection` when the merged index findings belong to older text:
+    /// the previous save's markers stay (shifted onto the new text) instead of flickering.
+    public func diagnosticsWithFreshness(for document: Document) async -> (diagnostics: [Diagnostic], staleSources: Set<String>) {
+        guard document.languageIdentifier == SwiftAnalysis.languageIdentifier,
+              !document.contentSnapshot.isElided,
+              let url = document.url, !DependencySourceLocation.isGeneratedInterface(url),
+              !Task.isCancelled
+        else { return ([], []) }
+        let (analysis, indexStale) = service.analysisAllowingStale(of: document.text, url: url)
+        guard !Task.isCancelled else { return ([], []) }
+        let diagnostics = analysis.findings.filter { $0.severity != .noHighlighting }.map { $0.asDiagnostic(map: analysis.map) }
+        return (diagnostics, indexStale ? [SwiftInspection.diagnosticSource] : [])
     }
 }
 

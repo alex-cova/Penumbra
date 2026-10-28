@@ -214,6 +214,65 @@ final class IDESwiftInspectCodeTests: XCTestCase {
                        "the private one needs only its file; the project-wide one waits to be asked")
     }
 
+    func testSavingRunsTheIndexBackedInspectionsAndAnotherFilesCallClearsThem() async throws {
+        let a = directory.appendingPathComponent("Sources/A.swift")
+        let b = directory.appendingPathComponent("Sources/B.swift")
+        let aText = "func orphan() {}\n"
+        try aText.write(to: a, atomically: true, encoding: .utf8)
+        try "func other() {}\n".write(to: b, atomically: true, encoding: .utf8)
+        let workspace = try await makeWorkspace()
+        await workspace.swiftSupport.waitForIndex()
+        for _ in 0..<200 {
+            let hasA = await workspace.swiftSupport.index.contains(a)
+            let hasB = await workspace.swiftSupport.index.contains(b)
+            if hasA, hasB { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        await workspace.openDocument(from: a)
+        workspace.host(for: workspace.workbench.activePaneID).textView.text = aText
+        let savedA = await workspace.saveActiveDocument()
+        XCTAssertTrue(savedA, "saving A runs the index-backed pass")
+        let shown = await pollInspection(of: aText, at: a, in: workspace, present: true)
+        XCTAssertTrue(shown, "saving A shows that nobody calls orphan")
+
+        // A call added in another file clears A's finding after that file's save. The edit goes
+        // through `replace` (as typing does), so the adapter's snapshot follows on its debounce.
+        await workspace.openDocument(from: b)
+        let bText = "func other() { orphan() }\n"
+        let textView = workspace.host(for: workspace.workbench.activePaneID).textView
+        textView.replace(NSRange(location: 0, length: (textView.text as NSString).length), withText: bText)
+        let flushed = await waitForBuffer(bText, at: b, in: workspace)
+        XCTAssertTrue(flushed, "the edit flushes to the adapter before the save")
+        let savedB = await workspace.saveActiveDocument()
+        XCTAssertTrue(savedB, "saving B re-runs every open document's pass")
+        let cleared = await pollInspection(of: aText, at: a, in: workspace, present: false)
+        XCTAssertTrue(cleared, "B's call reaches A's pass before it asks the index")
+    }
+
+    /// Waits until the adapter's document for `url` shows `text` (edits flush on a debounce).
+    private func waitForBuffer(_ text: String, at url: URL, in workspace: IDEWorkspace) async -> Bool {
+        let key = url.standardizedFileURL
+        for _ in 0..<200 {
+            let current = workspace.swiftSupport.openSwiftDocuments?().first {
+                $0.url?.standardizedFileURL == key
+            }.map { $0.contentSnapshot.text ?? $0.substring(utf16Offset: 0, length: $0.contentSnapshot.utf16Length) }
+            if current == text { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
+    }
+
+    /// Polls A's merged analysis until the unused-declaration finding is (or is not) there.
+    private func pollInspection(of text: String, at url: URL, in workspace: IDEWorkspace, present: Bool) async -> Bool {
+        for _ in 0..<200 {
+            let ids = workspace.swiftSupport.inspections.analysis(of: text, url: url).findings.map(\.id)
+            if ids.contains(SwiftInspectionRule.unusedDeclaration.code) == present { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
+    }
+
     func testTheCommitCheckCountsStagedSwiftFilesAndReviewOpensTheirRun() async throws {
         let bad = directory.appendingPathComponent("Sources/Bad.swift")
         let good = directory.appendingPathComponent("Sources/Good.swift")

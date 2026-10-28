@@ -27,6 +27,15 @@ final class IDESwiftSupport {
     private var rebuild: Task<Void, Never>?
     private var moduleUpdate: Task<Void, Never>?
     private let activity: IDEIndexActivity
+    /// One index-inspection pass per file in flight; a newer trigger cancels the older one.
+    private var indexTasks: [URL: Task<Void, Never>] = [:]
+    /// Bumped on every trigger so an older trigger's buffered run cannot publish over a newer one.
+    private var indexGeneration = 0
+    /// Called with each finished index pass's diagnostics for one file (empty when it is clean).
+    @ObservationIgnored var onInspectionDiagnostics: (@MainActor (URL, [Diagnostic]) -> Void)?
+    /// The window's open Swift documents, read when a save asks for a fresh project-wide pass.
+    /// The closure does not retain the window.
+    var openSwiftDocuments: (@MainActor () -> [EditorIntelligence.Document])?
 
     init(activity: IDEIndexActivity = IDEIndexActivity()) {
         self.activity = activity
@@ -46,6 +55,10 @@ final class IDESwiftSupport {
         typeHierarchy = SwiftTypeHierarchyProvider(index: index)
         callHierarchy = SwiftCallHierarchyProvider(index: index)
         codeGeneration = SwiftCodeGenerationProvider(index: index)
+        inspections.setIndexLookup(index)
+        inspections.setIndexResultHandler { [weak self] url, diagnostics in
+            Task { @MainActor [weak self] in self?.onInspectionDiagnostics?(url, diagnostics) }
+        }
     }
 
     var languageService: IDESwiftLanguageService {
@@ -108,6 +121,60 @@ final class IDESwiftSupport {
     func cancelIndexing() {
         rebuild?.cancel()
         rebuild = nil
+        indexGeneration += 1
+        for task in indexTasks.values { task.cancel() }
+        indexTasks.removeAll()
+    }
+
+    /// Runs the index-backed inspections for `documents` (a save, an open or a profile change —
+    /// never a keystroke). One pass per document is in flight, and a newer call cancels the older
+    /// one. Every open buffer lands in the index before any pass asks it who mentions a name, so a
+    /// call added in another file clears the finding when that file is saved.
+    func runIndexInspections(_ documents: [EditorIntelligence.Document]) {
+        var items: [(key: URL, url: URL, text: String)] = []
+        for document in documents {
+            guard document.languageIdentifier == SwiftAnalysis.languageIdentifier,
+                  !document.isDependencySource,
+                  let url = document.url else { continue }
+            // File-backed documents are elided (their text stays in the editor); read through
+            // the ranged reader like Java's `fullText` does.
+            items.append((url.standardizedFileURL, url, Self.fullText(of: document)))
+        }
+        guard !items.isEmpty else { return }
+        indexGeneration += 1
+        let generation = indexGeneration
+        for item in items { indexTasks[item.key]?.cancel() }
+        Task {
+            for item in items {
+                await index.noteOpenDocument(url: item.url, text: item.text)
+                if Task.isCancelled { return }
+            }
+            guard generation == indexGeneration, !Task.isCancelled else { return }
+            for item in items {
+                indexTasks[item.key] = Task {
+                    await inspections.runIndexInspections(for: item.url, text: item.text)
+                }
+            }
+        }
+    }
+
+    /// The document's whole text: the snapshot's when materialized, else through its ranged
+    /// reader (file-backed documents are elided by design).
+    private static func fullText(of document: EditorIntelligence.Document) -> String {
+        if let text = document.contentSnapshot.text { return text }
+        let length = document.contentSnapshot.utf16Length
+        guard length > 0 else { return "" }
+        return document.substring(utf16Offset: 0, length: length)
+    }
+
+    /// Runs the pass for one file's text: the same, without a document (tests and single-file callers).
+    func runIndexInspections(for url: URL, text: String) {
+        let key = url.standardizedFileURL
+        indexTasks[key]?.cancel()
+        indexTasks[key] = Task {
+            await index.noteOpenDocument(url: url, text: text)
+            await inspections.runIndexInspections(for: url, text: text)
+        }
     }
 
     /// The indentation unit the formatter lays code out with, from the editor's settings.

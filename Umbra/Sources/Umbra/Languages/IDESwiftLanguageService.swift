@@ -43,4 +43,20 @@ struct IDESwiftLanguageService: LanguageService {
     @MainActor func filesDidChange(_ urls: [URL]) {
         support?.filesDidChange(urls)
     }
+
+    /// A save runs the index-backed inspections again: another file's save can change what is
+    /// unused here, so every open Swift document gets a fresh pass (one in flight each, the
+    /// newest save cancelling the older one). Never on a keystroke.
+    @MainActor func documentsDidSave(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let saved = Set(urls.map { $0.standardizedFileURL })
+        let documents = support?.openSwiftDocuments?() ?? []
+        // The saved files first, so what the user is looking at reports back before the rest.
+        let ordered = documents.sorted { lhs, rhs in
+            let left = lhs.url.map { saved.contains($0.standardizedFileURL) } ?? false
+            let right = rhs.url.map { saved.contains($0.standardizedFileURL) } ?? false
+            return left && !right
+        }
+        support?.runIndexInspections(ordered)
+    }
 }
