@@ -12,7 +12,7 @@ struct IDEInspectionLaunch {
         /// `resolver` gives the options of one file when a profile's scopes make them differ; `options` is the base.
         case swift(
             scope: SwiftInspectionScope, options: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>?,
-            resolver: (@Sendable (URL) -> SwiftInspectionOptions)?
+            resolver: (@Sendable (URL) -> SwiftInspectionOptions)?, includeProjectRules: Bool
         )
     }
 
@@ -36,16 +36,22 @@ struct IDEInspectionLaunch {
     }
 
     init(swiftScope: SwiftInspectionScope, options: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>?) {
-        self.init(backend: .swift(scope: swiftScope, options: options, onlyRules: onlyRules, resolver: nil), profileName: "Swift settings")
+        self.init(
+            backend: .swift(scope: swiftScope, options: options, onlyRules: onlyRules, resolver: nil, includeProjectRules: false),
+            profileName: "Swift settings"
+        )
     }
 
     /// A Swift run under a profile: each file gets the options its scopes give it.
-    init(swiftScope: SwiftInspectionScope, profile: SwiftInspectionProfile, profileName: String, root: URL?, onlyRules: Set<SwiftInspectionRule>?) {
+    init(
+        swiftScope: SwiftInspectionScope, profile: SwiftInspectionProfile, profileName: String, root: URL?,
+        onlyRules: Set<SwiftInspectionRule>?, includeProjectRules: Bool = false
+    ) {
         let classifier = SwiftInspectionFileClassifier(projectRoot: root)
         self.init(
             backend: .swift(
                 scope: swiftScope, options: profile.options(), onlyRules: onlyRules,
-                resolver: { url in profile.options(for: classifier.context(for: url)) }
+                resolver: { url in profile.options(for: classifier.context(for: url)) }, includeProjectRules: includeProjectRules
             ),
             profileName: profileName
         )
@@ -61,20 +67,22 @@ struct IDEInspectionLaunch {
     var scopeTitle: String {
         switch backend {
         case .java(let scope, _, _, _): scope.title
-        case .swift(let scope, _, _, _): scope.title
+        case .swift(let scope, _, _, _, _): scope.title
         }
     }
 
     var onlyRuleCodes: Set<String>? {
         switch backend {
         case .java(_, _, let only, _): only.map { Set($0.map(\.code)) }
-        case .swift(_, _, let only, _): only.map { Set($0.map(\.code)) }
+        case .swift(_, _, let only, _, _): only.map { Set($0.map(\.code)) }
         }
     }
 
     var includeProjectRules: Bool {
-        if case .java(_, _, _, let include) = backend { return include }
-        return false
+        switch backend {
+        case .java(_, _, _, let include): include
+        case .swift(_, _, _, _, let include): include
+        }
     }
 }
 
@@ -195,13 +203,18 @@ extension IDEWorkspace {
                 }
                 if run.state == .running { run.finish(cancelled: Task.isCancelled) }
             }
-        case .swift(let scope, let inspection, let onlyRules, let resolver):
-            let options = SwiftBatchInspector.Options(inspection: inspection, onlyRules: onlyRules, optionsForFile: resolver)
+        case .swift(let scope, let inspection, let onlyRules, let resolver, let includeProjectRules):
+            let options = SwiftBatchInspector.Options(
+                inspection: inspection, onlyRules: onlyRules, optionsForFile: resolver,
+                includeProjectRules: includeProjectRules, projectLookup: includeProjectRules ? swiftSupport.index : nil
+            )
             run.task = Task { [weak self, weak run] in
                 let files = await Task.detached(priority: .userInitiated) {
                     scope.resolve(projectRoots: root.map { [$0] } ?? [])
                 }.value
                 guard let self, let run else { return }
+                // The project-wide rules ask the index, which must have read the project first.
+                if includeProjectRules { await self.swiftSupport.waitForIndex() }
                 let text = self.inspectionTextSource()
                 for await event in SwiftBatchInspector().run(files: files, options: options, text: text) {
                     switch event {
@@ -378,8 +391,11 @@ extension IDEWorkspace {
                 let fresh = await inspector.inspect(url: url, options: options, text: text)
                 run.markResolved(handled.filter { $0.url == url }, newFindings: fresh.map(IDEInspectionFinding.init), for: url)
             }
-        case .swift(_, let inspection, let onlyRules, let resolver):
-            let options = SwiftBatchInspector.Options(inspection: inspection, onlyRules: onlyRules, optionsForFile: resolver)
+        case .swift(_, let inspection, let onlyRules, let resolver, let includeProjectRules):
+            let options = SwiftBatchInspector.Options(
+                inspection: inspection, onlyRules: onlyRules, optionsForFile: resolver,
+                includeProjectRules: includeProjectRules, projectLookup: includeProjectRules ? swiftSupport.index : nil
+            )
             for url in urls {
                 let fresh = await SwiftBatchInspector().inspect(url: url, options: options, text: text)
                 run.markResolved(handled.filter { $0.url == url }, newFindings: fresh.map(IDEInspectionFinding.init), for: url)

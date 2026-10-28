@@ -116,10 +116,10 @@ struct IDEInspectCodeSheet: View {
                 TextField(language == .java ? "*.java, !**/generated/**" : "*.swift, !**/Generated/**", text: $masks)
                     .textFieldStyle(.roundedBorder)
             }
-            if language == .java {
-                Toggle("Include project-wide inspections (slower)", isOn: $includeProjectRules)
-                    .help("Unused declaration, weaker access, void return and constant parameter checks search the whole project")
-            }
+            Toggle("Include project-wide inspections (slower)", isOn: $includeProjectRules)
+                .help(language == .java
+                    ? "Unused declaration, weaker access, void return and constant parameter checks search the whole project"
+                    : "Unused declaration looks for names nothing else in the project writes")
             Picker("Profile", selection: $source) {
                 if inspections.hasProjectProfile { Text("Project").tag(IDEWorkspaceInspections.Source.project) }
                 ForEach(inspections.store.names, id: \.self) { Text($0).tag(IDEWorkspaceInspections.Source.global($0)) }
@@ -190,7 +190,8 @@ struct IDEInspectCodeSheet: View {
             return IDEInspectionLaunch(
                 swiftScope: SwiftInspectionScope(kind: kind.swift, includeTests: includeTests, fileMasks: masks),
                 profile: profile, profileName: inspections.title(for: source), root: workspace.project.rootURL,
-                onlyRules: request.rule.flatMap { SwiftInspectionRule(code: $0.code) }.map { [$0] }
+                onlyRules: request.rule.flatMap { SwiftInspectionRule(code: $0.code) }.map { [$0] },
+                includeProjectRules: includeProjectRules
             )
         }
     }
@@ -211,7 +212,7 @@ struct IDEInspectCodeSheet: View {
             let files = await Task.detached(priority: .userInitiated) { () -> [URL] in
                 switch launch.backend {
                 case .java(let scope, _, _, _): scope.resolve(projectRoots: roots, classifier: classifier)
-                case .swift(let scope, _, _, _): scope.resolve(projectRoots: roots)
+                case .swift(let scope, _, _, _, _): scope.resolve(projectRoots: roots)
                 }
             }.value
             let outcome = await workspace.fixAll(ruleCodes: [rule.code], language: launch.language, in: files)

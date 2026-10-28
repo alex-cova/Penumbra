@@ -189,4 +189,29 @@ final class IDESwiftInspectCodeTests: XCTestCase {
         workspace.performCodeActionCommand(CodeActionCommand(id: SwiftInspectionCommand.quiet, arguments: ["empty-catch"]))
         XCTAssertEqual(workspace.inspections.activeSwiftProfile.resolution(of: .emptyCatch).severity, .noHighlighting)
     }
+
+    func testProjectWideInspectionsAskTheIndexAndOnlyRunWhenAsked() async throws {
+        try "func used() {}\nfunc orphan() {}\n".write(to: directory.appendingPathComponent("Sources/A.swift"), atomically: true, encoding: .utf8)
+        try "func caller() { used() }\nprivate func hidden() {}\n".write(to: directory.appendingPathComponent("Sources/B.swift"), atomically: true, encoding: .utf8)
+        let workspace = try await makeWorkspace()
+        let wide = workspace.startInspection(IDEInspectionLaunch(
+            swiftScope: SwiftInspectionScope(kind: .project), profile: .standard, profileName: "Default",
+            root: directory, onlyRules: nil, includeProjectRules: true
+        ))
+        try await waitForRun(wide)
+        let messages = wide.entries.map(\.inspection.message).sorted()
+        XCTAssertEqual(messages, [
+            "'caller' is never used in the project.", "'hidden' is private and nothing else in this file mentions it.",
+            "'orphan' is never used in the project.",
+        ])
+
+        let plain = workspace.startInspection(IDEInspectionLaunch(
+            swiftScope: SwiftInspectionScope(kind: .project), profile: .standard, profileName: "Default",
+            root: directory, onlyRules: nil, includeProjectRules: false
+        ))
+        try await waitForRun(plain)
+        XCTAssertEqual(plain.entries.map(\.inspection.message), ["'hidden' is private and nothing else in this file mentions it."],
+                       "the private one needs only its file; the project-wide one waits to be asked")
+    }
 }
+

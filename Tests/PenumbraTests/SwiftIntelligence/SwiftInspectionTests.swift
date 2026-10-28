@@ -296,6 +296,44 @@ final class SwiftInspectionTests: XCTestCase {
         XCTAssertTrue(findings(.highComplexity, nested, limits: limits).first?.message.contains("`inner`") ?? false)
     }
 
+    // MARK: - Unused private declarations
+
+    func testUnusedPrivateMember() {
+        assertFlags(.unusedPrivateMember, "struct S {\n    private func helper() {}\n    func run() {}\n}\n")
+        assertFlags(.unusedPrivateMember, "private let cache = 1\nfunc f() {}\n")
+        assertFlags(.unusedPrivateMember, "final class C {\n    fileprivate var count2 = 0\n}\n")
+        assertFlags(.unusedPrivateMember, "private struct Hidden {}\nfunc f() {}\n")
+        assertFlags(.unusedPrivateMember, "private typealias Alias = Int\nfunc f() {}\n")
+        assertFlags(.unusedPrivateMember, "@MainActor final class C {\n    private func helper() {}\n}\n")
+        assertFlags(.unusedPrivateMember, "struct S {\n    private var a = 1, b = 2\n    func f() -> Int { a }\n}\n")
+        let message = findings(.unusedPrivateMember, "struct S {\n    private func helper() {}\n}\n").first?.message
+        XCTAssertEqual(message, "'helper' is private and nothing else in this file mentions it.")
+
+        // Used in the file, by this or another type, or from an extension.
+        assertQuiet(.unusedPrivateMember, "struct S {\n    private func helper() {}\n    func run() { helper() }\n}\n")
+        assertQuiet(.unusedPrivateMember, "struct S {\n    private let id = 1\n}\nextension S {\n    func f() -> Int { id }\n}\n")
+        assertQuiet(.unusedPrivateMember, "private let shared = 1\nfunc f() -> Int { shared }\n")
+        assertQuiet(.unusedPrivateMember, "struct S {\n    private func h() {}\n    func f() { let g = { [self] in h() }; g() }\n}\n")
+        assertQuiet(.unusedPrivateMember, "struct S {\n    private var token = 1\n    func f() -> String { \"\\(token)\" }\n}\n")
+    }
+
+    func testUnusedPrivateMemberLeavesWhatTheRuntimeOrAMacroMayReach() {
+        for source in [
+            "final class C {\n    @objc private func tapped() {}\n}\n",
+            "final class C {\n    @IBOutlet private var label: UILabel!\n}\n",
+            "struct S {\n    @State private var open = false\n}\n",
+            "@Observable final class M {\n    private var value = 0\n}\n",
+            "final class D: B {\n    override private func f() {}\n}\n",
+            "struct S: Codable {\n    private enum CodingKeys: String, CodingKey { case a }\n    var a = 1\n}\n",
+            "struct V: View {\n    private var body: some View { Text(\"\") }\n}\n",
+            "protocol P {\n    func f()\n}\n",
+            "struct S {\n    private(set) var value = 0\n}\n",
+            "struct S {\n    var open: Int { 1 }\n    func f() {}\n}\n",
+        ] {
+            assertQuiet(.unusedPrivateMember, source)
+        }
+    }
+
     // MARK: - Options, suppression, broken code
 
     func testDefaultsAreOnForTheSafeRulesAndOffForTheOpinionatedOnes() {

@@ -6,6 +6,7 @@ public enum SwiftInspectionGroup: String, CaseIterable, Sendable {
     case redundantCode
     case idioms
     case naming
+    case unusedCode
     case metrics
 
     public var title: String {
@@ -14,6 +15,7 @@ public enum SwiftInspectionGroup: String, CaseIterable, Sendable {
         case .redundantCode: "Redundant code"
         case .idioms: "Swift idioms and performance"
         case .naming: "Naming conventions"
+        case .unusedCode: "Unused code"
         case .metrics: "Code metrics"
         }
     }
@@ -49,6 +51,10 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
     // Naming
     case typeNameCase = "type-name-case"
     case memberNameCase = "member-name-case"
+    // Unused code (the compiler warns about unused locals, not about these)
+    case unusedPrivateMember = "unused-private-member"
+    /// Needs the whole project: asks the index whether the name is mentioned anywhere else. Run by Inspect Code.
+    case unusedDeclaration = "unused-declaration"
     // Metrics
     case longFunction = "long-function"
     case highComplexity = "high-complexity"
@@ -69,6 +75,8 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
             .idioms
         case .typeNameCase, .memberNameCase:
             .naming
+        case .unusedPrivateMember, .unusedDeclaration:
+            .unusedCode
         case .longFunction, .highComplexity, .manyParameters:
             .metrics
         }
@@ -98,6 +106,8 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
         case .leftoverPrint: "Leftover print"
         case .typeNameCase: "Type name does not start with an uppercase letter"
         case .memberNameCase: "Member name starts with an uppercase letter"
+        case .unusedPrivateMember: "Unused private declaration"
+        case .unusedDeclaration: "Unused declaration"
         case .longFunction: "Long function"
         case .highComplexity: "Function is too complex"
         case .manyParameters: "Function has too many parameters"
@@ -129,6 +139,8 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
         case .leftoverPrint: "A `print`, `debugPrint` or `dump` call left in the code."
         case .typeNameCase: "Types are named in UpperCamelCase."
         case .memberNameCase: "Properties and functions are named in lowerCamelCase."
+        case .unusedPrivateMember: "A `private` or `fileprivate` function, property or type whose name appears nowhere else in its file, where nothing outside the file can use it."
+        case .unusedDeclaration: "An internal type, function or property whose name appears nowhere else in the project. Public API, attributed declarations, overrides, tests and protocol witnesses are left alone. Searches the whole project, so it runs from Inspect Code."
         case .longFunction: "A function longer than the limit."
         case .highComplexity: "A function with more decision points than the limit."
         case .manyParameters: "A function with more parameters than the limit."
@@ -180,9 +192,13 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
         case .manyParameters: "function_parameter_count"
         case .identicalOperands: "identical_operands"
         case .duplicateConditions: "duplicate_conditions"
+        case .unusedPrivateMember, .unusedDeclaration: "unused_declaration"
         case .emptyStatementBody, .redundantParentheses: nil
         }
     }
+
+    /// Rules that need the rest of the project, and so run from Inspect Code and not as you type.
+    public var isProjectWide: Bool { self == .unusedDeclaration }
 
     /// Whether the rule offers a quick fix at all.
     public var hasFixes: Bool {
@@ -220,15 +236,19 @@ public struct SwiftInspectionOptions: Sendable, Hashable {
     public var enabled: Set<String>
     public var severities: [String: SwiftInspection.Severity]
     public var limits: SwiftInspectionLimits
+    /// Whether the project-wide rules leave `public` and `open` declarations alone (their users may be outside).
+    public var treatsPublicApiAsUsed: Bool
 
     public init(
         disabled: Set<String> = [], enabled: Set<String> = [],
-        severities: [String: SwiftInspection.Severity] = [:], limits: SwiftInspectionLimits = .standard
+        severities: [String: SwiftInspection.Severity] = [:], limits: SwiftInspectionLimits = .standard,
+        treatsPublicApiAsUsed: Bool = true
     ) {
         self.disabled = disabled
         self.enabled = enabled
         self.severities = severities
         self.limits = limits
+        self.treatsPublicApiAsUsed = treatsPublicApiAsUsed
     }
 
     public static let standard = SwiftInspectionOptions()

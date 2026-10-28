@@ -209,7 +209,8 @@ public struct SwiftInspectionProfile: Sendable, Equatable, Codable {
     public func options(for file: SwiftInspectionFileContext? = nil) -> SwiftInspectionOptions {
         var options = SwiftInspectionOptions(
             disabled: disabled, enabled: enabled,
-            severities: severities.compactMapValues(SwiftInspection.Severity.init(rawValue:)), limits: inspectionLimits
+            severities: severities.compactMapValues(SwiftInspection.Severity.init(rawValue:)), limits: inspectionLimits,
+            treatsPublicApiAsUsed: treatsPublicApiAsUsed
         )
         guard let file, !scopedOverrides.isEmpty else { return options }
         for rule in SwiftInspectionRule.allCases {

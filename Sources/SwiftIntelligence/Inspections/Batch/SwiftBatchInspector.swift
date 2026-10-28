@@ -50,15 +50,22 @@ public struct SwiftBatchInspector: Sendable {
         public var maxConcurrentFiles: Int
         /// The options for one file, when a profile's scopes make them differ per file; `inspection` is the base otherwise.
         public var optionsForFile: (@Sendable (URL) -> SwiftInspectionOptions)?
+        /// Run the project-wide rules too (they ask the rest of the project, so they cost more per file).
+        public var includeProjectRules: Bool
+        /// Where the project-wide rules look names up; without it they do not run.
+        public var projectLookup: (any SwiftProjectNameLookup)?
 
         public init(
             inspection: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>? = nil, maxConcurrentFiles: Int = 4,
-            optionsForFile: (@Sendable (URL) -> SwiftInspectionOptions)? = nil
+            optionsForFile: (@Sendable (URL) -> SwiftInspectionOptions)? = nil,
+            includeProjectRules: Bool = false, projectLookup: (any SwiftProjectNameLookup)? = nil
         ) {
             self.inspection = inspection
             self.onlyRules = onlyRules
             self.maxConcurrentFiles = max(1, maxConcurrentFiles)
             self.optionsForFile = optionsForFile
+            self.includeProjectRules = includeProjectRules
+            self.projectLookup = projectLookup
         }
 
         /// What the pipeline runs with.
@@ -121,7 +128,16 @@ public struct SwiftBatchInspector: Sendable {
 
     private static func inspect(url: URL, options: Options, text: @Sendable (URL) async -> String?) async -> [SwiftLocatedInspection] {
         guard !Task.isCancelled, let source = await text(url) else { return [] }
-        return located(in: source, effectiveOptions: options.effective(for: url))
+        let effective = options.effective(for: url)
+        guard options.includeProjectRules, let lookup = options.projectLookup, effective.isEnabled(.unusedDeclaration),
+              source.utf8.count <= SwiftInspectionService.maximumUTF8Length else {
+            return located(in: source, effectiveOptions: effective)
+        }
+        let analysis = await SwiftInspectionPipeline.analyze(
+            text: source, options: effective, url: url, isTest: SwiftInspectionScope.isTest(url), lookup: lookup,
+            cache: SwiftSyntaxParseCache(capacity: 1)
+        )
+        return analysis.findings.map { SwiftLocatedInspection(inspection: $0, range: analysis.map.range(bytes: $0.bytes)) }
     }
 
     /// The findings of `source` under `options`.

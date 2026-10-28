@@ -18,6 +18,9 @@ final class SwiftInspectionWalker: SyntaxVisitor {
     /// Whether a type in this file has a `count` and no `isEmpty`: `x.count > 0` may then be about that type,
     /// where `isEmpty` does not compile. Set when the walk enters the file.
     private(set) var declaresCountWithoutIsEmpty = false
+    /// How many times each identifier is written in the file, declarations included. Set when the walk enters the
+    /// file, only while a rule that reads it is on.
+    private(set) var identifierCounts: [String: Int] = [:]
 
     init(enabled: Set<SwiftInspectionRule>, limits: SwiftInspectionLimits, utf8: [UInt8]) {
         self.enabled = enabled
@@ -114,6 +117,7 @@ final class SwiftInspectionWalker: SyntaxVisitor {
     // MARK: - Dispatch
 
     override func visit(_ node: SourceFileSyntax) -> SyntaxVisitorContinueKind {
+        if isOn(.unusedPrivateMember) { identifierCounts = Self.countIdentifiers(in: node) }
         if isOn(.countIsZero) {
             let finder = CountWithoutIsEmptyFinder()
             finder.walk(node)
@@ -199,6 +203,7 @@ final class SwiftInspectionWalker: SyntaxVisitor {
     }
 
     override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
+        checkUnusedPrivate(variable: node)
         checkDelegateNotWeak(node)
         checkRedundantOptionalInitialization(node)
         checkMemberNameCase(variable: node)
@@ -206,6 +211,7 @@ final class SwiftInspectionWalker: SyntaxVisitor {
     }
 
     override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
+        checkUnusedPrivate(function: node)
         checkRedundantVoidReturn(node)
         checkMemberNameCase(function: node)
         checkMetrics(name: node.name, parameters: node.signature.parameterClause.parameters.count, body: node.body)
@@ -218,31 +224,37 @@ final class SwiftInspectionWalker: SyntaxVisitor {
     }
 
     override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
+        checkUnusedPrivate(type: node, name: node.name, modifiers: node.modifiers, attributes: node.attributes)
         checkTypeName(node.name)
         return .visitChildren
     }
 
     override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
+        checkUnusedPrivate(type: node, name: node.name, modifiers: node.modifiers, attributes: node.attributes)
         checkTypeName(node.name)
         return .visitChildren
     }
 
     override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
+        checkUnusedPrivate(type: node, name: node.name, modifiers: node.modifiers, attributes: node.attributes)
         checkTypeName(node.name)
         return .visitChildren
     }
 
     override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind {
+        checkUnusedPrivate(type: node, name: node.name, modifiers: node.modifiers, attributes: node.attributes)
         checkTypeName(node.name)
         return .visitChildren
     }
 
     override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
+        checkUnusedPrivate(type: node, name: node.name, modifiers: node.modifiers, attributes: node.attributes)
         checkTypeName(node.name)
         return .visitChildren
     }
 
     override func visit(_ node: TypeAliasDeclSyntax) -> SyntaxVisitorContinueKind {
+        checkUnusedPrivate(type: node, name: node.name, modifiers: node.modifiers, attributes: node.attributes)
         checkTypeName(node.name)
         return .visitChildren
     }

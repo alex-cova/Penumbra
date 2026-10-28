@@ -99,6 +99,12 @@ final class IDESwiftSupport {
         }
     }
 
+    /// Returns once the index has read the project (or at once when it is not reading). The project-wide inspections
+    /// ask it for names, and an index still being built would make everything look unused.
+    func waitForIndex() async {
+        await rebuild?.value
+    }
+
     func cancelIndexing() {
         rebuild?.cancel()
         rebuild = nil

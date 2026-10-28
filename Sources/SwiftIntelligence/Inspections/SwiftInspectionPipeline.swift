@@ -26,8 +26,36 @@ public enum SwiftInspectionPipeline {
     public static func analyze(
         text: String, options: SwiftInspectionOptions, cache: SwiftSyntaxParseCache = .shared
     ) -> Analysis {
+        guard let parsed = walk(text: text, options: options, cache: cache) else { return .empty(for: text) }
+        return finish(parsed, options: options, extra: [])
+    }
+
+    /// The same, plus the project-wide rules (`unused-declaration`), which ask `lookup` where else a name is written.
+    /// For Inspect Code: it searches the project, so it is not for the editor's pass.
+    public static func analyze(
+        text: String, options: SwiftInspectionOptions, url: URL?, isTest: Bool = false,
+        lookup: (any SwiftProjectNameLookup)?, cache: SwiftSyntaxParseCache = .shared
+    ) async -> Analysis {
+        guard let parsed = walk(text: text, options: options, cache: cache) else { return .empty(for: text) }
+        var extra: [SwiftInspection] = []
+        if let lookup, options.isEnabled(.unusedDeclaration) {
+            extra = await SwiftProjectInspections.unusedDeclarations(
+                in: parsed.folded, url: url, isTest: isTest, treatsPublicApiAsUsed: options.treatsPublicApiAsUsed, lookup: lookup
+            )
+        }
+        return finish(parsed, options: options, extra: extra)
+    }
+
+    private struct Walked {
+        let document: SwiftSyntaxDocument
+        let folded: SourceFileSyntax
+        let map: SourceTextMap
+        let findings: [SwiftInspection]
+    }
+
+    private static func walk(text: String, options: SwiftInspectionOptions, cache: SwiftSyntaxParseCache) -> Walked? {
         let enabled = options.enabledRules
-        guard !enabled.isEmpty else { return .empty(for: text) }
+        guard !enabled.isEmpty else { return nil }
         let document = cache.document(for: text)
         let map = SourceTextMap(text)
 
@@ -38,9 +66,14 @@ public enum SwiftInspectionPipeline {
 
         let walker = SwiftInspectionWalker(enabled: enabled, limits: options.limits, utf8: map.utf8)
         walker.walk(folded)
-        var findings = walker.findings
+        return Walked(document: document, folded: folded, map: map, findings: walker.findings)
+    }
 
-        if document.hasSyntaxErrors {
+    private static func finish(_ walked: Walked, options: SwiftInspectionOptions, extra: [SwiftInspection]) -> Analysis {
+        let folded = walked.folded
+        let map = walked.map
+        var findings = walked.findings + extra
+        if walked.document.hasSyntaxErrors {
             // The parser recovers, and a rule reading half-written code would describe text that is not
             // there. What lies in a statement or declaration with an error in it is dropped.
             let broken = brokenRanges(in: folded)
