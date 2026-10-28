@@ -175,4 +175,12 @@ final class IDESwiftInspectCodeTests: XCTestCase {
         workspace.showInspectionSettings(code: "redundant-void-return", language: .swift)
         XCTAssertEqual(workspace.requestedSettingsDomain, .swift)
     }
+
+    func testTheMenusCommandsTurnTheRuleOffAndOpenItsSettings() async throws {
+        let workspace = try await makeWorkspace()
+        workspace.performCodeActionCommand(CodeActionCommand(id: SwiftInspectionCommand.disable, arguments: ["redundant-void-return"]))
+        XCTAssertFalse(IDESwiftInspectionSettings.current().isEnabled(.redundantVoidReturn))
+        workspace.performCodeActionCommand(CodeActionCommand(id: SwiftInspectionCommand.configure, arguments: ["redundant-void-return"]))
+        XCTAssertEqual(workspace.requestedSettingsDomain, .swift)
+    }
 }

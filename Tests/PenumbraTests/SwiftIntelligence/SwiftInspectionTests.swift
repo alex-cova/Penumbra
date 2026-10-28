@@ -413,6 +413,39 @@ final class SwiftInspectionTests: XCTestCase {
     }
 }
 
+extension SwiftInspectionTests {
+    func testTheMenuOffersFixAllForTheRuleAndTheCommandsToDisableOrConfigureIt() async throws {
+        let text = "func a() -> Void { }\nfunc b() -> () { }\nfunc c() -> Int { 1 }\n"
+        let origin = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        func document(_ text: String) -> Document {
+            Document(
+                url: URL(fileURLWithPath: "/tmp/Fix.swift"), displayName: "Fix.swift",
+                contentSnapshot: TextSnapshot(version: 0, text: text),
+                selection: Selection(range: EditorIntelligence.TextRange(start: origin, end: origin)),
+                cursor: Cursor(position: origin), viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
+                languageIdentifier: "swift"
+            )
+        }
+        let provider = SwiftCodeActionProvider(inspections: SwiftInspectionService())
+        let caret = TextPosition(line: 0, column: 12, utf16Offset: 12)
+        let actions = await provider.codeActions(for: document(text), at: caret, diagnostics: [])
+        let title = SwiftInspectionRule.redundantVoidReturn.title
+
+        let fixAll = try XCTUnwrap(actions.first { $0.title == "Fix all '\(title)' problems in file" }, "\(actions.map(\.title))")
+        XCTAssertEqual(fixAll.kind, "quickfix.fixAll")
+        XCTAssertEqual(fixAll.edits.count, 2, "both functions, none of the third")
+        let disable = try XCTUnwrap(actions.first { $0.title == "Disable inspection '\(title)'" })
+        XCTAssertEqual(disable.command, CodeActionCommand(id: SwiftInspectionCommand.disable, arguments: ["redundant-void-return"]))
+        let configure = try XCTUnwrap(actions.first { $0.title == "Edit inspection settings…" })
+        XCTAssertEqual(configure.command?.id, SwiftInspectionCommand.configure)
+
+        // One finding in the file: nothing to fix "all" of, but the commands stay.
+        let single = await provider.codeActions(for: document("func a() -> Void { }\n"), at: caret, diagnostics: [])
+        XCTAssertFalse(single.contains { $0.title.hasPrefix("Fix all") })
+        XCTAssertTrue(single.contains { $0.title == "Edit inspection settings…" })
+    }
+}
+
 private final class OptionsReads: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0

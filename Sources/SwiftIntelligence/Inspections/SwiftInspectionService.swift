@@ -55,6 +55,14 @@ public final class SwiftInspectionService: @unchecked Sendable {
     }
 }
 
+/// The commands the ⌥↩ menu hands the host for a Swift inspection; the argument is the rule's code.
+public enum SwiftInspectionCommand {
+    /// Switch the rule off.
+    public static let disable = "swift.inspection.disable"
+    /// Open the inspection settings on the rule.
+    public static let configure = "swift.inspection.configure"
+}
+
 /// The inspections' squiggles. Findings are `Diagnostic`s with the source `swift-inspection` and the rule id
 /// as their code.
 public struct SwiftInspectionDiagnosticProvider: DiagnosticProvider {
@@ -76,6 +84,7 @@ extension SwiftInspectionService {
     func codeActions(for document: Document, at position: TextPosition) -> [CodeAction] {
         guard let analysis = analysis(for: document) else { return [] }
         var actions: [CodeAction] = []
+        var seenRules = Set<String>()
         for finding in analysis.findings {
             let range = analysis.map.range(bytes: finding.bytes)
             guard Self.contains(range, position) else { continue }
@@ -85,6 +94,22 @@ extension SwiftInspectionService {
             if let suppression = SwiftInspectionPipeline.suppressionFix(for: finding, in: analysis) {
                 actions.append(suppression.codeAction(map: analysis.map))
             }
+            // Once per rule: every fix of it in the file, and the commands to switch it off or open its settings.
+            guard let rule = SwiftInspectionRule(code: finding.id), seenRules.insert(finding.id).inserted else { continue }
+            if rule.hasFixes, analysis.findings.filter({ $0.id == finding.id }).count > 1 {
+                let all = SwiftBatchFixer.fixAll(rules: [rule], in: document.text, options: currentOptions)
+                if all.edits.count > 1 {
+                    actions.append(CodeAction(title: "Fix all '\(rule.title)' problems in file", kind: "quickfix.fixAll", edits: all.edits))
+                }
+            }
+            actions.append(CodeAction(
+                title: "Disable inspection '\(rule.title)'", kind: "inspection",
+                edits: [], command: CodeActionCommand(id: SwiftInspectionCommand.disable, arguments: [rule.code])
+            ))
+            actions.append(CodeAction(
+                title: "Edit inspection settings…", kind: "inspection",
+                edits: [], command: CodeActionCommand(id: SwiftInspectionCommand.configure, arguments: [rule.code])
+            ))
         }
         return actions
     }

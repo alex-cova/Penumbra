@@ -19,6 +19,15 @@ extension IDEWorkspace {
             performIntentionCommand(command)
             return
         }
+        if command.id == SwiftInspectionCommand.disable || command.id == SwiftInspectionCommand.configure {
+            guard let code = command.arguments.first else { return }
+            if command.id == SwiftInspectionCommand.disable {
+                disableInspection(code: code, language: .swift)
+            } else {
+                showInspectionSettings(code: code, language: .swift)
+            }
+            return
+        }
         guard let code = command.arguments.first, let rule = JavaInspectionRule(code: code) else {
             performRunCodeAction(command)
             return
