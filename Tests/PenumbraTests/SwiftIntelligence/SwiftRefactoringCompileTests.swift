@@ -14,6 +14,7 @@ final class SwiftRefactoringCompileTests: XCTestCase {
         case addType
         case move
         case shorthand
+        case signature(@Sendable (inout [SwiftSignatureParameter]) -> Void)
     }
 
     private static let cases: [(name: String, kind: Kind, source: String)] = [
@@ -52,6 +53,16 @@ final class SwiftRefactoringCompileTests: XCTestCase {
         ("shorten self", .shorthand, "final class F3 {\n    func run() { let weak1 = { [weak self] in if let ‸self = self { print(self) } }; weak1() }\n}\n"),
         ("expand if let", .shorthand, "func f4(x: Int?) {\n    if let ‸x { print(x) }\n}\n"),
         ("expand while let", .shorthand, "func f5(x: Int?) {\n    while let ‸x { print(x); return }\n}\n"),
+        ("signature reorder", .signature({ $0.reverse() }), "func ‸s1(a: Int, b: String) -> String { b + String(a) }\nfunc t1() -> String { s1(a: 1, b: \"x\") + s1(a: 2, b: \"y\") }\n"),
+        ("signature relabel", .signature({ $0[0].label = "from"; $0[1].label = "_" }), "struct S2 {\n    func ‸s2(a: Int, b: Int) -> Int { a + b }\n    func t() -> Int { s2(a: 1, b: 2) + self.s2(a: 3, b: 4) }\n}\n"),
+        ("signature add with call-site value", .signature({ $0.insert(.init(label: "scale", name: "scale", type: "Int", callSiteValue: "10"), at: 1) }), "func ‸s3(a: Int, b: Int) -> Int { a * b }\nfunc t3() -> Int { s3(a: 1, b: 2) }\n"),
+        ("signature add with default", .signature({ $0.append(.init(label: "c", name: "c", type: "Int", defaultValue: "0")) }), "func ‸s4(a: Int) -> Int { a }\nfunc t4() -> Int { s4(a: 1) }\n"),
+        ("signature remove unused", .signature({ $0.remove(at: 1) }), "func ‸s5(a: Int, unused: Int, b: Int = 2) -> Int { a + b }\nfunc t5() -> Int { s5(a: 1, unused: 9) + s5(a: 1, unused: 9, b: 3) }\n"),
+        ("signature rename internal", .signature({ $0[0].name = "value" }), "func ‸s6(_ a: Int) -> Int {\n    let doubled = a * 2\n    return doubled + a\n}\nfunc t6() -> Int { s6(4) }\n"),
+        ("signature protocol and conformer", .signature({ $0.reverse() }), "protocol P7 {\n    func ‸s7(_ a: Int, _ b: String) -> String\n}\nstruct C7: P7 {\n    func s7(_ x: Int, _ y: String) -> String { y + String(x) }\n}\nfunc t7(p: P7) -> String { p.s7(1, \"a\") + C7().s7(2, \"b\") }\n"),
+        ("signature trailing closure", .signature({ $0.insert(.init(label: "times", name: "times", type: "Int", callSiteValue: "2"), at: 1) }), "func ‸s8(n: Int, body: () -> Void) { for _ in 0 ..< n { body() } }\nfunc t8() { s8(n: 1) { print(1) } }\n"),
+        ("signature variadic", .signature({ $0.reverse() }), "func ‸s9(_ xs: Int..., sep: String) -> String { xs.map(String.init).joined(separator: sep) }\nfunc t9() -> String { s9(1, 2, 3, sep: \",\") }\n"),
+        ("signature across lines", .signature({ $0.reverse() }), "func ‸s10(\n    a: Int,\n    b: Int\n) -> Int { a - b }\nfunc t10() -> Int {\n    s10(\n        a: 1,\n        b: 2\n    )\n}\n"),
         ("move method", .move, "struct E1 {\n    var stored = 1\n\n    /// The answer.\n    func ‸f() -> Int { stored }\n    func g() {}\n}\n"),
         ("move nested", .move, "enum E2 {\n    struct Inner {\n        func ‸f() {}\n    }\n}\n"),
         ("move computed", .move, "struct E3 {\n    var n = 1\n    var ‸double: Int { n * 2 }\n}\n"),
@@ -81,6 +92,22 @@ final class SwiftRefactoringCompileTests: XCTestCase {
             case .addType: result = SwiftAddExplicitType.edits(in: marked.text, caret: marked.caret)
             case .move: result = SwiftMoveToExtension.edits(in: marked.text, caret: marked.caret)
             case .shorthand: result = SwiftOptionalBindingShorthand.edits(in: marked.text, caret: marked.caret)
+            case .signature(let transform):
+                guard let subject = SwiftChangeSignature.subject(in: marked.text, caret: marked.caret) else {
+                    failures.append("\(name): no function at the caret")
+                    continue
+                }
+                var change = SwiftSignatureChange(parameters: subject.parameters, oldShape: subject.shape)
+                transform(&change.parameters)
+                switch SwiftChangeSignature.edits(
+                    in: marked.text, nameBytes: SwiftRefactoringTests.occurrences(of: subject.name, in: marked.text),
+                    primary: subject.nameBytes, oldCount: subject.parameterCount, change: change
+                ) {
+                case .success(let outcome):
+                    if !outcome.skipped.isEmpty { failures.append("\(name): left \(outcome.skipped.count) calls unchanged") }
+                    result = .success(outcome.edits)
+                case .failure(let failure): result = .failure(failure)
+                }
             }
             guard let after = SwiftRefactoringTests.apply(result, to: marked.text) else {
                 if case .failure(let failure) = result { failures.append("\(name): refused: \(failure.message)") }

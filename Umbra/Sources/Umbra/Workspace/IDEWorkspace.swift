@@ -560,6 +560,7 @@ public final class IDEWorkspace {
     @ObservationIgnored private let renamePrompt = IDERenamePrompt()
     @ObservationIgnored private let refactoringNamePrompt = IDERefactoringNamePrompt()
     @ObservationIgnored private let changeSignaturePrompt = IDEChangeSignaturePrompt()
+    @ObservationIgnored private let swiftSignaturePrompt = IDESwiftSignaturePrompt()
     @ObservationIgnored private let generatePrompt = IDEGeneratePrompt()
     /// The app's shared stores (see `IDESharedServices`): every window reads and writes the same
     /// instances, so one window's change is neither lost nor missed by another.
@@ -3554,7 +3555,12 @@ public final class IDEWorkspace {
         }
         host.intelligenceController?.onRequestRefactoringParameters = { [weak self, weak host] descriptor, completion in
             guard let self, let textView = host?.textView else { return completion(nil) }
-            self.changeSignaturePrompt.present(descriptor: descriptor, in: textView, completion: completion)
+            // Swift edits a whole parameter list; Java's form adds or removes one.
+            if descriptor.parameterKeys == ["parameters"] {
+                self.swiftSignaturePrompt.present(descriptor: descriptor, in: textView, completion: completion)
+            } else {
+                self.changeSignaturePrompt.present(descriptor: descriptor, in: textView, completion: completion)
+            }
         }
         host.intelligenceController?.onRequestGeneration = { [weak self, weak host] menu, completion in
             guard let self, let textView = host?.textView else { return completion(nil) }

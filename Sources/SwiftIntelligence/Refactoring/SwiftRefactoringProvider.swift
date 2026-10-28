@@ -40,8 +40,8 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
         if let subject = SwiftChangeSignature.subject(in: text, caret: caret) {
             descriptors.append(RefactoringDescriptor(
                 id: .changeSignature, title: "Change Function Signature…", requiresSelection: false,
-                parameterKeys: ["newName", "addParameterType", "addParameterName", "addParameterDefault", "removeLastParameter"],
-                suggestedParameters: ["newName": subject.name, "removeLastParameter": "false"]
+                parameterKeys: ["parameters"],
+                suggestedParameters: ["parameters": SwiftSignatureChange(parameters: subject.parameters).json, "functionName": subject.name]
             ))
         }
         if let direction = SwiftConditionalConversion.available(in: text, caret: caret) {
@@ -108,25 +108,14 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
         guard let subject = SwiftChangeSignature.subject(in: text, caret: caret) else {
             return WorkspaceEditPlan(blockingError: "Place the caret on the function's name or parameters.", title: title)
         }
-        if let newName = parameters["newName"], newName != subject.name {
-            return WorkspaceEditPlan(blockingError: "To rename the function use Rename; this changes the parameters.", title: title)
+        guard var change = SwiftSignatureChange(json: parameters["parameters"]) else {
+            return WorkspaceEditPlan(blockingError: "Enter a valid parameter list.", title: title)
         }
-        func value(_ key: String) -> String { parameters[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
-        let change = SwiftSignatureChange(
-            addName: value("addParameterName"), addType: value("addParameterType"), addDefault: value("addParameterDefault"),
-            removeLast: parameters["removeLastParameter"] == "true"
-        )
-        if change.removeLast, change.addsParameter {
-            return WorkspaceEditPlan(blockingError: "Choose add or remove, not both.", title: title)
+        change.oldShape = subject.shape
+        if let problem = SwiftChangeSignature.problem(in: change, oldCount: subject.parameterCount) {
+            return WorkspaceEditPlan(blockingError: problem, title: title)
         }
-        if change.addsParameter {
-            guard !change.addName.isEmpty, !change.addType.isEmpty, !change.addDefault.isEmpty else {
-                return WorkspaceEditPlan(blockingError: "Give the new parameter a name, a type and a default value.", title: title)
-            }
-            guard SwiftIdentifiers.isValid(change.addName) else {
-                return WorkspaceEditPlan(blockingError: "'\(change.addName)' is not a valid parameter name.", title: title)
-            }
-        } else if !change.removeLast {
+        if change.parameters == subject.parameters {
             return WorkspaceEditPlan(blockingError: "Nothing to change.", title: title)
         }
 
@@ -162,7 +151,11 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
                 let range = lower ..< lower + subject.name.utf8.count
                 if fileMap.text(bytes: range) == subject.name { names.append(range) }
             }
-            switch SwiftChangeSignature.edits(in: fileText, nameBytes: names, parameterCount: subject.parameterCount, change: change) {
+            let isDocument = fileURL.path == url.standardizedFileURL.path
+            switch SwiftChangeSignature.edits(
+                in: fileText, nameBytes: names, primary: isDocument ? subject.nameBytes : nil,
+                oldCount: subject.parameterCount, change: change
+            ) {
             case .failure(let failure):
                 return WorkspaceEditPlan(blockingError: failure.message, title: title)
             case .success(let outcome):
@@ -171,7 +164,7 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
                         ambiguous.contains("\(fileURL.path):\(entry.range.start.utf16Offset)")
                             && fileMap.byteOffset(utf16: entry.range.start.utf16Offset) <= edit.bytes.upperBound
                     }
-                    entries.append(Self.entry(for: edit, text: fileText, map: fileMap, url: fileURL, description: change.removeLast ? "remove parameter" : "add parameter", ambiguous: wasAmbiguous && fileURL.path != url.standardizedFileURL.path))
+                    entries.append(Self.entry(for: edit, text: fileText, map: fileMap, url: fileURL, description: "change parameters", ambiguous: wasAmbiguous && fileURL.path != url.standardizedFileURL.path))
                 }
                 for skipped in outcome.skipped {
                     let position = fileMap.position(atByte: skipped.lowerBound)

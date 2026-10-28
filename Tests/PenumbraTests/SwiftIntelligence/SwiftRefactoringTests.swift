@@ -328,52 +328,158 @@ final class SwiftRefactoringTests: XCTestCase {
 
     // MARK: - Change signature
 
-    func testAddsAParameterWithADefaultAndLeavesCallsAlone() {
-        let source = "func f(a: Int) -> Int { a }\nfunc g() -> Int { f(a: 1) }\n"
-        let functionName = source.range(of: "f(a")!.lowerBound
-        let nameBytes = source.utf8.distance(from: source.startIndex, to: functionName)
-        guard case .success(let outcome) = SwiftChangeSignature.edits(
-            in: source, nameBytes: [nameBytes ..< nameBytes + 1, (source.range(of: "f(a: 1)")!.lowerBound.utf16Offset(in: source)) ..< (source.range(of: "f(a: 1)")!.lowerBound.utf16Offset(in: source)) + 1],
-            parameterCount: 1, change: SwiftSignatureChange(addName: "b", addType: "Int", addDefault: "0")
-        ) else { return XCTFail("refused") }
-        XCTAssertEqual(Self.apply(.success(outcome.edits), to: source), "func f(a: Int, b: Int = 0) -> Int { a }\nfunc g() -> Int { f(a: 1) }\n")
-    }
-
-    func testRemovesTheLastParameterAndItsArgumentsButOnlyWhenItIsUnused() {
-        let source = "func f(a: Int, b: Int) -> Int { a }\nfunc g() -> Int { f(a: 1, b: 2) + f(a: 3, b: 4) }\n"
-        let names = ["f(a: Int", "f(a: 1", "f(a: 3"].map { token -> Range<Int> in
-            let start = source.utf8.distance(from: source.startIndex, to: source.range(of: token)!.lowerBound)
-            return start ..< start + 1
+    /// The byte range of every whole-word occurrence of `name` (declaration, calls, anything else that names it).
+    static func occurrences(of name: String, in text: String) -> [Range<Int>] {
+        let bytes = Array(text.utf8)
+        let word = Array(name.utf8)
+        func isWord(_ byte: UInt8) -> Bool { byte == 0x5F || (0x30 ... 0x39).contains(byte) || (0x41 ... 0x5A).contains(byte) || (0x61 ... 0x7A).contains(byte) }
+        var result: [Range<Int>] = []
+        var index = 0
+        while index + word.count <= bytes.count {
+            if Array(bytes[index ..< index + word.count]) == word,
+               index == 0 || !isWord(bytes[index - 1]), index + word.count == bytes.count || !isWord(bytes[index + word.count]) {
+                result.append(index ..< index + word.count)
+                index += word.count
+            } else {
+                index += 1
+            }
         }
-        guard case .success(let outcome) = SwiftChangeSignature.edits(
-            in: source, nameBytes: names, parameterCount: 2, change: SwiftSignatureChange(removeLast: true)
-        ) else { return XCTFail("refused") }
-        XCTAssertEqual(Self.apply(.success(outcome.edits), to: source), "func f(a: Int) -> Int { a }\nfunc g() -> Int { f(a: 1) + f(a: 3) }\n")
-
-        let used = "func f(a: Int, b: Int) -> Int { a + b }\n"
-        XCTAssertNotNil(refusal(SwiftChangeSignature.edits(in: used, nameBytes: [5 ..< 6], parameterCount: 2, change: SwiftSignatureChange(removeLast: true)).map { _ in [] }))
+        return result
     }
 
-    func testACallWithATrailingClosureIsReportedNotRewritten() {
-        let source = "func f(a: Int, work: () -> Void) {}\nfunc g() { f(a: 1) { } }\n"
-        let names = ["f(a: Int", "f(a: 1"].map { token -> Range<Int> in
-            let start = source.utf8.distance(from: source.startIndex, to: source.range(of: token)!.lowerBound)
-            return start ..< start + 1
+    /// The subject at `‸`, the change `transform` makes to its parameters, and the text with the edits applied to
+    /// every occurrence of the function's name.
+    private func changeSignature(
+        _ marked: String, transform: (inout [SwiftSignatureParameter]) -> Void
+    ) -> (text: String?, failure: String?, skipped: Int) {
+        let parsed = Self.parse(marked)
+        guard let subject = SwiftChangeSignature.subject(in: parsed.text, caret: parsed.caret) else { return (nil, "no subject", 0) }
+        var change = SwiftSignatureChange(parameters: subject.parameters, oldShape: subject.shape)
+        transform(&change.parameters)
+        switch SwiftChangeSignature.edits(
+            in: parsed.text, nameBytes: Self.occurrences(of: subject.name, in: parsed.text), primary: subject.nameBytes,
+            oldCount: subject.parameterCount, change: change
+        ) {
+        case .failure(let failure): return (nil, failure.message, 0)
+        case .success(let outcome): return (Self.apply(.success(outcome.edits), to: parsed.text), nil, outcome.skipped.count)
         }
-        guard case .success(let outcome) = SwiftChangeSignature.edits(
-            in: source, nameBytes: names, parameterCount: 2, change: SwiftSignatureChange(removeLast: true)
-        ) else { return XCTFail("refused") }
-        XCTAssertEqual(outcome.skipped.count, 1)
     }
 
-    func testTheSubjectIsTheFunctionAtTheCaret() {
-        let source = "struct S {\n    func run(a: Int, b: String) {}\n}\n"
+    func testTheSubjectIsTheFunctionAtTheCaretWithItsParametersAsCallsSeeThem() {
+        let source = "struct S {\n    func run(_ a: Int, with b: String = \"x\", rest: Int...) {}\n}\n"
         let caret = source.utf8.distance(from: source.startIndex, to: source.range(of: "run")!.lowerBound) + 1
         let subject = SwiftChangeSignature.subject(in: source, caret: caret)
         XCTAssertEqual(subject?.name, "run")
-        XCTAssertEqual(subject?.parameterCount, 2)
-        XCTAssertEqual(subject?.lastParameter, "b")
+        XCTAssertEqual(subject?.parameters.map(\.label), ["_", "with", "rest"])
+        XCTAssertEqual(subject?.parameters.map(\.name), ["a", "b", "rest"])
+        XCTAssertEqual(subject?.parameters.map(\.type), ["Int", "String", "Int..."])
+        XCTAssertEqual(subject?.parameters.map(\.defaultValue), ["", "\"x\"", ""])
+        XCTAssertEqual(subject?.shape, [.init(label: "_", hasDefault: false, isVariadic: false), .init(label: "with", hasDefault: true, isVariadic: false), .init(label: "rest", hasDefault: false, isVariadic: true)])
         XCTAssertNil(SwiftChangeSignature.subject(in: source, caret: 2))
+    }
+
+    func testReorderingParametersReordersTheArgumentsOfEveryCall() {
+        let result = changeSignature("func ‸f(a: Int, b: String) {}\nfunc g() { f(a: 1, b: \"x\"); f(a: 2, b: \"y\") }\n") { $0.reverse() }
+        XCTAssertEqual(result.text, "func f(b: String, a: Int) {}\nfunc g() { f(b: \"x\", a: 1); f(b: \"y\", a: 2) }\n")
+        XCTAssertEqual(result.skipped, 0)
+    }
+
+    func testRelabelingChangesTheLabelAtDeclarationAndCalls() {
+        let result = changeSignature("func ‸f(from a: Int, _ b: Int) {}\nfunc g() { f(from: 1, 2) }\n") {
+            $0[0].label = "to"
+            $0[1].label = "extra"
+        }
+        XCTAssertEqual(result.text, "func f(to a: Int, extra b: Int) {}\nfunc g() { f(to: 1, extra: 2) }\n")
+        let unlabeled = changeSignature("func ‸f(a: Int) {}\nfunc g() { f(a: 1) }\n") { $0[0].label = "_" }
+        XCTAssertEqual(unlabeled.text, "func f(_ a: Int) {}\nfunc g() { f(1) }\n")
+    }
+
+    func testRenamingTheParameterRenamesItThroughTheBody() {
+        let result = changeSignature("func ‸f(_ a: Int) -> Int {\n    let b = a + 1\n    return a * b\n}\n") { $0[0].name = "value" }
+        XCTAssertEqual(result.text, "func f(_ value: Int) -> Int {\n    let b = value + 1\n    return value * b\n}\n")
+        // The label is kept when it differs from the name; when they become the same, one word is written.
+        let same = changeSignature("func ‸f(value a: Int) {}\nfunc g() { f(value: 1) }\n") { $0[0].name = "value" }
+        XCTAssertEqual(same.text, "func f(value: Int) {}\nfunc g() { f(value: 1) }\n")
+    }
+
+    func testRemovingAParameterDropsItsArgumentButNotWhenTheBodyReadsIt() {
+        let result = changeSignature("func ‸f(a: Int, b: Int, c: Int) -> Int { a + c }\nfunc g() -> Int { f(a: 1, b: 2, c: 3) }\n") { $0.remove(at: 1) }
+        XCTAssertEqual(result.text, "func f(a: Int, c: Int) -> Int { a + c }\nfunc g() -> Int { f(a: 1, c: 3) }\n")
+        let used = changeSignature("func ‸f(a: Int, b: Int) -> Int { a + b }\n") { $0.removeLast() }
+        XCTAssertNotNil(used.failure)
+        XCTAssertTrue(used.failure?.contains("`b`") ?? false)
+    }
+
+    func testANewParameterGetsItsDefaultOrTheValueEveryCallPasses() {
+        let withDefault = changeSignature("func ‸f(a: Int) {}\nfunc g() { f(a: 1) }\n") {
+            $0.append(.init(label: "b", name: "b", type: "Int", defaultValue: "0"))
+        }
+        XCTAssertEqual(withDefault.text, "func f(a: Int, b: Int = 0) {}\nfunc g() { f(a: 1) }\n", "the default keeps the call valid")
+        let withValue = changeSignature("func ‸f(a: Int) {}\nfunc g() { f(a: 1) }\n") {
+            $0.insert(.init(label: "_", name: "scale", type: "Double", callSiteValue: "2.0"), at: 0)
+        }
+        XCTAssertEqual(withValue.text, "func f(_ scale: Double, a: Int) {}\nfunc g() { f(2.0, a: 1) }\n")
+    }
+
+    func testDefaultedAndVariadicParametersAreMatchedAndKept() {
+        let defaulted = changeSignature("func ‸f(a: Int = 1, b: Int) {}\nfunc g() { f(b: 2); f(a: 3, b: 4) }\n") { $0.reverse() }
+        XCTAssertEqual(defaulted.text, "func f(b: Int, a: Int = 1) {}\nfunc g() { f(b: 2); f(b: 4, a: 3) }\n")
+        let variadic = changeSignature("func ‸f(_ xs: Int..., sep: String) {}\nfunc g() { f(1, 2, 3, sep: \",\") }\n") { $0.reverse() }
+        XCTAssertEqual(variadic.text, "func f(sep: String, _ xs: Int...) {}\nfunc g() { f(sep: \",\", 1, 2, 3) }\n")
+    }
+
+    func testATrailingClosureMustStayLastAndItsLabelsFollow() {
+        let source = "func ‸run(n: Int, body: () -> Void) {}\nfunc g() { run(n: 1) { } }\n"
+        let relabeled = changeSignature(source) { $0[0].label = "count" }
+        XCTAssertEqual(relabeled.text, "func run(count n: Int, body: () -> Void) {}\nfunc g() { run(count: 1) { } }\n")
+        let added = changeSignature(source) { $0.insert(.init(label: "m", name: "m", type: "Int", callSiteValue: "7"), at: 1) }
+        XCTAssertEqual(added.text, "func run(n: Int, m: Int, body: () -> Void) {}\nfunc g() { run(n: 1, m: 7) { } }\n")
+        let moved = changeSignature(source) { $0.reverse() }
+        XCTAssertNil(moved.text.flatMap { $0.contains("run(n: 1) { }") ? nil : $0 }, "the closure parameter moved: the call is left alone")
+        XCTAssertEqual(moved.skipped, 1)
+    }
+
+    func testACallItCannotMatchIsLeftAndReported() {
+        let result = changeSignature("func ‸f(a: Int, b: Int) {}\nfunc g() { f(a: 1); f(b: 2, a: 1) }\n") { $0.reverse() }
+        XCTAssertEqual(result.text, "func f(b: Int, a: Int) {}\nfunc g() { f(a: 1); f(b: 2, a: 1) }\n", "`f(a: 1)` misses a required parameter, `f(b: 2, a: 1)` is already out of order")
+        XCTAssertEqual(result.skipped, 2)
+    }
+
+    func testAListSpreadOverLinesStaysSpreadOverLines() {
+        let source = "func ‸f(\n    a: Int,\n    b: Int\n) {}\nfunc g() {\n    f(\n        a: 1,\n        b: 2\n    )\n}\n"
+        let result = changeSignature(source) { $0.reverse() }
+        XCTAssertEqual(result.text, "func f(\n    b: Int,\n    a: Int\n) {}\nfunc g() {\n    f(\n        b: 2,\n        a: 1\n    )\n}\n")
+    }
+
+    func testAnOverrideKeepsItsOwnInternalNames() {
+        let source = "protocol P {\n    func ‸f(_ a: Int, _ b: Int)\n}\nstruct S: P {\n    func f(_ x: Int, _ y: Int) { print(x, y) }\n}\n"
+        let result = changeSignature(source) { $0.reverse() }
+        XCTAssertEqual(result.text, "protocol P {\n    func f(_ b: Int, _ a: Int)\n}\nstruct S: P {\n    func f(_ y: Int, _ x: Int) { print(x, y) }\n}\n")
+    }
+
+    func testNonsenseLists() {
+        func problem(_ edit: (inout [SwiftSignatureParameter]) -> Void) -> String? {
+            var parameters = [SwiftSignatureParameter(oldIndex: 0, label: "a", name: "a", type: "Int"), SwiftSignatureParameter(oldIndex: 1, label: "b", name: "b", type: "Int")]
+            edit(&parameters)
+            return SwiftChangeSignature.problem(in: SwiftSignatureChange(parameters: parameters), oldCount: 2)
+        }
+        XCTAssertNil(problem { _ in })
+        XCTAssertNotNil(problem { $0[1].label = "a" }, "two labels")
+        XCTAssertNotNil(problem { $0[1].name = "a" }, "two names")
+        XCTAssertNotNil(problem { $0[0].name = "class" }, "a keyword")
+        XCTAssertNotNil(problem { $0[0].name = "1x" })
+        XCTAssertNotNil(problem { $0.append(.init(label: "c", name: "c", type: "Int")) }, "new, no default and no call-site value")
+        XCTAssertNotNil(problem { $0.append(.init(label: "c", name: "c", type: "  ", defaultValue: "1")) }, "new, no type")
+        XCTAssertNotNil(problem { $0[1].oldIndex = 0 }, "the same old parameter twice")
+        XCTAssertNil(problem { $0.append(.init(label: "_", name: "c", type: "Int", defaultValue: "1")) })
+        XCTAssertNil(problem { $0[0].label = "in" }, "`in` is a fine label")
+    }
+
+    func testTheChangeTravelsAsJSON() throws {
+        let change = SwiftSignatureChange(parameters: [.init(oldIndex: 1, label: "_", name: "x", type: "Int", defaultValue: "3", callSiteValue: "")])
+        XCTAssertEqual(SwiftSignatureChange(json: change.json)?.parameters, change.parameters)
+        XCTAssertNil(SwiftSignatureChange(json: "nonsense"))
+        XCTAssertNil(SwiftSignatureChange(json: nil))
     }
 
     // MARK: - Optional binding shorthand

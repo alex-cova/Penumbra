@@ -90,47 +90,86 @@ final class SwiftRefactoringProviderTests: XCTestCase {
 
     // MARK: - Change signature across files
 
-    func testAddingAParameterEditsTheDeclarationAndKeepsCallsInOtherFilesValid() async throws {
-        let marked = SwiftRefactoringTests.parse("struct Greeter {\n    func ‸greet(name: String) -> String { \"Hi \" + name }\n}\n")
-        let (provider, document, url) = try await provider(
-            files: ["Use.swift": "func use(g: Greeter) -> String { g.greet(name: \"a\") }\n"], open: "Greeter.swift", noting: marked
-        )
-        let plan = try await provider.plan(.changeSignature, context: context(document), parameters: [
-            "newName": "greet", "addParameterName": "loud", "addParameterType": "Bool", "addParameterDefault": "false",
-        ])
-        XCTAssertNil(plan.blockingError)
-        XCTAssertEqual(
-            applied(plan, to: url, text: marked.text),
-            "struct Greeter {\n    func greet(name: String, loud: Bool = false) -> String { \"Hi \" + name }\n}\n"
-        )
-        XCTAssertEqual(plan.entries.count, 1, "the call is valid as it is")
+    private func parametersJSON(of document: Document, at marked: SwiftRefactoringTests.Marked, _ transform: (inout [SwiftSignatureParameter]) -> Void) -> String {
+        let subject = SwiftChangeSignature.subject(in: marked.text, caret: marked.caret)!
+        var parameters = subject.parameters
+        transform(&parameters)
+        return SwiftSignatureChange(parameters: parameters).json
     }
 
-    func testRemovingTheLastParameterRewritesEveryCall() async throws {
+    func testTheMenuOffersTheParameterListToEdit() async throws {
+        let marked = SwiftRefactoringTests.parse("func ‸scale(by factor: Int, _ x: Double = 1) {}\n")
+        let (provider, document, _) = try await provider(files: [:], open: "A.swift", noting: marked)
+        let available = await provider.availableRefactorings(context(document))
+        let descriptor = try XCTUnwrap(available.first { $0.id == .changeSignature })
+        XCTAssertEqual(descriptor.parameterKeys, ["parameters"])
+        let list = try XCTUnwrap(SwiftSignatureChange(json: descriptor.suggestedParameters["parameters"]))
+        XCTAssertEqual(list.parameters.map(\.label), ["by", "_"])
+        XCTAssertEqual(list.parameters.map(\.defaultValue), ["", "1"])
+    }
+
+    func testReorderingEditsTheDeclarationAndTheCallsInOtherFiles() async throws {
         let marked = SwiftRefactoringTests.parse("struct Greeter {\n    func ‸greet(name: String, times: Int) -> String { name }\n}\n")
         let useURL = root.appendingPathComponent("Use.swift")
         let use = "func use(g: Greeter) -> String { g.greet(name: \"a\", times: 2) + g.greet(name: \"b\", times: 3) }\n"
         let (provider, document, url) = try await provider(files: ["Use.swift": use], open: "Greeter.swift", noting: marked)
-        let plan = try await provider.plan(.changeSignature, context: context(document), parameters: [
-            "newName": "greet", "removeLastParameter": "true",
-        ])
+        let json = parametersJSON(of: document, at: marked) { $0.reverse() }
+        let plan = try await provider.plan(.changeSignature, context: context(document), parameters: ["parameters": json])
         XCTAssertNil(plan.blockingError, plan.blockingError ?? "")
-        XCTAssertEqual(applied(plan, to: url, text: marked.text), "struct Greeter {\n    func greet(name: String) -> String { name }\n}\n")
-        XCTAssertEqual(applied(plan, to: useURL, text: use), "func use(g: Greeter) -> String { g.greet(name: \"a\") + g.greet(name: \"b\") }\n")
+        XCTAssertEqual(applied(plan, to: url, text: marked.text), "struct Greeter {\n    func greet(times: Int, name: String) -> String { name }\n}\n")
+        XCTAssertEqual(applied(plan, to: useURL, text: use), "func use(g: Greeter) -> String { g.greet(times: 2, name: \"a\") + g.greet(times: 3, name: \"b\") }\n")
+        XCTAssertTrue(plan.warnings.isEmpty, "\(plan.warnings)")
+    }
+
+    func testAddingAParameterWithADefaultLeavesTheCallsAlone() async throws {
+        let marked = SwiftRefactoringTests.parse("struct Greeter {\n    func ‸greet(name: String) -> String { name }\n}\n")
+        let (provider, document, url) = try await provider(
+            files: ["Use.swift": "func use(g: Greeter) -> String { g.greet(name: \"a\") }\n"], open: "Greeter.swift", noting: marked
+        )
+        let json = parametersJSON(of: document, at: marked) { $0.append(.init(label: "loud", name: "loud", type: "Bool", defaultValue: "false")) }
+        let plan = try await provider.plan(.changeSignature, context: context(document), parameters: ["parameters": json])
+        XCTAssertNil(plan.blockingError)
+        XCTAssertEqual(
+            applied(plan, to: url, text: marked.text),
+            "struct Greeter {\n    func greet(name: String, loud: Bool = false) -> String { name }\n}\n"
+        )
+        XCTAssertEqual(plan.entries.count, 1, "the call is valid as it is")
+    }
+
+    func testRemovingAParameterRewritesEveryCallAndAProtocolsConformers() async throws {
+        let marked = SwiftRefactoringTests.parse("protocol Greeter {\n    func ‸greet(name: String, times: Int) -> String\n}\n")
+        let impl = "struct Polite: Greeter {\n    func greet(name: String, times: Int) -> String { name }\n}\nfunc use(g: Greeter) -> String { g.greet(name: \"a\", times: 2) }\n"
+        let implURL = root.appendingPathComponent("Polite.swift")
+        let (provider, document, url) = try await provider(files: ["Polite.swift": impl], open: "Greeter.swift", noting: marked)
+        let json = parametersJSON(of: document, at: marked) { $0.removeLast() }
+        let plan = try await provider.plan(.changeSignature, context: context(document), parameters: ["parameters": json])
+        XCTAssertNil(plan.blockingError, plan.blockingError ?? "")
+        XCTAssertEqual(applied(plan, to: url, text: marked.text), "protocol Greeter {\n    func greet(name: String) -> String\n}\n")
+        XCTAssertEqual(
+            applied(plan, to: implURL, text: impl),
+            "struct Polite: Greeter {\n    func greet(name: String) -> String { name }\n}\nfunc use(g: Greeter) -> String { g.greet(name: \"a\") }\n"
+        )
     }
 
     func testAParameterTheBodyUsesCannotBeRemoved() async throws {
         let marked = SwiftRefactoringTests.parse("func ‸scale(a: Int, by factor: Int) -> Int { a * factor }\n")
         let (provider, document, _) = try await provider(files: [:], open: "A.swift", noting: marked)
-        let plan = try await provider.plan(.changeSignature, context: context(document), parameters: ["newName": "scale", "removeLastParameter": "true"])
+        let json = parametersJSON(of: document, at: marked) { $0.removeLast() }
+        let plan = try await provider.plan(.changeSignature, context: context(document), parameters: ["parameters": json])
         XCTAssertNotNil(plan.blockingError)
     }
 
-    func testRenamingIsLeftToRename() async throws {
+    func testNothingToChangeAndNonsenseAreBlocked() async throws {
         let marked = SwiftRefactoringTests.parse("func ‸scale(a: Int) -> Int { a }\n")
         let (provider, document, _) = try await provider(files: [:], open: "A.swift", noting: marked)
-        let plan = try await provider.plan(.changeSignature, context: context(document), parameters: ["newName": "resize", "addParameterName": "b", "addParameterType": "Int", "addParameterDefault": "0"])
-        XCTAssertNotNil(plan.blockingError)
+        let same = parametersJSON(of: document, at: marked) { _ in }
+        let unchanged = try await provider.plan(.changeSignature, context: context(document), parameters: ["parameters": same])
+        XCTAssertEqual(unchanged.blockingError, "Nothing to change.")
+        let missing = try await provider.plan(.changeSignature, context: context(document), parameters: ["parameters": "nonsense"])
+        XCTAssertNotNil(missing.blockingError)
+        let noValue = parametersJSON(of: document, at: marked) { $0.append(.init(label: "b", name: "b", type: "Int")) }
+        let blocked = try await provider.plan(.changeSignature, context: context(document), parameters: ["parameters": noValue])
+        XCTAssertTrue(blocked.blockingError?.contains("default") ?? false, "\(blocked.blockingError ?? "")")
     }
 
     // MARK: - ⌥↩
