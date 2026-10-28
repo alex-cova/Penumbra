@@ -26,6 +26,9 @@ public final class JavaProfileSymbols: @unchecked Sendable {
     public private(set) var frames: [Frame] = []
     private var methodIDs: [Method: Int32] = [:]
     private var frameIDs: [Frame: Int32] = [:]
+    /// The source file Instruments recorded for a method, by method id. JFR frames carry no
+    /// file path, so this stays empty for them and `Method` identity is unchanged.
+    private var methodSourcePaths: [Int32: String] = [:]
 
     public init() {}
 
@@ -49,6 +52,22 @@ public final class JavaProfileSymbols: @unchecked Sendable {
 
     public func method(ofFrame id: Int32) -> Method { methods[Int(frames[Int(id)].method)] }
     public func frame(_ id: Int32) -> Frame { frames[Int(id)] }
+
+    /// Records the source file a method was recorded in. The first path wins: one method
+    /// inlines in one file, and a later conflicting record would only hide the earlier one.
+    public func setSourcePath(_ path: String, forMethod id: Int32) {
+        guard !path.isEmpty, methodSourcePaths[id] == nil else { return }
+        methodSourcePaths[id] = path
+    }
+
+    /// The recorded source file of a method, if any.
+    public func sourcePath(ofMethod id: Int32) -> String? { methodSourcePaths[id] }
+
+    /// The recorded source file of a frame's method, if any.
+    public func sourcePath(ofFrame id: Int32) -> String? {
+        guard id >= 0, Int(id) < frames.count else { return nil }
+        return methodSourcePaths[frames[Int(id)].method]
+    }
 
     /// `Order$Line.total(int, String)`: the class's simple name, for the tables.
     public func displayName(ofMethod id: Int32) -> String {

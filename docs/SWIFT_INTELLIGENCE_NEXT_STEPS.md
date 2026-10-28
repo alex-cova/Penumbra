@@ -172,5 +172,9 @@ Commit after each numbered step. Each step updates `docs/SWIFT_INTELLIGENCE_ROAD
 - **Fixes for the unused-code rules** (deleting a declaration): left to the user on purpose.
 - **Project-wide rules in the editor:** `unused-declaration` runs from Inspect Code only; the editor's pass does not search the project.
 - **Refactorings that need types:** extract method and the rest come from SourceKit-LSP when it is running (they appear at ⌥↩ for a selection); there is no native fallback.
-- **Xcode projects:** coverage (`xccov`) and profiling a built Xcode target, and source lines in Swift profiles (Instruments' time-profile table has none).
+- **Xcode projects:** coverage (`xccov`) and profiling a built Xcode target. Source lines in Swift profiles are done (the table has them after all); Xcode targets are already known to the Swift profile tab's colouring.
+
+## Round three
+
+- **Step 1 (done).** Source lines in Swift profiles. `XCTraceTimeProfileParser` reads `<source line>` and its interned `<path>`; `JavaProfileSymbols` keeps an optional source path per method (identity unchanged, JFR profiles untouched) and frames are interned with the recorded line. `IDEProfilerSession.openFrame` carries the method's path: a Swift frame opens its file at its line (`openSwiftProfile` → `revealDebugStop`), and only a frame without a path (system libraries, stripped binaries) reports that there is nothing to open. `JavaLineProfile` keeps per-file costs alongside class costs, so a profiled Swift file shows per-line hints keyed by its recorded path (exact path, else the lone same-named file). The Swift tab's colouring also knows Xcode target names, for step 6. Tests: `XCTraceTimeProfileParserTests.testProgramFramesCarryTheirSourceLineAndFile` (`fib(_:)` → `/proj/Sources/spin/main.swift:1`, inlined `main` keeps line 3), the real-`xctrace` instrumentation test compiles with `-g` and asserts the hot frame has a line and path, `IDEProfileLineHintsTests.testASwiftFileIsKeyedByItsRecordedPath`.
 

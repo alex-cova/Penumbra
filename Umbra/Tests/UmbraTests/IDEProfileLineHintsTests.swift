@@ -74,6 +74,25 @@ final class IDEProfileLineHintsTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(hints.annotations(forFile: file, roots: roots, lineCount: 15)).count, 15)
     }
 
+    func testASwiftFileIsKeyedByItsRecordedPath() {
+        // A Swift frame's class is its binary, so the hints key the file by path, not by class.
+        let symbols = JavaProfileSymbols()
+        let method = symbols.internMethod(className: "spin", name: "fib(_:)", parameters: "")
+        symbols.setSourcePath("/proj/Sources/spin/main.swift", forMethod: method)
+        var tree = JavaProfileTree()
+        tree.add(stack: [symbols.internFrame(method: method, line: 1)], weight: 80)
+        tree.add(stack: [symbols.internFrame(method: symbols.internMethod(className: "dyld", name: "start", parameters: ""), line: 0)], weight: 20)
+        let hints = IDEProfileLineHints()
+        hints.show(JavaLineProfile.build(from: tree, symbols: symbols), title: "spin.trace")
+        XCTAssertTrue(hints.isActive)
+        // The exact path, and the same file name alone when the recording came from elsewhere.
+        let file = URL(fileURLWithPath: "/proj/Sources/spin/main.swift")
+        XCTAssertNotNil(hints.annotations(forFile: file, roots: [], lineCount: 10))
+        let moved = URL(fileURLWithPath: "/elsewhere/main.swift")
+        XCTAssertNotNil(hints.annotations(forFile: moved, roots: [], lineCount: 10))
+        XCTAssertNil(hints.annotations(forFile: URL(fileURLWithPath: "/elsewhere/other.swift"), roots: [], lineCount: 10))
+    }
+
     func testStaleUpdatesAreDropped() {
         let hints = IDEProfileLineHints()
         let first = hints.beginUpdate()

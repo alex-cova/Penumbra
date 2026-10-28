@@ -5,10 +5,11 @@ import Foundation
 /// methods and call tree already show for a Flight Recorder file.
 ///
 /// A sample is a row with a time, a thread and a backtrace, innermost frame first. The export interns what repeats:
-/// a thread, a frame, a binary or a whole backtrace is written once with an `id` and named by `ref` afterwards, so
-/// the parser keeps those tables and reads the file as a stream. A frame becomes a method whose "class" is the
-/// binary it is in (`spin`, `libswiftCore`), which is how the graph colours it, and whose name is the demangled
-/// symbol the tool printed. Instruments records no source line, so none is shown. Every sample counts one.
+/// a thread, a frame, a binary, a source path or a whole backtrace is written once with an `id` and named by `ref`
+/// afterwards, so the parser keeps those tables and reads the file as a stream. A frame becomes a method whose
+/// "class" is the binary it is in (`spin`, `libswiftCore`), which is how the graph colours it, and whose name is the
+/// demangled symbol the tool printed. A frame of the program's own binary carries `<source line>` and its `<path>`;
+/// system frames carry none. Every sample counts one.
 public enum XCTraceTimeProfileParser {
     public enum ParseError: Error, LocalizedError, Equatable {
         case unreadable
@@ -65,6 +66,7 @@ public enum XCTraceTimeProfileParser {
         private var times: [String: Int64] = [:]
         private var threads: [String: String] = [:]
         private var binaries: [String: String] = [:]
+        private var sourcePaths: [String: String] = [:]
         private var frames: [String: Int32] = [:]
         private var backtraces: [String: [Int32]] = [:]
 
@@ -83,6 +85,9 @@ public enum XCTraceTimeProfileParser {
         private var frameID: String?
         private var frameName: String?
         private var frameBinary: String?
+        private var frameSourceLine: Int32 = 0
+        private var frameSourcePath: String?
+        private var pathID: String?
 
         func parser(
             _ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?,
@@ -124,6 +129,8 @@ public enum XCTraceTimeProfileParser {
                     frameID = attributeDict["id"]
                     frameName = attributeDict["name"] ?? attributeDict["addr"] ?? "?"
                     frameBinary = nil
+                    frameSourceLine = 0
+                    frameSourcePath = nil
                 }
             case "binary" where collectingBacktrace:
                 if let ref = attributeDict["ref"] {
@@ -133,13 +140,25 @@ public enum XCTraceTimeProfileParser {
                     binaries[id] = module
                     frameBinary = module
                 }
+            case "source" where collectingBacktrace:
+                if let line = attributeDict["line"], let value = Int32(line) {
+                    frameSourceLine = max(0, value)
+                }
+                frameSourcePath = nil
+            case "path" where collectingBacktrace:
+                if let ref = attributeDict["ref"] {
+                    frameSourcePath = sourcePaths[ref]
+                    pathID = nil
+                } else if let id = attributeDict["id"] {
+                    pathID = id
+                }
             default:
                 break
             }
         }
 
         func parser(_ parser: XMLParser, foundCharacters string: String) {
-            if path.last == "sample-time" { text += string }
+            if path.last == "sample-time" || path.last == "path" { text += string }
         }
 
         func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
@@ -151,14 +170,24 @@ public enum XCTraceTimeProfileParser {
                     if let id = timeID { times[id] = value }
                 }
                 timeID = nil
+            case "path" where collectingBacktrace:
+                if let id = pathID {
+                    let recorded = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    sourcePaths[id] = recorded
+                    frameSourcePath = recorded.isEmpty ? nil : recorded
+                }
+                pathID = nil
             case "frame" where collectingBacktrace:
                 guard let name = frameName else { break }
                 let method = profile.symbols.internMethod(className: frameBinary ?? "", name: name, parameters: "")
-                let frame = profile.symbols.internFrame(method: method, line: 0)
+                if let recorded = frameSourcePath { profile.symbols.setSourcePath(recorded, forMethod: method) }
+                let frame = profile.symbols.internFrame(method: method, line: frameSourceLine)
                 if let id = frameID { frames[id] = frame }
                 stack.append(frame)
                 frameID = nil
                 frameName = nil
+                frameSourceLine = 0
+                frameSourcePath = nil
             case "tagged-backtrace" where inRow, "backtrace" where inRow:
                 if collectingBacktrace, let id = backtraceID { backtraces[id] = stack }
                 collectingBacktrace = false

@@ -192,7 +192,7 @@ final class IDEProfilerSession {
     /// newer `jfr` reads older recordings, so a failure moves on to the next.
     @ObservationIgnored var jfrCandidates: (() async -> [JDKInstallation])?
     @ObservationIgnored var confirmThresholdBytes = 500 * 1024 * 1024
-    @ObservationIgnored var openFrame: ((_ className: String, _ line: Int) -> Void)?
+    @ObservationIgnored var openFrame: ((_ className: String, _ line: Int, _ sourcePath: String?) -> Void)?
     @ObservationIgnored var chooseJDK: (() -> Void)?
     @ObservationIgnored var openAsHex: (() -> Void)?
     /// Reads the profile some other way than `jfr print` (an Instruments recording of a Swift program is exported
@@ -863,19 +863,19 @@ final class IDEProfilerSession {
 
     // MARK: - Source
 
-    /// `className` and line of a frame, for opening its source.
-    func frameLocation(_ frame: Int32) -> (className: String, line: Int)? {
+    /// `className`, line and recorded source path of a frame, for opening its source.
+    func frameLocation(_ frame: Int32) -> (className: String, line: Int, sourcePath: String?)? {
         guard let symbols else { return nil }
         let method = symbols.method(ofFrame: frame)
         guard !method.className.isEmpty else { return nil }
-        return (method.className, Int(symbols.frame(frame).line))
+        return (method.className, Int(symbols.frame(frame).line), symbols.sourcePath(ofFrame: frame))
     }
 
     func openSource(ofMethod method: Int32, line: Int = 0) {
         guard let symbols else { return }
         let className = symbols.methods[Int(method)].className
         guard !className.isEmpty else { return }
-        openFrame?(className, line)
+        openFrame?(className, line, symbols.sourcePath(ofMethod: method))
     }
 
     /// Folded stacks of the shown tree, for other flame-graph tools.

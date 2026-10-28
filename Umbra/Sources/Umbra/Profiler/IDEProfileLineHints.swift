@@ -69,11 +69,29 @@ final class IDEProfileLineHints {
     }
 
     /// The costs of the lines of `url`, or `nil` when the profile has nothing in that file.
+    /// A Swift file is keyed by its recorded path (a Swift frame's "class" is its binary, so
+    /// class keying says nothing); a Java file by its class under the source roots.
     func lines(forFile url: URL, roots: [URL]) -> [Int32: JavaLineProfile.Cost]? {
-        guard let profile, profile.totalSamples > 0,
-              let className = Self.className(forFile: url, roots: roots) else { return nil }
+        guard let profile, profile.totalSamples > 0 else { return nil }
+        if url.pathExtension == "swift" {
+            let lines = linesForSwiftFile(url)
+            return lines.isEmpty ? nil : lines
+        }
+        guard let className = Self.className(forFile: url, roots: roots) else { return nil }
         let lines = profile.lines(ofClass: className)
         return lines.isEmpty ? nil : lines
+    }
+
+    /// The recorded costs for a Swift file: the exact path first, else the profile path with the
+    /// same file name when it is the only one (a recording made elsewhere keeps its own root).
+    private func linesForSwiftFile(_ url: URL) -> [Int32: JavaLineProfile.Cost] {
+        guard let profile else { return [:] }
+        let exact = profile.lines(ofFile: url.standardizedFileURL.path)
+        if !exact.isEmpty { return exact }
+        let name = url.lastPathComponent
+        let candidates = profile.filePaths.filter { ($0 as NSString).lastPathComponent == name }
+        guard candidates.count == 1, let only = candidates.first else { return [:] }
+        return profile.lines(ofFile: only)
     }
 
     /// One entry per line of the file (`lineCount`), the label being the line's share of all samples.

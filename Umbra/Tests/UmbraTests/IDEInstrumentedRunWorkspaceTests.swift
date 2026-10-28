@@ -258,7 +258,7 @@ final class IDEInstrumentedRunWorkspaceTests: XCTestCase {
         XCTAssertGreaterThan(profiler.profile?.threads(of: .cpu).count ?? 0, 0)
 
         // A frame opens the project's source.
-        profiler.openFrame?("Spin", 2)
+        profiler.openFrame?("Spin", 2, nil)
         let revealed = await waitUntil {
             self.workspace.workbench.activePane.selectedDocument?.url?.standardizedFileURL == file.standardizedFileURL
         }

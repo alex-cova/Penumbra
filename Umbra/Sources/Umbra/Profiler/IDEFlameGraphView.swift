@@ -38,8 +38,8 @@ final class IDEFlameGraphNSView: NSView {
     var onSelectMethod: ((Int32?) -> Void)?
     var onZoom: ((Int) -> Void)?
     var onZoomOut: (() -> Void)?
-    /// Class (a binary name) and line of the frame to open.
-    var onOpenSource: ((String, Int) -> Void)?
+    /// Class (a binary name), line and recorded source path of the frame to open.
+    var onOpenSource: ((String, Int, String?) -> Void)?
     /// A fill that replaces the frame's colour (a differential graph's red and green).
     var nodeTint: ((Int) -> NSColor?)?
     /// A line added to a box's tooltip.
@@ -375,7 +375,8 @@ final class IDEFlameGraphNSView: NSView {
 
     @objc private func openSourceFromMenu(_ item: NSMenuItem) {
         guard let node = item.representedObject as? Int, let method = method(of: node) else { return }
-        onOpenSource?(symbols.methods[Int(method)].className, Int(symbols.frame(tree.frame(of: node)).line))
+        let frame = tree.frame(of: node)
+        onOpenSource?(symbols.methods[Int(method)].className, Int(symbols.frame(frame).line), symbols.sourcePath(ofFrame: frame))
     }
 
     @objc private func hideClassFromMenu(_ item: NSMenuItem) {
@@ -410,7 +411,9 @@ final class IDEFlameGraphNSView: NSView {
         switch event.keyCode {
         case 53: onZoomOut?()                      // Esc
         case 36, 76:                                // Return
-            if let method = selectedMethod { onOpenSource?(symbols.methods[Int(method)].className, 0) }
+            if let method = selectedMethod {
+                onOpenSource?(symbols.methods[Int(method)].className, 0, symbols.sourcePath(ofMethod: method))
+            }
         default: super.keyDown(with: event)
         }
     }
@@ -493,9 +496,9 @@ struct IDEFlameGraphView: NSViewRepresentable {
         graph.onSelectMethod = { [weak session] in if !(session?.isComparing ?? false) { session?.selectedMethod = $0 } }
         graph.onZoom = { [weak session] in session?.zoom(into: $0) }
         graph.onZoomOut = { [weak session] in session?.zoomOut() }
-        graph.onOpenSource = { [weak session] className, line in
+        graph.onOpenSource = { [weak session] className, line, sourcePath in
             guard !className.isEmpty else { return }
-            session?.openFrame?(className, line)
+            session?.openFrame?(className, line, sourcePath)
         }
         // The "what if"s name nodes of the profile's own tree, which a merged tree is not.
         let whatIf = comparison == nil

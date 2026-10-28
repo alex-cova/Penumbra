@@ -40,6 +40,30 @@ final class XCTraceTimeProfileParserTests: XCTestCase {
         XCTAssertTrue(folded.contains { $0.contains("fib(_:);spin.fib(_:)") || $0.components(separatedBy: "fib(_:)").count > 2 }, "\(folded.prefix(3))")
     }
 
+    func testProgramFramesCarryTheirSourceLineAndFile() throws {
+        let profile = try profile()
+        let symbols = profile.symbols
+        func methodID(named name: String) throws -> Int32 {
+            let index = try XCTUnwrap(symbols.methods.firstIndex { $0.name == name }, "no method \(name)")
+            return Int32(index)
+        }
+        func lines(ofMethod id: Int32) -> Set<Int32> {
+            Set(symbols.frames.filter { $0.method == id }.map(\.line))
+        }
+        // `fib(_:)` was recorded at line 1 of the program's file, and the inlined `main`
+        // frame keeps its own line 3 (not the line of the frame it inlined into).
+        let fib = try methodID(named: "fib(_:)")
+        XCTAssertEqual(symbols.sourcePath(ofMethod: fib), "/proj/Sources/spin/main.swift")
+        XCTAssertEqual(lines(ofMethod: fib), [1])
+        let main = try methodID(named: "main")
+        XCTAssertEqual(symbols.sourcePath(ofMethod: main), "/proj/Sources/spin/main.swift")
+        XCTAssertTrue(lines(ofMethod: main).contains(3), "\(lines(ofMethod: main))")
+        // A system frame carries neither.
+        let start = try methodID(named: "start")
+        XCTAssertNil(symbols.sourcePath(ofMethod: start))
+        XCTAssertTrue(symbols.frames.filter { $0.method == start }.allSatisfy { $0.line == 0 })
+    }
+
     func testThreadsAreNamedWithoutTheirProcess() throws {
         let profile = try profile()
         XCTAssertEqual(profile.threads(of: .cpu).map(\.name), ["Main Thread (0x26a632)"])

@@ -64,13 +64,19 @@ extension IDEWorkspace {
         document.contentKind = .profile
         let session = makeProfileSession(recordings: [trace], title: title, runID: nil)
         session.sourceLoader = { try await IDESwiftRunProvider.loadTimeProfile(trace: trace) }
-        // Instruments records no source line, and a Swift frame's "class" is its binary: say so instead of searching Java roots.
-        session.openFrame = { [weak self] _, _ in
-            self?.reportRunProblem("Instruments records no source line for Swift frames, so there is nothing to open.")
+        // A Swift frame's "class" is its binary: a frame of the program's binary carries its
+        // source file and opens it, while a system frame without one says so.
+        session.openFrame = { [weak self] _, line, sourcePath in
+            guard let path = sourcePath, !path.isEmpty else {
+                self?.reportRunProblem("This frame has no recorded source file, so there is nothing to open.")
+                return
+            }
+            self?.revealDebugStop(file: URL(fileURLWithPath: path), line: max(line, 1))
         }
-        let targets = Set(swiftPM.manifest?.targets.map(\.name) ?? [])
+        let swiftTargets = Set(swiftPM.manifest?.targets.map(\.name) ?? [])
+        let xcodeTargets = Set(xcode.model?.targets.map(\.name) ?? [])
         session.classifyClass = { module in
-            if targets.contains(module) { return .project }
+            if swiftTargets.contains(module) || xcodeTargets.contains(module) { return .project }
             // The platform's own libraries (dyld, libswiftCore, libsystem_c, …) play the part the JDK does for Java.
             if module.hasPrefix("lib") || module == "dyld" || module.isEmpty { return .jdk }
             return .library
@@ -150,7 +156,7 @@ extension IDEWorkspace {
             for jdk in installed where !candidates.contains(where: { $0.home == jdk.home }) { candidates.append(jdk) }
             return candidates
         }
-        session.openFrame = { [weak self] className, line in
+        session.openFrame = { [weak self] className, line, _ in
             self?.openProfileFrame(className: className, line: line)
         }
         let roots = IDEProfileSourceRoots()

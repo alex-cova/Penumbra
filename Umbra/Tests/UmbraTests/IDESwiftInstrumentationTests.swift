@@ -171,7 +171,7 @@ final class IDESwiftInstrumentationTests: XCTestCase {
         let source = directory.appendingPathComponent("spin.swift")
         try "func fib(_ n: Int) -> Int { n < 2 ? n : fib(n - 1) + fib(n - 2) }\nprint(fib(38))\n".write(to: source, atomically: true, encoding: .utf8)
         let binary = directory.appendingPathComponent("spin")
-        let compile = try await run("/usr/bin/xcrun", ["swiftc", "-O", source.path, "-o", binary.path])
+        let compile = try await run("/usr/bin/xcrun", ["swiftc", "-g", "-O", source.path, "-o", binary.path])
         try XCTSkipIf(compile != 0, "swiftc could not build the sample program")
 
         let trace = directory.appendingPathComponent("spin.trace")
@@ -183,6 +183,9 @@ final class IDESwiftInstrumentationTests: XCTestCase {
         let hot = try XCTUnwrap(profile.cpu.hotMethods(symbols: profile.symbols).first)
         XCTAssertTrue(profile.symbols.methods[Int(hot.method)].name.hasPrefix("fib"), profile.symbols.methods[Int(hot.method)].name)
         XCTAssertEqual(profile.symbols.methods[Int(hot.method)].className, "spin")
+        // Release builds keep DWARF, so the hot frame has a source line and file to open.
+        let hotFrame = try XCTUnwrap(profile.symbols.frames.firstIndex { $0.method == hot.method && $0.line > 0 })
+        XCTAssertEqual(profile.symbols.sourcePath(ofFrame: Int32(hotFrame)), source.path)
     }
 
     private func run(_ executable: String, _ arguments: [String]) async throws -> Int32 {

@@ -977,7 +977,7 @@ extension IDEProfilerTreeNodeView {
         guard frame >= 0 else { return }
         let method = symbols.method(ofFrame: frame)
         guard !method.className.isEmpty else { return }
-        session.openFrame?(method.className, Int(symbols.frame(frame).line))
+        session.openFrame?(method.className, Int(symbols.frame(frame).line), symbols.sourcePath(ofFrame: frame))
     }
 }
 
