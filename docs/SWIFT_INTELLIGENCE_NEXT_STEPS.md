@@ -155,3 +155,8 @@ Commit after each numbered step. Each step updates `docs/SWIFT_INTELLIGENCE_ROAD
   tests that pass alone); anything else is mine.
 - Manual (`./run.sh`): Inspect Code on a Swift folder with a profile that scopes `Tests`; ⌥↩ extras on a finding; change
   signature form on a function with callers in two files; Swift ▸ Refactor menu.
+
+## Progress
+
+- **Step 1 (done).** `JavaInspectionReport` takes a tool name and its own rule table (`RuleInfo`), so a Swift run exports as "Umbra Swift Inspections" with Swift rule titles (Java's default is unchanged). The Problems row menu (`IDEProblemsPanel`) is typed on `IDEInspectionRuleInfo`: a Swift inspection row gets Disable Inspection and Edit Inspection Settings (Turn Off Highlighting stays Java-only until B3). Tests: `IDESwiftInspectCodeTests` (SARIF/HTML of a Swift run).
+

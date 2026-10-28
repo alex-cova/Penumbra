@@ -153,6 +153,13 @@ final class IDESwiftInspectCodeTests: XCTestCase {
         let report = IDEWorkspace.inspectionReport(for: run, root: directory)
         XCTAssertEqual(report.entries.map(\.path), Array(repeating: "Sources/T.swift", count: 3))
         XCTAssertEqual(report.entries.map(\.line), [1, 2, 4])
+        // The export says it is Swift's, with Swift's rule titles, not "Umbra Java Inspections" and bare codes.
+        let sarif = String(decoding: report.sarif(), as: UTF8.self)
+        XCTAssertTrue(sarif.contains("Umbra Swift Inspections"), sarif)
+        XCTAssertFalse(sarif.contains("Umbra Java Inspections"))
+        XCTAssertTrue(sarif.contains(SwiftInspectionRule.redundantVoidReturn.title), sarif)
+        XCTAssertTrue(sarif.contains(SwiftInspectionRule.redundantVoidReturn.group.title), sarif)
+        XCTAssertTrue(report.html().contains(SwiftInspectionRule.forceUnwrap.title))
 
         await workspace.applyInspectionFixAll(ruleCode: "redundant-void-return", in: run)
         let fixed = try String(contentsOf: file, encoding: .utf8)

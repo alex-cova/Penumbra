@@ -94,9 +94,13 @@ struct IDEProblemsPanel: View {
                                         onFix: { workspace.fixProblemWithAgent(row) },
                                         onQuickFixes: [IDEProblemsStore.inspectionSource, SwiftInspection.diagnosticSource].contains(row.diagnostic.source) ? { showQuickFixes(for: row) } : nil,
                                         rule: inspectionRule(for: row),
-                                        onDisableRule: { workspace.disableInspection($0) },
-                                        onQuietRule: { rule in workspace.inspections.edit { $0.setSeverity(.noHighlighting, for: rule) } },
-                                        onConfigureRule: { workspace.showInspectionSettings(for: $0) }
+                                        onDisableRule: { workspace.disableInspection(code: $0.code, language: $0.language) },
+                                        onQuietRule: { info in
+                                            if let rule = JavaInspectionRule(code: info.code) {
+                                                workspace.inspections.edit { $0.setSeverity(.noHighlighting, for: rule) }
+                                            }
+                                        },
+                                        onConfigureRule: { workspace.showInspectionSettings(code: $0.code, language: $0.language) }
                                     )
                                 }
                             }
@@ -110,9 +114,13 @@ struct IDEProblemsPanel: View {
     }
 
     /// The inspection behind a row, nil for compiler, editor and tool diagnostics.
-    private func inspectionRule(for row: ProblemRow) -> JavaInspectionRule? {
-        guard row.diagnostic.source == IDEProblemsStore.inspectionSource else { return nil }
-        return row.diagnostic.code.flatMap { JavaInspectionRule(code: $0) }
+    private func inspectionRule(for row: ProblemRow) -> IDEInspectionRuleInfo? {
+        guard let code = row.diagnostic.code else { return nil }
+        switch row.diagnostic.source {
+        case IDEProblemsStore.inspectionSource: return IDEInspectionLanguage.java.rule(code: code)
+        case SwiftInspection.diagnosticSource: return IDEInspectionLanguage.swift.rule(code: code)
+        default: return nil
+        }
     }
 
     private func showQuickFixes(for row: ProblemRow) {
@@ -204,10 +212,10 @@ private struct IDEProblemRowView: View {
     let onOpen: () -> Void
     let onFix: () -> Void
     var onQuickFixes: (() -> Void)?
-    var rule: JavaInspectionRule?
-    var onDisableRule: ((JavaInspectionRule) -> Void)?
-    var onQuietRule: ((JavaInspectionRule) -> Void)?
-    var onConfigureRule: ((JavaInspectionRule) -> Void)?
+    var rule: IDEInspectionRuleInfo?
+    var onDisableRule: ((IDEInspectionRuleInfo) -> Void)?
+    var onQuietRule: ((IDEInspectionRuleInfo) -> Void)?
+    var onConfigureRule: ((IDEInspectionRuleInfo) -> Void)?
 
     @State private var isHovering = false
 
@@ -264,7 +272,8 @@ private struct IDEProblemRowView: View {
             if let rule {
                 Divider()
                 Button("Disable Inspection \u{201C}\(rule.title)\u{201D}") { onDisableRule?(rule) }
-                Button("Turn Off Highlighting (Keep Fix)") { onQuietRule?(rule) }
+                // Swift has no "No highlighting" level yet.
+                if rule.language == .java { Button("Turn Off Highlighting (Keep Fix)") { onQuietRule?(rule) } }
                 Button("Edit Inspection Settings…") { onConfigureRule?(rule) }
             }
         }

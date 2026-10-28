@@ -477,7 +477,13 @@ extension IDEWorkspace {
             }
         }
         entries.sort { ($0.path, $0.line, $0.column, $0.ruleCode) < ($1.path, $1.line, $1.column, $1.ruleCode) }
-        return JavaInspectionReport(title: run.title, entries: entries)
+        var rules: [String: JavaInspectionReport.RuleInfo] = [:]
+        for code in Set(entries.map(\.ruleCode)) {
+            if let rule = run.language.rule(code: code) {
+                rules[code] = JavaInspectionReport.RuleInfo(title: rule.title, summary: rule.summary, group: rule.groupTitle)
+            }
+        }
+        return JavaInspectionReport(title: run.title, entries: entries, toolName: "Umbra \(run.language.title) Inspections", rules: rules)
     }
 }
 

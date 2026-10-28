@@ -22,12 +22,32 @@ public struct JavaInspectionReport: Sendable {
         }
     }
 
+    /// What a report says about a rule: its title, what it finds and the group it belongs to.
+    public struct RuleInfo: Sendable, Equatable {
+        public let title: String
+        public let summary: String
+        public let group: String
+
+        public init(title: String, summary: String, group: String) {
+            self.title = title
+            self.summary = summary
+            self.group = group
+        }
+    }
+
     public let title: String
     public let entries: [Entry]
+    /// The tool the SARIF names as its driver.
+    public let toolName: String
+    /// The rules the entries refer to, by code, when they are not Java's (a Swift run passes its own).
+    /// `nil` reads every code as a Java inspection.
+    private let rules: [String: RuleInfo]?
 
-    public init(title: String, entries: [Entry]) {
+    public init(title: String, entries: [Entry], toolName: String = "Umbra Java Inspections", rules: [String: RuleInfo]? = nil) {
         self.title = title
         self.entries = entries
+        self.toolName = toolName
+        self.rules = rules
     }
 
     /// Builds entries from per-file findings; paths are made relative to `root` when inside it.
@@ -47,6 +67,13 @@ public struct JavaInspectionReport: Sendable {
         entries.sort { ($0.path, $0.line, $0.column, $0.ruleCode) < ($1.path, $1.line, $1.column, $1.ruleCode) }
         self.title = title
         self.entries = entries
+        self.toolName = "Umbra Java Inspections"
+        self.rules = nil
+    }
+
+    private func ruleInfo(for code: String) -> RuleInfo? {
+        if let rules { return rules[code] }
+        return JavaInspectionRule(code: code).map { RuleInfo(title: $0.title, summary: $0.summary, group: $0.group.title) }
     }
 
     static func sarifLevel(_ severity: JavaInspection.Severity) -> String {
@@ -60,13 +87,13 @@ public struct JavaInspectionReport: Sendable {
     public func sarif() -> Data {
         let usedCodes = Array(Set(entries.map(\.ruleCode))).sorted()
         let rules: [[String: Any]] = usedCodes.map { code in
-            let rule = JavaInspectionRule(code: code)
+            let rule = ruleInfo(for: code)
             var object: [String: Any] = ["id": code]
             if let rule {
                 object["name"] = rule.title
                 object["shortDescription"] = ["text": rule.title]
                 object["fullDescription"] = ["text": rule.summary]
-                object["properties"] = ["category": rule.group.title]
+                object["properties"] = ["category": rule.group]
             }
             return object
         }
@@ -87,7 +114,7 @@ public struct JavaInspectionReport: Sendable {
             "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
             "version": "2.1.0",
             "runs": [[
-                "tool": ["driver": ["name": "Umbra Java Inspections", "rules": rules]],
+                "tool": ["driver": ["name": toolName, "rules": rules]],
                 "results": results,
             ]],
         ]
@@ -103,7 +130,7 @@ public struct JavaInspectionReport: Sendable {
         }
         var rows = ""
         for entry in entries {
-            let rule = JavaInspectionRule(code: entry.ruleCode)?.title ?? entry.ruleCode
+            let rule = ruleInfo(for: entry.ruleCode)?.title ?? entry.ruleCode
             rows += "<tr class=\"\(Self.sarifLevel(entry.severity))\"><td>\(escape(entry.severity.rawValue))</td>"
             rows += "<td>\(escape(rule))</td><td>\(escape(entry.message))</td>"
             rows += "<td>\(escape(entry.path)):\(entry.line):\(entry.column)</td></tr>\n"
