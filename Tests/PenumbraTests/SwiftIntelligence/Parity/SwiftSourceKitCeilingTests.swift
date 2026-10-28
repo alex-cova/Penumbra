@@ -360,6 +360,57 @@ final class SwiftSourceKitCeilingTests: XCTestCase {
         XCTAssertEqual(editorFix?.edits.first?.replacement, "let")
     }
 
+    // MARK: - Refactorings
+
+    /// SourceKit-LSP's own refactorings (extract, add `Codable`, convert to `async`, …) are code actions of kind
+    /// `refactor.*`. The extract ones exist only for a selected range, so the request must carry the selection.
+    func testSourceKitOffersRefactoringsForASelection() async throws {
+        guard ProcessInfo.processInfo.environment["SWIFT_PARITY"] == "1" else {
+            throw XCTSkip("Runs only with SWIFT_PARITY=1")
+        }
+        let server = try SourceKitProcess.discover()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-sourcekit-refactor-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let text = "func area(a: Int, b: Int) -> Int {\n    let total = a * b + 1\n    print(total)\n    return total\n}\n"
+        let url = root.appendingPathComponent("Refactor.swift")
+        try text.write(to: url, atomically: true, encoding: .utf8)
+
+        let session = try server.start(root: root)
+        defer { session.stop() }
+        let map = SourceTextMap(text)
+        // Select `a * b` (line 1) and the three statements of the body (lines 1-3).
+        func document(selecting bytes: Range<Int>) -> Document {
+            let range = EditorIntelligence.TextRange(start: map.position(atByte: bytes.lowerBound), end: map.position(atByte: bytes.upperBound))
+            return Document(
+                url: url, displayName: "Refactor.swift", contentSnapshot: TextSnapshot(version: 1, text: text),
+                selection: Selection(range: range), cursor: Cursor(position: range.start),
+                viewport: Viewport(x: 0, y: 0, width: 800, height: 600), languageIdentifier: "swift"
+            )
+        }
+        let expression = (text as NSString).range(of: "a * b")
+        let bytes = text.utf8.distance(from: text.utf8.startIndex, to: text.utf16.index(text.utf16.startIndex, offsetBy: expression.location))
+        let selected = document(selecting: bytes ..< bytes + 5)
+        await session.client.notifyOpened(selected, languageID: "swift", version: 1)
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+
+        let actions = try await session.client.requestCodeActions(for: selected, at: selected.selection.range.start, diagnostics: [])
+        let listing = actions.map { "\($0.kind ?? "-"): \($0.title)" }
+        print("code actions for a selected expression: \(listing)")
+        for action in actions { print("  \(action.title): \(action.edits.map { "[\($0.range.start.line):\($0.range.start.character)-\($0.range.end.line):\($0.range.end.character)] \($0.newText.debugDescription)" })") }
+        XCTAssertTrue(actions.contains { ($0.kind ?? "").hasPrefix("refactor") }, "no refactoring offered for a selection: \(listing)")
+        let extractMethod = try XCTUnwrap(actions.first { $0.title == "Extract Method" }, "no Extract Method in \(listing)")
+        XCTAssertEqual(extractMethod.edits.count, 2, "the new function and the call that replaces the selection")
+        XCTAssertTrue(extractMethod.edits.contains { $0.newText.contains("extractedFunc") })
+
+        // The same request without the selection (a point) does not get the extract refactorings.
+        let point = document(selecting: bytes ..< bytes)
+        let atPoint = try await session.client.requestCodeActions(for: point, at: point.cursor.position, diagnostics: [])
+        print("code actions at a point: \(atPoint.map { "\($0.kind ?? "-"): \($0.title)" })")
+        XCTAssertLessThanOrEqual(atPoint.filter { ($0.kind ?? "").hasPrefix("refactor.extract") }.count, 0)
+    }
+
     // MARK: - One case
 
     struct Row {

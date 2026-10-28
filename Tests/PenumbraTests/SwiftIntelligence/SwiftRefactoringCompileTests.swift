@@ -13,6 +13,7 @@ final class SwiftRefactoringCompileTests: XCTestCase {
         case convert
         case addType
         case move
+        case shorthand
     }
 
     private static let cases: [(name: String, kind: Kind, source: String)] = [
@@ -46,12 +47,18 @@ final class SwiftRefactoringCompileTests: XCTestCase {
         ("explicit generic", .addType, "struct D4<T> { var v: T }\nfunc d4() { let ‸b = D4<Int>(v: 1); print(b) }\n"),
         ("explicit nested", .addType, "enum D5 { struct Inner {} }\nfunc d5() { let ‸i = D5.Inner(); print(i) }\n"),
         ("explicit property", .addType, "struct D6 { var ‸label = \"x\" }\n"),
+        ("shorten if let", .shorthand, "func f1(x: Int?) {\n    if let ‸x = x { print(x) }\n}\n"),
+        ("shorten guard var", .shorthand, "func f2(x: Int?) {\n    guard var ‸x = x else { return }\n    x += 1\n    print(x)\n}\n"),
+        ("shorten self", .shorthand, "final class F3 {\n    func run() { let weak1 = { [weak self] in if let ‸self = self { print(self) } }; weak1() }\n}\n"),
+        ("expand if let", .shorthand, "func f4(x: Int?) {\n    if let ‸x { print(x) }\n}\n"),
+        ("expand while let", .shorthand, "func f5(x: Int?) {\n    while let ‸x { print(x); return }\n}\n"),
         ("move method", .move, "struct E1 {\n    var stored = 1\n\n    /// The answer.\n    func ‸f() -> Int { stored }\n    func g() {}\n}\n"),
         ("move nested", .move, "enum E2 {\n    struct Inner {\n        func ‸f() {}\n    }\n}\n"),
         ("move computed", .move, "struct E3 {\n    var n = 1\n    var ‸double: Int { n * 2 }\n}\n"),
         ("move static", .move, "struct E4 {\n    static let ‸shared = E4()\n}\n"),
         ("move private use", .move, "struct E5 {\n    private var n = 1\n    func ‸bump() -> Int { n + 1 }\n}\n"),
         ("move convenience init", .move, "class E6 {\n    var n: Int\n    init(n: Int) { self.n = n }\n    ‸convenience init() { self.init(n: 0) }\n}\n"),
+        ("move second initializer", .move, "struct E9 {\n    var a: Int\n    init(a: Int) { self.a = a }\n    ‸init() { self.init(a: 0) }\n}\n"),
         ("move subscript", .move, "struct E7 {\n    var items = [1, 2]\n    ‸subscript(i: Int) -> Int { items[i] }\n}\n"),
         ("move nested type", .move, "struct E8 {\n    ‸struct Helper {}\n    var n = 1\n}\n"),
     ]
@@ -73,6 +80,7 @@ final class SwiftRefactoringCompileTests: XCTestCase {
             case .convert: result = SwiftConditionalConversion.edits(in: marked.text, caret: marked.caret)
             case .addType: result = SwiftAddExplicitType.edits(in: marked.text, caret: marked.caret)
             case .move: result = SwiftMoveToExtension.edits(in: marked.text, caret: marked.caret)
+            case .shorthand: result = SwiftOptionalBindingShorthand.edits(in: marked.text, caret: marked.caret)
             }
             guard let after = SwiftRefactoringTests.apply(result, to: marked.text) else {
                 if case .failure(let failure) = result { failures.append("\(name): refused: \(failure.message)") }

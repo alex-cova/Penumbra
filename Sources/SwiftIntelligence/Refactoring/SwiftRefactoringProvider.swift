@@ -5,6 +5,7 @@ extension RefactoringID {
     public static let convertIfGuard = RefactoringID("swift.convertIfGuard")
     public static let moveToExtension = RefactoringID("swift.moveToExtension")
     public static let addExplicitType = RefactoringID("swift.addExplicitType")
+    public static let optionalBindingShorthand = RefactoringID("swift.optionalBindingShorthand")
 }
 
 /// The native Swift refactorings. Each is a swift-syntax rewrite of the file: it needs no build and keeps
@@ -54,6 +55,13 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
         if SwiftAddExplicitType.isAvailable(in: text, caret: caret) {
             descriptors.append(RefactoringDescriptor(id: .addExplicitType, title: "Add Explicit Type", requiresSelection: false))
         }
+        let allowsShorthand = SwiftToolsVersion.allowsOptionalBindingShorthand(forFileAt: context.documentURL ?? context.document.url)
+        if let direction = SwiftOptionalBindingShorthand.available(in: text, caret: caret, allowsShorthand: allowsShorthand) {
+            descriptors.append(RefactoringDescriptor(
+                id: .optionalBindingShorthand, title: direction == .shorten ? "Use Short Optional Binding" : "Write Optional Binding Out",
+                requiresSelection: false
+            ))
+        }
         return descriptors
     }
 
@@ -81,6 +89,9 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
             return Self.plan(SwiftMoveToExtension.edits(in: text, caret: caret), text: text, url: url, title: "Move to Extension")
         case .addExplicitType:
             return Self.plan(SwiftAddExplicitType.edits(in: text, caret: caret), text: text, url: url, title: "Add Explicit Type")
+        case .optionalBindingShorthand:
+            let allowed = SwiftToolsVersion.allowsOptionalBindingShorthand(forFileAt: url)
+            return Self.plan(SwiftOptionalBindingShorthand.edits(in: text, caret: caret, allowsShorthand: allowed), text: text, url: url, title: "Optional Binding")
         case .changeSignature:
             return await changeSignaturePlan(context: context, text: text, url: url, caret: caret, parameters: parameters)
         default:

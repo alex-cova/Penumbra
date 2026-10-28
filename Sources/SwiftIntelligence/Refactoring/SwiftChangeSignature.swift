@@ -60,7 +60,7 @@ public enum SwiftChangeSignature {
         }
         var edits: [SwiftTextEdit] = []
         var skipped: [Range<Int>] = []
-        let references = SwiftSyntaxScopes.references(in: file.document)
+        let references = file.references
         for name in nameBytes.sorted(by: { $0.lowerBound < $1.lowerBound }) {
             guard let token = file.tree.token(at: AbsolutePosition(utf8Offset: name.lowerBound)) else { continue }
             if let function = token.parent?.as(FunctionDeclSyntax.self), function.name.id == token.id {

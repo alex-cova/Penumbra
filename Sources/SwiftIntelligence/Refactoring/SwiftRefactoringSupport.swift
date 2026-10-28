@@ -32,6 +32,23 @@ struct SwiftRefactoringFile {
     let document: SwiftSyntaxDocument
     let tree: SourceFileSyntax
     let map: SourceTextMap
+    private let memo = Memo()
+
+    /// Every bare identifier reference and where it resolves, computed once per file for all the refactorings
+    /// that ask (the lookup walks the whole tree).
+    var references: [SwiftSyntaxScopes.Reference] {
+        memo.lock.withLock {
+            if let known = memo.references { return known }
+            let computed = SwiftSyntaxScopes.references(in: document)
+            memo.references = computed
+            return computed
+        }
+    }
+
+    private final class Memo: @unchecked Sendable {
+        let lock = NSLock()
+        var references: [SwiftSyntaxScopes.Reference]?
+    }
 
     init?(text: String) {
         guard text.utf8.count <= SwiftInspectionService.maximumUTF8Length else { return nil }

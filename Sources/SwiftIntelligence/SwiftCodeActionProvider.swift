@@ -50,6 +50,14 @@ public struct SwiftCodeActionProvider: CodeActionProviding {
         if let direction = SwiftConditionalConversion.available(in: text, caret: caret) {
             add(direction == .ifToGuard ? "Convert to guard" : "Convert to if", SwiftConditionalConversion.edits(in: text, caret: caret))
         }
+        if let direction = SwiftOptionalBindingShorthand.available(
+            in: text, caret: caret, allowsShorthand: SwiftToolsVersion.allowsOptionalBindingShorthand(forFileAt: document.url)
+        ) {
+            add(
+                direction == .shorten ? "Use short optional binding" : "Write optional binding out",
+                SwiftOptionalBindingShorthand.edits(in: text, caret: caret, allowsShorthand: true)
+            )
+        }
         return actions
     }
 }

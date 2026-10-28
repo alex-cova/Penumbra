@@ -17,7 +17,7 @@ public enum SwiftInlineVariable {
         guard let file = SwiftRefactoringFile.load(text) else {
             return .failure(.init("The file has syntax errors; fix them before refactoring."))
         }
-        let references = SwiftSyntaxScopes.references(in: file.document)
+        let references = file.references
         guard let declaration = declaration(at: caret, file: file, references: references) else {
             return .failure(.init("Place the caret on a local constant or one of its uses."))
         }

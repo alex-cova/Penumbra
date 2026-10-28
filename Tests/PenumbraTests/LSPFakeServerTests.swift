@@ -201,6 +201,94 @@ final class LSPFakeServerTests: XCTestCase {
         XCTAssertEqual(actions.first?.edits.map(\.newText), ["let"])
     }
 
+    func testARefactoringTheServerOffersAsACommandIsRunAndItsEditComesBackAsTheAction() async throws {
+        let toServer = Pipe()
+        let fromServer = Pipe()
+        let peer = ScriptedLSPPeer()
+        peer.appliesEditOnCommand = true
+        let server = Task.detached {
+            peer.serve(reading: toServer.fileHandleForReading, writing: fromServer.fileHandleForWriting)
+        }
+        let clientWrite = HandleWriter(toServer.fileHandleForWriting)
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let reader = Task.detached {
+            let handle = fromServer.fileHandleForReading
+            while true {
+                let data = handle.availableData
+                if data.isEmpty {
+                    continuation.finish()
+                    return
+                }
+                continuation.yield(data)
+            }
+        }
+        defer {
+            clientWrite.close()
+            try? fromServer.fileHandleForWriting.close()
+            server.cancel()
+            reader.cancel()
+        }
+        let client = LanguageServerClient.make(
+            write: { try clientWrite.write($0) },
+            read: stream,
+            documentURI: { _ in "file:///tmp/A.swift" },
+            workspaceRoot: URL(fileURLWithPath: "/tmp")
+        )
+        let document = Self.document()
+        let actions = try await client.requestCodeActions(for: document, at: document.cursor.position, diagnostics: [])
+
+        let workspace = peer.clientCapabilities["workspace"] as? [String: Any]
+        XCTAssertEqual(workspace?["applyEdit"] as? Bool, true, "the client must say it takes workspace/applyEdit")
+        XCTAssertTrue(peer.methods.contains("workspace/executeCommand"), "\(peer.methods)")
+        XCTAssertTrue(peer.methods.contains("response:9001"), "the client answered the server's applyEdit: \(peer.methods)")
+
+        // The refactoring is an ordinary edit now; the one that is neither a refactoring nor an edit here is still dropped.
+        XCTAssertEqual(actions.map(\.title), ["Replace var with let", "Extract Method"])
+        let extract = try XCTUnwrap(actions.last)
+        XCTAssertEqual(extract.kind, "refactor.extract")
+        XCTAssertEqual(extract.edits.map(\.newText), ["func extracted() {}\n"])
+    }
+
+    func testACommandIsNotRunWhenNoOneIsCollectingItsEdit() async throws {
+        // Without a refactoring in flight a stray `workspace/applyEdit` is refused (applied: false), so the server
+        // does not believe an edit landed that the editor never saw. Covered by the response above; here the plain
+        // path: a server that does not send applyEdit gives no action for its command.
+        let toServer = Pipe()
+        let fromServer = Pipe()
+        let peer = ScriptedLSPPeer()
+        let server = Task.detached {
+            peer.serve(reading: toServer.fileHandleForReading, writing: fromServer.fileHandleForWriting)
+        }
+        let clientWrite = HandleWriter(toServer.fileHandleForWriting)
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let reader = Task.detached {
+            let handle = fromServer.fileHandleForReading
+            while true {
+                let data = handle.availableData
+                if data.isEmpty {
+                    continuation.finish()
+                    return
+                }
+                continuation.yield(data)
+            }
+        }
+        defer {
+            clientWrite.close()
+            try? fromServer.fileHandleForWriting.close()
+            server.cancel()
+            reader.cancel()
+        }
+        let client = LanguageServerClient.make(
+            write: { try clientWrite.write($0) },
+            read: stream,
+            documentURI: { _ in "file:///tmp/A.swift" },
+            workspaceRoot: URL(fileURLWithPath: "/tmp")
+        )
+        let document = Self.document()
+        let actions = try await client.requestCodeActions(for: document, at: document.cursor.position, diagnostics: [])
+        XCTAssertEqual(actions.map(\.title), ["Replace var with let"])
+    }
+
     func testCodeActionContextIsTheServersOwnDiagnosticAtThePosition() async throws {
         let toServer = Pipe()
         let fromServer = Pipe()
@@ -716,6 +804,12 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
     var scriptsProgress = false
     /// After `initialized`, push one diagnostic (source `SourceKit`, 0:4-0:7) for `file:///tmp/A.swift`.
     var publishesDiagnostic = false
+    /// While running `workspace/executeCommand`, send the client a `workspace/applyEdit` (id 9001) first, as
+    /// SourceKit-LSP does for a refactoring.
+    var appliesEditOnCommand = false
+    /// The id of an `executeCommand` held back until the client has answered the `workspace/applyEdit`, as the real
+    /// server does.
+    private var deferredCommandID: Any?
     private var incomplete = false
     private var initializeParams: [String: Any] = [:]
     private var codeActionContexts: [[[String: Any]]] = []
@@ -774,7 +868,15 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
             if let id = object["id"], !(id is NSNull) {
                 lock.lock()
                 seen.append("response:\(id)")
+                let deferred = (id as? Int) == 9001 ? deferredCommandID : nil
+                if deferred != nil { deferredCommandID = nil }
                 lock.unlock()
+                if let deferred {
+                    let body = Self.response(id: deferred, method: "workspace/executeCommand")
+                    var framed = Data("Content-Length: \(body.count)\r\n\r\n".utf8)
+                    framed.append(body)
+                    try? output.write(contentsOf: framed)
+                }
             }
             return
         }
@@ -792,6 +894,13 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
         if method == "initialized", scriptsProgress { Self.sendProgress(on: output) }
         if method == "initialized", publishesDiagnostic { Self.sendDiagnostic(on: output) }
         guard let id = object["id"], !(id is NSNull) else { return }
+        if method == "workspace/executeCommand", appliesEditOnCommand {
+            lock.lock()
+            deferredCommandID = id
+            lock.unlock()
+            Self.sendApplyEdit(on: output)
+            return
+        }
         let body = Self.response(id: id, method: method, incompleteCompletion: incompleteCompletion)
         var framed = Data("Content-Length: \(body.count)\r\n\r\n".utf8)
         framed.append(body)
@@ -869,6 +978,17 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
         }
         let object: [String: Any] = ["jsonrpc": "2.0", "id": id, "result": result]
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
+    }
+
+    private static func sendApplyEdit(on output: FileHandle) {
+        let edit: [String: Any] = ["changes": ["file:///tmp/A.swift": [[
+            "range": ["start": ["line": 0, "character": 0], "end": ["line": 0, "character": 0]], "newText": "func extracted() {}\n",
+        ]]]]
+        let message: [String: Any] = ["jsonrpc": "2.0", "id": 9001, "method": "workspace/applyEdit", "params": ["edit": edit]]
+        guard let body = try? JSONSerialization.data(withJSONObject: message) else { return }
+        var framed = Data("Content-Length: \(body.count)\r\n\r\n".utf8)
+        framed.append(body)
+        try? output.write(contentsOf: framed)
     }
 
     private static func sendDiagnostic(on output: FileHandle) {

@@ -16,6 +16,7 @@ final class SwiftRefactoringRepositoryTests: XCTestCase {
         ("inline variable", { SwiftInlineVariable.edits(in: $0, caret: $1) }),
         ("convert if/guard", { SwiftConditionalConversion.edits(in: $0, caret: $1) }),
         ("move to extension", { SwiftMoveToExtension.edits(in: $0, caret: $1) }),
+        ("optional binding shorthand", { SwiftOptionalBindingShorthand.edits(in: $0, caret: $1) }),
     ]
 
     private func swiftFiles(under directory: URL) -> [URL] {

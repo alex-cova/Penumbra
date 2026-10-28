@@ -14,6 +14,8 @@ public actor LanguageServerClient: LSPClient {
     private var cachedCapabilities: ServerCapabilities?
     /// Server work that reports progress, such as background indexing.
     private var workProgress = LSPWorkProgressTracker()
+    /// The edits a command sent back through `workspace/applyEdit`, while one is being run; nil otherwise.
+    private var applyEditSink: [LanguageServerProtocol.WorkspaceEdit]?
     /// What the server holds of each document this client opened: the version last sent and its UTF-16
     /// length. The client owns the version numbers, so the events that sync a document and the requests
     /// that find it stale cannot send the same one twice.
@@ -63,7 +65,12 @@ public actor LanguageServerClient: LSPClient {
                 rootUri: workspaceRoot?.absoluteString,
                 initializationOptions: initializationOptions.flatMap { try? JSONDecoder().decode(LSPAny.self, from: $0) },
                 capabilities: ClientCapabilities(
-                    workspace: nil,
+                    // `applyEdit`: SourceKit-LSP hands a refactoring over as a command and sends its edit back as a
+                    // `workspace/applyEdit` request while the command runs (see `editsOfRefactoring`).
+                    workspace: ClientCapabilities.Workspace(
+                        applyEdit: true, workspaceEdit: nil, didChangeConfiguration: nil, didChangeWatchedFiles: nil,
+                        symbol: nil, executeCommand: nil, workspaceFolders: nil, configuration: nil, semanticTokens: nil
+                    ),
                     // Without literal support SourceKit-LSP answers every `textDocument/codeAction` with an
                     // empty list (it advertises `codeActionProvider: true` all the same), so no fix-it or
                     // refactoring ever reached the editor. Only the kinds the mapping below can apply.
@@ -310,12 +317,17 @@ public actor LanguageServerClient: LSPClient {
         // diagnostics instead) gets the caller's list.
         let spot: LanguageServerProtocol.Position = lspPosition(from: position)
         let published = publishedDiagnostics.diagnostics(for: documentURI(document)).filter { contains($0.range, spot) }
+        // A selection that holds the caret is the range of the request: the server offers its extract refactorings
+        // (method, variable) only for a range, never for a point.
+        let selection = document.selection.range
+        let selectionHoldsCaret = !selection.isEmpty
+            && (selection.start.line, selection.start.column) <= (position.line, position.column)
+            && (position.line, position.column) <= (selection.end.line, selection.end.column)
         let params = CodeActionParams(
             textDocument: textDocument(for: document),
-            range: LSPRange(
-                start: spot,
-                end: spot
-            ),
+            range: selectionHoldsCaret
+                ? LSPRange(start: lspPosition(from: selection.start), end: lspPosition(from: selection.end))
+                : LSPRange(start: spot, end: spot),
             context: CodeActionContext(
                 diagnostics: (published.isEmpty ? diagnostics : published).map(lspDiagnostic(from:)),
                 only: nil,
@@ -326,7 +338,46 @@ public actor LanguageServerClient: LSPClient {
             return []
         }
         let uri = documentURI(document)
-        return response.compactMap { eipCodeAction(from: $0, documentURI: uri) }
+        var actions: [EditorIntelligence.LSPCodeAction] = []
+        var commandsRun = 0
+        for item in response {
+            if let action = eipCodeAction(from: item, documentURI: uri) {
+                actions.append(action)
+            } else if commandsRun < Self.maximumRefactoringCommands, let action = await refactoring(from: item, documentURI: uri) {
+                commandsRun += 1
+                actions.append(action)
+            }
+        }
+        return actions
+    }
+
+    /// How many command-only refactorings one request resolves. Each is a round trip to the server.
+    static let maximumRefactoringCommands = 8
+
+    /// A refactoring the server offers as a command (`Extract Method`, `Extract Expression`, …) with its edit, which
+    /// the server only produces by running the command: it sends the edit back as `workspace/applyEdit`, and the
+    /// client keeps it instead of applying it, so choosing the action in the editor is an ordinary edit. Only
+    /// `refactor.*` actions that touch just this document are resolved; anything else could do more than edit.
+    private func refactoring(
+        from item: TwoTypeOption<Command, LanguageServerProtocol.CodeAction>, documentURI: String
+    ) async -> EditorIntelligence.LSPCodeAction? {
+        guard case .optionB(let action) = item, action.edit == nil, let command = action.command,
+              (action.kind ?? "").hasPrefix("refactor"), applyEditSink == nil else { return nil }
+        applyEditSink = []
+        defer { applyEditSink = nil }
+        do {
+            _ = try await server.executeCommand(ExecuteCommandParams(command: command.command, arguments: command.arguments))
+        } catch {
+            return nil
+        }
+        var changes: [String: [EditorIntelligence.LSPTextEdit]] = [:]
+        for edit in applyEditSink ?? [] {
+            for (uri, edits) in LSPWorkspaceEditMapping.changes(from: edit) { changes[uri, default: []] += edits }
+        }
+        guard !changes.isEmpty, changes.keys.allSatisfy({ sameDocument($0, documentURI) }) else { return nil }
+        let edits = changes.values.flatMap { $0 }
+        guard !edits.isEmpty else { return nil }
+        return EditorIntelligence.LSPCodeAction(title: action.title, kind: action.kind, edits: edits, isPreferred: action.isPreferred ?? false)
     }
 
     public func requestSignatureHelp(for document: Document, at position: TextPosition) async throws -> EditorIntelligence.LSPSignatureHelp? {
@@ -545,6 +596,11 @@ public actor LanguageServerClient: LSPClient {
                 if workProgress.apply(params) { onProgress?(workProgress.active) }
             case .request(_, .windowWorkDoneProgressCreate(_, let respond)):
                 await respond(nil)
+            case .request(_, .workspaceApplyEdit(let params, let respond)):
+                // Kept for `refactoring(from:)`; applied by the editor, so the server is told it was taken.
+                let wanted = applyEditSink != nil
+                if wanted { applyEditSink?.append(params.edit) }
+                await respond(.success(ApplyWorkspaceEditResult(applied: wanted)))
             default:
                 break
             }

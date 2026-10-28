@@ -159,7 +159,7 @@ public enum SwiftIntroduceVariable {
     }
 
     private static func usesNamesDeclaredInside(_ bytes: Range<Int>, itemStart: Int, file: SwiftRefactoringFile) -> String? {
-        for reference in SwiftSyntaxScopes.references(in: file.document) where bytes.contains(reference.bytes.lowerBound) {
+        for reference in file.references where bytes.contains(reference.bytes.lowerBound) {
             if case .local(let declaration, _) = reference.resolution, declaration.lowerBound >= itemStart {
                 return "The expression uses `\(reference.name)`, which this statement declares."
             }

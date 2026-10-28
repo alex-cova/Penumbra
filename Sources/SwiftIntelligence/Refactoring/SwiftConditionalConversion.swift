@@ -130,11 +130,17 @@ public enum SwiftConditionalConversion {
             return .failure(.init("Only a `guard` whose `else` just leaves can become an `if`; the `else` does more."))
         }
         let exit = only.item
-        let leaves = exit.as(ReturnStmtSyntax.self).map { $0.expression == nil }
-            ?? (exit.as(ContinueStmtSyntax.self)?.label == nil && exit.is(ContinueStmtSyntax.self))
-            || (exit.as(BreakStmtSyntax.self).map { $0.label == nil } ?? false)
-        guard leaves else { return .failure(.init("Only a bare `return`, `continue` or `break` in the `else` can be dropped.")) }
+        let isReturn = exit.as(ReturnStmtSyntax.self).map { $0.expression == nil } ?? false
+        let isContinue = exit.as(ContinueStmtSyntax.self).map { $0.label == nil } ?? false
+        guard isReturn || isContinue else {
+            return .failure(.init("Only a bare `return` or `continue` in the `else` can be dropped (a `break` would keep the loop going)."))
+        }
         guard let list = item.parent?.as(CodeBlockItemListSyntax.self) else { return .failure(.init("The `guard` is not in a block.")) }
+        // What follows the block must be nothing: the leaving `else` also skipped whatever comes after the enclosing
+        // statement, which only a function, closure or loop body (for `continue`) does not have.
+        guard leavesNothingAfter(list, returning: isReturn) else {
+            return .failure(.init("This `guard` is inside another statement: leaving early also skips what follows that statement, which an `if` would not."))
+        }
         let rest = Array(list.drop { $0.id != item.id }.dropFirst())
         let itemRange = SwiftRefactoringFile.trimmed(item)
         guard let indent = file.indentation(before: itemRange.lowerBound) else {
@@ -149,6 +155,16 @@ public enum SwiftConditionalConversion {
         let body = indentText(file.string(restRange), by: unit, firstLineIndent: indent, file: file, bytes: restRange)
         let replacement = "if \(conditions) {\n" + body + "\n\(indent)}"
         return .success([SwiftTextEdit(bytes: itemRange.lowerBound ..< restRange.upperBound, replacement: replacement)])
+    }
+
+    /// Whether the block `list` is a body after which control leaves the construct for good.
+    private static func leavesNothingAfter(_ list: CodeBlockItemListSyntax, returning: Bool) -> Bool {
+        guard let owner = list.parent else { return false }
+        if owner.is(ClosureExprSyntax.self) { return returning }
+        guard let block = owner.as(CodeBlockSyntax.self), let parent = block.parent else { return false }
+        if parent.is(FunctionDeclSyntax.self) || parent.is(InitializerDeclSyntax.self) || parent.is(AccessorDeclSyntax.self) { return returning }
+        if parent.is(ForStmtSyntax.self) || parent.is(WhileStmtSyntax.self) || parent.is(RepeatStmtSyntax.self) { return !returning }
+        return false
     }
 
     // MARK: - Names and layout

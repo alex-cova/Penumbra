@@ -73,14 +73,22 @@ public enum SwiftMoveToExtension {
 
     private struct Owner {
         let isClass: Bool
+        let isStruct: Bool
         let isGeneric: Bool
+        /// How many initializers the type's own body declares.
+        let initializerCount: Int
 
         init?(_ node: Syntax) {
-            if let decl = node.as(StructDeclSyntax.self) { isClass = false; isGeneric = decl.genericParameterClause != nil }
-            else if let decl = node.as(ClassDeclSyntax.self) { isClass = true; isGeneric = decl.genericParameterClause != nil }
-            else if let decl = node.as(EnumDeclSyntax.self) { isClass = false; isGeneric = decl.genericParameterClause != nil }
-            else if let decl = node.as(ActorDeclSyntax.self) { isClass = true; isGeneric = decl.genericParameterClause != nil }
-            else { return nil }
+            func count(_ block: MemberBlockSyntax) -> Int { block.members.filter { $0.decl.is(InitializerDeclSyntax.self) }.count }
+            if let decl = node.as(StructDeclSyntax.self) {
+                isClass = false; isStruct = true; isGeneric = decl.genericParameterClause != nil; initializerCount = count(decl.memberBlock)
+            } else if let decl = node.as(ClassDeclSyntax.self) {
+                isClass = true; isStruct = false; isGeneric = decl.genericParameterClause != nil; initializerCount = count(decl.memberBlock)
+            } else if let decl = node.as(EnumDeclSyntax.self) {
+                isClass = false; isStruct = false; isGeneric = decl.genericParameterClause != nil; initializerCount = count(decl.memberBlock)
+            } else if let decl = node.as(ActorDeclSyntax.self) {
+                isClass = true; isStruct = false; isGeneric = decl.genericParameterClause != nil; initializerCount = count(decl.memberBlock)
+            } else { return nil }
         }
     }
 
@@ -121,6 +129,10 @@ public enum SwiftMoveToExtension {
             let words = modifiers(initializer.modifiers)
             if owner.isClass, !words.contains(.convenience) { return "Only a `convenience` initializer can be in an extension of a class." }
             if words.contains(.required) || words.contains(.override) { return "A `required` or overriding initializer has to stay in the type." }
+            // A struct with an initializer in its body has no memberwise one; with none left there it would come back.
+            if owner.isStruct, owner.initializerCount <= 1 {
+                return "This is the struct's only initializer in its body: moving it out brings the synthesized memberwise initializer back, which can clash with it."
+            }
             return nil
         }
         if let subscriptDecl = decl.as(SubscriptDeclSyntax.self) {

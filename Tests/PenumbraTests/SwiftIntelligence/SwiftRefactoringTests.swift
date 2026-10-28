@@ -240,6 +240,21 @@ final class SwiftRefactoringTests: XCTestCase {
         )))
     }
 
+    func testGuardInsideAnotherStatementOrLeavingTheWrongThingStaysAGuard() {
+        for source in [
+            // Leaving early also skips `print(2)`, which an `if` would run.
+            "func f(c: Bool, x: Int?) {\n    if c {\n        ‸guard let x = x else { return }\n        print(x)\n    }\n    print(2)\n}\n",
+            "func f(xs: [Int?]) {\n    for x in xs {\n        if x == nil {\n            ‸guard let y = x else { continue }\n            print(y)\n        }\n        print(1)\n    }\n}\n",
+            // `break` ends the loop; an `if` would go on with the next element.
+            "func f(xs: [Int?]) {\n    for x in xs {\n        ‸guard let y = x else { break }\n        print(y)\n    }\n}\n",
+            // `return` inside a loop leaves the function; the rest of the function would still run after an `if`.
+            "func f(xs: [Int?]) {\n    for x in xs {\n        ‸guard let y = x else { return }\n        print(y)\n    }\n    print(0)\n}\n",
+        ] {
+            let parsed = Self.parse(source)
+            XCTAssertNotNil(refusal(SwiftConditionalConversion.edits(in: parsed.text, caret: parsed.caret)), source)
+        }
+    }
+
     // MARK: - Add explicit type
 
     private func addType(_ marked: String) -> String? {
@@ -306,6 +321,9 @@ final class SwiftRefactoringTests: XCTestCase {
         XCTAssertNotNil(move("struct S {\n    static var ‸shared = 1\n}\n"))
         XCTAssertNotNil(move("struct S {\n    var ‸total: Int { 1 }\n}\n"))
         XCTAssertNotNil(move("struct S {\n    init() {}\n    ‸init(a: Int) {}\n}\n"))
+        // The only initializer of a struct: leaving the body would bring back the memberwise one.
+        let only = Self.parse("struct S {\n    var a: Int\n    ‸init(a: Int) { self.a = a }\n}\n")
+        XCTAssertNotNil(refusal(SwiftMoveToExtension.edits(in: only.text, caret: only.caret)))
     }
 
     // MARK: - Change signature
@@ -356,6 +374,45 @@ final class SwiftRefactoringTests: XCTestCase {
         XCTAssertEqual(subject?.parameterCount, 2)
         XCTAssertEqual(subject?.lastParameter, "b")
         XCTAssertNil(SwiftChangeSignature.subject(in: source, caret: 2))
+    }
+
+    // MARK: - Optional binding shorthand
+
+    private func shorthand(_ marked: String, allowed: Bool = true) -> String? {
+        let parsed = Self.parse(marked)
+        return Self.apply(SwiftOptionalBindingShorthand.edits(in: parsed.text, caret: parsed.caret, allowsShorthand: allowed), to: parsed.text)
+    }
+
+    func testOptionalBindingsShortenAndExpand() {
+        XCTAssertEqual(shorthand("func f(x: Int?) {\n    if let ‸x = x { print(x) }\n}\n"), "func f(x: Int?) {\n    if let x { print(x) }\n}\n")
+        XCTAssertEqual(shorthand("func f(x: Int?) {\n    guard var ‸x = x else { return }\n    x += 1\n}\n"), "func f(x: Int?) {\n    guard var x else { return }\n    x += 1\n}\n")
+        XCTAssertEqual(shorthand("func f(x: Int?, y: Int?) {\n    if let a = y, let ‸x = x { print(a, x) }\n}\n"), "func f(x: Int?, y: Int?) {\n    if let a = y, let x { print(a, x) }\n}\n")
+        XCTAssertEqual(shorthand("func f(x: Int?) {\n    if let ‸x { print(x) }\n}\n"), "func f(x: Int?) {\n    if let x = x { print(x) }\n}\n")
+        XCTAssertEqual(shorthand("func f(x: Int?) {\n    while let ‸x { print(x); return }\n}\n"), "func f(x: Int?) {\n    while let x = x { print(x); return }\n}\n")
+    }
+
+    func testOptionalBindingsThatAreNotTheSameNameOrCarryATypeStay() {
+        for source in [
+            "func f(x: Int?) {\n    if let ‸y = x { print(y) }\n}\n",
+            "func f(x: Int?) {\n    if let ‸x: Int = x { print(x) }\n}\n",
+            "func f(x: Int?) {\n    if let ‸x = x.map({ $0 }) { print(x) }\n}\n",
+            "func f(x: Int?) {\n    if let (a, b) = ‸x { print(a, b) }\n}\n",
+        ] {
+            let parsed = Self.parse(source)
+            XCTAssertNotNil(refusal(SwiftOptionalBindingShorthand.edits(in: parsed.text, caret: parsed.caret)), source)
+        }
+        // A package from before Swift 5.7 cannot use the short form, but can write it out.
+        XCTAssertNil(shorthand("func f(x: Int?) {\n    if let ‸x = x { print(x) }\n}\n", allowed: false))
+        XCTAssertNotNil(shorthand("func f(x: Int?) {\n    if let ‸x { print(x) }\n}\n", allowed: false))
+    }
+
+    func testTheToolsVersionIsReadFromTheManifestsFirstLine() {
+        XCTAssertEqual(SwiftToolsVersion.parse(manifest: "// swift-tools-version: 5.9\nimport PackageDescription\n"), SwiftToolsVersion(major: 5, minor: 9))
+        XCTAssertEqual(SwiftToolsVersion.parse(manifest: "// swift-tools-version:5.6.1\n"), SwiftToolsVersion(major: 5, minor: 6))
+        XCTAssertEqual(SwiftToolsVersion.parse(manifest: "// swift-tools-version:6\n"), SwiftToolsVersion(major: 6, minor: 0))
+        XCTAssertNil(SwiftToolsVersion.parse(manifest: "import PackageDescription\n"))
+        XCTAssertTrue(SwiftToolsVersion(major: 5, minor: 9) > SwiftToolsVersion(major: 5, minor: 7))
+        XCTAssertTrue(SwiftToolsVersion.allowsOptionalBindingShorthand(forFileAt: URL(fileURLWithPath: "/nowhere/at/all/A.swift")), "no manifest: allowed")
     }
 
     // MARK: - Syntax errors
