@@ -73,13 +73,19 @@ final class IDEXcodeProjectSystemTests: XCTestCase {
         system.projectDidChange(root: root)
 
         XCTAssertTrue(system.isActive)
-        XCTAssertEqual(system.syncState, .synced(modules: 1, dependencies: 0))
+        XCTAssertEqual(system.syncState, .synced(modules: 2, dependencies: 0))
         XCTAssertEqual(system.model?.format, .xcproj)
-        XCTAssertEqual(system.model?.targets.map(\.name), ["My_App"])
+        XCTAssertEqual(system.model?.targets.map(\.name), ["My_App", "My_AppTests"])
         XCTAssertEqual(system.model?.targets.first?.kind, .application)
+        XCTAssertEqual(system.model?.targets.last?.kind, .test)
         XCTAssertEqual(system.model?.configurations, ["Debug", "Release"])
-        XCTAssertEqual(system.tasks.map(\.path), ["build", "build:My_App", "clean"])
-        XCTAssertEqual(system.sourceRootPaths, [root.appendingPathComponent("My_App").standardizedFileURL.path])
+        XCTAssertEqual(system.tasks.map(\.path), ["build", "build:My_App", "build:My_AppTests", "clean"])
+        XCTAssertEqual(
+            system.sourceRootPaths,
+            [
+                root.appendingPathComponent("My_App").standardizedFileURL.path,
+                root.appendingPathComponent("Tests").standardizedFileURL.path,
+            ])
         XCTAssertEqual(system.buildConfiguration, "Debug")
     }
 

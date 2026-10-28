@@ -68,6 +68,12 @@ extension IDEWorkspace {
 
     /// Run ▸ Run with Coverage and Profile: what the caret is in, else the active file's launch.
     func runInstrumented(_ instrumentation: JavaRunInstrumentation) {
+        if let xcode = activeRunProvider as? IDEXcodeRunProvider {
+            if !xcode.runInstrumented(instrumentation, document: activeRunDocument()) {
+                reportRunProblem("There is nothing to run. Open a Swift file in an Xcode project with a program or tests.")
+            }
+            return
+        }
         if let swift = activeRunProvider as? IDESwiftRunProvider {
             if !swift.runInstrumented(instrumentation, document: activeRunDocument()) {
                 reportRunProblem("There is nothing to run. Open a Swift file in a package with a program or tests.")
@@ -82,6 +88,12 @@ extension IDEWorkspace {
 
     /// Run ▸ Run All Tests with Coverage / Profile All Tests: the active test class, else every test.
     func runTestsInstrumented(_ instrumentation: JavaRunInstrumentation) {
+        if let xcode = activeRunProvider as? IDEXcodeRunProvider {
+            if !xcode.runTestsInstrumented(instrumentation, document: activeRunDocument()) {
+                reportRunProblem("There are no tests to run. Open a Swift file in an Xcode project with a test target.")
+            }
+            return
+        }
         if let swift = activeRunProvider as? IDESwiftRunProvider {
             if !swift.runTestsInstrumented(instrumentation, document: activeRunDocument()) {
                 reportRunProblem("There are no tests to run. Open a Swift file in a package with a test target.")

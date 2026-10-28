@@ -1,0 +1,17 @@
+{
+  "project" : {
+    "configurations" : [
+      "Debug",
+      "Release"
+    ],
+    "name" : "FlowApp",
+    "schemes" : [
+      "FlowApp",
+      "FlowAppTests"
+    ],
+    "targets" : [
+      "FlowApp",
+      "FlowAppTests"
+    ]
+  }
+}

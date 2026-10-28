@@ -1,0 +1,62 @@
+{
+  "devices" : [
+    {
+      "architecture" : "arm64",
+      "deviceId" : "00006050-001A10383487401C",
+      "deviceName" : "My Mac",
+      "modelName" : "MacBook Pro",
+      "osBuildNumber" : "26A434",
+      "osVersion" : "27.0.1",
+      "platform" : "macOS"
+    }
+  ],
+  "testNodes" : [
+    {
+      "children" : [
+        {
+          "children" : [
+            {
+              "children" : [
+                {
+                  "duration" : "0.0006s",
+                  "durationInSeconds" : 0.0005990266799926758,
+                  "name" : "testExample()",
+                  "nodeIdentifier" : "FlowAppTests/testExample()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/FlowApp/FlowAppTests/FlowAppTests/testExample",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "0.58s",
+                  "durationInSeconds" : 0.5816730260848999,
+                  "name" : "testPerformanceExample()",
+                  "nodeIdentifier" : "FlowAppTests/testPerformanceExample()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/FlowApp/FlowAppTests/FlowAppTests/testPerformanceExample",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                }
+              ],
+              "name" : "FlowAppTests",
+              "nodeIdentifierURL" : "test://com.apple.xcode/FlowApp/FlowAppTests/FlowAppTests",
+              "nodeType" : "Test Suite",
+              "result" : "Passed"
+            }
+          ],
+          "name" : "FlowAppTests",
+          "nodeIdentifierURL" : "test://com.apple.xcode/FlowApp/FlowAppTests",
+          "nodeType" : "Unit test bundle",
+          "result" : "Passed"
+        }
+      ],
+      "name" : "FlowAppTests",
+      "nodeType" : "Test Plan",
+      "result" : "Passed"
+    }
+  ],
+  "testPlanConfigurations" : [
+    {
+      "configurationId" : "1",
+      "configurationName" : "Test Scheme Action"
+    }
+  ]
+}

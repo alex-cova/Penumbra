@@ -85,6 +85,26 @@ struct IDEXcodeProjectTemplate: IDEProjectTemplate {
         }
     }
 
+    /// The template's logic-test suite: self-contained XCTest, no host app, so `xcodebuild test`
+    /// runs it on the Mac with no signing identity and no destination.
+    static func testsSource(_ product: String) -> String {
+        """
+        import XCTest
+
+        final class \(product)Tests: XCTestCase {
+            func testExample() throws {
+                XCTAssertEqual(1 + 1, 2)
+            }
+
+            func testPerformanceExample() throws {
+                measure {
+                    _ = (0 ..< 1_000).reduce(0, +)
+                }
+            }
+        }
+        """
+    }
+
     func files(for options: IDENewProjectOptions) throws -> [IDEGeneratedFile] {
         let product = options.productName
         let project = try IDEXcodeProjectBuilder.project(kind: kind, options: options)
@@ -94,6 +114,7 @@ struct IDEXcodeProjectTemplate: IDEProjectTemplate {
                 data: try project.jsonRepresentation()
             ),
             IDEGeneratedFile(path: ".gitignore", text: Self.gitignore),
+            IDEGeneratedFile(path: "Tests/\(product)Tests.swift", text: Self.testsSource(product)),
         ]
         switch kind {
         case .macOSApp:
@@ -230,11 +251,23 @@ enum IDEXcodeProjectBuilder {
         let product = options.productName
         let targetName = product
         let productFile = kind.productFileName(product)
+        let testTargetName = product + "Tests"
+        let testProductFile = testTargetName + ".xctest"
 
         let sourceFolder = XCSchema.Folder(
             objectID: id("folder", product),
             path: try XCSchema.FilePath(base: .group, path: product),
             targets: [XCSchema.LocalTargetReference(targetName: targetName)],
+            membershipExceptions: [],
+            explicitFileTypes: [:],
+            explicitOpaqueFolders: [],
+            includeInIndex: nil
+        )
+
+        let testsFolder = XCSchema.Folder(
+            objectID: id("tests-folder", product),
+            path: try XCSchema.FilePath(base: .group, path: "Tests"),
+            targets: [XCSchema.LocalTargetReference(targetName: testTargetName)],
             membershipExceptions: [],
             explicitFileTypes: [:],
             explicitOpaqueFolders: [],
@@ -251,12 +284,22 @@ enum IDEXcodeProjectBuilder {
             includeInIndex: false,
             buildFiles: []
         )
+        let testProductReference = XCSchema.FileReference(
+            objectID: id("test-product", product),
+            path: try XCSchema.FilePath(base: .buildProducts, path: testProductFile),
+            explicitFileType: XCSchema.FileTypeID(fileTypeID: "wrapper.cfbundle"),
+            expectedSignature: nil,
+            textEncoding: nil,
+            lineEnding: nil,
+            includeInIndex: false,
+            buildFiles: []
+        )
         let productsGroup = XCSchema.Group(
             objectID: id("products", product),
             name: "Products",
             path: try XCSchema.FilePath(base: .group, path: ""),
             includeInIndex: nil,
-            children: [.fileReference(productReference)]
+            children: [.fileReference(productReference), .fileReference(testProductReference)]
         )
 
         var phases: [XCSchema.BuildPhase] = [
@@ -286,13 +329,36 @@ enum IDEXcodeProjectBuilder {
             packageProductTargetMembers: []
         )
 
+        // A logic-test bundle: no host app, so it runs on the Mac with no signing identity.
+        let testTarget = XCSchema.CommonTargetProperties(
+            name: testTargetName,
+            objectID: id("test-target", product),
+            configurationListDebugID: nil,
+            dependencies: [],
+            buildPhases: [
+                .sources(XCSchema.BuildPhaseProperties(objectID: id("test-sources", product), name: nil)),
+                .frameworks(XCSchema.BuildPhaseProperties(objectID: id("test-frameworks", product), name: nil)),
+            ],
+            buildRules: [],
+            specializedConfigurations: [],
+            buildSettings: testTargetSettings(options: options),
+            product: .namePath(XCSchema.NamePath(components: [.child("Products"), .child(testProductFile)])),
+            productTypeID: XCSchema.ProductTypeID(productTypeID: "com.apple.product-type.bundle.unit-test"),
+            testHostTarget: nil,
+            legacyProvisioningStyle: nil,
+            legacyTeamID: nil,
+            lastSwiftUpdateCheck: nil,
+            lastSwiftMigration: nil,
+            packageProductTargetMembers: []
+        )
+
         let debug = XCSchema.ConfigurationName(name: "Debug")
         let release = XCSchema.ConfigurationName(name: "Release")
         return XCSchema.Project(
             objectID: id("project", product),
             rootGroupDebugID: nil,
             configurationListDebugID: nil,
-            topLevelReferences: [.folder(sourceFolder), .group(productsGroup)],
+            topLevelReferences: [.folder(sourceFolder), .folder(testsFolder), .group(productsGroup)],
             packages: [],
             configurations: [
                 XCSchema.Configuration(name: debug, file: nil, objectID: nil),
@@ -300,7 +366,7 @@ enum IDEXcodeProjectBuilder {
             ],
             buildSettings: projectSettings(options: options),
             defaultConfigurationName: release,
-            targets: [.native(target)],
+            targets: [.native(target), .native(testTarget)],
             localizationInfo: XCSchema.ProjectLocalizationInfo(
                 development: XCSchema.Language(languageID: "en"),
                 supported: []
@@ -335,6 +401,16 @@ enum IDEXcodeProjectBuilder {
             "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": .string("-Onone"),
             "SWIFT_COMPILATION_MODE[config=Release]": .string("wholemodule"),
             "ENABLE_TESTABILITY[config=Debug]": .string("YES"),
+        ]
+    }
+
+    private static func testTargetSettings(options: IDENewProjectOptions) -> [String: XCSchema.BuildSetting] {
+        [
+            "PRODUCT_NAME": .string("$(TARGET_NAME)"),
+            "PRODUCT_BUNDLE_IDENTIFIER": .string(options.bundleIdentifier + ".tests"),
+            "GENERATE_INFOPLIST_FILE": .string("YES"),
+            "CODE_SIGN_STYLE": .string("Automatic"),
+            "LD_RUNPATH_SEARCH_PATHS": .array(["$(inherited)", "@executable_path/../Frameworks", "@loader_path/../Frameworks"]),
         ]
     }
 

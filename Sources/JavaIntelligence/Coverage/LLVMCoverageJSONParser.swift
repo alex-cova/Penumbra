@@ -91,7 +91,9 @@ public enum LLVMCoverageJSONParser {
 
     // MARK: - Where a file belongs
 
-    private static func place(of path: String, root: String?, options: Options) -> (module: String, name: String)? {
+    /// Shared with `XCCovArchiveParser`: the archive names absolute paths, and the module
+    /// placement is the same.
+    static func place(of path: String, root: String?, options: Options) -> (module: String, name: String)? {
         let name = (path as NSString).lastPathComponent
         let components: [String]
         if let root {

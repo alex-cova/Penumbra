@@ -114,7 +114,14 @@ struct IDESwiftModule: IDELanguageModule {
     }
 
     func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)? {
-        IDESwiftRunProvider(swiftPM: workspace.swiftPM, workspace: workspace)
+        // Xcode first: an Xcode project in the folder runs its tests through the Xcode provider;
+        // otherwise Swift files run through SwiftPM. The check reads the folder, so it holds at
+        // window creation without waiting for the project sync.
+        if let root = workspace.project.rootURL,
+           IDEXcodeProjectModel.findProject(in: root) != nil {
+            return IDEXcodeRunProvider(xcode: workspace.xcode, workspace: workspace)
+        }
+        return IDESwiftRunProvider(swiftPM: workspace.swiftPM, workspace: workspace)
     }
 
     func symbolPaletteSources(for workspace: IDEWorkspace) -> [any SearchEverywhereProvider] {
@@ -188,6 +195,13 @@ private struct IDESwiftCommands: View {
 
     private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
 
+    /// The Xcode test scheme, when the window runs Swift through Xcode.
+    @State private var schemes: [String] = []
+
+    private var xcodeProvider: IDEXcodeRunProvider? {
+        workspace?.runProviders.providers.first { $0 is IDEXcodeRunProvider } as? IDEXcodeRunProvider
+    }
+
     var body: some View {
         Menu("Refactor") {
             Button("Introduce Variable…", action: { workspace?.performRefactoring(.extractVariable) })
@@ -207,6 +221,17 @@ private struct IDESwiftCommands: View {
             .menuShortcut(.inspectCode, in: preset)
         Button("Run Inspection by Name…", action: { workspace?.presentRunInspectionByName(language: .swift) })
             .menuShortcut(.runInspectionByName, in: preset)
+        if let provider = xcodeProvider {
+            Menu("Scheme: \(provider.selectedScheme ?? schemes.first ?? "…")") {
+                ForEach(schemes, id: \.self) { scheme in
+                    Toggle(scheme, isOn: Binding(
+                        get: { provider.selectedScheme ?? schemes.first == scheme },
+                        set: { _ in provider.selectedScheme = scheme }
+                    ))
+                }
+            }
+            .task { schemes = await provider.schemes() }
+        }
         Divider()
         Button("Run Tests with Coverage", action: { workspace?.runTestsInstrumented(.coverage) })
         Button("Profile (Time Profiler)", action: { workspace?.runInstrumented(.profile) })
