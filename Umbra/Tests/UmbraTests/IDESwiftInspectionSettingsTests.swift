@@ -1,106 +1,162 @@
 import Foundation
+import JavaIntelligence
 import SwiftIntelligence
 import XCTest
 @testable import Umbra
 
-/// Settings ▸ Swift ▸ Inspections stores rule codes, and only what differs from each rule's default.
+/// Swift inspection choices live in the profiles Java's do: the Default profile's `swift` section, a global profile's
+/// file and the project's `.umbra/inspections.json`.
 @MainActor
 final class IDESwiftInspectionSettingsTests: XCTestCase {
-    private var defaults: UserDefaults!
-    private var suite = ""
+    private var directory: URL!
+    private var suite: UserDefaults!
+    private var suiteName: String!
+    private let preferences = IDEPreferences.shared
 
     override func setUp() {
         super.setUp()
-        suite = "IDESwiftInspectionSettingsTests.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suite)
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("swift-profiles-\(UUID().uuidString)")
+        suiteName = "umbra.test.\(UUID().uuidString)"
+        suite = UserDefaults(suiteName: suiteName)
     }
 
     override func tearDown() {
-        defaults.removePersistentDomain(forName: suite)
+        suite.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: directory)
         super.tearDown()
     }
 
-    func testNothingStoredMeansEveryRuleIsAtItsDefault() {
-        let options = IDESwiftInspectionSettings.current(defaults: defaults)
-        XCTAssertEqual(options, SwiftInspectionOptions())
-        XCTAssertEqual(options.enabledRules, Set(SwiftInspectionRule.allCases.filter(\.isEnabledByDefault)))
+    private func makeStore() -> IDEInspectionProfiles {
+        IDEInspectionProfiles(directory: directory, defaults: suite, preferences: preferences)
     }
 
-    func testSwitchingARuleAgainstItsDefaultStoresOnlyThatCode() throws {
-        let model = IDESwiftInspectionModel(defaults: defaults)
-        let onByDefault = try XCTUnwrap(SwiftInspectionRule.allCases.first(where: \.isEnabledByDefault))
-        model.setEnabled(false, for: onByDefault)
-        XCTAssertEqual(defaults.stringArray(forKey: IDESwiftInspectionSettings.disabledKey), [onByDefault.code])
-        XCTAssertEqual(defaults.stringArray(forKey: IDESwiftInspectionSettings.enabledKey) ?? [], [])
-        XCTAssertFalse(IDESwiftInspectionSettings.current(defaults: defaults).isEnabled(onByDefault))
-
-        // Back to the default: nothing is stored for it any more.
-        model.setEnabled(true, for: onByDefault)
-        XCTAssertEqual(defaults.stringArray(forKey: IDESwiftInspectionSettings.disabledKey) ?? [], [])
-        XCTAssertEqual(IDESwiftInspectionSettings.current(defaults: defaults), SwiftInspectionOptions())
+    func testNothingStoredMeansTheStandardSwiftProfile() {
+        let store = makeStore()
+        XCTAssertEqual(store.defaultProfile.swift, .standard)
+        XCTAssertNil(store.defaultProfile.sections["swift"], "a profile that never touched Swift stays a Java-only file")
     }
 
-    func testARuleOffByDefaultCanBeSwitchedOn() throws {
-        guard let offByDefault = SwiftInspectionRule.allCases.first(where: { !$0.isEnabledByDefault }) else {
-            return // every rule ships on; nothing to switch
-        }
-        let model = IDESwiftInspectionModel(defaults: defaults)
-        model.setEnabled(true, for: offByDefault)
-        XCTAssertEqual(defaults.stringArray(forKey: IDESwiftInspectionSettings.enabledKey), [offByDefault.code])
-        XCTAssertTrue(IDESwiftInspectionSettings.current(defaults: defaults).isEnabled(offByDefault))
+    func testTheFlatKeysFromBeforeProfilesSeedTheDefaultProfileAndAreForgottenOnceItIsSaved() {
+        suite.set(["empty-catch"], forKey: IDESwiftInspectionSettings.disabledKey)
+        suite.set(["force-try"], forKey: IDESwiftInspectionSettings.enabledKey)
+        suite.set(["force-try": "error"], forKey: IDESwiftInspectionSettings.severitiesKey)
+        suite.set([SwiftInspectionRule.longFunction.code: 120], forKey: IDESwiftInspectionSettings.limitsKey)
+        let store = makeStore()
+        var swift = store.defaultProfile.swift
+        XCTAssertEqual(swift.disabled, ["empty-catch"])
+        XCTAssertEqual(swift.enabled, ["force-try"])
+        XCTAssertEqual(swift.severities, ["force-try": "error"])
+        XCTAssertEqual(swift.limits, ["long-function": 120])
+
+        // The first change writes the section and drops the old keys.
+        swift.setEnabled(false, for: .explicitInit)
+        var profile = store.defaultProfile
+        profile.swift = swift
+        store.save(profile)
+        XCTAssertNotNil(suite.data(forKey: IDEInspectionProfiles.swiftSectionKey))
+        XCTAssertNil(suite.stringArray(forKey: IDESwiftInspectionSettings.disabledKey))
+        let again = makeStore().defaultProfile.swift
+        XCTAssertEqual(again.disabled, ["empty-catch", "explicit-init"])
+        XCTAssertEqual(again.limits, ["long-function": 120])
     }
 
-    func testSeverityIsStoredOnlyWhenItDiffersFromTheDefault() {
-        let model = IDESwiftInspectionModel(defaults: defaults)
-        let rule = SwiftInspectionRule.forceUnwrap
-        let other = SwiftInspection.Severity.allCases.first { $0 != rule.defaultSeverity }!
-        model.setSeverity(other, for: rule)
-        XCTAssertEqual(IDESwiftInspectionSettings.current(defaults: defaults).severity(of: rule), other)
-        model.setSeverity(rule.defaultSeverity, for: rule)
-        XCTAssertTrue(IDESwiftInspectionSettings.current(defaults: defaults).severities.isEmpty)
+    func testSavingDefaultLeavesJavaAloneAndTheOtherWayRound() {
+        let store = makeStore()
+        var profile = store.defaultProfile
+        profile.swift.setEnabled(true, for: .forceUnwrap)
+        let javaBefore = (profile.disabled, profile.severities)
+        store.save(profile)
+        let saved = store.defaultProfile
+        XCTAssertEqual(saved.swift.enabled, ["force-unwrap"])
+        XCTAssertEqual(saved.disabled, javaBefore.0)
+        XCTAssertEqual(saved.severities, javaBefore.1)
+
+        // Restoring the standard Swift profile removes the section again.
+        var restored = saved
+        restored.swift = .standard
+        store.save(restored)
+        XCTAssertEqual(store.defaultProfile.swift, .standard)
     }
 
-    func testLimitsRoundTripAndDefaultsAreNotStored() {
-        let model = IDESwiftInspectionModel(defaults: defaults)
-        model.setLimit(120, for: .longFunction)
-        model.setLimit(9, for: .highComplexity)
-        model.setLimit(3, for: .manyParameters)
-        var options = IDESwiftInspectionSettings.current(defaults: defaults)
-        XCTAssertEqual(options.limits.functionLines, 120)
-        XCTAssertEqual(options.limits.complexity, 9)
-        XCTAssertEqual(options.limits.parameters, 3)
+    func testAGlobalProfilesFileCarriesItsSwiftSectionThroughAReload() throws {
+        let store = makeStore()
+        var created = store.create(named: "Strict", from: store.defaultProfile)
+        created.swift.setEnabled(true, for: .forceUnwrap)
+        created.swift.scopedOverrides = [.init(code: "force-unwrap", scope: .tests, isEnabled: false)]
+        store.save(created)
 
-        model.setLimit(SwiftInspectionLimits.standard.functionLines, for: .longFunction)
-        let stored = defaults.dictionary(forKey: IDESwiftInspectionSettings.limitsKey) as? [String: Int]
-        XCTAssertNil(stored?[SwiftInspectionRule.longFunction.code])
+        let file = try String(contentsOf: directory.appendingPathComponent("Strict.json"), encoding: .utf8)
+        XCTAssertTrue(file.contains("\"swift\""), file)
+        XCTAssertTrue(file.contains("\"name\""), "Java's keys are still there: \(file)")
+        let loaded = try XCTUnwrap(makeStore().profile(named: "Strict"))
+        XCTAssertEqual(loaded.swift.enabled, ["force-unwrap"])
+        XCTAssertEqual(loaded.swift.scopedOverrides.count, 1)
 
-        // A rule without a threshold ignores the call.
-        model.setLimit(1, for: .forceUnwrap)
-        options = IDESwiftInspectionSettings.current(defaults: defaults)
-        XCTAssertEqual(options.limits.complexity, 9)
+        // Editing Java's side of the profile keeps Swift's.
+        var edited = loaded
+        edited.setEnabled(false, for: .selfAssignment)
+        XCTAssertEqual(edited.swift, loaded.swift)
     }
 
-    func testRestoreDefaultsClearsEverything() {
-        let model = IDESwiftInspectionModel(defaults: defaults)
-        model.setEnabled(false, for: .forceUnwrap)
-        model.setLimit(77, for: .longFunction)
-        model.resetToDefaults()
-        XCTAssertEqual(IDESwiftInspectionSettings.current(defaults: defaults), SwiftInspectionOptions())
+    func testTheProjectFileKeepsBothLanguagesAndAnOldOneStillLoads() throws {
+        let root = directory.appendingPathComponent("project", isDirectory: true)
+        var profile = JavaInspectionProfile.standard(name: "Project")
+        profile.swift.setEnabled(false, for: .emptyCatch)
+        try IDEInspectionProfiles.writeProjectProfile(profile, root: root)
+        let loaded = try XCTUnwrap(IDEInspectionProfiles.loadProjectProfile(root: root))
+        XCTAssertEqual(loaded.swift.disabled, ["empty-catch"])
+
+        // A file written before Swift had a section.
+        let old = #"{"profile":{"name":"Project","disabled":["unused-import"],"severities":{},"limits":{},"treatsPublicApiAsUsed":true,"scopedOverrides":[]}}"#
+        try old.write(to: IDEInspectionProfiles.projectFileURL(root: root), atomically: true, encoding: .utf8)
+        let legacy = try XCTUnwrap(IDEInspectionProfiles.loadProjectProfile(root: root))
+        XCTAssertEqual(legacy.swift, .standard)
+        XCTAssertEqual(legacy.disabled, ["unused-import"])
     }
 
-    func testOnlyMetricRulesOfferALimit() {
-        let options = SwiftInspectionOptions()
-        for rule in SwiftInspectionRule.allCases {
-            let isMetric = [SwiftInspectionRule.longFunction, .highComplexity, .manyParameters].contains(rule)
-            XCTAssertEqual(IDESwiftInspectionSettings.limit(of: rule, in: options) != nil, isMetric, rule.code)
-        }
+    func testTheWorkspacesChoiceFollowsTheProjectProfileAndTellsEveryoneWhenItChanges() throws {
+        let store = makeStore()
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let inspections = IDEWorkspaceInspections(store: store, defaults: defaults)
+        let root = directory.appendingPathComponent("project", isDirectory: true)
+        var profile = JavaInspectionProfile.standard(name: "Project")
+        profile.swift.setEnabled(true, for: .forceUnwrap)
+        try IDEInspectionProfiles.writeProjectProfile(profile, root: root)
+        inspections.setRoot(root)
+        XCTAssertEqual(inspections.activeSource, .project)
+        XCTAssertEqual(inspections.activeSwiftProfile.enabled, ["force-unwrap"])
+
+        var changes = 0
+        inspections.onChange = { changes += 1 }
+        inspections.edit { $0.swift.setSeverity(.error, for: .forceUnwrap) }
+        XCTAssertEqual(changes, 1)
+        XCTAssertEqual(IDEInspectionProfiles.loadProjectProfile(root: root)?.swift.severities, ["force-unwrap": "error"])
+        inspections.edit { $0.swift.setSeverity(.error, for: .forceUnwrap) }
+        XCTAssertEqual(changes, 1, "no change, no notification")
     }
 
-    func testSupportAnswersWithTheInspectionsFromSettings() async {
+    func testTheEditorsResolverGivesEachFileItsScopesOptionsAndSaysWhetherItChanged() {
+        let resolver = IDESwiftInspectionResolver()
+        var profile = SwiftInspectionProfile.standard
+        profile.scopedOverrides = [.init(code: "redundant-void-return", scope: .tests, isEnabled: false)]
+        let root = URL(fileURLWithPath: "/proj")
+        XCTAssertTrue(resolver.update(profile: profile, root: root))
+        XCTAssertFalse(resolver.update(profile: profile, root: root), "the same profile is no change")
+
+        XCTAssertTrue(resolver.options(for: root.appendingPathComponent("Sources/A.swift")).isEnabled(.redundantVoidReturn))
+        XCTAssertFalse(resolver.options(for: root.appendingPathComponent("Tests/ATests/ATests.swift")).isEnabled(.redundantVoidReturn))
+        XCTAssertTrue(resolver.options(for: nil).isEnabled(.redundantVoidReturn))
+        XCTAssertTrue(resolver.update(profile: profile, root: URL(fileURLWithPath: "/other")), "another project root reclassifies the files")
+    }
+
+    func testSupportAnswersWithTheInspectionsOfTheResolver() async {
         let support = IDESwiftSupport()
-        // `current()` reads the standard defaults, so only the wiring is asserted here, not a rule's state.
-        let analysis = support.inspections.analysis(of: "let x = y!\n")
-        XCTAssertEqual(analysis.findings.contains { $0.id == SwiftInspectionRule.forceUnwrap.code },
-                       IDESwiftInspectionSettings.current().isEnabled(.forceUnwrap))
+        var profile = SwiftInspectionProfile.standard
+        profile.setEnabled(true, for: .forceUnwrap)
+        support.inspectionResolver.update(profile: profile, root: nil)
+        let found = support.inspections.analysis(of: "func f(x: Int?) {\n    let y = x!\n    _ = y\n}\n", url: nil)
+        XCTAssertEqual(found.findings.map(\.id), ["force-unwrap"])
+        support.inspectionResolver.update(profile: .standard, root: nil)
+        XCTAssertTrue(support.inspections.analysis(of: "func f(x: Int?) {\n    let y = x!\n    _ = y\n}\n", url: nil).findings.isEmpty)
     }
 }

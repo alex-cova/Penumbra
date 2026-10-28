@@ -119,14 +119,10 @@ struct IDEInspectCodeSheet: View {
             if language == .java {
                 Toggle("Include project-wide inspections (slower)", isOn: $includeProjectRules)
                     .help("Unused declaration, weaker access, void return and constant parameter checks search the whole project")
-                Picker("Profile", selection: $source) {
-                    if inspections.hasProjectProfile { Text("Project").tag(IDEWorkspaceInspections.Source.project) }
-                    ForEach(inspections.store.names, id: \.self) { Text($0).tag(IDEWorkspaceInspections.Source.global($0)) }
-                }
-            } else {
-                Text("Uses the inspections switched on in Settings ▸ Swift.")
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            Picker("Profile", selection: $source) {
+                if inspections.hasProjectProfile { Text("Project").tag(IDEWorkspaceInspections.Source.project) }
+                ForEach(inspections.store.names, id: \.self) { Text($0).tag(IDEWorkspaceInspections.Source.global($0)) }
             }
             HStack {
                 Button("Configure Profile…") {
@@ -190,9 +186,10 @@ struct IDEInspectCodeSheet: View {
                 includeProjectRules: includeProjectRules
             )
         case .swift:
+            let profile = (inspections.profile(for: source) ?? inspections.activeProfile).swift
             return IDEInspectionLaunch(
                 swiftScope: SwiftInspectionScope(kind: kind.swift, includeTests: includeTests, fileMasks: masks),
-                options: IDESwiftInspectionSettings.current(),
+                profile: profile, profileName: inspections.title(for: source), root: workspace.project.rootURL,
                 onlyRules: request.rule.flatMap { SwiftInspectionRule(code: $0.code) }.map { [$0] }
             )
         }
@@ -214,7 +211,7 @@ struct IDEInspectCodeSheet: View {
             let files = await Task.detached(priority: .userInitiated) { () -> [URL] in
                 switch launch.backend {
                 case .java(let scope, _, _, _): scope.resolve(projectRoots: roots, classifier: classifier)
-                case .swift(let scope, _, _): scope.resolve(projectRoots: roots)
+                case .swift(let scope, _, _, _): scope.resolve(projectRoots: roots)
                 }
             }.value
             let outcome = await workspace.fixAll(ruleCodes: [rule.code], language: launch.language, in: files)

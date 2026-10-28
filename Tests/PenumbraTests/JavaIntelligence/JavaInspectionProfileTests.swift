@@ -93,4 +93,30 @@ final class JavaInspectionProfileTests: XCTestCase {
         XCTAssertTrue(JavaPathGlob.passes(masks: "", path: "anything"))
         XCTAssertTrue(JavaPathGlob.passes(masks: "!**/generated/**", path: "src/Foo.java"))
     }
+
+    func testSectionsOtherLanguagesKeepSurviveARoundTripUntouched() throws {
+        let json = #"{"disabled":["a"],"name":"Team","severities":{},"swift":{"disabled":["force-unwrap"],"limits":{"long-function":120},"nested":{"flag":true,"ratio":0.5,"list":[1,"two",null]}}}"#
+        let profile = try JSONDecoder().decode(JavaInspectionProfile.self, from: Data(json.utf8))
+        XCTAssertEqual(profile.name, "Team")
+        XCTAssertEqual(Set(profile.sections.keys), ["swift"])
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let again = try encoder.encode(profile)
+        let reread = try JSONDecoder().decode(JavaInspectionProfile.self, from: again)
+        XCTAssertEqual(reread, profile, "the section is carried as written")
+        let swift = try JSONSerialization.jsonObject(with: XCTUnwrap(reread.sections["swift"])) as? [String: Any]
+        XCTAssertEqual(swift?["disabled"] as? [String], ["force-unwrap"])
+        XCTAssertEqual((swift?["limits"] as? [String: Int])?["long-function"], 120)
+        XCTAssertEqual((swift?["nested"] as? [String: Any])?["flag"] as? Bool, true)
+
+        // Editing Java's side leaves the other section alone, and a profile without one writes no extra key.
+        var edited = reread
+        edited.setEnabled(true, for: .selfAssignment)
+        XCTAssertEqual(edited.sections, reread.sections)
+        let plain = try String(decoding: encoder.encode(JavaInspectionProfile.standard()), as: UTF8.self)
+        XCTAssertFalse(plain.contains("swift"))
+        XCTAssertEqual(JavaInspectionProfile.standard().sections, [:])
+    }
 }
+

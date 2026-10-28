@@ -51,6 +51,7 @@ enum IDEInspectionSeverity: String, Hashable, Sendable, CaseIterable {
         case .warning: self = .warning
         case .weakWarning: self = .weakWarning
         case .info: self = .info
+        case .noHighlighting: self = .noHighlighting
         }
     }
 

@@ -118,6 +118,9 @@ public struct JavaInspectionProfile: Sendable, Equatable, Codable {
     public var limits: [String: Int]
     public var treatsPublicApiAsUsed: Bool
     public var scopedOverrides: [ScopedOverride]
+    /// What other languages keep in the same profile file, by key (`swift`), as the JSON they wrote. Read and written
+    /// back untouched, so a profile edited for Java carries Swift's choices along and the other way round.
+    public var sections: [String: Data]
 
     public init(
         name: String,
@@ -125,7 +128,8 @@ public struct JavaInspectionProfile: Sendable, Equatable, Codable {
         severities: [String: String] = [:],
         limits: [String: Int] = [:],
         treatsPublicApiAsUsed: Bool = true,
-        scopedOverrides: [ScopedOverride] = []
+        scopedOverrides: [ScopedOverride] = [],
+        sections: [String: Data] = [:]
     ) {
         self.name = name
         self.disabled = disabled
@@ -133,6 +137,7 @@ public struct JavaInspectionProfile: Sendable, Equatable, Codable {
         self.limits = limits
         self.treatsPublicApiAsUsed = treatsPublicApiAsUsed
         self.scopedOverrides = scopedOverrides
+        self.sections = sections
     }
 
     /// The rules' own defaults.
@@ -216,7 +221,7 @@ public struct JavaInspectionProfile: Sendable, Equatable, Codable {
 
     // MARK: Codable
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case name, disabled, severities, limits, treatsPublicApiAsUsed, scopedOverrides
     }
 
@@ -228,6 +233,14 @@ public struct JavaInspectionProfile: Sendable, Equatable, Codable {
         limits = try container.decodeIfPresent([String: Int].self, forKey: .limits) ?? [:]
         treatsPublicApiAsUsed = try container.decodeIfPresent(Bool.self, forKey: .treatsPublicApiAsUsed) ?? true
         scopedOverrides = try container.decodeIfPresent([ScopedOverride].self, forKey: .scopedOverrides) ?? []
+        let known = Set(CodingKeys.allCases.map(\.stringValue))
+        var others: [String: Data] = [:]
+        let everything = try decoder.container(keyedBy: SectionKey.self)
+        for key in everything.allKeys where !known.contains(key.stringValue) {
+            guard let raw = try? everything.decode(RawJSON.self, forKey: key) else { continue }
+            others[key.stringValue] = raw.data
+        }
+        sections = others
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -238,5 +251,63 @@ public struct JavaInspectionProfile: Sendable, Equatable, Codable {
         try container.encode(limits, forKey: .limits)
         try container.encode(treatsPublicApiAsUsed, forKey: .treatsPublicApiAsUsed)
         try container.encode(scopedOverrides, forKey: .scopedOverrides)
+        var others = encoder.container(keyedBy: SectionKey.self)
+        for (name, data) in sections.sorted(by: { $0.key < $1.key }) {
+            guard let key = SectionKey(stringValue: name), let raw = RawJSON(data: data) else { continue }
+            try others.encode(raw, forKey: key)
+        }
+    }
+
+    private struct SectionKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    /// Any JSON value, kept so that a section this code does not model survives a round trip.
+    private enum RawJSON: Codable {
+        case null
+        case bool(Bool)
+        case integer(Int)
+        case number(Double)
+        case string(String)
+        case array([RawJSON])
+        case object([String: RawJSON])
+
+        init?(data: Data) {
+            guard let value = try? JSONDecoder().decode(RawJSON.self, from: data) else { return nil }
+            self = value
+        }
+
+        var data: Data {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            return (try? encoder.encode(self)) ?? Data()
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if container.decodeNil() { self = .null }
+            else if let value = try? container.decode(Bool.self) { self = .bool(value) }
+            else if let value = try? container.decode(Int.self) { self = .integer(value) }
+            else if let value = try? container.decode(Double.self) { self = .number(value) }
+            else if let value = try? container.decode(String.self) { self = .string(value) }
+            else if let value = try? container.decode([RawJSON].self) { self = .array(value) }
+            else { self = .object(try container.decode([String: RawJSON].self)) }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .null: try container.encodeNil()
+            case .bool(let value): try container.encode(value)
+            case .integer(let value): try container.encode(value)
+            case .number(let value): try container.encode(value)
+            case .string(let value): try container.encode(value)
+            case .array(let value): try container.encode(value)
+            case .object(let value): try container.encode(value)
+            }
+        }
     }
 }

@@ -2,6 +2,7 @@ import AppKit
 import EditorIntelligence
 import EditorIntelligenceLSP
 import JavaIntelligence
+import SwiftIntelligence
 import Observation
 import Penumbra
 import SwiftUI
@@ -3063,6 +3064,15 @@ public final class IDEWorkspace {
             importPolicy: preferences.javaImportPolicy,
             postfix: preferences.javaPostfix
         )
+        // The Swift choices of the same profile; open editors analyse again only when they changed.
+        if swiftSupport.inspectionResolver.update(profile: inspections.activeSwiftProfile, root: project.rootURL) {
+            swiftInspectionPreferencesChanged()
+        }
+    }
+
+    /// The options the Swift inspections run with for the file at `url` under this window's active profile.
+    func swiftInspectionOptions(for url: URL?) -> SwiftInspectionOptions {
+        swiftSupport.inspectionResolver.options(for: url)
     }
 
     func refreshUIColorScheme() {

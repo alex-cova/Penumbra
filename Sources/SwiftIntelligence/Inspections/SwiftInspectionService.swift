@@ -9,6 +9,8 @@ import Foundation
 /// switched off in Settings takes effect on the next pass without restarting anything.
 public final class SwiftInspectionService: @unchecked Sendable {
     public typealias OptionsSource = @Sendable () -> SwiftInspectionOptions
+    /// The options for one file (nil for text without a file): a profile's scopes can differ per file.
+    public typealias FileOptionsSource = @Sendable (URL?) -> SwiftInspectionOptions
 
     /// The largest text analysed. A file this size is almost always generated, and the parse is not incremental.
     public static let maximumUTF8Length = 1_500_000
@@ -19,22 +21,27 @@ public final class SwiftInspectionService: @unchecked Sendable {
         let options: SwiftInspectionOptions
     }
 
-    private let options: OptionsSource
+    private let options: FileOptionsSource
     private let cache: SwiftSyntaxParseCache
     private let lock = NSLock()
     private var recent: [(key: Key, analysis: SwiftInspectionPipeline.Analysis)] = []
 
     public init(options: @escaping OptionsSource = { .standard }, cache: SwiftSyntaxParseCache = .shared) {
-        self.options = options
+        self.options = { _ in options() }
         self.cache = cache
     }
 
-    public var currentOptions: SwiftInspectionOptions { options() }
+    public init(optionsForFile: @escaping FileOptionsSource, cache: SwiftSyntaxParseCache = .shared) {
+        self.options = optionsForFile
+        self.cache = cache
+    }
 
-    /// The analysis of `text` under the current options; the two most recent are kept.
-    public func analysis(of text: String) -> SwiftInspectionPipeline.Analysis {
+    public var currentOptions: SwiftInspectionOptions { options(nil) }
+
+    /// The analysis of `text` (the file `url`, when it is one) under the current options; the two most recent are kept.
+    public func analysis(of text: String, url: URL? = nil) -> SwiftInspectionPipeline.Analysis {
         guard text.utf8.count <= Self.maximumUTF8Length else { return .empty(for: "") }
-        let options = options()
+        let options = options(url)
         let key = Key(length: text.utf8.count, hash: text.hashValue, options: options)
         if let hit = lock.withLock({ recent.first { $0.key == key }?.analysis }) { return hit }
         let analysis = SwiftInspectionPipeline.analyze(text: text, options: options, cache: cache)
@@ -51,7 +58,7 @@ public final class SwiftInspectionService: @unchecked Sendable {
         guard document.languageIdentifier == SwiftAnalysis.languageIdentifier,
               !document.contentSnapshot.isElided else { return nil }
         if let url = document.url, DependencySourceLocation.isGeneratedInterface(url) { return nil }
-        return analysis(of: document.text)
+        return analysis(of: document.text, url: document.url)
     }
 }
 
@@ -61,6 +68,8 @@ public enum SwiftInspectionCommand {
     public static let disable = "swift.inspection.disable"
     /// Open the inspection settings on the rule.
     public static let configure = "swift.inspection.configure"
+    /// Set the rule to "No highlighting (fix available)".
+    public static let quiet = "swift.inspection.quiet"
 }
 
 /// The inspections' squiggles. Findings are `Diagnostic`s with the source `swift-inspection` and the rule id
@@ -75,7 +84,8 @@ public struct SwiftInspectionDiagnosticProvider: DiagnosticProvider {
 
     public func diagnostics(for document: Document) async -> [Diagnostic] {
         guard let analysis = service.analysis(for: document), !Task.isCancelled else { return [] }
-        return analysis.findings.map { $0.asDiagnostic(map: analysis.map) }
+        // "No highlighting" findings are not drawn or listed; their fixes stay on ⌥↩.
+        return analysis.findings.filter { $0.severity != .noHighlighting }.map { $0.asDiagnostic(map: analysis.map) }
     }
 }
 
@@ -97,10 +107,16 @@ extension SwiftInspectionService {
             // Once per rule: every fix of it in the file, and the commands to switch it off or open its settings.
             guard let rule = SwiftInspectionRule(code: finding.id), seenRules.insert(finding.id).inserted else { continue }
             if rule.hasFixes, analysis.findings.filter({ $0.id == finding.id }).count > 1 {
-                let all = SwiftBatchFixer.fixAll(rules: [rule], in: document.text, options: currentOptions)
+                let all = SwiftBatchFixer.fixAll(rules: [rule], in: document.text, options: options(document.url))
                 if all.edits.count > 1 {
                     actions.append(CodeAction(title: "Fix all '\(rule.title)' problems in file", kind: "quickfix.fixAll", edits: all.edits))
                 }
+            }
+            if finding.severity != .noHighlighting {
+                actions.append(CodeAction(
+                    title: "Turn off highlighting for '\(rule.title)' (keep fix)", kind: "inspection",
+                    edits: [], command: CodeActionCommand(id: SwiftInspectionCommand.quiet, arguments: [rule.code])
+                ))
             }
             actions.append(CodeAction(
                 title: "Disable inspection '\(rule.title)'", kind: "inspection",

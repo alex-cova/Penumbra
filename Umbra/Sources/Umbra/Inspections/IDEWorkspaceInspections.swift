@@ -1,6 +1,7 @@
 import Foundation
 import JavaIntelligence
 import Observation
+import SwiftIntelligence
 
 /// One window's choice of inspection profile: its project's `.umbra/inspections.json` when there
 /// is one (IntelliJ's "Project Default"), otherwise the selected global profile. Editing writes
@@ -60,6 +61,9 @@ final class IDEWorkspaceInspections {
     var activeProfile: JavaInspectionProfile {
         profile(for: activeSource) ?? store.defaultProfile
     }
+
+    /// The Swift choices of the active profile.
+    var activeSwiftProfile: SwiftInspectionProfile { activeProfile.swift }
 
     func profile(for source: Source) -> JavaInspectionProfile? {
         switch source {

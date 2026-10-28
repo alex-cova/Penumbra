@@ -9,7 +9,11 @@ struct IDEInspectionLaunch {
     /// What each language needs to run: Java's profile and project-wide rules, Swift's options.
     enum Backend {
         case java(scope: JavaInspectionScope, profile: JavaInspectionProfile, onlyRules: Set<JavaInspectionRule>?, includeProjectRules: Bool)
-        case swift(scope: SwiftInspectionScope, options: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>?)
+        /// `resolver` gives the options of one file when a profile's scopes make them differ; `options` is the base.
+        case swift(
+            scope: SwiftInspectionScope, options: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>?,
+            resolver: (@Sendable (URL) -> SwiftInspectionOptions)?
+        )
     }
 
     var backend: Backend
@@ -32,7 +36,19 @@ struct IDEInspectionLaunch {
     }
 
     init(swiftScope: SwiftInspectionScope, options: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>?) {
-        self.init(backend: .swift(scope: swiftScope, options: options, onlyRules: onlyRules), profileName: "Swift settings")
+        self.init(backend: .swift(scope: swiftScope, options: options, onlyRules: onlyRules, resolver: nil), profileName: "Swift settings")
+    }
+
+    /// A Swift run under a profile: each file gets the options its scopes give it.
+    init(swiftScope: SwiftInspectionScope, profile: SwiftInspectionProfile, profileName: String, root: URL?, onlyRules: Set<SwiftInspectionRule>?) {
+        let classifier = SwiftInspectionFileClassifier(projectRoot: root)
+        self.init(
+            backend: .swift(
+                scope: swiftScope, options: profile.options(), onlyRules: onlyRules,
+                resolver: { url in profile.options(for: classifier.context(for: url)) }
+            ),
+            profileName: profileName
+        )
     }
 
     var language: IDEInspectionLanguage {
@@ -45,14 +61,14 @@ struct IDEInspectionLaunch {
     var scopeTitle: String {
         switch backend {
         case .java(let scope, _, _, _): scope.title
-        case .swift(let scope, _, _): scope.title
+        case .swift(let scope, _, _, _): scope.title
         }
     }
 
     var onlyRuleCodes: Set<String>? {
         switch backend {
         case .java(_, _, let only, _): only.map { Set($0.map(\.code)) }
-        case .swift(_, _, let only): only.map { Set($0.map(\.code)) }
+        case .swift(_, _, let only, _): only.map { Set($0.map(\.code)) }
         }
     }
 
@@ -179,8 +195,8 @@ extension IDEWorkspace {
                 }
                 if run.state == .running { run.finish(cancelled: Task.isCancelled) }
             }
-        case .swift(let scope, let inspection, let onlyRules):
-            let options = SwiftBatchInspector.Options(inspection: inspection, onlyRules: onlyRules)
+        case .swift(let scope, let inspection, let onlyRules, let resolver):
+            let options = SwiftBatchInspector.Options(inspection: inspection, onlyRules: onlyRules, optionsForFile: resolver)
             run.task = Task { [weak self, weak run] in
                 let files = await Task.detached(priority: .userInitiated) {
                     scope.resolve(projectRoots: root.map { [$0] } ?? [])
@@ -218,7 +234,7 @@ extension IDEWorkspace {
             let style: JavaSuppressionStyle = preferences.javaSuppressWithComment ? .comment : .annotation
             return JavaInspectionQuickFixes.actions(for: inspection, in: text, suppressionStyle: style)
         case .swift(let located):
-            return SwiftInspectionQuickFixes.actions(for: located, in: text, options: IDESwiftInspectionSettings.current())
+            return SwiftInspectionQuickFixes.actions(for: located, in: text, options: swiftInspectionOptions(for: entry.url))
         }
     }
 
@@ -233,7 +249,7 @@ extension IDEWorkspace {
             guard let code = row.diagnostic.code else { return [] }
             return SwiftInspectionQuickFixes.actions(
                 ruleCode: code, range: row.diagnostic.range, message: row.diagnostic.message, in: text,
-                options: IDESwiftInspectionSettings.current()
+                options: swiftInspectionOptions(for: row.url)
             )
         default:
             return []
@@ -332,7 +348,7 @@ extension IDEWorkspace {
                 found = (result.edits, result.fixedCount)
             case .swift:
                 let rules = Set(ruleCodes.compactMap(SwiftInspectionRule.init(code:)))
-                let result = SwiftBatchFixer.fixAll(rules: rules, in: text, options: IDESwiftInspectionSettings.current())
+                let result = SwiftBatchFixer.fixAll(rules: rules, in: text, options: swiftInspectionOptions(for: url))
                 found = (result.edits, result.fixedCount)
             }
             guard !found.edits.isEmpty else { continue }
@@ -362,8 +378,8 @@ extension IDEWorkspace {
                 let fresh = await inspector.inspect(url: url, options: options, text: text)
                 run.markResolved(handled.filter { $0.url == url }, newFindings: fresh.map(IDEInspectionFinding.init), for: url)
             }
-        case .swift(_, let inspection, let onlyRules):
-            let options = SwiftBatchInspector.Options(inspection: inspection, onlyRules: onlyRules)
+        case .swift(_, let inspection, let onlyRules, let resolver):
+            let options = SwiftBatchInspector.Options(inspection: inspection, onlyRules: onlyRules, optionsForFile: resolver)
             for url in urls {
                 let fresh = await SwiftBatchInspector().inspect(url: url, options: options, text: text)
                 run.markResolved(handled.filter { $0.url == url }, newFindings: fresh.map(IDEInspectionFinding.init), for: url)
@@ -396,7 +412,7 @@ extension IDEWorkspace {
         case .java:
             if let rule = JavaInspectionRule(code: code) { disableInspection(rule) }
         case .swift:
-            if let rule = SwiftInspectionRule(code: code) { IDESwiftInspectionModel().setEnabled(false, for: rule) }
+            if let rule = SwiftInspectionRule(code: code) { inspections.edit { $0.swift.setEnabled(false, for: rule) } }
         }
     }
 
@@ -405,6 +421,7 @@ extension IDEWorkspace {
         case .java:
             if let rule = JavaInspectionRule(code: code) { showInspectionSettings(for: rule) }
         case .swift:
+            inspections.focusedRuleCode = code
             requestedSettingsDomain = .swift
             showSettings()
         }

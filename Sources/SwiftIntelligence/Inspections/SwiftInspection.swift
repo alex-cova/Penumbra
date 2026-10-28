@@ -33,6 +33,9 @@ public struct SwiftInspection: Sendable, Hashable {
         case weakWarning
         /// IntelliJ's "Consideration".
         case info
+        /// IntelliJ's "No highlighting (fix available)": nothing is drawn or listed in the editor, but the fix stays
+        /// on ⌥↩. Inspect Code still reports it.
+        case noHighlighting
     }
 
     /// The rule's code (``SwiftInspectionRule/code``).
@@ -75,6 +78,7 @@ extension SwiftInspection.Severity {
         case .warning: .warning
         case .weakWarning: .hint
         case .info: .information
+        case .noHighlighting: .hint
         }
     }
 }

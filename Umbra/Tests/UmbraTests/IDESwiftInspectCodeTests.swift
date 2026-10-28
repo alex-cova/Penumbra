@@ -14,6 +14,7 @@ final class IDESwiftInspectCodeTests: XCTestCase {
     private static let settingsKeys = [
         IDESwiftInspectionSettings.disabledKey, IDESwiftInspectionSettings.enabledKey,
         IDESwiftInspectionSettings.severitiesKey, IDESwiftInspectionSettings.limitsKey,
+        IDEInspectionProfiles.swiftSectionKey, "com.umbra.editor.inspectionProfile",
     ]
 
     override func setUp() {
@@ -171,16 +172,21 @@ final class IDESwiftInspectCodeTests: XCTestCase {
     func testDisablingASwiftInspectionFromAResultTurnsItOffInSettings() async throws {
         let workspace = try await makeWorkspace()
         workspace.disableInspection(code: "redundant-void-return", language: .swift)
-        XCTAssertFalse(IDESwiftInspectionSettings.current().isEnabled(.redundantVoidReturn))
+        XCTAssertFalse(workspace.inspections.activeSwiftProfile.isEnabled(.redundantVoidReturn))
+        XCTAssertFalse(workspace.swiftInspectionOptions(for: nil).isEnabled(.redundantVoidReturn), "the editor's analysis follows the profile")
         workspace.showInspectionSettings(code: "redundant-void-return", language: .swift)
         XCTAssertEqual(workspace.requestedSettingsDomain, .swift)
+        XCTAssertEqual(workspace.inspections.focusedRuleCode, "redundant-void-return")
     }
 
     func testTheMenusCommandsTurnTheRuleOffAndOpenItsSettings() async throws {
         let workspace = try await makeWorkspace()
         workspace.performCodeActionCommand(CodeActionCommand(id: SwiftInspectionCommand.disable, arguments: ["redundant-void-return"]))
-        XCTAssertFalse(IDESwiftInspectionSettings.current().isEnabled(.redundantVoidReturn))
+        XCTAssertFalse(workspace.inspections.activeSwiftProfile.isEnabled(.redundantVoidReturn))
         workspace.performCodeActionCommand(CodeActionCommand(id: SwiftInspectionCommand.configure, arguments: ["redundant-void-return"]))
         XCTAssertEqual(workspace.requestedSettingsDomain, .swift)
+
+        workspace.performCodeActionCommand(CodeActionCommand(id: SwiftInspectionCommand.quiet, arguments: ["empty-catch"]))
+        XCTAssertEqual(workspace.inspections.activeSwiftProfile.resolution(of: .emptyCatch).severity, .noHighlighting)
     }
 }

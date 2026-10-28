@@ -48,15 +48,27 @@ public struct SwiftBatchInspector: Sendable {
         /// Run only these rules, whatever `inspection` says; `nil` runs the enabled ones.
         public var onlyRules: Set<SwiftInspectionRule>?
         public var maxConcurrentFiles: Int
+        /// The options for one file, when a profile's scopes make them differ per file; `inspection` is the base otherwise.
+        public var optionsForFile: (@Sendable (URL) -> SwiftInspectionOptions)?
 
-        public init(inspection: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>? = nil, maxConcurrentFiles: Int = 4) {
+        public init(
+            inspection: SwiftInspectionOptions, onlyRules: Set<SwiftInspectionRule>? = nil, maxConcurrentFiles: Int = 4,
+            optionsForFile: (@Sendable (URL) -> SwiftInspectionOptions)? = nil
+        ) {
             self.inspection = inspection
             self.onlyRules = onlyRules
             self.maxConcurrentFiles = max(1, maxConcurrentFiles)
+            self.optionsForFile = optionsForFile
         }
 
         /// What the pipeline runs with.
         public var effective: SwiftInspectionOptions { onlyRules.map(inspection.only) ?? inspection }
+
+        /// What the pipeline runs with for the file at `url`.
+        public func effective(for url: URL) -> SwiftInspectionOptions {
+            let base = optionsForFile?(url) ?? inspection
+            return onlyRules.map(base.only) ?? base
+        }
     }
 
     public enum Event: Sendable {
@@ -109,15 +121,19 @@ public struct SwiftBatchInspector: Sendable {
 
     private static func inspect(url: URL, options: Options, text: @Sendable (URL) async -> String?) async -> [SwiftLocatedInspection] {
         guard !Task.isCancelled, let source = await text(url) else { return [] }
-        return located(in: source, options: options)
+        return located(in: source, effectiveOptions: options.effective(for: url))
     }
 
     /// The findings of `source` under `options`.
     public static func located(in source: String, options: Options) -> [SwiftLocatedInspection] {
+        located(in: source, effectiveOptions: options.effective)
+    }
+
+    public static func located(in source: String, effectiveOptions: SwiftInspectionOptions) -> [SwiftLocatedInspection] {
         guard source.utf8.count <= SwiftInspectionService.maximumUTF8Length else { return [] }
         // A cache of one: a run reads each file once, and the editor's cache keeps the open files.
         let analysis = SwiftInspectionPipeline.analyze(
-            text: source, options: options.effective, cache: SwiftSyntaxParseCache(capacity: 1)
+            text: source, options: effectiveOptions, cache: SwiftSyntaxParseCache(capacity: 1)
         )
         return analysis.findings.map { SwiftLocatedInspection(inspection: $0, range: analysis.map.range(bytes: $0.bytes)) }
     }

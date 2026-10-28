@@ -13,6 +13,8 @@ final class IDESwiftSupport {
     let diagnostics: SwiftDiagnosticProvider
     let refactoring: SwiftRefactoringProvider
     let inspections: SwiftInspectionService
+    /// The window's active Swift inspection profile as the editor's analysis reads it (off the main actor).
+    let inspectionResolver = IDESwiftInspectionResolver()
     let rename: SwiftRenameProvider
     let signatureHelp: SwiftSignatureHelpProvider
     let formatting = SwiftFormattingProvider()
@@ -34,8 +36,9 @@ final class IDESwiftSupport {
         hover = SwiftHoverProvider(index: index)
         navigation = SwiftNavigationProvider(index: index)
         diagnostics = SwiftDiagnosticProvider()
-        // The options are read for every analysis, so Settings changes need no plumbing into the service.
-        inspections = SwiftInspectionService(options: { IDESwiftInspectionSettings.current() })
+        // The options are asked for on every analysis, per file, so a profile change needs no plumbing into the service.
+        let resolver = inspectionResolver
+        inspections = SwiftInspectionService(optionsForFile: { resolver.options(for: $0) })
         rename = SwiftRenameProvider(index: index)
         refactoring = SwiftRefactoringProvider(index: index)
         signatureHelp = SwiftSignatureHelpProvider(index: index)

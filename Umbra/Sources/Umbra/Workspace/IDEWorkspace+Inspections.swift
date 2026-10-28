@@ -19,11 +19,14 @@ extension IDEWorkspace {
             performIntentionCommand(command)
             return
         }
-        if command.id == SwiftInspectionCommand.disable || command.id == SwiftInspectionCommand.configure {
+        if [SwiftInspectionCommand.disable, SwiftInspectionCommand.configure, SwiftInspectionCommand.quiet].contains(command.id) {
             guard let code = command.arguments.first else { return }
-            if command.id == SwiftInspectionCommand.disable {
+            switch command.id {
+            case SwiftInspectionCommand.disable:
                 disableInspection(code: code, language: .swift)
-            } else {
+            case SwiftInspectionCommand.quiet:
+                if let rule = SwiftInspectionRule(code: code) { inspections.edit { $0.swift.setSeverity(.noHighlighting, for: rule) } }
+            default:
                 showInspectionSettings(code: code, language: .swift)
             }
             return

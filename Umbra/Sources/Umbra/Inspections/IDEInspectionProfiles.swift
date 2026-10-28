@@ -1,6 +1,7 @@
 import Foundation
 import JavaIntelligence
 import Observation
+import SwiftIntelligence
 
 /// The app's named inspection profiles. "Default" is the one the settings always had: its
 /// rules, severities and thresholds live in the `IDEPreferences` keys, so what a user set before
@@ -20,6 +21,8 @@ final class IDEInspectionProfiles {
 
     private static let selectedKey = "com.umbra.editor.inspectionProfile"
     private static let scopedOverridesKey = "com.umbra.editor.javaInspectionScopedOverrides"
+    /// The Default profile's Swift section, as the JSON of a `SwiftInspectionProfile`.
+    static let swiftSectionKey = "com.umbra.editor.swiftInspectionProfile"
 
     /// File-backed profiles by name.
     private(set) var custom: [String: JavaInspectionProfile] = [:]
@@ -61,7 +64,7 @@ final class IDEInspectionProfiles {
            let decoded = try? JSONDecoder().decode([JavaInspectionProfile.ScopedOverride].self, from: data) {
             scoped = decoded
         }
-        return JavaInspectionProfile(
+        var profile = JavaInspectionProfile(
             name: Self.defaultName,
             disabled: preferences.javaDisabledInspections,
             severities: preferences.javaInspectionSeverities,
@@ -69,6 +72,16 @@ final class IDEInspectionProfiles {
             treatsPublicApiAsUsed: preferences.javaTreatsPublicApiAsUsed,
             scopedOverrides: scoped
         )
+        profile.swift = defaultSwiftProfile
+        return profile
+    }
+
+    /// Default's Swift choices: the section key, else what Settings ▸ Swift kept before profiles existed (flat
+    /// preference keys), else the standard profile.
+    private var defaultSwiftProfile: SwiftInspectionProfile {
+        if let stored = SwiftInspectionProfile(sectionData: defaults.data(forKey: Self.swiftSectionKey)) { return stored }
+        let legacy = IDESwiftInspectionSettings.current(defaults: defaults)
+        return legacy == SwiftInspectionOptions() ? .standard : SwiftInspectionProfile(options: legacy)
     }
 
     func profile(named name: String) -> JavaInspectionProfile? {
@@ -95,6 +108,10 @@ final class IDEInspectionProfiles {
                 defaults.removeObject(forKey: Self.scopedOverridesKey)
             } else if let data = try? JSONEncoder().encode(profile.scopedOverrides) {
                 defaults.set(data, forKey: Self.scopedOverridesKey)
+            }
+            if profile.swift != defaultSwiftProfile {
+                defaults.set(profile.swift.sectionData, forKey: Self.swiftSectionKey)
+                IDESwiftInspectionSettings.clearLegacyKeys(defaults: defaults)
             }
         } else {
             custom[profile.name] = profile
