@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The small badge at the top right of a Java editor: how many errors, warnings and weaker
+/// The small badge at the top right of a Java or Swift editor: how many errors, warnings and weaker
 /// problems the file has, or a check mark. A click opens the Problems tab for the file.
 struct IDEInspectionWidget: View {
     static let defaultsKey = "umbra.editor.showsInspectionWidget"
@@ -14,7 +14,8 @@ struct IDEInspectionWidget: View {
     }
 
     var body: some View {
-        if isEnabled, let url, url.pathExtension.lowercased() == "java" {
+        if isEnabled, let url, ["java", "swift"].contains(url.pathExtension.lowercased()) {
+            let isJava = url.pathExtension.lowercased() == "java"
             let counts = workspace.problems.counts(for: url)
             // No editor report yet, or a stale source in the landed one: the rows belong
             // to older text (or nothing has landed), so a check mark would lie.
@@ -23,7 +24,8 @@ struct IDEInspectionWidget: View {
             // The live compiler never checked this file: zero rows mean "not analysed", not
             // "clean", so the check mark stays off until it runs.
             let compilerState = workspace.javaSupport.compilerState
-            let compilerOff = compilerState != .ready
+            // Swift's native analyses always run; only Java has a live compiler that may be off.
+            let compilerOff = isJava && compilerState != .ready
             Button {
                 workspace.inspectionRuns.selection = .file
                 workspace.showProblems()

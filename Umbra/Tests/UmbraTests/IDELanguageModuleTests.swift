@@ -84,6 +84,15 @@ final class IDELanguageModuleTests: XCTestCase {
         XCTAssertNil(workspace.languageModuleMenu(for: IDEHTTPModule.id))
     }
 
+    func testTheSwiftMenuExistsOnlyForASwiftFile() {
+        let workspace = makeWorkspace()
+        XCTAssertNil(workspace.languageModuleMenu(for: IDESwiftModule.id))
+        workspace.statusLanguage = "swift"
+        XCTAssertEqual(workspace.languageModuleMenu(for: IDESwiftModule.id)?.title, "Swift")
+        workspace.statusLanguage = "java"
+        XCTAssertNil(workspace.languageModuleMenu(for: IDESwiftModule.id))
+    }
+
     func testTheJavaMenuFollowsTheJDKPickerAndNeverShowsOnTheWelcomeScreen() {
         let workspace = makeWorkspace()
         XCTAssertTrue(workspace.showsWelcome)

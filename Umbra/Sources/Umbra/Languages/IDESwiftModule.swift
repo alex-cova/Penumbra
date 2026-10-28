@@ -1,10 +1,11 @@
 import EditorIntelligence
 import Foundation
 import Penumbra
+import SwiftUI
 import SwiftIntelligence
 
 /// Swift in Umbra's chrome: palette commands, Run and the gutter's play buttons through SwiftPM,
-/// the symbol-palette source, and the class and target diagrams. There is no menu-bar menu.
+/// the symbol-palette source, and the class and target diagrams. A Swift menu shows while a Swift file is selected.
 /// The index and the providers stay on `IDESwiftSupport`; the package is `IDESwiftPMProjectSystem`.
 struct IDESwiftModule: IDELanguageModule {
     static let id = "swift"
@@ -102,6 +103,12 @@ struct IDESwiftModule: IDELanguageModule {
         return [.previewMenuItem(id: "swift.preview", title: "SwiftUI Preview", systemImage: "swift")]
     }
 
+    /// The Swift menu exists while a Swift file is the selected tab.
+    func menu(for workspace: IDEWorkspace) -> IDEModuleMenu? {
+        guard workspace.statusLanguage == "swift" else { return nil }
+        return IDEModuleMenu(title: "Swift") { ref in AnyView(IDESwiftCommands(ref: ref)) }
+    }
+
     func makeRunProvider(for workspace: IDEWorkspace) -> (any IDERunProvider)? {
         IDESwiftRunProvider(swiftPM: workspace.swiftPM, workspace: workspace)
     }
@@ -164,5 +171,41 @@ extension IDEWorkspace {
             return
         }
         openDiagram(IDESwiftPMProjectSystem.dependenciesDiagramRequest())
+    }
+}
+
+/// The Swift menu: the refactorings, Inspect Code, and Run with Coverage and Profile for a SwiftPM package.
+private struct IDESwiftCommands: View {
+    let ref: IDEWorkspaceRef
+
+    /// Resolved when read, never stored: menu actions run long after this view was built, and a stored
+    /// workspace would stay alive with them after its window closed.
+    private var workspace: IDEWorkspace? { ref.workspace }
+
+    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
+
+    var body: some View {
+        Menu("Refactor") {
+            Button("Introduce Variable…", action: { workspace?.performRefactoring(.extractVariable) })
+                .menuShortcut(.extractVariable, in: preset)
+            Button("Inline Variable", action: { workspace?.performRefactoring(.inlineVariable) })
+                .menuShortcut(.inlineVariable, in: preset)
+            Button("Change Function Signature…", action: { workspace?.performRefactoring(.changeSignature) })
+            Divider()
+            Button("Convert Between if and guard", action: { workspace?.performRefactoring(.convertIfGuard) })
+            Button("Write Optional Binding Out or Shorten It", action: { workspace?.performRefactoring(.optionalBindingShorthand) })
+            Button("Add Explicit Type", action: { workspace?.performRefactoring(.addExplicitType) })
+            Button("Move to Extension", action: { workspace?.performRefactoring(.moveToExtension) })
+        }
+        Button("Inspect Code…", action: { workspace?.presentInspectCode(language: .swift) })
+            .menuShortcut(.inspectCode, in: preset)
+        Button("Run Inspection by Name…", action: { workspace?.presentRunInspectionByName(language: .swift) })
+            .menuShortcut(.runInspectionByName, in: preset)
+        Divider()
+        Button("Run Tests with Coverage", action: { workspace?.runTestsInstrumented(.coverage) })
+        Button("Profile (Time Profiler)", action: { workspace?.runInstrumented(.profile) })
+        Divider()
+        Button("Show Class Diagram", action: { workspace?.showSwiftClassDiagram() })
+        Button("Show SwiftPM Targets", action: { workspace?.showSwiftPMTargets() })
     }
 }

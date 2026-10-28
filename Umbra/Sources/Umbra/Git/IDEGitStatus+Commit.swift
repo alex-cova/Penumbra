@@ -88,10 +88,10 @@ extension IDEGitStatusModel {
         }
         let root = rootURL.path
         if analyzesCodeBeforeCommit, let provider = codeAnalysisProvider {
-            let javaFiles = staged.filter { $0.relativePath.hasSuffix(".java") }
+            let analysable = staged.filter { $0.relativePath.hasSuffix(".java") || $0.relativePath.hasSuffix(".swift") }
                 .map { URL(fileURLWithPath: (root as NSString).appendingPathComponent($0.relativePath)) }
                 .filter { FileManager.default.fileExists(atPath: $0.path) }
-            if !javaFiles.isEmpty { facts.codeAnalysis = await provider(javaFiles) }
+            if !analysable.isEmpty { facts.codeAnalysis = await provider(analysable) }
         }
         for change in staged where change.staged != nil {
             let absolute = (root as NSString).appendingPathComponent(change.relativePath)

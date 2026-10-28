@@ -243,8 +243,8 @@ struct IDEPreferencesEditorPane: View {
             IDESettingsToggle("Error Stripe", isOn: $preferences.showsErrorStripe)
 
             IDESettingsToggle(
-                "Problem Counts in Java Editors", isOn: $showsInspectionWidget,
-                detail: "A badge at the top right of a Java file with its errors and warnings. Click it to open them."
+                "Problem Counts in Java and Swift Editors", isOn: $showsInspectionWidget,
+                detail: "A badge at the top right of a Java or Swift file with its errors and warnings. Click it to open them."
             )
 
             IDEPreferencesStepper(

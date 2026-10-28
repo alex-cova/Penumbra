@@ -213,5 +213,28 @@ final class IDESwiftInspectCodeTests: XCTestCase {
         XCTAssertEqual(plain.entries.map(\.inspection.message), ["'hidden' is private and nothing else in this file mentions it."],
                        "the private one needs only its file; the project-wide one waits to be asked")
     }
+
+    func testTheCommitCheckCountsStagedSwiftFilesAndReviewOpensTheirRun() async throws {
+        let bad = directory.appendingPathComponent("Sources/Bad.swift")
+        let good = directory.appendingPathComponent("Sources/Good.swift")
+        try "func f() {\n    do { try g() } catch { }\n}\nfunc g() throws {}\n".write(to: bad, atomically: true, encoding: .utf8)
+        try "func ok() {}\n".write(to: good, atomically: true, encoding: .utf8)
+        let workspace = try await makeWorkspace()
+
+        let analysis = await workspace.analyzeForCommit([bad, good])
+        XCTAssertEqual(analysis.warnings, 1, "the empty catch is a warning")
+        XCTAssertEqual(analysis.errors, 0)
+        XCTAssertEqual(analysis.paths, ["Sources/Bad.swift"])
+
+        // A profile that switches the rule off for that file leaves nothing to count.
+        workspace.inspections.edit { $0.swift.setEnabled(false, for: .emptyCatch) }
+        let quiet = await workspace.analyzeForCommit([bad])
+        XCTAssertFalse(quiet.hasProblems)
+
+        workspace.reviewCommitAnalysis(relativePaths: ["Sources/Bad.swift"])
+        let run = try XCTUnwrap(workspace.inspectionRuns.selectedRun)
+        XCTAssertEqual(run.language, .swift)
+        try await waitForRun(run)
+    }
 }
 

@@ -445,38 +445,63 @@ extension IDEWorkspace {
 
     // MARK: - Commit check
 
-    /// Inspects staged files with the active profile (no project-wide rules) and counts what a
-    /// reader would call a problem: errors and warnings. Java only: the commit check has no Swift profile.
+    /// Inspects staged Java and Swift files with the active profile (no project-wide rules) and counts what a
+    /// reader would call a problem: errors and warnings.
     func analyzeForCommit(_ files: [URL]) async -> IDEGitCommitFacts.CodeAnalysis {
-        let inspector = javaSupport.makeBatchInspector()
-        let options = JavaBatchInspector.Options(
-            profile: inspections.activeProfile,
-            classifier: JavaInspectionFileClassifier(projectRoot: project.rootURL, testRoots: javaTestSourceRoots)
-        )
         let text = inspectionTextSource()
         var analysis = IDEGitCommitFacts.CodeAnalysis()
         let root = project.rootURL?.standardizedFileURL.path
-        for url in files {
-            let findings = await inspector.inspect(url: url, options: options, text: text)
-            let errors = findings.filter { $0.severity == .error }.count
-            let warnings = findings.filter { $0.severity == .warning }.count
-            guard errors + warnings > 0 else { continue }
+        func note(_ url: URL, errors: Int, warnings: Int) {
+            guard errors + warnings > 0 else { return }
             analysis.errors += errors
             analysis.warnings += warnings
             let path = url.standardizedFileURL.path
             analysis.paths.append(root.flatMap { path.hasPrefix($0 + "/") ? String(path.dropFirst($0.count + 1)) : nil } ?? path)
         }
+
+        let javaOptions = JavaBatchInspector.Options(
+            profile: inspections.activeProfile,
+            classifier: JavaInspectionFileClassifier(projectRoot: project.rootURL, testRoots: javaTestSourceRoots)
+        )
+        let inspector = javaSupport.makeBatchInspector()
+        for url in files where url.pathExtension == "java" {
+            let findings = await inspector.inspect(url: url, options: javaOptions, text: text)
+            note(url, errors: findings.filter { $0.severity == .error }.count, warnings: findings.filter { $0.severity == .warning }.count)
+        }
+
+        let swiftFiles = files.filter { $0.pathExtension == "swift" }
+        if !swiftFiles.isEmpty {
+            let profile = inspections.activeSwiftProfile
+            let classifier = SwiftInspectionFileClassifier(projectRoot: project.rootURL)
+            let swiftOptions = SwiftBatchInspector.Options(
+                inspection: profile.options(), optionsForFile: { url in profile.options(for: classifier.context(for: url)) }
+            )
+            for url in swiftFiles {
+                let findings = await SwiftBatchInspector().inspect(url: url, options: swiftOptions, text: text)
+                note(url, errors: findings.filter { $0.inspection.severity == .error }.count, warnings: findings.filter { $0.inspection.severity == .warning }.count)
+            }
+        }
         return analysis
     }
 
-    /// "Review Problems" in the commit check: the findings of those files in a Problems tab.
+    /// "Review Problems" in the commit check: the findings of those files in a Problems tab per language.
     func reviewCommitAnalysis(relativePaths: [String]) {
         guard let root = project.rootURL else { return }
         let urls = relativePaths.map { URL(fileURLWithPath: $0, relativeTo: root).standardizedFileURL }
-        startInspection(IDEInspectionLaunch(
-            scope: JavaInspectionScope(kind: .files(urls)), profile: inspections.activeProfile,
-            profileName: inspections.title(for: inspections.activeSource), onlyRules: nil, includeProjectRules: false
-        ))
+        let java = urls.filter { $0.pathExtension == "java" }
+        let swift = urls.filter { $0.pathExtension == "swift" }
+        if !java.isEmpty || swift.isEmpty {
+            startInspection(IDEInspectionLaunch(
+                scope: JavaInspectionScope(kind: .files(java)), profile: inspections.activeProfile,
+                profileName: inspections.title(for: inspections.activeSource), onlyRules: nil, includeProjectRules: false
+            ))
+        }
+        if !swift.isEmpty {
+            startInspection(IDEInspectionLaunch(
+                swiftScope: SwiftInspectionScope(kind: .files(swift)), profile: inspections.activeSwiftProfile,
+                profileName: inspections.title(for: inspections.activeSource), root: project.rootURL, onlyRules: nil
+            ))
+        }
     }
 
     // MARK: - Exporting

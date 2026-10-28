@@ -89,6 +89,10 @@ struct IDEAppCommands: Commands {
             CommandMenu(menu.title) { menu.content(focused) }
         }
 
+        if let focused, let menu = workspace?.languageModuleMenu(for: IDESwiftModule.id) {
+            CommandMenu(menu.title) { menu.content(focused) }
+        }
+
         if let focused, let menu = workspace?.languageModuleMenu(for: IDEHTTPModule.id) {
             CommandMenu(menu.title) { menu.content(focused) }
         }

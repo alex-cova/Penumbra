@@ -26,7 +26,7 @@ struct IDEGitCommitFacts: Equatable, Sendable {
     var conflictMarkerPaths: [String] = []
     /// Files still in a conflicted state.
     var unresolvedPaths: [String] = []
-    /// What the inspection profile found in the staged Java files, when "Analyze Code" is on.
+    /// What the inspection profile found in the staged Java and Swift files, when "Analyze Code" is on.
     var codeAnalysis: CodeAnalysis?
 
     struct CodeAnalysis: Equatable, Sendable {
