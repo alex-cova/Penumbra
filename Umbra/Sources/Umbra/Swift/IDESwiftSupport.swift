@@ -37,7 +37,12 @@ final class IDESwiftSupport {
     /// The closure does not retain the window.
     var openSwiftDocuments: (@MainActor () -> [EditorIntelligence.Document])?
 
-    init(activity: IDEIndexActivity = IDEIndexActivity()) {
+    /// True while SourceKit-LSP offers code actions, so the native "Extract method" ⌥↩ entry stays
+    /// hidden and the two never show twice. The host injects a closure reading its connection box.
+    private let sourceKitOffersCodeActions: @Sendable () -> Bool
+
+    init(activity: IDEIndexActivity = IDEIndexActivity(), sourceKitOffersCodeActions: @escaping @Sendable () -> Bool = { false }) {
+        self.sourceKitOffersCodeActions = sourceKitOffersCodeActions
         self.activity = activity
         let index = SwiftIndex()
         self.index = index
@@ -71,7 +76,8 @@ final class IDESwiftSupport {
                 navigation: [navigation],
                 formatting: formatting,
                 signatureHelp: signatureHelp,
-                codeActions: SwiftCodeActionProvider(inspections: inspections),
+                codeActions: SwiftCodeActionProvider(
+                    inspections: inspections, sourceKitOffersCodeActions: sourceKitOffersCodeActions),
                 rename: rename,
                 refactoring: refactoring,
                 codeGeneration: codeGeneration,

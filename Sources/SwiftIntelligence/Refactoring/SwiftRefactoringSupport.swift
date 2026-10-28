@@ -133,6 +133,29 @@ struct SwiftRefactoringFile {
         return prefix.allSatisfy({ $0 == 0x20 || $0 == 0x09 }) ? String(decoding: prefix, as: UTF8.self) : nil
     }
 
+    /// The whole statements `bytes` covers exactly, when they form one run in a single block: the
+    /// trimmed edges must line up with whole items of the innermost block holding the selection.
+    func statementRun(exactly bytes: Range<Int>) -> [CodeBlockItemSyntax]? {
+        let trimmed = trimmedBytes(bytes)
+        guard !trimmed.isEmpty, trimmed.lowerBound < utf8.count,
+              let token = tree.token(at: AbsolutePosition(utf8Offset: trimmed.lowerBound)) else { return nil }
+        var list: CodeBlockItemListSyntax?
+        var node: Syntax? = Syntax(token)
+        while let current = node {
+            if let found = current.as(CodeBlockItemListSyntax.self) { list = found; break }
+            node = current.parent
+        }
+        guard let items = list.map(Array.init) else { return nil }
+        guard let first = items.firstIndex(where: { Self.trimmed($0).lowerBound == trimmed.lowerBound }),
+              let last = items[first...].firstIndex(where: { Self.trimmed($0).upperBound == trimmed.upperBound }),
+              (first ... last).allSatisfy({
+                  Self.trimmed(items[$0]).lowerBound >= trimmed.lowerBound
+                      && Self.trimmed(items[$0]).upperBound <= trimmed.upperBound
+              })
+        else { return nil }
+        return Array(items[first ... last])
+    }
+
     /// The nearest statement or declaration item around `node`.
     static func enclosingItem(of node: some SyntaxProtocol) -> CodeBlockItemSyntax? {
         var current: Syntax? = Syntax(node)
@@ -145,6 +168,55 @@ struct SwiftRefactoringFile {
 
     func edits(from syntax: [SwiftTextEdit]) -> [TextEdit] {
         syntax.map { TextEdit(range: map.range(bytes: $0.bytes), replacement: $0.replacement) }
+    }
+}
+
+/// The suggested names for the refactorings that introduce one: every identifier in the file is
+/// avoided, and the base comes from the shape of the code being named.
+enum SwiftRefactoringNaming {
+    static func usedNames(in file: SwiftRefactoringFile) -> Set<String> {
+        var names = Set<String>()
+        for token in file.tree.tokens(viewMode: .sourceAccurate) {
+            if case .identifier(let text) = token.tokenKind { names.insert(text) }
+        }
+        return names
+    }
+
+    static func name(for expression: ExprSyntax, avoiding used: Set<String>) -> String {
+        func lowered(_ word: String) -> String {
+            guard let first = word.first else { return "value" }
+            return first.lowercased() + word.dropFirst()
+        }
+        var base = "value"
+        if let call = expression.as(FunctionCallExprSyntax.self) {
+            let callee = call.calledExpression
+            if let member = callee.as(MemberAccessExprSyntax.self) { base = member.declName.baseName.text }
+            else if let reference = callee.as(DeclReferenceExprSyntax.self) { base = reference.baseName.text }
+        } else if let member = expression.as(MemberAccessExprSyntax.self) {
+            base = member.declName.baseName.text
+        } else if let reference = expression.as(DeclReferenceExprSyntax.self) {
+            base = reference.baseName.text + "Value"
+        } else if expression.is(StringLiteralExprSyntax.self) {
+            base = "text"
+        } else if expression.is(BooleanLiteralExprSyntax.self) {
+            base = "flag"
+        } else if expression.is(SubscriptCallExprSyntax.self) {
+            base = "element"
+        } else if expression.is(InfixOperatorExprSyntax.self) || expression.is(TernaryExprSyntax.self) {
+            base = "result"
+        }
+        for prefix in ["get", "make", "create"] where base.hasPrefix(prefix) && base.dropFirst(prefix.count).first?.isUppercase == true {
+            base = String(base.dropFirst(prefix.count))
+        }
+        var candidate = lowered(base)
+        if !SwiftIdentifiers.isValid(candidate) { candidate = "value" }
+        var suffix = 2
+        let root = candidate
+        while used.contains(candidate) {
+            candidate = "\(root)\(suffix)"
+            suffix += 1
+        }
+        return candidate
     }
 }
 

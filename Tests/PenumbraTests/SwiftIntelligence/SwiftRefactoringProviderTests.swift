@@ -88,6 +88,33 @@ final class SwiftRefactoringProviderTests: XCTestCase {
         XCTAssertTrue(plan.entries.isEmpty)
     }
 
+    func testExtractMethodIsOfferedAndPlansWithTheSuggestedName() async throws {
+        let marked = SwiftRefactoringTests.parse("func f(items: [Int]) -> Int {\n    ⟦let total: Int = items.count\n    print(total)⟧\n    return total\n}\n")
+        let (provider, document, url) = try await provider(files: [:], open: "A.swift", noting: marked)
+        let available = await provider.availableRefactorings(context(document))
+        let descriptor = try XCTUnwrap(available.first { $0.id == .extractMethod })
+        XCTAssertEqual(descriptor.title, "Extract Method…")
+        XCTAssertTrue(descriptor.requiresSelection)
+        XCTAssertEqual(descriptor.parameterKeys, ["name"])
+        let name = try XCTUnwrap(descriptor.suggestedParameters["name"])
+        let plan = try await provider.plan(.extractMethod, context: context(document), parameters: ["name": name])
+        XCTAssertNil(plan.blockingError, plan.blockingError ?? "")
+        XCTAssertEqual(
+            applied(plan, to: url, text: marked.text),
+            "func f(items: [Int]) -> Int {\n    let total = \(name)(items)\n    return total\n}\nprivate func \(name)(_ items: [Int]) -> Int {\n    let total: Int = items.count\n    print(total)\n    return total\n}\n"
+        )
+    }
+
+    func testExtractMethodRefusalBecomesABlockingError() async throws {
+        let marked = SwiftRefactoringTests.parse("func f() {\n    var a = 0\n    ⟦a⟧ = 1\n}\n")
+        let (provider, document, _) = try await provider(files: [:], open: "A.swift", noting: marked)
+        let available = await provider.availableRefactorings(context(document))
+        XCTAssertNil(available.first { $0.id == .extractMethod })
+        let plan = try await provider.plan(.extractMethod, context: context(document), parameters: ["name": "extracted"])
+        XCTAssertEqual(plan.blockingError, "Cannot extract an assignment target.")
+        XCTAssertTrue(plan.entries.isEmpty)
+    }
+
     // MARK: - Change signature across files
 
     private func parametersJSON(of document: Document, at marked: SwiftRefactoringTests.Marked, _ transform: (inout [SwiftSignatureParameter]) -> Void) -> String {
@@ -189,6 +216,20 @@ final class SwiftRefactoringProviderTests: XCTestCase {
         let (_, selectedDocument, _) = try await provider(files: [:], open: "B.swift", noting: selected)
         let selectedActions = await SwiftCodeActionProvider().codeActions(for: selectedDocument, at: selectedDocument.cursor.position, diagnostics: [])
         XCTAssertTrue(selectedActions.map(\.title).contains("Introduce variable 'result'"), "\(selectedActions.map(\.title))")
+    }
+
+    func testCodeActionsOfferExtractMethodUntilSourceKitDoes() async throws {
+        let marked = SwiftRefactoringTests.parse("func f(items: [Int]) -> Int {\n    ⟦let total: Int = items.count\n    print(total)⟧\n    return total\n}\n")
+        let (_, document, _) = try await provider(files: [:], open: "A.swift", noting: marked)
+        let native = await SwiftCodeActionProvider().codeActions(for: document, at: document.cursor.position, diagnostics: [])
+        let offered = try XCTUnwrap(native.first { $0.title.hasPrefix("Extract method") })
+        XCTAssertEqual(offered.kind, "refactor.rewrite")
+        XCTAssertFalse(offered.edits.isEmpty)
+        let quiet = await SwiftCodeActionProvider(sourceKitOffersCodeActions: { true })
+            .codeActions(for: document, at: document.cursor.position, diagnostics: [])
+        XCTAssertNil(quiet.first { $0.title.hasPrefix("Extract method") }, "\(quiet.map(\.title))")
+        // Everything else stays: only the server-twinned entry hides.
+        XCTAssertEqual(Set(quiet.map(\.title)), Set(native.map(\.title)).subtracting([offered.title]))
     }
 
     // MARK: - Safe delete

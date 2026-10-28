@@ -10,8 +10,8 @@ extension RefactoringID {
 
 /// The native Swift refactorings. Each is a swift-syntax rewrite of the file: it needs no build and keeps
 /// working while the file is half-edited elsewhere (a file with a syntax error is refused, never guessed at).
-/// Semantic refactorings (extract method, add `Codable`, convert to `async`) come from SourceKit-LSP's code
-/// actions instead.
+/// SourceKit-LSP does not claim `.refactoring`, so this provider always owns that route; its code actions
+/// (which SourceKit does claim) stay quiet while the server offers them, in `SwiftCodeActionProvider`.
 public struct SwiftRefactoringProvider: RefactoringProviding {
     private let renamer: SwiftRenameProvider
 
@@ -31,6 +31,13 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
            case .success = SwiftIntroduceVariable.edits(in: text, selection: selection, name: name) {
             descriptors.append(RefactoringDescriptor(
                 id: .extractVariable, title: "Introduce Variable…", requiresSelection: true,
+                parameterKeys: ["name"], suggestedParameters: ["name": name]
+            ))
+        }
+        if let selection, let name = SwiftExtractMethod.suggestedName(in: text, selection: selection),
+           case .success = SwiftExtractMethod.edits(in: text, selection: selection, name: name) {
+            descriptors.append(RefactoringDescriptor(
+                id: .extractMethod, title: "Extract Method…", requiresSelection: true,
                 parameterKeys: ["name"], suggestedParameters: ["name": name]
             ))
         }
@@ -84,6 +91,12 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
             }
             let name = parameters["name"] ?? "value"
             return Self.plan(SwiftIntroduceVariable.edits(in: text, selection: selection, name: name), text: text, url: url, title: "Introduce Variable")
+        case .extractMethod:
+            guard let selection = Self.selectionBytes(context.selection, map: map) else {
+                return WorkspaceEditPlan(blockingError: "Select the statements or expression to extract.", title: "Extract Method")
+            }
+            let name = parameters["name"] ?? "extracted"
+            return Self.plan(SwiftExtractMethod.edits(in: text, selection: selection, name: name), text: text, url: url, title: "Extract Method")
         case .inlineVariable:
             return Self.plan(SwiftInlineVariable.edits(in: text, caret: caret), text: text, url: url, title: "Inline Variable")
         case .convertIfGuard:

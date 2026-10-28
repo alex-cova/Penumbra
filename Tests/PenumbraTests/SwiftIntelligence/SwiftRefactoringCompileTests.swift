@@ -15,6 +15,7 @@ final class SwiftRefactoringCompileTests: XCTestCase {
         case move
         case shorthand
         case delete
+        case extract(String)
         case signature(@Sendable (inout [SwiftSignatureParameter]) -> Void)
     }
 
@@ -76,6 +77,20 @@ final class SwiftRefactoringCompileTests: XCTestCase {
         ("delete function with doc", .delete, "/// Does the thing.\nfunc ‸gone() {}\nfunc f() {}\n"),
         ("delete variable", .delete, "struct D {\n    var ‸gone = 1\n}\nfunc f() -> Int { 1 }\n"),
         ("delete type", .delete, "struct ‸Gone {}\nfunc f() {}\n"),
+        ("extract expression with input", .extract("text"), "func e1(a: Int) -> String {\n    let y: Int = a + 1\n    return ⟦String(y)⟧\n}\n"),
+        ("extract statements with output", .extract("counted"), "func e2(items: [Int]) -> Int {\n    ⟦let total: Int = items.count\n    print(total)⟧\n    return total\n}\n"),
+        ("extract inout write", .extract("bump"), "func e3() {\n    var count = 0\n    ⟦count += 1\n    print(count)⟧\n}\n"),
+        ("extract throwing", .extract("read"), "func e4() throws -> Int {\n    ⟦let n: Int = try compute()\n    print(n)⟧\n    return n\n}\nfunc compute() throws -> Int { 1 }\n"),
+        ("extract async", .extract("loaded"), "func e5() async -> Int {\n    ⟦let n: Int = await fetch()\n    print(n)⟧\n    return n\n}\nfunc fetch() async -> Int { 1 }\n"),
+        ("extract static member use", .extract("checked"), "struct E6 {\n    static var cache = [String: Int]()\n    static func lookup(_ key: String) -> Int {\n        ⟦let hit: Int = cache[key] ?? -1\n        print(hit)⟧\n        return hit\n    }\n}\n"),
+        ("extract mutating", .extract("step"), "struct E7 {\n    var count = 0\n    mutating func bump() {\n        ⟦count += 1⟧\n    }\n}\n"),
+        ("extract discarded call", .extract("log"), "func e9() {\n    ⟦print(\"hi\")⟧\n}\n"),
+        ("extract plain statements", .extract("log"), "func e10() {\n    ⟦print(\"a\")\n    print(\"b\")⟧\n}\n"),
+        ("extract parameter input", .extract("counted"), "func e11(items: [Int]) -> Int {\n    ⟦let n: Int = items.count\n    print(n)⟧\n    return n\n}\n"),
+        ("extract inout parameter", .extract("bump"), "func e12(_ x: inout Int) {\n    ⟦x += 1\n    print(x)⟧\n}\n"),
+        ("extract implicit return body", .extract("converted"), "struct P { var line: Int; var column: Int }\nstruct Q { init(line: Int, column: Int) {} }\nfunc e13(position: P) -> Q {\n    ⟦Q(line: position.line, column: position.column)⟧\n}\n"),
+        ("extract output assigned inside", .extract("loaded"), "func e14(flag: Bool, text: String) -> String {\n    ⟦let index: Int\n    if flag {\n        index = 1\n    } else {\n        index = 2\n    }⟧\n    return String(text.prefix(index))\n}\n"),
+        ("extract bare throw", .extract("fail"), "struct E15 {\n    var done = false\n    mutating func encode() throws {\n        ⟦throw EncodingError.failed⟧\n        done = true\n    }\n    enum EncodingError: Error { case failed }\n}\n"),
     ]
 
     func testEveryRefactoringLeavesCodeThatStillCompiles() throws {
@@ -97,6 +112,9 @@ final class SwiftRefactoringCompileTests: XCTestCase {
             case .move: result = SwiftMoveToExtension.edits(in: marked.text, caret: marked.caret)
             case .shorthand: result = SwiftOptionalBindingShorthand.edits(in: marked.text, caret: marked.caret)
             case .delete: result = SwiftSafeDelete.edits(in: marked.text, caret: marked.caret)
+            case .extract(let name):
+                guard let selection = marked.selection else { failures.append("\(name): no selection"); continue }
+                result = SwiftExtractMethod.edits(in: marked.text, selection: selection, name: name)
             case .signature(let transform):
                 guard let subject = SwiftChangeSignature.subject(in: marked.text, caret: marked.caret) else {
                     failures.append("\(name): no function at the caret")

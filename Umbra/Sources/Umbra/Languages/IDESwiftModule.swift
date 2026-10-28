@@ -42,6 +42,10 @@ struct IDESwiftModule: IDELanguageModule {
                 action: { [weak workspace] in workspace?.performRefactoring(.changeSignature) }
             ),
             EditorCommand(
+                id: "swift.extractMethod", title: "Swift: Extract Method…", group: "Swift",
+                action: { [weak workspace] in workspace?.performRefactoring(.extractMethod) }
+            ),
+            EditorCommand(
                 id: "swift.convertIfGuard", title: "Swift: Convert Between if and guard", group: "Swift",
                 action: { [weak workspace] in workspace?.performRefactoring(.convertIfGuard) }
             ),
@@ -191,6 +195,8 @@ private struct IDESwiftCommands: View {
             Button("Inline Variable", action: { workspace?.performRefactoring(.inlineVariable) })
                 .menuShortcut(.inlineVariable, in: preset)
             Button("Change Function Signature…", action: { workspace?.performRefactoring(.changeSignature) })
+            Button("Extract Method…", action: { workspace?.performRefactoring(.extractMethod) })
+                .menuShortcut(.extractMethod, in: preset)
             Divider()
             Button("Convert Between if and guard", action: { workspace?.performRefactoring(.convertIfGuard) })
             Button("Write Optional Binding Out or Shorten It", action: { workspace?.performRefactoring(.optionalBindingShorthand) })

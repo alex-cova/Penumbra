@@ -19,6 +19,28 @@ final class SwiftRefactoringRepositoryTests: XCTestCase {
         ("optional binding shorthand", { SwiftOptionalBindingShorthand.edits(in: $0, caret: $1) }),
     ]
 
+    private typealias SelectionRefactoring = @Sendable (String, Range<Int>) -> SwiftRefactoringResult
+
+    private static let selectionRefactorings: [(name: String, run: SelectionRefactoring)] = [
+        ("extract method", { SwiftExtractMethod.edits(in: $0, selection: $1, name: "extracted") }),
+    ]
+
+    /// One-, two- and three-line spans from every line start: a span that is not a statement run or
+    /// a single expression is refused and skipped, so only real statement runs are exercised.
+    private func statementSelections(of text: String, starts: [Int]) -> [Range<Int>] {
+        var out: [Range<Int>] = []
+        for (lineIndex, start) in starts.enumerated() {
+            for length in 1 ... 3 {
+                let lastLine = lineIndex + length - 1
+                guard lastLine < starts.count else { break }
+                let end = lastLine + 1 < starts.count ? starts[lastLine + 1] - 1 : text.utf8.count
+                guard end > start else { continue }
+                out.append(start ..< end)
+            }
+        }
+        return out
+    }
+
     private func swiftFiles(under directory: URL) -> [URL] {
         guard let walker = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil) else { return [] }
         return walker.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }.sorted { $0.path < $1.path }
@@ -45,12 +67,27 @@ final class SwiftRefactoringRepositoryTests: XCTestCase {
         for (fileIndex, file) in files.enumerated() where fileIndex % 12 == 0 {
             guard let text = try? String(contentsOf: file, encoding: .utf8), text.utf8.count < 200_000,
                   !SwiftSyntaxDocument.parse(text).hasSyntaxErrors else { continue }
-            for caret in lineStarts(of: text).enumerated().filter({ $0.offset % 4 == 0 }).map(\.element) {
+            let starts = lineStarts(of: text)
+            for (lineIndex, caret) in starts.enumerated() where lineIndex % 4 == 0 {
                 for (name, run) in Self.refactorings {
                     guard let after = SwiftRefactoringTests.apply(run(text, caret), to: text) else { continue }
                     applied[name, default: 0] += 1
                     if SwiftSyntaxDocument.parse(after).hasSyntaxErrors {
                         failures.append("\(file.lastPathComponent) @\(caret): \(name) leaves a syntax error")
+                    }
+                }
+                for length in 1 ... 3 {
+                    let lastLine = lineIndex + length - 1
+                    guard lastLine < starts.count else { break }
+                    let end = lastLine + 1 < starts.count ? starts[lastLine + 1] - 1 : text.utf8.count
+                    guard end > caret else { continue }
+                    let selection = caret ..< end
+                    for (name, run) in Self.selectionRefactorings {
+                        guard let after = SwiftRefactoringTests.apply(run(text, selection), to: text) else { continue }
+                        applied[name, default: 0] += 1
+                        if SwiftSyntaxDocument.parse(after).hasSyntaxErrors {
+                            failures.append("\(file.lastPathComponent) @\(caret)+\(length): \(name) leaves a syntax error")
+                        }
                     }
                 }
             }
@@ -68,16 +105,31 @@ final class SwiftRefactoringRepositoryTests: XCTestCase {
             guard let text = try? String(contentsOf: file, encoding: .utf8), text.utf8.count < 200_000,
                   !SwiftSyntaxDocument.parse(text).hasSyntaxErrors else { continue }
             let starts = lineStarts(of: text)
-            // Try the kinds in a rotation that differs per file, so every kind is exercised across the tree.
-            let order = (0 ..< Self.refactorings.count).map { Self.refactorings[(fileIndex + $0) % Self.refactorings.count] }
+            let selections = statementSelections(of: text, starts: starts)
+            // The caret kinds and the selection kinds share one rotation that differs per file, so every
+            // kind is exercised across the tree.
+            let slots = Self.refactorings.count + Self.selectionRefactorings.count
             var done = false
-            for (name, run) in order where !done {
-                for caret in starts {
-                    guard let after = SwiftRefactoringTests.apply(run(text, caret), to: text) else { continue }
-                    try after.write(to: file, atomically: true, encoding: .utf8)
-                    applied[name, default: 0] += 1
-                    done = true
-                    break
+            for slot in 0 ..< slots where !done {
+                let index = (fileIndex + slot) % slots
+                if index < Self.refactorings.count {
+                    let (name, run) = Self.refactorings[index]
+                    for caret in starts {
+                        guard let after = SwiftRefactoringTests.apply(run(text, caret), to: text) else { continue }
+                        try after.write(to: file, atomically: true, encoding: .utf8)
+                        applied[name, default: 0] += 1
+                        done = true
+                        break
+                    }
+                } else {
+                    let (name, run) = Self.selectionRefactorings[index - Self.refactorings.count]
+                    for selection in selections {
+                        guard let after = SwiftRefactoringTests.apply(run(text, selection), to: text) else { continue }
+                        try after.write(to: file, atomically: true, encoding: .utf8)
+                        applied[name, default: 0] += 1
+                        done = true
+                        break
+                    }
                 }
             }
         }

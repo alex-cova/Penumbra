@@ -71,7 +71,14 @@ final class IDEIntelligenceServices {
         self.maven = maven
         javaSupport = IDEJavaSupport(jdk: jdk, gradle: gradle, maven: maven, status: projectStatus, activity: indexActivity)
         typescriptSupport = IDETypeScriptSupport(activity: indexActivity)
-        swiftSupport = IDESwiftSupport(activity: indexActivity)
+        let sourceKitBox = sourceKitConnection
+        swiftSupport = IDESwiftSupport(activity: indexActivity, sourceKitOffersCodeActions: {
+            // The box outlives the connection: unset while the server is down, and unknown
+            // capabilities count as offered, as `lspClient` treats them.
+            guard sourceKitBox.current != nil else { return false }
+            guard let supported = sourceKitBox.supportedFeatures else { return true }
+            return supported.contains(.codeActions)
+        })
         let npm = IDENpmProjectSystem(status: projectStatus)
         self.npm = npm
         let swiftPM = IDESwiftPMProjectSystem(status: projectStatus)

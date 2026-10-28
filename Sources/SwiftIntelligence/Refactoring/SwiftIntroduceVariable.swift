@@ -11,7 +11,7 @@ public enum SwiftIntroduceVariable {
     public static func suggestedName(in text: String, selection: Range<Int>) -> String? {
         guard let file = SwiftRefactoringFile.load(text),
               let expression = file.expression(exactly: file.trimmedBytes(selection)) else { return nil }
-        return name(for: expression, avoiding: usedNames(in: file))
+        return SwiftRefactoringNaming.name(for: expression, avoiding: SwiftRefactoringNaming.usedNames(in: file))
     }
 
     public static func edits(in text: String, selection: Range<Int>, name requested: String) -> SwiftRefactoringResult {
@@ -281,48 +281,4 @@ public enum SwiftIntroduceVariable {
 
     // MARK: - Naming
 
-    private static func usedNames(in file: SwiftRefactoringFile) -> Set<String> {
-        var names = Set<String>()
-        for token in file.tree.tokens(viewMode: .sourceAccurate) {
-            if case .identifier(let text) = token.tokenKind { names.insert(text) }
-        }
-        return names
-    }
-
-    private static func name(for expression: ExprSyntax, avoiding used: Set<String>) -> String {
-        func lowered(_ word: String) -> String {
-            guard let first = word.first else { return "value" }
-            return first.lowercased() + word.dropFirst()
-        }
-        var base = "value"
-        if let call = expression.as(FunctionCallExprSyntax.self) {
-            let callee = call.calledExpression
-            if let member = callee.as(MemberAccessExprSyntax.self) { base = member.declName.baseName.text }
-            else if let reference = callee.as(DeclReferenceExprSyntax.self) { base = reference.baseName.text }
-        } else if let member = expression.as(MemberAccessExprSyntax.self) {
-            base = member.declName.baseName.text
-        } else if let reference = expression.as(DeclReferenceExprSyntax.self) {
-            base = reference.baseName.text + "Value"
-        } else if expression.is(StringLiteralExprSyntax.self) {
-            base = "text"
-        } else if expression.is(BooleanLiteralExprSyntax.self) {
-            base = "flag"
-        } else if expression.is(SubscriptCallExprSyntax.self) {
-            base = "element"
-        } else if expression.is(InfixOperatorExprSyntax.self) || expression.is(TernaryExprSyntax.self) {
-            base = "result"
-        }
-        for prefix in ["get", "make", "create"] where base.hasPrefix(prefix) && base.dropFirst(prefix.count).first?.isUppercase == true {
-            base = String(base.dropFirst(prefix.count))
-        }
-        var candidate = lowered(base)
-        if !SwiftIdentifiers.isValid(candidate) { candidate = "value" }
-        var suffix = 2
-        let root = candidate
-        while used.contains(candidate) {
-            candidate = "\(root)\(suffix)"
-            suffix += 1
-        }
-        return candidate
-    }
 }
