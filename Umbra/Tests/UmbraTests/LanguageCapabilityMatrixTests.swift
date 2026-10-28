@@ -21,7 +21,8 @@ final class LanguageCapabilityMatrixTests: XCTestCase {
         XCTAssertEqual(report.features[.callHierarchy]?.service, "swift")
         XCTAssertEqual(report.features[.codeGeneration]?.service, "swift")
         XCTAssertEqual(report.features[.codeActions], LanguageFeatureOwner(service: "swift", fidelity: .syntactic))
-        XCTAssertNil(report.features[.formatting])
+        XCTAssertEqual(report.features[.formatting]?.service, "swift")
+        XCTAssertEqual(report.features[.refactoring]?.service, "swift")
         XCTAssertNil(report.features[.inlayHints])
     }
 

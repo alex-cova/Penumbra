@@ -57,6 +57,28 @@ extension IDEWorkspace {
         presentDiagramDocument(document)
     }
 
+    /// Opens an Instruments recording of a Swift program: exported with `xctrace` and parsed in the tab, which then
+    /// looks like a Java profile (flame graph, hot methods, call tree, per-thread).
+    func openSwiftProfile(trace: URL, title: String, root: URL?) {
+        let document = WorkbenchDocument(displayName: title)
+        document.contentKind = .profile
+        let session = makeProfileSession(recordings: [trace], title: title, runID: nil)
+        session.sourceLoader = { try await IDESwiftRunProvider.loadTimeProfile(trace: trace) }
+        // Instruments records no source line, and a Swift frame's "class" is its binary: say so instead of searching Java roots.
+        session.openFrame = { [weak self] _, _ in
+            self?.reportRunProblem("Instruments records no source line for Swift frames, so there is nothing to open.")
+        }
+        let targets = Set(swiftPM.manifest?.targets.map(\.name) ?? [])
+        session.classifyClass = { module in
+            if targets.contains(module) { return .project }
+            // The platform's own libraries (dyld, libswiftCore, libsystem_c, …) play the part the JDK does for Java.
+            if module.hasPrefix("lib") || module == "dyld" || module.isEmpty { return .jdk }
+            return .library
+        }
+        profileSessions[document.id] = session
+        presentDiagramDocument(document)
+    }
+
     // MARK: - Live
 
     func beginLiveProfile(

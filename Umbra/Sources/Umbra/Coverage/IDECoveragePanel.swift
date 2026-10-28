@@ -49,7 +49,9 @@ struct IDECoveragePanel: View {
                 .frame(maxWidth: 180)
             Menu {
                 Button("Export HTML Report…") { workspace.exportCoverageHTML() }
+                    .disabled(workspace.coverage.snapshot?.supportsJaCoCoExports != true)
                 Button("Export XML Report…") { workspace.exportCoverageXML() }
+                    .disabled(workspace.coverage.snapshot?.supportsJaCoCoExports != true)
                 Divider()
                 Button("Clear Coverage") { workspace.clearCoverage() }
             } label: {

@@ -68,6 +68,12 @@ extension IDEWorkspace {
 
     /// Run ▸ Run with Coverage and Profile: what the caret is in, else the active file's launch.
     func runInstrumented(_ instrumentation: JavaRunInstrumentation) {
+        if let swift = activeRunProvider as? IDESwiftRunProvider {
+            if !swift.runInstrumented(instrumentation, document: activeRunDocument()) {
+                reportRunProblem("There is nothing to run. Open a Swift file in a package with a program or tests.")
+            }
+            return
+        }
         Task { @MainActor [self] in
             let started = await javaRun.runInstrumented(activeRunDocument(), instrumentation: instrumentation)
             if !started { reportRunProblem("There is nothing to run. Open a Java file with a main method or a test.") }
@@ -76,6 +82,12 @@ extension IDEWorkspace {
 
     /// Run ▸ Run All Tests with Coverage / Profile All Tests: the active test class, else every test.
     func runTestsInstrumented(_ instrumentation: JavaRunInstrumentation) {
+        if let swift = activeRunProvider as? IDESwiftRunProvider {
+            if !swift.runTestsInstrumented(instrumentation, document: activeRunDocument()) {
+                reportRunProblem("There are no tests to run. Open a Swift file in a package with a test target.")
+            }
+            return
+        }
         javaRun.runActiveTests(instrumentation: instrumentation)
     }
 
@@ -88,7 +100,7 @@ extension IDEWorkspace {
 
     /// Saves the run's report as the JaCoCo XML it was read from.
     func exportCoverageXML() {
-        guard let snapshot = coverage.snapshot else { return }
+        guard let snapshot = coverage.snapshot, snapshot.supportsJaCoCoExports else { return }
         let source = snapshot.runDirectory.appendingPathComponent("report.xml")
         guard FileManager.default.fileExists(atPath: source.path) else {
             reportRunProblem("The report file is gone. Run with coverage again.")
@@ -108,7 +120,7 @@ extension IDEWorkspace {
 
     /// Writes the HTML report (`jacococli --html`, with the sources) into a folder the user picks.
     func exportCoverageHTML() {
-        guard let snapshot = coverage.snapshot else { return }
+        guard let snapshot = coverage.snapshot, let java = snapshot.java, let cliJar = snapshot.cliJar else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -118,7 +130,7 @@ extension IDEWorkspace {
         guard panel.runModal() == .OK, let parent = panel.url else { return }
         let destination = parent.appendingPathComponent("coverage-\(snapshot.runID)", isDirectory: true)
         let call = JavaCoverageCommand.htmlInvocation(
-            java: snapshot.java, cliJar: snapshot.cliJar,
+            java: java, cliJar: cliJar,
             executionFiles: snapshot.executionFiles.filter { FileManager.default.fileExists(atPath: $0.path) },
             classDirectories: snapshot.classDirectories,
             sourceDirectories: snapshot.sourceDirectories,

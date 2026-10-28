@@ -1,5 +1,6 @@
 import Foundation
 import JavaIntelligence
+import SubprocessKit
 import SwiftIntelligence
 
 /// Run, Run in Context and the gutter's play buttons for Swift files in a SwiftPM package.
@@ -23,6 +24,7 @@ final class IDESwiftRunProvider: IDERunProvider {
     private struct TestRun {
         var title: String
         var filters: [String]
+        var coverage = false
     }
 
     init(swiftPM: IDESwiftPMProjectSystem, workspace: IDEWorkspace) {
@@ -32,13 +34,13 @@ final class IDESwiftRunProvider: IDERunProvider {
 
     // MARK: Availability
 
-    private enum Context {
+    enum Context {
         case executable(String)
         case tests(target: String)
     }
 
     /// What Run does for a file: its target's program, the package's only program, or its tests.
-    private func context(for url: URL?) -> Context? {
+    func context(for url: URL?) -> Context? {
         guard swiftPM.isActive, let manifest = swiftPM.manifest, let root = swiftPM.rootURL else { return nil }
         if let url, let module = manifest.moduleResolver(root: root)(url), let target = manifest.target(named: module) {
             switch target.kind {
@@ -182,8 +184,12 @@ final class IDESwiftRunProvider: IDERunProvider {
     }
 
     func rerun(_ session: IDERunSession) {
-        guard workspace != nil, let name = session.payload as? String else { return }
-        runExecutable(name)
+        guard workspace != nil else { return }
+        if let profile = session.payload as? ProfilePayload {
+            profileExecutable(profile.name)
+        } else if let name = session.payload as? String {
+            runExecutable(name)
+        }
     }
 
     var hasActiveWork: Bool { swiftPM.isRunningTasks }
@@ -194,7 +200,7 @@ final class IDESwiftRunProvider: IDERunProvider {
 
     // MARK: Programs
 
-    private func runExecutable(_ name: String) {
+    func runExecutable(_ name: String) {
         guard let workspace else { return }
         if swiftPM.isRunningTasks {
             workspace.reportRunProblem("SwiftPM is busy; wait for it or stop it first.")
@@ -276,7 +282,7 @@ final class IDESwiftRunProvider: IDERunProvider {
         }
     }
 
-    private static func binDirectory(in output: String) -> String? {
+    static func binDirectory(in output: String) -> String? {
         output.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .last { $0.hasPrefix("/") }
@@ -285,7 +291,7 @@ final class IDESwiftRunProvider: IDERunProvider {
     // MARK: Tests
 
     /// `Module.Class/method` for a method, `Module.Class` for a class, from the document's text.
-    private func testFilter(for location: IDERunnableLocation, in document: IDERunDocument) -> String {
+    func testFilter(for location: IDERunnableLocation, in document: IDERunDocument) -> String {
         guard let parsed = SwiftAnalysis.parse(document.text), let manifest = swiftPM.manifest, let root = swiftPM.rootURL
         else { return location.title }
         let module = document.url.flatMap { manifest.moduleResolver(root: root)($0) }
@@ -305,24 +311,28 @@ final class IDESwiftRunProvider: IDERunProvider {
         return find(parsed.model.declarations, owner: nil) ?? location.title
     }
 
-    private func runTests(title: String, filters: [String]) {
+    func runTests(title: String, filters: [String], coverage: Bool = false) {
         guard let workspace else { return }
         if swiftPM.isRunningTasks {
             workspace.reportRunProblem("SwiftPM is busy; wait for it or stop it first.")
             return
         }
-        lastTest = TestRun(title: title, filters: filters)
+        lastTest = TestRun(title: title, filters: filters, coverage: coverage)
+        if coverage, IDEPreferences.shared.javaCoverageClearsOnRun { workspace.clearCoverage() }
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("umbra-swift-test-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var arguments = ["test"]
         for filter in filters { arguments += ["--filter", filter] }
         arguments += ["--xunit-output", directory.appendingPathComponent("TEST-swift.xml").path]
+        if coverage { arguments = SwiftCoverageCommand.testArguments(filters: filters, xunitOutput: directory.appendingPathComponent("TEST-swift.xml").path) }
         workspace.testResults.beginRun(label: "Running \(title)…", rerunHandler: { [weak self] failedOnly in
             self?.rerunTests(failedOnly: failedOnly)
         })
         workspace.showTestResults()
-        let invocation = IDESwiftPMInvocation(title: "swift test \(filters.joined(separator: " "))", arguments: arguments)
+        let invocation = IDESwiftPMInvocation(
+            title: (coverage ? "swift test --enable-code-coverage " : "swift test ") + filters.joined(separator: " "), arguments: arguments
+        )
         swiftPM.run([invocation]) { [weak self] outcomes in
             guard let self, let workspace = self.workspace else {
                 try? FileManager.default.removeItem(at: directory)
@@ -353,6 +363,7 @@ final class IDESwiftRunProvider: IDERunProvider {
                     workspace.testResults.finishRun(parsed)
                 }
                 workspace.showTestResults()
+                if coverage, !outcome.cancelled { self.collectCoverage(label: title) }
             }
         }
     }
@@ -361,7 +372,7 @@ final class IDESwiftRunProvider: IDERunProvider {
     private func rerunTests(failedOnly: Bool) {
         guard let workspace, let last = lastTest else { return }
         guard failedOnly else {
-            runTests(title: last.title, filters: last.filters)
+            runTests(title: last.title, filters: last.filters, coverage: last.coverage)
             return
         }
         var filters: [String] = []
@@ -371,6 +382,6 @@ final class IDESwiftRunProvider: IDERunProvider {
         }
         guard !filters.isEmpty else { return }
         let unique = Array(NSOrderedSet(array: filters)) as? [String] ?? filters
-        runTests(title: unique.count == 1 ? unique[0] : "\(unique.count) failed tests", filters: unique)
+        runTests(title: unique.count == 1 ? unique[0] : "\(unique.count) failed tests", filters: unique, coverage: last.coverage)
     }
 }

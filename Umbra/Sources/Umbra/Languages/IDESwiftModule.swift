@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 import Penumbra
 import SwiftIntelligence
@@ -26,6 +27,38 @@ struct IDESwiftModule: IDELanguageModule {
             EditorCommand(
                 id: "swift.runInspectionByName", title: "Swift: Run Inspection by Name…", group: "Swift",
                 action: { [weak workspace] in workspace?.presentRunInspectionByName(language: .swift) }
+            ),
+            EditorCommand(
+                id: "swift.introduceVariable", title: "Swift: Introduce Variable…", group: "Swift",
+                action: { [weak workspace] in workspace?.performRefactoring(.extractVariable) }
+            ),
+            EditorCommand(
+                id: "swift.inlineVariable", title: "Swift: Inline Variable", group: "Swift",
+                action: { [weak workspace] in workspace?.performRefactoring(.inlineVariable) }
+            ),
+            EditorCommand(
+                id: "swift.changeSignature", title: "Swift: Change Function Signature…", group: "Swift",
+                action: { [weak workspace] in workspace?.performRefactoring(.changeSignature) }
+            ),
+            EditorCommand(
+                id: "swift.convertIfGuard", title: "Swift: Convert Between if and guard", group: "Swift",
+                action: { [weak workspace] in workspace?.performRefactoring(.convertIfGuard) }
+            ),
+            EditorCommand(
+                id: "swift.moveToExtension", title: "Swift: Move to Extension", group: "Swift",
+                action: { [weak workspace] in workspace?.performRefactoring(.moveToExtension) }
+            ),
+            EditorCommand(
+                id: "swift.addExplicitType", title: "Swift: Add Explicit Type", group: "Swift",
+                action: { [weak workspace] in workspace?.performRefactoring(.addExplicitType) }
+            ),
+            EditorCommand(
+                id: "swift.runWithCoverage", title: "Swift: Run Tests with Coverage", group: "Swift",
+                action: { [weak workspace] in workspace?.runTestsInstrumented(.coverage) }
+            ),
+            EditorCommand(
+                id: "swift.profile", title: "Swift: Profile (Time Profiler)", group: "Swift",
+                action: { [weak workspace] in workspace?.runInstrumented(.profile) }
             ),
             EditorCommand(
                 id: "swift.toggleSwiftUIPreview", title: "Swift: Toggle SwiftUI Preview", group: "Swift",

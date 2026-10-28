@@ -11,6 +11,7 @@ final class IDESwiftSupport {
     let hover: SwiftHoverProvider
     let navigation: SwiftNavigationProvider
     let diagnostics: SwiftDiagnosticProvider
+    let refactoring: SwiftRefactoringProvider
     let inspections: SwiftInspectionService
     let rename: SwiftRenameProvider
     let signatureHelp: SwiftSignatureHelpProvider
@@ -36,6 +37,7 @@ final class IDESwiftSupport {
         // The options are read for every analysis, so Settings changes need no plumbing into the service.
         inspections = SwiftInspectionService(options: { IDESwiftInspectionSettings.current() })
         rename = SwiftRenameProvider(index: index)
+        refactoring = SwiftRefactoringProvider(index: index)
         signatureHelp = SwiftSignatureHelpProvider(index: index)
         lineMarkers = SwiftLineMarkerProvider(index: index)
         typeHierarchy = SwiftTypeHierarchyProvider(index: index)
@@ -55,6 +57,7 @@ final class IDESwiftSupport {
                 signatureHelp: signatureHelp,
                 codeActions: SwiftCodeActionProvider(inspections: inspections),
                 rename: rename,
+                refactoring: refactoring,
                 codeGeneration: codeGeneration,
                 breadcrumbs: structure,
                 semanticTokens: semanticTokens,

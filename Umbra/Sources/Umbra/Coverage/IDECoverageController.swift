@@ -16,8 +16,11 @@ struct IDECoverageSnapshot {
     var executionFiles: [URL]
     var classDirectories: [URL]
     var sourceDirectories: [URL]
-    var java: URL
-    var cliJar: URL
+    /// The JaCoCo tools a Java run was made with; nil for a Swift run, which has no HTML or XML export.
+    var java: URL?
+    var cliJar: URL?
+
+    var supportsJaCoCoExports: Bool { java != nil && cliJar != nil }
 }
 
 /// One window's coverage: the snapshot of the last run, which files' colours can still be trusted,

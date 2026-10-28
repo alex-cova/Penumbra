@@ -1,0 +1,9 @@
+public struct Circle {
+    public var radius: Double
+
+    public init(radius: Double) { self.radius = radius }
+
+    public func circumference() -> Double {
+        2 * 3.14159 * radius
+    }
+}

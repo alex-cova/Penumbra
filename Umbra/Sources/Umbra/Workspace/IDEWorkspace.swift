@@ -1649,6 +1649,11 @@ public final class IDEWorkspace {
         _ = host(for: workbench.activePane.id).textView.perform(.generate)
     }
 
+    /// Runs a refactoring by id in the active editor (the language's own, from its service).
+    func performRefactoring(_ id: RefactoringID) {
+        _ = host(for: workbench.activePane.id).intelligenceController?.performRefactoring(id)
+    }
+
     /// Inlines the local variable at the caret (⌥⌘N).
     func inlineVariable() {
         _ = host(for: workbench.activePane.id).textView.perform(.inlineVariable)

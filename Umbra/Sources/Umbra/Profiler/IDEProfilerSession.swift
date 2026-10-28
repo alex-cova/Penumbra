@@ -195,6 +195,9 @@ final class IDEProfilerSession {
     @ObservationIgnored var openFrame: ((_ className: String, _ line: Int) -> Void)?
     @ObservationIgnored var chooseJDK: (() -> Void)?
     @ObservationIgnored var openAsHex: (() -> Void)?
+    /// Reads the profile some other way than `jfr print` (an Instruments recording of a Swift program is exported
+    /// and parsed by the Swift run provider). When set, `load` runs it instead of looking for a JDK.
+    @ObservationIgnored var sourceLoader: (@Sendable () async throws -> JavaProfile)?
     /// Whether a class (a binary name) is the project's own or a library's; the workspace knows the
     /// source roots. Unset, every non-JDK class counts as a library.
     @ObservationIgnored var classifyClass: ((String) -> FrameOrigin)?
@@ -225,6 +228,20 @@ final class IDEProfilerSession {
         generation += 1
         let current = generation
         phase = .summarizing
+        if let sourceLoader {
+            phase = .reading(lines: 0)
+            task = Task { [weak self] in
+                do {
+                    let profile = try await sourceLoader()
+                    self?.setProfile(profile, generation: current)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    self?.setPhase(.failed(error.localizedDescription), generation: current)
+                }
+            }
+            return
+        }
         let recordings = recordings
         let provider = jfrCandidates
         let threshold = confirmThresholdBytes
