@@ -220,7 +220,8 @@ public enum SwiftInspectionRule: String, CaseIterable, Sendable, Hashable {
         switch self {
         case .redundantReturn, .redundantParentheses, .redundantOptionalInitialization,
              .redundantVoidReturn, .unneededBreak, .unusedClosureParameter, .explicitInit,
-             .countIsZero, .filterFirst, .sortedFirst, .firstWhereNil, .unusedImport:
+             .countIsZero, .filterFirst, .sortedFirst, .firstWhereNil, .unusedImport,
+             .unusedPrivateMember, .unusedDeclaration:
             true
         default:
             false

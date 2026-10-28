@@ -273,6 +273,40 @@ final class IDESwiftInspectCodeTests: XCTestCase {
         return false
     }
 
+    func testAResultMenuOffersSafeDeleteForAProjectWideFinding() async throws {
+        let a = directory.appendingPathComponent("Sources/A.swift")
+        let b = directory.appendingPathComponent("Sources/B.swift")
+        let aText = "func orphan() {}\nfunc keeper() {}\nfunc caller() { keeper() }\n"
+        try aText.write(to: a, atomically: true, encoding: .utf8)
+        try "func other() {}\n".write(to: b, atomically: true, encoding: .utf8)
+        let workspace = try await makeWorkspace()
+        await workspace.swiftSupport.waitForIndex()
+        for _ in 0..<200 {
+            let hasA = await workspace.swiftSupport.index.contains(a)
+            let hasB = await workspace.swiftSupport.index.contains(b)
+            if hasA, hasB { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        // The entry as a run would hold it: the finding and its editor range.
+        let options = SwiftInspectionOptions().only([.unusedDeclaration])
+        let analysis = await SwiftInspectionPipeline.analyze(
+            text: aText, options: options, url: a, isTest: false, lookup: workspace.swiftSupport.index,
+            cache: SwiftSyntaxParseCache(capacity: 1)
+        )
+        let finding = try XCTUnwrap(analysis.findings.first {
+            $0.id == SwiftInspectionRule.unusedDeclaration.code && $0.message.contains("'orphan'")
+        })
+        let entry = IDEInspectionRun.Entry(
+            key: "safe-delete", url: a,
+            inspection: IDEInspectionFinding(SwiftLocatedInspection(
+                inspection: finding, range: analysis.map.range(bytes: finding.bytes)
+            ))
+        )
+        let fixes = await workspace.quickFixes(for: entry)
+        XCTAssertEqual(fixes.first?.title, "Safe delete 'orphan'")
+        XCTAssertTrue(fixes.contains { $0.title.hasPrefix("Suppress") })
+    }
+
     func testTheCommitCheckCountsStagedSwiftFilesAndReviewOpensTheirRun() async throws {
         let bad = directory.appendingPathComponent("Sources/Bad.swift")
         let good = directory.appendingPathComponent("Sources/Good.swift")

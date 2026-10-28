@@ -55,6 +55,9 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
         if SwiftAddExplicitType.isAvailable(in: text, caret: caret) {
             descriptors.append(RefactoringDescriptor(id: .addExplicitType, title: "Add Explicit Type", requiresSelection: false))
         }
+        if SwiftSafeDelete.target(in: text, caret: caret) != nil {
+            descriptors.append(RefactoringDescriptor(id: .safeDelete, title: "Safe Delete", requiresSelection: false))
+        }
         let allowsShorthand = SwiftToolsVersion.allowsOptionalBindingShorthand(forFileAt: context.documentURL ?? context.document.url)
         if let direction = SwiftOptionalBindingShorthand.available(in: text, caret: caret, allowsShorthand: allowsShorthand) {
             descriptors.append(RefactoringDescriptor(
@@ -92,6 +95,8 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
         case .optionalBindingShorthand:
             let allowed = SwiftToolsVersion.allowsOptionalBindingShorthand(forFileAt: url)
             return Self.plan(SwiftOptionalBindingShorthand.edits(in: text, caret: caret, allowsShorthand: allowed), text: text, url: url, title: "Optional Binding")
+        case .safeDelete:
+            return await safeDeletePlan(context: context, text: text, url: url, caret: caret)
         case .changeSignature:
             return await changeSignaturePlan(context: context, text: text, url: url, caret: caret, parameters: parameters)
         default:
@@ -174,6 +179,57 @@ public struct SwiftRefactoringProvider: RefactoringProviding {
         }
         guard !entries.isEmpty else { return WorkspaceEditPlan(blockingError: "Nothing to change.", title: title) }
         return WorkspaceEditPlan(entries: entries, warnings: warnings, title: title)
+    }
+
+    // MARK: - Safe delete
+
+    /// Deletes the declaration at the caret once the rename provider (the declaration family
+    /// across files) shows nothing else uses it. A usage blocks the deletion and lists its files,
+    /// as Java's safe delete does.
+    private func safeDeletePlan(context: RefactoringContext, text: String, url: URL, caret: Int) async -> WorkspaceEditPlan {
+        let title = "Safe Delete"
+        guard let target = SwiftSafeDelete.target(in: text, caret: caret) else {
+            return WorkspaceEditPlan(
+                blockingError: "Place the caret on the name of a function, variable, type or enum case to delete.",
+                title: title
+            )
+        }
+        let edits: [SwiftTextEdit]
+        switch SwiftSafeDelete.edits(in: text, caret: caret) {
+        case .success(let found):
+            edits = found
+        case .failure(let failure):
+            return WorkspaceEditPlan(blockingError: failure.message, title: title)
+        }
+        let map = SourceTextMap(text)
+        let nameStart = map.position(atByte: target.nameBytes.lowerBound)
+        let probe = NavigationContext(
+            document: context.document, cursor: Cursor(position: nameStart),
+            selection: Selection(range: EditorIntelligence.TextRange(start: nameStart, end: nameStart))
+        )
+        let renamed: RenamePlan
+        do {
+            renamed = try await renamer.rename(probe, to: target.name)
+        } catch {
+            return WorkspaceEditPlan(blockingError: error.localizedDescription, title: title)
+        }
+        if let blocked = renamed.blockingError {
+            // The name resolves to nothing renamable: there is nothing safe to prove.
+            return WorkspaceEditPlan(blockingError: blocked, title: title)
+        }
+        let ownURL = url.standardizedFileURL
+        let usages = renamed.entries.filter {
+            !($0.url.standardizedFileURL == ownURL && $0.range.start.utf16Offset == nameStart.utf16Offset)
+        }
+        if !usages.isEmpty {
+            let files = Set(usages.map { $0.url.lastPathComponent }).sorted().joined(separator: ", ")
+            let verb = usages.count == 1 ? "blocks" : "block"
+            return WorkspaceEditPlan(
+                blockingError: "\(usages.count) usage\(usages.count == 1 ? "" : "s") in \(files) \(verb) safe delete.",
+                title: title
+            )
+        }
+        return Self.plan(.success(edits), text: text, url: url, title: title)
     }
 
     // MARK: - Plans

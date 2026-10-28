@@ -317,6 +317,34 @@ final class SwiftInspectionTests: XCTestCase {
         assertQuiet(.unusedPrivateMember, "struct S {\n    private var token = 1\n    func f() -> String { \"\\(token)\" }\n}\n")
     }
 
+    func testUnusedPrivateMemberSafeDelete() {
+        assertFix(
+            .unusedPrivateMember, "struct S {\n    private func helper() {}\n    func run() {}\n}\n",
+            becomes: "struct S {\n    func run() {}\n}\n"
+        )
+        assertFix(.unusedPrivateMember, "private let cache = 1\nfunc f() {}\n", becomes: "func f() {}\n")
+        assertFix(.unusedPrivateMember, "private struct Hidden {}\nfunc f() {}\n", becomes: "func f() {}\n")
+        assertFix(.unusedPrivateMember, "private typealias Alias = Int\nfunc f() {}\n", becomes: "func f() {}\n")
+
+        let found = findings(.unusedPrivateMember, "struct S {\n    private func helper() {}\n    func run() {}\n}\n")
+        XCTAssertEqual(found.count, 1)
+        let fix = found.first?.fixes.first
+        XCTAssertEqual(fix?.title, "Safe delete 'helper'")
+        XCTAssertEqual(fix?.isBatchable, false)
+    }
+
+    func testUnusedPrivateMemberSharedLinesAndSiblingBindingsKeepNoFix() {
+        // One line holds the whole struct: deleting the line would delete code.
+        let shared = findings(.unusedPrivateMember, "struct S { private func helper() {} }\n")
+        XCTAssertEqual(shared.count, 1)
+        XCTAssertTrue(shared.first?.fixes.isEmpty == true)
+        // `b` is reported, but the declaration binds two names so it cannot go as a whole.
+        let siblings = findings(.unusedPrivateMember, "struct S {\n    private var a = 1, b = 2\n    func f() -> Int { a }\n}\n")
+        XCTAssertEqual(siblings.count, 1)
+        XCTAssertEqual(siblings.first?.message, "'b' is private and nothing else in this file mentions it.")
+        XCTAssertTrue(siblings.first?.fixes.isEmpty == true)
+    }
+
     func testUnusedPrivateMemberLeavesWhatTheRuntimeOrAMacroMayReach() {
         for source in [
             "final class C {\n    @objc private func tapped() {}\n}\n",

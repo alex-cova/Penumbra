@@ -248,7 +248,10 @@ extension IDEWorkspace {
             let style: JavaSuppressionStyle = preferences.javaSuppressWithComment ? .comment : .annotation
             return JavaInspectionQuickFixes.actions(for: inspection, in: text, suppressionStyle: style)
         case .swift(let located):
-            return SwiftInspectionQuickFixes.actions(for: located, in: text, options: swiftInspectionOptions(for: entry.url))
+            return await SwiftInspectionQuickFixes.actions(
+                ruleCode: located.inspection.id, range: located.range, message: located.inspection.message, in: text,
+                options: swiftInspectionOptions(for: entry.url), url: entry.url, lookup: swiftSupport.index
+            )
         }
     }
 
@@ -261,9 +264,9 @@ extension IDEWorkspace {
             return JavaInspectionQuickFixes.actions(for: row.diagnostic, in: text, suppressionStyle: style)
         case SwiftInspection.diagnosticSource:
             guard let code = row.diagnostic.code else { return [] }
-            return SwiftInspectionQuickFixes.actions(
+            return await SwiftInspectionQuickFixes.actions(
                 ruleCode: code, range: row.diagnostic.range, message: row.diagnostic.message, in: text,
-                options: swiftInspectionOptions(for: row.url)
+                options: swiftInspectionOptions(for: row.url), url: row.url, lookup: swiftSupport.index
             )
         default:
             return []

@@ -66,7 +66,7 @@ final class SwiftRefactoringProviderTests: XCTestCase {
         let onName = SwiftRefactoringTests.parse("func ‸run(a: Int) {}\n")
         let (second, secondDocument, _) = try await self.provider(files: [:], open: "B.swift", noting: onName)
         let namesOnName = await second.availableRefactorings(context(secondDocument)).map(\.title)
-        XCTAssertEqual(namesOnName, ["Change Function Signature…"])
+        XCTAssertEqual(namesOnName, ["Change Function Signature…", "Safe Delete"])
     }
 
     func testIntroduceVariablePlansWithTheSuggestedName() async throws {
@@ -189,6 +189,34 @@ final class SwiftRefactoringProviderTests: XCTestCase {
         let (_, selectedDocument, _) = try await provider(files: [:], open: "B.swift", noting: selected)
         let selectedActions = await SwiftCodeActionProvider().codeActions(for: selectedDocument, at: selectedDocument.cursor.position, diagnostics: [])
         XCTAssertTrue(selectedActions.map(\.title).contains("Introduce variable 'result'"), "\(selectedActions.map(\.title))")
+    }
+
+    // MARK: - Safe delete
+
+    func testSafeDeleteIsOfferedDeletesTheUnusedAndBlocksOnUsages() async throws {
+        let marked = SwiftRefactoringTests.parse("func ‸orphan() {}\n")
+        let (provider, document, url) = try await provider(files: [:], open: "A.swift", noting: marked)
+        let titles = await provider.availableRefactorings(context(document)).map(\.title)
+        XCTAssertTrue(titles.contains("Safe Delete"), "\(titles)")
+        let plan = try await provider.plan(.safeDelete, context: context(document), parameters: [:])
+        XCTAssertNil(plan.blockingError)
+        XCTAssertEqual(plan.entries.count, 1)
+        XCTAssertEqual(applied(plan, to: url, text: marked.text), "")
+
+        let used = SwiftRefactoringTests.parse("func ‸orphan() {}\n")
+        let (using, usingDocument, _) = try await self.provider(
+            files: ["B.swift": "func caller() { orphan() }\n"], open: "A.swift", noting: used
+        )
+        let blocked = try await using.plan(.safeDelete, context: context(usingDocument), parameters: [:])
+        XCTAssertEqual(blocked.blockingError, "1 usage in B.swift blocks safe delete.")
+        XCTAssertTrue(blocked.entries.isEmpty)
+    }
+
+    func testSafeDeleteRefusalsBecomeBlockingErrors() async throws {
+        let marked = SwiftRefactoringTests.parse("class B { func f() {} }\nclass D: B {\n    override func ‸f() {}\n}\n")
+        let (provider, document, _) = try await provider(files: [:], open: "A.swift", noting: marked)
+        let plan = try await provider.plan(.safeDelete, context: context(document), parameters: [:])
+        XCTAssertEqual(plan.blockingError, "'f' overrides another declaration.")
     }
 
     func testNothingIsOfferedForAFileThatDoesNotParseOrIsNotSwift() async throws {

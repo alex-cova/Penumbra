@@ -50,6 +50,44 @@ final class SwiftProjectInspectionTests: XCTestCase {
         XCTAssertEqual(again, ["shared"])
     }
 
+    func testUnusedDeclarationSafeDelete() async throws {
+        func findings(_ text: String) async -> [SwiftInspection] {
+            let options = SwiftInspectionOptions().only([.unusedDeclaration])
+            let analysis = await SwiftInspectionPipeline.analyze(
+                text: text, options: options, url: file, lookup: Lookup(), cache: SwiftSyntaxParseCache(capacity: 1)
+            )
+            return analysis.findings
+        }
+        func apply(_ fix: SwiftInspectionFix, to text: String) -> String {
+            var bytes = Array(text.utf8)
+            for edit in fix.edits.sorted(by: { $0.bytes.lowerBound > $1.bytes.lowerBound }) {
+                bytes.replaceSubrange(edit.bytes, with: Array(edit.replacement.utf8))
+            }
+            return String(decoding: bytes, as: UTF8.self)
+        }
+        let orphans = await findings("func orphan() {}\n")
+        let orphan = try XCTUnwrap(orphans.first)
+        let fix = try XCTUnwrap(orphan.fixes.first)
+        XCTAssertEqual(fix.title, "Safe delete 'orphan'")
+        XCTAssertFalse(fix.isBatchable)
+        XCTAssertEqual(apply(fix, to: "func orphan() {}\n"), "")
+        let stored = await findings("var cache = 1\n")
+        XCTAssertEqual(stored.count, 1)
+        let storedFix = try XCTUnwrap(stored.first?.fixes.first)
+        XCTAssertEqual(apply(storedFix, to: "var cache = 1\n"), "")
+    }
+
+    func testUnusedDeclarationSiblingBindingKeepsNoFix() async {
+        // One- and two-letter names never report (the index does not tell them apart).
+        let text = "var alpha = 1, beta = 2\n"
+        let options = SwiftInspectionOptions().only([.unusedDeclaration])
+        let analysis = await SwiftInspectionPipeline.analyze(
+            text: text, options: options, url: file, lookup: Lookup(), cache: SwiftSyntaxParseCache(capacity: 1)
+        )
+        XCTAssertEqual(analysis.findings.count, 2)
+        XCTAssertTrue(analysis.findings.allSatisfy { $0.fixes.isEmpty })
+    }
+
     func testWhatTheRuntimeOrAnotherModuleMayReachIsLeftAlone() async {
         for text in [
             "public func api() {}\n",

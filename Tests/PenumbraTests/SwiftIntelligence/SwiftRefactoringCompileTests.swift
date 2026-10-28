@@ -14,6 +14,7 @@ final class SwiftRefactoringCompileTests: XCTestCase {
         case addType
         case move
         case shorthand
+        case delete
         case signature(@Sendable (inout [SwiftSignatureParameter]) -> Void)
     }
 
@@ -72,6 +73,9 @@ final class SwiftRefactoringCompileTests: XCTestCase {
         ("move second initializer", .move, "struct E9 {\n    var a: Int\n    init(a: Int) { self.a = a }\n    ‸init() { self.init(a: 0) }\n}\n"),
         ("move subscript", .move, "struct E7 {\n    var items = [1, 2]\n    ‸subscript(i: Int) -> Int { items[i] }\n}\n"),
         ("move nested type", .move, "struct E8 {\n    ‸struct Helper {}\n    var n = 1\n}\n"),
+        ("delete function with doc", .delete, "/// Does the thing.\nfunc ‸gone() {}\nfunc f() {}\n"),
+        ("delete variable", .delete, "struct D {\n    var ‸gone = 1\n}\nfunc f() -> Int { 1 }\n"),
+        ("delete type", .delete, "struct ‸Gone {}\nfunc f() {}\n"),
     ]
 
     func testEveryRefactoringLeavesCodeThatStillCompiles() throws {
@@ -92,6 +96,7 @@ final class SwiftRefactoringCompileTests: XCTestCase {
             case .addType: result = SwiftAddExplicitType.edits(in: marked.text, caret: marked.caret)
             case .move: result = SwiftMoveToExtension.edits(in: marked.text, caret: marked.caret)
             case .shorthand: result = SwiftOptionalBindingShorthand.edits(in: marked.text, caret: marked.caret)
+            case .delete: result = SwiftSafeDelete.edits(in: marked.text, caret: marked.caret)
             case .signature(let transform):
                 guard let subject = SwiftChangeSignature.subject(in: marked.text, caret: marked.caret) else {
                     failures.append("\(name): no function at the caret")

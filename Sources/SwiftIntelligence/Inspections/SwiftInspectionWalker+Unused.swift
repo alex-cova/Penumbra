@@ -24,28 +24,41 @@ extension SwiftInspectionWalker {
     func checkUnusedPrivate(function node: FunctionDeclSyntax) {
         guard isOn(.unusedPrivateMember), node.attributes.isEmpty, isPrivateScoped(node.modifiers), isUnoverriding(node.modifiers),
               declaredAtTypeOrFileLevel(node) else { return }
-        report(unusedName: node.name)
+        report(unusedName: node.name, deleting: Syntax(node))
     }
 
     func checkUnusedPrivate(variable node: VariableDeclSyntax) {
         guard isOn(.unusedPrivateMember), node.attributes.isEmpty, isPrivateScoped(node.modifiers), isUnoverriding(node.modifiers),
               declaredAtTypeOrFileLevel(node) else { return }
+        // Only a declaration that binds one name can go as a whole; the others each keep their report but no fix.
+        let whole = node.bindings.count == 1 ? Syntax(node) : nil
         for binding in node.bindings {
             // A pattern that binds several names, or an accessor block that makes it a protocol witness, is left alone.
             guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
-            report(unusedName: pattern.identifier)
+            report(unusedName: pattern.identifier, deleting: whole)
         }
     }
 
     func checkUnusedPrivate(type node: some SyntaxProtocol, name: TokenSyntax, modifiers: DeclModifierListSyntax, attributes: AttributeListSyntax) {
         guard isOn(.unusedPrivateMember), attributes.isEmpty, isPrivateScoped(modifiers), declaredAtTypeOrFileLevel(node) else { return }
-        report(unusedName: name)
+        report(unusedName: name, deleting: Syntax(node))
     }
 
-    private func report(unusedName token: TokenSyntax) {
+    private func report(unusedName token: TokenSyntax, deleting node: Syntax? = nil) {
         let name = Identifier(token)?.name ?? token.text
         guard !Self.implicitlyUsedNames.contains(name), name != "_", identifierCounts[name] == 1 else { return }
-        report(.unusedPrivateMember, "'\(name)' is private and nothing else in this file mentions it.", at: token)
+        // The fix deletes the declaration's whole line; a declaration that shares its line with other
+        // code keeps the report but no fix. File-local and single-file by construction, but still a
+        // decision, so it never runs from Fix all.
+        let fixes: [SwiftInspectionFix]
+        if let node, let line = SwiftInspectionFix.lineDeleting(bytes(node), in: utf8) {
+            fixes = [SwiftInspectionFix(
+                title: "Safe delete '\(name)'", edits: [.init(bytes: line, replacement: "")], isBatchable: false
+            )]
+        } else {
+            fixes = []
+        }
+        report(.unusedPrivateMember, "'\(name)' is private and nothing else in this file mentions it.", at: token, fixes: fixes)
     }
 
     private func isPrivateScoped(_ modifiers: DeclModifierListSyntax) -> Bool { SwiftUnusedCode.isPrivateScoped(modifiers) }

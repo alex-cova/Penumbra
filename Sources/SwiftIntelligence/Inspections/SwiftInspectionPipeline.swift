@@ -42,7 +42,8 @@ public enum SwiftInspectionPipeline {
         if let lookup {
             if options.isEnabled(.unusedDeclaration) {
                 extra += await SwiftProjectInspections.unusedDeclarations(
-                    in: parsed.folded, url: url, isTest: isTest, treatsPublicApiAsUsed: options.treatsPublicApiAsUsed, lookup: lookup
+                    in: parsed.folded, text: text, url: url, isTest: isTest, treatsPublicApiAsUsed: options.treatsPublicApiAsUsed,
+                    lookup: lookup
                 )
             }
             if options.isEnabled(.unusedImport) {

@@ -52,7 +52,8 @@ public enum SwiftBatchFixer {
         var chosen: [SwiftInspectionFix.Edit] = []
         var count = 0
         for finding in analysis.findings {
-            guard let fix = finding.fixes.first, !fix.edits.isEmpty else { continue }
+            // Safe-delete fixes decide one declaration at a time; Fix all leaves them alone.
+            guard let fix = finding.fixes.first, fix.isBatchable, !fix.edits.isEmpty else { continue }
             let spans = fix.edits.map(\.bytes)
             guard !spans.contains(where: { span in taken.contains { touches($0, span) } }) else { continue }
             taken.append(contentsOf: spans)
@@ -98,6 +99,37 @@ public enum SwiftInspectionQuickFixes {
         let analysis = SwiftInspectionPipeline.analyze(
             text: text, options: options.only([rule]), cache: SwiftSyntaxParseCache(capacity: 1)
         )
+        let candidates = analysis.findings.filter { $0.id == rule.code }
+        let current = candidates.first { analysis.map.range(bytes: $0.bytes) == range && $0.message == message }
+            ?? candidates.first { analysis.map.range(bytes: $0.bytes) == range }
+        guard let current else { return [] }
+        var actions = current.fixes.enumerated().map { $1.codeAction(map: analysis.map, isPreferred: $0 == 0) }
+        if let suppression = SwiftInspectionPipeline.suppressionFix(for: current, in: analysis) {
+            actions.append(suppression.codeAction(map: analysis.map))
+        }
+        return actions
+    }
+
+    /// The same, plus the index-backed rules: the analysis also asks `lookup` about the rest of the
+    /// project, so a project-wide finding in Inspect Code or Problems still finds its fix. For rules
+    /// that need no index this is the sync variant over the same text.
+    public static func actions(
+        ruleCode: String, range: EditorIntelligence.TextRange, message: String, in text: String,
+        options: SwiftInspectionOptions = .standard, url: URL, lookup: (any SwiftModuleSurfaceLookup)?
+    ) async -> [CodeAction] {
+        guard let rule = SwiftInspectionRule(code: ruleCode),
+              text.utf8.count <= SwiftInspectionService.maximumUTF8Length else { return [] }
+        let analysis: SwiftInspectionPipeline.Analysis
+        if let lookup {
+            analysis = await SwiftInspectionPipeline.analyze(
+                text: text, options: options.only([rule]), url: url, isTest: SwiftInspectionScope.isTest(url),
+                lookup: lookup, cache: SwiftSyntaxParseCache(capacity: 1)
+            )
+        } else {
+            analysis = SwiftInspectionPipeline.analyze(
+                text: text, options: options.only([rule]), cache: SwiftSyntaxParseCache(capacity: 1)
+            )
+        }
         let candidates = analysis.findings.filter { $0.id == rule.code }
         let current = candidates.first { analysis.map.range(bytes: $0.bytes) == range && $0.message == message }
             ?? candidates.first { analysis.map.range(bytes: $0.bytes) == range }

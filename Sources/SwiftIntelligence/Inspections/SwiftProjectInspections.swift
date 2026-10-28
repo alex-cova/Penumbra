@@ -30,7 +30,8 @@ extension SwiftIndex: SwiftModuleSurfaceLookup {
 /// names of one or two characters (the index does not tell them apart), tests, and `main.swift`.
 enum SwiftProjectInspections {
     static func unusedDeclarations(
-        in tree: SourceFileSyntax, url: URL?, isTest: Bool, treatsPublicApiAsUsed: Bool, lookup: any SwiftProjectNameLookup
+        in tree: SourceFileSyntax, text: String, url: URL?, isTest: Bool, treatsPublicApiAsUsed: Bool,
+        lookup: any SwiftProjectNameLookup
     ) async -> [SwiftInspection] {
         guard !isTest, url?.lastPathComponent != "main.swift" else { return [] }
         let counts = SwiftInspectionWalker.countIdentifiers(in: tree)
@@ -54,11 +55,27 @@ enum SwiftProjectInspections {
             }
             guard !usedElsewhere else { continue }
             let start = candidate.token.positionAfterSkippingLeadingTrivia.utf8Offset
+            // The fix deletes the declaration's whole line; a declaration that shares its line with
+            // other code, or a variable beside a sibling binding, keeps the report but no fix.
+            // Project-wide by construction, so it never runs from Fix all.
+            let fixes: [SwiftInspectionFix]
+            if let node = candidate.node,
+               let line = SwiftInspectionFix.lineDeleting(
+                   node.positionAfterSkippingLeadingTrivia.utf8Offset ..< node.endPositionBeforeTrailingTrivia.utf8Offset,
+                   in: text
+               ) {
+                fixes = [SwiftInspectionFix(
+                    title: "Safe delete '\(name)'", edits: [.init(bytes: line, replacement: "")], isBatchable: false
+                )]
+            } else {
+                fixes = []
+            }
             findings.append(SwiftInspection(
                 id: SwiftInspectionRule.unusedDeclaration.code,
                 message: "'\(name)' is never used in the project.",
                 severity: SwiftInspectionRule.unusedDeclaration.defaultSeverity,
-                bytes: start ..< start + candidate.token.text.utf8.count
+                bytes: start ..< start + candidate.token.text.utf8.count,
+                fixes: fixes
             ))
         }
         return findings
@@ -108,7 +125,7 @@ enum SwiftProjectInspections {
                   !surface.names.contains(where: { words.contains($0) }) else { continue }
             let start = node.positionAfterSkippingLeadingTrivia.utf8Offset
             let end = node.endPositionBeforeTrailingTrivia.utf8Offset
-            guard let line = Self.lineDeleting(start ..< end, in: text) else { continue }
+            guard let line = SwiftInspectionFix.lineDeleting(start ..< end, in: text) else { continue }
             findings.append(SwiftInspection(
                 id: SwiftInspectionRule.unusedImport.code,
                 message: "import \(module) is never used in this file.",
@@ -155,46 +172,6 @@ enum SwiftProjectInspections {
         return words
     }
 
-    /// The whole line holding `range`, through its line break (or to the file's end), for the Remove
-    /// import fix. `nil` when other code shares the line (`import Foo; bar()`): deleting the line
-    /// would delete code. A trailing comment goes with the import, as organize-imports does.
-    private static func lineDeleting(_ range: Range<Int>, in text: String) -> Range<Int>? {
-        let utf8 = Array(text.utf8)
-        guard !utf8.isEmpty, range.lowerBound <= utf8.count, range.upperBound <= utf8.count else { return nil }
-        var start = range.lowerBound
-        while start > 0, utf8[start - 1] != 10, utf8[start - 1] != 13 { start -= 1 }
-        var end = range.upperBound
-        while end < utf8.count, utf8[end] != 10, utf8[end] != 13 { end += 1 }
-        let line = String(decoding: utf8[start..<end], as: UTF8.self)
-        // The import's own text is on this line by construction; anything else must be whitespace or
-        // a trailing comment.
-        let before = line.prefix(range.lowerBound - start)
-        guard before.allSatisfy({ $0 == " " || $0 == "\t" }) else { return nil }
-        let after = line.suffix(end - range.upperBound).trimmingCharacters(in: .whitespaces)
-        guard isTrailingCommentOnly(after) else { return nil }
-        if end < utf8.count {
-            if utf8[end] == 13, end + 1 < utf8.count, utf8[end + 1] == 10 {
-                end += 2
-            } else {
-                end += 1
-            }
-        } else if start > 0 {
-            start -= 1
-        }
-        return start ..< end
-    }
-
-    /// Whitespace, a `//` comment (which runs to the line's end), or a `/* … */` comment followed by
-    /// whitespace only: anything else is code the fix must not delete.
-    private static func isTrailingCommentOnly(_ after: String) -> Bool {
-        if after.isEmpty { return true }
-        if after.hasPrefix("//") { return true }
-        if after.hasPrefix("/*"), let end = after.range(of: "*/") {
-            return after[end.upperBound...].allSatisfy { $0 == " " || $0 == "\t" }
-        }
-        return false
-    }
-
     /// `pad`, `pad4`, `_padding0`: a field that only keeps a GPU or C layout aligned.
     private static func isPaddingName(_ name: String) -> Bool {
         let trimmed = name.drop { $0 == "_" }
@@ -205,6 +182,8 @@ enum SwiftProjectInspections {
         struct Candidate {
             let name: String
             let token: TokenSyntax
+            /// The declaration to delete, or nil for a variable beside a sibling binding.
+            let node: Syntax?
         }
 
         let treatsPublicApiAsUsed: Bool
@@ -215,34 +194,50 @@ enum SwiftProjectInspections {
             super.init(viewMode: .sourceAccurate)
         }
 
-        override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind { note(node, node.name, node.modifiers, node.attributes) }
-        override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind { note(node, node.name, node.modifiers, node.attributes) }
-        override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind { note(node, node.name, node.modifiers, node.attributes) }
-        override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind { note(node, node.name, node.modifiers, node.attributes) }
-        override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind { note(node, node.name, node.modifiers, node.attributes) }
-        override func visit(_ node: TypeAliasDeclSyntax) -> SyntaxVisitorContinueKind { note(node, node.name, node.modifiers, node.attributes) }
+        override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
+            note(node, node.name, node.modifiers, node.attributes, deleting: Syntax(node))
+        }
+        override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
+            note(node, node.name, node.modifiers, node.attributes, deleting: Syntax(node))
+        }
+        override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
+            note(node, node.name, node.modifiers, node.attributes, deleting: Syntax(node))
+        }
+        override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
+            note(node, node.name, node.modifiers, node.attributes, deleting: Syntax(node))
+        }
+        override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind {
+            note(node, node.name, node.modifiers, node.attributes, deleting: Syntax(node))
+        }
+        override func visit(_ node: TypeAliasDeclSyntax) -> SyntaxVisitorContinueKind {
+            note(node, node.name, node.modifiers, node.attributes, deleting: Syntax(node))
+        }
 
         override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
-            note(node, node.name, node.modifiers, node.attributes)
+            note(node, node.name, node.modifiers, node.attributes, deleting: Syntax(node))
         }
 
         override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
+            // Only a declaration that binds one name can go as a whole; the others each keep their
+            // report but no fix.
+            let whole = node.bindings.count == 1 ? Syntax(node) : nil
             for binding in node.bindings {
                 guard let pattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
-                _ = note(node, pattern.identifier, node.modifiers, node.attributes)
+                _ = note(node, pattern.identifier, node.modifiers, node.attributes, deleting: whole)
             }
             return .visitChildren
         }
 
         @discardableResult
         private func note(
-            _ node: some SyntaxProtocol, _ name: TokenSyntax, _ modifiers: DeclModifierListSyntax, _ attributes: AttributeListSyntax
+            _ node: some SyntaxProtocol, _ name: TokenSyntax, _ modifiers: DeclModifierListSyntax, _ attributes: AttributeListSyntax,
+            deleting deletable: Syntax?
         ) -> SyntaxVisitorContinueKind {
             let reachable = SwiftUnusedCode.hasNoAccessModifier(modifiers)
                 || (!treatsPublicApiAsUsed && SwiftUnusedCode.isPublicOrOpen(modifiers))
             if attributes.isEmpty, reachable, SwiftUnusedCode.isUnoverriding(modifiers),
                SwiftUnusedCode.declaredAtTypeOrFileLevel(node), !SwiftUnusedCode.isMemberOfConformingType(node) {
-                candidates.append(Candidate(name: Identifier(name)?.name ?? name.text, token: name))
+                candidates.append(Candidate(name: Identifier(name)?.name ?? name.text, token: name, node: deletable))
             }
             return .visitChildren
         }

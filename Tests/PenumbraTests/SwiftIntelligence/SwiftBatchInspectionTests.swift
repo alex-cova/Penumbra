@@ -150,6 +150,19 @@ final class SwiftBatchInspectionTests: XCTestCase {
         XCTAssertTrue(SwiftBatchFixer.fixAll(rules: [], in: source).isEmpty)
     }
 
+    func testFixAllSkipsSafeDeleteFixes() {
+        // The finding is there, but deleting a declaration is a decision: Fix all leaves it alone.
+        let text = "struct S {\n    private func helper() {}\n    func run() {}\n}\n"
+        let findings = SwiftInspectionPipeline.analyze(
+            text: text, options: SwiftInspectionOptions().only([.unusedPrivateMember]),
+            cache: SwiftSyntaxParseCache(capacity: 1)
+        ).findings
+        XCTAssertEqual(findings.count, 1)
+        let result = SwiftBatchFixer.fixAll(rules: [.unusedPrivateMember], in: text)
+        XCTAssertTrue(result.edits.isEmpty)
+        XCTAssertEqual(result.fixedCount, 0)
+    }
+
     func testFixAllLeavesCollidingFixesForTheNextRun() {
         // `return (a ? 1 : 2)`: the nested findings touch; whichever is taken first, none may overlap.
         let text = "func f(x: Bool) -> Int { return x ? 1 : 2 }\nfunc g(y: Bool) { if (y) { } }\n"
