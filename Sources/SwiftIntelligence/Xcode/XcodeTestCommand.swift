@@ -50,30 +50,69 @@ public enum XcodeTestCommand {
         return arguments
     }
 
-    /// `xcodebuild -project <project> -scheme <scheme> -showBuildSettings -json`: where the last
-    /// build left the product, for Profile.
-    public static func showBuildSettingsArguments(project: URL? = nil, scheme: String) -> [String] {
+    /// `xcodebuild -project <project> -scheme <scheme> -configuration <configuration>
+    /// -derivedDataPath <cache> -showBuildSettings -json`: where the last build left the product,
+    /// for Profile. The configuration and cache must match the build, or the settings answer
+    /// with the default location.
+    public static func showBuildSettingsArguments(
+        project: URL? = nil, scheme: String, configuration: String = "Release",
+        derivedDataPath: URL? = nil
+    ) -> [String] {
         var arguments: [String] = []
         if let project { arguments += ["-project", project.path] }
-        arguments += ["-scheme", scheme, "-showBuildSettings", "-json"]
+        arguments += ["-scheme", scheme, "-configuration", configuration]
+        if let derivedDataPath { arguments += ["-derivedDataPath", derivedDataPath.path] }
+        arguments += ["-showBuildSettings", "-json"]
         return arguments
     }
 
     /// The product executable from `-showBuildSettings -json`: `TARGET_BUILD_DIR` plus
-    /// `EXECUTABLE_PATH` of the first setting that names both, else nil.
+    /// `EXECUTABLE_PATH` of the first setting that names both, else nil. Every `[...]` run in
+    /// the output is tried in order: a run's joined output keeps `xcodebuild`'s stderr warnings
+    /// (with their own `[pid:tid]` brackets) around the JSON, so the first brackets are rarely
+    /// the array.
     public static func executableURL(from output: Data) -> URL? {
-        guard let settings = try? JSONDecoder().decode([BuildSettings].self, from: output) else { return nil }
-        for entry in settings {
-            guard let directory = entry.buildSettings["TARGET_BUILD_DIR"],
-                  let executable = entry.buildSettings["EXECUTABLE_PATH"],
-                  !directory.isEmpty, !executable.isEmpty else { continue }
-            return URL(fileURLWithPath: directory).appendingPathComponent(executable)
+        guard let text = String(data: output, encoding: .utf8) else { return nil }
+        var search = text.startIndex
+        while let open = text[search...].firstIndex(of: "["), let array = jsonArray(from: open, in: text) {
+            if let json = array.data(using: .utf8),
+               let settings = try? JSONDecoder().decode([BuildSettings].self, from: json) {
+                for entry in settings {
+                    guard let directory = entry.buildSettings["TARGET_BUILD_DIR"],
+                          let executable = entry.buildSettings["EXECUTABLE_PATH"],
+                          !directory.isEmpty, !executable.isEmpty else { continue }
+                    return URL(fileURLWithPath: directory).appendingPathComponent(executable)
+                }
+            }
+            search = text.index(after: open)
         }
         return nil
     }
 
     private struct BuildSettings: Decodable {
         var buildSettings: [String: String]
+    }
+
+    /// The balanced `[...]` run starting at `open`, skipping quoted brackets, else nil.
+    static func jsonArray(from open: String.Index, in text: String) -> String? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = open
+        while index < text.endIndex {
+            let character = text[index]
+            if inString {
+                if escaped { escaped = false } else if character == "\\" { escaped = true }
+                else if character == "\"" { inString = false }
+            } else if character == "\"" { inString = true }
+            else if character == "[" { depth += 1 }
+            else if character == "]" {
+                depth -= 1
+                if depth == 0 { return String(text[open...index]) }
+            }
+            index = text.index(after: index)
+        }
+        return nil
     }
 
     /// The `-only-testing` selector for a target, class, or method.

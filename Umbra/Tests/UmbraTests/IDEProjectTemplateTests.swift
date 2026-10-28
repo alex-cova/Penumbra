@@ -104,6 +104,7 @@ final class IDEProjectTemplateTests: XCTestCase {
                 "My_App/Assets.xcassets/Contents.json",
                 "My_App/Assets.xcassets/AccentColor.colorset/Contents.json",
                 "My_App/Assets.xcassets/AppIcon.appiconset/Contents.json",
+                "Tests/My_AppTests.swift",
             ]
         )
         let data = try XCTUnwrap(files.first { $0.path.hasSuffix("project.xcproj") }).data
@@ -111,7 +112,9 @@ final class IDEProjectTemplateTests: XCTestCase {
         // Writing what was read gives the same bytes: the output is already canonical.
         XCTAssertEqual(try project.jsonRepresentation(), data)
 
-        XCTAssertEqual(project.targets.map(\.name), ["My_App"])
+        XCTAssertEqual(project.targets.map(\.name), ["My_App", "My_AppTests"])
+        let testTarget = try XCTUnwrap(project.targets.last).commonProperties
+        XCTAssertEqual(testTarget.productTypeID?.rawValue, "com.apple.product-type.bundle.unit-test")
         let target = try XCTUnwrap(project.targets.first).commonProperties
         XCTAssertEqual(target.productTypeID?.rawValue, "com.apple.product-type.application")
         XCTAssertEqual(
@@ -125,16 +128,18 @@ final class IDEProjectTemplateTests: XCTestCase {
             if case .folder(let folder) = reference { return folder }
             return nil
         }
-        XCTAssertEqual(folders.count, 1)
-        XCTAssertEqual(folders.first?.path.path, "My_App")
-        XCTAssertEqual(folders.first?.targets, [XCSchema.LocalTargetReference(targetName: "My_App")])
+        XCTAssertEqual(folders.map(\.path.path).sorted(), ["My_App", "Tests"])
+        let appFolder = try XCTUnwrap(folders.first { $0.path.path == "My_App" })
+        XCTAssertEqual(appFolder.targets, [XCSchema.LocalTargetReference(targetName: "My_App")])
+        let testsFolder = try XCTUnwrap(folders.first { $0.path.path == "Tests" })
+        XCTAssertEqual(testsFolder.targets, [XCSchema.LocalTargetReference(targetName: "My_AppTests")])
     }
 
     func testCommandLineToolHasNoResourcesPhaseOrAssets() throws {
         let files = try template("swift.xcode.command-line-tool").files(for: options("Tool"))
         XCTAssertEqual(
             Set(files.map(\.path)),
-            ["Tool.xcodeproj/project.xcproj", ".gitignore", "Tool/main.swift"]
+            ["Tool.xcodeproj/project.xcproj", ".gitignore", "Tool/main.swift", "Tests/ToolTests.swift"]
         )
         let data = try XCTUnwrap(files.first { $0.path.hasSuffix("project.xcproj") }).data
         let project = try XCSchema.Project(jsonRepresentation: data)

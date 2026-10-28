@@ -88,6 +88,11 @@ final class IDEXcodeTestFlowTests: XCTestCase {
             echo '{"project":{"schemes":["\(appTarget)","\(testTarget)"],"targets":["\(appTarget)","\(testTarget)"]}}'
             exit 0
             fi
+            if [ "$1" = "build" ]; then exit 0; fi
+            if [ "$9" = "-showBuildSettings" ]; then
+            echo '[{"target":"\(appTarget)","buildSettings":{"TARGET_BUILD_DIR":"/bin","EXECUTABLE_PATH":"echo"}}]'
+            exit 0
+            fi
             prev=""
             for a in "$@"; do
             \(bundleLine)
@@ -444,12 +449,60 @@ final class IDEXcodeTestFlowTests: XCTestCase {
         XCTAssertFalse(fixture.provider.supportsInstrumentation(at: IDERunnableLocation(kind: .preview(index: 0), line: 1, title: "p")))
     }
 
-    func testProfileIsNotAvailableYet() async throws {
+    // MARK: Profile
+
+    func testBuildProductLocatesTheExecutable() async throws {
         let fixture = try makeFixture(xcresultJSON: xcresultJSON(target: "FlowAppTests", failing: nil))
         defer { tearDown(fixture) }
-        XCTAssertTrue(fixture.provider.runInstrumented(.profile, document: nil))
-        try await Task.sleep(for: .milliseconds(300))
-        XCTAssertFalse(fixture.xcode.isRunningTasks, "no build starts")
+        fixture.provider.selectedScheme = fixture.appTarget
+        let binary: URL? = await withCheckedContinuation { continuation in
+            fixture.provider.buildProduct(scheme: fixture.appTarget) { binary in
+                continuation.resume(returning: binary)
+            }
+        }
+        XCTAssertEqual(binary?.path, "/bin/echo")
+        let log = try String(contentsOf: fixture.argumentLog, encoding: .utf8)
+        XCTAssertTrue(log.contains("xcodebuild build "), log)
+        XCTAssertTrue(log.contains("-scheme \(fixture.appTarget)"), log)
+        XCTAssertTrue(log.contains("-showBuildSettings -json"), log)
+    }
+
+    /// A real Release build of the template app, and the product executable resolved from
+    /// its build settings (the `xctrace record` itself is SwiftPM-tested shared machinery).
+    func testRealBuildProductLocatesTheAppBinary() async throws {
+        guard IDEXcodeProjectSystem.resolveXcodebuild(environment: nil) != nil else {
+            throw XCTSkip("Needs Xcode installed.")
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("umbra-xcode-prof-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let template = try XCTUnwrap(IDEProjectTemplates.template(id: "swift.xcode.macos-app"))
+        let root = try IDEProjectWriter.create(
+            template, options: IDENewProjectOptions(name: "FlowApp", parentDirectory: directory))
+        let store = ProjectTrustStore(storeURL: directory.appendingPathComponent("flow-trust.json"))
+        store.setTrusted(true, for: root)
+        let xcode = IDEXcodeProjectSystem(status: IDEProjectStatus(), trustStore: store)
+        defer {
+            xcode.stop()
+            try? FileManager.default.removeItem(at: IDEXcodeRunProvider.cacheFolder(for: root))
+            try? FileManager.default.removeItem(at: directory)
+        }
+        xcode.projectDidChange(root: root)
+        let model = try XCTUnwrap(xcode.model)
+        let appTarget = try XCTUnwrap(model.targets.first { $0.kind == .application }?.name)
+
+        let workspace = IDEWorkspace()
+        defer { workspace.teardown() }
+        let provider = IDEXcodeRunProvider(xcode: xcode, workspace: workspace)
+        let binary: URL? = await withCheckedContinuation { continuation in
+            provider.buildProduct(scheme: appTarget) { binary in
+                continuation.resume(returning: binary)
+            }
+        }
+        let located = try XCTUnwrap(binary)
+        XCTAssertTrue(
+            located.path.hasSuffix("FlowApp.app/Contents/MacOS/FlowApp"), located.path)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: located.path))
     }
 
     // MARK: Context
@@ -634,10 +687,12 @@ final class IDEXcodeTestFlowTests: XCTestCase {
                     atomically: true, encoding: .utf8)
         }
         if environment["XCSHOWBUILDSETTINGS_FIXTURES"] == "1" {
+            let derivedData = IDEXcodeRunProvider.cacheFolder(for: root)
+                .appendingPathComponent("DerivedData", isDirectory: true)
             var request = SubprocessRequest(
                 executable: "/usr/bin/xcodebuild",
                 arguments: XcodeTestCommand.showBuildSettingsArguments(
-                    project: model.projectURL, scheme: appTarget)
+                    project: model.projectURL, scheme: appTarget, derivedDataPath: derivedData)
             )
             request.workingDirectory = root
             request.timeout = .seconds(120)

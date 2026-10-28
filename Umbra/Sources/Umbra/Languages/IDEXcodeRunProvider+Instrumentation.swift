@@ -3,11 +3,14 @@ import JavaIntelligence
 import SubprocessKit
 import SwiftIntelligence
 
-/// Run with Coverage (and later Profile) for an Xcode project.
+/// Run with Coverage and Profile for an Xcode project.
 ///
 /// Coverage is a test run with `-enableCodeCoverage YES` and then `xcrun xccov view` on the
 /// bundle the run kept on `lastResultBundle` (`XCCovArchiveParser` reads the archive into the
-/// report model the Coverage tab and the editor bands already draw).
+/// report model the Coverage tab and the editor bands already draw). Profile is a Release build
+/// into the cache and one `xctrace record` of the product, through the same recording path
+/// `IDESwiftRunProvider` uses for SwiftPM programs (Xcode's Release default `dwarf-with-dsym`
+/// keeps the Step 1 source lines).
 extension IDEXcodeRunProvider {
     // MARK: - Entry points
 
@@ -22,9 +25,7 @@ extension IDEXcodeRunProvider {
             }
             return true
         case .profile:
-            // Profile lands after coverage (results → coverage → profile): the build exists, the
-            // recording does not yet.
-            workspace?.reportRunProblem("Profiling Xcode projects is not available yet.")
+            profileApplication()
             return true
         case .none:
             return false
@@ -134,6 +135,103 @@ extension IDEXcodeRunProvider {
                 )
             }
         }
+    }
+
+    // MARK: - Profile
+
+    /// Profile: a Release build of the first application target into the cache, then one Time
+    /// Profiler recording of the product.
+    func profileApplication() {
+        guard let workspace, let root = xcode.rootURL, let model = xcode.model else { return }
+        guard let target = model.targets.first(where: { $0.kind == .application })?.name else {
+            workspace.reportRunProblem("This project has no application to profile.")
+            return
+        }
+        if xcode.isRunningTasks {
+            workspace.reportRunProblem("Xcode is busy; wait for it or stop it first.")
+            return
+        }
+        let scheme = selectedScheme ?? target
+        Task { [weak self] in
+            guard let self else { return }
+            guard await self.xcode.ensureTrusted() else { return }
+            self.buildProduct(scheme: scheme) { [weak self] binary in
+                guard let binary else {
+                    self?.workspace?.reportRunProblem("The Release build did not produce a program to profile.")
+                    return
+                }
+                self?.record(name: target, binary: binary)
+            }
+        }
+    }
+
+    /// Builds `scheme` Release into the cache and resolves the product executable from
+    /// `-showBuildSettings -json`, for Profile and its tests.
+    func buildProduct(scheme: String, completion: @MainActor @escaping (URL?) -> Void) {
+        guard let model = xcode.model, let root = xcode.rootURL else {
+            completion(nil)
+            return
+        }
+        let cache = Self.cacheFolder(for: root)
+        let derivedData = cache.appendingPathComponent("DerivedData", isDirectory: true)
+        try? FileManager.default.createDirectory(at: derivedData, withIntermediateDirectories: true)
+        let build = IDEXcodeInvocation(
+            title: "xcodebuild build -scheme \(scheme)",
+            arguments: XcodeTestCommand.buildArguments(
+                project: model.projectURL, scheme: scheme, derivedDataPath: derivedData)
+        )
+        let settings = IDEXcodeInvocation(
+            title: "xcodebuild -showBuildSettings -scheme \(scheme)",
+            arguments: XcodeTestCommand.showBuildSettingsArguments(
+                project: model.projectURL, scheme: scheme, derivedDataPath: derivedData),
+            collectsDiagnostics: false
+        )
+        xcode.run([build, settings]) { outcomes in
+            guard outcomes.count == 2, outcomes.allSatisfy(\.succeeded),
+                  let settingsData = outcomes.last?.output.data(using: .utf8),
+                  let binary = XcodeTestCommand.executableURL(from: settingsData),
+                  FileManager.default.isExecutableFile(atPath: binary.path)
+            else {
+                completion(nil)
+                return
+            }
+            completion(binary)
+        }
+    }
+
+    private func record(name: String, binary: URL) {
+        guard let workspace, let root = xcode.rootURL else { return }
+        let runID = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let folder = IDESwiftRunProvider.profileFolder(for: root).appendingPathComponent(runID, isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let trace = folder.appendingPathComponent("\(name).trace")
+        let environment = xcode.launchEnvironment ?? ProcessInfo.processInfo.environment
+        _ = workspace.runs.start(IDERunRequest(
+            id: UUID(), title: "Profile \(name)", providerID: id, payload: IDESwiftRunProvider.ProfilePayload(name: name), allowsMultipleInstances: false,
+            prepare: { [weak self] session in
+                let xcrun = URL(fileURLWithPath: "/usr/bin/xcrun")
+                guard FileManager.default.isExecutableFile(atPath: xcrun.path) else {
+                    session.fail("xcrun was not found. Profiling needs Xcode's command line tools (xctrace).")
+                    return
+                }
+                session.onFinished = { [weak self] session in
+                    if case .failed = session.state { return }
+                    guard FileManager.default.fileExists(atPath: trace.path) else {
+                        session.appendNote("No recording was written. Instruments needs the program to start and exit.")
+                        return
+                    }
+                    self?.workspace?.openSwiftProfile(trace: trace, title: "Profile: \(name)", root: root)
+                    IDESwiftRunProvider.pruneProfiles(in: IDESwiftRunProvider.profileFolder(for: root), keeping: folder.lastPathComponent)
+                }
+                session.start(IDEProcessLaunch(
+                    executable: xcrun,
+                    arguments: SwiftProfileCommand.recordArguments(trace: trace, executable: binary),
+                    workingDirectory: root, environment: environment,
+                    displayCommand: "xctrace record --template '\(SwiftProfileCommand.template)' --launch -- \(binary.lastPathComponent)"
+                ))
+            }
+        ))
+        workspace.showRunTab()
     }
 
     /// `xcrun xccov view --<kind> --json <bundle>`. Off the main actor's path.

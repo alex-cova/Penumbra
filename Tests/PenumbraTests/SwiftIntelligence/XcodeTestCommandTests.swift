@@ -70,7 +70,8 @@ final class XcodeTestCommandTests: XCTestCase {
         XCTAssertEqual(
             XcodeTestCommand.showBuildSettingsArguments(
                 project: URL(fileURLWithPath: "/tmp/MyApp.xcodeproj"), scheme: "MyApp"),
-            ["-project", "/tmp/MyApp.xcodeproj", "-scheme", "MyApp", "-showBuildSettings", "-json"]
+            ["-project", "/tmp/MyApp.xcodeproj", "-scheme", "MyApp", "-configuration", "Release",
+             "-showBuildSettings", "-json"]
         )
         // Real `-showBuildSettings -json` from the app template (`XcodeTests/ShowBuildSettings.json`,
         // refreshed by the `XCSHOWBUILDSETTINGS_FIXTURES=1` coverage flow test run; the home
@@ -80,6 +81,11 @@ final class XcodeTestCommandTests: XCTestCase {
         XCTAssertTrue(
             executable.path.hasSuffix("ProbeApp.app/Contents/MacOS/ProbeApp"), executable.path)
         XCTAssertNil(XcodeTestCommand.executableURL(from: Data("[]".utf8)))
+        // A run's joined output keeps stderr around the JSON; the array is still found,
+        // even when the warnings carry their own brackets.
+        let noisy = Data("note: [line]\n".utf8) + output
+            + Data("2026-10-28 xcodebuild[38576:4360450] CoreSimulator is out of date\n".utf8)
+        XCTAssertEqual(XcodeTestCommand.executableURL(from: noisy), executable)
     }
 
     func testOnlyTestingBuildsTargetClassAndMethodSelectors() {
