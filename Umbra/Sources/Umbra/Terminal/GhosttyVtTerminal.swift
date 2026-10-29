@@ -153,7 +153,7 @@ final class GhosttyVtTerminal: @unchecked Sendable {
                   let buf
             else { return nil }
             defer { ghostty_free(nil, buf, len) }
-            return String(bytesNoCopy: buf, length: len, encoding: .utf8, freeWhenDone: false)
+            return String(bytes: UnsafeBufferPointer(start: buf, count: len), encoding: .utf8)
         }
     }
 

@@ -171,8 +171,9 @@ final class GhosttyTerminalView: NSView {
             terminal?.onEvent = { [weak self] event in
                 DispatchQueue.main.async { [weak self] in self?.handleTerminalEvent(event) }
             }
+            let backend = terminal
             process.onOutput = { [weak self] data in
-                self?.terminal?.write(data)
+                backend?.write(data)
                 DispatchQueue.main.async { [weak self] in self?.needsDisplay = true }
             }
             process.onExit = { [weak self] _ in
@@ -348,7 +349,9 @@ final class GhosttyTerminalView: NSView {
                                 height: gridLayout.cellHeight))
         }
         if first.invisible { return }
-        let text = cells.map(\.text).joined()
+        // A blank narrow cell (never written, or skipped by a tab or cursor move) has empty
+        // text but still occupies a column; only a wide glyph's tail is legitimately empty.
+        let text = cells.map { $0.text.isEmpty && $0.wide == .narrow ? " " : $0.text }.joined()
         guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         var attributes: [NSAttributedString.Key: Any] = [
             .font: styledFont(bold: first.bold, italic: first.italic),
@@ -467,9 +470,11 @@ final class GhosttyTerminalView: NSView {
     private func ensureBlinkTimer() {
         guard blinkTimer == nil else { return }
         blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.53, repeats: true) { [weak self] _ in
-            guard let self, self.lastCursorBlinking, self.window?.firstResponder == self else { return }
-            self.blinkPhaseOn.toggle()
-            self.needsDisplay = true
+            MainActor.assumeIsolated {
+                guard let self, self.lastCursorBlinking, self.window?.firstResponder == self else { return }
+                self.blinkPhaseOn.toggle()
+                self.needsDisplay = true
+            }
         }
     }
 

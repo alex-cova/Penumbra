@@ -358,7 +358,7 @@ final class GhosttyPtyProcess: @unchecked Sendable {
         posix_spawn_file_actions_adddup2(&actions, 3, STDOUT_FILENO)
         posix_spawn_file_actions_adddup2(&actions, 3, STDERR_FILENO)
         posix_spawn_file_actions_addclose(&actions, 3)
-        posix_spawn_file_actions_addchdir_np(&actions, currentDirectory)
+        posix_spawn_file_actions_addchdir(&actions, currentDirectory)
 
         var merged = ProcessInfo.processInfo.environment
         merged["TERM"] = environment?["TERM"] ?? merged["TERM"] ?? "xterm-256color"

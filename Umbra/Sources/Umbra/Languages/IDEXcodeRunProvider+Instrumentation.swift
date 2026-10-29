@@ -142,7 +142,7 @@ extension IDEXcodeRunProvider {
     /// Profile: a Release build of the first application target into the cache, then one Time
     /// Profiler recording of the product.
     func profileApplication() {
-        guard let workspace, let root = xcode.rootURL, let model = xcode.model else { return }
+        guard let workspace, xcode.rootURL != nil, let model = xcode.model else { return }
         guard let target = model.targets.first(where: { $0.kind == .application })?.name else {
             workspace.reportRunProblem("This project has no application to profile.")
             return

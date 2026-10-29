@@ -96,7 +96,7 @@ final class GhosttyMouseReportEncoder {
         case nil: ghostty_mouse_event_clear_button(event)
         }
         ghostty_mouse_event_set_mods(event, report.modifiers.rawValue)
-        var position = GhosttyMousePosition(x: report.x, y: report.y)
+        let position = GhosttyMousePosition(x: report.x, y: report.y)
         ghostty_mouse_event_set_position(event, position)
 
         var stack = [CChar](repeating: 0, count: 128)

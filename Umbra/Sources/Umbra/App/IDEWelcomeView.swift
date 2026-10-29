@@ -97,6 +97,7 @@ struct IDEWelcomeView: View {
             Spacer(minLength: IDEAppearance.Spacing.xxl)
 
             VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xl) {
+                Spacer().frame(height: IDEAppearance.Spacing.xl)
                 IDEWelcomeBrandHeader()
                 IDEWelcomeActionList(
                     openFile: workspace.openFile,
@@ -106,19 +107,25 @@ struct IDEWelcomeView: View {
                     newProject: workspace.showNewProject,
                     openAIMode: { workspace.showAIMode() }
                 )
-                if !workspace.recentProjectURLs.isEmpty {
-                    IDEWelcomeRecentProjectsSection(
-                        urls: Array(workspace.recentProjectURLs.prefix(8)),
-                        onOpen: workspace.openRecentProject,
-                        onRemove: workspace.removeRecentProject
-                    )
-                }
-                if !workspace.recentFileURLs.isEmpty {
-                    IDEWelcomeRecentFilesSection(
-                        urls: Array(workspace.recentFileURLs.prefix(8)),
-                        onOpen: workspace.openRecentFile,
-                        onRemove: workspace.removeRecentFile
-                    )
+                if !workspace.recentProjectURLs.isEmpty || !workspace.recentFileURLs.isEmpty {
+                    HStack(alignment: .top, spacing: IDEAppearance.Spacing.xl) {
+                        if !workspace.recentProjectURLs.isEmpty {
+                            IDEWelcomeRecentProjectsSection(
+                                urls: Array(workspace.recentProjectURLs.prefix(8)),
+                                onOpen: workspace.openRecentProject,
+                                onRemove: workspace.removeRecentProject
+                            )
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                        }
+                        if !workspace.recentFileURLs.isEmpty {
+                            IDEWelcomeRecentFilesSection(
+                                urls: Array(workspace.recentFileURLs.prefix(8)),
+                                onOpen: workspace.openRecentFile,
+                                onRemove: workspace.removeRecentFile
+                            )
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                        }
+                    }
                 }
                 IDEWelcomeShortcutsGrid()
             }
@@ -200,6 +207,7 @@ private struct IDEWelcomeProjectContent: View {
             Spacer(minLength: IDEAppearance.Spacing.xxl)
 
             VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xl) {
+                Spacer().frame(height: IDEAppearance.Spacing.xl)
                 if let rootURL {
                     IDEWelcomeProjectHeader(url: rootURL, branch: workspace.gitStatus.currentBranch)
                 }
@@ -402,6 +410,8 @@ private struct IDEWelcomeRecentRow: View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
             Button(action: onOpen) {
                 Label(title, systemImage: systemImage)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(IDEWelcomeLinkButtonStyle())

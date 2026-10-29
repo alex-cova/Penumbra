@@ -183,4 +183,15 @@ final class GhosttyTerminalViewRenderTests: XCTestCase {
         guard let l = inkBounds(in: left), let r = inkBounds(in: right) else { return }
         XCTAssertLessThan(l.maxX, r.minX, "column 0 ink must sit left of column 1 ink")
     }
+
+    /// Cells a tab (or cursor move) skips over are never written, but still take a column:
+    /// `ls` pads its columns with tabs, and the gaps must not collapse.
+    func testTabGapKeepsItsColumns() {
+        let tabbed = tinyView()
+        tabbed.feedOutput("A\tB\u{1B}[?25l\r\n")
+        let spaced = tinyView()
+        spaced.feedOutput("A       B\u{1B}[?25l\r\n")
+        guard let t = inkBounds(in: tabbed), let s = inkBounds(in: spaced) else { return }
+        XCTAssertEqual(t.maxX, s.maxX, "B after a tab must land in column 8, as after seven spaces")
+    }
 }

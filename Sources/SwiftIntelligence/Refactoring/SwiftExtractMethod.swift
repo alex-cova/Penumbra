@@ -171,7 +171,7 @@ public enum SwiftExtractMethod {
                 return .failure(.init("Cannot extract a 'defer' statement."))
             }
             if run.count == 1, case .expr(let sole) = run.first!.item,
-               function.signature.output != nil,
+               function.signature.returnClause != nil,
                let list = Syntax(run.first!).parent?.as(CodeBlockItemListSyntax.self), list.count == 1,
                list.parent?.parent?.as(FunctionDeclSyntax.self)?.id == Syntax(function).id {
                 // The value the implicit return carries has to be known; otherwise this is a
@@ -202,7 +202,7 @@ public enum SwiftExtractMethod {
             }
             // A discarded run that is the whole body of a function with a declared return type
             // would leave the call site without a value.
-            if discarded, function.signature.output != nil,
+            if discarded, function.signature.returnClause != nil,
                let statements = function.body?.statements,
                statements.count == run.count,
                statements.first?.id == run.first!.id,
@@ -389,7 +389,7 @@ public enum SwiftExtractMethod {
                         if !stays { return .init("Cannot extract a 'break' or 'continue' statement.") }
                         break
                     }
-                    if current.is(FallthroughStmtSyntax.self) {
+                    if current.is(FallThroughStmtSyntax.self) {
                         var scope: Syntax? = current.parent
                         var stays = false
                         while let enclosing = scope, inside(enclosing) {
