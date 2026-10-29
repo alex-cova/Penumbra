@@ -169,9 +169,9 @@ Commit after each numbered step. Each step updates `docs/SWIFT_INTELLIGENCE_ROAD
 ## What is still open after this plan
 
 - **Unused imports** (`unused-import`): done (step 3 of round three).
-- **Fixes for the unused-code rules** (deleting a declaration): left to the user on purpose.
+- **Fixes for the unused-code rules:** done (step 4 of round three): "Safe delete '<name>'", one finding at a time, never batched.
 - **Project-wide rules in the editor:** `unused-declaration` now also runs in the editor (save, open, profile change; step 2 of round three).
-- **Refactorings that need types:** extract method and the rest come from SourceKit-LSP when it is running (they appear at ⌥↩ for a selection); there is no native fallback.
+- **Refactorings that need types:** SourceKit-LSP offers extract method and the rest at ⌥↩ for a selection when it is running; step 5 of round three added a native syntax-only Extract Method that is offered when SourceKit is not (it refuses, with a reason, when it cannot tell a type). Inline method is still SourceKit's.
 - **Xcode projects:** done (step 6 of round three): coverage (`xccov`) and profiling a built Xcode target.
 
 ## Round three
