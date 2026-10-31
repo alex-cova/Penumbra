@@ -13,12 +13,22 @@ public struct EvalConfiguration: Sendable {
     public var compactionThreshold: Double
     public var editTolerance: EditTolerance
     public var verifyBeforeStopping: Bool
+    /// Keep output too large to show where `read_tool_output` can read it back, as Umbra does.
+    public var saveToolOutput: Bool
+    /// Whether `read_file` prefixes each line with its number.
+    public var lineNumbers: Bool
+    /// Ask once when a run that changed nothing ends on a message that only announces a change.
+    public var nudgeAnnouncedActions: Bool
 
     public init(
         model: String, reasoningEffort: String? = nil, maxIterations: Int = 40, contextWindow: Int? = nil,
         trialTimeout: TimeInterval = 600, toolset: Toolset = .full, offerRunTests: Bool = true,
-        compactionThreshold: Double = 0.75, editTolerance: EditTolerance = .hosted, verifyBeforeStopping: Bool = true
+        compactionThreshold: Double = 0.75, editTolerance: EditTolerance = .hosted, verifyBeforeStopping: Bool = true,
+        saveToolOutput: Bool = true, lineNumbers: Bool = true, nudgeAnnouncedActions: Bool = false
     ) {
+        self.nudgeAnnouncedActions = nudgeAnnouncedActions
+        self.saveToolOutput = saveToolOutput
+        self.lineNumbers = lineNumbers
         self.model = model
         self.reasoningEffort = reasoningEffort
         self.maxIterations = maxIterations
@@ -53,6 +63,14 @@ public struct TrialResult: Codable, Sendable, Equatable {
     public var summaryFailed: Bool
     /// Tokens in the tool definitions offered to the model, not including the system prompt.
     public var toolCatalogTokens: Int
+    /// Calls to `read_tool_output`: the model went back for output the session had saved. Divided by
+    /// the results that were cut or condensed, it says whether shortening lost something it needed.
+    public var readToolOutputCalls = 0
+    /// Characters of tool output in the history at the end of the run, i.e. what the model was
+    /// actually sent (after truncation and saving), not what the tools produced.
+    public var toolResultChars = 0
+    /// Times the harness asked the model to act on what it had just announced.
+    public var announcedActionNudges = 0
     public var seconds: Double
     public var changedFiles: [String]
     public var finalMessage: String
@@ -79,7 +97,7 @@ public enum TrialRunner {
         let before = sandbox.snapshot()
         let runTests = configuration.offerRunTests ? RunTestsTool(command: task.check, directory: sandbox.root) : nil
         let workspace = DiskAgentWorkspace(root: sandbox.root)
-        let tools = configuration.toolset.tools(runTests: runTests)
+        let tools = configuration.toolset.tools(runTests: runTests, lineNumbers: configuration.lineNumbers)
         result.toolCatalogTokens = ContextBudget.tokens(system: "", tools: tools.map(\.definition))
         let session = AgentSession(
             client: client, tools: tools, workspace: workspace,
@@ -93,7 +111,9 @@ public enum TrialRunner {
                 contextWindow: configuration.contextWindow,
                 compactionThreshold: configuration.compactionThreshold,
                 verifyBeforeStopping: configuration.verifyBeforeStopping,
-                editTolerance: configuration.editTolerance))
+                nudgeAnnouncedActions: configuration.nudgeAnnouncedActions,
+                editTolerance: configuration.editTolerance,
+                toolOutputStore: configuration.saveToolOutput ? MemoryOutputStore() : nil))
 
         let started = Date()
         let timedOut = Atomic(false)
@@ -113,6 +133,7 @@ public enum TrialRunner {
             case .toolCallStarted:
                 result.toolCalls += 1
             case .toolCallArguments(_, let name, let arguments):
+                if name == "read_tool_output" { result.readToolOutputCalls += 1 }
                 log += "CALL \(name) \(arguments.prefix(600))\n"
             case .toolCallFinished(_, _, let output):
                 if output.isError { result.toolErrors += 1 }
@@ -134,6 +155,13 @@ public enum TrialRunner {
         if timedOut.value { result.ending = "timeout" }
         result.seconds = Date().timeIntervalSince(started)
         result.runTestsCalls = runTests?.callCount ?? 0
+        for item in await session.items {
+            switch item {
+            case .toolOutput(_, let output): result.toolResultChars += output.count
+            case .user(let text) where text.contains("made no tool call"): result.announcedActionNudges += 1
+            default: break
+            }
+        }
         result.finalMessage = String(lastMessage.prefix(500))
 
         // The verdict is the evaluator's own run of the check, never the model's report of it.

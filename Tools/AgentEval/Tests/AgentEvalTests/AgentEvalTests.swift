@@ -233,8 +233,11 @@ private func builtInTasks(only ids: [String]? = nil) throws -> [EvalTask] {
             "run", "--provider", "chat", "--model", "m", "--base-url", "http://x/v1", "--api-key-env", "K", "--trials", "3",
             "--tasks", "a, b", "--task-dir", "/tmp/t", "--toolset", "core", "--no-run-tests", "--max-iterations", "10",
             "--context", "8192", "--reasoning", "low", "--timeout", "30", "--jobs", "4", "--json", "o.json",
-            "--transcripts", "tr", "--keep", "--models-dir", "/m",
+            "--transcripts", "tr", "--keep", "--models-dir", "/m", "--no-output-store",
+            "--no-line-numbers", "--nudge-announced",
         ])
+        #expect(defaults.saveToolOutput && !all.saveToolOutput)
+        #expect(defaults.lineNumbers && !all.lineNumbers && !defaults.nudgeAnnouncedActions && all.nudgeAnnouncedActions)
         #expect(all.provider == "chat" && all.baseURL == "http://x/v1" && all.apiKeyEnvironment == "K" && all.trials == 3)
         #expect(all.taskIDs == ["a", "b"] && all.taskDirectory?.path == "/tmp/t" && all.toolset == .core && !all.offerRunTests)
         #expect(all.maxIterations == 10 && all.contextWindow == 8192 && all.reasoning == "low" && all.trialTimeout == 30 && all.jobs == 4)
@@ -291,17 +294,38 @@ private func builtInTasks(only ids: [String]? = nil) throws -> [EvalTask] {
         #expect(Summary.failureReason(cheated) == "edited tests")
     }
 
+    @Test func readsBackOfSavedOutputAndTheSizeOfToolResultsAreMeasured() async throws {
+        // An id that was never saved: the call is counted all the same, and its answer is in the history.
+        let turns: [MockTurn] = [
+            .toolCalls((id: "r", name: "read_tool_output", arguments: #"{"id":"out_missing"}"#)),
+            .text("Done."),
+        ]
+        let measured = await TrialRunner.run(task: try task(), trial: 1, client: MockLLMClient(turns: turns), configuration: configuration)
+        #expect(measured.readToolOutputCalls == 1)
+        #expect(measured.toolResultChars > 0)
+
+        let quiet = await TrialRunner.run(task: try task(), trial: 1, client: MockLLMClient(turns: [.text("ok")]), configuration: configuration)
+        #expect(quiet.readToolOutputCalls == 0 && quiet.toolResultChars == 0)
+    }
+
     @Test func theToolsetAndRunTestsSwitchControlWhatTheModelIsOffered() async throws {
         let full = MockLLMClient(turns: [.text("ok")])
         _ = await TrialRunner.run(task: try task(), trial: 1, client: full, configuration: configuration)
         let fullNames = Set(full.requests[0].tools.map(\.name))
-        #expect(fullNames == ["read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "apply_patch", "todo", "run_tests"])
+        // `read_tool_output` is added by the session itself when a store is configured, as in Umbra.
+        #expect(fullNames == ["read_file", "list_dir", "glob", "grep", "edit_file", "write_file", "apply_patch", "todo", "run_tests", "read_tool_output"])
 
         let core = MockLLMClient(turns: [.text("ok")])
         var coreConfiguration = configuration
         coreConfiguration.toolset = .core
         _ = await TrialRunner.run(task: try task(), trial: 1, client: core, configuration: coreConfiguration)
-        #expect(Set(core.requests[0].tools.map(\.name)) == ["read_file", "list_dir", "grep", "edit_file", "write_file", "run_tests"])
+        #expect(Set(core.requests[0].tools.map(\.name)) == ["read_file", "list_dir", "grep", "edit_file", "write_file", "run_tests", "read_tool_output"])
+
+        let unsaved = MockLLMClient(turns: [.text("ok")])
+        coreConfiguration.saveToolOutput = false
+        _ = await TrialRunner.run(task: try task(), trial: 1, client: unsaved, configuration: coreConfiguration)
+        #expect(!unsaved.requests[0].tools.map(\.name).contains("read_tool_output"))
+        coreConfiguration.saveToolOutput = true
 
         let blind = MockLLMClient(turns: [.text("ok")])
         coreConfiguration.offerRunTests = false

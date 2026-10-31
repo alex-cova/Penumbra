@@ -50,6 +50,7 @@ public actor AgentSession {
     private var editCallsThisRun = 0
     private var failedEditCallsThisRun = 0
     private let unappliedEditsPolicy = UnappliedEditsPolicy()
+    private let announcedActionPolicy = AnnouncedActionPolicy()
     /// What the model knows of the instruction file, so an edit made mid-conversation becomes a note.
     private let instructionState: InstructionState?
     /// Tokens reported during the current run. The budget uses this, not the session total, so
@@ -313,6 +314,7 @@ public actor AgentSession {
         editCallsThisRun = 0
         failedEditCallsThisRun = 0
         unappliedEditsPolicy.reset()
+        announcedActionPolicy.reset()
         verifyPolicy.reset()
         for policy in configuration.policies { policy.reset() }
         runUsage = TokenUsage()
@@ -573,6 +575,7 @@ public actor AgentSession {
         ]
         if configuration.verifyBeforeStopping { policies.append(verifyPolicy) }
         policies.append(unappliedEditsPolicy)
+        if configuration.nudgeAnnouncedActions { policies.append(announcedActionPolicy) }
         policies.append(contentsOf: configuration.policies)
         return policies
     }
@@ -584,7 +587,7 @@ public actor AgentSession {
             estimatedTokens: estimatedContextTokens(), filesEdited: filesEditedThisRun,
             verifiedSinceEdit: verifiedSinceEdit, mode: mode,
             editCalls: editCallsThisRun, failedEditCalls: failedEditCallsThisRun,
-            lastAssistantText: lastAssistantText)
+            lastAssistantText: lastAssistantText, editToolsOffered: tools.contains { $0.risk == .edit })
     }
 
     /// Yields what the Stop gate recorded while it was asked, if anything.

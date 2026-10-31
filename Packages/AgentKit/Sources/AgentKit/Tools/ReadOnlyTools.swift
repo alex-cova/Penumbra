@@ -10,9 +10,10 @@ enum LineNumbering {
 /// The generic read-only tools, in the fixed order the request lists them (byte-stable for caching).
 public enum ReadOnlyTools {
     /// `secretPatterns` are extra globs (one per entry) for files that must stay unread, on top of the built-in list.
-    public static func all(secretPatterns: [String] = []) -> [any AgentTool] {
+    /// `lineNumbers: false` makes `read_file` return the text as it is (see `ReadFileTool`).
+    public static func all(secretPatterns: [String] = [], lineNumbers: Bool = true) -> [any AgentTool] {
         let extra = SecretFilePolicy.patterns(from: secretPatterns)
-        return [ReadFileTool(extraSecretPatterns: extra), ListDirTool(), GlobTool(), GrepTool(extraSecretPatterns: extra)]
+        return [ReadFileTool(extraSecretPatterns: extra, lineNumbers: lineNumbers), ListDirTool(), GlobTool(), GrepTool(extraSecretPatterns: extra)]
     }
 }
 
@@ -21,15 +22,21 @@ public struct ReadFileTool: AgentTool {
     public static let maxBytes = 64 * 1_024
     static let maxLineLength = 2_000
     private let extraSecretPatterns: [GlobPattern]
+    /// Prefix every line with its number. The edit tools match on content, so the numbers are only
+    /// there for the model to cite; the `[path: lines a–b of n]` header pages either way.
+    private let lineNumbers: Bool
 
-    public init(extraSecretPatterns: [GlobPattern] = []) {
+    public init(extraSecretPatterns: [GlobPattern] = [], lineNumbers: Bool = true) {
         self.extraSecretPatterns = extraSecretPatterns
+        self.lineNumbers = lineNumbers
     }
     public var risk: ToolRisk { .read }
     public var definition: ToolDefinition {
         ToolDefinition(
             name: "read_file",
-            description: "Read a text file from the project with numbered lines. Long files are paged: pass offset to continue.",
+            description: lineNumbers
+                ? "Read a text file from the project with numbered lines. Long files are paged: pass offset to continue."
+                : "Read a text file from the project. The first line says which lines are shown. Long files are paged: pass offset to continue.",
             parameters: [
                 ToolParameter("path", .string, "Project-relative path."),
                 ToolParameter("offset", .integer, "1-based line to start from. Default 1.", optional: true),
@@ -61,7 +68,7 @@ public struct ReadFileTool: AgentTool {
             var line = lines[number - 1]
             if line.hasSuffix("\r") { line.removeLast() }
             if line.count > Self.maxLineLength { line = String(line.prefix(Self.maxLineLength)) + "…[line truncated]" }
-            let rendered = LineNumbering.line(number, line) + "\n"
+            let rendered = (lineNumbers ? LineNumbering.line(number, line) : line) + "\n"
             // Always return at least one line, however long.
             if !body.isEmpty, body.utf8.count + rendered.utf8.count > Self.maxBytes { break }
             body += rendered
@@ -126,9 +133,13 @@ public struct GrepTool: AgentTool {
     public static let maxResults = 100
     static let maxLineLength = 300
     private let extraSecretPatterns: [GlobPattern]
+    /// Prefix every line with its number. The edit tools match on content, so the numbers are only
+    /// there for the model to cite; the `[path: lines a–b of n]` header pages either way.
+    private let lineNumbers: Bool
 
-    public init(extraSecretPatterns: [GlobPattern] = []) {
+    public init(extraSecretPatterns: [GlobPattern] = [], lineNumbers: Bool = true) {
         self.extraSecretPatterns = extraSecretPatterns
+        self.lineNumbers = lineNumbers
     }
     public var risk: ToolRisk { .read }
     public var definition: ToolDefinition {

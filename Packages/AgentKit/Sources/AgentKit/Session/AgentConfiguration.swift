@@ -46,6 +46,10 @@ public struct AgentConfiguration: Sendable {
     public var graceTurnAtCap: Bool
     /// Ask once, before a run that edited files ends, to check those files. Never fires in plan mode.
     public var verifyBeforeStopping: Bool
+    /// When a run that changed nothing ends on a message that only announces a change, ask once
+    /// whether to make it (`AnnouncedActionPolicy`). Off until it has been measured on the models a
+    /// host uses.
+    public var nudgeAnnouncedActions: Bool
     /// Input plus output tokens for one run. `nil` means no token budget.
     public var maxRunTokens: Int?
     /// Wall-clock seconds for one run. `nil` means no time budget.
@@ -118,6 +122,7 @@ public struct AgentConfiguration: Sendable {
         pendingMessages: (@Sendable (_ itemCount: Int) async -> [String])? = nil,
         graceTurnAtCap: Bool = true,
         verifyBeforeStopping: Bool = false,
+        nudgeAnnouncedActions: Bool = false,
         maxRunTokens: Int? = nil,
         maxRunSeconds: TimeInterval? = nil,
         runIsOverCost: (@Sendable (TokenUsage) -> Bool)? = nil,
@@ -161,6 +166,7 @@ public struct AgentConfiguration: Sendable {
         self.pendingMessages = pendingMessages
         self.graceTurnAtCap = graceTurnAtCap
         self.verifyBeforeStopping = verifyBeforeStopping
+        self.nudgeAnnouncedActions = nudgeAnnouncedActions
         self.maxRunTokens = maxRunTokens
         self.maxRunSeconds = maxRunSeconds
         self.runIsOverCost = runIsOverCost

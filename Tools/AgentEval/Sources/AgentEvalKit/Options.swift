@@ -23,6 +23,9 @@ public struct Options: Sendable {
     public var taskDirectory: URL?
     public var toolset: Toolset = .full
     public var offerRunTests = true
+    public var saveToolOutput = true
+    public var lineNumbers = true
+    public var nudgeAnnouncedActions = false
     public var maxIterations = 40
     public var contextWindow: Int?
     public var reasoning: String?
@@ -58,6 +61,9 @@ public struct Options: Sendable {
       --task-dir DIR        tasks folder (default: Tools/AgentEval/Tasks of this checkout)
       --toolset full|core   core drops apply_patch, todo and the file walkers (default full)
       --no-run-tests        do not offer run_tests: the model must find bugs by reading
+      --no-line-numbers     read_file returns the text without a number on each line
+      --nudge-announced     ask once when a run that changed nothing ends on "I will fix it" (AnnouncedActionPolicy)
+      --no-output-store     do not save oversized tool output for read_tool_output (Umbra does)
       --max-iterations N    model turns per task (default 40)
       --context N           context window in tokens: local models are asked for it, and the
                             session compacts as it fills (default: the model's own / no compaction)
@@ -103,6 +109,9 @@ public struct Options: Sendable {
                 guard let toolset = Toolset(rawValue: name) else { throw UsageError("--toolset is full or core, not “\(name)”.") }
                 options.toolset = toolset
             case "--no-run-tests": options.offerRunTests = false
+            case "--no-output-store": options.saveToolOutput = false
+            case "--no-line-numbers": options.lineNumbers = false
+            case "--nudge-announced": options.nudgeAnnouncedActions = true
             case "--max-iterations": options.maxIterations = try number()
             case "--context": options.contextWindow = try number()
             case "--reasoning": options.reasoning = try value()

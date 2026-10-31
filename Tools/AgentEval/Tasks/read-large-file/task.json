@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Find a bug in the middle of a 2,000-line module",
+  "difficulty": "medium",
+  "prompt": "tests/test_ledger.py fails: invoices that are a few days late are charged no late fee. Find the root cause in ledger.py and fix it there. Do not change the tests."
+}

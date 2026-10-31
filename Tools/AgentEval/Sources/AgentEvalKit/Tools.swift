@@ -11,8 +11,8 @@ public enum Toolset: String, Sendable, CaseIterable {
 
     /// The model's tools for a task in `sandbox`. `run_tests` is the task's own check and nothing
     /// more general: the agent gets no shell.
-    public func tools(runTests: RunTestsTool?) -> [any AgentTool] {
-        var tools: [any AgentTool] = ReadOnlyTools.all() + EditingTools.all()
+    public func tools(runTests: RunTestsTool?, lineNumbers: Bool = true) -> [any AgentTool] {
+        var tools: [any AgentTool] = ReadOnlyTools.all(lineNumbers: lineNumbers) + EditingTools.all()
         if self == .full { tools.append(TodoTool()) }
         if let runTests { tools.append(runTests) }
         return self == .core ? tools.filter { Self.coreNames.contains($0.name) } : tools

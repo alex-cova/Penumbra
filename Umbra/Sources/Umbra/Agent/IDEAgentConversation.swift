@@ -1151,6 +1151,7 @@ final class IDEAgentConversation: Identifiable {
             secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns),
             pendingMessages: { [weak self] itemCount in await self?.deliverQueued(itemCount: itemCount) ?? [] },
             verifyBeforeStopping: !stopGateOn,
+            nudgeAnnouncedActions: true,
             maxRunTokens: settings.maxRunTokens > 0 ? settings.maxRunTokens : nil,
             maxRunSeconds: settings.maxRunSeconds > 0 ? TimeInterval(settings.maxRunSeconds) : nil,
             runIsOverCost: settings.runIsOverCost(for: choice),

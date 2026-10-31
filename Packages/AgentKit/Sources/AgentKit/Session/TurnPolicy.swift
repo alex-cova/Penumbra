@@ -29,11 +29,14 @@ public struct TurnState: Sendable, Equatable {
     public var failedEditCalls: Int
     /// What the model said on its latest turn, for checks that read it.
     public var lastAssistantText: String
+    /// The session offers at least one tool that changes things, so "I will fix it" can be acted on.
+    public var editToolsOffered: Bool
 
     public init(
         iteration: Int, maxIterations: Int, usage: TokenUsage, elapsed: TimeInterval,
         contextWindow: Int?, estimatedTokens: Int, filesEdited: [String], verifiedSinceEdit: Bool,
-        mode: PermissionMode, editCalls: Int = 0, failedEditCalls: Int = 0, lastAssistantText: String = ""
+        mode: PermissionMode, editCalls: Int = 0, failedEditCalls: Int = 0, lastAssistantText: String = "",
+        editToolsOffered: Bool = false
     ) {
         self.iteration = iteration
         self.maxIterations = maxIterations
@@ -47,6 +50,7 @@ public struct TurnState: Sendable, Equatable {
         self.editCalls = editCalls
         self.failedEditCalls = failedEditCalls
         self.lastAssistantText = lastAssistantText
+        self.editToolsOffered = editToolsOffered
     }
 }
 
@@ -152,6 +156,84 @@ public final class UnappliedEditsPolicy: TurnPolicy, @unchecked Sendable {
         return .note(
             "Every edit you attempted in this run failed, so no file was changed. Do not tell the user the change was made. "
                 + "Fix the error and try again, or say plainly that it did not apply and why.")
+    }
+}
+
+/// What a model says when it stops after announcing the next step ("Fixing the config key.", "I'll
+/// update the imports now.") instead of taking it. Seen in 7 of 140 AgentEval trials: the run ended
+/// `completed` with nothing changed. Deliberately narrow, because a miss costs nothing and a false
+/// match costs one extra turn: a short message whose last sentence is not a question, and which
+/// either starts with an action verb in the -ing form, follows a dash with one, or says "I'll",
+/// "I will", "I'm going to", "let me" or "now" directly before an action verb.
+public enum AnnouncedAction {
+    static let maxCharacters = 500
+
+    private static let verbs = "fix|apply|write|update|create|edit|change|rename|add|remove|implement|replace|patch|modify|delete|correct|save"
+    private static let progressive = "fixing|applying|writing|updating|creating|editing|changing|renaming|adding|removing|implementing|replacing|patching|modifying|deleting|correcting|saving"
+
+    private static let intent = try! NSRegularExpression(
+        pattern: "\\b(i['\u{2019}]ll|i will|i['\u{2019}]m going to|i am going to|let me|going to|now)\\s+(?:go ahead and |just |also )?(\(verbs))\\b",
+        options: [.caseInsensitive])
+    private static let leadingProgressive = try! NSRegularExpression(
+        pattern: "^\\W*(\(progressive))\\b", options: [.caseInsensitive])
+    private static let dashedProgressive = try! NSRegularExpression(
+        pattern: "[\u{2014}\u{2013}:;-]\\s*(\(progressive))\\b", options: [.caseInsensitive])
+
+    /// Whether `text` reads as the model saying what it is about to do.
+    public static func looksLikeAnnouncement(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= maxCharacters, !trimmed.hasSuffix("?") else { return false }
+        let sentence = lastSentence(of: trimmed)
+        let range = NSRange(sentence.startIndex..., in: sentence)
+        return [intent, leadingProgressive, dashedProgressive].contains { $0.firstMatch(in: sentence, range: range) != nil }
+    }
+
+    /// The text after the last sentence end, or the whole text. A full stop inside a file name or a
+    /// number ("answer.md", "3.5") does not end a sentence: it must be followed by a space.
+    static func lastSentence(of text: String) -> String {
+        var sentences: [Substring] = [text[...]]
+        var start = text.startIndex
+        var index = text.startIndex
+        while index < text.endIndex {
+            let next = text.index(after: index)
+            if ".!".contains(text[index]), next < text.endIndex, text[next] == " " {
+                sentences.append(text[start..<next])
+                start = text.index(after: next)
+            }
+            index = next
+        }
+        sentences.append(text[start...])
+        let candidate = sentences.last { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? text[...]
+        return String(candidate)
+    }
+}
+
+/// If a run that never changed anything ends on a message that only announces a change, ask once
+/// whether to make it. One extra turn at most, and only where a tool that changes things is offered
+/// (not plan mode, not a chat without a project). A run that edited anything, or whose every edit
+/// failed (`UnappliedEditsPolicy`), is left to the other policies.
+public final class AnnouncedActionPolicy: TurnPolicy, @unchecked Sendable {
+    private let lock = NSLock()
+    private var asked = false
+
+    public init() {}
+
+    /// A new run may be nudged again.
+    public func reset() { lock.withLock { asked = false } }
+
+    public func beforeTurn(_ state: TurnState) async -> TurnDecision { .proceed }
+
+    public func beforeEnding(_ state: TurnState) async -> TurnDecision {
+        guard state.mode != .plan, state.editToolsOffered, state.editCalls == 0, state.filesEdited.isEmpty,
+              AnnouncedAction.looksLikeAnnouncement(state.lastAssistantText) else { return .proceed }
+        let already = lock.withLock { () -> Bool in
+            defer { asked = true }
+            return asked
+        }
+        guard !already else { return .proceed }
+        return .note(
+            "Your last message said what you were about to do, but you made no tool call, so nothing has changed. "
+                + "If you meant to do it, make the tool call now. If not, say plainly that no change is needed.")
     }
 }
 

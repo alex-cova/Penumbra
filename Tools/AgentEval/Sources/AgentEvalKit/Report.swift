@@ -106,6 +106,9 @@ public enum Summary {
         let catalog = total.map(\.toolCatalogTokens).max() ?? 0
         let compactions = total.reduce(0) { $0 + $1.compactions }
         let failedSummaries = total.filter(\.summaryFailed).count
+        let resultChars = total.isEmpty ? 0 : Double(total.reduce(0) { $0 + $1.toolResultChars }) / Double(total.count)
+        let recoveries = total.reduce(0) { $0 + $1.readToolOutputCalls }
+        let nudged = total.filter { $0.announcedActionNudges > 0 }
         lines.append("")
         lines.append(
             "passed \(passes)/\(total.count) (\(Int((passRate(total) * 100).rounded()))%) · "
@@ -114,6 +117,12 @@ public enum Summary {
             "cached \(share)% of input · tool catalog \(tokens(Double(catalog))) tokens · "
             + "\(compactions) compaction\(compactions == 1 ? "" : "s")"
             + (failedSummaries == 0 ? "" : " · \(failedSummaries) summaries failed"))
+        lines.append(
+            "tool results \(tokens(resultChars / 4)) tokens per trial (about, at 4 characters each) · "
+            + "\(recoveries) read_tool_output call\(recoveries == 1 ? "" : "s")")
+        if !nudged.isEmpty {
+            lines.append("announced-action nudges in \(nudged.count) trial\(nudged.count == 1 ? "" : "s"), \(nudged.filter(\.passed).count) of them passed")
+        }
         return lines.joined(separator: "\n")
     }
 

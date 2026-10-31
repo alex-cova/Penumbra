@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 60,
+  "title": "Find one failing test in a very chatty test run",
+  "difficulty": "easy",
+  "prompt": "The tests for importer.py fail. Find out why and fix the code. Do not change the tests."
+}
