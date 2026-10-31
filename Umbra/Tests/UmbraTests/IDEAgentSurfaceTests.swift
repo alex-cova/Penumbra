@@ -83,4 +83,18 @@ final class IDEAgentSurfaceTests: XCTestCase {
         workspace.restartTerminalTab(tab.id)
         XCTAssertEqual(workspace.terminalTabs.first { $0.id == tab.id }?.restartRequestID, 0)
     }
+
+    func testTheSessionKeepsOnlyTheSelectedShell() throws {
+        workspace.addTerminalTab(saveSession: false)
+        workspace.addTerminalTab(saveSession: false)
+        workspace.addTerminalTab(saveSession: false)
+        let ids = workspace.terminalTabs.map(\.id)
+        workspace.applyTerminalLayout(.threeColumns)
+        workspace.selectTerminalTab(ids[1])
+
+        let session = workspace.makeSession()
+        XCTAssertEqual(session.terminalTabs?.map(\.id), [ids[1]])
+        XCTAssertEqual(session.selectedTerminalTabID, ids[1])
+        XCTAssertEqual(workspace.terminalTabs.count, 3, "the window itself keeps every shell")
+    }
 }

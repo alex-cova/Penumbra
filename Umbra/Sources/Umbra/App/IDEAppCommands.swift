@@ -636,6 +636,34 @@ private struct IDEViewCommands: View {
             .menuShortcut(.nextTerminalTab, in: preset)
         Button("Previous Terminal Tab", action: { workspace?.selectPreviousTerminalTab() })
             .menuShortcut(.previousTerminalTab, in: preset)
+        Menu("Terminal Layout", systemImage: "rectangle.split.3x1") {
+            Button("Split Right") { workspace?.splitTerminal(.trailing) }
+                .menuShortcut(.splitTerminalRight, in: preset)
+            Button("Split Down") { workspace?.splitTerminal(.bottom) }
+                .menuShortcut(.splitTerminalDown, in: preset)
+            Button("Split Left") { workspace?.splitTerminal(.leading) }
+            Button("Split Up") { workspace?.splitTerminal(.top) }
+            Divider()
+            ForEach(IDETerminalTiling.Preset.allCases, id: \.self) { layout in
+                Button(layout.title) { workspace?.applyTerminalLayout(layout) }
+            }
+            Divider()
+            Button("Zoom Pane") { workspace?.toggleTerminalPaneZoom() }
+                .menuShortcut(.zoomTerminalPane, in: preset)
+            Button("Focus Pane Left") { workspace?.focusTerminalPane(toward: .leading) }
+                .menuShortcut(.focusTerminalLeft, in: preset)
+            Button("Focus Pane Right") { workspace?.focusTerminalPane(toward: .trailing) }
+                .menuShortcut(.focusTerminalRight, in: preset)
+            Button("Focus Pane Up") { workspace?.focusTerminalPane(toward: .top) }
+                .menuShortcut(.focusTerminalUp, in: preset)
+            Button("Focus Pane Down") { workspace?.focusTerminalPane(toward: .bottom) }
+                .menuShortcut(.focusTerminalDown, in: preset)
+            Divider()
+            Button("Fullscreen") { workspace?.showTerminalFullscreen() }
+            ForEach(IDEBottomPanelSize.allCases, id: \.self) { size in
+                Button("\(size.title) of the Window") { workspace?.applyTerminalSize(size) }
+            }
+        }
         Divider()
         Button("Zoom In", systemImage: "plus.magnifyingglass", action: { workspace?.zoomIn() })
             .menuShortcut(.zoomIn, in: preset)

@@ -40,6 +40,8 @@ enum IDEMenuCommand: CaseIterable, Hashable {
     case toggleTerminal, toggleProblems, toggleSourceControl
     case recentChanges
     case newTerminalTab, nextTerminalTab, previousTerminalTab
+    case splitTerminalRight, splitTerminalDown, zoomTerminalPane
+    case focusTerminalLeft, focusTerminalRight, focusTerminalUp, focusTerminalDown
     case nextTab, previousTab, nextSplit, previousSplit
     case toggleDebugTool, hideAllToolWindows
     case zoomIn, zoomOut, resetZoom
@@ -188,7 +190,15 @@ enum IDEMenuShortcuts {
         .zoomIn: KeyboardShortcut("=", modifiers: .command),
         .zoomOut: KeyboardShortcut("-", modifiers: .command),
         .nextTerminalTab: KeyboardShortcut(.rightArrow, modifiers: [.control, .option]),
-        .previousTerminalTab: KeyboardShortcut(.leftArrow, modifiers: [.control, .option])
+        .previousTerminalTab: KeyboardShortcut(.leftArrow, modifiers: [.control, .option]),
+        // Terminal panes: ⌃⌥ with the editor's split key, ⌃⌥⌘ and the arrows to move between panes.
+        .splitTerminalRight: KeyboardShortcut("\\", modifiers: [.control, .option]),
+        .splitTerminalDown: KeyboardShortcut("\\", modifiers: [.control, .option, .shift]),
+        .zoomTerminalPane: KeyboardShortcut(.return, modifiers: [.control, .option]),
+        .focusTerminalLeft: KeyboardShortcut(.leftArrow, modifiers: [.control, .option, .command]),
+        .focusTerminalRight: KeyboardShortcut(.rightArrow, modifiers: [.control, .option, .command]),
+        .focusTerminalUp: KeyboardShortcut(.upArrow, modifiers: [.control, .option, .command]),
+        .focusTerminalDown: KeyboardShortcut(.downArrow, modifiers: [.control, .option, .command])
     ]
 
     /// IntelliJ IDEA's macOS keys. ⇧⌘O is Go to File there (the keymap binds it, and the menu

@@ -11,6 +11,7 @@ struct IDETerminalTabsBar: View {
                         tab: tab,
                         isSelected: workspace.isTerminalTabSelected
                             && tab.id == workspace.selectedTerminalTabID,
+                        isShown: workspace.bottomPanel.visibleTabIDs.contains(tab.id),
                         onSelect: { workspace.selectTerminalTab(tab.id) },
                         onClose: { workspace.closeTerminalTab(tab.id) }
                     )
@@ -65,21 +66,29 @@ struct IDETerminalTabsBar: View {
 }
 
 private struct IDETerminalTabItem: View {
+    @Environment(IDEWorkspace.self) private var workspace
     let tab: IDETerminalTab
     let isSelected: Bool
+    /// In a pane next to the focused one.
+    let isShown: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
 
     private let trailingSlotSide: CGFloat = 14
 
     var body: some View {
-        IDEChromeTabItem(title: tab.title, isSelected: isSelected, onSelect: onSelect) {
+        IDEChromeTabItem(title: tab.title, isSelected: isSelected, isShown: isShown, onSelect: onSelect) {
             Image(systemName: "terminal")
                 .font(.system(size: 10))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         } trailing: {
             IDEChromeTabCloseButton(side: trailingSlotSide, onClose: onClose)
         }
+        .onDrag {
+            workspace.bottomPanel.draggedTabID = tab.id
+            return NSItemProvider(object: (IDETerminalPanes.dragPrefix + tab.id.uuidString) as NSString)
+        }
+        .contextMenu { IDETerminalTabMenu(tabID: tab.id) }
     }
 }
 

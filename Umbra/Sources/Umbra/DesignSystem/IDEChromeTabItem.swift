@@ -6,6 +6,8 @@ import SwiftUI
 struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
     let title: String
     let isSelected: Bool
+    /// Not selected, but showing alongside the selected one (a pane of a split terminal).
+    var isShown = false
     var accessibilityLabel: String?
     let onSelect: () -> Void
     @ViewBuilder let leading: () -> Leading
@@ -19,7 +21,7 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
                 .frame(width: 12)
 
             Text(title)
-                .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                .foregroundStyle(isSelected || isShown ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 .lineLimit(1)
                 .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
 
@@ -48,6 +50,7 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
 
     private var backgroundColor: Color {
         if isSelected { return IDEAppearance.ColorToken.tabActive }
+        if isShown { return IDEAppearance.ColorToken.tabActive.opacity(0.5) }
         if isHovering { return IDEAppearance.ColorToken.tabHover }
         return IDEAppearance.ColorToken.tabInactive
     }

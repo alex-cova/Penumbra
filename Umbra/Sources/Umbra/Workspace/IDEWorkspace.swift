@@ -1154,8 +1154,12 @@ public final class IDEWorkspace {
         terminalHosts.compactMap(\.host).first { $0.isShownActive }
     }
 
-    func registerTerminalHost(_ host: IDETerminalHostView) {
-        host.onFocus = { [weak self] in self?.autosaveBecauseFocusMoved() }
+    func registerTerminalHost(_ host: IDETerminalHostView, tabID: UUID) {
+        host.onFocus = { [weak self] in
+            self?.autosaveBecauseFocusMoved()
+            // A click into another pane makes its shell the selected tab.
+            self?.bottomPanel.focus(tabID)
+        }
         terminalHosts.removeAll { $0.host == nil }
         terminalHosts.append(WeakTerminalHost(host: host))
     }
@@ -1988,6 +1992,77 @@ public final class IDEWorkspace {
             window?.makeFirstResponder(nil)
             requestTerminalFocus()
         }
+    }
+
+    /// Splits the focused pane. `tabID` is the tab to put on `edge` of it, or a new shell when that is
+    /// the focused tab itself (or nil).
+    func splitTerminal(_ edge: IDETerminalTiling.Edge, with tabID: UUID? = nil) {
+        showTerminal()
+        selectedBottomTab = .terminal
+        guard let target = selectedTerminalTabID ?? terminalTabs.first?.id else { return }
+        let id: UUID
+        if let tabID, tabID != target {
+            id = tabID
+        } else {
+            let tab = makeTerminalTab(cwd: nil)
+            terminalTabs.append(tab)
+            id = tab.id
+        }
+        bottomPanel.place(id, beside: target, edge: edge)
+        requestTerminalFocus()
+        saveSession()
+    }
+
+    /// Arranges the shells as halves, thirds or quarters, opening shells to fill the panes.
+    func applyTerminalLayout(_ preset: IDETerminalTiling.Preset) {
+        showTerminal()
+        selectedBottomTab = .terminal
+        var ids = bottomPanel.layout.paneIDs
+        ids += terminalTabs.filter { $0.agentCommandID == nil && !ids.contains($0.id) }.map(\.id)
+        while ids.count < preset.paneCount {
+            let tab = makeTerminalTab(cwd: nil)
+            terminalTabs.append(tab)
+            ids.append(tab.id)
+        }
+        bottomPanel.apply(preset, filling: ids)
+        requestTerminalFocus()
+        saveSession()
+    }
+
+    /// Shows only `id`, with the other shells waiting in the tab bar.
+    func showOnlyTerminalTab(_ id: UUID) {
+        bottomPanel.showOnly(id)
+        requestTerminalFocus()
+    }
+
+    func dropTerminalTab(_ id: UUID, onto target: UUID, at zone: IDEBottomPanelModel.DropZone) {
+        bottomPanel.drop(id, onto: target, at: zone)
+        requestTerminalFocus()
+        saveSession()
+    }
+
+    /// Moves the keyboard to the pane next to the focused one.
+    func focusTerminalPane(toward edge: IDETerminalTiling.Edge) {
+        if let id = bottomPanel.neighborID(toward: edge) { selectTerminalTab(id) }
+    }
+
+    func toggleTerminalPaneZoom() {
+        bottomPanel.toggleZoom()
+        requestTerminalFocus()
+    }
+
+    /// Sizes the panel to a fraction of the editor column and shows it.
+    func applyTerminalSize(_ preset: IDEBottomPanelSize) {
+        showTerminal()
+        bottomPanel.applySize(preset)
+        requestTerminalFocus()
+        saveSession()
+    }
+
+    /// Opens the panel over the whole editor area.
+    func showTerminalFullscreen() {
+        showTerminal()
+        if !isBottomPanelExpanded { toggleBottomPanelExpanded() }
     }
 
     public func toggleTerminal() {
@@ -3261,8 +3336,12 @@ public final class IDEWorkspace {
         projectSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) -> IDEWindowSession {
-        let shells = terminalTabs.filter { $0.agentCommandID == nil }
-        let selectedShell = shells.contains { $0.id == selectedTerminalTabID } ? selectedTerminalTabID : shells.first?.id
+        // Only one shell comes back: the selected one, else the first. Split panes and the other
+        // shells are not restored (the next launch opens one console).
+        let allShells = terminalTabs.filter { $0.agentCommandID == nil }
+        let keptShell = allShells.first { $0.id == selectedTerminalTabID } ?? allShells.first
+        let shells = keptShell.map { [$0] } ?? []
+        let selectedShell = keptShell?.id
         syncLiveTextForSession()
         return IDEWindowSession(
             restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
@@ -4601,8 +4680,17 @@ public final class IDEWorkspace {
             EditorCommand(id: "app.nextTerminalTab", title: "Next Terminal Tab", group: "View",
                           action: { [weak self] in self?.selectNextTerminalTab() }),
             EditorCommand(id: "app.previousTerminalTab", title: "Previous Terminal Tab", group: "View",
-                          action: { [weak self] in self?.selectPreviousTerminalTab() })
-        ])
+                          action: { [weak self] in self?.selectPreviousTerminalTab() }),
+            EditorCommand(id: "app.splitTerminalRight", title: "Split Terminal Right", group: "View",
+                          action: { [weak self] in self?.splitTerminal(.trailing) }),
+            EditorCommand(id: "app.splitTerminalDown", title: "Split Terminal Down", group: "View",
+                          action: { [weak self] in self?.splitTerminal(.bottom) }),
+            EditorCommand(id: "app.zoomTerminalPane", title: "Zoom Terminal Pane", group: "View",
+                          action: { [weak self] in self?.toggleTerminalPaneZoom() })
+        ] + IDETerminalTiling.Preset.allCases.map { preset in
+            EditorCommand(id: "app.terminalLayout.\(preset)", title: "Terminal Layout: \(preset.title)", group: "View",
+                          action: { [weak self] in self?.applyTerminalLayout(preset) })
+        })
         // Language modules add their own (Java, HTTP) where Java's used to be.
         palette.commandRegistry.register(languageModuleCommands())
         palette.commandRegistry.register([

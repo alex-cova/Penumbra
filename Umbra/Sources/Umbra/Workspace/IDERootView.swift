@@ -123,7 +123,10 @@ public struct IDERootView: View {
                     if workspace.isTerminalVisible {
                         IDETerminalResizeHandle(height: Binding(
                             get: { workspace.terminalHeight },
-                            set: { workspace.terminalHeight = $0 }
+                            set: {
+                                workspace.bottomPanel.sizePreset = nil
+                                workspace.terminalHeight = $0
+                            }
                         ))
                         .allowsHitTesting(!workspace.isBottomPanelExpanded)
 
@@ -144,6 +147,9 @@ public struct IDERootView: View {
                             .opacity(workspace.chromeOpacity)
                             .allowsHitTesting(workspace.chromeOpacity > 0.05)
                     }
+                }
+                .onGeometryChange(for: Double.self) { Double($0.size.height) } action: {
+                    workspace.bottomPanel.columnHeightChanged($0)
                 }
 
                 if workspace.isSwiftUIPreviewVisible, let preview = workspace.swiftUIPreview {
