@@ -2,6 +2,31 @@ import Foundation
 
 /// A conversation as it is kept on disk. It holds the history and the host's own state (Umbra's
 /// transcript), and never a credential: provider settings and keys live elsewhere.
+/// One child subagent as it is kept on disk with its parent: enough to continue it by its
+/// session id after a relaunch. The agent is named (resolved through the host's catalog on
+/// restore; a child whose agent is gone is dropped), and `items`/`totalUsage` restore its
+/// conversation and budget accounting.
+public struct ChildSnapshot: Codable, Sendable, Equatable {
+    public var id: String
+    public var agent: String
+    public var description: String
+    public var canEdit: Bool
+    public var items: [ConversationItem]
+    public var totalUsage: TokenUsage
+
+    public init(
+        id: String, agent: String, description: String, canEdit: Bool,
+        items: [ConversationItem], totalUsage: TokenUsage = TokenUsage()
+    ) {
+        self.id = id
+        self.agent = agent
+        self.description = description
+        self.canEdit = canEdit
+        self.items = items
+        self.totalUsage = totalUsage
+    }
+}
+
 public struct SessionSnapshot: Codable, Sendable, Equatable, Identifiable {
     public static let currentVersion = 1
 
@@ -15,10 +40,13 @@ public struct SessionSnapshot: Codable, Sendable, Equatable, Identifiable {
     public var totalUsage: TokenUsage
     /// Whatever the host needs to bring its own UI back; opaque to the session.
     public var host: Data?
+    /// Children that can be continued by session id after a relaunch. Missing in old files.
+    public var children: [ChildSnapshot]
 
     public init(
         id: UUID = UUID(), projectRoot: String, title: String, createdAt: Date = Date(), updatedAt: Date = Date(),
-        items: [ConversationItem], totalUsage: TokenUsage = TokenUsage(), host: Data? = nil
+        items: [ConversationItem], totalUsage: TokenUsage = TokenUsage(), host: Data? = nil,
+        children: [ChildSnapshot] = []
     ) {
         self.version = Self.currentVersion
         self.id = id
@@ -29,6 +57,25 @@ public struct SessionSnapshot: Codable, Sendable, Equatable, Identifiable {
         self.items = items
         self.totalUsage = totalUsage
         self.host = host
+        self.children = children
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, id, projectRoot, title, createdAt, updatedAt, items, totalUsage, host, children
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        version = try box.decode(Int.self, forKey: .version)
+        id = try box.decode(UUID.self, forKey: .id)
+        projectRoot = try box.decode(String.self, forKey: .projectRoot)
+        title = try box.decode(String.self, forKey: .title)
+        createdAt = try box.decode(Date.self, forKey: .createdAt)
+        updatedAt = try box.decode(Date.self, forKey: .updatedAt)
+        items = try box.decode([ConversationItem].self, forKey: .items)
+        totalUsage = try box.decode(TokenUsage.self, forKey: .totalUsage)
+        host = try box.decodeIfPresent(Data.self, forKey: .host)
+        children = try box.decodeIfPresent([ChildSnapshot].self, forKey: .children) ?? []
     }
 }
 

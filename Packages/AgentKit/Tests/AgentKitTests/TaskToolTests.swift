@@ -180,7 +180,7 @@ private func sessionID(in text: String) -> String? {
         #expect(disk(project, "Made.txt") == nil)
     }
 
-    @Test func aChildNeverGetsCommandsOrQuestionsOrAnotherTask() async throws {
+    @Test func anEditingChildKeepsCommandsAndQuestionsButNeverAnotherTask() async throws {
         struct Shell: AgentTool {
             var risk: ToolRisk { .command }
             var definition: ToolDefinition { ToolDefinition(name: "run_command", description: "x") }
@@ -196,19 +196,41 @@ private func sessionID(in text: String) -> String? {
             configuration: AgentConfiguration(model: "m", approval: .approveAll))
         _ = await run(session)
         let seen = toolNames(child.requests[0])
-        #expect(!seen.contains("run_command") && !seen.contains("ask_user") && !seen.contains("task"))
+        #expect(seen.contains("run_command") && seen.contains("ask_user"), "commands ask through the parent, questions reach the user")
+        #expect(!seen.contains("task") && !seen.contains("explore") && !seen.contains("todo") && !seen.contains("remember"))
         #expect(seen.contains("write_file"))
     }
 
-    @Test func aChildThatChangesFilesIsRefusedWhereTheUserApprovesEachEdit() async throws {
+    @Test func aReadOnlyChildStaysReadOnly() async throws {
+        struct Shell: AgentTool {
+            var risk: ToolRisk { .command }
+            var definition: ToolDefinition { ToolDefinition(name: "run_command", description: "x") }
+            func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String { "ran" }
+        }
         let project = try TempProject()
-        let child = MockLLMClient(turns: [.text("never runs")])
+        let child = MockLLMClient(turns: [.text("ok")])
+        let parent = MockLLMClient(turns: [taskCall("scout"), .text("done")])
+        let catalog = AgentCatalog(agents: [AgentDefinition(name: "scout", description: "looks")])
+        let session = AgentSession(
+            client: parent,
+            tools: ReadOnlyTools.all() + EditingTools.all() + [Shell(), AskUserTool(), TaskTool(catalog: catalog, childClient: child)],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m", approval: .approveAll))
+        _ = await run(session)
+        let seen = toolNames(child.requests[0])
+        #expect(!seen.contains("run_command") && !seen.contains("write_file"))
+        #expect(seen.contains("read_file"))
+    }
+
+    @Test func anEditingChildRunsWhereTheUserApprovesEachEdit() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let child = MockLLMClient(turns: [writeCall("Made.txt", "made by the child"), .text("created Made.txt")])
         let parent = MockLLMClient(turns: [taskCall(), .text("ok")])
-        let events = await run(makeParent(parent, child: child, project: project, mode: .manual))
-        let result = try #require(output(events))
-        #expect(result.isError)
-        #expect(result.text.contains("approves each edit"))
-        #expect(child.requests.isEmpty)
+        let session = makeParent(parent, child: child, project: project, mode: .manual, approval: .approveAll)
+        let events = await run(session)
+        #expect(output(events)?.text.contains("created Made.txt") == true, "its edits ask through the parent instead of being refused")
+        #expect(disk(project, "Made.txt") == "made by the child")
+        #expect(ending(events) == .completed)
     }
 
     @Test func planModeDoesNotOfferTask() async throws {
@@ -243,7 +265,15 @@ private func sessionID(in text: String) -> String? {
             tools: ReadOnlyTools.all() + EditingTools.all() + [TaskTool(childClient: child)],
             workspace: project.workspace,
             configuration: AgentConfiguration(model: "m", approval: .askForCommands, gate: ClaimsGate()))
-        let events = await run(session)
+        var events: [AgentEvent] = []
+        var denied = false
+        for await event in await session.send("go") {
+            events.append(event)
+            if case .subagent(_, let inner) = event, case .approvalRequested(let request) = inner, !denied {
+                denied = true
+                await session.resolveApproval(callID: request.callID, decision: .deny(note: nil))
+            }
+        }
         let asked = events.compactMap { event -> ApprovalRequest? in
             if case .subagent(_, let inner) = event, case .approvalRequested(let request) = inner { return request }
             return nil
@@ -338,17 +368,181 @@ private func sessionID(in text: String) -> String? {
         #expect(usage.inputTokens == 100 && usage.outputTokens == 7)
     }
 
-    @Test func anApprovalAChildRaisesIsRefusedInsteadOfHanging() async throws {
+    @Test func anApprovalAChildRaisesReachesTheHostAndResolves() async throws {
+        let project = try TempProject()
+        let rules = PermissionRules(ask: [PermissionRule(tool: "Edit", pattern: "secret/**")])
+        let child = MockLLMClient(turns: [writeCall("secret/x.txt", "ok"), .text("wrote it")])
+        let parent = MockLLMClient(turns: [taskCall(), .text("ok")])
+        let session = makeParent(parent, child: child, project: project, permissions: rules, approval: .askForCommands)
+        var events: [AgentEvent] = []
+        var approved = false
+        for await event in await session.send("go") {
+            events.append(event)
+            if case .subagent(_, let inner) = event, case .approvalRequested(let request) = inner, !approved {
+                approved = true
+                await session.resolveApproval(callID: request.callID, decision: .approve)
+            }
+        }
+        #expect(approved, "the child's approval reaches the host wrapped as .subagent")
+        #expect(disk(project, "secret/x.txt") == "ok")
+        #expect(ending(events) == .completed)
+    }
+
+    @Test func denyingAChildsApprovalStopsOnlyThatCall() async throws {
         let project = try TempProject()
         let rules = PermissionRules(ask: [PermissionRule(tool: "Edit", pattern: "secret/**")])
         let child = MockLLMClient(turns: [writeCall("secret/x.txt", "nope"), .text("could not write it")])
         let parent = MockLLMClient(turns: [taskCall(), .text("ok")])
         let session = makeParent(parent, child: child, project: project, permissions: rules, approval: .askForCommands)
-        let events = await run(session)
+        var events: [AgentEvent] = []
+        var denied = false
+        for await event in await session.send("go") {
+            events.append(event)
+            if case .subagent(_, let inner) = event, case .approvalRequested(let request) = inner, !denied {
+                denied = true
+                await session.resolveApproval(callID: request.callID, decision: .deny(note: nil))
+            }
+        }
+        #expect(denied)
+        #expect(disk(project, "secret/x.txt") == nil, "the refused edit never lands")
         #expect(ending(events) == .completed)
-        #expect(disk(project, "secret/x.txt") == nil)
-        let secondRequest = child.requests[1]
-        #expect(outputs(secondRequest).contains { $0.contains("cannot ask the user for approval") })
+    }
+
+    @Test func aQuestionAChildAsksIsAnsweredThroughTheParent() async throws {
+        let project = try TempProject()
+        let child = MockLLMClient(turns: [
+            .toolCalls((id: "q1", name: "ask_user", arguments: #"{"question":"Favorite color?"}"#)),
+            .text("done"),
+        ])
+        let parent = MockLLMClient(turns: [taskCall("scout"), .text("ok")])
+        let catalog = AgentCatalog(agents: [AgentDefinition(name: "scout", description: "looks")])
+        let session = AgentSession(
+            client: parent,
+            tools: ReadOnlyTools.all() + [AskUserTool(), TaskTool(catalog: catalog, childClient: child)],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m", approval: .approveAll))
+        var events: [AgentEvent] = []
+        var answered = false
+        for await event in await session.send("go") {
+            events.append(event)
+            if case .subagent(_, let inner) = event, case .questionAsked(let question) = inner, !answered {
+                answered = true
+                await session.answerQuestion(callID: question.callID, answer: "blue")
+            }
+        }
+        #expect(answered, "the child's question reaches the host wrapped as .subagent")
+        #expect(outputs(child.requests[1]).contains { $0.contains("blue") })
+        #expect(ending(events) == .completed)
+    }
+}
+
+@Suite struct TaskToolRoutingTests {
+    @Test func twoReadOnlyChildrenAndOneEditingChildRunInOneTurn() async throws {
+        let project = try TempProject(files: ["A.txt": "x"])
+        let child = MockLLMClient(turns: [.text("scout one saw it"), .text("scout two saw it"), .text("editing child done")])
+        let catalog = AgentCatalog(agents: [
+            AgentDefinition(name: "scout", description: "looks"),
+            AgentDefinition(name: "scout2", description: "looks again"),
+        ])
+        let parent = MockLLMClient(turns: [
+            .toolCalls(
+                (id: "t1", name: "task", arguments: #"{"agent":"scout","description":"first look","prompt":"look"}"#),
+                (id: "t2", name: "task", arguments: #"{"agent":"scout2","description":"second look","prompt":"look again"}"#),
+                (id: "t3", name: "task", arguments: #"{"agent":"general","description":"make it","prompt":"do it"}"#)),
+            .text("done"),
+        ])
+        let session = makeParent(parent, child: child, project: project, catalog: catalog)
+        let events = await run(session)
+        #expect(output(events, call: "t1")?.text.contains("scout one saw it") == true)
+        #expect(output(events, call: "t2")?.text.contains("scout two saw it") == true)
+        #expect(output(events, call: "t3")?.text.contains("editing child done") == true)
+        #expect(ending(events) == .completed)
+    }
+
+    @Test func stopChildCancelsOneChildAndLeavesTheOthersRunning() async throws {
+        let project = try TempProject()
+        let catalog = AgentCatalog(agents: [AgentDefinition(name: "scout", description: "looks")])
+        let child = MockLLMClient(turns: [
+            MockTurn(
+                [.textDelta("s"), .textDelta("l"), .textDelta("o"), .textDelta("w"), .finished(.completed)],
+                delayPerEvent: .seconds(1)),
+            .text("fast report"),
+        ])
+        let parent = ReactiveClient { request in
+            if notes(request).contains(where: { $0.contains("finished in the background") }) { return .text("final answer") }
+            switch outputs(request).count {
+            case 0:
+                return .toolCalls(
+                    (id: "t1", name: "task", arguments: #"{"agent":"scout","description":"slow job","prompt":"take your time","background":true}"#),
+                    (id: "t2", name: "task", arguments: #"{"agent":"scout","description":"fast job","prompt":"be quick","background":true}"#))
+            default:
+                return .text("waiting for them")
+            }
+        }
+        let session = AgentSession(
+            client: parent,
+            tools: ReadOnlyTools.all() + EditingTools.all() + [TaskTool(catalog: catalog, childClient: child)],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m", approval: .approveAll))
+        var events: [AgentEvent] = []
+        var stopped: String? = nil
+        for await event in await session.send("go") {
+            events.append(event)
+            if stopped == nil, case .toolCallFinished(let id, _, _) = event, id == "t1" {
+                try? await Task.sleep(for: .milliseconds(300))
+                let running = await session.runningChildCalls
+                if let childID = running["t1"] {
+                    await session.stopChild(id: childID)
+                    stopped = childID
+                }
+            }
+        }
+        let stoppedID = try #require(stopped, "a background child was running to stop")
+        #expect(ending(events) == .completed, "the parent and the other child carry on")
+        let finishedIDs = events.compactMap { event -> String? in
+            if case .subagentFinished(let id, _, _, _, _) = event { return id }
+            return nil
+        }
+        #expect(!finishedIDs.contains(stoppedID), "the stopped child files no report")
+        #expect(finishedIDs.count == 1, "the other child still reports")
+        let infos = await session.childInfos
+        #expect(infos.allSatisfy { !$0.isRunning })
+    }
+
+    @Test func aChildContinuesAfterASnapshotReload() async throws {
+        let project = try TempProject()
+        let catalog = AgentCatalog(agents: [AgentDefinition(name: "scout", description: "looks")])
+        let child = MockLLMClient(turns: [.text("first report")])
+        let parent = MockLLMClient(turns: [taskCall("scout", prompt: "look"), .text("done")])
+        let first = AgentSession(
+            client: parent,
+            tools: ReadOnlyTools.all() + [TaskTool(catalog: catalog, childClient: child)],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m", approval: .approveAll))
+        let firstEvents = await run(first, "go")
+        let id = try #require(sessionID(in: output(firstEvents)?.text ?? ""))
+        let snapshots = await first.childSnapshots()
+        #expect(snapshots.count == 1 && snapshots[0].id == id)
+
+        // A fresh session restores the child and continues it by session id on the shared client:
+        // parent turn, the continued child's turn, the parent's closing turn.
+        let shared = MockLLMClient(turns: [
+            taskCall("scout", prompt: "and more", session: id, id: "t2"),
+            .text("second report"),
+            .text("done"),
+        ])
+        let second = AgentSession(
+            client: shared,
+            tools: ReadOnlyTools.all() + [TaskTool(catalog: catalog)],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(model: "m", approval: .approveAll))
+        await second.restoreChildren(snapshots, catalog: catalog)
+        #expect(await second.childInfos.map(\.id) == [id])
+        let events = await run(second, "go")
+        #expect(output(events, call: "t2")?.text.contains("second report") == true)
+        // The continued request carries the first exchange, so the child remembers what it did.
+        #expect(shared.requests[1].items.contains { if case .assistant(let text) = $0 { text.contains("first report") } else { false } })
+        #expect(ending(events) == .completed)
     }
 }
 

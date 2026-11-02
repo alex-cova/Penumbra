@@ -115,6 +115,9 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private var acpFingerprint: String?
     @ObservationIgnored private var lastACPSessionID: String?
     @ObservationIgnored private var pendingElicitations: [String: CheckedContinuation<String?, Never>] = [:]
+    /// A subagent's plan waiting on a parent card: parent entry call id → the child's plan call id,
+    /// which is what the session routes to the waiting child.
+    @ObservationIgnored private var subagentPlanCalls: [String: String] = [:]
     /// Agent-advertised modes for the ACP header chip; empty for the built-in agent.
     private(set) var acpAvailableModes: [ACPSessionMode] = []
     private(set) var acpCurrentModeID: String?
@@ -157,6 +160,8 @@ final class IDEAgentConversation: Identifiable {
     /// Items of a conversation loaded from disk, handed to the session that is created for it.
     @ObservationIgnored private var restoredItems: [ConversationItem]?
     @ObservationIgnored private var restoredTodos: [TodoItem] = []
+    /// Idle subagents loaded from disk, restored into the session when it is created.
+    @ObservationIgnored private var restoredChildren: [ChildSnapshot] = []
     @ObservationIgnored private var createdAt = Date()
 
     /// The history as of the last step that left no tool call open, with how many transcript rows and which
@@ -789,6 +794,7 @@ final class IDEAgentConversation: Identifiable {
         restoredTodos = []
         status = nil
         restoredItems = nil
+        restoredChildren = []
         chatRules = PermissionRules()
         queue = []
         checkpointLog = nil
@@ -880,6 +886,8 @@ final class IDEAgentConversation: Identifiable {
         usage = snapshot.totalUsage
         // Provider items only the model that produced them may be sent back; the transcript is enough.
         restoredItems = droppingOpaque(snapshot.items)
+        // Idle subagents come back with the conversation, so `session:` continues them by id.
+        restoredChildren = snapshot.children
         chatRules = PermissionRules()
         conversationID = snapshot.id
         createdAt = snapshot.createdAt
@@ -927,7 +935,7 @@ final class IDEAgentConversation: Identifiable {
     /// Then `entries` is the transcript as of the last finished step, and the queue is kept with it.
     private func persist(
         items: [ConversationItem], checkpoints: [RunSnapshot], entries savedEntries: ArraySlice<IDEAgentEntry>? = nil,
-        interrupted: Bool = false
+        interrupted: Bool = false, children: [ChildSnapshot]? = nil
     ) {
         guard let store, let root = host?.agentProjectRoot, !items.isEmpty else { return }
         let snapshot = SessionSnapshot(
@@ -936,7 +944,8 @@ final class IDEAgentConversation: Identifiable {
             host: IDEAgentSavedTranscript.encode(
                 entries: savedEntries.map(Array.init) ?? entries, cost: cost, todos: todos, customTitle: customTitle,
                 checkpoints: checkpoints, modelChoice: modelChoice,
-                runInProgress: interrupted, queued: queue.map(\.text)))
+                runInProgress: interrupted, queued: queue.map(\.text)),
+            children: children ?? restoredChildren)
         // A write failure only costs the history; it is not worth interrupting the user for.
         try? store.save(snapshot)
         // The originals are kept for the newest runs of the project; this chat's own are never the ones to go.
@@ -1180,6 +1189,11 @@ final class IDEAgentConversation: Identifiable {
         // A restored conversation whose checklist the history no longer shows (compaction) keeps the saved one.
         if !restoredTodos.isEmpty, await created.todoList.items.isEmpty { await created.setTodos(restoredTodos) }
         restoredTodos = []
+        // Idle subagents saved with the conversation come back, so `session:` continues them by id.
+        if !restoredChildren.isEmpty {
+            await created.restoreChildren(restoredChildren, catalog: agents)
+            restoredChildren = []
+        }
         session = created
         sessionFingerprint = fingerprint
         return created
@@ -1321,13 +1335,14 @@ final class IDEAgentConversation: Identifiable {
         // stopped also sees it saved, marked unread and announced.
         let finalItems = await session.items
         let finalCheckpoints = await session.checkpoints.snapshot()
+        let finalChildren = await session.childSnapshots()
         currentRun = nil
         isRunning = false
         isAwaitingUser = false
         status = nil
         runRules = PermissionRules()
         fileClaims?.release(tab: id)
-        persist(items: finalItems, checkpoints: finalCheckpoints)
+        persist(items: finalItems, checkpoints: finalCheckpoints, children: finalChildren)
         onRunFinished?()
         if let ending = lastEnding {
             let lastAnswer = entries.last(where: { $0.kind == .assistant })?.text ?? ""
@@ -1378,7 +1393,7 @@ final class IDEAgentConversation: Identifiable {
     /// Answers the question on a command's card. The run is paused until this is called, or Stop.
     func decide(callID: String, _ decision: ApprovalDecision) {
         guard session != nil || acpSession != nil else { return }
-        if let index = toolIndex(callID) {
+        if let index = toolIndex(callID) ?? entries.lastIndex(where: { $0.approval?.callID == callID }) {
             entries[index].approval = nil
             entries[index].approvalOutcome = switch decision {
             case .approve: "Approved"
@@ -1394,7 +1409,7 @@ final class IDEAgentConversation: Identifiable {
     /// Answers an `ask_user` card; `nil` skips it, and the model is told to use its judgment.
     func answer(callID: String, text: String?) {
         guard session != nil || acpSession != nil else { return }
-        if let index = toolIndex(callID) {
+        if let index = toolIndex(callID) ?? entries.lastIndex(where: { $0.question?.callID == callID }) {
             entries[index].question = nil
             entries[index].questionOutcome = text == nil ? "Skipped" : "Answered"
         }
@@ -1445,27 +1460,30 @@ final class IDEAgentConversation: Identifiable {
 
     // MARK: - Reverting
 
-    /// Answers a plan card. Approving also switches this chat to that mode.
+    /// Answers a plan card. Approving also switches this chat to that mode. A card showing a
+    /// subagent's plan resolves with the child's call id, which the session routes to it.
     func approvePlan(callID: String, mode: PermissionMode) {
         guard let session else { return }
+        let routed = subagentPlanCalls.removeValue(forKey: callID) ?? callID
         if let index = toolIndex(callID) {
             entries[index].plan = nil
             entries[index].planOutcome = "Approved · \(mode.displayName)"
         }
         if mode != .plan { self.mode = mode }
         isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
-        Task { await session.resolvePlan(callID: callID, decision: .approve(mode)) }
+        Task { await session.resolvePlan(callID: routed, decision: .approve(mode)) }
     }
 
     /// "Keep planning": the model revises with the user's words.
     func revisePlan(callID: String, feedback: String) {
         guard let session else { return }
+        let routed = subagentPlanCalls.removeValue(forKey: callID) ?? callID
         if let index = toolIndex(callID) {
             entries[index].plan = nil
             entries[index].planOutcome = "Changes requested"
         }
         isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
-        Task { await session.resolvePlan(callID: callID, decision: .revise(feedback)) }
+        Task { await session.resolvePlan(callID: routed, decision: .revise(feedback)) }
     }
 
     func showDiff(for change: IDEAgentFileChange) {
@@ -1788,10 +1806,64 @@ final class IDEAgentConversation: Identifiable {
         case .stopGateChecked(let passed, let summary):
             // A pass is silent; a block shows why the run continues instead of ending.
             if !passed { append(.init(kind: .notice, text: summary)) }
-        case .subagent:
-            // Progress UI for a delegated child (collapsible card) plugs in here; the summary
-            // already lands on the explore tool's own card.
-            break
+        case .subagent(let parentID, let inner):
+            // A delegated child's progress lands on its parent `task`/`explore` card, labelled
+            // with the agent. Its approvals, questions and plans use the existing cards: the
+            // child's call id resolves through the session, which routes it to the waiting child.
+            let parentIndex = toolIndex(parentID)
+            let agent = parentIndex.map { subagentName(for: entries[$0]) } ?? "Subagent"
+            switch inner {
+            case .approvalRequested(var request):
+                request.title = "[\(agent)] \(request.title)"
+                if let index = parentIndex {
+                    entries[index].approval = request
+                    entries[index].liveOutput = IDEAgentLiveOutput.append(
+                        entries[index].liveOutput, "\n\(agent) wants approval: \(request.command)")
+                }
+                isAwaitingUser = true
+                onAttention?(.needsYou("\(agent) wants to run: \(request.command)"))
+            case .questionAsked(let question):
+                if let index = parentIndex {
+                    entries[index].question = question
+                    entries[index].liveOutput = IDEAgentLiveOutput.append(
+                        entries[index].liveOutput, "\n\(agent) asks: \(question.question)")
+                }
+                isAwaitingUser = true
+                onAttention?(.needsYou("\(agent) asks: \(question.question)"))
+            case .planProposed(let childCallID, let plan):
+                if let index = parentIndex, let callID = entries[index].callID {
+                    entries[index].plan = plan
+                    subagentPlanCalls[callID] = childCallID
+                    entries[index].liveOutput = IDEAgentLiveOutput.append(
+                        entries[index].liveOutput, "\n\(agent) proposed a plan.")
+                }
+                isAwaitingUser = true
+                onAttention?(.needsYou("\(agent) proposed a plan."))
+            case .toolCallStarted(_, let name):
+                if let index = parentIndex {
+                    entries[index].liveOutput = IDEAgentLiveOutput.append(
+                        entries[index].liveOutput, "\n\(agent): \(name)…")
+                }
+            case .toolCallFinished(let id, let name, let output):
+                // A finished child call clears a card it raised: it is answered, whatever it was.
+                for index in entries.indices where entries[index].approval?.callID == id {
+                    entries[index].approval = nil
+                }
+                for index in entries.indices where entries[index].question?.callID == id {
+                    entries[index].question = nil
+                }
+                if let index = parentIndex, output.isError {
+                    entries[index].liveOutput = IDEAgentLiveOutput.append(
+                        entries[index].liveOutput, "\n\(agent): \(name) failed.")
+                }
+            case .assistantMessage(let text):
+                if let index = parentIndex, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    entries[index].liveOutput = IDEAgentLiveOutput.append(
+                        entries[index].liveOutput, "\n\(agent): \(text.prefix(300))")
+                }
+            default:
+                break
+            }
         case .subagentFinished(_, let agent, let description, _, let ending):
             // A background child's report goes to the model as a note; the user sees that it finished.
             var text = "Subagent “\(description)” (\(agent)) finished in the background."
@@ -1845,6 +1917,30 @@ final class IDEAgentConversation: Identifiable {
 
     private func toolIndex(_ id: String) -> Int? {
         entries.lastIndex { $0.callID == id }
+    }
+
+    /// The agent behind a `task` card's arguments, for labelling a child's progress and approvals.
+    private func subagentName(for entry: IDEAgentEntry) -> String {
+        if case .toolCall(let name) = entry.kind, name == "explore" { return "explore" }
+        guard let object = (try? JSONValue(parsing: entry.text))?.objectValue,
+              let agent = object["agent"]?.stringValue, !agent.isEmpty
+        else { return "Subagent" }
+        return agent
+    }
+
+    /// Stops one running subagent by its session id and leaves the rest of the run going.
+    func stopSubagent(sessionID: String) {
+        guard let session else { return }
+        Task { await session.stopChild(id: sessionID) }
+    }
+
+    /// Stops the running child started by one `task`/`explore` call, if any.
+    func stopSubagentsForCall(_ parentCallID: String) {
+        guard let session else { return }
+        Task {
+            let running = await session.runningChildCalls
+            if let id = running[parentCallID] { await session.stopChild(id: id) }
+        }
     }
 
     private func closeStreamingEntry() {

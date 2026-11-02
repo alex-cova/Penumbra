@@ -420,6 +420,9 @@ final class IDEAgentController {
 
     func stop() { selected.stop() }
 
+    /// Stops the subagent started by one `task`/`explore` call and leaves the rest of the run going.
+    func stopSubagentCall(callID: String) { selected.stopSubagentsForCall(callID) }
+
     func handle(_ event: AgentEvent) { selected.handle(event) }
 
     func decide(callID: String, _ decision: ApprovalDecision) { selected.decide(callID: callID, decision) }

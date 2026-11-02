@@ -4,6 +4,25 @@ import Testing
 
 /// Opt-in, against a real Ollama: `AGENTKIT_OLLAMA_MODEL=qwen-fixed:latest swift test --filter OllamaSmokeTests`.
 /// Needs a model with tool support. These check the wire, not the model's intelligence.
+private enum OllamaChildKeyError: Error { case unknown }
+
+/// Records which model ids one client was asked for.
+private final class RecordingLLMClient: LLMClient, @unchecked Sendable {
+    let inner: OllamaClient
+    private let lock = NSLock()
+    private(set) var models: [String] = []
+
+    init(_ inner: OllamaClient) { self.inner = inner }
+
+    var providerID: String { inner.providerID }
+    var supportsDisabledToolChoice: Bool { inner.supportsDisabledToolChoice }
+
+    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error> {
+        lock.withLock { models.append(request.model) }
+        return inner.stream(request)
+    }
+}
+
 @Suite(.enabled(if: PaidTests.allowed("AGENTKIT_OLLAMA_MODEL")), .serialized)
 struct OllamaSmokeTests {
     private var model: String { PaidTests.value("AGENTKIT_OLLAMA_MODEL") ?? "" }
@@ -23,6 +42,34 @@ struct OllamaSmokeTests {
         #expect(events.last == .finished(.completed))
         let usage = events.compactMap { event -> TokenUsage? in if case .usage(let u) = event { u } else { nil } }.first
         #expect((usage?.inputTokens ?? 0) > 0 && (usage?.outputTokens ?? 0) > 0)
+    }
+
+    @Test func aChildWithAModelOverrideRunsOnThatModel() async throws {
+        let project = try TempProject(files: ["NOTES.md": "The secret word is OTTER.\n"])
+        let recorder = RecordingLLMClient(client)
+        let catalog = AgentCatalog(agents: [
+            AgentDefinition(name: "scout", description: "Reads one file and reports back what it says.", model: "local-scout"),
+        ])
+        let session = AgentSession(
+            client: client, tools: ReadOnlyTools.all() + [TaskTool(catalog: catalog)], workspace: project.workspace,
+            configuration: AgentConfiguration(
+                model: model, systemPrompt: SystemPrompt.make(projectRoot: project.workspace.rootPath),
+                maxOutputTokens: 600,
+                makeChildClient: { key in
+                    guard key == "local-scout" else { throw OllamaChildKeyError.unknown }
+                    return ChildClient(client: recorder, model: model, contextWindow: 8_192)
+                }))
+        var events: [AgentEvent] = []
+        for await event in await session.send(
+            "Use the task tool with the scout agent to read NOTES.md and report the secret word. Put everything it needs in the prompt.")
+        { events.append(event) }
+
+        #expect(events.last == .runEnded(.completed), "\(events.suffix(3))")
+        #expect(!recorder.models.isEmpty, "the child asked through the override client, not the parent's")
+        #expect(recorder.models.allSatisfy { $0 == model }, "every child request named the override model: \(recorder.models)")
+        let answer = events.compactMap { if case .assistantMessage(let t) = $0 { t } else { nil } }.joined(separator: " ")
+        #expect(answer.uppercased().contains("OTTER"), "\(answer)")
+        expectEveryCallAnswered(await session.items)
     }
 
     @Test func aRealToolCallRoundTripThroughTheSession() async throws {

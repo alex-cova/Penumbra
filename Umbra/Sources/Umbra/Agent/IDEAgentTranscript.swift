@@ -113,6 +113,14 @@ enum IDEAgentToolSummary {
         case "ask_user": object["question"]?.stringValue
         case "todo": object["items"]?.arrayValue.map { "\($0.count) \($0.count == 1 ? "item" : "items")" }
         case "run_command": object["command"]?.stringValue
+        case "task":
+            if let description = object["description"]?.stringValue, !description.isEmpty {
+                object["agent"]?.stringValue.map { "\(description) (\($0))" } ?? description
+            } else {
+                object["agent"]?.stringValue
+            }
+        case "explore":
+            object["task"]?.stringValue.map { String($0.prefix(80)) }
         case "gradle": object["tasks"]?.arrayValue?.compactMap(\.stringValue).joined(separator: " ")
         case "run_tests":
             ((object["module"]?.stringValue.map { [$0] } ?? [])

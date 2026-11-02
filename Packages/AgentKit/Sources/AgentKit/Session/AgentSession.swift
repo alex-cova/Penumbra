@@ -162,10 +162,14 @@ public actor AgentSession {
         runTask?.cancel()
     }
 
-    /// Answers an `.approvalRequested` event. A call with no pending request is ignored, so a late
-    /// or repeated answer from the UI is harmless.
+    /// Answers an `.approvalRequested` event, including one a child raised (forwarded wrapped as
+    /// `.subagent(id:event:)`). A call with no pending request anywhere is ignored, so a late or
+    /// repeated answer from the UI is harmless.
     public func resolveApproval(callID: String, decision: ApprovalDecision) {
-        pendingApprovals.removeValue(forKey: callID)?.resume(returning: decision)
+        if pendingApprovals.removeValue(forKey: callID)?.resume(returning: decision) != nil { return }
+        for child in children.values {
+            Task { await child.session.resolveApproval(callID: callID, decision: decision) }
+        }
     }
 
     public var awaitingApproval: [String] { Array(pendingApprovals.keys) }
@@ -183,10 +187,13 @@ public actor AgentSession {
         rules = newRules
     }
 
-    /// Answers an `.questionAsked` event; `nil` means the user dismissed it. A call with no pending
-    /// question is ignored.
+    /// Answers an `.questionAsked` event, including one a child raised. `nil` means the user
+    /// dismissed it. A call with no pending question anywhere is ignored.
     public func answerQuestion(callID: String, answer: String?) {
-        pendingQuestions.removeValue(forKey: callID)?.resume(returning: answer)
+        if pendingQuestions.removeValue(forKey: callID)?.resume(returning: answer) != nil { return }
+        for child in children.values {
+            Task { await child.session.answerQuestion(callID: callID, answer: answer) }
+        }
     }
 
     public var awaitingAnswer: [String] { Array(pendingQuestions.keys) }
@@ -195,12 +202,52 @@ public actor AgentSession {
     /// turn is offered the tools that change things; the model learns it from the tool's output, so no
     /// separate note is added. A call with no pending plan is ignored.
     public func resolvePlan(callID: String, decision: PlanDecision) {
-        guard let continuation = pendingPlans.removeValue(forKey: callID) else { return }
+        guard let continuation = pendingPlans.removeValue(forKey: callID) else {
+            for child in children.values {
+                Task { await child.session.resolvePlan(callID: callID, decision: decision) }
+            }
+            return
+        }
         if case .approve(let approved) = decision, approved != .plan {
             mode = approved
             announcedMode = approved
         }
         continuation.resume(returning: decision)
+    }
+
+    /// Stops one child and leaves the parent and the other children running. Unknown ids are
+    /// ignored, so a late Stop from the UI is harmless.
+    public func stopChild(id: String) {
+        guard let child = children[id] else { return }
+        child.work?.cancel()
+        Task { await child.session.stop() }
+    }
+
+    /// The parent tool-call id each running child was started from, for per-child Stop buttons.
+    public var runningChildCalls: [String: String] {
+        var map: [String: String] = [:]
+        for (id, child) in children where child.isRunning {
+            if let call = child.parentCallID { map[call] = id }
+        }
+        return map
+    }
+
+    /// A child's display state for progress UI.
+    public struct ChildInfo: Sendable {
+        public var id: String
+        public var agent: String
+        public var description: String
+        public var isRunning: Bool
+        public var canEdit: Bool
+    }
+
+    public var childInfos: [ChildInfo] {
+        childOrder.compactMap { id in
+            guard let child = children[id] else { return nil }
+            return ChildInfo(
+                id: id, agent: child.agent.name, description: child.description,
+                isRunning: child.isRunning, canEdit: child.canEdit)
+        }
     }
 
     public var awaitingPlan: [String] { Array(pendingPlans.keys) }
@@ -991,11 +1038,14 @@ public actor AgentSession {
         let agent: AgentDefinition
         var description: String
         var canEdit: Bool
-        /// Set while the child runs.
+        /// The parent's tool-call id that started this run of the child, for per-child Stop.
+        var parentCallID: String?
+        /// Set while the child runs (foreground and background alike).
+        var isRunning = false
+        /// The background task, if any.
         var work: Task<Void, Never>?
         /// Usage already added to this session's budget, so a continued child adds only the new part.
         var accountedUsage = TokenUsage()
-        var isRunning: Bool { work != nil }
     }
 
     private struct FinishedDelegation {
@@ -1008,19 +1058,19 @@ public actor AgentSession {
     }
 
     private static let maxChildren = 12
-    /// Tools a child never gets: it cannot ask the user, plan, remember, open files for the user, or
-    /// start children of its own. Commands are left out too (see `childTools`).
+    /// Tools a child never gets: it cannot plan, remember, open files for the user, or start
+    /// children of its own. A child asks the user through `ask_user`, routed to the parent's UI.
     private static let withheldFromChildren: Set<String> = [
-        "ask_user", "exit_plan_mode", "todo", "remember", "explore", "task", "show_file",
+        "exit_plan_mode", "todo", "remember", "explore", "task", "show_file",
     ]
 
     private var hasRunningChildren: Bool { children.values.contains { $0.isRunning } }
 
-    /// What a child of `agent` may use: this session's tools without the ones a child never gets and
-    /// without commands (a child cannot ask for approval, so a command could never run), read-only
-    /// ones unless the agent changes files, narrowed by the agent's own list.
+    /// What a child of `agent` may use: this session's tools without the ones a child never gets,
+    /// read-only ones unless the agent changes files (an editing child also keeps commands: they
+    /// ask for approval through the parent's UI), narrowed by the agent's own list.
     private func childTools(for agent: AgentDefinition) -> [any AgentTool] {
-        var list = tools.filter { !Self.withheldFromChildren.contains($0.name) && $0.risk != .command }
+        var list = tools.filter { !Self.withheldFromChildren.contains($0.name) }
         if !agent.editsFiles { list = list.filter { $0.risk == .read } }
         if !agent.tools.isEmpty {
             let allowed = Set(agent.tools)
@@ -1034,9 +1084,6 @@ public actor AgentSession {
         let agent = request.agent
         let tools = childTools(for: agent)
         let canEdit = tools.contains { $0.risk == .edit }
-        if canEdit, mode != .acceptEdits, mode != .auto {
-            return .refused("\(agent.name) changes files, and in this mode the user approves each edit and a subagent cannot ask them. Make the change yourself, or use a read-only agent.")
-        }
         if canEdit, writerChildID != nil {
             return .refused("Another subagent that changes files is still running. Wait for its report, or give this one read-only work.")
         }
@@ -1094,6 +1141,8 @@ public actor AgentSession {
         let message = request.continuing == nil
             ? request.prompt + "\n\nEnd with a self-contained report: what you found or changed (with file paths), and anything left undone."
             : request.prompt
+        children[id]?.isRunning = true
+        children[id]?.parentCallID = request.callID
         if request.background {
             children[id]?.description = request.description
             children[id]?.work = Task { [weak self] in
@@ -1114,9 +1163,11 @@ public actor AgentSession {
         var editedPaths: [String] = []
     }
 
-    /// Runs the child to the end and collects its report. A child cannot ask the user anything, so an
-    /// approval it raises (an ask rule, a file claimed by another chat) is answered with a refusal
-    /// instead of leaving it waiting for a card nobody shows.
+    /// Runs the child to the end and collects its report. The child's `.approvalRequested`,
+    /// `.questionAsked` and `.planProposed` events arrive wrapped as `.subagent(id:event:)` for the
+    /// host's UI; the host answers them through this session's `resolveApproval`/`answerQuestion`/
+    /// `resolvePlan`, which route to the waiting child. A run that ends while a child waits on the
+    /// user cancels that child through `endChildren()`.
     private func runChild(
         _ child: AgentSession, message: String, callID: String, _ out: AsyncStream<AgentEvent>.Continuation
     ) async -> ChildOutcome {
@@ -1127,10 +1178,6 @@ public actor AgentSession {
                 switch event {
                 case .assistantMessage(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
                     outcome.summary = text
-                case .approvalRequested(let request):
-                    await child.resolveApproval(
-                        callID: request.callID,
-                        decision: .deny(note: "A subagent cannot ask the user for approval, so this was not done. Leave it for the main conversation."))
                 case .runEnded(let ending):
                     outcome.ending = ending
                 default:
@@ -1154,6 +1201,7 @@ public actor AgentSession {
         let delta = total.minus(child.accountedUsage)
         child.accountedUsage = total
         child.work = nil
+        child.isRunning = false
         children[id] = child
         if writerChildID == id { writerChildID = nil }
         // A run that already ended (or a new one) must not receive late usage or edits.
@@ -1241,6 +1289,7 @@ public actor AgentSession {
         for (id, child) in children where child.isRunning {
             await child.work?.value
             children[id]?.work = nil
+            children[id]?.isRunning = false
         }
         writerChildID = nil
         finishedDelegations = []
@@ -1256,9 +1305,67 @@ public actor AgentSession {
         }
     }
 
+    /// Snapshots idle children for `SessionSnapshot.children`, so `session:` continuation works
+    /// after a relaunch. Running children are skipped: their live turn cannot be saved.
+    public func childSnapshots() async -> [ChildSnapshot] {
+        var snapshots: [ChildSnapshot] = []
+        for id in childOrder {
+            guard let child = children[id], !child.isRunning else { continue }
+            snapshots.append(ChildSnapshot(
+                id: id, agent: child.agent.name, description: child.description, canEdit: child.canEdit,
+                items: await child.session.items, totalUsage: await child.session.totalUsage))
+        }
+        return snapshots
+    }
+
+    /// Restores children saved by `childSnapshots()`. Agents missing from `catalog` are dropped;
+    /// a restored child keeps its conversation and budget accounting, resolves its model again, and
+    /// files its next edits under its own run (the parent run it shared is over by now).
+    public func restoreChildren(_ snapshots: [ChildSnapshot], catalog: AgentCatalog) async {
+        for snapshot in snapshots {
+            guard children[snapshot.id] == nil, !snapshot.id.isEmpty else { continue }
+            guard let agent = catalog.agent(named: snapshot.agent) else { continue }
+            let tools = childTools(for: agent)
+            let resolved = resolveChildClient(for: agent.model)
+            let session = AgentSession(
+                client: resolved.client,
+                tools: tools,
+                workspace: workspace,
+                configuration: AgentConfiguration(
+                    model: resolved.model,
+                    systemPrompt: Self.childPrompt(
+                        root: workspace.rootPath, agent: agent, canEdit: snapshot.canEdit),
+                    reasoningEffort: configuration.reasoningEffort,
+                    maxOutputTokens: configuration.maxOutputTokens,
+                    maxIterations: agent.maxIterations,
+                    toolTimeout: configuration.toolTimeout,
+                    cacheKey: configuration.cacheKey,
+                    approval: configuration.approval,
+                    contextWindow: resolved.contextWindow,
+                    compactionThreshold: configuration.compactionThreshold,
+                    mode: snapshot.canEdit ? .acceptEdits : .plan,
+                    permissions: rules,
+                    gate: configuration.gate,
+                    secretPatterns: configuration.secretPatterns,
+                    editTolerance: configuration.editTolerance,
+                    shapeToolOutput: configuration.shapeToolOutput,
+                    toolOutputStore: configuration.toolOutputStore,
+                    snapshotter: configuration.snapshotter,
+                    afterEdit: configuration.afterEdit),
+                history: snapshot.items,
+                totalUsage: snapshot.totalUsage,
+                checkpoints: checkpoints,
+                ledger: ReadLedger(snapshot: await ledger.snapshot()))
+            var child = Child(
+                session: session, agent: agent, description: snapshot.description, canEdit: snapshot.canEdit)
+            child.accountedUsage = snapshot.totalUsage
+            remember(child, as: snapshot.id)
+        }
+    }
+
     private static func childPrompt(root: String, agent: AgentDefinition, canEdit: Bool) -> String {
         var prompt = SystemPrompt.make(projectRoot: root, mode: canEdit ? .acceptEdits : .plan)
-        prompt += "\n\nYou are a subagent started by another session to do one task. You cannot ask the user questions or run commands; finish what you can with the tools you have, and say what you could not do. Your last message is your report to the session that started you: make it self-contained, name files as path:line, and say what you changed."
+        prompt += "\n\nYou are a subagent started by another session to do one task. A command you run, or an edit another chat is already changing, asks the user through the session that started you; while it waits, do other work when you can. A question you ask with ask_user reaches the user the same way. Your last message is your report to the session that started you: make it self-contained, name files as path:line, and say what you changed."
         if !agent.instructions.isEmpty { prompt += "\n\n" + agent.instructions }
         return prompt
     }

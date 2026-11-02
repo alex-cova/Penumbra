@@ -39,10 +39,11 @@ public enum DelegationResult: Sendable {
 }
 
 /// Hands a self-contained piece of work to a child session with its own context window
-/// (`task`). The child can be read-only or change files, depending on the agent; it never asks the
-/// user anything and never runs commands. Edits are filed under the parent's run, so Revert Run
-/// covers them. A `.edit` tool: plan mode does not offer it, and it runs alone, so at most one
-/// foreground child exists at a time.
+/// (`task`). The child can be read-only or change files, depending on the agent; an editing child
+/// also runs commands, asking for approval through the parent, and its questions reach the user
+/// the same way. Edits are filed under the parent's run, so Revert Run covers them. A `.edit`
+/// tool: plan mode does not offer it, and it runs alone, so at most one editing child runs at a
+/// time.
 public struct TaskTool: AgentTool {
     public var catalog: AgentCatalog
     /// When set, the child asks this client instead of sharing the parent's (tests).
@@ -64,7 +65,7 @@ public struct TaskTool: AgentTool {
         return ToolDefinition(
             name: "task",
             description: ([
-                "Hand a self-contained task to a subagent with its own context. It knows nothing of this conversation: put everything it needs in the prompt and say what to report. It cannot ask the user or run commands.",
+                "Hand a self-contained task to a subagent with its own context. It knows nothing of this conversation: put everything it needs in the prompt and say what to report. A subagent that changes files also runs commands; its approvals and questions come to the user through this conversation.",
                 "Its report is the output, with a session id to pass as `session` to continue it. background=true returns at once and you are told when it finishes: do not poll, sleep or repeat its work, and avoid its files.",
                 "Use `explore` for quick read-only research.",
                 "",

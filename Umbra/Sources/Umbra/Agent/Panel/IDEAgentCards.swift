@@ -224,6 +224,13 @@ struct IDEAgentToolCard: View {
                             .foregroundStyle(outcome == "Denied" || outcome == "Declined" ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
                     }
                     statusIcon
+                    if (name == "task" || name == "explore"), entry.output == nil, workspace.agent.isRunning,
+                       let callID = entry.callID {
+                        Button("Stop") { workspace.agent.stopSubagentCall(callID: callID) }
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .help("Stop this subagent and leave the rest of the run going")
+                    }
                 }
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .padding(.horizontal, IDEAppearance.Spacing.sm)

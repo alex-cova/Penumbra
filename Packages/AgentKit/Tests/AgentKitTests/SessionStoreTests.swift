@@ -143,7 +143,7 @@ private func snapshot(_ root: String = "/proj/a", title: String = "Fix the build
         #expect((try FileManager.default.attributesOfItem(atPath: file.deletingLastPathComponent().path)[.posixPermissions] as? Int) == 0o700)
         // The shape is the history and the host blob; there is nowhere to put a key.
         let keys = Set(((try JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any] ?? [:]).keys)
-        #expect(keys == ["version", "id", "projectRoot", "title", "createdAt", "updatedAt", "items", "totalUsage", "host"])
+        #expect(keys == ["version", "id", "projectRoot", "title", "createdAt", "updatedAt", "items", "totalUsage", "host", "children"])
     }
 
     @Test func deletingOneOrAllWorks() throws {
@@ -178,6 +178,34 @@ private func snapshot(_ root: String = "/proj/a", title: String = "Fix the build
         #expect(SessionStore.title(from: [.user("[Editor state, for orientation only]\nActive file: A.java\n[End editor state]\n\nrename foo to bar")]) == "rename foo to bar")
         #expect(SessionStore.title(from: [.user(String(repeating: "x", count: 200))]).count == 61)
         #expect(SessionStore.title(from: []) == "New conversation")
+    }
+
+    @Test func childrenRoundTripWithTheSession() throws {
+        let (store, directory) = makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var item = snapshot(at: Date(timeIntervalSince1970: 1_800_000_000))
+        item.children = [ChildSnapshot(
+            id: "sub-abc123", agent: "scout", description: "a look", canEdit: false,
+            items: [.user("look"), .assistant("saw it")],
+            totalUsage: TokenUsage(inputTokens: 5, outputTokens: 2))]
+        try store.save(item)
+        let loaded = try #require(store.load(item.id, projectRoot: item.projectRoot))
+        #expect(loaded == item)
+        #expect(loaded.children.count == 1 && loaded.children[0].agent == "scout")
+    }
+
+    @Test func aFileFromBeforeChildrenStillLoads() throws {
+        let (store, directory) = makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let item = snapshot()
+        try store.save(item)
+        let url = store.projectDirectory(for: item.projectRoot).appendingPathComponent("\(item.id.uuidString).json")
+        var object = try #require((try JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any])
+        object.removeValue(forKey: "children")
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+        let loaded = try #require(store.load(item.id, projectRoot: item.projectRoot))
+        #expect(loaded.children.isEmpty)
+        #expect(loaded.items == item.items)
     }
 
     @Test func aRestoredSessionKeepsItsIdentityHistoryAndUsage() async throws {
