@@ -76,6 +76,11 @@ final class IDEAgentConversation: Identifiable {
     /// panel's behavior). Saved with the chat. Changing it starts a new session on the next send,
     /// which keeps the conversation.
     var modelChoice: IDEAIModelChoice?
+    /// A worktree checkout this chat is bound to; `nil` means the window's project root. Saved in the
+    /// chat. `PathJail` keeps the agent inside it, so a worktree chat never touches the main tree.
+    var rootOverride: URL?
+    /// The folder this chat reads and writes: the override when set, else the window's project.
+    var effectiveRoot: URL? { rootOverride ?? host?.agentProjectRoot }
     /// Builds the client for a chat that has its own choice. The factory given at creation serves the
     /// chats that follow the settings, so existing callers and tests are unchanged.
     @ObservationIgnored var choiceClientFactory: @MainActor (IDEAgentSettings, IDEAIModelChoice) throws -> any LLMClient = {
@@ -275,7 +280,7 @@ final class IDEAgentConversation: Identifiable {
                 appendNotice("This model cannot see images, \(kept). Describe what they show in words, or switch to a vision model.")
             }
         }
-        guard let root = host?.agentProjectRoot else { return "" }
+        guard let root = effectiveRoot else { return "" }
         // Without a vision model the image files keep the `@` mention path too.
         let mentioned = modelSeesImages ? rest : urls
         return mentioned.map { IDEAgentMentionToken.format(path: IDEAgentMentionPath.relative($0, root: root)) }
@@ -287,7 +292,7 @@ final class IDEAgentConversation: Identifiable {
     /// permission rules for this run only. The draft is cleared once the message is on its way.
     func submit(text: String, modelText: String? = nil, allowedTools: [String] = []) {
         guard !isRunning, !isCompacting, hasConsent, (!text.isEmpty || !pendingImages.isEmpty), let host else { return }
-        guard let root = host.agentProjectRoot else {
+        guard let root = effectiveRoot else {
             append(.init(kind: .error, text: "Open a project folder first; the agent works inside one."))
             return
         }
@@ -351,7 +356,7 @@ final class IDEAgentConversation: Identifiable {
     /// Tries the send that failed because the provider could not be reached. The message is already in
     /// the transcript and in the history, so this does not add another copy of it.
     func retry() {
-        guard !isRunning, !isCompacting, hasConsent, let host, let root = host.agentProjectRoot else { return }
+        guard !isRunning, !isCompacting, hasConsent, let host, let root = effectiveRoot else { return }
         guard entries.contains(where: \.canRetry) else { return }
         willSend?()
         commandCatalog?.invalidate()
@@ -371,7 +376,7 @@ final class IDEAgentConversation: Identifiable {
     /// Carries on with a run the app was closed in the middle of. The saved history already holds its
     /// finished steps; the session tells the model what happened. Nothing is added to the transcript.
     func resume() {
-        guard !isRunning, !isCompacting, hasConsent, !isACPConversation, let host, let root = host.agentProjectRoot else { return }
+        guard !isRunning, !isCompacting, hasConsent, !isACPConversation, let host, let root = effectiveRoot else { return }
         guard entries.contains(where: \.canResume) else { return }
         willSend?()
         commandCatalog?.invalidate()
@@ -689,7 +694,7 @@ final class IDEAgentConversation: Identifiable {
     /// Not while a run is going.
     func runShell(_ command: String) {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isRunning, !isCompacting, !trimmed.isEmpty, let host, let root = host.agentProjectRoot else { return }
+        guard !isRunning, !isCompacting, !trimmed.isEmpty, let host, let root = effectiveRoot else { return }
         draft = ""
         promptRecall.reset()
         append(IDEAgentEntry(kind: .user, text: "!" + trimmed))
@@ -742,7 +747,7 @@ final class IDEAgentConversation: Identifiable {
     /// Called by the session at a turn boundary: moves the queue into the transcript, resolving each
     /// message's `@` mentions, and returns what the model is to be sent.
     private func deliverQueued(itemCount: Int) async -> [String] {
-        guard !queue.isEmpty, let root = host?.agentProjectRoot else { return [] }
+        guard !queue.isEmpty, let root = effectiveRoot else { return [] }
         let batch = queue
         queue = []
         flush()
@@ -818,7 +823,7 @@ final class IDEAgentConversation: Identifiable {
     }
 
     private func saveProjectRule(_ rule: PermissionRule) {
-        guard let root = host?.agentProjectRoot,
+        guard let root = effectiveRoot,
               let file = IDEAgentPermissionFiles.file(for: .project, projectRoot: root, appFile: appPermissionsFile)
         else { return appendError("Open a project folder first; rules are saved in the project.") }
         let existed = FileManager.default.fileExists(atPath: file.path)
@@ -841,7 +846,7 @@ final class IDEAgentConversation: Identifiable {
     }
 
     private func pushRules() {
-        guard let root = host?.agentProjectRoot else { return }
+        guard let root = effectiveRoot else { return }
         let rules = currentRules(root: root)
         if let session { Task { await session.setRules(rules) } }
         if let acpSession { Task { await acpSession.setRules(rules) } }
@@ -961,6 +966,7 @@ final class IDEAgentConversation: Identifiable {
         guard !isRunning else { return }
         endSession()
         let saved = IDEAgentSavedTranscript.decode(snapshot.host)
+        rootOverride = saved.chatRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
         let blobs = checkpointBlobs()
         entries = saved.entries.compactMap { $0.restoredEntry(blobs: blobs) }
         restoredRuns = saved.checkpoints
@@ -1004,7 +1010,7 @@ final class IDEAgentConversation: Identifiable {
 
     /// The originals of the files agents changed, on disk beside this project's conversations.
     private func checkpointBlobs() -> IDEAgentCheckpointBlobs? {
-        guard let store, let root = host?.agentProjectRoot else { return nil }
+        guard let store, let root = effectiveRoot else { return nil }
         return IDEAgentCheckpointBlobs(store: store, projectRoot: root.path)
     }
 
@@ -1029,7 +1035,8 @@ final class IDEAgentConversation: Identifiable {
             host: IDEAgentSavedTranscript.encode(
                 entries: savedEntries.map(Array.init) ?? entries, cost: cost, todos: todos, customTitle: customTitle,
                 checkpoints: checkpoints, modelChoice: modelChoice,
-                runInProgress: interrupted, queued: queue.map(\.text)),
+                runInProgress: interrupted, queued: queue.map(\.text),
+                chatRoot: rootOverride?.path),
             children: children ?? restoredChildren)
         // A write failure only costs the history; it is not worth interrupting the user for.
         try? store.save(snapshot)
@@ -1194,9 +1201,13 @@ final class IDEAgentConversation: Identifiable {
             projectRoot: root, secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns),
             unsavedBuffers: { await box.read(default: [:]) { $0.agentUnsavedBuffers() } })
         if await GitRepository.discover(from: root, runner: git.runner) != nil {
-            tools += [IDEGitStatusTool(source: git), IDEGitDiffTool(source: git)]
+            tools += [
+                IDEGitStatusTool(source: git), IDEGitDiffTool(source: git),
+                IDEGitLogTool(source: git), IDEGitCommitTool(source: git), IDEGitBranchTool(source: git),
+            ]
         }
-        if let navigator = host.agentJavaNavigator() {
+        // A worktree chat has no index of its own; the window's would name files outside it.
+        if rootOverride == nil, let navigator = host.agentJavaNavigator() {
             let lineText: @Sendable (URL, Int) async -> String? = { url, line in await box.lineText(url: url, line: line) }
             // Name search leads: it needs no file, so it is where a question about code starts.
             if let search = host.agentSymbolSearch() {
@@ -1604,7 +1615,7 @@ final class IDEAgentConversation: Identifiable {
     /// Puts a finished run's files back. A file the user changed after the agent wrote it is left
     /// alone and listed on the card, where Show Diff compares it with the original.
     func revert(entryID: UUID) {
-        guard !isRunning, let host, let root = host.agentProjectRoot,
+        guard !isRunning, let host, let root = effectiveRoot,
               let entry = entries.first(where: { $0.id == entryID }), let run = entry.run, !entry.isReverted
         else { return }
         Task { [weak self] in
@@ -1633,7 +1644,7 @@ final class IDEAgentConversation: Identifiable {
     /// first so a file several runs changed ends as it was before the oldest. Cards already reverted are
     /// skipped; files edited afterwards are left alone and named, as with a single card.
     func revertRuns(entryIDs: [UUID]) {
-        guard !isRunning, let host, let root = host.agentProjectRoot else { return }
+        guard !isRunning, let host, let root = effectiveRoot else { return }
         let wanted = Set(entryIDs)
         let cards = entries.filter { wanted.contains($0.id) && $0.kind == .changes && !$0.isReverted && $0.run != nil }
         let runs = cards.compactMap(\.run)
@@ -1693,7 +1704,7 @@ final class IDEAgentConversation: Identifiable {
             appendNotice("Shortening is not available for an external ACP agent.")
             return
         }
-        guard !isRunning, !isCompacting, let host, let root = host.agentProjectRoot else { return }
+        guard !isRunning, !isCompacting, let host, let root = effectiveRoot else { return }
         guard session != nil || !(restoredItems ?? []).isEmpty else {
             appendNotice("There is nothing to shorten yet.")
             return
@@ -1735,7 +1746,7 @@ final class IDEAgentConversation: Identifiable {
     /// or both. The message goes back into the field to be sent again, or changed. Not while a run is going.
     @discardableResult
     func rewind(to entryID: UUID, scope: IDEAgentRewind.Scope) async -> Bool {
-        guard !isRunning, let host, let root = host.agentProjectRoot,
+        guard !isRunning, let host, let root = effectiveRoot,
               let position = entries.firstIndex(where: { $0.id == entryID }), entries[position].kind == .user,
               let target = rewindTargets.first(where: { $0.id == entryID })
         else { return false }

@@ -75,6 +75,8 @@ final class IDEAgentController {
     /// behavior; AI mode sets it to what the user last picked.
     @ObservationIgnored var newChatChoice: IDEAIModelChoice?
     @ObservationIgnored private var didRestore = false
+    /// The worktrees Umbra created for agent chats; tests point it at a temporary folder.
+    var worktreeStore = IDEAgentWorktreeStore.default()
     /// True while a Gradle run the agent started is going, so Stop ends that run and no other.
     @ObservationIgnored var isGradleRunActive = false
     @ObservationIgnored var isMavenRunActive = false
@@ -101,6 +103,7 @@ final class IDEAgentController {
             settings: settings, store: store, appPermissionsFile: appPermissionsFile, clientFactory: clientFactory)
         conversations = [first]
         selectedID = first.id
+        IDEAgentBundledSkills.seed(appSupport: commandsAppSupport)
         commandCatalog = IDEAgentCommandCatalog(
             root: { [weak self] in self?.host?.agentProjectRoot }, loadsUserFolders: { settings.loadsUserSkills },
             home: commandsHome, appSupport: commandsAppSupport)

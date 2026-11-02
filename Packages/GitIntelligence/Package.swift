@@ -18,6 +18,11 @@ let package = Package(
             name: "GitIntelligence",
             dependencies: [.product(name: "SubprocessKit", package: "SubprocessKit")],
             swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "GitIntelligenceTests",
+            dependencies: ["GitIntelligence"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]
 )

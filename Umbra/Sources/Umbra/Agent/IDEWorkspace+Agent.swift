@@ -385,6 +385,21 @@ extension IDEWorkspace: IDEAgentHost {
         return allowed ? Set(servers.map(IDEMCPStore.fingerprint(of:))) : []
     }
 
+    /// One question for all the hooks a project's settings files list, showing each command,
+    /// because what runs is a shell command with this user's permissions.
+    func agentConfirmToolHooks(_ hooks: [IDEAgentHookEntry]) async -> Bool {
+        guard !hooks.isEmpty else { return false }
+        let listing = hooks.prefix(8).map { hook in
+            "• \(hook.event.rawValue) \(hook.matcher.isEmpty ? "*" : hook.matcher): \(hook.command)"
+        }.joined(separator: "\n") + (hooks.count > 8 ? "\n… and \(hooks.count - 8) more" : "")
+        let names = hooks.count == 1 ? "a hook" : "\(hooks.count) hooks"
+        var alert = IDEAlert.confirm(
+            "This project wants to run \(names) for the agent.",
+            detail: "\(listing)\n\nThese are shell commands from the project's own settings files. They run on this Mac with your permissions whenever the agent calls a matching tool. Allow them only if you trust this project.",
+            confirm: "Allow", cancel: "Not Now")
+        return await alert.confirms(in: window)
+    }
+
     func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? {
         // Only an open file the editor already analyses has anything to report: a file written to disk,
         // or a language with no analysis, would only make this wait out its timeout.

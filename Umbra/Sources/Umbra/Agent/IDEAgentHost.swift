@@ -60,6 +60,10 @@ protocol IDEAgentHost: AnyObject {
     /// Asks the user whether these MCP servers, which the project's own files list, may run on this Mac.
     /// Returns the fingerprints they allowed.
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String>
+    /// Asks the user whether these hooks, which the project's own settings files list, may run
+    /// their shell commands on this Mac. `true` approves exactly this block; a changed block asks
+    /// again. Hooks from an unapproved block never run.
+    func agentConfirmToolHooks(_ hooks: [IDEAgentHookEntry]) async -> Bool
 
     // Navigation. Both are optional (see the extension below).
     /// Java symbol navigation, or `nil` when the project has no Java to resolve.
@@ -118,6 +122,7 @@ extension IDEAgentHost {
     // Optional capabilities: a host without them simply doesn't get the tools that need them.
     func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? { nil }
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> { [] }
+    func agentConfirmToolHooks(_ hooks: [IDEAgentHookEntry]) async -> Bool { false }
     func agentJavaNavigator() -> (any IDEAgentNavigating)? { nil }
     func agentSymbolSearch() -> (any IDEAgentSymbolSearching)? { nil }
     func agentProjectTaskNames() -> [String] { [] }

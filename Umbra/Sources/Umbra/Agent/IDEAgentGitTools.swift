@@ -126,6 +126,185 @@ struct IDEGitStatusTool: AgentTool {
     }
 }
 
+struct IDEGitLogTool: AgentTool {
+    static let defaultLimit = 20
+    static let maxLimit = 50
+    let source: IDEAgentGitSource
+
+    var risk: ToolRisk { .read }
+    var definition: ToolDefinition {
+        ToolDefinition(
+            name: "git_log",
+            description: """
+            Recent commits on the current branch: short hash, author, date and subject. Use it to \
+            match the repository's message style before committing. Capped at 50 commits.
+            """,
+            parameters: [
+                ToolParameter("path", .string, "Only commits touching this project-relative file.", optional: true),
+                ToolParameter("limit", .integer, "How many commits. Default 20, at most 50.", optional: true),
+            ])
+    }
+
+    func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
+        let limit = min(max((try arguments.optionalInt("limit")) ?? Self.defaultLimit, 1), Self.maxLimit)
+        let path = try arguments.optionalString("path")
+        let snapshot: IDEAgentGitSource.Snapshot
+        do { snapshot = try await source.snapshot() } catch { throw ToolError(error.localizedDescription) }
+        let prefix = source.projectPrefix(in: snapshot.repository)
+        let commits: [GitCommit]
+        do {
+            commits = try await snapshot.repository.log(
+                scope: .head, path: path.map { prefix + $0 }, limit: limit)
+        } catch {
+            throw ToolError(error.localizedDescription)
+        }
+        var lines = ["Branch: \(snapshot.branch ?? "(detached or unknown)")"]
+        if commits.isEmpty {
+            lines.append(path == nil ? "No commits." : "No commits touch \(path!).")
+        } else {
+            for commit in commits {
+                lines.append("\(commit.shortHash) \(commit.author) \(Self.day(commit.date)) \(commit.subject)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func day(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+}
+
+struct IDEGitCommitTool: AgentTool {
+    let source: IDEAgentGitSource
+
+    var risk: ToolRisk { .command }
+    var definition: ToolDefinition {
+        ToolDefinition(
+            name: "git_commit",
+            description: """
+            Commit project-relative files with a message: stages `paths` and commits them, in-process \
+            so the command sandbox does not matter. Every file is named explicitly; there is no \
+            commit-everything. Hooks run and the commit is never amended. Credential files are refused.
+            """,
+            parameters: [
+                ToolParameter("message", .string, "The commit message."),
+                ToolParameter("paths", .array(of: .string), "Project-relative files to commit. At least one."),
+                ToolParameter("signoff", .boolean, "Add a Signed-off-by trailer. Default follows the repo's config.", optional: true),
+            ])
+    }
+
+    func permissionSubject(for arguments: ToolArguments) -> PermissionSubject {
+        guard let paths = try? arguments.optionalStringArray("paths") else { return .none }
+        return .paths(paths)
+    }
+
+    func approvalRequest(for arguments: ToolArguments, context: ToolContext) async -> ApprovalRequest? {
+        guard let message = (try? arguments.optionalString("message")) ?? nil, !message.isEmpty,
+              let paths = (try? arguments.optionalStringArray("paths")) ?? nil, !paths.isEmpty
+        else { return nil }
+        var notes = ["Message: \(message)"]
+        let dirty = await source.dirtyPaths()
+        let unsaved = paths.filter { dirty.contains($0) }
+        if !unsaved.isEmpty {
+            notes.append("Unsaved in the editor, so the commit sees the version on disk: " + unsaved.sorted().joined(separator: ", "))
+        }
+        return ApprovalRequest(
+            title: "Commit \(paths.count == 1 ? "1 file" : "\(paths.count) files")",
+            command: "git commit -m \"\(message.split(separator: "\n").first ?? "")\" -- \(paths.joined(separator: " "))",
+            workingDirectory: source.projectRoot.path,
+            reason: try? arguments.optionalString("reason"),
+            notes: notes,
+            suggestedRule: "git_commit")
+    }
+
+    func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
+        let message = (try arguments.optionalString("message"))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !message.isEmpty else { throw ToolError("The commit message is empty.") }
+        let paths = (try arguments.optionalStringArray("paths")) ?? []
+        guard !paths.isEmpty else { throw ToolError("No files were named: `paths` must list every file to commit.") }
+        let blocked = paths.filter { source.isProtected($0) }
+        guard blocked.isEmpty else {
+            throw ToolError("Not committed: \(blocked.sorted().joined(separator: ", ")) looks like it holds credentials.")
+        }
+        let snapshot: IDEAgentGitSource.Snapshot
+        do { snapshot = try await source.snapshot() } catch { throw ToolError(error.localizedDescription) }
+        let prefix = source.projectPrefix(in: snapshot.repository)
+        let repoPaths = paths.map { prefix + $0 }
+        let tracked = await snapshot.repository.pathsInHead(repoPaths)
+        let untracked = repoPaths.filter { !tracked.contains($0) }
+        let signoff: Bool
+        if let asked = try arguments.optionalBool("signoff") {
+            signoff = asked
+        } else {
+            let primary = await snapshot.repository.config("commit.signoff")
+            let fallback = await snapshot.repository.config("format.signOff")
+            signoff = (primary ?? fallback)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "true"
+        }
+        do {
+            let output = try await snapshot.repository.commit(
+                message: message, paths: repoPaths, untrackedPaths: untracked,
+                amend: false, signoff: signoff, skipHooks: false)
+            return output.isEmpty ? "Committed \(paths.count == 1 ? "1 file" : "\(paths.count) files")." : output
+        } catch {
+            throw ToolError(error.localizedDescription)
+        }
+    }
+}
+
+struct IDEGitBranchTool: AgentTool {
+    static let actions = ["create", "switch"]
+    let source: IDEAgentGitSource
+
+    var risk: ToolRisk { .command }
+    var definition: ToolDefinition {
+        ToolDefinition(
+            name: "git_branch",
+            description: """
+            Create a branch and switch to it (`create`), or switch to an existing branch (`switch`). \
+            Only those two: no deleting, no renaming, no force switching.
+            """,
+            parameters: [
+                ToolParameter("action", .enumeration(Self.actions), "What to do."),
+                ToolParameter("name", .string, "The branch name."),
+            ])
+    }
+
+    func approvalRequest(for arguments: ToolArguments, context: ToolContext) async -> ApprovalRequest? {
+        guard let action = (try? arguments.optionalString("action")) ?? nil,
+              Self.actions.contains(action),
+              let name = (try? arguments.optionalString("name")) ?? nil, !name.isEmpty
+        else { return nil }
+        let command = action == "create" ? "git switch -c \(name)" : "git switch \(name)"
+        return ApprovalRequest(
+            title: action == "create" ? "Create branch \(name)" : "Switch to \(name)",
+            command: command, workingDirectory: source.projectRoot.path,
+            reason: try? arguments.optionalString("reason"),
+            suggestedRule: "git_branch")
+    }
+
+    func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
+        let action = try arguments.optionalString("action") ?? ""
+        guard Self.actions.contains(action) else {
+            throw ToolError("Unknown action \"\(action)\": use create or switch.")
+        }
+        let name = (try arguments.optionalString("name"))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !name.isEmpty else { throw ToolError("The branch name is empty.") }
+        let snapshot: IDEAgentGitSource.Snapshot
+        do { snapshot = try await source.snapshot() } catch { throw ToolError(error.localizedDescription) }
+        do {
+            let output = action == "create"
+                ? try await snapshot.repository.createBranch(name)
+                : try await snapshot.repository.switchBranch(name)
+            return output.isEmpty ? (action == "create" ? "Created and switched to \(name)." : "Switched to \(name).") : output
+        } catch {
+            throw ToolError(error.localizedDescription)
+        }
+    }
+}
+
 struct IDEGitDiffTool: AgentTool {
     static let maxFileCharacters = 12_000
     static let maxTotalCharacters = 60_000

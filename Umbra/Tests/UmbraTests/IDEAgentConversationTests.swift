@@ -34,6 +34,19 @@ final class IDEAgentConversationTests: XCTestCase {
         XCTAssertNotEqual(controller.selected.conversationID, saved, "a new conversation is saved under a new id")
     }
 
+    func testARootOverrideReplacesTheWindowRootAndSurvivesASave() {
+        let controller = IDEAgentController(settings: makeSettings(), clientFactory: { _ in MockLLMClient(turns: []) })
+        let chat = controller.selected
+        XCTAssertNil(chat.effectiveRoot, "no host in tests, so no root at all")
+        let worktree = URL(fileURLWithPath: "/tmp/worktree-checkout", isDirectory: true)
+        chat.rootOverride = worktree
+        XCTAssertEqual(chat.effectiveRoot, worktree)
+
+        let encoded = IDEAgentSavedTranscript.encode(entries: [], cost: nil, chatRoot: worktree.path)
+        XCTAssertEqual(IDEAgentSavedTranscript.decode(encoded).chatRoot, worktree.path)
+        XCTAssertNil(IDEAgentSavedTranscript.decode(IDEAgentSavedTranscript.encode(entries: [], cost: nil)).chatRoot)
+    }
+
     func testTheControllerStartsWithOneSelectedConversation() {
         let controller = IDEAgentController(settings: makeSettings(), clientFactory: { _ in MockLLMClient(turns: []) })
         XCTAssertEqual(controller.conversations.count, 1)

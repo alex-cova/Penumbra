@@ -383,6 +383,126 @@ public final class StopGatePolicy: TurnPolicy, @unchecked Sendable {
     }
 }
 
+/// What drains a policy's pending `.stopGateChecked` events for the session to yield.
+protocol StopGateEventSource {
+    func takePendingEvents() -> [AgentEvent]
+}
+
+extension StopGatePolicy: StopGateEventSource {}
+
+/// A user-configured Stop hook, as a turn policy. Modelled on `StopGatePolicy`: the host's
+/// check runs from `beforeEnding`, and a `.block` continues the run with the reason as an
+/// editor note. Unlike the gate it always runs when there are Stop hooks to consult — in plan
+/// mode too, and when nothing was edited — since a hook may check anything, not just files.
+/// After `maxContinuations` blocks the run ends anyway; a check that throws, is cancelled or
+/// times out fails open. The host builds `check` from its Stop hooks.
+public final class HookStopPolicy: TurnPolicy, @unchecked Sendable {
+    public var maxContinuations: Int
+    public var timeout: TimeInterval
+    public var check: @Sendable (StopGateInput) async throws -> StopGateVerdict
+
+    private let lock = NSLock()
+    private var continuations = 0
+    private var lastReason = ""
+    private var pending: [AgentEvent] = []
+
+    public init(
+        maxContinuations: Int = StopGatePolicy.defaultMaxContinuations,
+        timeout: TimeInterval = StopGatePolicy.defaultTimeout,
+        check: @escaping @Sendable (StopGateInput) async throws -> StopGateVerdict
+    ) {
+        self.maxContinuations = maxContinuations
+        self.timeout = timeout
+        self.check = check
+    }
+
+    /// A new run blocks again from zero.
+    public func reset() {
+        lock.withLock {
+            continuations = 0
+            lastReason = ""
+            pending = []
+        }
+    }
+
+    /// Events since the last drain, for the session to yield after asking.
+    func takePendingEvents() -> [AgentEvent] {
+        lock.withLock {
+            defer { pending = [] }
+            return pending
+        }
+    }
+
+    public func beforeTurn(_ state: TurnState) async -> TurnDecision { .proceed }
+
+    public func beforeEnding(_ state: TurnState) async -> TurnDecision {
+        let (count, reason): (Int, String) = lock.withLock { (continuations, lastReason) }
+        if count >= maxContinuations {
+            emit(passed: false, summary: "The check still fails after \(count) continuations; ending anyway.")
+            return .finalTurn(
+                note: "The check still fails\(reason.isEmpty ? "" : ": \(reason)") Say so plainly.",
+                ending: .completed)
+        }
+        let input = StopGateInput(
+            filesEdited: state.filesEdited, verifiedSinceEdit: state.verifiedSinceEdit,
+            continuations: count, lastAssistantText: state.lastAssistantText)
+        let (verdict, failOpen): (StopGateVerdict, String?) = await runCheck(input)
+        switch verdict {
+        case .pass:
+            emit(passed: true, summary: failOpen ?? "The check passed.")
+            return .proceed
+        case .skip:
+            emit(passed: true, summary: "The check skipped this run.")
+            return .proceed
+        case .block(let raw):
+            let capped = OutputTruncation.headAndTail(raw, maxCharacters: StopGatePolicy.maxReasonCharacters)
+            lock.withLock {
+                continuations += 1
+                lastReason = capped
+            }
+            emit(passed: false, summary: capped)
+            return .note(capped)
+        }
+    }
+
+    private func emit(passed: Bool, summary: String) {
+        lock.withLock { pending.append(.stopGateChecked(passed: passed, summary: summary)) }
+    }
+
+    /// Runs the host check bounded by `timeout`. Anything but a verdict — a throw, Stop, or the
+    /// timeout — fails open with the reason, so a broken check never wedges the run.
+    private func runCheck(_ input: StopGateInput) async -> (StopGateVerdict, String?) {
+        if Task.isCancelled { return (.pass, "The check was cancelled (Stop); failing open.") }
+        let check = self.check
+        let timeout = self.timeout
+        do {
+            let verdict = try await withThrowingTaskGroup(of: StopGateVerdict.self) { group in
+                group.addTask { try await check(input) }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(timeout))
+                    throw StopGateCheckError.timedOut(timeout)
+                }
+                guard let first = try await group.next() else { throw StopGateCheckError.noResult }
+                group.cancelAll()
+                return first
+            }
+            if Task.isCancelled, case .block = verdict {
+                // Stop landed as the check blocked: the run is ending anyway, so don't continue it.
+                return (.pass, "The check was cancelled (Stop); failing open.")
+            }
+            return (verdict, nil)
+        } catch is CancellationError {
+            return (.pass, "The check was cancelled (Stop); failing open.")
+        } catch let error as StopGateCheckError {
+            return (.pass, "\(error.localizedDescription); failing open.")
+        } catch {
+            return (.pass, "The check threw (\(error.localizedDescription)); failing open.")
+        }
+    }
+}
+
+extension HookStopPolicy: StopGateEventSource {}
+
 enum StopGateCheckError: Error, LocalizedError {
     case timedOut(TimeInterval)
     case noResult

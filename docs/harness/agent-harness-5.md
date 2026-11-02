@@ -2,7 +2,7 @@
 
 Part of the series `agent-harness-1.md` to `agent-harness-7.md` (index: `README.md`). Checked against the code on 2026-10-26.
 
-**Status:** open. Phase 1 is small and fixes a real problem (commits fail under the command sandbox).
+**Status:** mostly done (2026-11-02). Phases 1–4 landed fully: `git_log`/`git_commit`/`git_branch` tools (in-process, so the sandbox no longer breaks commits), the bundled `/pr` skill, a per-chat root override saved in the chat, and worktree operations in GitIntelligence. Phase 5 landed as: worktrees under Application Support on title-named branches with a manifest, the chat's root becoming the worktree (`PathJail` keeps the agent out of the main tree), navigation tools off in worktree chats, and manifest-guarded Discard from the panel. Still open from phase 5: the editor does not switch to the worktree folder, the Changes tab has no "vs base branch" view (and so no Merge action there; Open PR is the `/pr` skill instead), and a worktree does not inherit the main checkout's Gradle/Maven/language-server trust.
 
 ## What exists today
 

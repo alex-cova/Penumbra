@@ -125,27 +125,27 @@ struct IDEAgentPersistedEntry: Codable, Equatable {
 extension IDEAgentSavedTranscript {
     static func encode(
         entries: [IDEAgentEntry], cost: Double?, todos: [TodoItem] = [], customTitle: String? = nil, checkpoints: [RunSnapshot] = [],
-        modelChoice: IDEAIModelChoice? = nil, runInProgress: Bool = false, queued: [String] = []
+        modelChoice: IDEAIModelChoice? = nil, runInProgress: Bool = false, queued: [String] = [], chatRoot: String? = nil
     ) -> Data? {
         try? JSONEncoder().encode(IDEAgentSavedTranscript(
             entries: entries.compactMap(IDEAgentPersistedEntry.init), cost: cost, todos: todos.isEmpty ? nil : todos,
             customTitle: customTitle?.isEmpty == false ? customTitle : nil, modelChoice: modelChoice,
-            checkpoints: checkpoints.isEmpty ? nil : checkpoints,
+            checkpoints: checkpoints.isEmpty ? nil : checkpoints, chatRoot: chatRoot,
             runInProgress: runInProgress ? true : nil, queued: runInProgress && !queued.isEmpty ? queued : nil))
     }
 
     /// A blob from before cost was saved is a bare array of rows; it reads as having no known cost.
     static func decode(_ data: Data?) -> (
         entries: [IDEAgentPersistedEntry], cost: Double?, todos: [TodoItem], customTitle: String?, checkpoints: [RunSnapshot],
-        modelChoice: IDEAIModelChoice?, runInProgress: Bool, queued: [String]
+        modelChoice: IDEAIModelChoice?, runInProgress: Bool, queued: [String], chatRoot: String?
     ) {
-        guard let data else { return ([], 0, [], nil, [], nil, false, []) }
+        guard let data else { return ([], 0, [], nil, [], nil, false, [], nil) }
         if let saved = try? JSONDecoder().decode(IDEAgentSavedTranscript.self, from: data) {
             return (
                 saved.entries, saved.cost, saved.todos ?? [], saved.customTitle, saved.checkpoints ?? [], saved.modelChoice,
-                saved.runInProgress ?? false, saved.queued ?? [])
+                saved.runInProgress ?? false, saved.queued ?? [], saved.chatRoot)
         }
-        if let rows = try? JSONDecoder().decode([IDEAgentPersistedEntry].self, from: data) { return (rows, nil, [], nil, [], nil, false, []) }
-        return ([], 0, [], nil, [], nil, false, [])
+        if let rows = try? JSONDecoder().decode([IDEAgentPersistedEntry].self, from: data) { return (rows, nil, [], nil, [], nil, false, [], nil) }
+        return ([], 0, [], nil, [], nil, false, [], nil)
     }
 }

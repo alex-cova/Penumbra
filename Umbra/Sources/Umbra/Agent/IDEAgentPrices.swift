@@ -112,6 +112,9 @@ struct IDEAgentSavedTranscript: Codable {
     var modelChoice: IDEAIModelChoice?
     /// The runs that changed files, so Revert Run still works after a relaunch (their originals are on disk).
     var checkpoints: [RunSnapshot]?
+    /// The worktree checkout this chat was bound to, as a path; absent for window-root chats and
+    /// older files.
+    var chatRoot: String?
     /// A run was going when this was written and nothing wrote the end of it: the app was closed (or
     /// died) in the middle. Reading it back offers Resume. Absent on older files.
     var runInProgress: Bool?

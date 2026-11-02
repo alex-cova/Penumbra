@@ -17,6 +17,7 @@ struct IDEAgentPanel: View {
     @State private var composerState = IDEAgentComposerState()
     @State private var composerHeight: CGFloat = 22
     @State private var acceptRequest = 0
+    @State private var isDiscardWorktreePresented = false
 
     @Environment(IDEWorkspace.self) private var workspace
 
@@ -76,6 +77,28 @@ struct IDEAgentPanel: View {
             if placement != .aiMode {
                 IDEIconButton(systemImage: "square.and.pencil", help: "New Chat (⌥⌘T)", isDisabled: agent.entries.isEmpty && !agent.isRunning) {
                     agent.newConversation()
+                }
+                .contextMenu {
+                    Button("New Chat in Worktree…") {
+                        agent.startWorktreeConversation(title: agent.selected.customTitle ?? "")
+                    }
+                    if agent.isWorktreeChat {
+                        Button("Discard Worktree…", role: .destructive) {
+                            isDiscardWorktreePresented = true
+                        }
+                    }
+                }
+                .confirmationDialog(
+                    "Discard this chat's worktree?",
+                    isPresented: $isDiscardWorktreePresented,
+                    titleVisibility: .visible
+                ) {
+                    Button("Discard Worktree", role: .destructive) {
+                        agent.discardWorktreeConversation()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Removes the worktree folder and deletes its branch. The chat keeps its transcript.")
                 }
                 IDEIconButton(systemImage: "clock.arrow.circlepath", help: "Earlier Chats", isActive: isHistoryPresented) {
                     isHistoryPresented.toggle()

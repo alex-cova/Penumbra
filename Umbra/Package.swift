@@ -116,6 +116,7 @@ let package = Package(
             resources: [
                 .copy("Tools/JavaDebugAdapter/build/java-debug-adapter.jar"),
                 .copy("Tools/JavaAnalysisServer/build/java-analysis-server.jar"),
+                .copy("Agent/Skills"),
                 .copy("../../umbra.png")
             ] + umbraJaCoCoResources,
             swiftSettings: swift6
