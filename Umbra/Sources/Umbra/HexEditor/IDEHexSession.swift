@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import HexKit
+import JavaIntelligence
 import Penumbra
 
 enum HexPasteChoice: Sendable {
@@ -112,7 +113,9 @@ final class IDEHexSession {
         self.bookmarks = HexBookmarks(offsets: bookmarks)
         let gated = document.count > settings.largeFileEditThreshold
         self.largeFileGated = gated
-        self.readOnly = gated
+        // A class or resource copied out of a jar lives in the index cache; editing the copy would
+        // change nothing in the jar.
+        self.readOnly = gated || (fileURL.map(JavaAttachedSources.isInCache) ?? false)
         if settings.bytesPerRowSetting == "auto" {
             fixedBytesPerRow = nil
             bytesPerRow = 16

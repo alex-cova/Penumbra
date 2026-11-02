@@ -124,4 +124,58 @@ final class IDEExternalLibrariesModelTests: XCTestCase {
         XCTAssertNil(model.selectedID)
         XCTAssertEqual(model.libraries.map(\.label), ["beta.jar"])
     }
+
+    // MARK: Opened archives
+
+    func testAnOpenedJarHasItsOwnSectionAndSurvivesClear() async throws {
+        let model = IDEExternalLibrariesModel()
+        let jar = try makeJar(named: "opened.jar")
+        model.openArchive(jar)
+        XCTAssertTrue(model.hasOpenedArchives)
+        XCTAssertFalse(model.isEmpty)
+
+        let rows = try await waitForRows(model) { $0.contains { $0.kind == .package } }
+        XCTAssertEqual(rows.first?.kind, .section)
+        XCTAssertEqual(rows.first?.title, "Opened Archives")
+        let root = try XCTUnwrap(rows.first { $0.isOpenedArchive })
+        XCTAssertEqual(root.title, "opened.jar")
+        XCTAssertEqual(root.location?.standardizedFileURL, jar.standardizedFileURL)
+
+        // The project going away does not close a jar the user opened.
+        model.clear()
+        XCTAssertTrue(model.hasOpenedArchives)
+        XCTAssertTrue(model.rows().contains { $0.kind == .package })
+    }
+
+    func testAClassOfAnOpenedJarCarriesTheJarAndEntryToExtract() async throws {
+        let model = IDEExternalLibrariesModel()
+        let jar = try makeJar(named: "entries.jar")
+        model.openArchive(jar)
+        let rows = try await waitForRows(model) { $0.contains { $0.kind == .package } }
+        let package = try XCTUnwrap(rows.first { $0.kind == .package })
+        model.expand(package.id)
+        let expanded = try await waitForRows(model) { $0.contains { $0.kind == .type } }
+        let type = try XCTUnwrap(expanded.first { $0.kind == .type })
+        XCTAssertEqual(type.entry, "org/x/Foo.class")
+        XCTAssertEqual(type.archive?.standardizedFileURL, jar.standardizedFileURL)
+    }
+
+    func testClosingAnArchiveRemovesItsSectionAndSelection() throws {
+        let model = IDEExternalLibrariesModel()
+        let jar = try makeJar(named: "gone.jar")
+        let id = model.openArchive(jar)
+        XCTAssertEqual(model.selectedID, id)
+        model.closeArchive(jar)
+        XCTAssertFalse(model.hasOpenedArchives)
+        XCTAssertNil(model.selectedID)
+        XCTAssertTrue(model.rows().isEmpty)
+    }
+
+    func testOpenedArchivesShowWithoutTheProjectLibraries() throws {
+        let model = IDEExternalLibrariesModel()
+        model.update(libraries: [JavaExternalLibrary(jar: try makeJar(named: "dep.jar"))])
+        model.openArchive(try makeJar(named: "mine.jar"))
+        let rows = model.rows(includesProjectLibraries: false)
+        XCTAssertEqual(rows.filter { $0.kind == .section }.map(\.title), ["Opened Archives"])
+    }
 }

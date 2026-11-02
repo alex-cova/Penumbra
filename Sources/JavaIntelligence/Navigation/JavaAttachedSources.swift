@@ -6,6 +6,11 @@ import Foundation
 /// can open it; that copy is not the JDK and must be shown read-only.
 public enum JavaAttachedSources {
     public static func isExtractedSource(_ url: URL) -> Bool {
+        isInCache(url) || JavaClassFileDecompiler.isClassFile(url)
+    }
+
+    /// Whether `url` is a copy Umbra made under the index cache, as opposed to a file of the user's.
+    public static func isInCache(_ url: URL) -> Bool {
         url.standardizedFileURL.pathComponents.contains("attached-sources")
     }
 

@@ -20,6 +20,7 @@ struct IDEHexModule: IDELanguageModule {
 
     static let openAsHex = "hex.openAsHex"
     static let reopenAsText = "hex.reopenAsText"
+    static let reopenAsDecompiled = "hex.reopenAsDecompiled"
     static let goToOffset = "hex.goToOffset"
     static let find = "hex.find"
     static let toggleInsert = "hex.toggleInsert"
@@ -29,7 +30,7 @@ struct IDEHexModule: IDELanguageModule {
     static let toggleInspector = "hex.toggleInspector"
 
     static let commandIDs = [
-        openAsHex, reopenAsText, goToOffset, find, toggleInsert, zeroSelection,
+        openAsHex, reopenAsText, reopenAsDecompiled, goToOffset, find, toggleInsert, zeroSelection,
         compareDisk, toggleBookmark, toggleInspector
     ]
 
@@ -51,6 +52,12 @@ struct IDEHexModule: IDELanguageModule {
             ))
         }
         guard isHex(workspace) else { return commands }
+        if workspace.activeDocumentCanReopenAsDecompiled {
+            commands.append(EditorCommand(
+                id: Self.reopenAsDecompiled, title: "Reopen as Decompiled Source", group: "Hex",
+                action: { [weak workspace] in workspace?.reopenActiveDocumentAsDecompiled() }
+            ))
+        }
         commands.append(contentsOf: [
             EditorCommand(id: Self.reopenAsText, title: "Reopen as Text", group: "Hex",
                           action: { [weak workspace] in workspace?.reopenActiveDocumentAsText() }),
@@ -129,6 +136,11 @@ struct IDEHexModule: IDELanguageModule {
             })
         }
         guard isHex(workspace) else { return items }
+        if workspace.activeDocumentCanReopenAsDecompiled {
+            items.append(IDEViewMenuContribution(id: "hex.reopenAsDecompiled") { ref in
+                AnyView(Button("Reopen as Decompiled Source") { ref.workspace?.reopenActiveDocumentAsDecompiled() })
+            })
+        }
         items.append(IDEViewMenuContribution(id: "hex.inspector") { ref in
             AnyView(Button("Data Inspector") { ref.workspace?.toggleHexInspector() })
         })

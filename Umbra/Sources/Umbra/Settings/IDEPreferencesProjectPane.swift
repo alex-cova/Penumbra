@@ -6,13 +6,18 @@ struct IDEPreferencesProjectPane: View {
     var body: some View {
         IDESettingsSection(
             "Windows",
-            footer: "Applies when a window already has a project. An empty window always takes the folder, and folders opened from the Dock or Finder open in a new window."
+            footer: "Open Folders applies when a window already has a project. An empty window always takes the folder, and folders opened from the Dock or Finder open in a new window."
         ) {
             IDESettingsPicker("Open Folders", selection: $preferences.openFoldersIn) {
                 ForEach(IDEOpenFoldersIn.allCases) { option in
                     Text(option.title).tag(option)
                 }
             }
+            IDESettingsToggle(
+                "Always Open with Empty File",
+                isOn: $preferences.opensWithEmptyFile,
+                detail: "A window with no files open starts with an empty Untitled tab instead of the Welcome screen."
+            )
         }
         IDESettingsSection("Explorer") {
             IDESettingsToggle(

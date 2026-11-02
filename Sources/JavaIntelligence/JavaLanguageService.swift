@@ -27,7 +27,7 @@ public struct JavaLanguageService: LanguageService {
     private let inlayHints: JavaInlayHintProvider
     private let lineMarkers: JavaLineMarkerProvider
     private let typeHierarchy: JavaTypeHierarchyProvider
-    private let callHierarchy: JavaCallHierarchyProvider
+    private let callHierarchy: any CallHierarchyProviding
 
     public init(
         completion: JavaCompletionProvider,
@@ -49,7 +49,7 @@ public struct JavaLanguageService: LanguageService {
         lineMarkers: JavaLineMarkerProvider,
         structure: JavaStructureProvider,
         typeHierarchy: JavaTypeHierarchyProvider,
-        callHierarchy: JavaCallHierarchyProvider,
+        callHierarchy: any CallHierarchyProviding,
         symbolReference: JavaSymbolReferenceProvider? = nil
     ) {
         self.hover = hover
@@ -108,7 +108,7 @@ public struct JavaLanguageService: LanguageService {
         await inlayHints.setOpenBufferLookup(openBuffer)
         await lineMarkers.setOpenBufferLookup(openBuffer)
         await typeHierarchy.setOpenBufferLookup(openBuffer)
-        await callHierarchy.setOpenBufferLookup(openBuffer)
+        await setCallHierarchyOpenBuffer(openBuffer)
         await formatting.setIndentUnitProvider(environment.indentUnit)
         // Decompiling class files needs the user's agreement; only a manual navigation may ask.
         await navigation.setDecompilerConsent(
@@ -126,9 +126,19 @@ public struct JavaLanguageService: LanguageService {
         await inlayHints.setOpenBufferLookup(nil)
         await lineMarkers.setOpenBufferLookup(nil)
         await typeHierarchy.setOpenBufferLookup(nil)
-        await callHierarchy.setOpenBufferLookup(nil)
+        await setCallHierarchyOpenBuffer(nil)
         await formatting.setIndentUnitProvider(nil)
         await navigation.setDecompilerConsent(accepted: false, request: nil)
+    }
+
+    /// The registered hierarchy is the bytecode wrapper (which falls back to the source provider
+    /// for every non-class file); the open buffer must still reach the source index behind it.
+    private func setCallHierarchyOpenBuffer(_ lookup: (@Sendable (URL) async -> String?)?) async {
+        if let source = callHierarchy as? JavaCallHierarchyProvider {
+            await source.setOpenBufferLookup(lookup)
+        } else if let bytecode = callHierarchy as? JavaBytecodeCallHierarchyProvider {
+            await bytecode.setOpenBufferLookup(lookup)
+        }
     }
 }
 

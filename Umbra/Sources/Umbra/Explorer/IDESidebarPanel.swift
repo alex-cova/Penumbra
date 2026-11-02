@@ -109,9 +109,13 @@ struct IDESidebarPanel: View {
                     showClassDiagram: { workspace.showClassDiagram(forExplorerItem: $0) },
                     inspectCode: { workspace.inspectCode(forExplorerItem: $0) }
                 ),
-                externalLibraries: preferences.explorerShowExternalLibraries ? workspace.externalLibraries : nil,
+                externalLibraries: preferences.explorerShowExternalLibraries || workspace.externalLibraries.hasOpenedArchives
+                    ? workspace.externalLibraries : nil,
                 onOpenLibraryItem: { workspace.openExternalLibraryItem($0) },
                 onCopyLibraryName: { workspace.copyExternalLibraryItemName($0) },
+                showsProjectLibraries: preferences.explorerShowExternalLibraries,
+                onCloseArchive: { workspace.closeArchive($0) },
+                onOpenArchiveAsHex: { workspace.openArchiveAsHex($0) },
                 collapsedWhileFiltering: $collapsedWhileFiltering
             )
         }

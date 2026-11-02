@@ -37,18 +37,27 @@ struct IDEFileTreeView: View {
     var externalLibraries: IDEExternalLibrariesModel?
     var onOpenLibraryItem: ((IDEExternalLibraryItem) -> Void)?
     var onCopyLibraryName: ((IDEExternalLibraryItem) -> Void)?
+    /// Whether the project's External Libraries are listed (the Explorer option). Jars the user
+    /// opened are listed either way.
+    var showsProjectLibraries = true
+    var onCloseArchive: ((IDEExternalLibraryItem) -> Void)?
+    var onOpenArchiveAsHex: ((IDEExternalLibraryItem) -> Void)?
     /// Folders opened so a match stays visible. Collapsing one hides that branch until the query
     /// changes; it does not rewrite the project's own expansion state.
     @Binding var collapsedWhileFiltering: Set<String>
 
     var body: some View {
         Group {
-            if let root = project.rootNode {
-                let displayRoot = flattenPackages
-                    ? IDEFlattenedPackages.flatten(root, sourceRootPaths: javaSourceRootPaths)
-                    : root
-                let nodes = flattenedNodes(root: displayRoot)
-                let libraryRows = externalLibraries?.rows(filter: filterNeedle) ?? []
+            if project.rootNode != nil || externalLibraries?.hasOpenedArchives == true {
+                // Without a folder the tree is only the jars that were opened.
+                let nodes: [FlatNode] = project.rootNode.map { root in
+                    flattenedNodes(root: flattenPackages
+                        ? IDEFlattenedPackages.flatten(root, sourceRootPaths: javaSourceRootPaths)
+                        : root)
+                } ?? []
+                let libraryRows = externalLibraries?.rows(
+                    filter: filterNeedle, includesProjectLibraries: showsProjectLibraries
+                ) ?? []
                 if nodes.isEmpty && libraryRows.isEmpty {
                     IDEFileTreeFilterEmptyState()
                 } else {
@@ -86,7 +95,9 @@ struct IDEFileTreeView: View {
                                     onSelect: { selectLibraryRow(item) },
                                     onToggle: { externalLibraries?.toggle(item.id) },
                                     onOpen: { onOpenLibraryItem?(item) },
-                                    onCopyName: { onCopyLibraryName?(item) }
+                                    onCopyName: { onCopyLibraryName?(item) },
+                                    onCloseArchive: { onCloseArchive?(item) },
+                                    onOpenAsHex: { onOpenArchiveAsHex?(item) }
                                 )
                             }
                         }
@@ -611,6 +622,8 @@ private struct IDEExternalLibraryRow: View {
     let onToggle: () -> Void
     let onOpen: () -> Void
     let onCopyName: () -> Void
+    var onCloseArchive: () -> Void = {}
+    var onOpenAsHex: () -> Void = {}
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
@@ -668,6 +681,10 @@ private struct IDEExternalLibraryRow: View {
             }
             if item.kind == .type {
                 Button("Copy Reference") { onCopyName() }
+            }
+            if item.isOpenedArchive {
+                Button("Open as Hex Editor") { onOpenAsHex() }
+                Button("Close Archive") { onCloseArchive() }
             }
             if let location = item.location {
                 Button("Copy Path") {

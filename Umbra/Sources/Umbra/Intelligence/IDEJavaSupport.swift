@@ -51,6 +51,9 @@ final class IDEJavaSupport {
     let hierarchyProvider: JavaTypeHierarchyProvider
     /// Callers and callees for the Call Hierarchy tab.
     let callHierarchyProvider: JavaCallHierarchyProvider
+    /// The same hierarchy, answering a decompiled `.class` tab from the bytecode of its jar or class
+    /// folder and everything else through ``callHierarchyProvider``. This is what the window registers.
+    let bytecodeCallHierarchyProvider: JavaBytecodeCallHierarchyProvider
     /// Static inspections (unused imports, missing @Override, unresolved types).
     let inspectionService: JavaInspectionService
     /// Classifies Java identifiers for semantic highlighting.
@@ -213,6 +216,7 @@ final class IDEJavaSupport {
         hoverProvider = JavaHoverProvider(index: javaIndex, indexPaths: paths)
         hierarchyProvider = JavaTypeHierarchyProvider(index: javaIndex, indexPaths: paths)
         callHierarchyProvider = JavaCallHierarchyProvider(index: javaIndex, indexPaths: paths, findUsages: findUsagesProvider)
+        bytecodeCallHierarchyProvider = JavaBytecodeCallHierarchyProvider(fallback: callHierarchyProvider, cacheRoot: paths.root)
         inspectionService = JavaInspectionService(index: javaIndex, parseCache: sharedParseCache, usageProvider: findUsagesProvider)
         semanticTokenProvider = JavaSemanticTokenProvider(index: javaIndex)
         let inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
@@ -266,7 +270,7 @@ final class IDEJavaSupport {
                 lineMarkers: lineMarkerProvider,
                 structure: structureProvider,
                 typeHierarchy: hierarchyProvider,
-                callHierarchy: callHierarchyProvider,
+                callHierarchy: bytecodeCallHierarchyProvider,
                 symbolReference: JavaSymbolReferenceProvider(index: javaIndex)
             ),
             support: self

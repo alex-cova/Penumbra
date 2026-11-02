@@ -55,6 +55,7 @@ public final class IDEPreferences {
         static let keymapPreset = "com.umbra.editor.keymapPreset"
         static let goToFileShortcut = "com.umbra.editor.goToFileShortcut"
         static let openFoldersIn = "com.umbra.editor.openFoldersIn"
+        static let openWithEmptyFile = "com.umbra.editor.openWithEmptyFile"
         static let showMethodSeparators = "com.umbra.editor.showMethodSeparators"
         static let highlightsOccurrencesOfSelection = "com.umbra.editor.highlightsOccurrencesOfSelection"
         static let insertPairedBrackets = "com.umbra.editor.insertPairedBrackets"
@@ -375,6 +376,12 @@ public final class IDEPreferences {
     /// preferences snapshot: it stays on this Mac.
     var openFoldersIn: IDEOpenFoldersIn {
         didSet { UserDefaults.standard.set(openFoldersIn.rawValue, forKey: Keys.openFoldersIn) }
+    }
+
+    /// A window that would start with no files opens an empty Untitled tab instead of the Welcome
+    /// screen. Not part of the preferences snapshot: it stays on this Mac.
+    var opensWithEmptyFile: Bool {
+        didSet { UserDefaults.standard.set(opensWithEmptyFile, forKey: Keys.openWithEmptyFile) }
     }
 
     var showMethodSeparators: Bool {
@@ -1110,6 +1117,7 @@ public final class IDEPreferences {
         keymapPreset = KeymapPreset(rawValue: presetRaw) ?? .sublime
         goToFileShortcut = defaults.string(forKey: Keys.goToFileShortcut).flatMap(GoToFileShortcut.init(rawValue:)) ?? .commandP
         openFoldersIn = defaults.string(forKey: Keys.openFoldersIn).flatMap(IDEOpenFoldersIn.init(rawValue:)) ?? .ask
+        opensWithEmptyFile = defaults.object(forKey: Keys.openWithEmptyFile) as? Bool ?? false
         showMethodSeparators = defaults.object(forKey: Keys.showMethodSeparators) as? Bool ?? true
         highlightsOccurrencesOfSelection = defaults.object(forKey: Keys.highlightsOccurrencesOfSelection) as? Bool ?? true
         insertPairedBrackets = defaults.object(forKey: Keys.insertPairedBrackets) as? Bool ?? true

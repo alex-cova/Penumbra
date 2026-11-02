@@ -50,7 +50,7 @@ enum JavaClassDecompiler {
 
     /// The type's name relative to its package, e.g. `Fixture.Point` for
     /// `com.penumbra.fixture.Fixture.Point`, or just `Fixture` for a top-level type.
-    private static func dottedName(of stub: JavaClassStub) -> String {
+    static func dottedName(of stub: JavaClassStub) -> String {
         guard !stub.packageName.isEmpty, stub.qualifiedName.hasPrefix(stub.packageName + ".") else {
             return stub.qualifiedName
         }

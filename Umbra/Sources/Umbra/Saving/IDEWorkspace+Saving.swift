@@ -1,4 +1,5 @@
 import AppKit
+import JavaIntelligence
 import Penumbra
 
 /// Why a document is being saved. The reason decides what the save may do: only a user's own
@@ -106,6 +107,8 @@ extension IDEWorkspace {
         case .image, .diagram, .profile:
             return .clean
         }
+        // A decompiled class is Java text over a `.class` file: saving it would replace the bytecode.
+        if let url = document.url, JavaClassFileDecompiler.isClassFile(url) { return .clean }
         // An explicit save writes a clean buffer too (it records history and runs the actions);
         // the others only have something to do for a buffer with changes.
         guard document.isDirty || reason == .explicit else { return .clean }

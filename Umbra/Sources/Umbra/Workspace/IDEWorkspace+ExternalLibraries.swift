@@ -8,9 +8,11 @@ extension IDEWorkspace {
     func refreshExternalLibraries() {
         guard javaSupport.isJavaBuildActive, let model = javaSupport.projectModel else {
             externalLibraries.update(libraries: [])
+            syncBytecodeArchives()
             return
         }
         externalLibraries.update(libraries: JavaExternalLibrary.list(from: model))
+        syncBytecodeArchives()
     }
 
     /// A class goes through Go to Definition (attached sources, or the decompiler and its agreement);
@@ -18,6 +20,11 @@ extension IDEWorkspace {
     func openExternalLibraryItem(_ item: IDEExternalLibraryItem) {
         switch item.kind {
         case .type:
+            // A class in a jar the user opened has no index behind it: extract and decompile it.
+            if let archive = item.archive, let entry = item.entry {
+                openArchiveEntry(entry, from: archive)
+                return
+            }
             guard let name = item.qualifiedName else { return }
             Task { await openJavaType(qualifiedName: name) }
         case .resource:

@@ -268,6 +268,30 @@ extension IDEWorkspace {
         }
     }
 
+    /// Back from a class file's bytes to its decompiled source. Byte edits are not decompiled (the
+    /// decompiler reads the file), so a modified tab asks first.
+    func reopenAsDecompiled(_ document: WorkbenchDocument) async {
+        guard document.contentKind == .binary, let url = document.url else { return }
+        if let session = hexSessions[document.id], session.isModified {
+            var alert = IDEAlert.confirm(
+                "Discard the byte edits?",
+                detail: "Decompiling reads the class file on disk, not the edited bytes.",
+                confirm: "Discard and Decompile")
+            guard alert.confirms() else { return }
+        }
+        guard let loaded = await loadDecompiledClass(from: url) else {
+            NSSound.beep()
+            return
+        }
+        closeHexSession(document.id)
+        installReloaded(loaded, onto: document)
+        document.language = loaded.language
+        document.languageIdentifier = loaded.languageIdentifier
+        document.contentKind = .text
+        document.contentGeneration &+= 1
+        showCurrent(document)
+    }
+
     func closeHexSession(_ documentID: UUID) {
         guard let session = hexSessions.removeValue(forKey: documentID) else { return }
         for pane in workbench.panes {

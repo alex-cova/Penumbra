@@ -328,9 +328,21 @@ public final class IDEWorkspace {
         project.rootURL?.lastPathComponent ?? "Umbra"
     }
 
-    /// No project and no documents: the Welcome screen.
+    /// No project and no documents (an untouched "Always Open with Empty File" tab does not count):
+    /// the Welcome screen, or the empty scratch tab in its place.
     var isEmpty: Bool {
-        !hasOpenProject && !hasOpenDocuments
+        !hasOpenProject && (!hasOpenDocuments || hasOnlyUntouchedEmptyFile)
+    }
+
+    /// The Untitled tab opened by Settings ▸ Project ▸ Always Open with Empty File, while it is the
+    /// only document and has not been edited. The first file opened replaces it.
+    private var emptyFileDocumentID: UUID?
+
+    var hasOnlyUntouchedEmptyFile: Bool {
+        guard let emptyFileDocumentID else { return false }
+        let documents = workbench.allDocuments()
+        guard documents.count == 1, let document = documents.first else { return false }
+        return document.id == emptyFileDocumentID && !document.isDirty && document.url == nil
     }
 
     /// A blank window opened next to others that has not been used: it never becomes the window
@@ -738,7 +750,9 @@ public final class IDEWorkspace {
     }
     /// What `IDERootView` should actually render: the user's sidebar toggle, once a folder or a
     /// document is open (the stripe offers no Explorer button before that).
-    var showsSidebar: Bool { isSidebarVisible && (hasOpenProject || hasOpenDocuments) }
+    var showsSidebar: Bool {
+        isSidebarVisible && (hasOpenProject || hasOpenDocuments || externalLibraries.hasOpenedArchives)
+    }
     /// A tab is offered when it has something to show: Changes needs a git repository. Structure
     /// stays offered for any file (it explains itself outside Java) so the tab does not come and
     /// go as the active file changes.
@@ -1039,6 +1053,7 @@ public final class IDEWorkspace {
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
         refreshPresentation()
+        openEmptyFileIfNeeded()
         showsWelcome = !hasOpenDocuments
         showsFirstRunGuide = !preferences.hasCompletedFirstRunGuide
 
@@ -1196,6 +1211,27 @@ public final class IDEWorkspace {
 
     public func newFile() {
         openUntitled(displayName: "Untitled", text: "")
+    }
+
+    /// Always Open with Empty File: a window with nothing open gets an Untitled tab in place of the
+    /// Welcome screen.
+    func openEmptyFileIfNeeded() {
+        guard preferences.opensWithEmptyFile, !hasOpenDocuments else { return }
+        newFile()
+        emptyFileDocumentID = workbench.activePane.selectedDocument?.id
+    }
+
+    /// A file is being opened: the empty tab from `openEmptyFileIfNeeded` goes away if it is still
+    /// untouched. Either way it stops being special.
+    private func discardUntouchedEmptyFile(keeping keptID: UUID) {
+        defer { emptyFileDocumentID = nil }
+        guard let emptyFileDocumentID, emptyFileDocumentID != keptID else { return }
+        let documents = workbench.allDocuments()
+        guard let scratch = documents.first(where: { $0.id == emptyFileDocumentID }),
+              !scratch.isDirty, scratch.url == nil,
+              let pane = workbench.panes.first(where: { $0.documents.contains { $0.id == emptyFileDocumentID } })
+        else { return }
+        closeDocument(emptyFileDocumentID, in: pane)
     }
 
     /// An unsaved editor tab with this text. `languageIdentifier` highlights it from the start
@@ -1533,7 +1569,8 @@ public final class IDEWorkspace {
         stopProjectActivity()
         applyProjectRoot(nil)
         resetTerminalsToDefaultDirectory()
-        showsWelcome = true
+        openEmptyFileIfNeeded()
+        showsWelcome = !hasOpenDocuments
         refreshPresentation()
         saveSession()
     }
@@ -3344,7 +3381,7 @@ public final class IDEWorkspace {
         let selectedShell = keptShell?.id
         syncLiveTextForSession()
         return IDEWindowSession(
-            restoration: hasOpenDocuments ? workbench.makeRestorationState() : nil,
+            restoration: hasOpenDocuments && !hasOnlyUntouchedEmptyFile ? workbench.makeRestorationState() : nil,
             projectRootBookmark: project.makeBookmarkData(),
             sidebarWidth: sidebarWidth ?? self.sidebarWidth,
             isSidebarVisible: isSidebarVisible,
@@ -3718,6 +3755,12 @@ public final class IDEWorkspace {
         openAsText: Bool = false
     ) async throws -> WorkbenchDocument {
         let settings = IDEHexSettings.shared
+        // A class file opens as source. Without the user's agreement to decompile, or when the
+        // bytes will not decompile, it falls through to the hex view.
+        if !openAsHex, !openAsText, Self.isDecompilableClass(url) {
+            if let decompiled = await loadDecompiledClass(from: url) { return decompiled }
+            return WorkbenchDocument.loadBinary(from: url)
+        }
         let classification = BinaryContentDetector.classify(url)
         let needsHead = !openAsHex && !openAsText
             && !ImageContentDetector.isImageFile(url)
@@ -3783,21 +3826,28 @@ public final class IDEWorkspace {
         _ = workbench.splitActivePane(edge: .trailing)
     }
 
-    func openDocument(from url: URL, selecting range: NSRange? = nil, inRightSplit: Bool = false) async {
+    func openDocument(from url: URL, selecting range: NSRange? = nil, inRightSplit: Bool = false, asHex: Bool = false) async {
         // A Flight Recorder file is only useful through the profiler. Reopen as Hex reaches the bytes
         // through `loadDocument(openAsHex:)`, which this does not intercept.
-        if IDEWorkspace.isFlightRecording(url) {
+        if !asHex, IDEWorkspace.isFlightRecording(url) {
             recordRecentFile(url)
             openProfile(file: url)
             return
         }
+        // A jar is a folder of classes: its contents go to the Explorer rather than to a tab.
+        // Open as Hex Editor on its row (or Reopen as Hex) reaches the bytes.
+        if !asHex, IDEWorkspace.isJavaArchive(url) {
+            openArchive(url)
+            return
+        }
         do {
-            let document = try await loadDocument(from: url)
+            let document = try await loadDocument(from: url, openAsHex: asHex)
             if inRightSplit {
                 activatePaneToTheRight()
             }
             workbench.openDocument(document)
-            if document.contentKind == .text { localHistory.recordBaseline(url) }
+            discardUntouchedEmptyFile(keeping: document.id)
+            if document.contentKind == .text, !JavaClassFileDecompiler.isClassFile(url) { localHistory.recordBaseline(url) }
             if let range, document.contentKind == .text, let selected = workbench.activePane.selectedDocument {
                 selected.selectedRange = range
             }
