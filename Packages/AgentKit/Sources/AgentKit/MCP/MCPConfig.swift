@@ -1,46 +1,78 @@
 import Foundation
 
-/// One MCP server the agent may use: a program that speaks MCP on its standard input and output.
-/// AgentKit never starts it; the host does, after the user has said yes.
+/// How the host reaches one MCP server: a local program on stdio, or a streamable HTTP endpoint.
+/// AgentKit never spawns a process and never decides which to use; the host builds the transport.
+public enum MCPServerTransport: Sendable, Hashable, Codable, Equatable {
+    /// A program that speaks MCP on its standard input and output.
+    /// `command` is an executable path, or a bare name the host finds on `PATH`.
+    /// `env` is extra environment for the process. It may hold secrets: shown to nobody, never put in
+    /// a tool name.
+    case stdio(command: String, args: [String], env: [String: String])
+    /// A hosted server over streamable HTTP. `headers` carries per-request headers such as an
+    /// `Authorization` bearer token; values may be secrets with the same handling as `env`.
+    case http(url: String, headers: [String: String])
+}
+
+/// One MCP server the agent may use. AgentKit never starts it; the host does, after the user has
+/// said yes.
 public struct MCPServerConfig: Sendable, Hashable, Codable, Identifiable {
     /// What the user calls it. Tool names are built from `identifier`.
     public var name: String
-    /// An executable path, or a bare name the host finds on `PATH`.
-    public var command: String
-    public var args: [String]
-    /// Extra environment for the process. May hold secrets: shown to nobody, never put in a tool name.
-    public var env: [String: String]
+    public var transport: MCPServerTransport
 
     public init(name: String, command: String, args: [String] = [], env: [String: String] = [:]) {
         self.name = name
-        self.command = command
-        self.args = args
-        self.env = env
+        self.transport = .stdio(command: command, args: args, env: env)
+    }
+
+    public init(name: String, url: String, headers: [String: String] = [:]) {
+        self.name = name
+        self.transport = .http(url: url, headers: headers)
     }
 
     public var id: String { name }
 
+    /// True for a server reached over the network, which needs the host's per-server trust.
+    public var isRemote: Bool {
+        if case .http = transport { return true }
+        return false
+    }
+
     /// The name as it appears in tool names: letters, digits, `-` and `_`, at most 24 characters.
     public var identifier: String { MCPNaming.sanitize(name, limit: 24) }
 
-    /// Everything that decides what would run, in one stable text. A host hashes it to remember that
-    /// the user trusted exactly this: change the command, an argument or the environment and it differs.
+    /// Everything that decides what would run or be contacted, in one stable text. A host hashes it
+    /// to remember that the user trusted exactly this: change the command, an argument, the
+    /// environment, the URL or a header and it differs.
     public var canonicalText: String {
-        var parts = ["name=\(name)", "command=\(command)"]
-        parts += args.map { "arg=\($0)" }
-        parts += env.keys.sorted().map { "env=\($0)=\(env[$0] ?? "")" }
+        var parts = ["name=\(name)"]
+        switch transport {
+        case .stdio(let command, let args, let env):
+            parts.append("command=\(command)")
+            parts += args.map { "arg=\($0)" }
+            parts += env.keys.sorted().map { "env=\($0)=\(env[$0] ?? "")" }
+        case .http(let url, let headers):
+            parts.append("url=\(url)")
+            parts += headers.keys.sorted().map { "header=\($0)=\(headers[$0] ?? "")" }
+        }
         return parts.joined(separator: "\u{0}")
     }
 
-    /// The command line as the user would read it.
+    /// The command line (or URL) as the user would read it.
     public var displayCommand: String {
-        ([command] + args).map { $0.contains(" ") ? "\"\($0)\"" : $0 }.joined(separator: " ")
+        switch transport {
+        case .stdio(let command, let args, _):
+            return ([command] + args).map { $0.contains(" ") ? "\"\($0)\"" : $0 }.joined(separator: " ")
+        case .http(let url, _):
+            return url
+        }
     }
 }
 
 /// An `.mcp.json` style file: `{"mcpServers": {"name": {"command": "npx", "args": [...], "env": {...}}}}`
-/// (Claude Code, Cursor), or `{"servers": {...}}` (VS Code). Servers that are not a local program are
-/// reported, not dropped silently.
+/// (Claude Code, Cursor), or `{"servers": {...}}` (VS Code). A hosted server is
+/// `{"name": {"type": "http", "url": "https://…", "headers": {"Authorization": "Bearer …"}}}`. Servers
+/// that are neither a local program nor a streamable HTTP endpoint are reported, not dropped silently.
 public struct MCPConfigFile: Sendable, Equatable {
     public var servers: [MCPServerConfig]
     /// A server the file lists that this version cannot use, and why.
@@ -82,8 +114,20 @@ public struct MCPConfigFile: Sendable, Equatable {
                 continue
             }
             let type = entry["type"]?.stringValue?.lowercased()
+            if let url = entry["url"]?.stringValue?.trimmingCharacters(in: .whitespaces), !url.isEmpty,
+               type == nil || type == "http" || type == "streamable-http" || type == "streamablehttp"
+            {
+                guard let scheme = URL(string: url)?.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+                    skipped.append((name, "Its URL is not http or https."))
+                    continue
+                }
+                var headers: [String: String] = [:]
+                for (key, value) in entry["headers"]?.objectValue ?? [:] { if let text = value.stringValue { headers[key] = text } }
+                servers.append(MCPServerConfig(name: name, url: url, headers: headers))
+                continue
+            }
             if entry["url"] != nil || (type != nil && type != "stdio") {
-                skipped.append((name, "It connects over \(type ?? "HTTP"), and this version only starts local programs."))
+                skipped.append((name, "It connects over \(type == "sse" ? "SSE" : type ?? "HTTP"), and this version only starts local programs or streamable HTTP servers."))
                 continue
             }
             guard let command = entry["command"]?.stringValue?.trimmingCharacters(in: .whitespaces), !command.isEmpty else {

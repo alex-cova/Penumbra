@@ -3,6 +3,53 @@ import Foundation
 import XCTest
 @testable import Umbra
 
+/// A streamable HTTP MCP server on loopback: POSTs are answered as JSON, the initialize answer
+/// carries a session id the later requests must repeat, and notifications get an empty 202.
+private let fakeHTTPServerSource = """
+import json, sys
+portfile = sys.argv[1]
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+seen = []
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def do_POST(self):
+        global seen
+        length = int(self.headers.get("Content-Length", 0))
+        message = json.loads(self.rfile.read(length) or b"{}")
+        seen.append((self.path, dict(self.headers)))
+        if "id" not in message:
+            self.send_response(202)
+            self.end_headers()
+            return
+        method, ident = message["method"], message["id"]
+        if method == "initialize":
+            result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "remote", "version": "1"}}
+        elif method == "tools/list":
+            result = {"tools": [{"name": "echo", "description": "echoes", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}]}
+        elif method == "tools/call":
+            text = message["params"]["arguments"].get("text", "")
+            auth = self.headers.get("Authorization", "-")
+            result = {"content": [{"type": "text", "text": "echo: " + text + " auth=" + auth}]}
+        else:
+            self.send_response(200, "n/a")
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"jsonrpc": "2.0", "id": ident, "error": {"code": -32601, "message": "no " + method}}).encode())
+            return
+        self.send_response(200, "ok")
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Mcp-Session-Id", "test-session")
+        self.end_headers()
+        self.wfile.write(json.dumps({"jsonrpc": "2.0", "id": ident, "result": result}).encode())
+    def do_DELETE(self):
+        self.send_response(200, "gone")
+        self.end_headers()
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+open(portfile, "w").write(str(server.server_address[1]))
+server.serve_forever()
+"""
+
 private let fakeServerSource = """
 import json, os, sys
 pidfile = sys.argv[1]
@@ -50,7 +97,12 @@ final class IDEMCPStoreTests: XCTestCase {
         store.setEnabled(true, id: entry.id)
         let config = try XCTUnwrap(store.enabledConfigs().first)
         XCTAssertEqual(config.name, "Files")
-        XCTAssertEqual(config.env, ["TOKEN": "abc=def", "REGION": "eu"])
+        guard case .stdio(let command, let args, let env) = config.transport else {
+            return XCTFail("a command entry stays a stdio server")
+        }
+        XCTAssertEqual(command, "npx")
+        XCTAssertEqual(args, ["-y", "server", "/my dir"])
+        XCTAssertEqual(env, ["TOKEN": "abc=def", "REGION": "eu"])
 
         // It survives a relaunch.
         let again = IDEMCPStore(defaults: defaults, keyStore: keys)
@@ -67,6 +119,49 @@ final class IDEMCPStoreTests: XCTestCase {
         let (store, _, _) = makeStore()
         XCTAssertNil(store.add(name: "x", commandLine: "   ", environment: ""))
         XCTAssertTrue(store.servers.isEmpty)
+    }
+
+    func testARemoteServerKeepsItsHeadersInTheKeychain() throws {
+        let (store, defaults, keys) = makeStore()
+        let entry = try XCTUnwrap(store.addRemote(
+            name: "Issues", url: "https://mcp.test/mcp", headers: "Authorization=Bearer t\nX-Extra=1\nBAD KEY=2"))
+        XCTAssertTrue(entry.isRemote)
+        XCTAssertEqual(entry.url, "https://mcp.test/mcp")
+        XCTAssertEqual(entry.headerKeys, ["Authorization", "X-Extra"])
+        XCTAssertEqual(entry.displayEndpoint, "https://mcp.test/mcp")
+        XCTAssertEqual(entry.displayName, "Issues")
+        XCTAssertEqual(try keys.load(account: IDEMCPStore.account(entry.id, "Authorization")), "Bearer t")
+        XCTAssertFalse(String(decoding: try XCTUnwrap(defaults.data(forKey: "umbra.agent.mcpServers")), as: UTF8.self).contains("Bearer t"),
+                       "the value is not in UserDefaults")
+
+        XCTAssertNil(store.addRemote(name: "Bad", url: "ftp://mcp.test/mcp", headers: ""), "only http and https")
+        XCTAssertNil(store.addRemote(name: "Bad", url: "not a url", headers: ""))
+
+        store.setEnabled(true, id: entry.id)
+        let config = try XCTUnwrap(store.enabledConfigs().first)
+        guard case .http(let url, let headers) = config.transport else {
+            return XCTFail("a URL entry stays a remote server")
+        }
+        XCTAssertEqual(url, "https://mcp.test/mcp")
+        XCTAssertEqual(headers, ["Authorization": "Bearer t", "X-Extra": "1"])
+        XCTAssertTrue(config.isRemote)
+
+        // It survives a relaunch, and removing deletes the header secrets.
+        let again = IDEMCPStore(defaults: defaults, keyStore: keys)
+        XCTAssertEqual(again.servers, store.servers)
+        XCTAssertTrue(again.isEnabled(entry.id))
+        again.remove(id: entry.id)
+        XCTAssertNil(try keys.load(account: IDEMCPStore.account(entry.id, "Authorization")))
+        XCTAssertTrue(again.servers.isEmpty)
+    }
+
+    func testAnEntryWithoutARemoteHalfDecodesFromOlderData() throws {
+        let old = try XCTUnwrap(#"{"id":"\#(UUID().uuidString)","name":"Files","command":"npx","args":[],"envKeys":[]}"#.data(using: .utf8))
+        let entry = try JSONDecoder().decode(IDEMCPServerEntry.self, from: old)
+        XCTAssertNil(entry.url)
+        XCTAssertTrue(entry.headerKeys.isEmpty)
+        XCTAssertFalse(entry.isRemote)
+        XCTAssertEqual(entry.commandLine, "npx")
     }
 
     func testTrustFollowsExactlyWhatWouldRun() {
@@ -92,6 +187,20 @@ final class IDEMCPStoreTests: XCTestCase {
         XCTAssertFalse(store.isTrusted(server))
         store.forget(server)
         XCTAssertFalse(store.isDeclined(server))
+    }
+
+    func testTrustFollowsTheURLAndHeadersOfARemoteServer() {
+        let (store, _, _) = makeStore()
+        let server = MCPServerConfig(name: "db", url: "https://x.test/mcp", headers: ["Authorization": "Bearer t"])
+        XCTAssertFalse(store.isTrusted(server))
+        store.trust(server)
+        XCTAssertTrue(store.isTrusted(server))
+        for changed in [
+            MCPServerConfig(name: "db", url: "https://y.test/mcp", headers: ["Authorization": "Bearer t"]),
+            MCPServerConfig(name: "db", url: "https://x.test/mcp", headers: ["Authorization": "Bearer u"]),
+            MCPServerConfig(name: "db", url: "https://x.test/mcp"),
+            MCPServerConfig(name: "db", command: "npx"),
+        ] { XCTAssertFalse(store.isTrusted(changed), "a changed server must be asked about again") }
     }
 
     func testHiddenToolsAndLoadingChoicesAreRememberedPerServer() {
@@ -143,9 +252,14 @@ final class IDEMCPStoreTests: XCTestCase {
             .write(to: root.appendingPathComponent(".mcp.json"))
 
         let loaded = IDEMCPProjectConfig.load(root: root)
-        XCTAssertEqual(loaded.servers.map(\.name), ["only-umbra", "shared", "only-claude"])
-        XCTAssertEqual(loaded.servers.first { $0.name == "shared" }?.command, "umbra-one", "Umbra's own file wins")
-        XCTAssertEqual(loaded.skipped.map(\.name), ["web"])
+        XCTAssertEqual(loaded.servers.map(\.name), ["only-umbra", "shared", "only-claude", "web"])
+        let shared = try XCTUnwrap(loaded.servers.first { $0.name == "shared" })
+        guard case .stdio(let command, _, _) = shared.transport else { return XCTFail("Umbra's own file wins") }
+        XCTAssertEqual(command, "umbra-one", "Umbra's own file wins")
+        let web = try XCTUnwrap(loaded.servers.first { $0.name == "web" })
+        guard case .http(let url, _) = web.transport else { return XCTFail("a URL entry is a remote server") }
+        XCTAssertEqual(url, "https://x.test")
+        XCTAssertTrue(loaded.skipped.isEmpty)
 
         let elsewhere = root.appendingPathComponent("elsewhere.json")
         try Data(#"{"mcpServers": {"evil": {"command": "rm"}}}"#.utf8).write(to: elsewhere)
@@ -168,6 +282,7 @@ final class IDEMCPManagerTests: XCTestCase {
     private var store: IDEMCPStore!
     private var manager: IDEMCPManager!
     private var pidFile: URL { root.appendingPathComponent("pid.txt") }
+    private var httpServer: Process?
 
     override func setUpWithError() throws {
         let python = "/usr/bin/python3"
@@ -188,6 +303,7 @@ final class IDEMCPManagerTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        if let httpServer { httpServer.terminate(); self.httpServer = nil }
         manager?.shutdown()
         if let root { try? FileManager.default.removeItem(at: root) }
     }
@@ -365,5 +481,68 @@ final class IDEMCPManagerTests: XCTestCase {
         let tool = try XCTUnwrap(available.first)
         let output = try await run(tool, "{}")
         XCTAssertTrue(output.contains("LEAK=none"), output)
+    }
+
+    func testARemoteServerListsAndCallsToolsOverRealHTTP() async throws {
+        let script = root.appendingPathComponent("http_server.py")
+        try fakeHTTPServerSource.write(to: script, atomically: true, encoding: .utf8)
+        let portFile = root.appendingPathComponent("http.port")
+        let server = Process()
+        server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        server.arguments = [script.path, portFile.path]
+        server.standardOutput = Pipe()
+        server.standardError = Pipe()
+        try server.run()
+        httpServer = server
+        var port: String?
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if let text = try? String(contentsOf: portFile, encoding: .utf8), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                port = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        let portNumber = try XCTUnwrap(port, "the http server should print its port")
+        try Data(#"{"mcpServers": {"remote": {"url": "http://127.0.0.1:\#(portNumber)/mcp", "headers": {"Authorization": "Bearer test"}}}}"#.utf8)
+            .write(to: root.appendingPathComponent(".mcp.json"))
+        let allowAll: @MainActor ([MCPServerConfig]) async -> Set<String> = { Set($0.map(IDEMCPStore.fingerprint(of:))) }
+        let prepared = await manager.prepare(root: root, confirm: allowAll, willStart: {})
+        XCTAssertTrue(prepared.notices.isEmpty, prepared.notices.joined(separator: "\n"))
+        let available = try await tools(of: prepared.hub)
+        XCTAssertEqual(available.map(\.name), ["mcp__remote__echo"])
+        let output = try await run(available[0], #"{"text":"hello"}"#)
+        XCTAssertTrue(output.contains("echo: hello auth=Bearer test"), output)
+        if case .running(let count, _, _)? = manager.states.first(where: { $0.name == "remote" })?.kind {
+            XCTAssertEqual(count, 1)
+        } else {
+            XCTFail("the remote server should show as running")
+        }
+    }
+
+    func testARemoteProjectServerAsksAndFailsWithoutCrashing() async throws {
+        try Data(#"{"mcpServers": {"remote": {"url": "http://127.0.0.1:1/mcp"}}}"#.utf8)
+            .write(to: root.appendingPathComponent(".mcp.json"))
+        var asked: [[MCPServerConfig]] = []
+
+        let refused = await manager.prepare(root: root, confirm: { servers in asked.append(servers); return [] }, willStart: {})
+        XCTAssertNil(refused.hub)
+        XCTAssertEqual(asked.count, 1)
+        let remote = try XCTUnwrap(asked.first?.first)
+        XCTAssertEqual(remote.name, "remote", "the http server is offered, not skipped")
+        XCTAssertTrue(remote.isRemote)
+
+        manager.allow(remote)
+        var started = 0
+        let allowed = await manager.prepare(root: root, confirm: { _ in [] }, willStart: { started += 1 })
+        XCTAssertEqual(started, 1)
+        let hub = try XCTUnwrap(allowed.hub)
+        let listed = try await tools(of: hub)
+        XCTAssertTrue(listed.isEmpty, "nothing listed, but the hub exists so the transcript can say why")
+        XCTAssertEqual(allowed.notices.count, 1)
+        XCTAssertTrue(allowed.notices[0].contains("remote"), allowed.notices[0])
+        if case .failed? = manager.states.first(where: { $0.name == "remote" })?.kind {} else {
+            XCTFail("the state should say it failed")
+        }
     }
 }

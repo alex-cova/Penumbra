@@ -11,10 +11,12 @@ struct IDEMCPSettingsSection: View {
     @State private var nameDraft = ""
     @State private var commandDraft = ""
     @State private var environmentDraft = ""
+    @State private var urlDraft = ""
+    @State private var headersDraft = ""
 
     var body: some View {
         Section("MCP Servers") {
-            Text("MCP servers give the agent more tools (a database, an issue tracker, a browser). Each is a program on this Mac that Umbra starts when a chat first needs it and stops when the window closes. Every tool call still asks first unless a rule allows it.")
+            Text("MCP servers give the agent more tools (a database, an issue tracker, a browser). Each is a program on this Mac that Umbra starts when a chat first needs it, or a hosted server Umbra contacts over the network; both stop when the window closes. Every tool call still asks first unless a rule allows it.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
 
@@ -22,7 +24,7 @@ struct IDEMCPSettingsSection: View {
                 ContentUnavailableView(
                     "No MCP Servers",
                     systemImage: "server.rack",
-                    description: Text("Add one by name and command, for example npx -y @modelcontextprotocol/server-filesystem /path.")
+                    description: Text("Add one by name and command, for example npx -y @modelcontextprotocol/server-filesystem /path, or by URL below.")
                 )
             }
             ForEach(store.servers) { entry in
@@ -30,12 +32,17 @@ struct IDEMCPSettingsSection: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.displayName)
-                        Text(entry.commandLine)
+                        Text(entry.displayEndpoint)
                             .font(IDEAppearance.Typography.monoSmall)
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
                             .lineLimit(1)
                         if !entry.envKeys.isEmpty {
                             Text("Environment: \(entry.envKeys.joined(separator: ", ")) (in the Keychain)")
+                                .font(IDEAppearance.Typography.caption)
+                                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        }
+                        if !entry.headerKeys.isEmpty {
+                            Text("Headers: \(entry.headerKeys.joined(separator: ", ")) (values in the Keychain)")
                                 .font(IDEAppearance.Typography.caption)
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                         }
@@ -49,7 +56,9 @@ struct IDEMCPSettingsSection: View {
                         Label("Use", systemImage: isOn ? "checkmark.square" : "square")
                     }
                     .buttonStyle(.borderless)
-                    .help("Allow running this command on this Mac and offer its tools to the agent. It starts with your next message.")
+                    .help(entry.isRemote
+                        ? "Allow contacting this server and offer its tools to the agent. It is contacted with your next message."
+                        : "Allow running this command on this Mac and offer its tools to the agent. It starts with your next message.")
                     .accessibilityLabel(isOn ? "Stop using \(entry.displayName)" : "Use \(entry.displayName)")
                     Button("Remove") { store.remove(id: entry.id) }
                 }
@@ -68,6 +77,21 @@ struct IDEMCPSettingsSection: View {
             }
             .disabled(commandDraft.trimmingCharacters(in: .whitespaces).isEmpty)
             Text("Adding a server does not start it; “Use” does. Environment values go to the Keychain, and the program only sees what is listed here plus a basic PATH, not the rest of Umbra's environment.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            TextField("URL (e.g. https://mcp.example.com/mcp)", text: $urlDraft)
+                .font(IDEAppearance.Typography.monoSmall)
+            TextField("Headers, one KEY=VALUE per line (optional)", text: $headersDraft, axis: .vertical)
+                .font(IDEAppearance.Typography.monoSmall)
+                .lineLimit(1...4)
+            Button("Add Remote Server") {
+                store.addRemote(name: nameDraft, url: urlDraft, headers: headersDraft)
+                nameDraft = ""
+                urlDraft = ""
+                headersDraft = ""
+            }
+            .disabled(URL(string: urlDraft.trimmingCharacters(in: .whitespaces))?.scheme == nil)
+            Text("A remote server is contacted over the network with the headers listed; header values go to the Keychain. Turning “Use” on is the consent to contact it.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
 
@@ -93,10 +117,17 @@ struct IDEMCPSettingsSection: View {
                         .font(IDEAppearance.Typography.monoSmall)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                         .lineLimit(2)
-                    if !server.env.isEmpty {
-                        Text("Sets \(server.env.keys.sorted().joined(separator: ", "))")
+                    switch server.transport {
+                    case .stdio(_, _, let env) where !env.isEmpty:
+                        Text("Sets \(env.keys.sorted().joined(separator: ", "))")
                             .font(IDEAppearance.Typography.caption)
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    case .http(_, let headers) where !headers.isEmpty:
+                        Text("Sends \(headers.keys.sorted().joined(separator: ", "))")
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    default:
+                        EmptyView()
                     }
                     stateText(for: "project:\(server.name)")
                     IDEMCPToolListView(store: store, server: server.name, rows: toolRows(for: server.name))
@@ -106,7 +137,9 @@ struct IDEMCPSettingsSection: View {
                     Button("Revoke") { manager.revoke(server) }
                 } else {
                     Button("Allow") { manager.allow(server) }
-                        .help("These are programs from the project's own files. Allow them only if you trust this project.")
+                        .help(server.isRemote
+                            ? "This is a hosted server the project's own files name. Allow it only if you trust this project."
+                            : "These are programs from the project's own files. Allow them only if you trust this project.")
                 }
             }
         }
@@ -120,7 +153,7 @@ struct IDEMCPSettingsSection: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(.red)
         }
-        Text("A project's servers never start on their own: the first chat asks, and a change to a server's command, arguments or environment asks again.")
+        Text("A project's servers never start on their own: the first chat asks, and a change to a server's command, arguments, environment, URL or headers asks again.")
             .font(IDEAppearance.Typography.caption)
             .foregroundStyle(IDEAppearance.ColorToken.muted)
     }

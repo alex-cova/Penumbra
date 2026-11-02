@@ -274,4 +274,27 @@ private func finalOutput(_ session: AgentSession) async -> String? {
         #expect(output.contains("characters omitted"))
         await hub.close()
     }
+
+    @Test func aToolsChangedNoticeRefreshesTheListAtTheNextTurnBoundary() async throws {
+        let servers = Servers { _, transport in FakeMCPServer(transport: transport, tools: [.init(name: "a")]) }
+        let hub = MCPHub(servers: [config("s")], makeTransport: servers.factory)
+        await hub.start()
+        #expect(await hub.tools.map(\.name) == ["mcp__s__a"])
+        #expect(await hub.refreshStaleTools() == false, "nothing announced, nothing to do")
+        let server = try #require(servers.servers("s").first)
+        server.pages = [[.init(name: "a"), .init(name: "b")]]
+        try await server.connection.notify(method: "notifications/tools/list_changed")
+        // The notice lands asynchronously; the host polls this at turn boundaries.
+        var changed = false
+        for _ in 0..<200 {
+            changed = await hub.refreshStaleTools()
+            if changed { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(changed, "the announced tools are picked up")
+        #expect(await hub.tools.map(\.name) == ["mcp__s__a", "mcp__s__b"])
+        #expect(await hub.statuses.map(\.state) == [.connected(tools: 2)])
+        #expect(await hub.refreshStaleTools() == false, "a second refresh is a no-op")
+        await hub.close()
+    }
 }

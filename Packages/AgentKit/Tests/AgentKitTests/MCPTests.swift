@@ -217,27 +217,244 @@ private func connectedClient(
     }
 }
 
+// MARK: - Streamable HTTP transport
+
+/// Answers POSTs from a handler, so the transport's own logic runs without a network.
+private final class MCPStubURLProtocol: URLProtocol, @unchecked Sendable {
+    struct Reply {
+        var status = 200
+        var headers: [String: String] = [:]
+        var body = Data()
+        var failure: URLError?
+    }
+
+    nonisolated(unsafe) static var handler: @Sendable (URLRequest) -> Reply = { _ in Reply() }
+    nonisolated(unsafe) static var seen: [URLRequest] = []
+    static let lock = NSLock()
+
+    static func reset(_ handler: @escaping @Sendable (URLRequest) -> Reply) {
+        lock.withLock {
+            self.handler = handler
+            seen = []
+        }
+    }
+
+    static var requests: [URLRequest] { lock.withLock { seen } }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let (reply, request) = Self.lock.withLock { (Self.handler(request), request) }
+        Self.lock.withLock { Self.seen.append(request) }
+        if let failure = reply.failure {
+            client?.urlProtocol(self, didFailWithError: failure)
+            return
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: reply.headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: reply.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+private func httpTransport(
+    headers: [String: String] = [:],
+    token: MCPHTTPTransport.TokenProvider? = nil,
+    _ handler: @escaping @Sendable (URLRequest) -> MCPStubURLProtocol.Reply
+) -> MCPHTTPTransport {
+    MCPStubURLProtocol.reset(handler)
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [MCPStubURLProtocol.self]
+    return MCPHTTPTransport(
+        url: URL(string: "https://mcp.test/mcp")!, headers: headers, tokenProvider: token,
+        session: URLSession(configuration: configuration))
+}
+
+private func rpcBody(_ request: URLRequest) -> [String: Any] {
+    // URLSession hands the protocol a stream, not the `httpBody` the sender set.
+    var data: Data?
+    if let body = request.httpBody {
+        data = body
+    } else if let stream = request.httpBodyStream {
+        stream.open()
+        defer { stream.close() }
+        var bytes = Data()
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
+        defer { buffer.deallocate() }
+        while stream.hasBytesAvailable {
+            let count = stream.read(buffer, maxLength: 4096)
+            if count <= 0 { break }
+            bytes.append(buffer, count: count)
+        }
+        data = bytes
+    }
+    guard let data, let json = try? JSONSerialization.jsonObject(with: data) else { return [:] }
+    return json as? [String: Any] ?? [:]
+}
+
+private func jsonReply(_ object: [String: JSONValue], sessionID: String? = nil) -> MCPStubURLProtocol.Reply {
+    var headers = ["Content-Type": "application/json"]
+    if let sessionID { headers["Mcp-Session-Id"] = sessionID }
+    return MCPStubURLProtocol.Reply(headers: headers, body: Data(((try? JSONValue.object(object).serialized()) ?? "").utf8))
+}
+
+private let mcpInitializeResult: [String: JSONValue] = [
+    "protocolVersion": "2025-06-18", "serverInfo": ["name": "remote", "version": "1"],
+    "capabilities": ["tools": [:]],
+]
+
+@Suite(.serialized) struct MCPHTTPTransportTests {
+    @Test func aFullSessionRunsOverOneEndpointWithTheSessionID() async throws {
+        let transport = httpTransport(headers: ["Authorization": "Bearer static"]) { request in
+            let method = rpcBody(request)["method"] as? String
+            switch (request.httpMethod, method) {
+            case ("POST", "initialize"):
+                return jsonReply(["jsonrpc": "2.0", "id": 1, "result": .object(mcpInitializeResult)], sessionID: "session-1")
+            case ("POST", "tools/list"):
+                return jsonReply(["jsonrpc": "2.0", "id": 2, "result": [
+                    "tools": [["name": "echo", "description": "echoes", "inputSchema": ["type": "object"]]],
+                ]])
+            case ("POST", "tools/call"):
+                return jsonReply(["jsonrpc": "2.0", "id": 3, "result": [
+                    "content": [["type": "text", "text": "echo!"]],
+                ]])
+            default:
+                return MCPStubURLProtocol.Reply(status: 202)
+            }
+        }
+        let client = MCPClient(transport: transport)
+        try await client.start(timeout: .seconds(5))
+        let listed = try await client.listTools()
+        #expect(listed.map { $0.name } == ["echo"])
+        let result = try await client.callTool(name: "echo", arguments: .object([:]), timeout: .seconds(5))
+        #expect(result.text == "echo!")
+        let posts = MCPStubURLProtocol.requests.filter { $0.httpMethod == "POST" }
+        #expect(posts.count == 4, "initialize, initialized notice, list, call")
+        for post in posts.dropFirst() {
+            #expect(post.value(forHTTPHeaderField: "Mcp-Session-Id") == "session-1", "the session travels after initialize")
+            #expect(post.value(forHTTPHeaderField: "Authorization") == "Bearer static")
+        }
+        await client.close()
+        let delete = try #require(MCPStubURLProtocol.requests.last)
+        #expect(delete.httpMethod == "DELETE")
+        #expect(delete.value(forHTTPHeaderField: "Mcp-Session-Id") == "session-1")
+    }
+
+    @Test func anSSEResponseIsReadAsMessages() async throws {
+        let transport = httpTransport { request in
+            let method = rpcBody(request)["method"] as? String
+            switch (request.httpMethod, method) {
+            case ("POST", "initialize"):
+                let body = """
+                : a comment the parser ignores
+                event: message
+                data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"remote","version":"1"},"capabilities":{"tools":{}}}}
+
+                """
+                return MCPStubURLProtocol.Reply(headers: ["Content-Type": "text/event-stream"], body: Data(body.utf8))
+            case ("POST", "tools/list"):
+                return jsonReply(["jsonrpc": "2.0", "id": 2, "result": ["tools": []]])
+            default:
+                return MCPStubURLProtocol.Reply(status: 202)
+            }
+        }
+        let client = MCPClient(transport: transport)
+        try await client.start(timeout: .seconds(5))
+        #expect(try await client.listTools().isEmpty)
+    }
+
+    @Test func a401FailsAloneAndRetriesOnceWithAFreshToken() async throws {
+        let refusing = httpTransport(headers: ["Authorization": "Bearer static"]) { request in
+            guard request.value(forHTTPHeaderField: "Authorization") == "Bearer fresh" else {
+                return MCPStubURLProtocol.Reply(status: 401)
+            }
+            return jsonReply(["jsonrpc": "2.0", "id": 1, "result": .object(mcpInitializeResult)])
+        }
+        // Without a token provider there is nothing to retry with: one request, and the failure says why.
+        let client = MCPClient(transport: refusing)
+        await #expect(throws: MCPError.server(code: 401, message: "The MCP server answered 401: ")) {
+            try await client.start(timeout: .seconds(5))
+        }
+        #expect(MCPStubURLProtocol.requests.count == 1)
+
+        let retrying = httpTransport(token: { "fresh" }) { request in
+            guard request.value(forHTTPHeaderField: "Authorization") == "Bearer fresh" else {
+                return MCPStubURLProtocol.Reply(status: 401)
+            }
+            return jsonReply(["jsonrpc": "2.0", "id": 1, "result": .object(mcpInitializeResult)])
+        }
+        let retryClient = MCPClient(transport: retrying)
+        try await retryClient.start(timeout: .seconds(5))
+        #expect(MCPStubURLProtocol.requests.count == 2, "one 401, then one retry with the fresh token")
+    }
+
+    @Test func aRedirectToAnotherHostIsRefused() async throws {
+        let transport = httpTransport { _ in
+            MCPStubURLProtocol.Reply(status: 302, headers: ["Location": "https://evil.test/mcp"])
+        }
+        await #expect(throws: ACPError.agentError(JSONRPCError(
+            code: -32000,
+            message: "The MCP server redirected to evil.test, which is outside its configured address, so the request was not followed."))) {
+            try await transport.send(Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.utf8))
+        }
+        #expect(MCPStubURLProtocol.requests.count == 1, "evil.test was never contacted")
+    }
+
+    @Test func aSameHostRedirectIsFollowed() async throws {
+        let transport = httpTransport { request in
+            if request.url?.path == "/other" {
+                return jsonReply(["jsonrpc": "2.0", "id": 1, "result": .object(mcpInitializeResult)])
+            }
+            return MCPStubURLProtocol.Reply(status: 302, headers: ["Location": "https://mcp.test/other"])
+        }
+        try await transport.send(Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.utf8))
+        #expect(MCPStubURLProtocol.requests.map { $0.url?.path } == ["/mcp", "/other"])
+    }
+
+    @Test func aDroppedConnectionSurfacesTheReason() async throws {
+        let transport = httpTransport { _ in
+            MCPStubURLProtocol.Reply(failure: URLError(.networkConnectionLost))
+        }
+        do {
+            try await transport.send(Data(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.utf8))
+            Issue.record("expected a throw")
+        } catch {
+            #expect(error.localizedDescription.contains("Could not reach"))
+        }
+    }
+}
+
 // MARK: - Configuration and names
 
 @Suite struct MCPConfigTests {
-    @Test func aClaudeStyleFileIsReadAndHttpServersAreReported() throws {
+    @Test func aClaudeStyleFileIsReadAndHttpServersAreKept() throws {
         let file = try MCPConfigFile.parse(Data("""
         {"mcpServers": {
           "github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": {"TOKEN": "abc", "N": 3}},
-          "remote": {"type": "http", "url": "https://x.test/mcp"},
-          "sse": {"url": "https://x.test/sse"},
+          "remote": {"type": "http", "url": "https://x.test/mcp", "headers": {"Authorization": "Bearer t", "N": 3}},
+          "bare-url": {"url": "https://x.test/other"},
+          "sse": {"type": "sse", "url": "https://x.test/sse"},
+          "bad-scheme": {"url": "ftp://x.test/mcp"},
           "empty": {"args": ["x"]},
           "weird": 5
         }}
         """.utf8))
-        #expect(file.servers == [MCPServerConfig(name: "github", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], env: ["TOKEN": "abc"])])
-        #expect(Dictionary(uniqueKeysWithValues: file.skipped.map { ($0.name, $0.reason) }).keys.sorted() == ["empty", "remote", "sse", "weird"])
-        #expect(file.skipped.first { $0.name == "remote" }?.reason.contains("http") == true)
+        #expect(file.servers == [
+            MCPServerConfig(name: "bare-url", url: "https://x.test/other"),
+            MCPServerConfig(name: "github", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], env: ["TOKEN": "abc"]),
+            MCPServerConfig(name: "remote", url: "https://x.test/mcp", headers: ["Authorization": "Bearer t"]),
+        ])
+        #expect(Dictionary(uniqueKeysWithValues: file.skipped.map { ($0.name, $0.reason) }).keys.sorted() == ["bad-scheme", "empty", "sse", "weird"])
+        #expect(file.skipped.first { $0.name == "sse" }?.reason.contains("SSE") == true)
+        #expect(file.skipped.first { $0.name == "bad-scheme" }?.reason.contains("http") == true)
     }
 
     @Test func theVSCodeShapeAndEmptyFilesWork() throws {
         let vscode = try MCPConfigFile.parse(Data(#"{"servers": {"a": {"type": "stdio", "command": "uvx", "args": ["tool"]}}}"#.utf8))
-        #expect(vscode.servers.map(\.command) == ["uvx"])
+        #expect(vscode.servers.map(\.transport) == [.stdio(command: "uvx", args: ["tool"], env: [:])])
         #expect(try MCPConfigFile.parse(Data("{}".utf8)).servers.isEmpty)
         #expect(throws: MCPConfigFile.ParseError.notJSON) { try MCPConfigFile.parse(Data("nope".utf8)) }
         #expect(throws: MCPConfigFile.ParseError.notJSON) { try MCPConfigFile.parse(Data("[1]".utf8)) }
@@ -254,6 +471,20 @@ private func connectedClient(
             MCPServerConfig(name: "a", command: "npx", args: ["x"], env: ["K": "w"]),
             MCPServerConfig(name: "a", command: "npx", args: ["x"], env: ["K": "v", "L": "1"]),
             MCPServerConfig(name: "a", command: "npx", args: ["x", ""], env: ["K": "v"]),
+        ] { #expect(changed.canonicalText != base.canonicalText) }
+    }
+
+    @Test func aChangedURLOrHeaderAsksAboutTrustAgain() {
+        let base = MCPServerConfig(name: "a", url: "https://x.test/mcp", headers: ["Authorization": "Bearer t"])
+        #expect(base.isRemote)
+        #expect(!MCPServerConfig(name: "a", command: "npx").isRemote)
+        #expect(base.canonicalText == MCPServerConfig(name: "a", url: "https://x.test/mcp", headers: ["Authorization": "Bearer t"]).canonicalText)
+        #expect(base.displayCommand == "https://x.test/mcp")
+        for changed in [
+            MCPServerConfig(name: "a", url: "https://y.test/mcp", headers: ["Authorization": "Bearer t"]),
+            MCPServerConfig(name: "a", url: "https://x.test/mcp", headers: ["Authorization": "Bearer u"]),
+            MCPServerConfig(name: "a", url: "https://x.test/mcp"),
+            MCPServerConfig(name: "a", command: "npx"),
         ] { #expect(changed.canonicalText != base.canonicalText) }
     }
 

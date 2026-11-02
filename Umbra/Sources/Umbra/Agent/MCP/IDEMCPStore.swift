@@ -4,25 +4,71 @@ import Foundation
 import Observation
 import SwiftUI
 
-/// A server the user added in Settings. The secret half of its environment is in the Keychain.
-struct IDEMCPServerEntry: Codable, Equatable, Identifiable, Sendable {
+/// A server the user added in Settings: either a local program (a command line whose secret
+/// environment values are in the Keychain) or a hosted streamable HTTP endpoint (a URL whose secret
+/// header values are in the Keychain). Exactly one of the two halves is set.
+struct IDEMCPServerEntry: Equatable, Identifiable, Sendable {
     var id: UUID
     var name: String
     var command: String
     var args: [String]
     /// Names of the environment variables whose values are in the Keychain.
     var envKeys: [String]
+    /// A hosted endpoint. Set for a remote server; a local server leaves it nil.
+    var url: String?
+    /// Names of the HTTP headers whose values are in the Keychain.
+    var headerKeys: [String]
 
-    init(id: UUID = UUID(), name: String, command: String, args: [String] = [], envKeys: [String] = []) {
+    init(
+        id: UUID = UUID(), name: String, command: String = "", args: [String] = [], envKeys: [String] = [],
+        url: String? = nil, headerKeys: [String] = []
+    ) {
         self.id = id
         self.name = name
         self.command = command
         self.args = args
         self.envKeys = envKeys
+        self.url = url
+        self.headerKeys = headerKeys
     }
 
-    var displayName: String { name.isEmpty ? command : name }
+    var isRemote: Bool { url != nil }
+
+    var displayName: String {
+        if !name.isEmpty { return name }
+        return url ?? command
+    }
     var commandLine: String { ([command] + args).joined(separator: " ") }
+    /// What Settings shows: the URL for a remote server, the command line for a local one.
+    var displayEndpoint: String { url ?? commandLine }
+}
+
+extension IDEMCPServerEntry: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, command, args, envKeys, url, headerKeys
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        command = try values.decodeIfPresent(String.self, forKey: .command) ?? ""
+        args = try values.decodeIfPresent([String].self, forKey: .args) ?? []
+        envKeys = try values.decodeIfPresent([String].self, forKey: .envKeys) ?? []
+        url = try values.decodeIfPresent(String.self, forKey: .url)
+        headerKeys = try values.decodeIfPresent([String].self, forKey: .headerKeys) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(name, forKey: .name)
+        try values.encode(command, forKey: .command)
+        try values.encode(args, forKey: .args)
+        try values.encode(envKeys, forKey: .envKeys)
+        try values.encodeIfPresent(url, forKey: .url)
+        try values.encode(headerKeys, forKey: .headerKeys)
+    }
 }
 
 /// A tool a server offered the last time it started, kept so Settings can list it before the next start.
@@ -180,9 +226,26 @@ final class IDEMCPStore {
         return entry
     }
 
+    /// Adds a hosted streamable HTTP server. Header values go to the Keychain under the header's
+    /// name; turning "Use" on is the consent to contact the URL. Returns nil for a URL that is not
+    /// http or https.
+    @discardableResult
+    func addRemote(name: String, url: String, headers: String) -> IDEMCPServerEntry? {
+        let trimmed = url.trimmingCharacters(in: .whitespaces)
+        guard let scheme = URL(string: trimmed)?.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            return nil
+        }
+        var entry = IDEMCPServerEntry(name: name.trimmingCharacters(in: .whitespaces), url: trimmed)
+        for (key, value) in Self.parseHeaders(headers) {
+            if (try? keyStore.save(value, account: Self.account(entry.id, key))) != nil { entry.headerKeys.append(key) }
+        }
+        servers.append(entry)
+        return entry
+    }
+
     func remove(id: UUID) {
         if let entry = servers.first(where: { $0.id == id }) {
-            for key in entry.envKeys { try? keyStore.delete(account: Self.account(id, key)) }
+            for key in entry.envKeys + entry.headerKeys { try? keyStore.delete(account: Self.account(id, key)) }
         }
         servers.removeAll { $0.id == id }
         enabledIDs.remove(id)
@@ -200,6 +263,13 @@ final class IDEMCPStore {
     }
 
     func config(for entry: IDEMCPServerEntry) -> MCPServerConfig {
+        if let url = entry.url {
+            var headers: [String: String] = [:]
+            for key in entry.headerKeys {
+                if let value = try? keyStore.load(account: Self.account(entry.id, key)), !value.isEmpty { headers[key] = value }
+            }
+            return MCPServerConfig(name: entry.displayName, url: url, headers: headers)
+        }
         var env: [String: String] = [:]
         for key in entry.envKeys {
             if let value = try? keyStore.load(account: Self.account(entry.id, key)), !value.isEmpty { env[key] = value }
@@ -208,6 +278,21 @@ final class IDEMCPStore {
     }
 
     static func account(_ id: UUID, _ key: String) -> String { "mcp.\(id.uuidString).\(key)" }
+
+    /// `KEY=VALUE` lines for header names: letters, digits and hyphens, so `X-Team: x` works
+    /// (environment variable names cannot have those). Blank lines, `#` comments and other names
+    /// are skipped.
+    static func parseHeaders(_ text: String) -> [(key: String, value: String)] {
+        text.split(whereSeparator: \.isNewline).compactMap { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#"), let equals = trimmed.firstIndex(of: "=") else { return nil }
+            let key = String(trimmed[..<equals]).trimmingCharacters(in: .whitespaces)
+            let valid = (key.first?.isLetter ?? false)
+                && key.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+            guard valid else { return nil }
+            return (key, String(trimmed[trimmed.index(after: equals)...]))
+        }
+    }
 
     /// `KEY=VALUE` lines; blank lines, `#` comments and names that are not variable names are skipped.
     static func parseEnvironment(_ text: String) -> [(key: String, value: String)] {

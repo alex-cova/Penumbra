@@ -361,20 +361,25 @@ extension IDEWorkspace: IDEAgentHost {
         showAgentCommand(id: id, title: title, line: line)
     }
 
-    /// One question for all the servers a project's files list, naming each command line, because
-    /// what runs is the program, with this user's permissions.
+    /// One question for all the servers a project's files list, naming each command line or URL,
+    /// because what runs is the program with this user's permissions, and what is contacted gets
+    /// the project's headers.
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> {
         guard !servers.isEmpty else { return [] }
-        let listing = servers.prefix(8).map { server in
+        let listing = servers.prefix(8).map { server -> String in
             var line = "• \(server.name): \(server.displayCommand)"
-            if !server.env.isEmpty { line += "   (sets \(server.env.keys.sorted().joined(separator: ", ")))" }
+            switch server.transport {
+            case .stdio(_, _, let env):
+                if !env.isEmpty { line += "   (sets \(env.keys.sorted().joined(separator: ", ")))" }
+            case .http(_, let headers):
+                if !headers.isEmpty { line += "   (sends \(headers.keys.sorted().joined(separator: ", ")))" }
+            }
             return line
         }.joined(separator: "\n") + (servers.count > 8 ? "\n… and \(servers.count - 8) more" : "")
+        let names = servers.count == 1 ? "an MCP server" : "\(servers.count) MCP servers"
         var alert = IDEAlert.confirm(
-            servers.count == 1
-                ? "This project wants to run an MCP server."
-                : "This project wants to run \(servers.count) MCP servers.",
-            detail: "\(listing)\n\nThese are programs from the project's own files. They run on this Mac with your permissions, and the agent can use what they offer (each use asks first). Allow them only if you trust this project.",
+            "This project wants to use \(names).",
+            detail: "\(listing)\n\nLocal ones are programs from the project's own files. They run on this Mac with your permissions. Remote ones are contacted over the network with the headers shown. The agent can use what they offer (each use asks first). Allow them only if you trust this project.",
             confirm: "Allow", cancel: "Not Now")
         let allowed = await alert.confirms(in: window)
         return allowed ? Set(servers.map(IDEMCPStore.fingerprint(of:))) : []

@@ -2,7 +2,7 @@
 
 Part of the series `agent-harness-1.md` to `agent-harness-7.md` (index: `README.md`). Checked against the code on 2026-10-26.
 
-**Status:** open. Phases 1 and 2 are the useful core; the rest can wait.
+**Status:** phases 1, 2 and 4 built 2026-11-02 (streamable HTTP with header secrets, session ids, no-cross-host redirects; `list_changed` refresh at turn boundaries). Open: OAuth (3), prompts and resources (5), per-server sign-in status (6). SSE (legacy transport) deliberately not built; see the open question.
 
 ## What exists today
 
@@ -28,10 +28,10 @@ Hosted MCP servers (Sentry, Linear, GitHub, Atlassian, Stripe and similar) canno
 
 ## Proposal
 
-1. **Transport enum in the config.** `MCPServerConfig` becomes `.stdio(command, args, env)` or `.http(url, headers)`. `MCPConfig.parse` keeps `url` and `headers`. The canonical text behind `IDEMCPStore.fingerprint(of:)` includes them, so a changed URL asks for trust again. Files: `MCP/MCPConfig.swift`, `IDEMCPStore.swift`, `IDEMCPSettingsSection.swift` (a URL field and header rows).
-2. **`MCPHTTPTransport: ACPTransport`** in AgentKit (`MCP/`), on `URLSession`: POST each outgoing message, accept either a JSON body or an SSE body and push each message into `incoming`, carry the `Mcp-Session-Id` header, send `DELETE` on close. Umbra's `TransportFactory` switches on the enum. Header values (API tokens) are stored like env secrets (`IDEMCPStore.account`, Keychain). This alone covers every hosted server that takes a token. The host is fixed by the config: no redirect to another host.
+1. **Transport enum in the config — built 2026-11-02.** `MCPServerConfig` is `.stdio(command, args, env)` or `.http(url, headers)` (`MCPServerTransport`; the stdio `canonicalText` is byte-identical, so existing trust stands). `MCPConfig.parse` keeps `url` and `headers`. The canonical text behind `IDEMCPStore.fingerprint(of:)` includes them, so a changed URL asks for trust again. Files: `MCP/MCPConfig.swift`, `IDEMCPStore.swift`, `IDEMCPSettingsSection.swift` (a URL field and header rows).
+2. **`MCPHTTPTransport: ACPTransport` — built 2026-11-02** in AgentKit (`MCP/`), on `URLSession`: POST each outgoing message, accept either a JSON body or an SSE body and push each message into `incoming`, carry the `Mcp-Session-Id` header, send `DELETE` on close. HTTP failures throw `ACPError.agentError`, which `MCPClient` carries as `MCPError.server`, so the reason reaches the host. Umbra's `TransportFactory` switches on the enum. Header values (API tokens) are stored like env secrets (`IDEMCPStore.account`, Keychain). This alone covers every hosted server that takes a token. The host is fixed by the config: no redirect to another host.
 3. **OAuth with PKCE** in Umbra, through `ASWebAuthenticationSession` (public API, App Store-safe), tokens in `IDEAgentKeychain`. AgentKit gets a token-provider closure on `MCPHTTPTransport` and retries once on 401. Dynamic client registration where the server offers it.
-4. **`list_changed`.** Set the notification handler in `MCPClient`; `MCPHub` refreshes that one server's tools at the next turn boundary. The tool list is part of the session fingerprint, so a refresh starts a new `AgentSession` with the history kept (the existing behaviour for fingerprint changes).
+4. **`list_changed` — built 2026-11-02.** `MCPClient` sets the notification handler and reports the notice; `MCPHub.refreshStaleTools()` (called by Umbra's `prepare` on a reused hub) re-lists that server's tools at the next turn boundary. The tool list is part of the session fingerprint, so a refresh starts a new `AgentSession` with the history kept (the existing behaviour for fingerprint changes).
 5. **Prompts and resources.** Prompts through `IDEAgentCommandCatalog` as `/mcp__server__prompt`; resources through `IDEAgentMentionResolver` as `@` mentions. Resource text is untrusted content like tool output.
 6. **Status.** `IDEMCPSettingsSection` shows connected, needs sign-in or failed (with the error) per server.
 
@@ -43,9 +43,9 @@ Hosted MCP servers (Sentry, Linear, GitHub, Atlassian, Stripe and similar) canno
 
 ## Tests
 
-- A fake streamable HTTP server in `Packages/AgentKit/Tests` (a `URLProtocol` stub): initialize, `tools/list`, `tools/call`, an SSE reply, a dropped connection, the session id header, a 401 then a retry.
-- `MCPConfig` parsing tests for `url` + `headers`, and an `IDEMCPStore` test that a URL change changes the fingerprint (`Umbra/Tests/UmbraTests`).
-- OAuth is tested through a stub token provider; the real flow is checked by hand against one hosted server.
+- Built: `MCPHTTPTransportTests` (a `URLProtocol` stub: full session with session id and `DELETE` on close, SSE reply, 401 alone and 401-then-retry, cross-host redirect refused, same-host redirect followed, dropped connection) and `aToolsChangedNoticeRefreshesTheListAtTheNextTurnBoundary` in `MCPHubTests`.
+- Built: `MCPConfig` parsing tests for `url` + `headers`, canonical-text tests for URL/header changes, `IDEMCPStore` trust tests for remote servers, `IDEMCPManagerTests.testARemoteProjectServerAsksAndFailsWithoutCrashing`, and `testARemoteServerListsAndCallsToolsOverRealHTTP` (a real loopback HTTP server: project file → trust → Bearer header → list → call through the full Umbra path).
+- OAuth is tested through a stub token provider; the real flow is checked by hand against one hosted server. Still open, with phases 3, 5 and 6.
 
 ## Done when
 

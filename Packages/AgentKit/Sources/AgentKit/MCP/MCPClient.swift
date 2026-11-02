@@ -49,6 +49,16 @@ public actor MCPClient {
     public private(set) var serverName: String?
     public private(set) var serverInstructions: String?
 
+    /// Called when the server announces `notifications/tools/list_changed`. The hub sets this to
+    /// refresh that server's tools at the next turn boundary, which keeps the request prefix stable
+    /// mid-turn.
+    private var onToolsChanged: (@Sendable () async -> Void)?
+
+    /// The hub calls this after connecting, so a restarted client is adopted too.
+    public func setToolsChangedHandler(_ handler: (@Sendable () async -> Void)?) {
+        onToolsChanged = handler
+    }
+
     public init(transport: any ACPTransport, clientName: String = "Umbra", clientVersion: String = "1.0") {
         self.connection = ACPConnection(transport: transport)
         self.clientName = clientName
@@ -62,6 +72,10 @@ public actor MCPClient {
         await connection.setRequestHandler { method, _ in
             // `ping` is the one request a client must answer; everything else is a capability we did not offer.
             method == "ping" ? .success(.object([:])) : .failure(.methodNotFound(method))
+        }
+        await connection.setNotificationHandler { [weak self] method, _ in
+            guard method == "notifications/tools/list_changed", let self else { return }
+            await self.notifyToolsChanged()
         }
         await connection.start()
         let result = try await call("initialize", [
@@ -108,6 +122,11 @@ public actor MCPClient {
     }
 
     public func close() async { await connection.close() }
+
+    private func notifyToolsChanged() async {
+        guard let onToolsChanged else { return }
+        await onToolsChanged()
+    }
 
     // MARK: - Wire
 

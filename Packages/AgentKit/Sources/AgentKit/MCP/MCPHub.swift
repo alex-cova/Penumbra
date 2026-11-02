@@ -74,7 +74,7 @@ public struct MCPToolSummary: Sendable, Equatable, Identifiable {
 public actor MCPHub {
     public typealias TransportFactory = @Sendable (MCPServerConfig) throws -> any ACPTransport
 
-    private struct ToolSpec {
+    private struct ToolSpec: Equatable {
         var name: String
         /// The server's identifier, as used in tool names.
         var server: String
@@ -88,6 +88,8 @@ public actor MCPHub {
     private struct Entry {
         var config: MCPServerConfig
         var client: MCPClient?
+        /// Set when the server announced `notifications/tools/list_changed` since its tools were read.
+        var staleTools = false
     }
 
     public static let maxRestarts = 3
@@ -220,37 +222,89 @@ public actor MCPHub {
                 continue
             }
             entries[identifier]?.client = result.client
-            let hiddenNames = hidden[config.name] ?? []
-            let infos = result.outcome.tools.sorted(by: { $0.name < $1.name })
-            let listed = infos.filter { !hiddenNames.contains($0.name) }.map { ToolDefinitionTrimmer.trim($0, trimming) }
-            let deferServer: Bool
-            switch deferral.mode(for: config.name) {
-            case .never: deferServer = false
-            case .always: deferServer = !listed.isEmpty
-            case .automatic:
-                let cost = ToolCost.tokens(of: listed.map { MCPTool(name: "x", server: identifier, info: $0, hub: self).definition }, provider: deferral.provider)
-                deferServer = cost > deferral.budgetTokens || listed.count > deferral.toolCount
-            }
-            var count = 0
-            for original in infos {
-                let isHidden = hiddenNames.contains(original.name)
-                var name = MCPNaming.toolName(server: identifier, tool: original.name)
-                var suffix = 2
-                while !usedNames.insert(name).inserted {
-                    name = MCPNaming.toolName(server: identifier, tool: original.name + "_\(suffix)")
-                    suffix += 1
-                }
-                newSpecs.append(ToolSpec(
-                    name: name, server: identifier, serverName: config.name, original: original,
-                    info: ToolDefinitionTrimmer.trim(original, trimming), isHidden: isHidden, isDeferred: deferServer))
-                if !isHidden { count += 1 }
-            }
+            if let client = result.client { await adopt(client, identifier: identifier) }
+            let (fresh, count) = buildSpecs(for: identifier, config: config, infos: result.outcome.tools, usedNames: &usedNames)
+            newSpecs += fresh
             statuses.append(MCPServerStatus(name: config.name, state: .connected(tools: count)))
         }
         specs = newSpecs
         // The window may have closed while the servers were starting.
         if closed { await closeClients() }
         return statuses
+    }
+
+    /// Re-lists the tools of servers that announced `notifications/tools/list_changed` since the last
+    /// read. The host calls this at turn boundaries, never mid-turn, so the request prefix stays
+    /// stable while the model is writing. Returns true when the tool list changed.
+    @discardableResult
+    public func refreshStaleTools() async -> Bool {
+        let stale = order.filter { entries[$0]?.staleTools == true && entries[$0]?.client != nil }
+        guard !stale.isEmpty else { return false }
+        let before = specs
+        for identifier in stale {
+            entries[identifier]?.staleTools = false
+            guard let config = entries[identifier]?.config else { continue }
+            do {
+                let client = try await liveClient(for: identifier)
+                let infos = try await client.listTools(timeout: .seconds(connectTimeout))
+                var usedNames = Set(specs.filter { $0.server != identifier }.map(\.name))
+                let (fresh, count) = buildSpecs(for: identifier, config: config, infos: infos, usedNames: &usedNames)
+                if let first = specs.firstIndex(where: { $0.server == identifier }) {
+                    let last = specs.lastIndex(where: { $0.server == identifier })!
+                    specs.replaceSubrange(first...last, with: fresh)
+                } else {
+                    specs += fresh
+                }
+                if let statusIndex = statuses.firstIndex(where: { $0.name == config.name }) {
+                    statuses[statusIndex] = MCPServerStatus(name: config.name, state: .connected(tools: count))
+                }
+            } catch {
+                // A failed refresh keeps the old tools; the next call retries through liveClient.
+            }
+        }
+        return specs != before
+    }
+
+    /// Builds one server's tool specs with the hub's trimming, hiding and deferral, claiming names
+    /// against `usedNames` like the initial start does.
+    private func buildSpecs(
+        for identifier: String, config: MCPServerConfig, infos: [MCPToolInfo], usedNames: inout Set<String>
+    ) -> (specs: [ToolSpec], connectedCount: Int) {
+        let hiddenNames = hidden[config.name] ?? []
+        let sorted = infos.sorted(by: { $0.name < $1.name })
+        let listed = sorted.filter { !hiddenNames.contains($0.name) }.map { ToolDefinitionTrimmer.trim($0, trimming) }
+        let deferServer: Bool
+        switch deferral.mode(for: config.name) {
+        case .never: deferServer = false
+        case .always: deferServer = !listed.isEmpty
+        case .automatic:
+            let cost = ToolCost.tokens(of: listed.map { MCPTool(name: "x", server: identifier, info: $0, hub: self).definition }, provider: deferral.provider)
+            deferServer = cost > deferral.budgetTokens || listed.count > deferral.toolCount
+        }
+        var fresh: [ToolSpec] = []
+        var count = 0
+        for original in sorted {
+            let isHidden = hiddenNames.contains(original.name)
+            var name = MCPNaming.toolName(server: identifier, tool: original.name)
+            var suffix = 2
+            while !usedNames.insert(name).inserted {
+                name = MCPNaming.toolName(server: identifier, tool: original.name + "_\(suffix)")
+                suffix += 1
+            }
+            fresh.append(ToolSpec(
+                name: name, server: identifier, serverName: config.name, original: original,
+                info: ToolDefinitionTrimmer.trim(original, trimming), isHidden: isHidden, isDeferred: deferServer))
+            if !isHidden { count += 1 }
+        }
+        return (fresh, count)
+    }
+
+    private func markStale(_ identifier: String) {
+        entries[identifier]?.staleTools = true
+    }
+
+    private func adopt(_ client: MCPClient, identifier: String) async {
+        await client.setToolsChangedHandler({ [weak self, identifier] in await self?.markStale(identifier) })
     }
 
     // MARK: - Calling
@@ -292,6 +346,7 @@ public actor MCPHub {
             throw MCPError.closed
         }
         entries[server]?.client = client
+        await adopt(client, identifier: server)
         return client
     }
 

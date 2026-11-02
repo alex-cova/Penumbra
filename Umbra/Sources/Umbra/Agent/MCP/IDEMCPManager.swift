@@ -102,54 +102,54 @@ final class IDEMCPManager {
                 states = idleStates()
                 return Prepared()
             }
-            if let hub, key == hubKey { return Prepared(hub: hub) }
+            if let hub, key == hubKey {
+                // A server may have announced new tools since the last message: pick them up now, at a
+                // turn boundary, so the next session is built with the new list.
+                await hub.refreshStaleTools()
+                await syncRowsAndStates(from: hub, statuses: await hub.statuses, provider: provider) { [registry] name in
+                    registry.recentStandardError(for: name)
+                }
+                return Prepared(hub: hub)
+            }
 
             await stop()
             willStart()
             let registry = self.registry
             let loginPath = await IDELoginShellPath.shared.entries()
             let newHub = MCPHub(servers: active, trimming: .standard, hidden: hidden, deferral: deferral) { config in
-                let environment = AgentCommandEnvironment.make(javaHome: nil, loginPath: loginPath, extras: config.env)
-                let definition = IDEACPDefinition(name: config.name, command: config.command, args: config.args)
-                guard definition.resolvedExecutable(pathValue: environment["PATH"] ?? "") != nil else {
-                    throw MCPError.server(code: -32000, message: "Could not find “\(config.command)” on PATH. Install it, or give its full path.")
+                switch config.transport {
+                case .stdio(let command, let args, let env):
+                    let environment = AgentCommandEnvironment.make(javaHome: nil, loginPath: loginPath, extras: env)
+                    let definition = IDEACPDefinition(name: config.name, command: command, args: args)
+                    guard definition.resolvedExecutable(pathValue: environment["PATH"] ?? "") != nil else {
+                        throw MCPError.server(code: -32000, message: "Could not find “\(command)” on PATH. Install it, or give its full path.")
+                    }
+                    let transport = IDEACPTransport(definition: definition, workingDirectory: root, environment: environment)
+                    registry.set(transport, for: config.name)
+                    return transport
+                case .http(let url, let headers):
+                    // OAuth (a token provider) is not built yet; servers that take a Bearer [REDACTED] work today.
+                    guard let endpoint = URL(string: url), let scheme = endpoint.scheme?.lowercased(),
+                          scheme == "http" || scheme == "https"
+                    else {
+                        throw MCPError.server(code: -32000, message: "“\(config.name)” is not a valid http or https URL.")
+                    }
+                    return MCPHTTPTransport(url: endpoint, headers: headers)
                 }
-                let transport = IDEACPTransport(definition: definition, workingDirectory: root, environment: environment)
-                registry.set(transport, for: config.name)
-                return transport
             }
             let statuses = await newHub.start()
             hub = newHub
             hubKey = key
+            await syncRowsAndStates(from: newHub, statuses: statuses, provider: provider) { [registry] name in
+                registry.recentStandardError(for: name)
+            }
             var notices: [String] = []
-            var running: [String: IDEMCPServerState.Kind] = [:]
-            let summaries = await newHub.summaries
-            var rows: [String: [IDEMCPToolRow]] = [:]
-            for summary in summaries {
-                let tokens = ToolCost.tokens(of: summary.definition, provider: provider)
-                let first = summary.description.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
-                rows[summary.server, default: []].append(IDEMCPToolRow(
-                    server: summary.server, name: summary.remoteName, summary: String(first.prefix(160)), tokens: tokens,
-                    isHidden: summary.isHidden, isDeferred: summary.isDeferred))
-            }
-            for (server, list) in rows {
-                store.remember(list.map { IDEMCPKnownTool(name: $0.name, tokens: $0.tokens, summary: $0.summary) }, server: server)
-            }
-            toolRows = rows
             for status in statuses {
-                switch status.state {
-                case .connected(let tools):
-                    let mine = rows[status.name] ?? []
-                    let listed = mine.filter { !$0.isHidden && !$0.isDeferred }
-                    running[status.name] = .running(
-                        tools: tools, tokens: listed.reduce(0) { $0 + $1.tokens }, searchOnly: !mine.isEmpty && mine.allSatisfy { $0.isDeferred || $0.isHidden } && mine.contains { $0.isDeferred })
-                case .failed(let reason):
+                if case .failed(let reason) = status.state {
                     let detail = Self.withStandardError(reason, registry.recentStandardError(for: status.name))
-                    running[status.name] = .failed(detail)
                     notices.append("MCP server “\(status.name)” did not start: \(detail)")
                 }
             }
-            states = idleStates(running: running)
             return Prepared(hub: newHub, notices: notices)
         }
     }
@@ -171,6 +171,39 @@ final class IDEMCPManager {
         oldRegistry.terminateAll()
     }
 
+    /// What Settings shows, from one hub: each server's tools and costs, and whether it runs.
+    private func syncRowsAndStates(
+        from hub: MCPHub, statuses: [MCPServerStatus], provider: String, standardError: (String) -> String
+    ) async {
+        var running: [String: IDEMCPServerState.Kind] = [:]
+        let summaries = await hub.summaries
+        var rows: [String: [IDEMCPToolRow]] = [:]
+        for summary in summaries {
+            let tokens = ToolCost.tokens(of: summary.definition, provider: provider)
+            let first = summary.description.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            rows[summary.server, default: []].append(IDEMCPToolRow(
+                server: summary.server, name: summary.remoteName, summary: String(first.prefix(160)), tokens: tokens,
+                isHidden: summary.isHidden, isDeferred: summary.isDeferred))
+        }
+        for (server, list) in rows {
+            store.remember(list.map { IDEMCPKnownTool(name: $0.name, tokens: $0.tokens, summary: $0.summary) }, server: server)
+        }
+        toolRows = rows
+        for status in statuses {
+            switch status.state {
+            case .connected(let tools):
+                let mine = rows[status.name] ?? []
+                let listed = mine.filter { !$0.isHidden && !$0.isDeferred }
+                running[status.name] = .running(
+                    tools: tools, tokens: listed.reduce(0) { $0 + $1.tokens }, searchOnly: !mine.isEmpty && mine.allSatisfy { $0.isDeferred || $0.isHidden } && mine.contains { $0.isDeferred })
+            case .failed(let reason):
+                let detail = Self.withStandardError(reason, standardError(status.name))
+                running[status.name] = .failed(detail)
+            }
+        }
+        states = idleStates(running: running)
+    }
+
     /// Runs `body` after everything queued before it, so two chats asking at once start the servers once.
     private func serialized<T: Sendable>(_ body: @escaping @MainActor () async -> T) async -> T {
         let previous = last
@@ -185,7 +218,8 @@ final class IDEMCPManager {
     private func idleStates(running: [String: IDEMCPServerState.Kind] = [:]) -> [IDEMCPServerState] {
         var result: [IDEMCPServerState] = []
         for entry in store.servers {
-            let kind: IDEMCPServerState.Kind = store.isEnabled(entry.id) ? (running[entry.displayName] ?? .waiting("Starts with the next message")) : .off
+            let waiting = entry.isRemote ? "Contacted with the next message" : "Starts with the next message"
+            let kind: IDEMCPServerState.Kind = store.isEnabled(entry.id) ? (running[entry.displayName] ?? .waiting(waiting)) : .off
             result.append(IDEMCPServerState(id: "user:\(entry.id)", name: entry.displayName, kind: kind))
         }
         for server in project.servers {
