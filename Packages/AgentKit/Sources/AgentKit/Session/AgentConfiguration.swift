@@ -93,8 +93,17 @@ public struct AgentConfiguration: Sendable {
     /// What it returns (the editor's own problems in those files, say) is added to the last edit's
     /// output, so the model sees what it broke in the same step. `nil`, or `nil` back, adds nothing.
     public var afterEdit: (@Sendable ([String]) async -> String?)?
+    /// User-configured hooks around the agent's tool calls. The before-hook runs ahead of the
+    /// permission policy (so it covers concurrent reads and `.approveAll`); a deny is final and
+    /// beats an allow rule, and ask forces an approval card. The after-hook's text is appended to
+    /// the call's output for the model and still passes through the shaper. A throwing hook fails
+    /// open. `nil` runs no hooks. Children get the same hooks.
+    public var toolHooks: (any ToolHooks)?
     /// How long a turn waits for `afterEdit` before going on without it.
     public var afterEditTimeout: TimeInterval
+    /// Loads image bytes for the ids `UserPart.image` names, from the host's `SessionStore`
+    /// image directory. Without it, images encode as a text note. Children share the parent's.
+    public var loadImages: (@Sendable ([String]) async -> [String: LLMImage])?
     /// Resolves a model key to a client for a child session: an agent's `model:`, `explore`'s
     /// model, or `helper`. Throw when the key is unknown or unavailable; the child then falls
     /// back to the parent's client and the tool output says so. `nil` shares the parent always.
@@ -136,14 +145,18 @@ public struct AgentConfiguration: Sendable {
         toolOutputStore: (any ToolOutputStore)? = nil,
         snapshotter: (any WorkspaceSnapshotter)? = nil,
         afterEdit: (@Sendable ([String]) async -> String?)? = nil,
+        toolHooks: (any ToolHooks)? = nil,
         afterEditTimeout: TimeInterval = 3,
+        loadImages: (@Sendable ([String]) async -> [String: LLMImage])? = nil,
         makeChildClient: (@Sendable (String) throws -> ChildClient)? = nil,
         summaryClient: ChildClient? = nil
     ) {
         self.toolOutputStore = toolOutputStore
         self.snapshotter = snapshotter
         self.afterEdit = afterEdit
+        self.toolHooks = toolHooks
         self.afterEditTimeout = afterEditTimeout
+        self.loadImages = loadImages
         self.makeChildClient = makeChildClient
         self.summaryClient = summaryClient
         self.maxLengthContinuations = maxLengthContinuations

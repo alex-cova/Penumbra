@@ -75,6 +75,15 @@ public actor AgentSession {
     /// Marks tool output the model must treat as data, never instructions.
     static let untrustedMarker = "<untrusted"
 
+    /// The text-only rendering of one history item for a client without image support: the text
+    /// parts plus a note per image. Image bytes never reach the model.
+    static func textOnlyFallback(_ item: ConversationItem) -> ConversationItem {
+        guard case .userParts(let parts) = item else { return item }
+        var texts = parts.compactMap { part -> String? in if case .text(let t) = part { t } else { nil } }
+        for part in parts { if case .image(let id, _) = part { texts.append(ConversationItem.imageUnavailableNote(id: id)) } }
+        return .user(texts.isEmpty ? "(no content)" : texts.joined(separator: "\n"))
+    }
+
     public init(
         client: any LLMClient,
         tools: [any AgentTool],
@@ -119,13 +128,22 @@ public actor AgentSession {
         }
     }
 
+    /// Starts a run from a user turn with text and image parts. Images are untrusted content.
+    public func send(parts: [UserPart]) -> AsyncStream<AgentEvent> {
+        beginRun {
+            items.append(.userParts(parts))
+            let text = parts.compactMap { part -> String? in if case .text(let t) = part { t } else { nil } }.joined(separator: "\n")
+            return text.isEmpty ? "(image)" : text
+        }
+    }
+
     /// Runs again from the conversation as it stands, without adding a message. For a send the provider
     /// never answered: the user message is already in the history, and a turn that failed to connect
     /// left nothing half-written.
     public func retry() -> AsyncStream<AgentEvent> {
         beginRun {
             for item in items.reversed() {
-                if case .user(let text) = item { return text }
+                if let text = item.userText { return text }
             }
             return ""
         }
@@ -323,7 +341,7 @@ public actor AgentSession {
     @discardableResult
     public func rewind(toBeforeItem index: Int) async throws -> [ConversationItem] {
         guard !isRunning else { throw RewindError.runInProgress }
-        guard items.indices.contains(index), case .user = items[index] else { throw RewindError.notAUserMessage }
+        guard items.indices.contains(index), items[index].isUserTurn else { throw RewindError.notAUserMessage }
         let removed = Array(items[index...])
         items.removeSubrange(index...)
         await instructionState?.rewound(toBeforeItem: index)
@@ -640,7 +658,7 @@ public actor AgentSession {
     /// Yields what the Stop gate recorded while it was asked, if anything.
     private func drainStopGateEvents(_ policies: [any TurnPolicy], _ out: AsyncStream<AgentEvent>.Continuation) {
         for policy in policies {
-            guard let gate = policy as? StopGatePolicy else { continue }
+            guard let gate = policy as? any StopGateEventSource else { continue }
             for event in gate.takePendingEvents() { out.yield(event) }
         }
     }
@@ -713,7 +731,8 @@ public actor AgentSession {
                 shapeToolOutput: configuration.shapeToolOutput,
                 toolOutputStore: configuration.toolOutputStore,
                 snapshotter: configuration.snapshotter,
-                afterEdit: configuration.afterEdit),
+                afterEdit: configuration.afterEdit,
+                toolHooks: configuration.toolHooks),
             ledger: ReadLedger(snapshot: await ledger.snapshot()))
         var summary = ""
         var ending: RunEnding = .failed("The child session ended without an answer.")
@@ -943,6 +962,16 @@ public actor AgentSession {
         var report = CompactionReport()
         report.estimatedTokensBefore = before
 
+        // Stage zero: old images go before any text is touched; the model can ask for them again.
+        let targetTokens = Int(Double(window) * policy.target)
+        let elided = ImageStubs.apply(
+            to: items, keepRecentImages: policy.keepRecentImages,
+            estimatedTokens: force ? max(before, window) : before, targetTokens: targetTokens)
+        if elided.removed > 0 {
+            items = elided.items
+            report.elidedImages = elided.removed
+        }
+
         // After a provider overflow the estimate is known to be too low, so treat the window as full.
         let stubs = ToolOutputStubs.apply(to: items, policy: policy, estimatedTokens: force ? max(before, window) : before)
         if stubs.stubbed > 0 {
@@ -1130,7 +1159,8 @@ public actor AgentSession {
                     shapeToolOutput: configuration.shapeToolOutput,
                     toolOutputStore: configuration.toolOutputStore,
                     snapshotter: configuration.snapshotter,
-                    afterEdit: configuration.afterEdit),
+                    afterEdit: configuration.afterEdit,
+                    toolHooks: configuration.toolHooks),
                 checkpoints: checkpoints,
                 ledger: ReadLedger(snapshot: await ledger.snapshot()),
                 inheritedRun: run)
@@ -1351,7 +1381,8 @@ public actor AgentSession {
                     shapeToolOutput: configuration.shapeToolOutput,
                     toolOutputStore: configuration.toolOutputStore,
                     snapshotter: configuration.snapshotter,
-                    afterEdit: configuration.afterEdit),
+                    afterEdit: configuration.afterEdit,
+                    toolHooks: configuration.toolHooks),
                 history: snapshot.items,
                 totalUsage: snapshot.totalUsage,
                 checkpoints: checkpoints,
@@ -1408,10 +1439,16 @@ public actor AgentSession {
         // the provider's cached prefix, and dropping it would make the last turn of a run pay for everything.
         let disabled = !toolsEnabled && client.supportsDisabledToolChoice
         let context = contextTokenParts()
+        // Image bytes for what the history names. A client without image support gets a text note
+        // in place of each image, never the bytes.
+        let imageIDs = items.flatMap(\.imageIDs)
+        let loadedImages = await configuration.loadImages?(imageIDs) ?? [:]
+        let requestItems = client.supportsImages ? items : items.map(Self.textOnlyFallback)
         let request = LLMRequest(
             model: configuration.model,
             system: configuration.systemPrompt,
-            items: items,
+            items: requestItems,
+            images: loadedImages,
             tools: toolsEnabled || disabled ? offeredTools.map(\.definition) : [],
             toolChoice: disabled ? .disabled : nil,
             reasoningEffort: configuration.reasoningEffort,
@@ -1561,18 +1598,44 @@ public actor AgentSession {
         /// Files the edit tools changed this turn, and the last edit call, which carries what the host says about them.
         var turnEditedPaths: [String] = []
         var lastEditIndex: Int?
+        // User-configured before-hooks run ahead of the permission policy, so they cover concurrent
+        // reads and `.approveAll` too. A deny is final and beats an allow rule; ask forces an
+        // approval card. A throwing hook fails open.
+        var hookAskIDs: Set<String> = []
+        if let hooks = configuration.toolHooks {
+            for (index, call) in calls.enumerated() {
+                guard case .run(let tool, let arguments, _) = plans[index] else { continue }
+                let hookCall = HookCall(toolName: tool.name, risk: tool.risk, argumentsJSON: arguments)
+                let decision: HookDecision
+                do {
+                    decision = try await hooks.before(hookCall)
+                } catch {
+                    continue
+                }
+                switch decision {
+                case .allow:
+                    break
+                case .deny(let reason):
+                    plans[index] = .answered(.error(reason))
+                case .ask:
+                    hookAskIDs.insert(call.id)
+                }
+            }
+        }
         var start = 0
         while start < calls.count, !Task.isCancelled {
             var end = start + 1
-            if plans[start].isConcurrent {
-                while end < calls.count, plans[end].isConcurrent { end += 1 }
+            if plans[start].isConcurrent, !hookAskIDs.contains(calls[start].id) {
+                while end < calls.count, plans[end].isConcurrent, !hookAskIDs.contains(calls[end].id) { end += 1 }
                 // A read that leaves the machine still runs in this batch, unless a deny rule names it.
                 for index in start..<end {
                     plans[index] = await refusedByDenyRule(plans[index], call: calls[index])
                 }
             } else {
-                // Commands and edits ask first, one call at a time (they never share a batch).
-                plans[start] = await approved(plans[start], call: calls[start], out)
+                // Commands and edits ask first, one call at a time (they never share a batch). A call
+                // a hook asked about joins them even when a rule would allow it.
+                plans[start] = await approved(
+                    plans[start], call: calls[start], forceAsk: hookAskIDs.contains(calls[start].id), out)
                 if Task.isCancelled { break }
             }
             let names = (start..<end).compactMap { index -> String? in
@@ -1630,6 +1693,17 @@ public actor AgentSession {
             start = end
         }
 
+        // User-configured after-hooks: their text joins the call's output for the model (and so the
+        // shaper), while `.toolCallFinished` above keeps the original. A throwing hook adds nothing.
+        if let hooks = configuration.toolHooks, !Task.isCancelled {
+            for index in calls.indices {
+                guard case .run(let tool, let arguments, _) = plans[index], let output = outputs[index] else { continue }
+                let hookCall = HookCall(toolName: tool.name, risk: tool.risk, argumentsJSON: arguments)
+                guard let extra = try? await hooks.after(hookCall, output: output.text), !extra.isEmpty else { continue }
+                outputs[index] = ToolOutput(output.text + "\n\n" + extra, isError: output.isError)
+            }
+        }
+
         // What the editor now says about the files this turn changed, so the model sees what it broke
         // in the same step. A host that is slow or fails adds nothing.
         if let afterEdit = configuration.afterEdit, !turnEditedPaths.isEmpty, let index = lastEditIndex,
@@ -1667,9 +1741,12 @@ public actor AgentSession {
 
     /// Applies the permission policy to a call that changes files or runs a command, and returns the
     /// plan to follow: unchanged, with the user's edit, or settled as a refusal. Nothing a tool
-    /// returns can approve a call; only `resolveApproval` does.
-    private func approved(_ plan: Plan, call: PendingCall, _ out: AsyncStream<AgentEvent>.Continuation) async -> Plan {
-        guard case .run(let tool, let arguments, _) = plan, configuration.approval == .askForCommands,
+    /// returns can approve a call; only `resolveApproval` does. `forceAsk` (a before-hook's ask)
+    /// shows the approval card even when the policy allows.
+    private func approved(
+        _ plan: Plan, call: PendingCall, forceAsk: Bool = false, _ out: AsyncStream<AgentEvent>.Continuation
+    ) async -> Plan {
+        guard case .run(let tool, let arguments, _) = plan, configuration.approval == .askForCommands || forceAsk,
               let parsed = try? ToolArguments(json: arguments)
         else { return plan }
 
@@ -1686,6 +1763,8 @@ public actor AgentSession {
             // A run that saw untrusted content still asks before persisting what the model saw.
             if sawUntrustedThisRun, tool.asksAfterUntrustedContent(for: parsed) {
                 notes = [tool.untrustedAskNote]
+            } else if forceAsk {
+                notes = ["A hook asked for approval before this call."]
             } else {
                 preapprovedCalls.insert(call.id)
                 return plan

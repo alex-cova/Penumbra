@@ -4,6 +4,7 @@ import AgentKitMLX
 import AppKit
 import LocalModelStore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The agent tool window: transcript, tool-call cards, composer and the settings sheet.
 struct IDEAgentPanel: View {
@@ -178,6 +179,9 @@ struct IDEAgentPanel: View {
             if !agent.selected.queue.isEmpty {
                 IDEAgentQueuedMessages(queue: agent.selected.queue) { agent.selected.removeQueued($0) }
             }
+            if !agent.selected.pendingImages.isEmpty {
+                IDEAgentImageChips(images: agent.selected.pendingImages) { agent.selected.removePendingImage($0) }
+            }
             if isAIMode, let browser = workspace.aiBrowser, !browser.annotations.userOpenItems.isEmpty {
                 IDEAgentBrowserNotesChip(
                     notes: browser.annotations.userOpenItems, isAttached: agent.selected.attachesBrowserNotes,
@@ -214,6 +218,9 @@ struct IDEAgentPanel: View {
     private var fieldRow: some View {
         HStack(alignment: .bottom, spacing: IDEAppearance.Spacing.sm) {
             @Bindable var agent = agent
+            IDEIconButton(
+                systemImage: "paperclip", help: "Attach an image",
+                tint: IDEAppearance.ColorToken.muted, action: pickImages)
             let field = IDEAgentComposerField(
                 text: $agent.draft, height: $composerHeight,
                 placeholder: placeholder,
@@ -235,10 +242,8 @@ struct IDEAgentPanel: View {
                 onAccept: { agent.perform($0) },
                 onUserEdit: { agent.selected.promptRecall.reset() },
                 onHistory: { agent.recallPrompt($0) },
-                onDropFiles: { urls in
-                    urls.map { IDEAgentMentionToken.format(path: IDEAgentMentionPath.relative($0, root: agent.projectRoot)) }
-                        .joined(separator: " ") + " "
-                }
+                onDropFiles: { agent.selected.droppedFilesInsertion($0) },
+                onPasteImage: { agent.selected.pasteImage($0) }
             )
             .frame(height: composerHeight)
             if isAIMode {
@@ -257,8 +262,25 @@ struct IDEAgentPanel: View {
                 IDEIconButton(
                     systemImage: "arrow.up.circle.fill", help: "Send",
                     tint: IDEAppearance.ColorToken.accent,
-                    isDisabled: agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, action: send)
+                    isDisabled: agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && agent.selected.pendingImages.isEmpty,
+                    action: send)
             }
+        }
+    }
+
+    /// The file picker for image attachments. Picked files go through the same path as
+    /// drops: images attach when the model sees them, anything else becomes an `@` mention.
+    private func pickImages() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP, .tiff, .heic]
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.begin { response in
+            guard response == .OK else { return }
+            let insertion = agent.selected.droppedFilesInsertion(panel.urls)
+            if !insertion.isEmpty { agent.draft += insertion }
         }
     }
 

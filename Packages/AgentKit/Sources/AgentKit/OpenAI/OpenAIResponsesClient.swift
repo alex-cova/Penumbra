@@ -4,6 +4,7 @@ import Foundation
 public struct OpenAIResponsesClient: LLMClient {
     public var providerID: String { ResponsesRequestEncoder.providerID }
     public var supportsDisabledToolChoice: Bool { true }
+    public var supportsImages: Bool { true }
 
     public let endpoint: LLMEndpoint
     public let strictTools: Bool

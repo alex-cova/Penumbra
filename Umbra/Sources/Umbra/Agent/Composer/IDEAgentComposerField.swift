@@ -24,6 +24,8 @@ struct IDEAgentComposerField: NSViewRepresentable {
     var onHistory: ((Int) -> String?)?
     /// Text to insert for files dropped on the field (project-relative mentions).
     var onDropFiles: (([URL]) -> String)?
+    /// Image data pasted from the clipboard. `true` consumes the paste (the image became a chip).
+    var onPasteImage: ((Data) -> Bool)?
 
     static let maxLines = 8
 
@@ -262,9 +264,18 @@ struct IDEAgentComposerField: NSViewRepresentable {
         // MARK: - Drops
 
         func dropped(_ urls: [URL], into textView: IDEAgentComposerTextView) -> Bool {
-            guard let insertion = parent.onDropFiles?(urls), !insertion.isEmpty else { return false }
-            textView.insertText(insertion, replacementRange: textView.selectedRange())
+            // An empty insertion still consumes the drop: image files attach as chips instead of text.
+            guard let insertion = parent.onDropFiles?(urls) else { return false }
+            if !insertion.isEmpty { textView.insertText(insertion, replacementRange: textView.selectedRange()) }
             return true
+        }
+
+        /// Image data on the clipboard becomes a chip instead of pasted bytes. Anything else
+        /// falls through to the normal paste.
+        func pasteImage() -> Bool {
+            let board = NSPasteboard.general
+            guard let data = board.data(forType: .png) ?? board.data(forType: .tiff) else { return false }
+            return parent.onPasteImage?(data) ?? false
         }
     }
 }
@@ -292,6 +303,11 @@ final class IDEAgentComposerTextView: NSTextView {
                 .font: font ?? NSFont.systemFont(ofSize: 15),
                 .foregroundColor: IDEAppearance.NSToken.muted,
             ])
+    }
+
+    override func paste(_ sender: Any?) {
+        if let coordinator, MainActor.assumeIsolated({ coordinator.pasteImage() }) { return }
+        super.paste(sender)
     }
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {

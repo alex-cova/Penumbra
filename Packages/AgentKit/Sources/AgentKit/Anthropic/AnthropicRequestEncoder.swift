@@ -106,6 +106,9 @@ public enum AnthropicRequestEncoder {
             case .user(let text):
                 flushAssistant()
                 userText.append(["type": "text", "text": .string(text)])
+            case .userParts(let parts):
+                flushAssistant()
+                userText += userBlocks(parts, images: request.images)
             case .toolOutput(let callID, let output):
                 flushAssistant()
                 toolResults.append([
@@ -130,6 +133,32 @@ public enum AnthropicRequestEncoder {
         flushAssistant()
         flushUser()
         return result
+    }
+
+    /// Text parts become `text` blocks; image parts become `image` blocks with a base64 source.
+    /// Missing bytes become a text note, never a failure: the history must stay sendable.
+    static func userBlocks(_ parts: [UserPart], images: [String: LLMImage]) -> [JSONValue] {
+        var blocks: [JSONValue] = []
+        for part in parts {
+            switch part {
+            case .text(let text):
+                blocks.append(["type": "text", "text": .string(text)])
+            case .image(let id, let mediaType):
+                guard let image = images[id] else {
+                    blocks.append(["type": "text", "text": .string(ConversationItem.imageUnavailableNote(id: id))])
+                    continue
+                }
+                blocks.append([
+                    "type": "image",
+                    "source": [
+                        "type": "base64", "media_type": .string(image.mediaType.isEmpty ? mediaType : image.mediaType),
+                        "data": .string(image.data.base64EncodedString()),
+                    ],
+                ])
+            }
+        }
+        if blocks.isEmpty { blocks.append(["type": "text", "text": .string("(no content)")]) }
+        return blocks
     }
 
     /// `input` must be an object. Arguments that did not parse were answered with an error already,

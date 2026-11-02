@@ -4,12 +4,25 @@ import Foundation
 /// these into its own wire format.
 public enum ConversationItem: Sendable, Hashable, Codable {
     case user(String)
+    /// A user turn with text and image parts. `.user` stays so saved chats still decode.
+    /// Image bytes live as files beside the session (`SessionStore`) and are referenced by id;
+    /// they are never inline in the JSON.
+    case userParts([UserPart])
     case assistant(String)
     /// `arguments` is the JSON object the model produced, as text.
     case toolCall(id: String, name: String, arguments: String)
     /// Every `toolCall` gets exactly one of these; both APIs reject a history with an unanswered call.
     case toolOutput(callID: String, output: String)
     case opaque(OpaqueItem)
+}
+
+/// One part of a `.userParts` message. Images are untrusted content: a dropped file, a paste,
+/// or (later) a tool screenshot, never something the model produced.
+public enum UserPart: Sendable, Hashable, Codable {
+    case text(String)
+    /// `id` names the image file beside the session; `mediaType` is `image/jpeg`, `image/png`,
+    /// `image/gif` or `image/webp`.
+    case image(id: String, mediaType: String)
 }
 
 extension ConversationItem {
@@ -47,6 +60,49 @@ extension ConversationItem {
 
     static func interruptedCallOutput(name: String) -> String {
         "Tool execution interrupted: \(name). The app closed before it returned, so it may have partly run. Check the current state (read the file, git_status) before repeating it."
+    }
+
+    /// The text of a user turn, joining `.userParts` text parts. `nil` for anything else.
+    public var userText: String? {
+        switch self {
+        case .user(let text): return text
+        case .userParts(let parts):
+            let texts = parts.compactMap { part -> String? in if case .text(let t) = part { t } else { nil } }
+            return texts.isEmpty ? nil : texts.joined(separator: "\n")
+        default: return nil
+        }
+    }
+
+    /// Image ids in a `.userParts` turn, in order. Empty for anything else.
+    public var imageIDs: [String] {
+        guard case .userParts(let parts) = self else { return [] }
+        return parts.compactMap { part in if case .image(let id, _) = part { id } else { nil } }
+    }
+
+    /// Whether this turn carries at least one image.
+    public var hasImages: Bool {
+        guard case .userParts(let parts) = self else { return false }
+        return parts.contains { if case .image = $0 { true } else { false } }
+    }
+
+    /// Whether this item opens a user turn (a plain or parts message). Turn tracking, cuts and
+    /// history counts treat both alike.
+    public var isUserTurn: Bool {
+        switch self {
+        case .user, .userParts: true
+        default: false
+        }
+    }
+
+    /// The note a client without image support (or with missing bytes) gets in place of an image.
+    public static func imageUnavailableNote(id: String) -> String {
+        "[image \(id) was attached but this model cannot see images, or the image file is missing. Describe what you need in words, or switch to a vision model.]"
+    }
+
+    /// The note compaction leaves where older images were.
+    public static func imageElidedNote(count: Int) -> String {
+        count == 1 ? "[image omitted to save context. Ask for it again if you need it.]"
+            : "[\(count) images omitted to save context. Ask for them again if you need them.]"
     }
 }
 

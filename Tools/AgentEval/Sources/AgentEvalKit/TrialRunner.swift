@@ -159,6 +159,9 @@ public enum TrialRunner {
             switch item {
             case .toolOutput(_, let output): result.toolResultChars += output.count
             case .user(let text) where text.contains("made no tool call"): result.announcedActionNudges += 1
+            case .userParts(let parts) where parts.contains(where: {
+                if case .text(let text) = $0 { text.contains("made no tool call") } else { false }
+            }): result.announcedActionNudges += 1
             default: break
             }
         }

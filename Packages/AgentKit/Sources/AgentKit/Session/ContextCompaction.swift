@@ -9,6 +9,8 @@ public struct CompactionPolicy: Sendable, Equatable {
     public var target: Double
     /// The newest tool outputs are never stubbed: the model is probably still working from them.
     public var keepRecentToolOutputs: Int
+    /// The newest turns with images keep their bytes; older images are elided first, before text.
+    public var keepRecentImages: Int
     /// An output smaller than this is not worth replacing.
     public var minimumStubbableBytes: Int
     /// A summary keeps at least this many of the newest model turns word for word.
@@ -20,13 +22,14 @@ public struct CompactionPolicy: Sendable, Equatable {
 
     public init(
         contextWindow: Int, threshold: Double = 0.75, target: Double = 0.5,
-        keepRecentToolOutputs: Int = 4, minimumStubbableBytes: Int = 600, keepRecentTurns: Int = 2,
+        keepRecentToolOutputs: Int = 4, keepRecentImages: Int = 1, minimumStubbableBytes: Int = 600, keepRecentTurns: Int = 2,
         tailTokenShare: Double = 0.30
     ) {
         self.contextWindow = contextWindow
         self.threshold = threshold
         self.target = target
         self.keepRecentToolOutputs = keepRecentToolOutputs
+        self.keepRecentImages = keepRecentImages
         self.minimumStubbableBytes = minimumStubbableBytes
         self.keepRecentTurns = keepRecentTurns
         self.tailTokenShare = tailTokenShare
@@ -35,6 +38,8 @@ public struct CompactionPolicy: Sendable, Equatable {
 
 public struct CompactionReport: Sendable, Equatable {
     public var stubbedOutputs = 0
+    /// Images elided by stage zero, before any text was touched.
+    public var elidedImages = 0
     public var summarizedItems = 0
     public var estimatedTokensBefore = 0
     public var estimatedTokensAfter = 0
@@ -43,7 +48,7 @@ public struct CompactionReport: Sendable, Equatable {
 
     public init() {}
 
-    public var changedAnything: Bool { stubbedOutputs > 0 || summarizedItems > 0 }
+    public var changedAnything: Bool { stubbedOutputs > 0 || elidedImages > 0 || summarizedItems > 0 }
 }
 
 /// Token counts without a tokenizer: UTF-8 bytes divided by four. Close enough to decide when to
@@ -52,12 +57,19 @@ public enum ContextBudget {
     public static func tokens(forBytes bytes: Int) -> Int { (bytes + 3) / 4 }
     public static func tokens(_ text: String) -> Int { tokens(forBytes: text.utf8.count) }
 
+    /// An image counts as a fixed estimate: the bytes never enter the JSON, but the model still reads them.
+    public static let imageTokenEstimate = 1_500
+
     public static func tokens(_ item: ConversationItem) -> Int {
         switch item {
-        case .user(let text), .assistant(let text): tokens(text) + 4
-        case .toolCall(let id, let name, let arguments): tokens(id) + tokens(name) + tokens(arguments) + 8
-        case .toolOutput(let callID, let output): tokens(callID) + tokens(output) + 4
-        case .opaque(let item): tokens((try? item.payload.serialized()) ?? "")
+        case .user(let text), .assistant(let text): return tokens(text) + 4
+        case .userParts(let parts):
+            let text = parts.compactMap { part -> String? in if case .text(let t) = part { t } else { nil } }.joined(separator: "\n")
+            let images = parts.filter { if case .image = $0 { true } else { false } }.count
+            return tokens(text) + images * imageTokenEstimate + 4
+        case .toolCall(let id, let name, let arguments): return tokens(id) + tokens(name) + tokens(arguments) + 8
+        case .toolOutput(let callID, let output): return tokens(callID) + tokens(output) + 4
+        case .opaque(let item): return tokens((try? item.payload.serialized()) ?? "")
         }
     }
 
@@ -142,6 +154,43 @@ public enum ToolOutputStubs {
     }
 }
 
+/// Stage zero of compaction: attached images are the bulkiest part of a turn, and the model can
+/// ask for them again, so the oldest ones become a note before any text is touched. The newest
+/// `keepRecentImages` turns keep their images; older turns keep their words.
+public enum ImageStubs {
+    public static func apply(
+        to items: [ConversationItem], keepRecentImages: Int, estimatedTokens: Int, targetTokens: Int
+    ) -> (items: [ConversationItem], removed: Int) {
+        var needed = estimatedTokens - targetTokens
+        guard needed > 0 else { return (items, 0) }
+        let withImages = items.indices.filter { items[$0].hasImages }
+        guard withImages.count > max(0, keepRecentImages) else { return (items, 0) }
+        let candidates = withImages.dropLast(max(0, keepRecentImages))
+
+        var result = items
+        var removed = 0
+        for index in candidates {
+            guard needed > 0, case .userParts(let parts) = items[index] else { continue }
+            let count = parts.filter { if case .image = $0 { true } else { false } }.count
+            guard count > 0 else { continue }
+            let texts = parts.compactMap { part -> String? in if case .text(let t) = part { t } else { nil } }
+            let note = ConversationItem.imageElidedNote(count: count)
+            let replacement: ConversationItem
+            if texts.isEmpty {
+                replacement = .user(note)
+            } else {
+                replacement = .userParts([.text(texts.joined(separator: "\n")), .text(note)])
+            }
+            let saved = ContextBudget.tokens(items[index]) - ContextBudget.tokens(replacement)
+            guard saved > 0 else { continue }
+            needed -= saved
+            result[index] = replacement
+            removed += count
+        }
+        return (result, removed)
+    }
+}
+
 /// Stage two: when stubs are not enough, the oldest part of the conversation becomes one model-written
 /// summary. The cut always falls where a model turn begins, so a tool call is never separated from
 /// its output.
@@ -190,10 +239,11 @@ public enum ConversationSummary {
     }
 
     /// The user's own words from these items, newest kept, oldest dropped once `budget` is full.
+    /// Image parts contribute nothing verbatim: the summary keeps the words, not the bytes.
     public static func boundedVerbatim(from items: [ConversationItem], budget: Int) -> [String] {
         let texts = items.compactMap { item -> String? in
-            if case .user(let text) = item { return UserText.typed(text) }
-            return nil
+            guard let text = item.userText else { return nil }
+            return UserText.typed(text)
         }
         var kept: [String] = []
         var used = 0
@@ -215,12 +265,12 @@ public enum ConversationSummary {
         for (index, item) in items.enumerated() {
             let previous = index > 0 ? items[index - 1] : nil
             switch item {
-            case .user:
+            case .user, .userParts:
                 starts.append(index)
             case .assistant, .toolCall, .opaque:
                 // A turn begins after a user message or after tool outputs, never in the middle of its own calls.
                 switch previous {
-                case nil, .user?, .toolOutput?: starts.append(index)
+                case nil, .user?, .userParts?, .toolOutput?: starts.append(index)
                 default: break
                 }
             case .toolOutput:
@@ -235,10 +285,10 @@ public enum ConversationSummary {
     /// `keepTurns` model turns.
     public static func cutIndex(in items: [ConversationItem], keepTurns: Int) -> Int? {
         let starts = turnStarts(in: items)
-        let modelTurns = starts.filter { if case .user = items[$0] { false } else { true } }
+        let modelTurns = starts.filter { !items[$0].isUserTurn }
         guard modelTurns.count > keepTurns else {
             // Few turns: cut at the last user message, if there is an earlier one to summarize.
-            let users = starts.filter { if case .user = items[$0] { true } else { false } }
+            let users = starts.filter { items[$0].isUserTurn }
             return users.count > 1 ? users.last : nil
         }
         let cut = modelTurns[modelTurns.count - keepTurns]
@@ -251,9 +301,9 @@ public enum ConversationSummary {
     public static func cutIndex(in items: [ConversationItem], tailBudget: Int, minimumTurns: Int) -> Int? {
         let minimum = max(1, minimumTurns)
         let starts = turnStarts(in: items)
-        let modelTurns = starts.filter { if case .user = items[$0] { false } else { true } }
+        let modelTurns = starts.filter { !items[$0].isUserTurn }
         guard modelTurns.count > minimum else {
-            let users = starts.filter { if case .user = items[$0] { true } else { false } }
+            let users = starts.filter { items[$0].isUserTurn }
             return users.count > 1 ? users.last : nil
         }
         var keep = minimum
@@ -276,6 +326,11 @@ public enum ConversationSummary {
         for item in items {
             switch item {
             case .user(let text): lines.append("USER: \(text)")
+            case .userParts(let parts):
+                let text = parts.compactMap { part -> String? in if case .text(let t) = part { t } else { nil } }.joined(separator: "\n")
+                let images = parts.filter { if case .image = $0 { true } else { false } }.count
+                let suffix = images == 0 ? "" : " [\(images) attached image\(images == 1 ? "" : "s")]"
+                lines.append("USER: \(text)\(suffix)")
             case .assistant(let text): lines.append("ASSISTANT: \(text)")
             case .toolCall(_, let name, let arguments): lines.append("ASSISTANT CALLS \(name) \(arguments)")
             case .toolOutput(_, let output):

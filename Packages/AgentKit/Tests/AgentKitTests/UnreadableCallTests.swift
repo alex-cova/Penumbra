@@ -55,6 +55,7 @@ private let liveUnreadableProjects = Locked<[TempProject]>([])
         let kinds = items.map { item -> String in
             switch item {
             case .user: "user"
+            case .userParts: "user"
             case .assistant: "assistant"
             case .toolCall: "call"
             case .toolOutput: "output"

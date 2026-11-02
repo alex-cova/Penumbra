@@ -56,6 +56,9 @@ public enum OllamaRequestEncoder {
             case .user(let text):
                 flushAssistant()
                 result.append(["role": "user", "content": .string(text)])
+            case .userParts(let parts):
+                flushAssistant()
+                result.append(userMessage(parts, images: request.images))
             case .assistant(let text):
                 flushAssistant()
                 assistantText = text
@@ -74,6 +77,29 @@ public enum OllamaRequestEncoder {
         }
         flushAssistant()
         return result
+    }
+
+    /// Text parts join into `content`; image bytes become the `images` array (base64).
+    /// Missing bytes become a text note, never the bytes.
+    static func userMessage(_ parts: [UserPart], images: [String: LLMImage]) -> JSONValue {
+        var texts: [String] = []
+        var blobs: [JSONValue] = []
+        for part in parts {
+            switch part {
+            case .text(let text):
+                texts.append(text)
+            case .image(let id, _):
+                guard let image = images[id] else {
+                    texts.append(ConversationItem.imageUnavailableNote(id: id))
+                    continue
+                }
+                blobs.append(.string(image.data.base64EncodedString()))
+            }
+        }
+        if texts.isEmpty && blobs.isEmpty { texts.append("(no content)") }
+        var message: [String: JSONValue] = ["role": "user", "content": .string(texts.joined(separator: "\n"))]
+        if !blobs.isEmpty { message["images"] = .array(blobs) }
+        return .object(message)
     }
 }
 
@@ -127,11 +153,14 @@ public struct OllamaClient: LLMClient {
     public static let defaultBaseURL = URL(string: "http://localhost:11434")!
 
     public var providerID: String { OllamaRequestEncoder.providerID }
+    public var supportsImages: Bool { supportsVision }
 
     public let endpoint: LLMEndpoint
     /// `options.num_ctx`. Kept fixed for a session: a different value makes Ollama reload the model.
     public let contextLength: Int
     public let supportsThinking: Bool
+    /// From `/api/show` capabilities (`vision`): only vision models get image parts.
+    public let supportsVision: Bool
     public let keepAlive: String
     private let transport: any LLMTransport
     private let retry: RetryPolicy
@@ -140,6 +169,7 @@ public struct OllamaClient: LLMClient {
         endpoint: LLMEndpoint = LLMEndpoint(baseURL: OllamaClient.defaultBaseURL),
         contextLength: Int = 32_768,
         supportsThinking: Bool = false,
+        supportsVision: Bool = false,
         keepAlive: String = "30m",
         transport: any LLMTransport = URLSessionTransport(),
         retry: RetryPolicy = .default
@@ -147,6 +177,7 @@ public struct OllamaClient: LLMClient {
         self.endpoint = endpoint
         self.contextLength = contextLength
         self.supportsThinking = supportsThinking
+        self.supportsVision = supportsVision
         self.keepAlive = keepAlive
         self.transport = transport
         self.retry = retry

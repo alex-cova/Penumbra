@@ -8,7 +8,7 @@ public enum ResponsesRequestEncoder {
     public static func body(for request: LLMRequest, strictTools: Bool = true) throws -> Data {
         var body: [String: JSONValue] = [
             "model": .string(request.model),
-            "input": .array(request.items.compactMap(inputItem)),
+            "input": .array(request.items.compactMap { inputItem($0, images: request.images) }),
             "stream": true,
             "store": false,
         ]
@@ -38,10 +38,12 @@ public enum ResponsesRequestEncoder {
         return try encoder.encode(JSONValue.object(body))
     }
 
-    private static func inputItem(_ item: ConversationItem) -> JSONValue? {
+    static func inputItem(_ item: ConversationItem, images: [String: LLMImage] = [:]) -> JSONValue? {
         switch item {
         case .user(let text):
             return ["role": "user", "content": .string(text)]
+        case .userParts(let parts):
+            return ["role": "user", "content": .array(userContent(parts, images: images))]
         case .assistant(let text):
             return ["role": "assistant", "content": .string(text)]
         case .toolCall(let id, let name, let arguments):
@@ -52,5 +54,26 @@ public enum ResponsesRequestEncoder {
             // Replayed only to the client that produced it.
             return opaque.provider == providerID ? opaque.payload : nil
         }
+    }
+
+    /// Text parts become `input_text`; images become `input_image` with a data URL. A plain
+    /// string stays a string so old golden bodies do not change; missing bytes become a note.
+    static func userContent(_ parts: [UserPart], images: [String: LLMImage]) -> [JSONValue] {
+        var content: [JSONValue] = []
+        for part in parts {
+            switch part {
+            case .text(let text):
+                content.append(["type": "input_text", "text": .string(text)])
+            case .image(let id, let mediaType):
+                guard let image = images[id] else {
+                    content.append(["type": "input_text", "text": .string(ConversationItem.imageUnavailableNote(id: id))])
+                    continue
+                }
+                let type = image.mediaType.isEmpty ? mediaType : image.mediaType
+                content.append(["type": "input_image", "image_url": .string("data:\(type);base64,\(image.data.base64EncodedString())")])
+            }
+        }
+        if content.isEmpty { content.append(["type": "input_text", "text": .string("(no content)")]) }
+        return content
     }
 }

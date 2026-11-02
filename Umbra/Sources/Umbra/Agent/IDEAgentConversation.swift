@@ -30,6 +30,9 @@ final class IDEAgentConversation: Identifiable {
     /// that message only.
     var attachesBrowserNotes = true
     var draft = ""
+    /// Images waiting in the composer to go with the next message. Shown as removable thumbnail
+    /// chips; saved beside the session when the message is sent.
+    var pendingImages: [IDEAttachedImage] = []
     /// What the agent may do without asking, in this chat. New chats start from the setting.
     private(set) var mode: PermissionMode
     /// The saved session's identity. It changes when the conversation is reset or another is loaded.
@@ -151,6 +154,8 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored private var agentWorkspace: IDEAgentWorkspace?
     /// The app-wide permission rules file; `nil` in tests, which must not read the user's own.
     @ObservationIgnored private let appPermissionsFile: URL?
+    /// Which project hook blocks the user approved. Asked again when the block changes.
+    @ObservationIgnored private let hookTrust = IDEAgentHookTrust()
     /// Rules that last as long as this chat ("Allow for this chat").
     @ObservationIgnored private var chatRules = PermissionRules()
     /// Where ↑ and ↓ are in the prompt history for this chat's field.
@@ -201,7 +206,14 @@ final class IDEAgentConversation: Identifiable {
     }
 
     var canSend: Bool {
-        !isRunning && !isCompacting && hasConsent && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !isRunning && !isCompacting && hasConsent
+            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImages.isEmpty)
+    }
+
+    /// Whether the current model sees attached images. Otherwise drops and pastes of image files
+    /// keep the `@` mention path, with a notice saying why.
+    var modelSeesImages: Bool {
+        settings.clientFactory().supportsImages(for: effectiveChoice)
     }
 
     /// Whether what this chat sends may leave the Mac: the endpoint was accepted, or it runs on this Mac,
@@ -215,11 +227,66 @@ final class IDEAgentConversation: Identifiable {
         submit(text: draft.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// Attaches prepared images to the next message. Only called when `modelSeesImages`; otherwise
+    /// the drop keeps the `@` mention path.
+    func attachImages(_ images: [IDEAttachedImage]) {
+        pendingImages.append(contentsOf: images)
+    }
+
+    func removePendingImage(_ id: UUID) {
+        pendingImages.removeAll { $0.id == id }
+    }
+
+    /// Pastes image data from the clipboard into the pending attachments. `true` when the data
+    /// became a chip; `false` when the model cannot see images or the data is not an image.
+    @discardableResult
+    func pasteImage(_ data: Data) -> Bool {
+        guard modelSeesImages,
+              let prepared = IDEAttachedImage.prepare(data, filename: "paste.jpg")
+        else { return false }
+        attachImages([prepared])
+        return true
+    }
+
+    /// Handles files dropped on (or picked for) the composer. Image files become pending
+    /// attachments when the model sees them; every other file keeps the `@` mention path, with a
+    /// notice saying why an image did not attach. Returns the text to insert for other files.
+    func droppedFilesInsertion(_ urls: [URL]) -> String {
+        let imageURLs = urls.filter { IDEAttachedImage.isImageFile($0) }
+        let rest = urls.filter { !IDEAttachedImage.isImageFile($0) }
+        if !imageURLs.isEmpty {
+            if modelSeesImages {
+                var attached: [IDEAttachedImage] = []
+                for url in imageURLs {
+                    guard let data = try? Data(contentsOf: url),
+                          let prepared = IDEAttachedImage.prepare(data, filename: url.lastPathComponent)
+                    else {
+                        appendNotice("Could not attach \(url.lastPathComponent): the image is unreadable or too large.")
+                        continue
+                    }
+                    attached.append(prepared)
+                }
+                attachImages(attached)
+            } else {
+                let names = imageURLs.map(\.lastPathComponent).joined(separator: ", ")
+                let kept = imageURLs.count == 1
+                    ? "so \(names) stays an @ mention"
+                    : "so \(names) stay @ mentions"
+                appendNotice("This model cannot see images, \(kept). Describe what they show in words, or switch to a vision model.")
+            }
+        }
+        guard let root = host?.agentProjectRoot else { return "" }
+        // Without a vision model the image files keep the `@` mention path too.
+        let mentioned = modelSeesImages ? rest : urls
+        return mentioned.map { IDEAgentMentionToken.format(path: IDEAgentMentionPath.relative($0, root: root)) }
+            .joined(separator: " ") + (mentioned.isEmpty ? "" : " ")
+    }
+
     /// Sends a message. The transcript shows `text`; the model gets `modelText` when it differs (a
     /// command's expansion, a skill's instructions), which the row offers as `detail`. `allowedTools` are
     /// permission rules for this run only. The draft is cleared once the message is on its way.
     func submit(text: String, modelText: String? = nil, allowedTools: [String] = []) {
-        guard !isRunning, !isCompacting, hasConsent, !text.isEmpty, let host else { return }
+        guard !isRunning, !isCompacting, hasConsent, (!text.isEmpty || !pendingImages.isEmpty), let host else { return }
         guard let root = host.agentProjectRoot else {
             append(.init(kind: .error, text: "Open a project folder first; the agent works inside one."))
             return
@@ -229,11 +296,17 @@ final class IDEAgentConversation: Identifiable {
         commandCatalog?.invalidate()
         promptRecall.reset()
         draft = ""
+        // Images are claimed here so a second send cannot take them again.
+        let images = modelSeesImages ? pendingImages : []
+        pendingImages = []
         var entry = IDEAgentEntry(kind: .user, text: text)
         // What the model reads: the output of commands the user ran since the last message, then the message.
         let fullText = IDEAgentShellContext.prefix(for: shellContext) + (modelText ?? text)
         shellContext = []
         if fullText != text { entry.detail = fullText }
+        if !images.isEmpty {
+            entry.attachments.append(images.count == 1 ? "1 attached image" : "\(images.count) attached images")
+        }
         append(entry)
         runRules = PermissionRules(allow: allowedTools.compactMap(PermissionRule.init(parsing:)))
         // The model sees the editor's state with the message; the transcript shows only the message.
@@ -259,7 +332,19 @@ final class IDEAgentConversation: Identifiable {
             // The new message is on its way, so the previous failure's Retry no longer applies, nor Resume.
             if let index = self.entries.lastIndex(where: \.canRetry) { self.entries[index].canRetry = false }
             self.clearResume()
-            return await session.send(framed)
+            guard !images.isEmpty else { return await session.send(framed) }
+            // Image bytes live beside the session, referenced by id; never inline in the history.
+            var parts: [UserPart] = [.text(framed)]
+            if let store = self.store {
+                for image in images {
+                    guard let id = try? store.saveImage(
+                        image.data, mediaType: image.mediaType,
+                        sessionID: self.conversationID, projectRoot: root.path)
+                    else { continue }
+                    parts.append(.image(id: id, mediaType: image.mediaType))
+                }
+            }
+            return await session.send(parts: parts)
         }
     }
 
@@ -1034,8 +1119,17 @@ final class IDEAgentConversation: Identifiable {
         let choice = effectiveChoice
         // Read the login shell's PATH now, so the first command does not wait for zsh to start.
         Task { await IDELoginShellPath.shared.warm() }
+        // Hooks load with the rules, from the same files. A project's block runs only after the
+        // user approves exactly it; a changed block asks again.
+        let hookEntries = IDEAgentHookFiles.load(projectRoot: root, appFile: appPermissionsFile)
+        let trustedHooks = await IDEAgentHookConsent.resolve(
+            entries: hookEntries, trust: hookTrust,
+            confirm: { [weak host, hookEntries] in
+                await host?.agentConfirmToolHooks(hookEntries.filter { $0.origin != .app }) ?? false
+            })
         let fingerprint = settings.fingerprint(for: choice) + "|" + root.path + "|" + String(host.agentIsGradleProject) + String(host.agentIsMavenProject) + "|" + (skills?.fingerprint ?? "")
             + "|" + agents.fingerprint + "|" + mcpFingerprint + "|" + ProjectMemory.fingerprint(of: memoryText)
+            + "|" + IDEAgentHookTrust.fingerprint(of: hookEntries)
         if let session, sessionFingerprint == fingerprint { return session }
 
         let client = modelChoice == nil ? try clientFactory(settings) : try choiceClientFactory(settings, choice)
@@ -1125,11 +1219,21 @@ final class IDEAgentConversation: Identifiable {
         // The blocking gate and the soft nudge are alternatives: the toggle picks the gate.
         let isMaven = host.agentIsMavenProject
         let stopGateOn = settings.runTestsBeforeFinishing && (host.agentIsGradleProject || isMaven)
-        let stopGatePolicies: [any TurnPolicy] = stopGateOn
+        var stopGatePolicies: [any TurnPolicy] = stopGateOn
             ? [StopGatePolicy(check: { [support] _ in
                 isMaven ? try await Self.runMavenTestsForStopGate(support: support) : try await Self.runTestsForStopGate(support: support)
             })]
             : []
+        // User-configured Stop hooks run through their own policy, beside the test gate.
+        let stopHookEntries = trustedHooks.filter { $0.event == .stop }
+        let hookContext = IDEAgentHookHost.Context(
+            sessionID: conversationID.uuidString, root: root,
+            environment: await box.commandEnvironment(),
+            onWarning: { [weak self] text in Task { @MainActor in self?.appendNotice(text) } })
+        if !stopHookEntries.isEmpty {
+            stopGatePolicies.append(HookStopPolicy(check: IDEAgentHookHost.stopCheck(
+                entries: stopHookEntries, context: hookContext)))
+        }
         // Output too large to show is kept beside the conversation; the sweep drops what is old.
         let toolOutputs = store.map {
             IDEAgentToolOutputs(store: $0, projectRoot: root.path, conversationID: conversationID)
@@ -1172,6 +1276,13 @@ final class IDEAgentConversation: Identifiable {
             toolOutputStore: toolOutputs,
             snapshotter: IDEAgentGitSnapshotter(projectRoot: root),
             afterEdit: { paths in await box.problemsAfterEdit(relativePaths: paths, timeout: IDEAgentEditProblems.timeout) },
+            toolHooks: trustedHooks.isEmpty ? nil : IDEAgentHookHost(entries: trustedHooks, context: hookContext),
+            // Attached images resolve to bytes beside the session when a vision model asks for them.
+            loadImages: store.map { store in
+                let conversationID = conversationID
+                let projectPath = root.path
+                return { ids in store.loadImages(ids: ids, sessionID: conversationID, projectRoot: projectPath) }
+            },
             makeChildClient: { [resolver] key in try resolver.childClient(for: key) },
             summaryClient: try? resolver.childClient(for: "helper"))
         // Apple's on-device window is small. When the system prompt and tool list alone take more than half of

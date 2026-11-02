@@ -35,10 +35,26 @@ public enum ToolChoice: Sendable, Hashable {
     case disabled
 }
 
+/// Image bytes for the ids a `.userParts` turn names. Kept out of `ConversationItem` (and
+/// the saved session) so history JSON stays small; the host loads them from `SessionStore`.
+public struct LLMImage: Sendable, Hashable {
+    public var id: String
+    public var mediaType: String
+    public var data: Data
+
+    public init(id: String, mediaType: String, data: Data) {
+        self.id = id
+        self.mediaType = mediaType
+        self.data = data
+    }
+}
+
 public struct LLMRequest: Sendable {
     public var model: String
     public var system: String
     public var items: [ConversationItem]
+    /// Bytes for the image ids `items` names, keyed by id. Missing ids encode as a text note.
+    public var images: [String: LLMImage]
     public var tools: [ToolDefinition]
     /// `nil` leaves the choice to the model. Sent only when the client `supportsDisabledToolChoice`.
     public var toolChoice: ToolChoice?
@@ -55,6 +71,7 @@ public struct LLMRequest: Sendable {
         model: String,
         system: String = "",
         items: [ConversationItem],
+        images: [String: LLMImage] = [:],
         tools: [ToolDefinition] = [],
         toolChoice: ToolChoice? = nil,
         reasoningEffort: String? = nil,
@@ -65,6 +82,7 @@ public struct LLMRequest: Sendable {
         self.model = model
         self.system = system
         self.items = items
+        self.images = images
         self.tools = tools
         self.toolChoice = toolChoice
         self.reasoningEffort = reasoningEffort
@@ -84,11 +102,15 @@ public protocol LLMClient: Sendable {
     /// Whether the endpoint takes `ToolChoice.disabled` with a tool list. When it does not, the closing
     /// turn of a run is sent with no tools instead.
     var supportsDisabledToolChoice: Bool { get }
+    /// Whether the model sees attached images. A client without it gets a text note in place of
+    /// each image, never the bytes. Hosted vision endpoints say yes; MLX and Apple stay text-only.
+    var supportsImages: Bool { get }
     func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error>
 }
 
 extension LLMClient {
     public var supportsDisabledToolChoice: Bool { false }
+    public var supportsImages: Bool { false }
 }
 
 public enum LLMError: Error, Sendable, Equatable, LocalizedError {

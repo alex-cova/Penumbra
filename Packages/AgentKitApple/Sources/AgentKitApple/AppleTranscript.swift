@@ -20,6 +20,9 @@ enum AppleTranscript {
         case .user(let text):
             earlier = Array(items.dropLast())
             prompt = text
+        case .userParts(let parts):
+            earlier = Array(items.dropLast())
+            prompt = Self.textOnly(parts)
         case .toolOutput:
             // The calls and their outputs go back as one message: a transcript that ends in tool output
             // has nothing to answer, and a rebuilt one never saw the calls run.
@@ -61,6 +64,9 @@ enum AppleTranscript {
             case .user(let value):
                 flushCalls()
                 entries.append(.prompt(Transcript.Prompt(segments: [text(value)])))
+            case .userParts(let parts):
+                flushCalls()
+                entries.append(.prompt(Transcript.Prompt(segments: [text(Self.textOnly(parts))])))
             case .assistant(let value):
                 flushCalls()
                 entries.append(.response(Transcript.Response(assetIDs: [], segments: [text(value)])))
@@ -77,6 +83,13 @@ enum AppleTranscript {
         }
         flushCalls()
         return entries
+    }
+
+    /// Text-only fallback: the text parts plus a note per image. Image bytes never reach Apple.
+    private static func textOnly(_ parts: [UserPart]) -> String {
+        var texts = parts.compactMap { part -> String? in if case .text(let t) = part { t } else { nil } }
+        for part in parts { if case .image(let id, _) = part { texts.append(ConversationItem.imageUnavailableNote(id: id)) } }
+        return texts.isEmpty ? "(no content)" : texts.joined(separator: "\n")
     }
 
     private static func resultsPrompt(calls: [ConversationItem], outputs: [ConversationItem]) -> String {

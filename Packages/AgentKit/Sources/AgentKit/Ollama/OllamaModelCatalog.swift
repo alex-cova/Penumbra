@@ -14,7 +14,7 @@ public struct OllamaModel: Sendable, Equatable, Identifiable {
     public var id: String { name }
     public var supportsTools: Bool { capabilities.contains("tools") }
     public var supportsThinking: Bool { capabilities.contains("thinking") }
-    /// Shown as a badge only: the agent sends no images.
+    /// Vision models get the attached images; anything else gets a text note instead.
     public var supportsVision: Bool { capabilities.contains("vision") }
 }
 

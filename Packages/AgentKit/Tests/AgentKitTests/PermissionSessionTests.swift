@@ -241,7 +241,7 @@ private func expectEveryCallAnswered(_ items: [ConversationItem]) {
         switch item {
         case .toolCall(let id, _, _): open.insert(id)
         case .toolOutput(let id, _): open.remove(id)
-        case .user:
+        case .user, .userParts:
             #expect(open.isEmpty, "a message between a call and its output makes the history invalid")
         default: break
         }

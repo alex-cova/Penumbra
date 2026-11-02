@@ -96,6 +96,21 @@ struct IDEAgentClientFactory: Sendable {
         return hostedContextWindows.first { name.hasPrefix($0.prefix) }?.tokens
     }
 
+    /// Whether the model behind `choice` sees attached images. Hosted vision endpoints do; Ollama
+    /// only for models whose `/api/show` says `vision`; MLX and Apple stay text-only.
+    func supportsImages(for choice: IDEAIModelChoice) -> Bool {
+        switch choice.provider {
+        case .openAIResponses, .meta: return true
+        case .anthropic: return true
+        case .chatCompletions:
+            // Only OpenAI's own endpoint advertises image parts; other Chat Completions servers
+            // get the conservative subset, so their client degrades to a text note.
+            return endpointHost(for: choice.provider) == "api.openai.com"
+        case .ollama: return selectedOllamaModel(named: choice.model)?.supportsVision ?? false
+        case .mlx, .apple, .applePCC: return false
+        }
+    }
+
     /// `requiresTools: false` is plain chat: a model the server or its chat template says cannot call
     /// tools is fine, since none are offered.
     func client(for choice: IDEAIModelChoice, requiresTools: Bool = true) throws -> any LLMClient {
@@ -133,7 +148,8 @@ struct IDEAgentClientFactory: Sendable {
             }
             return OllamaClient(
                 endpoint: endpoint, contextLength: effectiveContextLength(for: choice),
-                supportsThinking: info?.supportsThinking ?? false)
+                supportsThinking: info?.supportsThinking ?? false,
+                supportsVision: info?.supportsVision ?? false)
         case .mlx:
             return try makeMLXClient(model: choice.model, requiresTools: requiresTools)
         case .apple, .applePCC:

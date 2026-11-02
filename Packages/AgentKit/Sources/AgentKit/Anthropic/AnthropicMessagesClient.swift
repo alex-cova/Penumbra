@@ -9,6 +9,7 @@ extension LLMEndpoint {
 public struct AnthropicMessagesClient: LLMClient {
     public var providerID: String { AnthropicRequestEncoder.providerID }
     public var supportsDisabledToolChoice: Bool { true }
+    public var supportsImages: Bool { true }
 
     public static let apiVersion = "2023-06-01"
 

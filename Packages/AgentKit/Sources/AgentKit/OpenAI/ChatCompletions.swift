@@ -16,12 +16,16 @@ public struct ChatCompletionsCapabilities: Sendable, Equatable {
     /// `tool_choice: "none"` next to the tool list, so the closing turn of a run keeps the cached prefix.
     /// Without it that turn is sent with no tools.
     public var toolChoiceNone: Bool
+    /// Whether this endpoint forwards image parts. OpenAI does; the conservative subset does not.
+    public var supportsImages: Bool
 
     public init(
         strictTools: Bool, usageInStream: Bool, parallelToolCalls: Bool? = nil,
-        maxTokensField: String, sendsReasoningEffort: Bool, promptCacheKey: Bool, toolChoiceNone: Bool = false
+        maxTokensField: String, sendsReasoningEffort: Bool, promptCacheKey: Bool, toolChoiceNone: Bool = false,
+        supportsImages: Bool = false
     ) {
         self.toolChoiceNone = toolChoiceNone
+        self.supportsImages = supportsImages
         self.strictTools = strictTools
         self.usageInStream = usageInStream
         self.parallelToolCalls = parallelToolCalls
@@ -32,12 +36,12 @@ public struct ChatCompletionsCapabilities: Sendable, Equatable {
 
     public static let openAI = ChatCompletionsCapabilities(
         strictTools: true, usageInStream: true, maxTokensField: "max_completion_tokens",
-        sendsReasoningEffort: true, promptCacheKey: true, toolChoiceNone: true)
+        sendsReasoningEffort: true, promptCacheKey: true, toolChoiceNone: true, supportsImages: true)
 
     /// Azure, LM Studio, Ollama's `/v1` and the like: the conservative subset.
     public static let compatible = ChatCompletionsCapabilities(
         strictTools: false, usageInStream: true, maxTokensField: "max_tokens",
-        sendsReasoningEffort: false, promptCacheKey: false)
+        sendsReasoningEffort: false, promptCacheKey: false, supportsImages: false)
 }
 
 /// Builds the `/v1/chat/completions` body. Stateless like the Responses encoder: the whole history
@@ -96,6 +100,9 @@ public enum ChatCompletionsRequestEncoder {
             case .user(let text):
                 flushAssistant()
                 result.append(["role": "user", "content": .string(text)])
+            case .userParts(let parts):
+                flushAssistant()
+                result.append(["role": "user", "content": .array(userContent(parts, images: request.images))])
             case .assistant(let text):
                 flushAssistant()
                 assistantText = text
@@ -113,6 +120,30 @@ public enum ChatCompletionsRequestEncoder {
         }
         flushAssistant()
         return result
+    }
+
+    /// Text parts become `text` blocks; images become `image_url` blocks with a data URL.
+    /// Missing bytes become a text note, never the bytes.
+    static func userContent(_ parts: [UserPart], images: [String: LLMImage]) -> [JSONValue] {
+        var content: [JSONValue] = []
+        for part in parts {
+            switch part {
+            case .text(let text):
+                content.append(["type": "text", "text": .string(text)])
+            case .image(let id, let mediaType):
+                guard let image = images[id] else {
+                    content.append(["type": "text", "text": .string(ConversationItem.imageUnavailableNote(id: id))])
+                    continue
+                }
+                let type = image.mediaType.isEmpty ? mediaType : image.mediaType
+                content.append([
+                    "type": "image_url",
+                    "image_url": ["url": .string("data:\(type);base64,\(image.data.base64EncodedString())")],
+                ])
+            }
+        }
+        if content.isEmpty { content.append(["type": "text", "text": .string("(no content)")]) }
+        return content
     }
 }
 
@@ -210,6 +241,7 @@ public struct ChatCompletionsEventDecoder: StreamDecoder {
 public struct OpenAIChatCompletionsClient: LLMClient {
     public var providerID: String { ChatCompletionsRequestEncoder.providerID }
     public var supportsDisabledToolChoice: Bool { capabilities.toolChoiceNone }
+    public var supportsImages: Bool { capabilities.supportsImages }
 
     public let endpoint: LLMEndpoint
     public let capabilities: ChatCompletionsCapabilities

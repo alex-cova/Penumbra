@@ -128,6 +128,83 @@ public struct SessionStore: Sendable {
         projectDirectory(for: projectRoot).appendingPathComponent("\(id.uuidString).json")
     }
 
+    // MARK: - Attached images
+
+    /// Media types the composer accepts. Anything else is refused before it reaches the session.
+    public static let imageMediaTypes: Set<String> = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    /// An attached image is downscaled by the composer; anything still larger is refused.
+    public static let maxImageBytes = 10_000_000
+
+    /// `<project dir>/<session id>.images/`: beside the session JSON, never inline in it.
+    public func imageDirectory(for id: UUID, projectRoot: String) -> URL {
+        projectDirectory(for: projectRoot).appendingPathComponent("\(id.uuidString).images", isDirectory: true)
+    }
+
+    private static func imageExtension(for mediaType: String) -> String? {
+        switch mediaType.lowercased() {
+        case "image/jpeg": return "jpg"
+        case "image/png": return "png"
+        case "image/gif": return "gif"
+        case "image/webp": return "webp"
+        default: return nil
+        }
+    }
+
+    public static func mediaType(forExtension ext: String) -> String? {
+        switch ext.lowercased() {
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        default: return nil
+        }
+    }
+
+    /// Writes image bytes beside the session (0600) and returns the id `UserPart.image` names.
+    /// Throws when the media type is not an accepted image or the bytes are too large.
+    @discardableResult
+    public func saveImage(_ data: Data, mediaType: String, sessionID: UUID, projectRoot: String) throws -> String {
+        guard let ext = Self.imageExtension(for: mediaType) else {
+            throw AgentWorkspaceError.writeFailed(path: "image", reason: "Unsupported image type \(mediaType).")
+        }
+        guard data.count <= Self.maxImageBytes else {
+            throw AgentWorkspaceError.tooLarge(path: "image", bytes: data.count)
+        }
+        let folder = imageDirectory(for: sessionID, projectRoot: projectRoot)
+        try FileManager.default.createDirectory(
+            at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let id = UUID().uuidString
+        let url = folder.appendingPathComponent("\(id).\(ext)")
+        try data.write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return id
+    }
+
+    /// The bytes (and media type) for an attached image, or `nil` when the file is gone.
+    public func loadImage(id: String, sessionID: UUID, projectRoot: String) -> (mediaType: String, data: Data)? {
+        let folder = imageDirectory(for: sessionID, projectRoot: projectRoot)
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        guard let url = files.first(where: { $0.deletingPathExtension().lastPathComponent == id }) else { return nil }
+        guard let mediaType = Self.mediaType(forExtension: url.pathExtension),
+              let data = try? Data(contentsOf: url)
+        else { return nil }
+        return (mediaType, data)
+    }
+
+    /// Loads every attached image of a session that is still on disk, keyed by id.
+    public func loadImages(ids: [String], sessionID: UUID, projectRoot: String) -> [String: LLMImage] {
+        var result: [String: LLMImage] = [:]
+        for id in ids {
+            guard let (mediaType, data) = loadImage(id: id, sessionID: sessionID, projectRoot: projectRoot) else { continue }
+            result[id] = LLMImage(id: id, mediaType: mediaType, data: data)
+        }
+        return result
+    }
+
+    public func deleteImages(sessionID: UUID, projectRoot: String) {
+        try? FileManager.default.removeItem(at: imageDirectory(for: sessionID, projectRoot: projectRoot))
+    }
+
     public func save(_ snapshot: SessionSnapshot) throws {
         let folder = projectDirectory(for: snapshot.projectRoot)
         try FileManager.default.createDirectory(
@@ -191,12 +268,13 @@ public struct SessionStore: Sendable {
         guard let data = try? Data(contentsOf: url), let snapshot = decode(data) else { return nil }
         return SessionSummary(
             id: snapshot.id, title: snapshot.title, updatedAt: snapshot.updatedAt,
-            messageCount: snapshot.items.reduce(into: 0) { count, item in if case .user = item { count += 1 } },
+            messageCount: snapshot.items.reduce(into: 0) { count, item in if item.isUserTurn { count += 1 } },
             cost: Self.cost(in: snapshot.host), projectRoot: snapshot.projectRoot)
     }
 
     public func delete(_ id: UUID, projectRoot: String) {
         try? FileManager.default.removeItem(at: file(id, in: projectRoot))
+        deleteImages(sessionID: id, projectRoot: projectRoot)
     }
 
     /// "Clear History": every conversation of one project.
@@ -224,8 +302,8 @@ public struct SessionStore: Sendable {
 
     /// A short title from the first thing the user asked.
     public static func title(from items: [ConversationItem]) -> String {
-        for case .user(let text) in items {
-            guard let typed = UserText.typed(text) else { continue }
+        for item in items {
+            guard let text = item.userText, let typed = UserText.typed(text) else { continue }
             let line = typed.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
             if !line.isEmpty { return line.count > 60 ? String(line.prefix(60)) + "…" : line }
         }

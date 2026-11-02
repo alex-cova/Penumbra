@@ -63,7 +63,7 @@ enum MLXConversation {
     static func split(_ items: [ConversationItem]) -> Split? {
         guard let last = items.last else { return nil }
         switch last {
-        case .user:
+        case .user, .userParts:
             return Split(history: Array(items.dropLast()), pending: [last])
         case .toolOutput:
             var start = items.count
@@ -75,6 +75,7 @@ enum MLXConversation {
     }
 
     /// An assistant's text and the calls it made are one message; other providers' items are dropped.
+    /// Text-only: image parts become a note (never bytes) so a local model still sees the request.
     static func messages(_ items: [ConversationItem]) -> [Chat.Message] {
         var result: [Chat.Message] = []
         var text: String?
@@ -90,6 +91,9 @@ enum MLXConversation {
             case .user(let value):
                 flush()
                 result.append(.user(value))
+            case .userParts(let parts):
+                flush()
+                result.append(.user(textOnly(parts)))
             case .assistant(let value):
                 flush()
                 text = value
@@ -104,5 +108,13 @@ enum MLXConversation {
         }
         flush()
         return result
+    }
+
+    /// The text parts plus a note per image. Image bytes never reach a text-only model.
+    static func textOnly(_ parts: [UserPart]) -> String {
+        var texts = parts.compactMap { part -> String? in if case .text(let t) = part { t } else { nil } }
+        let images = parts.compactMap { part -> String? in if case .image(let id, _) = part { id } else { nil } }
+        for id in images { texts.append(ConversationItem.imageUnavailableNote(id: id)) }
+        return texts.isEmpty ? "(no content)" : texts.joined(separator: "\n")
     }
 }
