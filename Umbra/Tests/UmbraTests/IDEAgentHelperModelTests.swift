@@ -197,6 +197,107 @@ final class IDEAgentHelperModelTests: XCTestCase {
         XCTAssertNil(deletedConfiguration.summaryClient)
     }
 
+    func testLocalAgentsAreOfferedOnlyWhenTheHelperPasses() async throws {
+        let (settings, _) = makeSettings()
+        settings.helperChoice = IDEAIModelChoice(provider: .ollama, model: "qwen3-coder:30b")
+        let client = MockLLMClient(turns: [.text("hi")])
+        let controller = IDEAgentController(
+            settings: settings, store: SessionStore(directory: storeDirectory), clientFactory: { _ in client })
+        controller.attach(host: workspace)
+        await send(controller, "hi")
+
+        let session = try XCTUnwrap(controller.currentSessionForTesting)
+        let tools = await session.toolsForTesting
+        let task = try XCTUnwrap(tools.compactMap({ $0 as? TaskTool }).first)
+        XCTAssertTrue(task.definition.description.contains("local-explore"))
+        XCTAssertTrue(task.definition.description.contains("local-digest"))
+    }
+
+    func testLocalAgentsAreHiddenWithoutAHelper() async throws {
+        let (settings, _) = makeSettings()
+        XCTAssertNil(settings.helperChoice)
+        let client = MockLLMClient(turns: [.text("hi")])
+        let controller = IDEAgentController(
+            settings: settings, store: SessionStore(directory: storeDirectory), clientFactory: { _ in client })
+        controller.attach(host: workspace)
+        await send(controller, "hi")
+
+        let session = try XCTUnwrap(controller.currentSessionForTesting)
+        let tools = await session.toolsForTesting
+        let task = try XCTUnwrap(tools.compactMap({ $0 as? TaskTool }).first)
+        XCTAssertFalse(task.definition.description.contains("local-explore"))
+        XCTAssertFalse(task.definition.description.contains("local-digest"))
+    }
+
+    func testLocalCommandRunsOnTheHelper() async throws {
+        let (settings, _) = makeSettings()
+        settings.helperChoice = IDEAIModelChoice(provider: .ollama, model: "qwen3-coder:30b")
+        let helper = MockLLMClient(turns: [.text("the helper report")])
+        let client = MockLLMClient(turns: [.text("hi")])
+        let controller = IDEAgentController(
+            settings: settings, store: SessionStore(directory: storeDirectory), clientFactory: { _ in client })
+        controller.attach(host: workspace)
+        controller.selected.helperClientFactory = { _ in ChildClient(client: helper, model: "qwen3-coder:30b") }
+        controller.selected.runLocal(prompt: "where is it?")
+        for _ in 0..<500 where controller.isRunning { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(controller.isRunning, "the helper run should have finished")
+
+        let entries = controller.selected.entries
+        let report = entries.first { $0.kind == .assistant }
+        XCTAssertTrue(report?.text.contains("the helper report") == true, "the helper report lands in the chat")
+        XCTAssertEqual(helper.requests.count, 1, "one prompt went to the helper model")
+        let split = controller.selected.usageByModel["qwen3-coder:30b"]
+        XCTAssertNotNil(split, "helper tokens are tagged with the helper model id")
+        XCTAssertNotNil(controller.selected.cost, "helper turns are priced at 0, so the estimate survives")
+    }
+
+    func testLocalCommandNeedsAHelper() {
+        let (settings, _) = makeSettings()
+        XCTAssertNil(settings.helperChoice)
+        let controller = IDEAgentController(
+            settings: settings, store: SessionStore(directory: storeDirectory),
+            clientFactory: { _ in MockLLMClient(turns: []) })
+        controller.attach(host: workspace)
+        controller.selected.runLocal(prompt: "where is it?")
+        XCTAssertTrue(controller.selected.entries.contains {
+            $0.kind == .notice && $0.text.contains("No helper model is set")
+        })
+    }
+
+    func testAHelperOnADifferentOnDeviceModelStaysOff() async throws {
+        let (settings, _) = makeSettings()
+        settings.helperChoice = IDEAIModelChoice(provider: .mlx, model: "helper-model")
+        let client = MockLLMClient(turns: [.text("hi")])
+        let controller = IDEAgentController(
+            settings: settings, store: SessionStore(directory: storeDirectory), clientFactory: { _ in client })
+        controller.attach(host: workspace)
+        controller.choiceClientFactory = { _, _ in client }
+        controller.selected.modelChoice = IDEAIModelChoice(provider: .mlx, model: "chat-model")
+        await send(controller, "hi")
+
+        let entries = controller.selected.entries
+        XCTAssertTrue(entries.contains {
+            $0.kind == .notice && $0.text.contains("only one stays loaded")
+        }, "the session says the helper is ignored")
+        let session = try XCTUnwrap(controller.currentSessionForTesting)
+        let tools = await session.toolsForTesting
+        XCTAssertNil(tools.compactMap({ $0 as? ExploreTool }).first?.model, "explore shares the parent")
+        let task = try XCTUnwrap(tools.compactMap({ $0 as? TaskTool }).first)
+        XCTAssertFalse(task.definition.description.contains("local-explore"), "helper agents are hidden")
+        let configuration = await session.configurationForTesting
+        XCTAssertNil(configuration.summaryClient)
+    }
+
+    func testCostNoticeListsHelperTokens() {
+        let usage = TokenUsage(inputTokens: 1_000, outputTokens: 200)
+        let split = ["qwen3-coder:30b": TokenUsage(inputTokens: 800, outputTokens: 100)]
+        let text = IDEAgentController.costNotice(
+            usage: usage, cost: 0.01, usageByModel: split, helperName: "qwen3-coder:30b")
+        XCTAssertTrue(text.contains("keeping them off the hosted model"), text)
+        let plain = IDEAgentController.costNotice(usage: usage, cost: 0.01)
+        XCTAssertFalse(plain.contains("helper model"), plain)
+    }
+
     func testResolverErrors() {
         let (settings, _) = makeSettings()
         XCTAssertThrowsError(try settings.clientFactory().childClient(for: "helper")) { error in

@@ -50,6 +50,23 @@ public struct AgentDefinition: Sendable, Equatable, Hashable {
         description: "Carries out a self-contained task with its own context: research, or a change to a few files. Use it for work that would fill your own context.",
         editsFiles: true, maxIterations: 25, source: "built in")
 
+    /// Bulk reading on the helper model: finding call sites, mapping how an area works, summarizing
+    /// a large file. Read-only; its report is unverified data, so check what you rely on before using it.
+    public static let localExplore = AgentDefinition(
+        name: "local-explore",
+        description: "Reads bulk files on the cheap local helper model: finding call sites, mapping how an area works, summarizing large files. Read-only; its report is unverified, so check what you rely on.",
+        tools: ["read_file", "glob", "grep", "find_symbol", "go_to_definition", "find_usages", "explore_symbol"],
+        editsFiles: false, maxIterations: 15, model: "helper", source: "built in")
+
+    /// A narrow digest on the helper model: quoted evidence only. Read-only; its report is
+    /// unverified data, so check what you rely on before using it.
+    public static let localDigest = AgentDefinition(
+        name: "local-digest",
+        description: "Returns quoted evidence with path:line on the cheap local helper model; makes no conclusions. Read-only; its report is unverified, so check what you rely on.",
+        tools: ["read_file", "grep"],
+        editsFiles: false, maxIterations: 10, model: "helper",
+        instructions: "Return quotes with path:line and no conclusions.", source: "built in")
+
     /// Parses one `agents/<name>.md` file. `nil` for a name that is not usable.
     public static func parse(fileName: String, contents: String, source: String) -> AgentDefinition? {
         let document = MarkdownFrontmatter.parse(contents)
@@ -85,6 +102,19 @@ public struct AgentCatalog: Sendable, Equatable {
     }
 
     public static let builtIn = AgentCatalog()
+
+    /// This catalog plus the built-in helper agents (`local-explore`, `local-digest`). The host
+    /// calls it only when a helper model is set and passes the capability gate; the helper agents
+    /// are otherwise not offered. A file that reuses a helper name wins over the built-in.
+    public func withLocalHelpers() -> AgentCatalog {
+        var list = agents
+        for helper in [AgentDefinition.localExplore, AgentDefinition.localDigest] {
+            if !list.contains(where: { $0.name.caseInsensitiveCompare(helper.name) == .orderedSame }) {
+                list.append(helper)
+            }
+        }
+        return AgentCatalog(agents: list)
+    }
 
     public func agent(named name: String) -> AgentDefinition? {
         agents.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }

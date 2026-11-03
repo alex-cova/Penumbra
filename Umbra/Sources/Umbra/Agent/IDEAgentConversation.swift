@@ -21,8 +21,12 @@ final class IDEAgentConversation: Identifiable {
     /// What the run is doing right now, for the panel's status line.
     private(set) var status: String?
     private(set) var usage = TokenUsage()
-    /// Estimated dollars for the conversation, or `nil` when any turn had no known price (a local
-    /// model, or a model the price table doesn't list).
+    /// Tokens by the model id that produced them, so a mixed run can report what the helper kept
+    /// off the hosted model. The keys are bare model ids (no provider prefix).
+    private(set) var usageByModel: [String: TokenUsage] = [:]
+    /// Estimated dollars for the conversation, or `nil` when any priced turn had no known price (a
+    /// model the price table doesn't list). Helper-model turns are priced at 0, so they never
+    /// clear the estimate on their own.
     private(set) var cost: Double? = 0
     /// The model's checklist (`todo`), shown above the transcript.
     private(set) var todos: [TodoItem] = []
@@ -86,6 +90,11 @@ final class IDEAgentConversation: Identifiable {
     @ObservationIgnored var choiceClientFactory: @MainActor (IDEAgentSettings, IDEAIModelChoice) throws -> any LLMClient = {
         try $0.makeClient(for: $1)
     }
+    /// Resolves the helper child client for `/local` and other direct helper runs. Tests replace
+    /// it with a scripted client; production resolves through the settings like `task` children do.
+    @ObservationIgnored var helperClientFactory: @MainActor (IDEAgentSettings) throws -> ChildClient = {
+        try $0.clientFactory().childClient(for: "helper")
+    }
 
     /// What this chat uses now: its own choice, else the global settings.
     var effectiveChoice: IDEAIModelChoice { modelChoice ?? settings.currentChoice }
@@ -116,6 +125,7 @@ final class IDEAgentConversation: Identifiable {
     /// Called when a message is about to be sent, before it is added to the transcript.
     @ObservationIgnored var willSend: (() -> Void)?
     @ObservationIgnored private var session: AgentSession?
+    @ObservationIgnored private var localSession: AgentSession?
     @ObservationIgnored private var sessionFingerprint: String?
     // ACP backend (plan steps 5-6): an external agent presenting the same AgentEvent stream.
     @ObservationIgnored private var acpSession: ACPClientSession?
@@ -728,6 +738,98 @@ final class IDEAgentConversation: Identifiable {
         }
     }
 
+    /// Runs one prompt on the helper model in a read-only child and pastes its report into the
+    /// chat (`/local`). Read-only like `explore`: the helper never changes files. Needs a helper
+    /// model that passes the gate; a different on-device model than the chat's own is refused,
+    /// since only one MLX model stays resident.
+    func runLocal(prompt: String) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            appendNotice("Give the helper something to do: /local <prompt>.")
+            return
+        }
+        guard let host, let root = effectiveRoot else {
+            append(.init(kind: .error, text: "Open a project folder first; the agent works inside one."))
+            return
+        }
+        guard !isRunning, !isCompacting else {
+            appendNotice("Wait for the current run to finish before asking the helper model.")
+            return
+        }
+        guard let helper = settings.helperChoice else {
+            appendNotice("No helper model is set. Choose one in the agent settings first.")
+            return
+        }
+        if let issue = settings.clientFactory().helperIssue() {
+            appendNotice(issue)
+            return
+        }
+        if helper.provider == .mlx, effectiveChoice.provider == .mlx, helper.model != effectiveChoice.model {
+            appendNotice(
+                "The helper model is a different on-device model than this chat's; only one stays loaded. " +
+                "Switch the chat or the helper to the same model first.")
+            return
+        }
+        let child: ChildClient
+        do {
+            child = try helperClientFactory(settings)
+        } catch {
+            append(.init(kind: .error, text: error.localizedDescription))
+            return
+        }
+        commandCatalog?.invalidate()
+        promptRecall.reset()
+        draft = ""
+        append(IDEAgentEntry(kind: .user, text: "/local " + trimmed))
+        turnStart = entries.count
+        stopRequested = false
+        isRunning = true
+        status = "Asking the helper model…"
+        runTask = Task { [weak self] in
+            guard let self else { return }
+            let box = IDEAgentHostBox(host)
+            let workspace = self.agentWorkspace ?? IDEAgentWorkspace(root: root, box: box)
+            self.agentWorkspace = workspace
+            let configuration = AgentConfiguration(
+                model: child.model,
+                systemPrompt: SystemPrompt.make(projectRoot: workspace.rootPath, mode: .plan, variant: .local),
+                maxIterations: 15,
+                contextWindow: child.contextWindow,
+                mode: .plan,
+                permissions: self.currentRules(root: root),
+                secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns),
+                shapeToolOutput: { IDEAgentOutputScrubber.shape($0) })
+            let helperSession = AgentSession(
+                client: child.client,
+                tools: ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns),
+                workspace: workspace,
+                configuration: configuration)
+            self.localSession = helperSession
+            if self.stopRequested {
+                self.localSession = nil
+                self.endBeforeStarting()
+                return
+            }
+            if self.stopRequested { await helperSession.stop() }
+            let stream = await helperSession.send(
+                trimmed + "\n\nEnd with a self-contained report: what you found, with file paths as path:line. Quote the evidence you rely on.")
+            for await event in stream { self.handle(event) }
+            self.flush()
+            self.localSession = nil
+            self.currentRun = nil
+            self.isRunning = false
+            self.isAwaitingUser = false
+            self.status = nil
+            if let session = self.session {
+                persist(items: await session.items, checkpoints: await session.checkpoints.snapshot())
+            } else if let restoredItems = self.restoredItems {
+                persist(items: restoredItems, checkpoints: restoredRuns)
+            }
+            self.onRunFinished?()
+            self.drainQueue()
+        }
+    }
+
     // MARK: - Queued messages
 
     /// Writes a message while a run is going. It joins the conversation at the model's next turn.
@@ -955,6 +1057,7 @@ final class IDEAgentConversation: Identifiable {
         cancelElicitations()
         guard isRunning else { return }
         if let session { Task { await session.stop() } }
+        if let localSession { Task { await localSession.stop() } }
         if let acpSession {
             let transport = acpTransport
             Task {
@@ -972,6 +1075,7 @@ final class IDEAgentConversation: Identifiable {
         endSession()
         entries = []
         usage = TokenUsage()
+        usageByModel = [:]
         cost = 0
         todos = []
         restoredTodos = []
@@ -1069,6 +1173,9 @@ final class IDEAgentConversation: Identifiable {
         todos = saved.todos
         restoredTodos = saved.todos
         usage = snapshot.totalUsage
+        // The saved file keeps no per-model split; attribute the restored total to the current
+        // model so the split still adds up to it.
+        usageByModel = snapshot.totalUsage == TokenUsage() ? [:] : [effectiveChoice.model: snapshot.totalUsage]
         // Provider items only the model that produced them may be sent back; the transcript is enough.
         restoredItems = droppingOpaque(snapshot.items)
         // Idle subagents come back with the conversation, so `session:` continues them by id.
@@ -1212,8 +1319,19 @@ final class IDEAgentConversation: Identifiable {
     private func currentSession(root: URL, host: any IDEAgentHost) async throws -> AgentSession {
         // Skills are in the tool list, so a changed one starts a new session (which keeps the conversation).
         let skills = commandCatalog.map(\.skillCatalog).flatMap { $0.skills.isEmpty ? nil : $0 }
-        // Likewise the subagents `task` offers: the list is in the tool's description.
-        let agents = commandCatalog?.agentCatalog ?? .builtIn
+        // Likewise the subagents `task` offers: the list is in the tool's description. The
+        // built-in helper agents (`local-explore`, `local-digest`) join only when a helper model
+        // is set and passes the gate; their `model: helper` then resolves.
+        let baseAgents = commandCatalog?.agentCatalog ?? .builtIn
+        // One MLX model stays resident: a helper on MLX while the chat is also MLX uses the same
+        // model, else the helper is off for this chat (the `/local` command refuses the same way).
+        let helperClashesMLX: Bool = {
+            guard let helper = settings.helperChoice else { return false }
+            return helper.provider == .mlx && effectiveChoice.provider == .mlx && helper.model != effectiveChoice.model
+        }()
+        let helperReady = settings.helperChoice != nil
+            && settings.clientFactory().helperIssue() == nil && !helperClashesMLX
+        let agents = helperReady ? baseAgents.withLocalHelpers() : baseAgents
         // MCP servers start here, on the first message that needs them, and may ask about the project's
         // own first. Their tools are fixed for the life of the hub, and its fingerprint is in the session's.
         var mcpTools: [any AgentTool] = []
@@ -1298,7 +1416,10 @@ final class IDEAgentConversation: Identifiable {
         // name theirs in `model:`. A saved choice that stopped passing (a deleted model, a window
         // below the floor) is ignored with a notice, and children fall back to the main model.
         let resolver = settings.clientFactory()
-        let helperIssue = resolver.helperIssue()
+        // The clash wins over the gate: it applies however the helper otherwise fares.
+        let helperIssue = helperClashesMLX
+            ? "Helper model “\(settings.helperChoice?.model ?? "")” is not usable: it is a different on-device model than this chat's, and only one stays loaded. Explore and summaries run on the main model."
+            : resolver.helperIssue()
         if settings.helperChoice != nil, let helperIssue {
             append(.init(kind: .notice, text: helperIssue))
         }
@@ -1410,7 +1531,7 @@ final class IDEAgentConversation: Identifiable {
                 return { ids in store.loadImages(ids: ids, sessionID: conversationID, projectRoot: projectPath) }
             },
             makeChildClient: { [resolver] key in try resolver.childClient(for: key) },
-            summaryClient: try? resolver.childClient(for: "helper"))
+            summaryClient: helperOK ? try? resolver.childClient(for: "helper") : nil)
         // Apple's on-device window is small. When the system prompt and tool list alone take more than half of
         // it, the model has no room to read a file, so say so here instead of failing on the first request.
         if let kind = choice.provider.appleKind, let window = settings.appleContextSize(for: kind) {
@@ -1953,6 +2074,25 @@ final class IDEAgentConversation: Identifiable {
         persist(items: items, checkpoints: [])
     }
 
+    /// Books tokens produced by `model`: the totals, the per-model split, and the hosted-only
+    /// cost. The main model keeps its old pricing (nil for a local chat); helper-model turns are
+    /// priced at 0, so local tokens never clear the hosted estimate. Anything else prices
+    /// against the table under its own model id.
+    private func bookUsage(_ turnUsage: TokenUsage, model: String) {
+        if turnUsage.inputTokens > 0 { contextTokens = turnUsage.inputTokens }
+        usage = usage + turnUsage
+        usageByModel[model, default: TokenUsage()] = usageByModel[model, default: TokenUsage()] + turnUsage
+        let turnCost: Double?
+        if model == effectiveChoice.model {
+            turnCost = settings.cost(of: turnUsage, for: effectiveChoice)
+        } else if let helper = settings.helperChoice, model == helper.model {
+            turnCost = 0
+        } else {
+            turnCost = IDEAgentPrices(text: settings.priceTableText).cost(of: turnUsage, model: model)
+        }
+        if let turnCost, let total = cost { cost = total + turnCost } else { cost = nil }
+    }
+
     func handle(_ event: AgentEvent) {
         if case .textDelta(let delta) = event {
             pendingText += delta
@@ -2107,10 +2247,11 @@ final class IDEAgentConversation: Identifiable {
             if case .failed(let message) = ending { text = "Subagent “\(description)” (\(agent)) failed: \(message)" }
             append(.init(kind: .notice, text: text))
         case .usage(let turnUsage):
-            // The input of the latest turn is what the window holds right now.
+            // The input of the latest turn is what the window holds right now. The tokens and
+            // price land with the `.usageDetailed` that follows this event.
             if turnUsage.inputTokens > 0 { contextTokens = turnUsage.inputTokens }
-            usage = usage + turnUsage
-            if let turnCost = settings.cost(of: turnUsage, for: effectiveChoice), let total = cost { cost = total + turnCost } else { cost = nil }
+        case .usageDetailed(let model, let turnUsage):
+            bookUsage(turnUsage, model: model)
         case .runEnded(let ending):
             lastEnding = ending
             closeStreamingEntry()

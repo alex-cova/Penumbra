@@ -64,6 +64,9 @@ public enum AgentEvent: Sendable, Equatable {
     /// The model changed its checklist.
     case todosUpdated([TodoItem])
     case usage(TokenUsage)
+    /// The same tokens tagged with the model id that produced them, so a host can split a mixed
+    /// run (main vs helper model) for per-model accounting. Always follows its `.usage`.
+    case usageDetailed(model: String, usage: TokenUsage)
     /// The conversation was shortened to fit the window. The host's transcript is unaffected.
     case compacted(CompactionReport)
     /// The last response was cut short (the output limit, or a dropped connection after output began)

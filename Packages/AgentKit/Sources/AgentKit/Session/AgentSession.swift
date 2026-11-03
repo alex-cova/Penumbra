@@ -11,6 +11,9 @@ public actor AgentSession {
     /// Names this conversation in a `SessionStore`; kept when it is restored.
     public let sessionID: UUID
     public private(set) var totalUsage: TokenUsage
+    /// Tokens by the model id that produced them, so a mixed run can show what each model spent.
+    /// Updated together with `totalUsage`, including restored history (attributed to the resolved model).
+    public private(set) var usageByModel: [String: TokenUsage] = [:]
     /// Input tokens the provider reported for the latest turn: the best measure of context in use.
     public private(set) var lastInputTokens = 0
     /// How many `items` the request that reported `lastInputTokens` covered.
@@ -100,6 +103,10 @@ public actor AgentSession {
         self.sessionID = sessionID
         self.checkpoints = checkpoints
         self.totalUsage = totalUsage
+        if totalUsage != TokenUsage() {
+            // Restored usage predates this launch; attribute it to the session's model.
+            self.usageByModel = [configuration.model: totalUsage]
+        }
         self.client = client
         // A pointer to saved output is only useful with the tool that reads it, so a store brings the tool.
         var tools = tools
@@ -458,13 +465,11 @@ public actor AgentSession {
                 return .failed("The model's response ended unexpectedly.")
             }
 
-            runUsage = runUsage + turn.usage
-            totalUsage = totalUsage + turn.usage
+            recordUsage(turn.usage, model: configuration.model, out)
             if turn.usage.inputTokens > 0 {
                 lastInputTokens = turn.usage.inputTokens
                 itemsAtLastReport = itemsAtRequest
             }
-            out.yield(.usage(turn.usage))
 
             items += turn.items
             items += turn.calls.map { .toolCall(id: $0.id, name: $0.name, arguments: $0.arguments) }
@@ -697,6 +702,49 @@ public actor AgentSession {
         }
     }
 
+    /// Books `usage` produced by `model`: the run budget, the session total, and the per-model
+    /// split. Emits `.usage` (the long-standing event) followed by `.usageDetailed`.
+    private func recordUsage(
+        _ usage: TokenUsage, model: String, _ out: AsyncStream<AgentEvent>.Continuation
+    ) {
+        runUsage = runUsage + usage
+        totalUsage = totalUsage + usage
+        usageByModel[model, default: TokenUsage()] = usageByModel[model, default: TokenUsage()] + usage
+        out.yield(.usage(usage))
+        out.yield(.usageDetailed(model: model, usage: usage))
+    }
+
+    /// The note a tool shows the model when a child that ran on another model could not do the
+    /// job on its own: the hosted model continues the work itself. `nil` when the child ran on the
+    /// parent's model (a fallback) or finished well.
+    private func escalationNote(
+        askedAlternateModel: Bool, fellBack: Bool, ending: RunEnding, summary: String
+    ) -> String? {
+        guard askedAlternateModel, !fellBack else { return nil }
+        if ending == .iterationCap {
+            return "The helper model could not finish; do this yourself."
+        }
+        if ending == .completed, summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "The helper model returned no usable text; do this yourself."
+        }
+        return nil
+    }
+
+    /// Combines the fallback note (unknown or unavailable model) with the escalation note, if any.
+    private func childNote(
+        fallback: String?, askedAlternateModel: Bool, ending: RunEnding, summary: String
+    ) -> String? {
+        let escalation = escalationNote(
+            askedAlternateModel: askedAlternateModel, fellBack: fallback != nil,
+            ending: ending, summary: summary)
+        switch (fallback, escalation) {
+        case (nil, nil): return nil
+        case (let f?, nil): return f
+        case (nil, let e?): return e
+        case (let f?, let e?): return f + "\n" + e
+        }
+    }
+
     /// Runs one child session for read-only research, in the foreground only. The child shares this
     /// run's client, workspace (with a copy of the read ledger), model, permission rules and window;
     /// it runs in plan mode with a hard iteration cap. Its events are forwarded wrapped for progress
@@ -750,12 +798,19 @@ public actor AgentSession {
             Task { await child.stop() }
         }
         let usage = await child.totalUsage
+        let askedAlternate = Self.asksAlternateModel(request.model)
         if currentRun == run {
-            runUsage = runUsage + usage
-            totalUsage = totalUsage + usage
-            out.yield(.usage(usage))
+            recordUsage(usage, model: resolved.model, out)
         }
-        return SubagentResult(summary: summary, usage: usage, ending: ending, note: resolved.note)
+        let note = childNote(
+            fallback: resolved.note, askedAlternateModel: askedAlternate, ending: ending, summary: summary)
+        return SubagentResult(summary: summary, usage: usage, ending: ending, note: note)
+    }
+
+    /// Whether the model named a model for the child (`helper`, or a `provider:model` id).
+    private static func asksAlternateModel(_ key: String?) -> Bool {
+        guard let key = key?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else { return false }
+        return true
     }
 
     /// Redacts a line through the configured output shaper before it is persisted outside the
@@ -1065,6 +1120,8 @@ public actor AgentSession {
     private struct Child {
         let session: AgentSession
         let agent: AgentDefinition
+        /// The model id the child runs on, for per-model accounting and the escalation note.
+        let model: String
         var description: String
         var canEdit: Bool
         /// The parent's tool-call id that started this run of the child, for per-child Stop.
@@ -1164,8 +1221,9 @@ public actor AgentSession {
                 checkpoints: checkpoints,
                 ledger: ReadLedger(snapshot: await ledger.snapshot()),
                 inheritedRun: run)
-            remember(Child(session: session, agent: agent, description: request.description, canEdit: canEdit), as: id)
+            remember(Child(session: session, agent: agent, model: resolved.model, description: request.description, canEdit: canEdit), as: id)
         }
+        let askedAlternate = request.continuing == nil && Self.asksAlternateModel(agent.model)
 
         if canEdit { writerChildID = id }
         let message = request.continuing == nil
@@ -1177,13 +1235,18 @@ public actor AgentSession {
             children[id]?.description = request.description
             children[id]?.work = Task { [weak self] in
                 guard let self else { return }
-                await self.finishBackground(id: id, run: run, message: message, callID: request.callID, note: resolved.note, out)
+                await self.finishBackground(
+                    id: id, run: run, message: message, callID: request.callID,
+                    fallbackNote: resolved.note, askedAlternateModel: askedAlternate, out)
             }
             return .started(sessionID: id)
         }
         let outcome = await runChild(session, message: message, callID: request.callID, out)
         await settleChild(id, outcome: outcome, run: run, out)
-        return .finished(sessionID: id, summary: outcome.summary, ending: outcome.ending, note: resolved.note)
+        let note = childNote(
+            fallback: resolved.note, askedAlternateModel: askedAlternate,
+            ending: outcome.ending, summary: outcome.summary)
+        return .finished(sessionID: id, summary: outcome.summary, ending: outcome.ending, note: note)
     }
 
     private struct ChildOutcome {
@@ -1236,9 +1299,7 @@ public actor AgentSession {
         if writerChildID == id { writerChildID = nil }
         // A run that already ended (or a new one) must not receive late usage or edits.
         guard currentRun == run else { return }
-        runUsage = runUsage + delta
-        totalUsage = totalUsage + delta
-        out.yield(.usage(delta))
+        recordUsage(delta, model: child.model, out)
         if !outcome.editedPaths.isEmpty {
             filesEditedThisRun.append(contentsOf: outcome.editedPaths)
             verifiedSinceEdit = false
@@ -1246,8 +1307,8 @@ public actor AgentSession {
     }
 
     private func finishBackground(
-        id: String, run: RunID, message: String, callID: String, note: String?,
-        _ out: AsyncStream<AgentEvent>.Continuation
+        id: String, run: RunID, message: String, callID: String, fallbackNote: String?,
+        askedAlternateModel: Bool, _ out: AsyncStream<AgentEvent>.Continuation
     ) async {
         guard let child = children[id] else { return }
         let outcome = await runChild(child.session, message: message, callID: callID, out)
@@ -1257,6 +1318,9 @@ public actor AgentSession {
             wakeDelegationWaiters()
             return
         }
+        let note = childNote(
+            fallback: fallbackNote, askedAlternateModel: askedAlternateModel,
+            ending: outcome.ending, summary: outcome.summary)
         let finished = FinishedDelegation(
             sessionID: id, agent: child.agent.name, description: child.description,
             summary: outcome.summary, ending: outcome.ending, note: note)
@@ -1388,7 +1452,8 @@ public actor AgentSession {
                 checkpoints: checkpoints,
                 ledger: ReadLedger(snapshot: await ledger.snapshot()))
             var child = Child(
-                session: session, agent: agent, description: snapshot.description, canEdit: snapshot.canEdit)
+                session: session, agent: agent, model: resolved.model,
+                description: snapshot.description, canEdit: snapshot.canEdit)
             child.accountedUsage = snapshot.totalUsage
             remember(child, as: snapshot.id)
         }

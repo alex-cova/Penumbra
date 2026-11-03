@@ -26,7 +26,7 @@ struct IDEAgentSlashInvocation: Equatable {
 
 /// The commands the editor itself provides.
 enum IDEAgentBuiltInCommand: String, CaseIterable {
-    case new, clear, resume, rewind, fork, compact, plan, mode, permissions, model, history, export, loop, initialize = "init", cost, rename, help
+    case new, clear, resume, rewind, fork, compact, plan, mode, permissions, model, history, export, loop, initialize = "init", cost, local, rename, help
 
     var summary: String {
         switch self {
@@ -45,6 +45,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .loop: "Resend a prompt on a timer, up to 10 runs"
         case .initialize: "Have the agent write an AGENTS.md for this project"
         case .cost: "Show this chat's token use and cost"
+        case .local: "Run one prompt on the helper model and paste its report"
         case .rename: "Name this chat's tab"
         case .help: "List the commands"
         }
@@ -58,6 +59,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .mode: "manual | accept-edits | auto | plan"
         case .export: "[json] [--hide-tools]"
         case .loop: "<interval> [count] <prompt>"
+        case .local: "<prompt>"
         case .rename: "<name>"
         default: nil
         }
@@ -80,6 +82,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .loop: "repeat"
         case .initialize: "doc.badge.plus"
         case .cost: "dollarsign.circle"
+        case .local: "magnifyingglass"
         case .rename: "pencil"
         case .help: "questionmark.circle"
         }

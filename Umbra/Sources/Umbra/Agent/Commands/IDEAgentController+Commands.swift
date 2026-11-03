@@ -249,7 +249,12 @@ extension IDEAgentController {
             guard selected.canRunCommands else { return }
             selected.submit(text: "/init", modelText: Self.initPrompt)
         case .cost:
-            selected.appendNotice(Self.costNotice(usage: selected.usage, cost: selected.cost))
+            selected.appendNotice(Self.costNotice(
+                usage: selected.usage, cost: selected.cost,
+                usageByModel: selected.usageByModel, helperName: settings.helperChoice?.model))
+        case .local:
+            guard selected.canRunCommands else { return }
+            selected.runLocal(prompt: arguments)
         case .rename:
             if arguments.isEmpty {
                 selected.appendNotice("Give the chat a name: /rename <name>.")
@@ -271,11 +276,18 @@ extension IDEAgentController {
         IDEAgentHistorySearch.rank(history, query: query, requiresMatch: true).first
     }
 
-    static func costNotice(usage: TokenUsage, cost: Double?) -> String {
+    static func costNotice(
+        usage: TokenUsage, cost: Double?, usageByModel: [String: TokenUsage] = [:], helperName: String? = nil
+    ) -> String {
         let total = usage.inputTokens + usage.outputTokens
         guard total > 0 else { return "Nothing has been sent in this chat yet." }
         var text = "\(IDEAgentFormat.tokens(usage.inputTokens)) tokens in (\(IDEAgentFormat.tokens(usage.cachedInputTokens)) cached), \(IDEAgentFormat.tokens(usage.outputTokens)) out."
         if let cost { text += " About \(IDEAgentPrices.format(cost))." } else { text += " No price is known for this model, so there is no cost estimate." }
+        if let helperName,
+           let helper = usageByModel[helperName],
+           helper.inputTokens + helper.outputTokens > 0 {
+            text += " \(IDEAgentFormat.tokens(helper.inputTokens + helper.outputTokens)) of those ran on the helper model (\(helperName)), keeping them off the hosted model."
+        }
         return text
     }
 

@@ -75,6 +75,91 @@ private final class SummarySpottingClient: LLMClient, @unchecked Sendable {
         #expect(!TaskTool().definition.description.contains("[runs on model"))
     }
 
+    @Test func localHelpersJoinOnlyThroughWithLocalHelpers() throws {
+        let base = AgentCatalog(agents: [AgentDefinition(name: "scout", description: "looks")])
+        #expect(base.agent(named: "local-explore") == nil)
+        #expect(base.agent(named: "local-digest") == nil)
+        let full = base.withLocalHelpers()
+        let explore = try #require(full.agent(named: "local-explore"))
+        #expect(explore.model == "helper")
+        #expect(!explore.editsFiles)
+        #expect(explore.tools.contains("read_file"))
+        let digest = try #require(full.agent(named: "local-digest"))
+        #expect(digest.model == "helper")
+        #expect(!digest.editsFiles)
+        #expect(digest.instructions.contains("path:line"))
+        #expect(full.fingerprint != base.fingerprint)
+        #expect(TaskTool(catalog: full).definition.description.contains("local-explore"))
+        #expect(!TaskTool(catalog: base).definition.description.contains("local-explore"))
+    }
+
+    @Test func aFileNamedLikeAHelperWinsOverTheBuiltIn() {
+        let mine = AgentDefinition(name: "local-explore", description: "mine", model: "main-model")
+        let full = AgentCatalog(agents: [mine]).withLocalHelpers()
+        #expect(full.agent(named: "local-explore")?.description == "mine")
+        #expect(full.agents.filter { $0.name == "local-explore" }.count == 1)
+    }
+
+    @Test func usageIsTaggedByModel() async throws {
+        let project = try TempProject(files: [:])
+        let child = MockLLMClient(turns: [MockTurn([.usage(TokenUsage(inputTokens: 100, outputTokens: 50)), .textDelta("found it"), .finished(.completed)])])
+        let parent = MockLLMClient(turns: [helperTaskCall(), .text("done")])
+        let catalog = AgentCatalog(agents: [AgentDefinition(name: "scout", description: "looks", model: "helper")])
+        let agent = AgentSession(
+            client: parent,
+            tools: ReadOnlyTools.all() + [TaskTool(catalog: catalog)],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(
+                model: "main", approval: .approveAll,
+                makeChildClient: { _ in ChildClient(client: child, model: "helper-model") }))
+        let events = await helperRun(agent)
+        #expect(events.last == .runEnded(.completed))
+        let split = await agent.usageByModel
+        #expect(split["helper-model"] == TokenUsage(inputTokens: 100, outputTokens: 50))
+        #expect(await agent.totalUsage == TokenUsage(inputTokens: 100, outputTokens: 50))
+        #expect(events.contains(.usageDetailed(model: "helper-model", usage: TokenUsage(inputTokens: 100, outputTokens: 50))))
+    }
+
+    @Test func aHelperChildAtItsCapHandsTheTaskBack() async throws {
+        let project = try TempProject(files: [:])
+        let child = MockLLMClient(turns: [
+            .toolCalls((id: "c1", name: "look", arguments: "{}")),
+            .text("wrapping up"),
+        ])
+        let parent = MockLLMClient(turns: [helperTaskCall(), .text("done")])
+        let catalog = AgentCatalog(agents: [
+            AgentDefinition(name: "scout", description: "looks", maxIterations: 1, model: "helper"),
+        ])
+        let agent = AgentSession(
+            client: parent,
+            tools: ReadOnlyTools.all() + [TaskTool(catalog: catalog), HelperLookTool()],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(
+                model: "main", approval: .approveAll,
+                makeChildClient: { _ in ChildClient(client: child, model: "helper-model") }))
+        let events = await helperRun(agent)
+        #expect(events.last == .runEnded(.completed))
+        let output = try #require(helperFinishedOutput(events, call: "t1"))
+        #expect(output.contains("The helper model could not finish; do this yourself."))
+    }
+
+    @Test func aFallbackChildDoesNotEscalate() async throws {
+        let project = try TempProject(files: [:])
+        let parent = MockLLMClient(turns: [helperTaskCall(), .text("child answer"), .text("done")])
+        let catalog = AgentCatalog(agents: [AgentDefinition(name: "scout", description: "looks", model: "helper")])
+        let agent = AgentSession(
+            client: parent,
+            tools: ReadOnlyTools.all() + [TaskTool(catalog: catalog)],
+            workspace: project.workspace,
+            configuration: AgentConfiguration(
+                model: "main", approval: .approveAll,
+                makeChildClient: { _ in throw AgentConfigurationErrorForTests.unknown }))
+        let events = await helperRun(agent)
+        let output = try #require(helperFinishedOutput(events, call: "t1"))
+        #expect(output.contains("runs on the main model instead"))
+        #expect(!output.contains("do this yourself"))
+    }
+
     @Test func aChildWithAModelUsesTheResolvedClientAndModel() async throws {
         let project = try TempProject(files: [:])
         let child = MockLLMClient(turns: [.text("found it")])
