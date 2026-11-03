@@ -98,6 +98,10 @@ public struct DocumentTextExport: Sendable {
     public func addFoldObserver(_ observer: @escaping () -> Void) {
         foldObservers.append(observer)
     }
+
+    /// A fold scan is waiting or running, so the lines will move once it lands: a host that wants
+    /// to scroll to a line waits for an event of ``addFoldObserver(_:)`` with this false.
+    public var isFoldScanPending: Bool { textInputView.isFoldScanPending }
     /// True while a wheel or overlay-scroller drag is assigning `contentOffset`. Programmatic
     /// scrolls, including `scrollRangeToVisible`, leave it false.
     public internal(set) var isUserInitiatedScroll = false

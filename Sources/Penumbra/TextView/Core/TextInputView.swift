@@ -1152,6 +1152,7 @@ final class TextInputView: EditorView {
     var onStickyLinesInvalidated: (() -> Void)?
     /// Called after the fold regions or what is collapsed changed (a scan landed, a fold was toggled).
     var onFoldsChanged: (() -> Void)?
+    var isFoldScanPending: Bool { codeFoldingManager.hasPendingScan }
     let occurrenceHighlightController: OccurrenceHighlightController
     let scopeHighlightController = ScopeHighlightController()
     /// Marks the block the caret is in along the fold ribbon. Needs line folding on, since the
@@ -2381,6 +2382,10 @@ private extension TextInputView {
             self?.adjustSelectionForFoldingIfNeeded()
             self?.foldPreviewController.dismiss()
             self?.scopeHighlightController.regionsDidChange()
+            // A scan lands on its own: lines hid or came back and moved, and nothing else asks for
+            // a layout pass (a click did, which is why the text only appeared then).
+            self?.layoutManager.setNeedsLayout()
+            self?.setNeedsLayout()
             self?.onFoldsChanged?()
         }.store(in: &cancellables)
     }

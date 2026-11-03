@@ -49,6 +49,11 @@ final class CodeFoldingManager {
         }
     }
 
+    /// A scan has been asked for or is running: the regions (and what is collapsed) are about to change.
+    var hasPendingScan: Bool {
+        needsUpdate || hasUpdateInFlight || pendingFullUpdate
+    }
+
     var lastScannedLineCount: Int {
         foldingModel.lastScannedLineCount
     }

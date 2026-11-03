@@ -25,6 +25,9 @@ final class IDEDiffViewerView: NSView {
     private var isLoadingTexts = false
     private var unifiedLayout: IDEDiffUnifiedLayout?
     private var appliedFolding: [ObjectIdentifier: AppliedFolding] = [:]
+    /// A change was centered while the folds were still being scanned: the lines moved when they
+    /// landed, so it is centered again then.
+    private var revealsAgainWhenFoldsLand = false
     /// Set when new texts are shown: the first chunks that arrive for them move to the first change.
     private var revealsFirstChange = false
     private var preferences: IDEPreferences?
@@ -63,8 +66,11 @@ final class IDEDiffViewerView: NSView {
         leftTextView.addScrollObserver { [weak self] in self?.textViewDidScroll(self?.leftTextView) }
         rightTextView.addScrollObserver { [weak self] in self?.textViewDidScroll(self?.rightTextView) }
         // Folds land after a scan and move lines without a scroll: the ribbons follow them.
-        for textView in [leftTextView, rightTextView] {
-            textView.addFoldObserver { [weak self] in self?.divider.needsDisplay = true }
+        for textView in [leftTextView, rightTextView, unifiedTextView] {
+            textView.addFoldObserver { [weak self, weak textView] in
+                self?.divider.needsDisplay = true
+                if let textView, !textView.isFoldScanPending { self?.foldsDidLand(in: textView) }
+            }
         }
         for textView in [leftTextView, rightTextView, unifiedTextView] {
             textView.addKeyDownInterceptor { [weak self, weak textView] event in
@@ -223,6 +229,7 @@ final class IDEDiffViewerView: NSView {
                 textView.selectedRange = NSRange(location: 0, length: 0)
             }
             revealsFirstChange = true
+            revealsAgainWhenFoldsLand = false
             unifiedLayout = nil
             unifiedTextView.setState(TextViewState(text: ""))
         case .loading:
@@ -297,6 +304,37 @@ final class IDEDiffViewerView: NSView {
             } else {
                 select(chunk: 0)
             }
+            revealsAgainWhenFoldsLand = session.settings.collapsesUnchanged
+        }
+    }
+
+    /// The fold scan of `textView` landed. A first change centered before that is centered again.
+    private func foldsDidLand(in textView: TextView) {
+        guard revealsAgainWhenFoldsLand, let session, session.state == .ready else { return }
+        let shown = session.settings.layout == .unified ? [unifiedTextView] : [leftTextView, rightTextView]
+        // Both sides fold on their own scans: centering after the first would leave the other, still
+        // unfolded, scrolled past its end once it folds.
+        guard shown.contains(where: { $0 === textView }), shown.allSatisfy({ !$0.isFoldScanPending }) else { return }
+        revealsAgainWhenFoldsLand = false
+        revealCurrentChange()
+    }
+
+    /// Centers the change the user is on (the first one when none was visited) on both sides.
+    private func revealCurrentChange() {
+        guard let session, session.state == .ready, !session.chunks.isEmpty else { return }
+        let index = min(session.currentChunkIndex ?? 0, session.chunks.count - 1)
+        // Folds just changed the height of the text: lay it out first, or the scroll is worked out
+        // against the old height and clamped to the new one afterwards.
+        for textView in [leftTextView, rightTextView, unifiedTextView] where !textView.isHidden {
+            textView.layoutIfNeeded()
+        }
+        if session.settings.layout == .unified {
+            guard let layout = unifiedLayout, layout.chunkRows.indices.contains(index),
+                  let start = unifiedTextView.location(at: TextLocation(lineNumber: layout.chunkRows[index].all.lowerBound, column: 0))
+            else { return }
+            unifiedTextView.scrollRangeToCenter(NSRange(location: start, length: 0))
+        } else {
+            select(chunk: index)
         }
     }
 
@@ -349,11 +387,14 @@ final class IDEDiffViewerView: NSView {
         } else {
             targets = [(leftTextView, session.chunks.map(\.left)), (rightTextView, session.chunks.map(\.right))]
         }
+        var togglesCollapse = false
         for (textView, changed) in targets {
             // A new provider rescans and folds everything again, taking back folds the user opened:
             // install one only when what it folds changed (this runs on every option and chunk update).
             let applied = AppliedFolding(collapses: collapse, changedLines: collapse ? changed : [])
-            guard appliedFolding[ObjectIdentifier(textView)] != applied else { continue }
+            let previous = appliedFolding[ObjectIdentifier(textView)]
+            guard previous != applied else { continue }
+            if let previous, previous.collapses != applied.collapses { togglesCollapse = true }
             appliedFolding[ObjectIdentifier(textView)] = applied
             guard collapse else {
                 textView.foldingProviderOverride = nil
@@ -362,6 +403,15 @@ final class IDEDiffViewerView: NSView {
             }
             textView.foldingProviderOverride = IDEDiffUnchangedFoldingProvider(changedLines: changed, context: 3)
             textView.isLineFoldingEnabled = true
+        }
+        // The lines moved a long way (thousands of unchanged lines folded or came back): the scroll
+        // position no longer points at anything. Stay on the current change.
+        if togglesCollapse, session.state == .ready, !session.chunks.isEmpty {
+            if collapse {
+                revealsAgainWhenFoldsLand = true
+            } else {
+                revealCurrentChange()
+            }
         }
     }
 

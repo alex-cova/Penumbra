@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import Penumbra
+@testable import Penumbra
 import XCTest
 @testable import Umbra
 
@@ -307,25 +307,40 @@ final class IDEDiffTabTests: XCTestCase {
         }
     }
 
-    private func collapsedViewer(collapsed: Bool, prefix: String) async throws -> (IDEDiffViewerView, IDEDiffSession) {
-        // A change every 30 lines: folded, the text is still taller than the viewport.
-        let lines = (0 ..< 900).map { "let value\($0) = \($0)" }
+    private func collapsedViewer(
+        collapsed: Bool,
+        prefix: String,
+        lineCount: Int = 900,
+        changedLines: [Int]? = nil,
+        layout: IDEDiffLayout = .sideBySide,
+        startsEmpty: Bool = false
+    ) async throws -> (IDEDiffViewerView, IDEDiffSession) {
+        // By default a change every 30 lines: folded, the text is still taller than the viewport.
+        let lines = (0 ..< lineCount).map { "let value\($0) = \($0)" }
         var changed = lines
-        for index in stride(from: 40, to: 900, by: 30) { changed[index] = "let value\(index) = -1" }
+        let changes = changedLines ?? Array(stride(from: 40, to: 900, by: 30))
+        for index in changes { changed[index] = "let value\(index) = -1" }
         let diff = request(lines.joined(separator: "\n") + "\n", changed.joined(separator: "\n") + "\n")
         var settings = IDEDiffSettings()
         settings.collapsesUnchanged = collapsed
+        settings.layout = layout
         let session = IDEDiffSession(request: diff, siblings: [], settings: settings, settingsPrefix: prefix)
         session.loadContent = { source in
             if case .text(let text) = source { return .text(text) }
             return .failed("no git")
         }
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 900, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
-        let viewer = IDEDiffViewerView(frame: CGRect(x: 0, y: 0, width: 900, height: 500))
-        window.contentView = viewer
-        withExtendedLifetime(window) {}
+        // SwiftUI creates a hosted viewer with no size and sizes it after the first update.
+        let viewer = IDEDiffViewerView(frame: startsEmpty ? .zero : CGRect(x: 0, y: 0, width: 900, height: 500))
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: 900, height: 500))
+        container.addSubview(viewer)
+        window.contentView = container
         viewer.show(session, preferences: IDEPreferences.shared)
-        await waitForCondition(timeout: 3) { session.chunks.count == 29 }
+        await waitForCondition(timeout: 3) { session.chunks.count == changes.count }
+        if startsEmpty {
+            viewer.frame = container.bounds
+            viewer.autoresizingMask = [.width, .height]
+        }
         try await settle(viewer)
         objc_setAssociatedObject(viewer, "window", window, .OBJC_ASSOCIATION_RETAIN)
         return (viewer, session)
@@ -383,5 +398,78 @@ final class IDEDiffTabTests: XCTestCase {
         viewer.applyPreferences()
         XCTAssertTrue(viewer.rightTextView.isLineFoldingEnabled, "Collapse Unchanged wins over the editor's switch")
         XCTAssertTrue(viewer.leftTextView.isLineFoldingEnabled)
+    }
+
+    func testAFirstChangeNearTheEndOfABigFileIsInViewOnceTheFoldsLand() async throws {
+        let prefix = "umbra.test.diff.late."
+        let (viewer, session) = try await collapsedViewer(
+            collapsed: true, prefix: prefix, lineCount: 2000, changedLines: [1853, 1856, 1900, 1960]
+        )
+        defer { session.cancel() }
+        try await settle(viewer)
+        for textView in [viewer.leftTextView, viewer.rightTextView] {
+            let top = textView.yPosition(ofLine: 1854)
+            XCTAssertGreaterThanOrEqual(top, textView.contentOffset.y, "the first change is above the viewport")
+            XCTAssertLessThanOrEqual(top, textView.contentOffset.y + textView.bounds.height, "the first change is below the viewport")
+        }
+    }
+
+    func testAFirstChangeNearTheEndOfABigFileIsInViewInTheUnifiedLayout() async throws {
+        let prefix = "umbra.test.diff.lateunified."
+        let (viewer, session) = try await collapsedViewer(
+            collapsed: true, prefix: prefix, lineCount: 2000, changedLines: [1853, 1856, 1900, 1960], layout: .unified
+        )
+        defer { session.cancel() }
+        try await settle(viewer)
+        let textView = viewer.unifiedTextView
+        // The unified text lists the old line, then the new one: the change starts at row 1853.
+        let top = textView.yPosition(ofLine: 1854)
+        XCTAssertGreaterThanOrEqual(top, textView.contentOffset.y)
+        XCTAssertLessThanOrEqual(top, textView.contentOffset.y + textView.bounds.height)
+    }
+
+    func testAViewerSizedAfterItOpenedStillShowsTheFirstChangeOfABigFile() async throws {
+        let prefix = "umbra.test.diff.sizedlater."
+        let (viewer, session) = try await collapsedViewer(
+            collapsed: true, prefix: prefix, lineCount: 2000, changedLines: [1853, 1856, 1900, 1960], startsEmpty: true
+        )
+        defer { session.cancel() }
+        try await settle(viewer, steps: 40)
+        for textView in [viewer.leftTextView, viewer.rightTextView] {
+            XCTAssertGreaterThan(textView.bounds.height, 100)
+            let top = textView.yPosition(ofLine: 1854)
+            XCTAssertGreaterThanOrEqual(top, textView.contentOffset.y, "the first change is above the viewport")
+            XCTAssertLessThanOrEqual(top, textView.contentOffset.y + textView.bounds.height, "the first change is below the viewport")
+        }
+    }
+
+    func testTurningCollapseOffAndOnKeepsTheCurrentChangeInView() async throws {
+        let prefix = "umbra.test.diff.toggle."
+        defer {
+            for key in ["layout", "whitespace", "highlight", "collapse", "syncScroll"] {
+                UserDefaults.standard.removeObject(forKey: prefix + key)
+            }
+        }
+        let (viewer, session) = try await collapsedViewer(
+            collapsed: true, prefix: prefix, lineCount: 2000, changedLines: [1853, 1856, 1900, 1960], startsEmpty: true
+        )
+        defer { session.cancel() }
+        func assertChangeInView(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
+            for textView in [viewer.leftTextView, viewer.rightTextView] {
+                let top = textView.yPosition(ofLine: 1854)
+                XCTAssertGreaterThanOrEqual(top, textView.contentOffset.y, "\(label): the change is above the viewport", file: file, line: line)
+                XCTAssertLessThanOrEqual(top, textView.contentOffset.y + textView.bounds.height, "\(label): the change is below the viewport", file: file, line: line)
+            }
+        }
+        try await settle(viewer, steps: 20)
+        assertChangeInView("collapsed")
+
+        session.settings.collapsesUnchanged = false
+        try await settle(viewer, steps: 20)
+        assertChangeInView("expanded again")
+
+        session.settings.collapsesUnchanged = true
+        try await settle(viewer, steps: 20)
+        assertChangeInView("collapsed again")
     }
 }
