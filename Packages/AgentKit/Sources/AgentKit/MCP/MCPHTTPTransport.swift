@@ -1,6 +1,6 @@
 import Foundation
 
-/// An `ACPTransport` over streamable HTTP, for hosted MCP servers that take a Bearer [REDACTED] or other
+/// An `ACPTransport` over streamable HTTP, for hosted MCP servers that take a Bearer token or other
 /// headers. One JSON-RPC message (or batch) is POSTed; the reply is a single JSON message, a batch
 /// array, or a `text/event-stream` body whose `data:` payloads are the messages. A 202 with an empty
 /// body acknowledges a notification and yields nothing.
@@ -31,6 +31,9 @@ public final class MCPHTTPTransport: ACPTransport, @unchecked Sendable {
 
     private let lock = NSLock()
     private var sessionID: String?
+    /// The version the server picked in its `initialize` result. Every request after that one
+    /// names it in `MCP-Protocol-Version` (required by the 2025-06-18 transport spec).
+    private var negotiatedVersion: String?
     private var continuation: AsyncStream<Data>.Continuation?
     private var closedFlag = false
 
@@ -64,38 +67,74 @@ public final class MCPHTTPTransport: ACPTransport, @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         for (field, value) in headers { request.setValue(value, forHTTPHeaderField: field) }
-        if let id: String = lock.withLock({ sessionID }) { request.setValue(id, forHTTPHeaderField: "Mcp-Session-Id") }
+        let (knownSession, version): (String?, String?) = lock.withLock { (sessionID, negotiatedVersion) }
+        if let knownSession { request.setValue(knownSession, forHTTPHeaderField: "Mcp-Session-Id") }
+        if let version, request.value(forHTTPHeaderField: "MCP-Protocol-Version") == nil {
+            request.setValue(version, forHTTPHeaderField: "MCP-Protocol-Version")
+        }
         if request.value(forHTTPHeaderField: "Authorization") == nil, let token = await tokenProvider?() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         let (status, responseHeaders, body) = try await post(request, retriesLeft: Self.maxRedirects, tokenRetriesLeft: 1)
         if let id = responseHeaders[Self.sessionIDHeader], !id.isEmpty { lock.withLock { sessionID = id } }
+        if status == 404, knownSession != nil {
+            // The server no longer knows this session (it restarted, or expired it). The spec's answer
+            // is a new `initialize` without a session id: report the transport as closed, which makes
+            // `MCPHub` start the server again through a fresh transport (counted like any restart).
+            await expireSession()
+            throw ACPError.transportClosed
+        }
         guard (200..<300).contains(status) else {
             throw ACPError.agentError(JSONRPCError(
                 code: status, message: "The MCP server answered \(status): \(String(decoding: body.prefix(300), as: UTF8.self))"))
         }
         for message in Self.messages(from: body, contentType: responseHeaders["content-type"]) {
+            if let version = Self.protocolVersion(inInitializeResult: message) { lock.withLock { negotiatedVersion = version } }
             var frame = message
             if !frame.isEmpty, frame.last != UInt8(ascii: "\n") { frame.append(UInt8(ascii: "\n")) }
             lock.withLock { continuation }?.yield(frame)
         }
     }
 
+    /// Forgets the session the server dropped and ends the stream, so a read waiting on `incoming`
+    /// stops too. No `DELETE` is sent for a session the server says does not exist.
+    private func expireSession() async {
+        let (continuation, session, ownsSession): (AsyncStream<Data>.Continuation?, URLSession, Bool) = lock.withLock {
+            let captured = continuation
+            continuation = nil
+            sessionID = nil
+            let wasClosed = closedFlag
+            closedFlag = true
+            return (captured, self.session, self.ownsSession && !wasClosed)
+        }
+        continuation?.finish()
+        if ownsSession { session.finishTasksAndInvalidate() }
+    }
+
+    /// The `protocolVersion` of an `initialize` result frame, `nil` for any other message.
+    static func protocolVersion(inInitializeResult frame: Data) -> String? {
+        // Cheap pre-check: most frames are tool results and never mention it.
+        guard frame.range(of: Data("protocolVersion".utf8)) != nil,
+              let json = try? JSONValue(parsing: String(decoding: frame, as: UTF8.self)) else { return nil }
+        return json["result"]?["protocolVersion"]?.stringValue
+    }
+
     public func close() async {
-        let (continuation, sessionID, endpoint, session, ownsSession): (
-            AsyncStream<Data>.Continuation?, String?, URL, URLSession, Bool
+        let (continuation, sessionID, version, endpoint, session, ownsSession): (
+            AsyncStream<Data>.Continuation?, String?, String?, URL, URLSession, Bool
         ) = lock.withLock {
             let captured = continuation
             continuation = nil
             let wasClosed = closedFlag
             closedFlag = true
-            return (captured, sessionID, endpoint, session, ownsSession && !wasClosed)
+            return (captured, sessionID, negotiatedVersion, endpoint, session, ownsSession && !wasClosed)
         }
         // Best effort: tell a stateful server the session is over. A 404 (no such session) is fine.
         if let sessionID {
             var request = URLRequest(url: endpoint)
             request.httpMethod = "DELETE"
             request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id")
+            if let version { request.setValue(version, forHTTPHeaderField: "MCP-Protocol-Version") }
             _ = try? await session.data(for: request)
         }
         continuation?.finish()

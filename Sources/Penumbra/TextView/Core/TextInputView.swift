@@ -1150,6 +1150,8 @@ final class TextInputView: EditorView {
     let methodSeparatorController = MethodSeparatorController()
     /// Called when rows moved, text changed or a parse finished, so sticky lines drop what they cached.
     var onStickyLinesInvalidated: (() -> Void)?
+    /// Called after the fold regions or what is collapsed changed (a scan landed, a fold was toggled).
+    var onFoldsChanged: (() -> Void)?
     let occurrenceHighlightController: OccurrenceHighlightController
     let scopeHighlightController = ScopeHighlightController()
     /// Marks the block the caret is in along the fold ribbon. Needs line folding on, since the
@@ -2379,6 +2381,7 @@ private extension TextInputView {
             self?.adjustSelectionForFoldingIfNeeded()
             self?.foldPreviewController.dismiss()
             self?.scopeHighlightController.regionsDidChange()
+            self?.onFoldsChanged?()
         }.store(in: &cancellables)
     }
 

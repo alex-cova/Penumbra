@@ -5,6 +5,7 @@ import Foundation
 public struct ResponsesEventDecoder: Sendable {
     private var callIDByItemID: [String: String] = [:]
     private var sawToolCall = false
+    private var sawSummaryPart = false
 
     public init() {}
 
@@ -25,6 +26,12 @@ public struct ResponsesEventDecoder: Sendable {
 
         case "response.reasoning_summary_text.delta":
             return json["delta"]?.stringValue.map { [.reasoningDelta($0)] } ?? []
+
+        case "response.reasoning_summary_part.added":
+            // A summary comes in parts (several per reasoning item, and one set per item). The deltas
+            // carry no separator, so a later part starts a new paragraph or two sentences run together.
+            defer { sawSummaryPart = true }
+            return sawSummaryPart ? [.reasoningDelta("\n\n")] : []
 
         case "response.output_item.added":
             guard let item = json["item"], item["type"]?.stringValue == "function_call",

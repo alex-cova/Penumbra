@@ -181,4 +181,207 @@ final class IDEDiffTabTests: XCTestCase {
         XCTAssertNil(weakSession, "the diff session outlived its workspace")
         XCTAssertNil(weakWorkspace, "the workspace with a diff tab is still alive")
     }
+
+    // MARK: - Embedded viewer (History pane)
+
+    func testAnEmbeddedViewerSwapsFilesRevealsTheFirstChangeAndReportsOnlyItsOwnMoves() async throws {
+        let workspace = IDEWorkspace()
+        workspace.bootstrap()
+        defer { workspace.teardown() }
+        // The default layout applies until one was picked; start without a stored pick.
+        UserDefaults.standard.removeObject(forKey: IDEDiffSettings.embeddedPrefix + "layout")
+        let first = request("a\nb\nc\nd\ne\n", "a\nb\nc\nd\nE\n", title: "first")
+        let second = request("1\n2\n", "1\n2\n3\n", title: "second")
+        var reported: [String] = []
+        func view(_ request: IDEDiffRequest) -> IDEEmbeddedDiffView {
+            IDEEmbeddedDiffView(
+                workspace: workspace,
+                request: request,
+                siblings: [first, second],
+                onRequestChanged: { reported.append($0.title) }
+            )
+        }
+
+        let viewer = IDEDiffViewerView(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        let coordinator = IDEEmbeddedDiffView.Coordinator()
+        coordinator.viewer = viewer
+        coordinator.update(view(first))
+        let session = try XCTUnwrap(coordinator.session)
+        XCTAssertEqual(session.settings.layout, .unified, "the History pane starts unified")
+        await waitForCondition(timeout: 2) { session.chunks.count == 1 }
+        XCTAssertEqual(session.currentChunkIndex, 0, "the first change is revealed")
+
+        // The pane picking another file is not reported back.
+        coordinator.update(view(second))
+        XCTAssertEqual(session.request.title, "second")
+        await waitForCondition(timeout: 2) { session.chunks.first?.kind == .inserted }
+        XCTAssertEqual(session.currentChunkIndex, 0)
+        XCTAssertTrue(reported.isEmpty, "\(reported)")
+
+        // The viewer's own Previous File is.
+        session.moveToFile(by: -1)
+        XCTAssertEqual(reported, ["first"])
+
+        coordinator.teardown()
+        XCTAssertNil(coordinator.session)
+    }
+
+    func testAnEmbeddedSessionTakesTheSiblingsOfTheNextCommit() throws {
+        let workspace = IDEWorkspace()
+        workspace.bootstrap()
+        defer { workspace.teardown() }
+        let a = request("1", "2", title: "a")
+        let b = request("3", "4", title: "b")
+        let c = request("5", "6", title: "c")
+        let session = workspace.makeEmbeddedDiffSession(a, siblings: [a, b])
+        XCTAssertTrue(session.canMoveToFile(by: 1))
+        session.show(request: c, siblings: [c])
+        XCTAssertEqual(session.request.title, "c")
+        XCTAssertFalse(session.canMoveToFile(by: 1))
+        XCTAssertFalse(session.canMoveToFile(by: -1))
+        session.cancel()
+    }
+
+    // MARK: - Collapse Unchanged Fragments
+
+    func testCollapsingUnchangedFragmentsOnAndOffKeepsBothSidesScrollableAndPainted() async throws {
+        let workspace = IDEWorkspace()
+        workspace.bootstrap()
+        defer { workspace.teardown() }
+        let lines = (0 ..< 300).map { "let value\($0) = \($0)" }
+        var changed = lines
+        changed[150] = "let value150 = -1"
+        let diff = request(lines.joined(separator: "\n") + "\n", changed.joined(separator: "\n") + "\n")
+        let prefix = "umbra.test.diff.collapse."
+        defer {
+            for key in ["layout", "whitespace", "highlight", "collapse", "syncScroll"] {
+                UserDefaults.standard.removeObject(forKey: prefix + key)
+            }
+        }
+        let session = IDEDiffSession(request: diff, siblings: [], settings: IDEDiffSettings(), settingsPrefix: prefix)
+        session.loadContent = { source in
+            if case .text(let text) = source { return .text(text) }
+            return .failed("no git")
+        }
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 900, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
+        let viewer = IDEDiffViewerView(frame: CGRect(x: 0, y: 0, width: 900, height: 500))
+        window.contentView = viewer
+        viewer.show(session, preferences: IDEPreferences.shared)
+        await waitForCondition(timeout: 3) { session.chunks.count == 1 }
+        viewer.layoutSubtreeIfNeeded()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let fullHeight = viewer.rightTextView.contentSize.height
+        XCTAssertGreaterThan(fullHeight, 3_000)
+
+        session.settings.collapsesUnchanged = true
+        for _ in 0 ..< 30 {
+            viewer.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let foldedHeight = viewer.rightTextView.contentSize.height
+        XCTAssertLessThan(foldedHeight, fullHeight / 2, "the unchanged runs are folded")
+
+        session.settings.collapsesUnchanged = false
+        for _ in 0 ..< 10 {
+            viewer.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        for textView in [viewer.leftTextView, viewer.rightTextView] {
+            XCTAssertEqual(textView.contentSize.height, fullHeight, accuracy: 1, "it scrolls to the end again")
+        }
+
+        session.settings.collapsesUnchanged = true
+        for _ in 0 ..< 30 {
+            viewer.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(viewer.rightTextView.contentSize.height, foldedHeight, accuracy: 1, "folded again without a click")
+        XCTAssertEqual(viewer.leftTextView.contentSize.height, foldedHeight, accuracy: 1)
+        session.cancel()
+    }
+
+    private func settle(_ viewer: IDEDiffViewerView, steps: Int = 30) async throws {
+        for _ in 0 ..< steps {
+            viewer.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private func collapsedViewer(collapsed: Bool, prefix: String) async throws -> (IDEDiffViewerView, IDEDiffSession) {
+        // A change every 30 lines: folded, the text is still taller than the viewport.
+        let lines = (0 ..< 900).map { "let value\($0) = \($0)" }
+        var changed = lines
+        for index in stride(from: 40, to: 900, by: 30) { changed[index] = "let value\(index) = -1" }
+        let diff = request(lines.joined(separator: "\n") + "\n", changed.joined(separator: "\n") + "\n")
+        var settings = IDEDiffSettings()
+        settings.collapsesUnchanged = collapsed
+        let session = IDEDiffSession(request: diff, siblings: [], settings: settings, settingsPrefix: prefix)
+        session.loadContent = { source in
+            if case .text(let text) = source { return .text(text) }
+            return .failed("no git")
+        }
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 900, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
+        let viewer = IDEDiffViewerView(frame: CGRect(x: 0, y: 0, width: 900, height: 500))
+        window.contentView = viewer
+        withExtendedLifetime(window) {}
+        viewer.show(session, preferences: IDEPreferences.shared)
+        await waitForCondition(timeout: 3) { session.chunks.count == 29 }
+        try await settle(viewer)
+        objc_setAssociatedObject(viewer, "window", window, .OBJC_ASSOCIATION_RETAIN)
+        return (viewer, session)
+    }
+
+    func testOpeningACollapsedDiffLeavesTheFirstChangeInView() async throws {
+        let prefix = "umbra.test.diff.reveal."
+        let (viewer, session) = try await collapsedViewer(collapsed: true, prefix: prefix)
+        defer { session.cancel() }
+        for textView in [viewer.leftTextView, viewer.rightTextView] {
+            let top = textView.yPosition(ofLine: 41)
+            XCTAssertGreaterThanOrEqual(top, textView.contentOffset.y, "the change is above the viewport")
+            XCTAssertLessThanOrEqual(top, textView.contentOffset.y + textView.bounds.height, "the change is below the viewport")
+        }
+        XCTAssertGreaterThan(viewer.rightTextView.contentSize.height, viewer.rightTextView.bounds.height * 2, "the folded text still scrolls")
+    }
+
+    func testAnUnrelatedOptionDoesNotCollapseFoldsTheUserOpened() async throws {
+        let prefix = "umbra.test.diff.keepopen."
+        defer {
+            for key in ["layout", "whitespace", "highlight", "collapse", "syncScroll"] {
+                UserDefaults.standard.removeObject(forKey: prefix + key)
+            }
+        }
+        let (viewer, session) = try await collapsedViewer(collapsed: true, prefix: prefix)
+        defer { session.cancel() }
+        let folded = viewer.rightTextView.contentSize.height
+        XCTAssertTrue(viewer.rightTextView.perform(.expandAllRegions))
+        try await settle(viewer, steps: 10)
+        let expanded = viewer.rightTextView.contentSize.height
+        XCTAssertGreaterThan(expanded, folded)
+
+        session.settings.synchronizesScrolling.toggle()
+        try await settle(viewer, steps: 20)
+        XCTAssertEqual(viewer.rightTextView.contentSize.height, expanded, accuracy: 1,
+                       "changing an unrelated option folded the text again")
+    }
+
+    func testReapplyingThePreferencesKeepsTheViewersOwnFoldingState() async throws {
+        let prefix = "umbra.test.diff.prefs."
+        let preferences = IDEPreferences.shared
+        let saved = preferences.isLineFoldingEnabled
+        defer { preferences.isLineFoldingEnabled = saved }
+        preferences.isLineFoldingEnabled = true
+        let (viewer, session) = try await collapsedViewer(collapsed: false, prefix: prefix)
+        defer { session.cancel() }
+        XCTAssertFalse(viewer.rightTextView.isLineFoldingEnabled, "no folds in a diff unless asked for")
+        // The editor's folding switch is applied to every text view, the viewer's included.
+        viewer.applyPreferences()
+        XCTAssertFalse(viewer.rightTextView.isLineFoldingEnabled)
+        XCTAssertFalse(viewer.leftTextView.isLineFoldingEnabled)
+
+        session.settings.collapsesUnchanged = true
+        preferences.isLineFoldingEnabled = false
+        viewer.applyPreferences()
+        XCTAssertTrue(viewer.rightTextView.isLineFoldingEnabled, "Collapse Unchanged wins over the editor's switch")
+        XCTAssertTrue(viewer.leftTextView.isLineFoldingEnabled)
+    }
 }

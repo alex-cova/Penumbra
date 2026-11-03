@@ -42,11 +42,16 @@ extension IDEWorkspace {
 
     /// One file of a commit against its parent, with the commit's other files as siblings.
     func openCommitDiff(hash: String, shortHash: String, file: GitChangedFile, files: [GitChangedFile]) {
-        guard let root = gitStatus.repositoryRootPath else { return }
-        func request(_ file: GitChangedFile) -> IDEDiffRequest {
-            IDEDiffRequest.commitFile(hash: hash, shortHash: shortHash, path: file.path, oldPath: file.oldPath, repositoryRoot: root)
+        guard let request = commitDiffRequests(hash: hash, shortHash: shortHash, files: [file]).first else { return }
+        openDiff(request, siblings: commitDiffRequests(hash: hash, shortHash: shortHash, files: files))
+    }
+
+    /// One request per file of a commit (each against the commit's first parent), in `files` order.
+    func commitDiffRequests(hash: String, shortHash: String, files: [GitChangedFile]) -> [IDEDiffRequest] {
+        guard let root = gitStatus.repositoryRootPath else { return [] }
+        return files.map {
+            IDEDiffRequest.commitFile(hash: hash, shortHash: shortHash, path: $0.path, oldPath: $0.oldPath, repositoryRoot: root)
         }
-        openDiff(request(file), siblings: files.map(request))
     }
 
     /// One file of a branch comparison, branch against branch, with the other files as siblings.
@@ -136,8 +141,26 @@ extension IDEWorkspace {
 
     // MARK: - Sessions
 
-    private func makeDiffSession(_ request: IDEDiffRequest, siblings: [IDEDiffRequest], documentID: UUID) -> IDEDiffSession {
-        let session = IDEDiffSession(request: request, siblings: siblings)
+    /// A session for a viewer that is not a tab: the History pane's. Nothing retitles, and it keeps
+    /// its own options (unified until the user picks another layout).
+    func makeEmbeddedDiffSession(_ request: IDEDiffRequest, siblings: [IDEDiffRequest]) -> IDEDiffSession {
+        makeDiffSession(
+            request,
+            siblings: siblings,
+            documentID: nil,
+            settings: .load(prefix: IDEDiffSettings.embeddedPrefix, defaultLayout: .unified),
+            settingsPrefix: IDEDiffSettings.embeddedPrefix
+        )
+    }
+
+    private func makeDiffSession(
+        _ request: IDEDiffRequest,
+        siblings: [IDEDiffRequest],
+        documentID: UUID?,
+        settings: IDEDiffSettings = .load(),
+        settingsPrefix: String = IDEDiffSettings.tabPrefix
+    ) -> IDEDiffSession {
+        let session = IDEDiffSession(request: request, siblings: siblings, settings: settings, settingsPrefix: settingsPrefix)
         session.loadContent = { [weak self] source in
             guard let self else { return .failed("The window was closed.") }
             if case .workingTree(let path) = source, let live = self.unsavedEditorText(atPath: path) {
@@ -160,7 +183,7 @@ extension IDEWorkspace {
             self?.gitStatus.refresh()
         }
         session.onRequestChanged = { [weak self, weak session] in
-            guard let self, let session else { return }
+            guard let self, let session, let documentID else { return }
             self.workbench.allDocuments().first { $0.id == documentID }?.displayName = session.request.title
             self.refreshTabPresentation()
         }

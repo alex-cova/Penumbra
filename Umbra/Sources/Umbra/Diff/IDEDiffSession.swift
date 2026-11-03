@@ -16,10 +16,18 @@ struct IDEDiffSettings: Equatable {
     var collapsesUnchanged = false
     var synchronizesScrolling = true
 
-    private static let prefix = "umbra.diff."
+    /// The keys of the diff tabs; the History pane's embedded viewer keeps its own (`embeddedPrefix`).
+    static let tabPrefix = "umbra.diff."
+    static let embeddedPrefix = "umbra.diff.history."
 
-    static func load(from defaults: UserDefaults = .standard) -> IDEDiffSettings {
+    /// `defaultLayout` applies until the user picked one under `prefix`.
+    static func load(
+        from defaults: UserDefaults = .standard,
+        prefix: String = tabPrefix,
+        defaultLayout: IDEDiffLayout = .sideBySide
+    ) -> IDEDiffSettings {
         var settings = IDEDiffSettings()
+        settings.layout = defaultLayout
         if let raw = defaults.string(forKey: prefix + "layout"), let value = IDEDiffLayout(rawValue: raw) { settings.layout = value }
         if let raw = defaults.string(forKey: prefix + "whitespace"), let value = IDEDiffWhitespacePolicy(rawValue: raw) { settings.whitespace = value }
         if let raw = defaults.string(forKey: prefix + "highlight"), let value = IDEDiffHighlightMode(rawValue: raw) { settings.highlight = value }
@@ -28,12 +36,12 @@ struct IDEDiffSettings: Equatable {
         return settings
     }
 
-    func save(to defaults: UserDefaults = .standard) {
-        defaults.set(layout.rawValue, forKey: Self.prefix + "layout")
-        defaults.set(whitespace.rawValue, forKey: Self.prefix + "whitespace")
-        defaults.set(highlight.rawValue, forKey: Self.prefix + "highlight")
-        defaults.set(collapsesUnchanged, forKey: Self.prefix + "collapse")
-        defaults.set(synchronizesScrolling, forKey: Self.prefix + "syncScroll")
+    func save(to defaults: UserDefaults = .standard, prefix: String = tabPrefix) {
+        defaults.set(layout.rawValue, forKey: prefix + "layout")
+        defaults.set(whitespace.rawValue, forKey: prefix + "whitespace")
+        defaults.set(highlight.rawValue, forKey: prefix + "highlight")
+        defaults.set(collapsesUnchanged, forKey: prefix + "collapse")
+        defaults.set(synchronizesScrolling, forKey: prefix + "syncScroll")
     }
 }
 
@@ -59,11 +67,13 @@ final class IDEDiffSession {
 
     private(set) var request: IDEDiffRequest
     /// The files Previous/Next File step through (the Changes list or a commit's files).
-    let siblings: [IDEDiffRequest]
+    private(set) var siblings: [IDEDiffRequest]
+    /// Where `settings` persist: the tabs share one set, the History pane's viewer has its own.
+    let settingsPrefix: String
     var settings: IDEDiffSettings {
         didSet {
             guard settings != oldValue else { return }
-            settings.save()
+            settings.save(prefix: settingsPrefix)
             if settings.whitespace != oldValue.whitespace || settings.highlight != oldValue.highlight {
                 recompute()
             } else {
@@ -127,10 +137,16 @@ final class IDEDiffSession {
     @ObservationIgnored private var computeTask: Task<Void, Never>?
     @ObservationIgnored private let edit = Debouncer()
 
-    init(request: IDEDiffRequest, siblings: [IDEDiffRequest], settings: IDEDiffSettings = .load()) {
+    init(
+        request: IDEDiffRequest,
+        siblings: [IDEDiffRequest],
+        settings: IDEDiffSettings = .load(),
+        settingsPrefix: String = IDEDiffSettings.tabPrefix
+    ) {
         self.request = request
         self.siblings = siblings.isEmpty ? [request] : siblings
         self.settings = settings
+        self.settingsPrefix = settingsPrefix
     }
 
     func cancel() {
@@ -231,8 +247,18 @@ final class IDEDiffSession {
     /// first, as IntelliJ does.
     func moveToFile(by step: Int) {
         guard let index = siblingIndex, siblings.indices.contains(index + step) else { return }
+        show(request: siblings[index + step])
+    }
+
+    /// Shows another comparison in this session (Previous/Next File, or the History pane picking a
+    /// file). Unsaved edits are saved first; the new texts load and the viewer reveals the first
+    /// change when they arrive.
+    /// `siblings` replaces the files Previous/Next File walk (another commit's, say).
+    func show(request newRequest: IDEDiffRequest, siblings newSiblings: [IDEDiffRequest]? = nil) {
+        if let newSiblings { siblings = newSiblings.isEmpty ? [newRequest] : newSiblings }
+        guard newRequest.id != request.id else { return }
         save()
-        request = siblings[index + step]
+        request = newRequest
         state = .loading
         currentChunkIndex = nil
         chunks = []

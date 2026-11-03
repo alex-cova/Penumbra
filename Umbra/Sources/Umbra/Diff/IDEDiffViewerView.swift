@@ -24,6 +24,7 @@ final class IDEDiffViewerView: NSView {
     /// True while texts are being set, so their change callbacks are not taken for edits.
     private var isLoadingTexts = false
     private var unifiedLayout: IDEDiffUnifiedLayout?
+    private var appliedFolding: [ObjectIdentifier: AppliedFolding] = [:]
     /// Set when new texts are shown: the first chunks that arrive for them move to the first change.
     private var revealsFirstChange = false
     private var preferences: IDEPreferences?
@@ -61,6 +62,10 @@ final class IDEDiffViewerView: NSView {
         unifiedTextView.editorDelegate = delegateProxy
         leftTextView.addScrollObserver { [weak self] in self?.textViewDidScroll(self?.leftTextView) }
         rightTextView.addScrollObserver { [weak self] in self?.textViewDidScroll(self?.rightTextView) }
+        // Folds land after a scan and move lines without a scroll: the ribbons follow them.
+        for textView in [leftTextView, rightTextView] {
+            textView.addFoldObserver { [weak self] in self?.divider.needsDisplay = true }
+        }
         for textView in [leftTextView, rightTextView, unifiedTextView] {
             textView.addKeyDownInterceptor { [weak self, weak textView] event in
                 guard let self, let textView else { return false }
@@ -181,6 +186,8 @@ final class IDEDiffViewerView: NSView {
         }
         unifiedTextView.showLineNumbers = false
         applyEditability()
+        // `apply(to:)` just set the editor's folding switch on these views: say what the viewer wants.
+        appliedFolding = [:]
         applyFolding()
     }
 
@@ -343,6 +350,11 @@ final class IDEDiffViewerView: NSView {
             targets = [(leftTextView, session.chunks.map(\.left)), (rightTextView, session.chunks.map(\.right))]
         }
         for (textView, changed) in targets {
+            // A new provider rescans and folds everything again, taking back folds the user opened:
+            // install one only when what it folds changed (this runs on every option and chunk update).
+            let applied = AppliedFolding(collapses: collapse, changedLines: collapse ? changed : [])
+            guard appliedFolding[ObjectIdentifier(textView)] != applied else { continue }
+            appliedFolding[ObjectIdentifier(textView)] = applied
             guard collapse else {
                 textView.foldingProviderOverride = nil
                 textView.isLineFoldingEnabled = false
@@ -351,6 +363,12 @@ final class IDEDiffViewerView: NSView {
             textView.foldingProviderOverride = IDEDiffUnchangedFoldingProvider(changedLines: changed, context: 3)
             textView.isLineFoldingEnabled = true
         }
+    }
+
+    /// What `applyFolding` last gave a text view.
+    private struct AppliedFolding: Equatable {
+        var collapses: Bool
+        var changedLines: [Range<Int>]
     }
 
     // MARK: - Colors

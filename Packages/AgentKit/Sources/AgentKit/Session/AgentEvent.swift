@@ -46,6 +46,8 @@ public enum AgentEvent: Sendable, Equatable {
     /// Follows `.turnRestarted`: the provider failed with something worth retrying and the request is
     /// sent again after `delay` seconds. `attempt` counts the tries, from 1. A host shows the wait.
     case retryScheduled(attempt: Int, delay: TimeInterval)
+    /// What the provider says is left of its rate limit. A host keeps the latest to explain a wait.
+    case rateLimit(RateLimitStatus)
     /// The finished assistant text of a turn, once.
     case assistantMessage(String)
     case toolCallStarted(id: String, name: String)

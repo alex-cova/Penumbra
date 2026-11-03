@@ -57,6 +57,9 @@ final class IDEGitStatusModel {
     private(set) var commitDetailText: String?
     /// The files the selected commit changed (all of them, also in a file's history).
     private(set) var selectedCommitFiles: [GitChangedFile] = []
+    /// The path (`GitChangedFile.path`) of the file shown in the History pane's diff editor; nil
+    /// shows the commit's whole patch. Cleared when another commit is selected.
+    var selectedCommitFile: String?
     private(set) var branches: [String] = []
     private(set) var localBranches: [String] = []
     /// The current branch against its upstream; nil without one (a branch never pushed).
@@ -195,6 +198,7 @@ final class IDEGitStatusModel {
         repository = nil
         commits = []
         selectedCommitHash = nil
+        selectedCommitFile = nil
         commitDetailText = nil
         selectedCommitFiles = []
         historyFilePath = nil
@@ -331,6 +335,7 @@ final class IDEGitStatusModel {
     }
 
     func selectCommit(_ hash: String?) {
+        if hash != selectedCommitHash { selectedCommitFile = nil }
         selectedCommitHash = hash
         selectedCommitHashes = hash.map { [$0] } ?? []
         commitBranches = []

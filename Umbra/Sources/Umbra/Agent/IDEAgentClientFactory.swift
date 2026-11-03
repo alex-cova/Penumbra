@@ -138,8 +138,9 @@ struct IDEAgentClientFactory: Sendable {
         case .anthropic:
             return AnthropicMessagesClient(endpoint: endpoint)
         case .meta:
-            // Meta's Model API is Responses-compatible and takes a Bearer [REDACTED], so it reuses `OpenAIResponsesClient`.
-            return OpenAIResponsesClient(endpoint: endpoint)
+            // Meta's Model API is Responses-compatible and takes a Bearer key, so it reuses `OpenAIResponsesClient`.
+            // It answers `tool_choice: none` with a 400, so the client turns that off (`OpenAIResponsesClient.meta`).
+            return OpenAIResponsesClient.meta(endpoint: endpoint)
         case .ollama:
             let info = selectedOllamaModel(named: choice.model)
             // Only refuse on what the server told us: with no list loaded, the request decides.

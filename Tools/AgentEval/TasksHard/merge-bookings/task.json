@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "difficulty": "hard",
+  "prompt": "tests/test_intervals.py, tests/test_schedule.py and tests/test_report.py have failures. Find every root cause in the code and fix it. Do not change the tests.",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 120,
+  "title": "Several bugs in an interval merge and the schedule built on it"
+}

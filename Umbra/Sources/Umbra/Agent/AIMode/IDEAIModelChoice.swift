@@ -17,7 +17,7 @@ struct IDEAIModelChoice: Codable, Hashable, Sendable {
     init(provider: IDEAgentProvider, model: String, reasoningEffort: String? = nil, acpAgentID: UUID? = nil) {
         self.provider = provider
         self.model = model
-        self.reasoningEffort = reasoningEffort ?? provider.defaultReasoning
+        self.reasoningEffort = provider.normalizedReasoning(reasoningEffort ?? provider.defaultReasoning)
         self.acpAgentID = acpAgentID
     }
 
@@ -33,7 +33,13 @@ struct IDEAIModelChoice: Codable, Hashable, Sendable {
     }
 
     /// The effort to send, or `nil` for "off".
-    var effectiveReasoningEffort: String? { reasoningEffort == "off" ? nil : reasoningEffort }
+    var effectiveReasoningEffort: String? {
+        let effort = provider.normalizedReasoning(reasoningEffort)
+        return effort == "off" ? nil : effort
+    }
+
+    /// The effort the picker shows: a saved one the provider no longer offers reads as its default.
+    var shownReasoningEffort: String { provider.normalizedReasoning(reasoningEffort) }
 
     var isACP: Bool { acpAgentID != nil }
 }

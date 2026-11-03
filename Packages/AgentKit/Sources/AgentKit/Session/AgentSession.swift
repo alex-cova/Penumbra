@@ -205,11 +205,22 @@ public actor AgentSession {
     /// the next turn boundary, as a note, so a history never gets a message between a call and its output.
     public func setMode(_ newMode: PermissionMode) {
         mode = newMode
+        // A child that edits follows the user's mode, running or idle: switching to Manual must also
+        // make a continued child ask. (Plan mode does not offer `task`, so it changes no child.)
+        guard newMode != .plan else { return }
+        for child in children.values where child.canEdit {
+            let session = child.session
+            Task { await session.setMode(newMode) }
+        }
     }
 
     /// Replaces the user's rules for the calls that follow.
     public func setRules(_ newRules: PermissionRules) {
         rules = newRules
+        for child in children.values {
+            let session = child.session
+            Task { await session.setRules(newRules) }
+        }
     }
 
     /// Answers an `.questionAsked` event, including one a child raised. `nil` means the user
@@ -1208,7 +1219,10 @@ public actor AgentSession {
                     approval: configuration.approval,
                     contextWindow: resolved.contextWindow,
                     compactionThreshold: configuration.compactionThreshold,
-                    mode: canEdit ? .acceptEdits : .plan,
+                    // A child that edits follows the user's mode: in Manual its edits ask too (the
+                    // card reaches the parent's UI), instead of Accept Edits quietly lifting that.
+                    // `task` is not offered in plan mode, so `.plan` here only means a read-only child.
+                    mode: canEdit ? (mode == .plan ? .acceptEdits : mode) : .plan,
                     permissions: rules,
                     gate: configuration.gate,
                     secretPatterns: configuration.secretPatterns,
@@ -1437,7 +1451,7 @@ public actor AgentSession {
                     approval: configuration.approval,
                     contextWindow: resolved.contextWindow,
                     compactionThreshold: configuration.compactionThreshold,
-                    mode: snapshot.canEdit ? .acceptEdits : .plan,
+                    mode: snapshot.canEdit ? (mode == .plan ? .acceptEdits : mode) : .plan,
                     permissions: rules,
                     gate: configuration.gate,
                     secretPatterns: configuration.secretPatterns,
@@ -1564,6 +1578,8 @@ public actor AgentSession {
                     turn.usage = usage
                 case .finished(let reason):
                     turn.finish = reason
+                case .rateLimit(let status):
+                    out.yield(.rateLimit(status))
                 case .retrying(let attempt, let delay):
                     turn = Turn()
                     textFlushed = false

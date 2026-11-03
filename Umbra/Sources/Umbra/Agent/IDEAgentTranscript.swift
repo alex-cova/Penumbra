@@ -168,10 +168,15 @@ enum IDEAgentToolSummary {
     }
 
     /// The status line while a failed request waits to be sent again.
-    static func retryStatus(attempt: Int, delay: TimeInterval) -> String {
+    /// `rateLimit` is what the failed response reported (Meta and OpenAI send `x-ratelimit-*`): when a
+    /// limit is used up the line says so instead of the generic "busy or unreachable".
+    static func retryStatus(attempt: Int, delay: TimeInterval, rateLimit: RateLimitStatus? = nil) -> String {
         let seconds = Int(delay.rounded(.up))
         if seconds < 2 { return "Retrying…" }
         let wait = seconds < 90 ? "\(seconds) s" : "\((seconds + 30) / 60) min"
+        if let used = rateLimit?.exhausted {
+            return "The provider's \(used) rate limit is used up. Retrying in \(wait) (try \(attempt))…"
+        }
         return "The provider is busy or unreachable. Retrying in \(wait) (try \(attempt))…"
     }
 

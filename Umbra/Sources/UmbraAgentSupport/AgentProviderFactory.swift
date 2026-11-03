@@ -224,7 +224,7 @@ public enum UmbraAgentProviderFactory {
         case .meta:
             // Meta's Model API speaks the OpenAI Responses format with a Bearer [REDACTED].
             return UmbraAgentProviderSetup(
-                client: OpenAIResponsesClient(endpoint: endpoint),
+                client: OpenAIResponsesClient.meta(endpoint: endpoint),
                 contextWindow: config.contextWindow, model: model, reasoningEffort: reasoning)
         default:
             throw UmbraAgentProviderError.message("Unknown provider “\(config.provider.rawValue)”.")

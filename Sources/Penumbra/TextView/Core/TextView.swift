@@ -90,6 +90,14 @@ public struct DocumentTextExport: Sendable {
         typingObservers.append(observer)
     }
     private var scrollObservers: [() -> Void] = []
+    private var foldObservers: [() -> Void] = []
+
+    /// Registers an observer called after the fold regions or the collapsed state changed. A fold
+    /// scan lands asynchronously and moves lines without scrolling, so overlays anchored to lines
+    /// (the diff viewer's ribbons) cannot rely on ``addScrollObserver(_:)`` alone.
+    public func addFoldObserver(_ observer: @escaping () -> Void) {
+        foldObservers.append(observer)
+    }
     /// True while a wheel or overlay-scroller drag is assigning `contentOffset`. Programmatic
     /// scrolls, including `scrollRangeToVisible`, leave it false.
     public internal(set) var isUserInitiatedScroll = false
@@ -1515,6 +1523,8 @@ public struct DocumentTextExport: Sendable {
     var lineBackgroundFillsForTesting: [LineBackgroundFill] { textInputView.lineBackgroundFillsForTesting }
     var collapsedFoldLineRangesForTesting: [ClosedRange<Int>] { textInputView.collapsedFoldLineRangesForTesting }
     func updateFoldsForTesting() async { await textInputView.updateFoldsForTesting() }
+    /// Test hook — the height the text itself needs (folded lines count as zero), before overscroll.
+    var textContentHeightForTesting: CGFloat { textInputView.contentSize.height }
 
     func foldPreviewContentForTesting(headerRow row: Int, maximumLines: Int = 20) -> FoldPreviewContent? {
         textInputView.foldPreviewContentForTesting(headerRow: row, maximumLines: maximumLines)
@@ -1760,6 +1770,9 @@ public struct DocumentTextExport: Sendable {
         minimapView.applyTheme()
         minimapView.collapseOverlay()
         addFixedOverlaySubview(minimapView)
+        textInputView.onFoldsChanged = { [weak self] in
+            self?.foldObservers.forEach { $0() }
+        }
         textInputView.onStickyLinesInvalidated = { [weak self] in
             guard let self, self.showsStickyLines else { return }
             self.stickyLinesController.invalidate()

@@ -5,7 +5,7 @@ import Testing
 private let liveOutputLimitProjects = Locked<[TempProject]>([])
 
 private func session(
-    _ client: MockLLMClient, probe: Probe, configuration: AgentConfiguration = AgentConfiguration(model: "m")
+    _ client: any LLMClient, probe: Probe, configuration: AgentConfiguration = AgentConfiguration(model: "m")
 ) throws -> AgentSession {
     let project = try TempProject()
     liveOutputLimitProjects.value.append(project)
@@ -316,5 +316,127 @@ private func editorNotes(_ items: [ConversationItem]) -> [String] {
         }
         #expect(try stripped(AnthropicRequestEncoder.body(for: earlier)) == stripped(AnthropicRequestEncoder.body(for: closing)))
         #expect(try stripped(ResponsesRequestEncoder.body(for: earlier)) == stripped(ResponsesRequestEncoder.body(for: closing)))
+    }
+}
+
+/// Meta's Model API answers `tool_choice: "none"` with a 400 ("only `auto` is supported"; measured
+/// 2026-11-02), so the Muse client must not claim it, or the closing turn of a run that hit its cap
+/// would fail instead of summarizing.
+@Suite struct MetaClosingTurnTests {
+    @Test func theMetaClientDoesNotSwitchToolsOff() {
+        let meta = OpenAIResponsesClient.meta()
+        #expect(!meta.supportsDisabledToolChoice)
+        #expect(meta.endpoint.baseURL == LLMEndpoint.meta.baseURL)
+        #expect(meta.supportsImages, "image input is accepted (probe 2026-11-02)")
+        #expect(OpenAIResponsesClient().supportsDisabledToolChoice, "OpenAI keeps its keep-the-list closing turn")
+    }
+
+    @Test func aRunThatHitsItsCapClosesWithoutToolChoiceNoneOnMeta() async throws {
+        // The session sends what the client allows: no `tool_choice`, and no tools on the last turn.
+        let stub = StubTransport([
+            .response(status: 200, lines: Self.functionCallTurn),
+            .response(status: 200, lines: Self.textTurn("Stopped at the cap.")),
+        ])
+        let client = OpenAIResponsesClient.meta(transport: stub, retry: .none)
+        let session = try session(client, probe: Probe(), configuration: AgentConfiguration(model: "muse-spark-1.3", maxIterations: 1))
+        _ = await run(session)
+        var bodies: [[String: Any]] = []
+        for request in stub.requests {
+            let data = try #require(request.httpBody ?? request.bodyStreamData)
+            bodies.append(try #require(JSONSerialization.jsonObject(with: data) as? [String: Any]))
+        }
+        #expect(bodies.count == 2)
+        #expect(bodies[1]["tool_choice"] == nil)
+        #expect((bodies[1]["tools"] as? [Any])?.isEmpty ?? true)
+        #expect(bodies[0]["tool_choice"] == nil)
+        #expect(!((bodies[0]["tools"] as? [Any])?.isEmpty ?? true), "the first turn still offers the tools")
+    }
+
+    private static let functionCallTurn = [
+        #"data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"c1","name":"look","arguments":""}}"#,
+        #"data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{}"}"#,
+        #"data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"c1","name":"look","arguments":"{}"}}"#,
+        #"data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":5}}}"#,
+    ]
+
+    private static func textTurn(_ text: String) -> [String] {
+        [
+            #"data: {"type":"response.output_text.delta","output_index":0,"item_id":"m1","delta":"\#(text)"}"#,
+            #"data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":5}}}"#,
+        ]
+    }
+}
+
+private extension URLRequest {
+    /// `URLSession` may hand the body over as a stream rather than `httpBody`.
+    var bodyStreamData: Data? {
+        guard let stream = httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
+}
+
+/// Error bodies captured from Meta's Model API on 2026-11-02.
+@Suite struct MetaErrorBodyTests {
+    @Test func anOverlongPromptIsAContextOverflowSoCompactionRuns() {
+        let body = #"{"error":{"code":"context_length_exceeded","message":"The input (3584471 tokens) exceeds the model's context window of 1048576 tokens. Reduce the length of the input.","param":"input","type":"invalid_request_error"}}"#
+        #expect(HTTPErrorClassifier.classify(status: 400, body: body, retryAfter: nil) == .contextLengthExceeded)
+    }
+
+    @Test func anUnknownModelIsABadRequestThatSaysSo() {
+        let body = #"{"error":{"code":"model_not_found","message":"The requested model was not found.","param":null,"type":"invalid_request_error"}}"#
+        #expect(HTTPErrorClassifier.classify(status: 404, body: body, retryAfter: nil)
+            == .badRequest(status: 404, message: "The requested model was not found."))
+    }
+
+    @Test func aRejectedToolChoiceAndEffortAreBadRequestsNotContextErrors() {
+        let toolChoice = #"{"error":{"code":null,"message":"only `\"auto\"` is supported for `tool_choice`. `\"none\"`, `\"required\"`, and named function choices are not currently supported","param":"tool_choice","type":"invalid_request_error"}}"#
+        if case .badRequest(let status, _) = HTTPErrorClassifier.classify(status: 400, body: toolChoice, retryAfter: nil) { #expect(status == 400) } else {
+            Issue.record("a rejected tool_choice must stay a bad request")
+        }
+    }
+}
+
+/// Meta (and OpenAI) report what is left of the rate limit in `x-ratelimit-*` headers; a host uses it
+/// to say which limit a wait is for.
+@Suite struct RateLimitStatusTests {
+    private let metaHeaders = [
+        "x-ratelimit-limit-requests": "3000", "x-ratelimit-remaining-requests": "2999",
+        "x-ratelimit-limit-tokens": "4000000", "x-ratelimit-remaining-tokens": "3999821",
+    ]
+
+    @Test func theFourHeadersAreReadWhateverTheirCase() {
+        let status = RateLimitStatus.parse(headers: Dictionary(uniqueKeysWithValues: metaHeaders.map { ($0.key.uppercased(), $0.value) }))
+        #expect(status == RateLimitStatus(limitRequests: 3000, remainingRequests: 2999, limitTokens: 4_000_000, remainingTokens: 3_999_821))
+        #expect(status?.exhausted == nil)
+        #expect(RateLimitStatus.parse(headers: ["retry-after": "3"]) == nil)
+        #expect(RateLimitStatus.parse(headers: ["x-ratelimit-remaining-requests": "0"])?.exhausted == "requests")
+        #expect(RateLimitStatus.parse(headers: ["x-ratelimit-remaining-tokens": "0"])?.exhausted == "tokens")
+        #expect(RateLimitStatus.parse(headers: ["x-ratelimit-remaining-requests": "soon"]) == nil, "an unreadable value is ignored")
+    }
+
+    @Test func aStreamReportsTheLimitFirstAndAFailedOneBeforeTheRetry() async throws {
+        let ok = #"data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}"#
+        let spent = metaHeaders.merging(["x-ratelimit-remaining-requests": "0", "retry-after": "0"]) { $1 }
+        let transport = StubTransport([
+            .response(status: 429, headers: spent, lines: [#"{"error":{"message":"slow down"}}"#]),
+            .response(status: 200, headers: metaHeaders, lines: [ok]),
+        ])
+        let client = OpenAIResponsesClient.meta(transport: transport, retry: RetryPolicy(maxRetries: 2, baseDelay: 0.001, maxDelay: 0.001, jitter: false))
+        let events = try await collect(client.stream(LLMRequest(model: "muse-spark-1.3", items: [.user("hi")])))
+        guard case .rateLimit(let first)? = events.first else { Issue.record("expected a rate limit first: \(events)"); return }
+        #expect(first.exhausted == "requests")
+        #expect(events.dropFirst().first.map { if case .retrying(let attempt, _) = $0 { attempt == 1 } else { false } } == true)
+        guard case .rateLimit(let second)? = events.dropFirst(2).first else { Issue.record("expected the success headers: \(events)"); return }
+        #expect(second.remainingRequests == 2999)
+        #expect(events.last == .finished(.completed))
     }
 }

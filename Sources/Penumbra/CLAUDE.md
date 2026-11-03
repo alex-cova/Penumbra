@@ -59,6 +59,7 @@ Loaded when working under `Sources/Penumbra`. Feature catalog and behaviour note
 **Code folding**
 - IntelliJ-style layers: `FoldingProviding` / `FoldingDescriptor` in `EditorIntelligence`, `CodeFoldingManager` (async descriptor fetch with generation stamp), `FoldingModel` / `FoldRegion` in Penumbra (`isLineFoldingEnabled`).
 - Built-in providers: `TreeSitterFoldingProvider` (primary when a tree-sitter language mode is active; per-node placeholders like `{...}` / `/*...*/`) and `IndentationFoldingProvider` fallback; hosts can override via `EditorIntelligenceServices.foldingProvider`.
+- Turning folding off (`isLineFoldingEnabled = false`) expands everything, drops the regions and invalidates the content height (a stale folded height left the view unscrollable); turning it on scans again, including a `foldingProviderOverride` set while it was off (Umbra's Collapse Unchanged Fragments toggles both). `TextView.addFoldObserver(_:)` is called whenever regions or the collapsed state change, including when an async scan lands (lines move with no scroll, so `addScrollObserver` alone misses it). Tests: `FoldingToggleTests`.
 - Collapse/expand by zeroing hidden line heights in `LineManager` (no separate scroll model); gutter fold ribbons (`FoldRibbonView`), per-region placeholder chips, hover preview of collapsed bodies (`FoldPreviewController`), and editor actions (collapse/expand block, all, recursively — IntelliJ keymap ⌘-/⌘+, ⌘⇧-, ⌘⇧+, ⌘⌥-, ⌘⌥+).
 
 **Search & replace**

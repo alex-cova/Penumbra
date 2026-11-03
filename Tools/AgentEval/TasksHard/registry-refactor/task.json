@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q && ! grep -nE \"^_registry|^[[:space:]]*global \" plugins.py app.py extras.py cli.py",
+  "difficulty": "hard",
+  "prompt": "plugins.py keeps its registry in module-level state, which makes the code impossible to test in isolation. Make `plugins.Registry` a class with `register(name, fn)`, `get(name)` and `names()` (sorted), remove the module-level state, and pass a registry explicitly: `app.build(registry)`, `app.run(registry, name, text)`, `extras.install(registry)` and `cli.available(registry)`. Update every caller. Do not change the tests.",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 120,
+  "title": "Replace a module-level registry with one the caller owns"
+}

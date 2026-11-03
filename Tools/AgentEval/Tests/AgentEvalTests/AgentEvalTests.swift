@@ -234,8 +234,9 @@ private func builtInTasks(only ids: [String]? = nil) throws -> [EvalTask] {
             "--tasks", "a, b", "--task-dir", "/tmp/t", "--toolset", "core", "--no-run-tests", "--max-iterations", "10",
             "--context", "8192", "--reasoning", "low", "--timeout", "30", "--jobs", "4", "--json", "o.json",
             "--transcripts", "tr", "--keep", "--models-dir", "/m", "--no-output-store",
-            "--no-line-numbers", "--nudge-announced",
+            "--no-line-numbers", "--nudge-announced", "--strict-arguments",
         ])
+        #expect(!defaults.strictArguments && all.strictArguments)
         #expect(defaults.saveToolOutput && !all.saveToolOutput)
         #expect(defaults.lineNumbers && !all.lineNumbers && !defaults.nudgeAnnouncedActions && all.nudgeAnnouncedActions)
         #expect(all.provider == "chat" && all.baseURL == "http://x/v1" && all.apiKeyEnvironment == "K" && all.trials == 3)

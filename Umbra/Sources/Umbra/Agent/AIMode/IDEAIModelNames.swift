@@ -21,6 +21,16 @@ enum IDEAIModelNames {
         ("muse-wonder-1.0", "Muse Wonder 1.0"),
     ]
 
+    /// Whether an id from Meta's `/models` is something the picker can chat with. The endpoint also
+    /// lists an image generator (`muse-image-1.0`), a transcriber (`muse-voice-transcribe-1.0`) and
+    /// `sam-3.1`, none of which take a conversation. An exclusion list rather than a list of known
+    /// families, so a new Muse chat model still appears without an app update.
+    static func isMuseChatModel(_ id: String) -> Bool {
+        let name = id.lowercased()
+        guard name.hasPrefix("muse-") else { return false }
+        return !["image", "voice", "transcribe", "audio", "speech", "embed"].contains { name.contains($0) }
+    }
+
     /// "Opus 5.5" for a known Claude id, the id itself otherwise.
     static func display(provider: IDEAgentProvider, model: String) -> String {
         if provider == .anthropic, let known = claude.first(where: { $0.id == model }) { return known.name }

@@ -1,18 +1,24 @@
 # Harness gap 7: smaller items
 
-Part of the series `agent-harness-1.md` to `agent-harness-7.md` (index: `README.md`). Checked against the code on 2026-10-26. Each item is independent and small; none blocks parity.
+Part of the series `agent-harness-1.md` to `agent-harness-9.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-10-26. Each item is independent and small; none blocks parity.
 
-**Status:** open. Take them in the order at the end.
+**Status:** items 1–4 built (checked 2026-11-02): the measurement is saved (with the caveat in item 1), `/export json` writes a scrubbed `SessionStore` snapshot, the navigation text and `IDEJavaAgentNavigator` are cleaned up and `hover` and `rename_symbol` exist, and `/loop` ships. Items 5 and 6 stay on demand.
 
 ## 1. Measure what is already built
 
-**What exists.** `docs/harness/BUILT.md` says tolerant tool arguments are "not yet measured with AgentEval". AgentEval supports `--trials N`, `--jobs N`, `--json` and `--transcripts` (`Tools/AgentEval/Sources/AgentEvalKit/Options.swift`, `Report.swift`), but **no results are saved anywhere in the repo**. Nothing in the repo supports an earlier note that the full-versus-core toolset was "inconclusive at 16 trials"; it came from session notes.
+**What exists.** An earlier `BUILT.md` (deleted in `e7b8d169`) said tolerant tool arguments were "not yet measured with AgentEval". AgentEval supports `--trials N`, `--jobs N`, `--json` and `--transcripts` (`Tools/AgentEval/Sources/AgentEvalKit/Options.swift`, `Report.swift`), but **no results are saved anywhere in the repo**. Nothing in the repo supports an earlier note that the full-versus-core toolset was "inconclusive at 16 trials"; it came from session notes.
 
-**Proposal.** Save `--json` results under `Tools/AgentEval/Results/<date>-<change>.json`, and record one summary line (provider, model, trials, pass count) in the doc that motivated the change. Measure tolerant arguments first. AgentEval has no Anthropic or Meta provider; `agent-harness-6.md` phase 1 fixes that.
+**Proposal.** Save `--json` results under `Tools/AgentEval/Results/<date>-<change>.json`, and record one summary line (provider, model, trials, pass count) in the doc that motivated the change. Measure tolerant arguments first. AgentEval now has Anthropic and Meta providers (`Tools/AgentEval/Sources/AgentEval/Providers.swift`).
 
-**Done when.** The tolerant-arguments line in the plan carries a measured number. **Size:** S.
+**Done when.** The tolerant-arguments line carries a measured number *and a baseline to compare it with* (met on 2026-11-03 with the caveat below). **Size:** S.
 
-**Measured 2026-11-02** (`Tools/AgentEval/Results/2026-11-02-tolerant-arguments.json`): ollama · qwen-fixed:latest · full toolset · 14 tasks × 3 trials, 21/42 passes. The first run's `trace-default` trials failed environmentally (ollama unreachable for the last task); they were re-run the same day on the same model and merged in (2/3).
+**Measured 2026-11-02, invalid** (`Tools/AgentEval/Results/2026-11-02-tolerant-arguments.json`): 21/42 is not a pass rate. 20 of its 21 failures are `Could not connect to localhost` across seven tasks (`implement-roman`, `injection`, `long-session`, `noisy-tests`, `read-large-file`, `rename-across-files`, `trace-deep-bug`): Ollama was unreachable and those trials never ran. An earlier version of this note said only `trace-default` was affected; the JSON says otherwise. The file is kept for the record and must not be used as a baseline.
+
+**Measured 2026-11-03** (`AgentKit`'s `ToolArguments.isTolerant`, AgentEval `--strict-arguments`; a measurement hook, not a product setting): ollama · qwen-fixed:latest · full toolset · 14 tasks × 3 trials.
+- **Strict arguments** (`Results/2026-11-03-strict-arguments.json`): 37/42. `read-large-file` 0/3 is an Ollama `500` server error, not an argument problem; `implement-roman` 1/3 (a failing test and a timeout); the other twelve tasks 3/3.
+- **Tolerant arguments** (default): the clean run was cut short. The Mac hibernated on battery at 01:34 (`caffeinate -s` holds only on AC power) and the run was killed after the wake, so no JSON was written. Its log has the first 26 of 42 trials: 26/26 passed, against 24/26 for the same 26 trials in the strict arm (the two misses are `implement-roman`).
+- **What it says.** No strict-arm transcript has an argument-type error ("must be an integer", "must be true or false", "must be a list of strings"), so strict mode changed no call: this model sends well-typed arguments and the tolerance had nothing to repair. The 2-trial gap is run-to-run noise at this size. The measure that would show a benefit is rejected calls per run on a model that does make type mistakes; the pass count cannot. **Conclusion: unmeasured as a benefit, shown unnecessary for `qwen-fixed:latest`.** Keep the tolerance (it costs nothing and the unit tests cover what it reads); do not claim it helps until a weaker model shows rejected calls in strict mode.
+- A trial that spans a system sleep records the sleep in `seconds` and can end `timeout`, because the trial deadline is wall-clock.
 
 ## 2. Session export
 
@@ -53,7 +59,7 @@ Part of the series `agent-harness-1.md` to `agent-harness-7.md` (index: `README.
 
 ## 6. Plugin bundle format
 
-**What exists.** `docs/harness/BUILT.md` says: "Not planned: a durable SQLite inbox, image pruning (AI mode is text-only), a plugin system, LLM-written chat titles, user-configurable tool hooks." Skills, commands, agent definitions and MCP config already cover most of what a Claude Code plugin ships; hooks are proposed in `agent-harness-3.md`.
+**What exists.** An earlier `BUILT.md` (deleted in `e7b8d169`) said: "Not planned: a durable SQLite inbox, image pruning (AI mode is text-only), a plugin system, LLM-written chat titles, user-configurable tool hooks." Skills, commands, agent definitions and MCP config already cover most of what a Claude Code plugin ships; hooks are proposed in `agent-harness-3.md`.
 
 **Proposal.** A folder with a manifest that installs skills, commands, agents, MCP servers and hooks together and removes them cleanly. Revisit only after hooks and HTTP MCP exist and users are sharing configurations by hand. If built, update the "Not planned" line.
 

@@ -1,0 +1,992 @@
+{
+  "model" : "muse-spark-1.3",
+  "provider" : "meta",
+  "results" : [
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 9299,
+      "changedFiles" : [
+        "config.py",
+        "rules.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All checkout totals fixed and 5 tests pass.\n\nRoot causes:\n- `config.py:6` — `priority` stored as string, so sorting was lexicographic (`\"10\" < \"2\"`). Fixed by parsing to `int`.\n- `rules.py:4` — percent discount applied to `original` instead of running `total`, so it ignored earlier rules. Fixed to use `total`.\n\n",
+      "inputTokens" : 19045,
+      "outputTokens" : 1046,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 10.215029001235962,
+      "summaryFailed" : false,
+      "taskID" : "discount-order",
+      "toolCalls" : 8,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3131,
+      "trial" : 1,
+      "turns" : 5
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 13892,
+      "changedFiles" : [
+        "config.py",
+        "rules.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "Fixed both root causes — all 5 tests pass.\n\n* `rules.py:4` — percent discount used `original * amount\/100` instead of the running `total`, so it ignored earlier rules. Changed to `total - total * amount\/100`.\n* `config.py:6` — `priority` stayed a string, so sorting was lexicographic (`\"10\" < \"2\"`). Parsed to `float` so lower priority number runs first.",
+      "inputTokens" : 24081,
+      "outputTokens" : 1265,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 14.074090957641602,
+      "summaryFailed" : false,
+      "taskID" : "discount-order",
+      "toolCalls" : 8,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3133,
+      "trial" : 2,
+      "turns" : 6
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 16452,
+      "changedFiles" : [
+        "config.py",
+        "rules.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "Fixed two root causes (3 lines):\n\n- `config.py:6` — `priority` kept as string so `sorted` compared lexicographically (`\"10\" < \"2\"`). Now parsed as `int` so lower numeric priority runs first.\n- `rules.py:4` — `percent` discount used `original` total instead of running `total`, so it ignored earlier rules. Now discounts `total`, and clamps at `0` so the total never goes negative (matching the `fixed` rule and test title).\n\nAll 5 tests in `tests\/test_pricing.py` pass. Tests untouched.",
+      "inputTokens" : 24859,
+      "outputTokens" : 1586,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 14.491664052009583,
+      "summaryFailed" : false,
+      "taskID" : "discount-order",
+      "toolCalls" : 8,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3139,
+      "trial" : 3,
+      "turns" : 6
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 18485,
+      "changedFiles" : [
+        "config.py",
+        "rules.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 5 tests pass. Fixed two root causes:\n\n- `rules.py:4` — percent discount used `original` subtotal instead of the running `total`, so it ignored earlier rules. Now discounts what is left.\n- `config.py:6` — `priority` stayed a string so sorting was lexicographic (`\"10\" < \"2\"`). Now parsed as a number so lower priority runs first.",
+      "inputTokens" : 29193,
+      "outputTokens" : 1204,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 2,
+      "seconds" : 16.67500400543213,
+      "summaryFailed" : false,
+      "taskID" : "discount-order",
+      "toolCalls" : 9,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 4038,
+      "trial" : 4,
+      "turns" : 7
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 23078,
+      "changedFiles" : [
+        "config.py",
+        "rules.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 5 tests pass.\n\nFixed two root causes (3 lines):\n- `rules.py:4` — percent discount used `original` subtotal instead of the running `total`, so stacked discounts were wrong; changed to `total` and clamped at 0 to keep the total non-negative.\n- `config.py:6` — `priority` stayed a string, so sorting was lexicographic (`\"10\" < \"2\"`); parsed to `int` so lower priority runs first numerically.\n\nDid not change the tests.",
+      "inputTokens" : 33818,
+      "outputTokens" : 1336,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 12.827656030654907,
+      "summaryFailed" : false,
+      "taskID" : "discount-order",
+      "toolCalls" : 10,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3309,
+      "trial" : 5,
+      "turns" : 8
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 22822,
+      "changedFiles" : [
+        "config.py",
+        "rules.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 5 tests pass.\n\nFixed two root causes:\n- `config.py:6` — `priority` was kept as a string, so sorting was lexicographic (`\"10\"` before `\"2\"`). Now parsed as `int` so lower-numbered priority runs first.\n- `rules.py:4` — percent discount used `original` subtotal instead of the running `total`, so it ignored earlier rules. Now applies to the running total.\n\nNo test files changed.",
+      "inputTokens" : 33087,
+      "outputTokens" : 1151,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 11.061826944351196,
+      "summaryFailed" : false,
+      "taskID" : "discount-order",
+      "toolCalls" : 10,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3343,
+      "trial" : 6,
+      "turns" : 8
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 13892,
+      "changedFiles" : [
+        "config.py",
+        "rules.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 5 tests pass. Fixed 2 root causes without touching tests:\n\n- `config.py:6` — `priority` was stored as a string, so `sorted` compared lexicographically (`\"10\" < \"2\"`). Now parsed with `float(priority)` so lower priority number runs first.\n- `rules.py:4` — percent discount used `original * amount \/ 100` instead of the running total. Changed to `total * amount \/ 100` so a percentage applies to what is left after earlier rules.",
+      "inputTokens" : 23328,
+      "outputTokens" : 1015,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 9.408077955245972,
+      "summaryFailed" : false,
+      "taskID" : "discount-order",
+      "toolCalls" : 8,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3133,
+      "trial" : 7,
+      "turns" : 6
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 28183,
+      "changedFiles" : [
+        "config.py",
+        "rules.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 5 tests pass. Fixed 3 root causes without touching the tests:\n\n- `config.py:6` — `priority` was kept as a string so `sorted()` compared lexicographically (`\"10\" < \"2\"`). Now parsed as `int(priority)` so lower-priority-number runs first.\n- `rules.py:4` — percent discount used the original subtotal (`total - original * amount\/100`) instead of the running total. Now `total - total * amount\/100`, so sequential rules compound correctly (e.g. 100 − 5 then 10% → 85.5).\n- `rules.py:4` — percent bran",
+      "inputTokens" : 39205,
+      "outputTokens" : 1496,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 15.978642106056213,
+      "summaryFailed" : false,
+      "taskID" : "discount-order",
+      "toolCalls" : 11,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3475,
+      "trial" : 8,
+      "turns" : 9
+    },
+    {
+      "announcedActionNudges" : 1,
+      "cachedInputTokens" : 19509,
+      "changedFiles" : [
+        "intervals.py",
+        "schedule.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 12 tests pass. Fixed `intervals.py:4-6` (sort input, join touching with `<=`, keep outer end with `max`) and `schedule.py:11-20` (skip bookings ending before the cursor, stop at `DAY_END`, clamp gaps, advance with `max`). `report.py` needed no change — it passes once `merge` is correct.",
+      "inputTokens" : 37901,
+      "outputTokens" : 2057,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 18.644423007965088,
+      "summaryFailed" : false,
+      "taskID" : "merge-bookings",
+      "toolCalls" : 11,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 4576,
+      "trial" : 1,
+      "turns" : 8
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 20917,
+      "changedFiles" : [
+        "intervals.py",
+        "schedule.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 12 tests pass. Fixed two files, tests untouched:\n\n**`intervals.py:4-6`** — `merge()` had 3 root causes:\n- No `sorted()` — unsorted input merged in arrival order (`[(5,6),(1,2)]` → `[(5,2)]`) and chains failed.\n- `start < last_end` excluded touching intervals — `[(1,3),(3,5)]` stayed split.\n- Used `end` instead of `max(last_end, end)` — nested `[(1,10),(2,3)]` shrank to `(1,3)`.\n\n**`schedule.py:12-20`** — `free_slots()` had its own root causes beyond the bad `merge`:\n- `cursor = end` moved th",
+      "inputTokens" : 43834,
+      "outputTokens" : 2619,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 2,
+      "seconds" : 23.70433795452118,
+      "summaryFailed" : false,
+      "taskID" : "merge-bookings",
+      "toolCalls" : 12,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 8500,
+      "trial" : 2,
+      "turns" : 8
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 21301,
+      "changedFiles" : [
+        "intervals.py",
+        "schedule.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 12 tests pass. No test files changed.\n\n**Root causes & fixes:**\n\n- `intervals.py:4` — `merge` never sorted, so `test_unsorted_input` \/ `test_chain` failed. Fixed with `sorted(intervals)`.\n- `intervals.py:5` — used `start <` so touching intervals `(1,3),(3,5)` stayed split. Fixed to `start <=` (`test_touching_intervals_join`, plus `report.py` counting `(10,12),(12,13)` separately).\n- `intervals.py:6` — used `end` instead of `max(...)`, so nested `(2,3)` shrank `(1,10)` to `(1,3)`. Fixed with ",
+      "inputTokens" : 33777,
+      "outputTokens" : 2237,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 19.66231596469879,
+      "summaryFailed" : false,
+      "taskID" : "merge-bookings",
+      "toolCalls" : 11,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 4702,
+      "trial" : 3,
+      "turns" : 7
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 37768,
+      "changedFiles" : [
+        "intervals.py",
+        "schedule.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 12 tests pass. No test files changed.\n\nRoot causes and fixes:\n\n- `intervals.py:4` — `merge` never sorted, so unsorted\/chained input failed. Fixed with `sorted(intervals)`.\n- `intervals.py:5` — used `start < merged[-1][1]`, so touching intervals `(1,3),(3,5)` stayed split. Fixed to `<=`.\n- `intervals.py:6` — used `end` instead of `max(...)`, so nested `(2,3)` shrank `(1,10)` to `(1,3)`. Fixed to `max(merged[-1][1], end)`. This also fixes `report.py` (`busy_hours` double-counting overlaps) wit",
+      "inputTokens" : 50409,
+      "outputTokens" : 2146,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 17.838883996009827,
+      "summaryFailed" : false,
+      "taskID" : "merge-bookings",
+      "toolCalls" : 14,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3916,
+      "trial" : 4,
+      "turns" : 10
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 19125,
+      "changedFiles" : [
+        "intervals.py",
+        "schedule.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 12 tests pass.\n\nFixed `intervals.py:1` — `merge` now sorts input, joins touching intervals with `<=`, and keeps the outer end with `max` so nested intervals don't shrink it. This fixes the touching, nested, unsorted, and chain cases, which also fixes `report.py:4` overlap counting.\n\nFixed `schedule.py:7` — `free_slots` now clips bookings to `[DAY_START, DAY_END]`, skips intervals outside the day, and advances with `max`, so bookings before the day no longer leak a `(8, 10)` gap.\n\nChanged fil",
+      "inputTokens" : 31147,
+      "outputTokens" : 2002,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 15.369632959365845,
+      "summaryFailed" : false,
+      "taskID" : "merge-bookings",
+      "toolCalls" : 11,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3429,
+      "trial" : 5,
+      "turns" : 7
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 30999,
+      "changedFiles" : [
+        "intervals.py",
+        "schedule.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 12 tests pass. No test files changed.\n\nRoot causes and fixes:\n\n**`intervals.py:4-6` — `merge()` had 3 bugs (this also caused `test_report.py` and part of `test_schedule.py` failures, since both call `merge`):**\n- Never sorted input → unsorted input stayed unsorted\/unmerged. Fixed with `sorted(intervals)`.\n- Used `start < merged[-1][1]` → touching intervals like `(1,3),(3,5)` never joined. Fixed to `start <= ...`.\n- Used `(merged[-1][0], end)` → nested interval like `(2,3)` inside `(1,10)` sh",
+      "inputTokens" : 44107,
+      "outputTokens" : 2505,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 20.34788203239441,
+      "summaryFailed" : false,
+      "taskID" : "merge-bookings",
+      "toolCalls" : 14,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3867,
+      "trial" : 6,
+      "turns" : 9
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 44281,
+      "changedFiles" : [
+        "intervals.py",
+        "schedule.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 12 tests pass. No tests were changed.\n\nRoot causes and fixes:\n\n**`intervals.py:4-6` — `merge()` had 3 bugs (this also fixed `test_report.py`, since `busy_hours` depends on `merge`):**\n- Never sorted the input, so unsorted intervals were never merged.\n- Used `start < ...` so touching intervals like `(1,3),(3,5)` stayed split. Changed to `<=`.\n- Extended with `end` instead of `max(...)`, so a nested interval like `(2,3)` shrank `(1,10)` to `(1,3)`. Changed to `max(merged[-1][1], end)`.\n\n**`sch",
+      "inputTokens" : 58374,
+      "outputTokens" : 2548,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 22.2136549949646,
+      "summaryFailed" : false,
+      "taskID" : "merge-bookings",
+      "toolCalls" : 15,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 5182,
+      "trial" : 7,
+      "turns" : 11
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 33943,
+      "changedFiles" : [
+        "intervals.py",
+        "schedule.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 12 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 12 tests pass.\n\nFixed two files (no test changes):\n\n- `intervals.py:4-6` — `merge` never sorted, used `<` instead of `<=`, and overwrote the end instead of `max(...)`. This caused unsorted input to corrupt, touching intervals not to join, and nested intervals to shrink. This one root cause also fixed `test_report.py` and most of `test_schedule.py` downstream.\n- `schedule.py:11-18` — `free_slots` moved `cursor` backward on pre-day bookings (`cursor = end`) and never clipped to `[DAY_START, DA",
+      "inputTokens" : 41669,
+      "outputTokens" : 1933,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 2,
+      "seconds" : 17.074490904808044,
+      "summaryFailed" : false,
+      "taskID" : "merge-bookings",
+      "toolCalls" : 12,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 8470,
+      "trial" : 8,
+      "turns" : 8
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 36089,
+      "changedFiles" : [
+        "app.py",
+        "cli.py",
+        "extras.py",
+        "plugins.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "Converted `plugins` module-level registry to a `Registry` class with `register`\/`get`\/`names()` (sorted), and updated `app.build(registry)`, `app.run(registry, name, text)`, `extras.install(registry)`, and `cli.available(registry)`. All 4 tests pass.",
+      "inputTokens" : 46173,
+      "outputTokens" : 1261,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 11.914017915725708,
+      "summaryFailed" : false,
+      "taskID" : "registry-refactor",
+      "toolCalls" : 15,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 2449,
+      "trial" : 1,
+      "turns" : 11
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 34681,
+      "changedFiles" : [
+        "app.py",
+        "cli.py",
+        "extras.py",
+        "plugins.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "Done: converted `plugins` module-level registry to a `Registry` class with `register`\/`get`\/`names()`, and updated `app.build(registry)`, `app.run(registry, name, text)`, `extras.install(registry)`, and `cli.available(registry)`. All 4 tests pass.",
+      "inputTokens" : 44971,
+      "outputTokens" : 1136,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 14.152104020118713,
+      "summaryFailed" : false,
+      "taskID" : "registry-refactor",
+      "toolCalls" : 13,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 2751,
+      "trial" : 2,
+      "turns" : 11
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 26647,
+      "changedFiles" : [
+        "app.py",
+        "cli.py",
+        "extras.py",
+        "plugins.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "Moved plugin state into `plugins.Registry` with `register`\/`get`\/`names()` (sorted) and removed module-level state. Updated signatures to `app.build(registry)`, `app.run(registry, name, text)`, `extras.install(registry)`, `cli.available(registry)` and their bodies to use the passed registry. All 4 tests pass.",
+      "inputTokens" : 36648,
+      "outputTokens" : 1148,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 15.993053078651428,
+      "summaryFailed" : false,
+      "taskID" : "registry-refactor",
+      "toolCalls" : 13,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3323,
+      "trial" : 3,
+      "turns" : 9
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 35833,
+      "changedFiles" : [
+        "app.py",
+        "cli.py",
+        "extras.py",
+        "plugins.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "Replaced module-level state in `plugins.py` with a `Registry` class (`register`\/`get`\/`names()` sorted), and updated callers to pass it explicitly: `app.build(registry)`, `app.run(registry, name, text)`, `extras.install(registry)`, `cli.available(registry)`. All 4 tests pass.",
+      "inputTokens" : 45773,
+      "outputTokens" : 1152,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 15.89122998714447,
+      "summaryFailed" : false,
+      "taskID" : "registry-refactor",
+      "toolCalls" : 14,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 2366,
+      "trial" : 4,
+      "turns" : 11
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 25623,
+      "changedFiles" : [
+        "app.py",
+        "cli.py",
+        "extras.py",
+        "plugins.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "Moved plugin state into `plugins.Registry` with `register`\/`get`\/`names()` (sorted), removed module-level state, and threaded the registry explicitly through `app.build`, `app.run`, `extras.install`, and `cli.available`. Tests pass (4\/4).",
+      "inputTokens" : 35687,
+      "outputTokens" : 1207,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 13.93478798866272,
+      "summaryFailed" : false,
+      "taskID" : "registry-refactor",
+      "toolCalls" : 13,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 1,
+      "toolResultChars" : 2234,
+      "trial" : 5,
+      "turns" : 9
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 27543,
+      "changedFiles" : [
+        "app.py",
+        "cli.py",
+        "extras.py",
+        "plugins.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "Converted `plugins` module-level registry to an injectable `plugins.Registry` class with `register`\/`get`\/`names()` (sorted), and updated `app.build(registry)`, `app.run(registry, name, text)`, `extras.install(registry)`, and `cli.available(registry)`. All 4 tests pass.",
+      "inputTokens" : 38200,
+      "outputTokens" : 1187,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 10.86909306049347,
+      "summaryFailed" : false,
+      "taskID" : "registry-refactor",
+      "toolCalls" : 14,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 3574,
+      "trial" : 6,
+      "turns" : 9
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 44251,
+      "changedFiles" : [
+        "app.py",
+        "cli.py",
+        "extras.py",
+        "plugins.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "Replaced module-level registry with `plugins.Registry` (`register`\/`get`\/`names()` sorted), and updated `app.build(registry)`, `app.run(registry, name, text)`, `extras.install(registry)`, `cli.available(registry)`. All 4 tests pass.",
+      "inputTokens" : 54724,
+      "outputTokens" : 1223,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 15.380007982254028,
+      "summaryFailed" : false,
+      "taskID" : "registry-refactor",
+      "toolCalls" : 15,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 2533,
+      "trial" : 7,
+      "turns" : 13
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 40682,
+      "changedFiles" : [
+        "app.py",
+        "cli.py",
+        "extras.py",
+        "plugins.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 4 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "Done. `plugins.Registry` now holds instance state with `register`\/`get`\/`names()`, and `app.build`, `app.run`, `extras.install`, `cli.available` all take a registry explicitly. All 4 tests pass.",
+      "inputTokens" : 51048,
+      "outputTokens" : 1231,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 13.187738060951233,
+      "summaryFailed" : false,
+      "taskID" : "registry-refactor",
+      "toolCalls" : 15,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 2526,
+      "trial" : 8,
+      "turns" : 12
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 23861,
+      "changedFiles" : [
+        "cache.py",
+        "service.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 7 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 7 tests pass.\n\nFixed in `cache.py`:\n- Expiry check `>` → `>=` so entries are gone exactly at TTL (cache.py:22).\n- `get` now marks the entry most-recently-used (`move_to_end`) so reads protect from LRU eviction (cache.py:25).\n- `set` on an existing key now restarts TTL (`now + ttl`) and marks it most-recently-used (cache.py:30-31).\n- `set` on a new key purges expired entries before LRU eviction so dead entries don't force an eviction (cache.py:33,38-43).\n\nFixed in `service.py`:\n- `rename` now",
+      "inputTokens" : 39666,
+      "outputTokens" : 2427,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 2,
+      "seconds" : 20.266631960868835,
+      "summaryFailed" : false,
+      "taskID" : "ttl-cache",
+      "toolCalls" : 10,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 9543,
+      "trial" : 1,
+      "turns" : 7
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 45817,
+      "changedFiles" : [
+        "cache.py",
+        "service.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 7 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 7 tests pass.\n\n**`cache.py` — 3 root causes:**\n- `get` used `now() > expires_at` (cache.py:22), so entries survived exactly at their TTL; changed to `>=`.\n- `get` never refreshed recency and `set` on an existing key left order alone, breaking LRU; added `move_to_end` on hits and re-insert on rewrite.\n- `set` on an existing key kept the old `expires_at` (cache.py:29-30), so TTL never restarted; now always writes `now() + ttl`. Rewriting also no longer counts toward capacity eviction incorrect",
+      "inputTokens" : 60488,
+      "outputTokens" : 2239,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 21.99750006198883,
+      "summaryFailed" : false,
+      "taskID" : "ttl-cache",
+      "toolCalls" : 14,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 6872,
+      "trial" : 2,
+      "turns" : 11
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 21429,
+      "changedFiles" : [
+        "cache.py",
+        "service.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 7 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 7 tests pass. Code fixes only, no test changes.\n\n**Root causes in `cache.py`:**\n- `cache.py:22` expiry used `>` instead of `>=`, so entries survived exactly at TTL — fixed to `>=` (`test_entry_is_gone_exactly_at_its_ttl`).\n- `cache.py:25` `get()` never marked the key most-recently-used — added `move_to_end(key)` on hit (`test_reading_an_entry_protects_it_from_eviction`).\n- `cache.py:28-31` `set()` on an existing key kept the old `expires_at` and old recency — now restarts TTL with `clock.now",
+      "inputTokens" : 33215,
+      "outputTokens" : 2078,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 16.73809003829956,
+      "summaryFailed" : false,
+      "taskID" : "ttl-cache",
+      "toolCalls" : 10,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 1,
+      "toolResultChars" : 6101,
+      "trial" : 3,
+      "turns" : 7
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 34455,
+      "changedFiles" : [
+        "cache.py",
+        "service.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 7 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 7 tests pass. Tests unchanged.\n\nRoot causes and fixes:\n\n**cache.py**\n- `get` used `now() > expires_at` (cache.py:22), keeping entries alive exactly at their TTL; changed to `>=` so `test_entry_is_gone_exactly_at_its_ttl` expires on time.\n- `get` never refreshed recency, so a read didn't protect from LRU eviction; added `move_to_end(key)` on hit for `test_reading_an_entry_protects_it_from_eviction`.\n- `set` on an existing key reused the old `expires_at` and left its LRU position (cache.py:28-",
+      "inputTokens" : 48280,
+      "outputTokens" : 2046,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 16.497125029563904,
+      "summaryFailed" : false,
+      "taskID" : "ttl-cache",
+      "toolCalls" : 12,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 6706,
+      "trial" : 4,
+      "turns" : 9
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 29094,
+      "changedFiles" : [
+        "cache.py",
+        "service.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 7 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 7 tests pass. Fixed without touching tests:\n\n- `cache.py:22` — expiry check was `>` so entries lived past their TTL; changed to `>=` so an entry is gone exactly at its TTL.\n- `cache.py:25` — `get` never marked the key most-recently-used; added `move_to_end` so reads protect from LRU eviction.\n- `cache.py:30-31` — `set` on an existing key kept the old `expires_at` and old LRU position; now restarts TTL with `now() + ttl` and moves to the end (also keeps rewrites from wrongly evicting).\n- `ser",
+      "inputTokens" : 43130,
+      "outputTokens" : 2287,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 18.81181001663208,
+      "summaryFailed" : false,
+      "taskID" : "ttl-cache",
+      "toolCalls" : 11,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 1,
+      "toolResultChars" : 6944,
+      "trial" : 5,
+      "turns" : 8
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 24629,
+      "changedFiles" : [
+        "cache.py",
+        "service.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 7 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 7 tests pass.\n\nFixed root causes (tests untouched):\n\n- `cache.py:22`: expiry used `>` so entries survived exactly at TTL; changed to `>=`.\n- `cache.py:25`: `get` never updated LRU order, so reads didn't protect entries; added `move_to_end`.\n- `cache.py:30-31`: `set` on an existing key kept the old `expires_at`, so TTL didn't restart; now sets `now() + ttl` and moves key to most-recent (also keeps the no-eviction-on-rewrite behavior).\n- `service.py:15`: `rename` only updated the store, leavin",
+      "inputTokens" : 44984,
+      "outputTokens" : 2090,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 2,
+      "seconds" : 17.585981011390686,
+      "summaryFailed" : false,
+      "taskID" : "ttl-cache",
+      "toolCalls" : 11,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 1,
+      "toolResultChars" : 9026,
+      "trial" : 6,
+      "turns" : 8
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 32535,
+      "changedFiles" : [
+        "cache.py",
+        "service.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 7 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 7 tests pass.\n\nRoot causes and fixes:\n\n**`cache.py`:**\n- Expiry check was `now() > expires_at`, so entries survived exactly at their TTL — changed to `>=` (`cache.py:22`).\n- `get()` never updated recency, so a read didn't protect the entry from LRU eviction — added `move_to_end(key)` on hit (`cache.py:25`).\n- `set()` on an existing key kept the old `expires_at` instead of restarting the TTL, and didn't refresh recency — rewrote to delete-then-insert with `now() + ttl`, which restarts the TTL",
+      "inputTokens" : 53427,
+      "outputTokens" : 2162,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 18.51010501384735,
+      "summaryFailed" : false,
+      "taskID" : "ttl-cache",
+      "toolCalls" : 13,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 6745,
+      "trial" : 7,
+      "turns" : 10
+    },
+    {
+      "announcedActionNudges" : 0,
+      "cachedInputTokens" : 30502,
+      "changedFiles" : [
+        "cache.py",
+        "service.py"
+      ],
+      "checkExitCode" : 0,
+      "checkOutput" : "----------------------------------------------------------------------\nRan 7 tests in 0.000s\n\nOK\n",
+      "compactions" : 0,
+      "ending" : "completed",
+      "finalMessage" : "All 7 tests pass. Fixed:\n\n**cache.py:**\n- Expiry check `>` → `>=` so entries expire exactly at TTL (cache.py:22).\n- `get` now marks the key most-recently-used via `move_to_end` so reads protect from LRU eviction (cache.py:25).\n- `set` on an existing key now restarts TTL with `now() + ttl` and moves it to most-recently-used without evicting another entry (cache.py:29-31).\n\n**service.py:**\n- `rename` now invalidates the cached entry via `cache.delete` so the next `get` re-reads the renamed store v",
+      "inputTokens" : 49357,
+      "outputTokens" : 2141,
+      "passed" : true,
+      "protectedChanged" : [
+
+      ],
+      "readToolOutputCalls" : 0,
+      "runTestsCalls" : 1,
+      "seconds" : 23.556829929351807,
+      "summaryFailed" : false,
+      "taskID" : "ttl-cache",
+      "toolCalls" : 12,
+      "toolCatalogTokens" : 936,
+      "toolErrors" : 0,
+      "toolResultChars" : 6729,
+      "trial" : 8,
+      "turns" : 9
+    }
+  ],
+  "runTests" : true,
+  "startedAt" : "2026-11-03T16:12:27Z",
+  "tasks" : {
+    "discount-order" : "A checkout total is wrong; the cause is not in the module the test imports",
+    "merge-bookings" : "Several bugs in an interval merge and the schedule built on it",
+    "registry-refactor" : "Replace a module-level registry with one the caller owns",
+    "ttl-cache" : "A cache and the service on top of it return stale or wrongly evicted data"
+  },
+  "toolset" : "full",
+  "trialsPerTask" : 8
+}

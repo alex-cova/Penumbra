@@ -1,8 +1,8 @@
 # Harness gap 4: image input
 
-Part of the series `agent-harness-1.md` to `agent-harness-7.md` (index: `README.md`). Checked against the code on 2026-10-26.
+Part of the series `agent-harness-1.md` to `agent-harness-9.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-10-26.
 
-**Status:** decision needed. The 2026-10-21 "text-only" decision removed text-to-image **generation**, and the plan lists "image pruning (AI mode is text-only)" under "Not planned". This doc is about image **input** (the user gives the model a picture). Confirm it is wanted before building.
+**Status:** proposals 1–5 built (checked 2026-11-02): `ConversationItem.userParts`, `LLMClient.supportsImages`, the four encoders, composer chips with downscaling, and image-first compaction (`ImageInputTests`, `IDEAgentImageInputTests`). Proposal 6 (images from tools: `read_file` on a picture, a `browser_inspect` screenshot) is not built. Image input is accepted by Meta's Model API (`input_image`, probed 2026-11-02: a solid red picture came back as "Red"; `MetaSmokeTests.aSmallPictureIsSeenThroughInputImage`). The "What exists today" section describes the code before this work. Original status: decision needed. The 2026-10-21 "text-only" decision removed text-to-image **generation**, and the plan lists "image pruning (AI mode is text-only)" under "Not planned". This doc is about image **input** (the user gives the model a picture). Confirm it is wanted before building.
 
 ## What exists today
 

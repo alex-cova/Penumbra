@@ -1,6 +1,6 @@
 # Harness gap 3: user-configurable hooks
 
-Part of the series `agent-harness-1.md` to `agent-harness-7.md` (index: `README.md`). Checked against the code on 2026-10-26.
+Part of the series `agent-harness-1.md` to `agent-harness-9.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-10-26.
 
 **Status:** implemented 2026-11-02 (`ToolHooks` in AgentKit, shell hooks in `Umbra/Sources/Umbra/Agent/Hooks/`, wired in `IDEAgentConversation.currentSession`).
 

@@ -62,16 +62,32 @@ public struct ForwardedCall: Sendable {
 /// message below, so nothing is guessed.
 public struct ToolArguments: Sendable {
     private let object: [String: JSONValue]
+    /// Read once, when the arguments were made, from `isTolerant`.
+    private let tolerant: Bool
+
+    /// Whether the accessors accept the wrong-but-unambiguous shapes described above. On in every
+    /// product path. `false` is a measurement hook for AgentEval (`--strict-arguments`), which runs
+    /// the same tasks both ways to see whether the tolerance helps; it is process-wide, so set it
+    /// once before any session starts. `null` still reads as absent in strict mode: that is the
+    /// strict-mode wire contract, not a tolerance.
+    public static var isTolerant: Bool {
+        get { toleranceSwitch.value }
+        set { toleranceSwitch.value = newValue }
+    }
+    private static let toleranceSwitch = ToleranceSwitch()
 
     /// Models send `""` or `{}` for a call without arguments, and some send the object as a JSON
     /// string inside a string.
-    public init(json text: String) throws {
+    public init(json text: String) throws { try self.init(json: text, tolerant: Self.isTolerant) }
+
+    init(json text: String, tolerant: Bool) throws {
+        self.tolerant = tolerant
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { object = [:]; return }
         guard var value = try? JSONValue(parsing: trimmed) else {
             throw ToolError("The arguments were not a valid JSON object.")
         }
-        if case .string(let inner) = value, let unwrapped = try? JSONValue(parsing: inner), case .object = unwrapped {
+        if tolerant, case .string(let inner) = value, let unwrapped = try? JSONValue(parsing: inner), case .object = unwrapped {
             value = unwrapped
         }
         guard case .object(let object) = value else {
@@ -80,7 +96,10 @@ public struct ToolArguments: Sendable {
         self.object = object
     }
 
-    public init(_ object: [String: JSONValue]) { self.object = object }
+    public init(_ object: [String: JSONValue]) {
+        self.object = object
+        self.tolerant = Self.isTolerant
+    }
 
     /// The arguments as they came, without the `null`s a strict-mode caller sends for what it left out:
     /// for a tool whose schema someone else wrote (`MCPTool`), which wants a missing key, not a null.
@@ -91,7 +110,7 @@ public struct ToolArguments: Sendable {
     private func value(_ key: String) -> JSONValue? {
         switch object[key] {
         case nil, .null?: return nil
-        case .object(let fields)? where fields.isEmpty: return nil
+        case .object(let fields)? where fields.isEmpty && tolerant: return nil
         case let value?: return value
         }
     }
@@ -112,7 +131,7 @@ public struct ToolArguments: Sendable {
     public func optionalInt(_ key: String) throws -> Int? {
         guard let value = value(key) else { return nil }
         if let int = value.intValue { return int }
-        if case .string(let text) = value {
+        if tolerant, case .string(let text) = value {
             let trimmed = text.trimmingCharacters(in: .whitespaces)
             if let int = Int(trimmed) { return int }
             if let double = Double(trimmed), let int = Int(exactly: double) { return int }
@@ -133,7 +152,7 @@ public struct ToolArguments: Sendable {
                 guard let text = $0.stringValue else { throw ToolError("Every item of \"\(key)\" must be a string.") }
                 return text
             }
-        case .string(let text):
+        case .string(let text) where tolerant:
             // A list written as a JSON string. Any other string stays an error: for a checklist or a
             // list of paths, "one item" and "not a list" are different mistakes.
             if text.trimmingCharacters(in: .whitespaces).hasPrefix("["),
@@ -149,7 +168,7 @@ public struct ToolArguments: Sendable {
     public func optionalBool(_ key: String) throws -> Bool? {
         guard let value = value(key) else { return nil }
         if let bool = value.boolValue { return bool }
-        if case .string(let text) = value {
+        if tolerant, case .string(let text) = value {
             switch text.trimmingCharacters(in: .whitespaces).lowercased() {
             case "true": return true
             case "false": return false
@@ -157,6 +176,15 @@ public struct ToolArguments: Sendable {
             }
         }
         throw ToolError("Argument \"\(key)\" must be true or false.")
+    }
+}
+
+private final class ToleranceSwitch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tolerant = true
+    var value: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return tolerant }
+        set { lock.lock(); defer { lock.unlock() }; tolerant = newValue }
     }
 }
 

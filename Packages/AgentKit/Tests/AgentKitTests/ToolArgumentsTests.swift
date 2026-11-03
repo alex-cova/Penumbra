@@ -55,4 +55,18 @@ import Testing
         #expect(throws: ToolError.self) { try ToolArguments(json: #""just text""#) }
         #expect(throws: ToolError.self) { try ToolArguments(json: "[1]") }
     }
+
+    @Test func strictModeRefusesTheShapesTolerantModeReads() throws {
+        func strict(_ json: String) throws -> ToolArguments { try ToolArguments(json: json, tolerant: false) }
+        let args = try strict(#"{"limit":"20","flag":"true","paths":"[\"a\"]","skipped":{},"nothing":null}"#)
+        #expect(throws: ToolError.self) { try args.optionalInt("limit") }
+        #expect(throws: ToolError.self) { try args.optionalBool("flag") }
+        #expect(throws: ToolError.self) { try args.optionalStringArray("paths") }
+        #expect(throws: ToolError.self) { try args.optionalString("skipped") }
+        #expect(try args.optionalString("nothing") == nil)
+        #expect(throws: ToolError.self) { try strict(#""{\"path\":\"a.txt\"}""#) }
+        // The same text, tolerant, reads.
+        let tolerant = try ToolArguments(json: #"{"limit":"20","flag":"true","paths":"[\"a\"]"}"#, tolerant: true)
+        #expect(try tolerant.optionalInt("limit") == 20 && tolerant.optionalBool("flag") == true && tolerant.optionalStringArray("paths") == ["a"])
+    }
 }

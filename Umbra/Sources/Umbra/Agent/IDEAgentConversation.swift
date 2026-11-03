@@ -2093,10 +2093,38 @@ final class IDEAgentConversation: Identifiable {
         if let turnCost, let total = cost { cost = total + turnCost } else { cost = nil }
     }
 
+    /// What the provider last said is left of its rate limit; explains a wait in the status line.
+    @ObservationIgnored private var rateLimit: RateLimitStatus?
+
+    /// The summary of the model's reasoning for the turn in progress, as it streams.
+    @ObservationIgnored private var reasoningSummary = ""
+
+    /// "Thinking: <the latest line of the summary>", cut to fit the status line; plain "Thinking…" before
+    /// any summary text has arrived.
+    static func thinkingStatus(_ summary: String, limit: Int = 90) -> String {
+        let line = summary.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .last { !$0.isEmpty } ?? ""
+        guard !line.isEmpty else { return "Thinking…" }
+        return line.count <= limit ? "Thinking: \(line)" : "Thinking: \(line.prefix(limit - 1))…"
+    }
+
     func handle(_ event: AgentEvent) {
         if case .textDelta(let delta) = event {
+            if !reasoningSummary.isEmpty {
+                // The answer has started; the summary of the thinking before it is no longer news.
+                reasoningSummary = ""
+                status = "Thinking…"
+            }
             pendingText += delta
             scheduleFlush()
+            return
+        }
+        if case .reasoningDelta(let delta) = event {
+            // Providers that stream a summary of their reasoning (Claude, OpenAI, Muse) show its latest
+            // line in the status; nothing is added to the transcript.
+            reasoningSummary += delta
+            status = Self.thinkingStatus(reasoningSummary)
             return
         }
         if case .toolCallOutput(let id, let chunk) = event {
@@ -2114,6 +2142,7 @@ final class IDEAgentConversation: Identifiable {
             case .idle: status = nil
             case .streaming:
                 turnStart = entries.count
+                reasoningSummary = ""
                 status = "Thinking…"
             case .runningTools(let names): status = "Running \(names.joined(separator: ", "))…"
             case .awaitingApproval: status = "Waiting for your approval…"
@@ -2121,12 +2150,14 @@ final class IDEAgentConversation: Identifiable {
             case .awaitingPlanApproval: status = "Waiting for you to approve the plan…"
             }
         case .textDelta, .reasoningDelta:
-            break
+            break // handled above, before the flush
         case .turnRestarted:
             entries.removeSubrange(min(turnStart, entries.count)...)
             status = "Retrying…"
+        case .rateLimit(let latest):
+            rateLimit = latest
         case .retryScheduled(let attempt, let delay):
-            status = IDEAgentToolSummary.retryStatus(attempt: attempt, delay: delay)
+            status = IDEAgentToolSummary.retryStatus(attempt: attempt, delay: delay, rateLimit: rateLimit)
         case .assistantMessage(let text):
             // The turn's finished text. Its streamed copy is already in the transcript, ahead of
             // any tool cards the same turn produced (a tool call closes the streaming entry), so

@@ -1,8 +1,8 @@
 # Harness gap 2: subagents that can do real work
 
-Part of the series `agent-harness-1.md` to `agent-harness-7.md` (index: `README.md`). Checked against the code on 2026-10-26.
+Part of the series `agent-harness-1.md` to `agent-harness-9.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-10-26.
 
-**Status:** open. Phase 0 is a bug fix and can land on its own.
+**Status:** phases 0, 1, 2, 3 and 4 built (checked 2026-11-02). Phase 0: `gate` (and the snapshot, after-edit and cache settings) reach children. Phase 1: a child's approvals, questions and plans reach the parent's cards through `.subagent(id:event:)` and `resolveApproval`/`answerQuestion`/`resolvePlan` route to the waiting child; an editing child keeps `.command` tools; a run that ends cancels a waiting child. Phase 2: `AgentDefinition.model` and `makeChildClient` landed with `agent-harness-8.md` phase 1. Phase 3 deviates from the proposal: there is no `.subagent` `IDEAgentEntry.Kind`; the child's progress, labelled with the agent, lands on its parent `task`/`explore` card, which has a Stop button (`AgentSession.stopChild(id:)`). Phase 4: `SessionSnapshot.children` (`ChildSnapshot`). The "What exists today" section below describes the code *before* this work.
 
 ## What exists today
 

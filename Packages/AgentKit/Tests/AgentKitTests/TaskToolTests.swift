@@ -388,6 +388,59 @@ private func sessionID(in text: String) -> String? {
         #expect(ending(events) == .completed)
     }
 
+    /// A child must not be a way round the user's mode: in Manual every edit asks, a child's included.
+    /// (`anEditingChildRunsWhereTheUserApprovesEachEdit` runs under `.approveAll`, which skips the
+    /// policy altogether, so it cannot see this.)
+    @Test func aManualParentMakesAnEditingChildsEditsAsk() async throws {
+        let project = try TempProject()
+        let child = MockLLMClient(turns: [writeCall("Made.txt", "by the child"), .text("wrote it")])
+        let parent = MockLLMClient(turns: [taskCall(), .text("ok")])
+        let session = makeParent(parent, child: child, project: project, mode: .manual, approval: .askForCommands)
+        var asked = false
+        var landedBeforeAnswer = false
+        for await event in await session.send("go") {
+            if case .subagent(_, let inner) = event, case .approvalRequested(let request) = inner, !asked {
+                asked = true
+                landedBeforeAnswer = disk(project, "Made.txt") != nil
+                await session.resolveApproval(callID: request.callID, decision: .deny(note: nil))
+            }
+        }
+        #expect(asked, "Manual asks about the child's edit like any other")
+        #expect(!landedBeforeAnswer)
+        #expect(disk(project, "Made.txt") == nil, "denied, so it never lands")
+    }
+
+    /// Switching the chat to Manual after a child exists reaches that child when it is continued.
+    @Test func aChildContinuedAfterSwitchingToManualAsksAboutItsEdits() async throws {
+        let project = try TempProject()
+        let child = MockLLMClient(turns: [.text("first report"), writeCall("Late.txt", "late"), .text("wrote it")])
+        let parent = ReactiveClient { request in
+            let seen = outputs(request)
+            switch seen.count {
+            case 0: return taskCall()
+            case 1:
+                // The mode change adds an editor note after the message, so look past the last item.
+                if request.items.contains(where: { if case .user("again") = $0 { true } else { false } }) { return taskCall(session: sessionID(in: seen[0]) ?? "missing", id: "t2") }
+                return .text("done")
+            default: return .text("done")
+            }
+        }
+        let session = makeParent(parent, child: child, project: project, mode: .acceptEdits, approval: .askForCommands)
+        _ = await run(session)
+        await session.setMode(.manual)
+        // The forward is a detached task; give it the moment it needs before the child runs again.
+        try await Task.sleep(for: .milliseconds(50))
+        var asked = false
+        for await event in await session.send("again") {
+            if case .subagent(_, let inner) = event, case .approvalRequested(let request) = inner, !asked {
+                asked = true
+                await session.resolveApproval(callID: request.callID, decision: .deny(note: nil))
+            }
+        }
+        #expect(asked, "the continued child follows Manual")
+        #expect(disk(project, "Late.txt") == nil)
+    }
+
     @Test func denyingAChildsApprovalStopsOnlyThatCall() async throws {
         let project = try TempProject()
         let rules = PermissionRules(ask: [PermissionRule(tool: "Edit", pattern: "secret/**")])

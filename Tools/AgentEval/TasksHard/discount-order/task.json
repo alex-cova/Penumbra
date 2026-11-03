@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "difficulty": "hard",
+  "prompt": "tests/test_pricing.py has failures: the checkout totals are wrong. Find every root cause in the code and fix it. Do not change the tests.",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 120,
+  "title": "A checkout total is wrong; the cause is not in the module the test imports"
+}

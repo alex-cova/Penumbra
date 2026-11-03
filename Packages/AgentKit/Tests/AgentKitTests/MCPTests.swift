@@ -336,11 +336,36 @@ private let mcpInitializeResult: [String: JSONValue] = [
         for post in posts.dropFirst() {
             #expect(post.value(forHTTPHeaderField: "Mcp-Session-Id") == "session-1", "the session travels after initialize")
             #expect(post.value(forHTTPHeaderField: "Authorization") == "Bearer static")
+            #expect(post.value(forHTTPHeaderField: "MCP-Protocol-Version") == "2025-06-18", "the negotiated version travels after initialize")
         }
+        #expect(posts[0].value(forHTTPHeaderField: "MCP-Protocol-Version") == nil, "initialize itself names no version")
         await client.close()
         let delete = try #require(MCPStubURLProtocol.requests.last)
         #expect(delete.httpMethod == "DELETE")
         #expect(delete.value(forHTTPHeaderField: "Mcp-Session-Id") == "session-1")
+        #expect(delete.value(forHTTPHeaderField: "MCP-Protocol-Version") == "2025-06-18")
+    }
+
+    @Test func aServerThatForgotTheSessionClosesTheTransportSoTheHubStartsItAgain() async throws {
+        let transport = httpTransport { request in
+            let method = rpcBody(request)["method"] as? String
+            switch (request.httpMethod, method) {
+            case ("POST", "initialize"):
+                return jsonReply(["jsonrpc": "2.0", "id": 1, "result": .object(mcpInitializeResult)], sessionID: "session-1")
+            case ("POST", "tools/list"):
+                // The server restarted: it has never heard of session-1.
+                return MCPStubURLProtocol.Reply(status: 404, body: Data("unknown session".utf8))
+            default:
+                return MCPStubURLProtocol.Reply(status: 202)
+            }
+        }
+        let client = MCPClient(transport: transport)
+        try await client.start(timeout: .seconds(5))
+        await #expect(throws: MCPError.closed) { _ = try await client.listTools() }
+        await client.close()
+        #expect(
+            !MCPStubURLProtocol.requests.contains { $0.httpMethod == "DELETE" },
+            "no DELETE for a session the server says does not exist")
     }
 
     @Test func anSSEResponseIsReadAsMessages() async throws {

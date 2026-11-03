@@ -19,6 +19,12 @@ final class FoldingModel {
             } else {
                 expandAll()
                 regions = []
+                hiddenLineIDs = []
+                collapsedRegionByHiddenLineID = [:]
+                collapsedRegionByHeaderLineID = [:]
+                // The hidden lines have their heights back: the totals the scroll view reads
+                // (content height) were measured with them folded.
+                contentSizeService.invalidateContentSize()
             }
             didChangeFolds.send()
         }

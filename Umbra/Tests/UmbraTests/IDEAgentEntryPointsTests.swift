@@ -282,6 +282,25 @@ final class IDEAgentEntryPointsTests: XCTestCase {
         XCTAssertEqual(items.last?.title, "Ask Agent About Selection")
     }
 
+    /// Claude, OpenAI and Muse stream a summary of their reasoning; its latest line is the status.
+    func testTheLatestLineOfAReasoningSummaryShowsInTheStatusUntilTheAnswerStarts() {
+        XCTAssertEqual(IDEAgentConversation.thinkingStatus(""), "Thinking…")
+        XCTAssertEqual(IDEAgentConversation.thinkingStatus("Counting r letters.\n\nVerifying the total."), "Thinking: Verifying the total.")
+        XCTAssertEqual(IDEAgentConversation.thinkingStatus(String(repeating: "a", count: 200)).count, "Thinking: ".count + 90)
+
+        let controller = IDEAgentController(settings: makeSettings(), store: SessionStore(directory: project.appendingPathComponent("store")))
+        controller.attach(host: workspace)
+        controller.handle(.stateChanged(.streaming))
+        controller.handle(.reasoningDelta("Reading the file."))
+        XCTAssertEqual(controller.status, "Thinking: Reading the file.")
+        controller.handle(.reasoningDelta("\n\nChecking callers."))
+        XCTAssertEqual(controller.status, "Thinking: Checking callers.")
+        controller.handle(.textDelta("Here"))
+        XCTAssertEqual(controller.status, "Thinking…", "the answer has started")
+        controller.handle(.stateChanged(.streaming))
+        XCTAssertEqual(controller.status, "Thinking…", "a new turn starts without the last turn's summary")
+    }
+
     func testCostIsEstimatedPerTurnSavedAndRestoredAndLocalModelsHaveNone() async throws {
         let store = SessionStore(directory: project.appendingPathComponent("store"))
         let settings = makeSettings()
@@ -303,7 +322,8 @@ final class IDEAgentEntryPointsTests: XCTestCase {
 
         // A turn the table can't price makes the total unknown rather than too low.
         settings.model = "mystery-model"
-        second.handle(.usage(TokenUsage(inputTokens: 10, outputTokens: 10)))
+        // Tokens are booked on `.usageDetailed` (which names the model); `.usage` only moves the context meter.
+        second.handle(.usageDetailed(model: "mystery-model", usage: TokenUsage(inputTokens: 10, outputTokens: 10)))
         XCTAssertNil(second.cost)
 
         settings.provider = .ollama

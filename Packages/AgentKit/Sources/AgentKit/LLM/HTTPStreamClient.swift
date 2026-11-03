@@ -60,6 +60,7 @@ struct HTTPStreamClient: Sendable {
                             return
                         }
                         attempt += 1
+                        if let status = output.rateLimit { continuation.yield(.rateLimit(status)) }
                         continuation.yield(.retrying(attempt: attempt, after: delay))
                         do { try await Task.sleep(for: .seconds(delay)) } catch {
                             continuation.finish(throwing: CancellationError())
@@ -76,12 +77,15 @@ struct HTTPStreamClient: Sendable {
     /// task that runs the attempt.
     private final class OutputFlag: @unchecked Sendable {
         var started = false
+        /// The rate-limit headers of the latest response, kept so a retry can say why it waits.
+        var rateLimit: RateLimitStatus?
     }
 
     private func run(
         into continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation, output: OutputFlag
     ) async throws {
         let response = try await transport.open(try makeRequest())
+        output.rateLimit = RateLimitStatus.parse(headers: response.headers)
 
         guard (200..<300).contains(response.status) else {
             var text = ""
@@ -91,6 +95,7 @@ struct HTTPStreamClient: Sendable {
                 retryAfter: HTTPErrorClassifier.retryAfter(from: response.headers))
         }
 
+        if let status = output.rateLimit { continuation.yield(.rateLimit(status)) }
         let parser = SSELineParser()
         var decoder = makeDecoder()
         var finished = false

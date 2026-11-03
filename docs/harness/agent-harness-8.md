@@ -1,8 +1,8 @@
 # Harness gap 8: local models as helpers for hosted ones
 
-Part of the series `agent-harness-1.md` to `agent-harness-8.md` (index: `README.md`). Checked against the code on 2026-10-26.
+Part of the series `agent-harness-1.md` to `agent-harness-9.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-10-26.
 
-**Status:** open. Needs `agent-harness-2.md` phase 2 (per-agent model); phase 1 below is that phase plus a setting, so the two can land together.
+**Status:** phases 1–4 and the first half of 5 built (checked 2026-11-02): `model:` on agents and `makeChildClient`, the Helper model setting with the capability gate (`helperIssue`, 16K floor), the built-in `local-explore` and `local-digest` agents and `/local`, per-model usage (`usageByModel`, local ids priced at 0) and the "helper model could not finish; do this yourself" hand-back. Not built: phase 5.2 (the helper as an MCP server or ACP agent), which stays undecided. **Phase 3 is not yet justified by the measurement the doc demands** ("Measure before keeping phase 3"): the only saved runs are two reading tasks on two local models with no hosted run beside them; the hosted baseline is in `agent-harness-9.md`. The "What exists today" section describes the code before this work.
 
 ## What exists today
 

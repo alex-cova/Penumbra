@@ -74,14 +74,29 @@ enum IDEAgentProvider: String, CaseIterable, Identifiable, Sendable, Codable {
     var hasEndpoint: Bool { self != .mlx && appleKind == nil }
 
     /// What the reasoning picker offers. Claude also takes the two levels above "high"; Apple's models have no setting.
+    /// Muse always reasons: Meta's API rejects `none` with a 400 and accepts `minimal` to `max`, so
+    /// there is no "off" for it (measured 2026-11-02, `docs/harness/agent-harness-9.md`).
     var reasoningEfforts: [String] {
         if appleKind != nil { return ["off"] }
-        return self == .anthropic ? ["off", "low", "medium", "high", "xhigh", "max"] : ["off", "low", "medium", "high"]
+        switch self {
+        case .anthropic: return ["off", "low", "medium", "high", "xhigh", "max"]
+        case .meta: return ["minimal", "low", "medium", "high", "xhigh", "max"]
+        default: return ["off", "low", "medium", "high"]
+        }
+    }
+
+    /// `effort` if this provider offers it, else the provider's default. A choice saved when Meta
+    /// listed "off" must not send a level the picker no longer shows.
+    func normalizedReasoning(_ effort: String) -> String {
+        reasoningEfforts.contains(effort) ? effort : defaultReasoning
     }
 
     var defaultReasoning: String {
         // A local model that thinks is slow per step; the user turns it on.
-        isLocal || appleKind != nil ? "off" : "medium"
+        if isLocal || appleKind != nil { return "off" }
+        // Muse always reasons. `minimal` passed 102 of 102 trials on the 18 AgentEval tasks (14 easy, 4 hard)
+        // to `medium`'s 101 of 102, at about half the cost and time (`docs/harness/agent-harness-9.md`).
+        return self == .meta ? "minimal" : "medium"
     }
 }
 
@@ -145,7 +160,7 @@ final class IDEAgentSettings {
     func baseURL(for provider: IDEAgentProvider) -> String { values[Keys.field("baseURL", provider)] ?? provider.defaultBaseURL }
     func model(for provider: IDEAgentProvider) -> String { values[Keys.field("model", provider)] ?? provider.defaultModel }
     func reasoningEffort(for provider: IDEAgentProvider) -> String {
-        values[Keys.field("reasoning", provider)] ?? provider.defaultReasoning
+        provider.normalizedReasoning(values[Keys.field("reasoning", provider)] ?? provider.defaultReasoning)
     }
 
     /// What a chat with no choice of its own uses: the global provider, model and reasoning, and the
@@ -742,6 +757,7 @@ final class IDEAgentSettings {
         do {
             metaModels = try await HostedModelCatalog(
                 endpoint: LLMEndpoint(baseURL: url, apiKey: key), transport: transport).models()
+                .filter(IDEAIModelNames.isMuseChatModel)
             metaError = metaModels.isEmpty ? "Meta listed no models." : nil
         } catch {
             metaError = error.localizedDescription

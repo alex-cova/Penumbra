@@ -130,6 +130,65 @@ final class IDEAIModelChoiceTests: XCTestCase {
         XCTAssertEqual(IDEAIModelNames.display(provider: .meta, model: "muse-future-9.9"), "muse-future-9.9")
     }
 
+    /// `GET api.meta.ai/v1/models` (captured 2026-11-02) also lists an image generator, a transcriber and
+    /// `sam-3.1`; none of them takes a conversation, so none belongs in the picker.
+    func testMetaNonChatModelsAreLeftOutOfThePicker() async throws {
+        let transport = MetaListTransport()
+        transport.body = "{\"object\":\"list\",\"data\":[{\"id\":\"muse-wonder-1.0\"},{\"id\":\"sam-3.1\"},{\"id\":\"muse-voice-transcribe-1.0\"},{\"id\":\"muse-spark-1.3\"},{\"id\":\"muse-image-1.0\"},{\"id\":\"muse-spark-1.2\"},{\"id\":\"muse-spark-1.1\"}]}"
+        let settings = makeSettings(transport: transport)
+        settings.saveAPIKey("meta-test-key", for: .meta)
+        await settings.refreshMetaModels()
+        XCTAssertEqual(settings.metaModels, ["muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"])
+        XCTAssertTrue(IDEAIModelNames.isMuseChatModel("muse-future-9.9"), "a new Muse chat model still appears")
+        XCTAssertFalse(IDEAIModelNames.isMuseChatModel("muse-image-2.0"))
+        XCTAssertFalse(IDEAIModelNames.isMuseChatModel("MUSE-VOICE-TRANSCRIBE-2"))
+        XCTAssertFalse(IDEAIModelNames.isMuseChatModel("sam-3.1"))
+    }
+
+    /// Meta rejects `none` with a 400 and accepts `minimal` to `max` (measured 2026-11-02); the
+    /// others keep "off".
+    func testMuseOffersMinimalToMaxAndNeverSendsOff() {
+        XCTAssertEqual(IDEAgentProvider.meta.reasoningEfforts, ["minimal", "low", "medium", "high", "xhigh", "max"])
+        XCTAssertFalse(IDEAgentProvider.meta.reasoningEfforts.contains("off"))
+        XCTAssertEqual(IDEAgentProvider.meta.defaultReasoning, "minimal")
+        XCTAssertEqual(IDEAgentProvider.openAIResponses.defaultReasoning, "medium")
+        XCTAssertTrue(IDEAgentProvider.openAIResponses.reasoningEfforts.contains("off"))
+
+        // A choice saved while Meta listed "off" reads as the default, and what is sent is a real level.
+        var saved = IDEAIModelChoice(provider: .meta, model: "muse-spark-1.3")
+        saved.reasoningEffort = "off"
+        XCTAssertEqual(saved.shownReasoningEffort, "minimal")
+        XCTAssertEqual(saved.effectiveReasoningEffort, "minimal")
+        saved.reasoningEffort = "xhigh"
+        XCTAssertEqual(saved.effectiveReasoningEffort, "xhigh")
+        XCTAssertEqual(IDEAIModelChoice(provider: .meta, model: "muse-spark-1.3", reasoningEffort: "off").reasoningEffort, "minimal")
+        XCTAssertNil(IDEAIModelChoice(provider: .openAIResponses, model: "gpt-5", reasoningEffort: "off").effectiveReasoningEffort)
+    }
+
+    /// Meta's rate sheet (dev.meta.ai/docs/pricing-rate-limits, read 2026-11-02), dollars per million
+    /// tokens: Spark 1.1 to 1.3 at 1.25 input / 0.15 cached / 4.25 output, Wonder at 4.00 / 0.20 / 20.00.
+    func testTheMusePriceRowsMatchMetasRateSheet() throws {
+        let prices = IDEAgentPrices(text: IDEAgentPrices.defaultText)
+        func dollars(_ model: String, input: Int = 0, cached: Int = 0, output: Int = 0) throws -> Double {
+            try XCTUnwrap(prices.cost(of: TokenUsage(inputTokens: input + cached, outputTokens: output, cachedInputTokens: cached), model: model))
+        }
+        for spark in ["muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"] {
+            XCTAssertEqual(try dollars(spark, input: 1_000_000), 1.25, accuracy: 1e-9, spark)
+            XCTAssertEqual(try dollars(spark, cached: 1_000_000), 0.15, accuracy: 1e-9, spark)
+            XCTAssertEqual(try dollars(spark, output: 1_000_000), 4.25, accuracy: 1e-9, spark)
+        }
+        XCTAssertEqual(try dollars("muse-wonder-1.0", input: 1_000_000), 4.00, accuracy: 1e-9)
+        XCTAssertEqual(try dollars("muse-wonder-1.0", cached: 1_000_000), 0.20, accuracy: 1e-9)
+        XCTAssertEqual(try dollars("muse-wonder-1.0", output: 1_000_000), 20.00, accuracy: 1e-9)
+    }
+
+    func testTheMetaClientCannotSwitchToolsOff() throws {
+        let settings = makeSettings()
+        settings.saveAPIKey("meta-test-key", for: .meta)
+        let client = try XCTUnwrap(settings.makeClient(for: IDEAIModelChoice(provider: .meta, model: "muse-spark-1.3")) as? OpenAIResponsesClient)
+        XCTAssertFalse(client.supportsDisabledToolChoice)
+    }
+
     func testAKeyIsSavedPerProviderAndTheChoiceNeedsOneBeforeItIsReady() throws {
         let settings = makeSettings()
         let choice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5")

@@ -26,6 +26,7 @@ public struct Options: Sendable {
     public var saveToolOutput = true
     public var lineNumbers = true
     public var nudgeAnnouncedActions = false
+    public var strictArguments = false
     public var maxIterations = 40
     public var contextWindow: Int?
     public var reasoning: String?
@@ -65,6 +66,8 @@ public struct Options: Sendable {
       --no-run-tests        do not offer run_tests: the model must find bugs by reading
       --no-line-numbers     read_file returns the text without a number on each line
       --nudge-announced     ask once when a run that changed nothing ends on "I will fix it" (AnnouncedActionPolicy)
+      --strict-arguments    turn off ToolArguments' tolerance ("20" for 20, a list written as a string, ...) so
+                            a run can be compared with the default; a measurement hook, not a product setting
       --no-output-store     do not save oversized tool output for read_tool_output (Umbra does)
       --max-iterations N    model turns per task (default 40)
       --context N           context window in tokens: local models are asked for it, and the
@@ -114,6 +117,7 @@ public struct Options: Sendable {
             case "--no-output-store": options.saveToolOutput = false
             case "--no-line-numbers": options.lineNumbers = false
             case "--nudge-announced": options.nudgeAnnouncedActions = true
+            case "--strict-arguments": options.strictArguments = true
             case "--max-iterations": options.maxIterations = try number()
             case "--context": options.contextWindow = try number()
             case "--reasoning": options.reasoning = try value()

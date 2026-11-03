@@ -97,7 +97,7 @@ enum Providers {
         }
         if options.provider == "meta" {
             // Meta's Model API speaks the OpenAI Responses format with a Bearer [REDACTED].
-            return ProviderSetup(client: OpenAIResponsesClient(endpoint: endpoint), label: "meta · \(model)", contextWindow: options.contextWindow, isLocal: isLocalHost)
+            return ProviderSetup(client: OpenAIResponsesClient.meta(endpoint: endpoint), label: "meta · \(model)", contextWindow: options.contextWindow, isLocal: isLocalHost)
         }
         let capabilities: ChatCompletionsCapabilities = url.host() == "api.openai.com" ? .openAI : .compatible
         return ProviderSetup(

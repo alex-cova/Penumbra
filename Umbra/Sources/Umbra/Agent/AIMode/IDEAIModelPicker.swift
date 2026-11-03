@@ -70,7 +70,7 @@ struct IDEAIModelPicker: View {
     private var labelText: AttributedString {
         var name = AttributedString(plainLabel)
         name.foregroundColor = IDEAppearance.ColorToken.foreground
-        if !choice.isACP, let effort = IDEAIModelNames.effortLabel(choice.reasoningEffort) {
+        if !choice.isACP, let effort = IDEAIModelNames.effortLabel(choice.shownReasoningEffort) {
             var level = AttributedString("  " + effort)
             level.foregroundColor = IDEAppearance.ColorToken.muted
             name.append(level)
@@ -239,7 +239,7 @@ struct IDEAIModelPicker: View {
                     updated.reasoningEffort = effort
                     onSelect(updated)
                 } label: {
-                    if effort == choice.reasoningEffort { Label(effort.capitalized, systemImage: "checkmark") } else { Text(effort.capitalized) }
+                    if effort == choice.shownReasoningEffort { Label(effort.capitalized, systemImage: "checkmark") } else { Text(effort.capitalized) }
                 }
             }
         }

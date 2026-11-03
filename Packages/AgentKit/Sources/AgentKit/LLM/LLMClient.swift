@@ -26,6 +26,9 @@ public enum LLMEvent: Sendable, Hashable {
     /// The turn failed in a way worth retrying and is being resent: the consumer drops what it
     /// received from this turn so far. Safe because tools only run after a turn ends.
     case retrying(attempt: Int, after: TimeInterval)
+    /// What the provider reports is left of its rate limit, from a response's headers. Comes first in
+    /// a stream when the response has them, and before `.retrying` when the failed response had them.
+    case rateLimit(RateLimitStatus)
 }
 
 /// What the model may do with the tools it is shown.

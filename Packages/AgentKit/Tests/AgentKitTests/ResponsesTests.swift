@@ -39,6 +39,20 @@ private enum Fixture {
         return events
     }
 
+    /// Shape captured from Meta's Model API on 2026-11-02 (`reasoning.summary: "auto"`): two summary
+    /// parts in one reasoning item, each with its own `part.added` and a text delta.
+    @Test func summaryPartsAreSeparatedByAParagraphBreak() throws {
+        let events = try decode(sse(
+            #"{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1"}}"#,
+            #"{"type":"response.reasoning_summary_part.added","item_id":"rs_1","output_index":0,"summary_index":0,"part":{"text":"","type":"summary_text"}}"#,
+            #"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"Counting r letters."}"#,
+            #"{"type":"response.reasoning_summary_part.added","item_id":"rs_1","output_index":0,"summary_index":1,"part":{"text":"","type":"summary_text"}}"#,
+            #"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":1,"delta":"Verifying the total."}"#,
+            #"{"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}"#))
+        let text = events.compactMap { if case .reasoningDelta(let t) = $0 { t } else { nil } }.joined()
+        #expect(text == "Counting r letters.\n\nVerifying the total.")
+    }
+
     @Test func decodesTextUsageAndSkipsUnknownEvents() throws {
         #expect(try decode(Fixture.textTurn) == [
             .textDelta("Hel"), .textDelta("lo"),

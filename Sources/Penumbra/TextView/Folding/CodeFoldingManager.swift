@@ -31,7 +31,22 @@ final class CodeFoldingManager {
 
     var isEnabled: Bool {
         get { foldingModel.isEnabled }
-        set { foldingModel.isEnabled = newValue }
+        set {
+            let wasEnabled = foldingModel.isEnabled
+            foldingModel.isEnabled = newValue
+            if newValue, !wasEnabled {
+                // `scheduleUpdate` does nothing while folding is off, so what was set meanwhile
+                // (the document, a provider override) has not been scanned yet.
+                scheduleUpdate(full: true)
+            } else if !newValue, wasEnabled {
+                // A scan still running would put regions back into the model after it was emptied.
+                updateTask?.cancel()
+                hasUpdateInFlight = false
+                needsUpdate = false
+                pendingFullUpdate = false
+                pendingDirtyRows = nil
+            }
+        }
     }
 
     var lastScannedLineCount: Int {

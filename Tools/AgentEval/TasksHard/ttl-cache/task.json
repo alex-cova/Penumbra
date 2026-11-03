@@ -1,0 +1,10 @@
+{
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "difficulty": "hard",
+  "prompt": "tests/test_cache.py and tests/test_service.py have failures. Find every root cause in the code and fix it. Do not change the tests.",
+  "protected": [
+    "tests/**"
+  ],
+  "timeoutSeconds": 120,
+  "title": "A cache and the service on top of it return stale or wrongly evicted data"
+}

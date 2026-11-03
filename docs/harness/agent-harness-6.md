@@ -1,6 +1,6 @@
 # Harness gap 6: headless use and one shared agent library
 
-Part of the series `agent-harness-1.md` to `agent-harness-7.md` (index: `README.md`). Checked against the code on 2026-10-26; implemented 2026-11-02.
+Part of the series `agent-harness-1.md` to `agent-harness-9.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-10-26; implemented 2026-11-02.
 
 **Status:** implemented (phases 1–3). Phase 1 (the shared library) is the enabler for the CLI and for `agent-harness-3.md`.
 

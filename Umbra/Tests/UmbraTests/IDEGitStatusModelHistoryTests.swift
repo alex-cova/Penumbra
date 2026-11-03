@@ -49,6 +49,22 @@ final class IDEGitStatusModelHistoryTests: XCTestCase {
         return model
     }
 
+    func testTheSelectedFileOfACommitIsClearedWhenAnotherCommitIsSelected() async throws {
+        try await commit("a.txt", "1\n", "add a")
+        try await commit("b.txt", "1\n", "add b")
+        let model = try await makeModel()
+        try await waitUntil("the log") { model.commits.count == 2 }
+
+        model.selectCommit(model.commits[0].hash)
+        try await waitUntil("the commit's files") { model.selectedCommitFiles.map(\.path) == ["b.txt"] }
+        model.selectedCommitFile = "b.txt"
+        // Selecting the same commit again keeps the file; another commit drops it.
+        model.selectCommit(model.commits[0].hash)
+        XCTAssertEqual(model.selectedCommitFile, "b.txt")
+        model.selectCommit(model.commits[1].hash)
+        XCTAssertNil(model.selectedCommitFile)
+    }
+
     func testFileHistoryListsOnlyThatFilesCommitsAndShowsItsDiff() async throws {
         try await commit("a.txt", "1\n", "add a")
         try await commit("b.txt", "1\n", "add b")

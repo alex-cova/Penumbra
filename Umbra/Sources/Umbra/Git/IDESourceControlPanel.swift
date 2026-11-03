@@ -272,7 +272,22 @@ struct IDESourceControlPanel: View {
                     commitFiles
                     Rectangle().fill(IDEAppearance.ColorToken.border).frame(height: 1)
                 }
-                if let text {
+                if let selection = selectedCommitDiff {
+                    // The diff editor for the picked file: chunks, word highlights, and it opens on
+                    // the first change.
+                    IDEEmbeddedDiffView(
+                        workspace: workspace,
+                        request: selection.request,
+                        siblings: selection.siblings,
+                        onRequestChanged: { request in
+                            if let index = selection.siblings.firstIndex(where: { $0.id == request.id }),
+                               selection.files.indices.contains(index) {
+                                gitStatus.selectedCommitFile = selection.files[index].path
+                            }
+                        }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let text {
                     IDESourceControlDiffView(
                         text: text,
                         fontName: workspace.preferences.fontName,
@@ -295,8 +310,16 @@ struct IDESourceControlPanel: View {
         let files = gitStatus.selectedCommitFiles
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
+                IDECommitAllChangesRow(isSelected: gitStatus.selectedCommitFile == nil) {
+                    gitStatus.selectedCommitFile = nil
+                }
                 ForEach(files) { file in
-                    IDECommitFileRow(file: file) { openCommitFile(file, in: files) }
+                    IDECommitFileRow(
+                        file: file,
+                        isSelected: gitStatus.selectedCommitFile == file.path,
+                        onSelect: { gitStatus.selectedCommitFile = file.path },
+                        onOpenInTab: { openCommitFile(file, in: files) }
+                    )
                 }
             }
             .padding(.vertical, IDEAppearance.Spacing.xs)
@@ -306,8 +329,21 @@ struct IDESourceControlPanel: View {
 
     private func openCommitFile(_ file: GitChangedFile, in files: [GitChangedFile]) {
         guard let hash = gitStatus.selectedCommitHash else { return }
-        let shortHash = gitStatus.commits.first { $0.hash == hash }?.shortHash ?? String(hash.prefix(7))
-        workspace.openCommitDiff(hash: hash, shortHash: shortHash, file: file, files: files)
+        workspace.openCommitDiff(hash: hash, shortHash: shortHash(of: hash), file: file, files: files)
+    }
+
+    private func shortHash(of hash: String) -> String {
+        gitStatus.commits.first { $0.hash == hash }?.shortHash ?? String(hash.prefix(7))
+    }
+
+    /// The request for the file picked under the commit, with the commit's other files as siblings.
+    private var selectedCommitDiff: (request: IDEDiffRequest, siblings: [IDEDiffRequest], files: [GitChangedFile])? {
+        guard let hash = gitStatus.selectedCommitHash, let path = gitStatus.selectedCommitFile else { return nil }
+        let files = gitStatus.selectedCommitFiles
+        guard let index = files.firstIndex(where: { $0.path == path }) else { return nil }
+        let requests = workspace.commitDiffRequests(hash: hash, shortHash: shortHash(of: hash), files: files)
+        guard requests.indices.contains(index) else { return nil }
+        return (requests[index], requests, files)
     }
 
     private var dateTitle: String {
@@ -996,9 +1032,41 @@ private struct IDEUnsyncedRow: View {
 }
 
 /// One file of a commit: its status letter and path. Clicking opens its diff.
+/// The first row of a commit's file list: back to the whole patch with the commit message.
+private struct IDECommitAllChangesRow: View {
+    let isSelected: Bool
+    let onSelect: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            Image(systemName: "doc.plaintext")
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(width: 12)
+            Text("All changes")
+                .font(IDEAppearance.Typography.tabLabel)
+                .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .frame(height: 22)
+        .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
+        .contentShape(Rectangle())
+        .accessibilityAddTraits(.isButton)
+        .onTapGesture(perform: onSelect)
+        .onHover { isHovering = $0 }
+        .help("Show the whole commit")
+    }
+}
+
+/// A file of the selected commit. A click shows its diff under the list; a double-click or the
+/// arrow opens it in a tab.
 private struct IDECommitFileRow: View {
     let file: GitChangedFile
-    let onOpen: () -> Void
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onOpenInTab: () -> Void
     @State private var isHovering = false
 
     var body: some View {
@@ -1013,13 +1081,17 @@ private struct IDECommitFileRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
+            if isHovering || isSelected {
+                IDEIconButton(systemImage: "arrow.up.forward.square", help: "Open in Diff Tab", action: onOpenInTab)
+            }
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .frame(height: 22)
-        .background(isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
+        .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
         .contentShape(Rectangle())
         .accessibilityAddTraits(.isButton)
-        .onTapGesture(perform: onOpen)
+        .onTapGesture(count: 2, perform: onOpenInTab)
+        .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
         .help("Show Diff")
     }

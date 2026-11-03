@@ -53,6 +53,7 @@ case .run:
     } catch { fail("\(error)") }
 
     let model = options.model ?? ""
+    ToolArguments.isTolerant = !options.strictArguments
     let configuration = EvalConfiguration(
         model: model, reasoningEffort: options.reasoning, maxIterations: options.maxIterations,
         contextWindow: setup.contextWindow, trialTimeout: options.trialTimeout, toolset: options.toolset,
@@ -64,7 +65,7 @@ case .run:
     let jobs = setup.isLocal ? 1 : options.jobs
     let transcripts = options.transcriptsPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
     let work = tasks.flatMap { task in (1...options.trials).map { (task, $0) } }
-    print("\(setup.label) · toolset \(options.toolset.rawValue) · \(tasks.count) tasks × \(options.trials) trial(s)\n")
+    print("\(setup.label) · toolset \(options.toolset.rawValue)\(options.strictArguments ? " · strict arguments" : "") · \(tasks.count) tasks × \(options.trials) trial(s)\n")
 
     let started = Date()
     var results: [TrialResult] = []
