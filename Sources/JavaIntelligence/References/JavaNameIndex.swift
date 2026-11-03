@@ -9,7 +9,7 @@ import Foundation
 ///
 /// Open editor buffers are handled with an overlay (``setOverlay(_:text:)``): for those files the
 /// live text wins over whatever is on disk.
-public actor JavaNameIndex: JavaUsageCandidateSource {
+public actor JavaNameIndex: JavaUsageCandidateSource, JavaUsageStatisticsSource {
     private struct RootState {
         let directory: URL
         let shardURL: URL
@@ -194,6 +194,26 @@ public actor JavaNameIndex: JavaUsageCandidateSource {
             }
         }
         return result.sorted().map { URL(fileURLWithPath: $0) }
+    }
+
+    /// Files that mention each identifier, summed over every root with a shard (a dictionary lookup
+    /// per identifier and root). Counts come from the saved text: an open buffer's unsaved edits are
+    /// not in them, which is fine for ranking and would not be for finding usages.
+    public func fileCounts(ofIdentifiers identifiers: [String]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for key in Array(roots.keys) {
+            guard var state = roots[key] else { continue }
+            if state.reader == nil {
+                state.reader = try? JavaNameIndexShardReader(url: state.shardURL)
+                roots[key] = state
+            }
+            guard let reader = state.reader else { continue }
+            for identifier in identifiers {
+                let count = reader.fileCount(containing: identifier)
+                if count > 0 { counts[identifier, default: 0] += count }
+            }
+        }
+        return counts
     }
 
     /// Number of files in the loaded shard of `root`, or `nil` when it has none.

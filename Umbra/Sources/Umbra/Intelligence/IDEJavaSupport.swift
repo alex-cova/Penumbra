@@ -207,6 +207,9 @@ final class IDEJavaSupport {
         self.completionProvider = completionProvider
         let initialPostfix = IDEPreferences.shared.javaPostfix
         Task { await completionProvider.setPostfixConfiguration(initialPostfix) }
+        // What the project uses ranks up (class names and the implementation offered after `new`):
+        // the name index already knows how many files mention each identifier.
+        Task { [nameIndex] in await completionProvider.setUsageStatistics(nameIndex) }
         navigationProvider = JavaGoToDefinitionProvider(index: javaIndex, indexPaths: paths)
         findUsagesProvider = JavaFindUsagesProvider(index: javaIndex, indexPaths: paths, nameIndex: nameIndex)
         codeActionProvider = JavaCodeActionProvider(index: javaIndex)

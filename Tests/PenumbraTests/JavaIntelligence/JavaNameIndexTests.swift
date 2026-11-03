@@ -53,6 +53,31 @@ final class JavaNameIndexTests: XCTestCase {
         XCTAssertEqual(missing, [])
     }
 
+    /// F18: the same posting table answers "how many files use this name" without decoding it.
+    func testFileCountsAreTheNumberOfFilesMentioningEachIdentifier() async throws {
+        try write("A.java", "class A { LinkedList l; ArrayList a; }")
+        try write("pkg/B.java", "class B { LinkedList l; LinkedList m; }")
+        try write("C.java", "class C { void linkedList() {} }")
+        _ = await build()
+        let counts = await index.fileCounts(ofIdentifiers: ["LinkedList", "ArrayList", "linkedList", "Nope"])
+        XCTAssertEqual(counts["LinkedList"], 2, "files, not occurrences: B mentions it twice")
+        XCTAssertEqual(counts["ArrayList"], 1)
+        XCTAssertEqual(counts["linkedList"], 1, "case matters")
+        XCTAssertNil(counts["Nope"])
+    }
+
+    func testFileCountsSumOverRootsAndAgreeWithTheCandidateFiles() async throws {
+        let second = dir.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        try write("A.java", "class A { Widget w; }")
+        try "class Z { Widget w; }".write(to: second.appendingPathComponent("Z.java"), atomically: true, encoding: .utf8)
+        for await _ in await index.build(roots: [src, second]) {}
+        let counts = await index.fileCounts(ofIdentifiers: ["Widget"])
+        let candidates = await index.candidateFiles(containing: "Widget", in: [src, second])
+        XCTAssertEqual(counts["Widget"], 2)
+        XCTAssertEqual(counts["Widget"], candidates.count)
+    }
+
     func testSecondBuildIsSkippedAndShardReloadsInFreshIndex() async throws {
         try write("A.java", "class A { Widget w; }")
         _ = await build()

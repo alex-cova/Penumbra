@@ -106,6 +106,17 @@ enum JavaNameIndexProfile {
             scanHits = scan.count
         }
 
+        // F18: ranking asks for the usage counts of every class a completion offers, in one batch.
+        let batch = (0..<200).map { "Type\($0 * max(1, javaFiles.count / 200))" } + vocabulary
+        var counts: [Double] = []
+        for iteration in 0..<(samples + 1) {
+            let start = DispatchTime.now().uptimeNanoseconds
+            _ = await index.fileCounts(ofIdentifiers: batch)
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+            if iteration >= 1 { counts.append(elapsed) }
+        }
+        emit(band: "usage_counts_\(batch.count)_identifiers", samples: counts)
+
         emit(band: "unchanged", samples: unchanged)
         emit(band: "file_changed", samples: changed)
         emit(band: "candidates_rare_indexed", samples: rareIndexed)

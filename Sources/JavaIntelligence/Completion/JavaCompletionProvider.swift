@@ -61,6 +61,21 @@ public actor JavaCompletionProvider: CompletionProvider {
         importPolicy = policy
     }
 
+    /// Where project-wide usage counts come from (the name index). Without one, ranking is exactly
+    /// what it was before statistics: scope buckets, package affinity and the JDK stand-ins.
+    public func setUsageStatistics(_ source: (any JavaUsageStatisticsSource)?) {
+        usageStatistics = source
+    }
+
+    private var usageStatistics: (any JavaUsageStatisticsSource)?
+
+    /// The counts for `stubs`, in one lookup.
+    private func usageProfile(for stubs: [JavaClassStub]) async -> JavaUsageProfile {
+        guard let usageStatistics, !stubs.isEmpty else { return .empty }
+        let names = Array(Set(stubs.map(\.simpleName)))
+        return JavaUsageProfile(fileCounts: await usageStatistics.fileCounts(ofIdentifiers: names))
+    }
+
     /// Postfix templates, their per-key toggles, and custom templates.
     public func setPostfixConfiguration(_ configuration: JavaPostfixConfiguration) {
         postfixConfiguration = configuration
@@ -1007,17 +1022,36 @@ public actor JavaCompletionProvider: CompletionProvider {
                 }
             }
         }
-        let fast = await constructorItems(fastStubs, expected: expected, assignability: assignability, request: request)
         var slowStubs = await extraNewStubs(request: request, expected: expected, assignability: assignability, excluding: seen)
         if request.prefix.isEmpty {
             slowStubs += await implementationStubs(request: request, expected: expected, assignability: assignability, excluding: seen)
         }
-        let slow = await constructorItems(slowStubs, expected: expected, assignability: assignability, request: request)
+        // Which implementation leads is decided over both phases at once: the project's own most
+        // used one when the project clearly reaches for it, otherwise the JDK's conventional one.
+        let usage = await usageProfile(for: fastStubs + slowStubs)
+        let leader = Self.preferredImplementation(expected: expected, candidates: fastStubs + slowStubs, usage: usage)
+        let fast = await constructorItems(fastStubs, expected: expected, assignability: assignability, request: request, usage: usage, leader: leader)
+        let slow = await constructorItems(slowStubs, expected: expected, assignability: assignability, request: request, usage: usage, leader: leader)
         return phased(fast: fast, slow: slow, request: request, expected: expected, offersClasses: false)
     }
 
+    /// The implementation offered first after `new`: the candidate the project uses most when at
+    /// least two files use it and it beats the conventional stand-in's own count (`ArrayList` for
+    /// `List`), else the stand-in, else none.
+    static func preferredImplementation(
+        expected: [JavaTypeRef], candidates: [JavaClassStub], usage: JavaUsageProfile
+    ) -> String? {
+        let standIns = Set(expected.compactMap { $0.erasedQualifiedName.flatMap { JavaCompletionSuggestions.jdkImplementations[$0] } })
+        let standInUsage = candidates.filter { standIns.contains($0.qualifiedName) }.map { usage.usage(of: $0) }.max() ?? 0
+        if let favourite = usage.mostUsed(of: candidates), usage.usage(of: favourite) > standInUsage {
+            return favourite.qualifiedName
+        }
+        return candidates.first { standIns.contains($0.qualifiedName) }?.qualifiedName
+    }
+
     private func constructorItems(
-        _ stubs: [JavaClassStub], expected: [JavaTypeRef], assignability: JavaAssignability, request: Request
+        _ stubs: [JavaClassStub], expected: [JavaTypeRef], assignability: JavaAssignability, request: Request,
+        usage: JavaUsageProfile = .empty, leader: String? = nil
     ) async -> [CompletionItem] {
         var items: [CompletionItem] = []
         for stub in stubs where stub.kind != .enumKind && stub.kind != .annotationKind {
@@ -1027,10 +1061,12 @@ public actor JavaCompletionProvider: CompletionProvider {
             guard decisionForNew.keep else { continue }
             // Preferred implementation: the conventional class for an expected JDK interface
             // (`ArrayList` for `List`) leads the other implementations (`Stack`, `Vector`).
-            let preferred = expected.contains { $0.erasedQualifiedName.flatMap { JavaCompletionSuggestions.jdkImplementations[$0] } == stub.qualifiedName }
+            let preferred = stub.qualifiedName == leader
             items.append(request.factory.constructorItem(
                 stub, importDecision: decision,
-                priority: classPriority(stub, decision: decision, request: request) + (preferred ? JavaCompletionPriority.affinityStep * 4 : 0),
+                priority: classPriority(stub, decision: decision, request: request)
+                    + usage.bonus(for: stub, cap: JavaCompletionPriority.usageCapForNew)
+                    + (preferred ? JavaCompletionPriority.affinityStep * 4 : 0),
                 expectedMatch: decisionForNew.matches, anonymous: JavaCompletionSuggestions.isAnonymous(stub)
             ))
         }
@@ -1129,6 +1165,7 @@ public actor JavaCompletionProvider: CompletionProvider {
 
     private func typeOnlyClassItems(keyword: String, request: Request, stubs: [JavaClassStub]) async -> [CompletionItem] {
         var items: [CompletionItem] = []
+        let usage = await usageProfile(for: stubs)
         for stub in stubs {
             switch keyword {
             case "implements":
@@ -1139,7 +1176,7 @@ public actor JavaCompletionProvider: CompletionProvider {
                 break
             }
             let decision = request.importer.decision(for: stub)
-            var priority = classPriority(stub, decision: decision, request: request)
+            var priority = classPriority(stub, decision: decision, request: request, usage: usage)
             if keyword == "catch" || keyword == "throws", stub.simpleName.hasSuffix("Exception") || stub.simpleName.hasSuffix("Error") {
                 priority += 1
             }
@@ -1433,9 +1470,12 @@ public actor JavaCompletionProvider: CompletionProvider {
         guard !request.prefix.isEmpty else { return [] }
         var items: [CompletionItem] = []
         let ownNames = Set(request.context.enclosingTypeQualifiedNames)
-        for match in await index.classes(matching: request.prefix, limit: classNameLimit(request)) where isAccessibleClass(match.stub, request: request) {
+        let matches = await index.classes(matching: request.prefix, limit: classNameLimit(request))
+            .filter { isAccessibleClass($0.stub, request: request) }
+        let usage = await usageProfile(for: matches.map(\.stub))
+        for match in matches {
             let decision = ownNames.contains(match.stub.qualifiedName) ? .none : request.importer.decision(for: match.stub)
-            items.append(request.factory.classItem(match.stub, importDecision: decision, priority: classPriority(match.stub, decision: decision, request: request)))
+            items.append(request.factory.classItem(match.stub, importDecision: decision, priority: classPriority(match.stub, decision: decision, request: request, usage: usage)))
         }
         return items
     }
@@ -1445,18 +1485,19 @@ public actor JavaCompletionProvider: CompletionProvider {
     }
 
     private func inScopeClassNameItems(request: Request) async -> [CompletionItem] {
-        classItems(stubs: await inScopeClassStubs(request: request), request: request)
+        await classItems(stubs: await inScopeClassStubs(request: request), request: request)
     }
 
     private func extraClassNameItems(request: Request, existing: [CompletionItem]) async -> [CompletionItem] {
-        classItems(stubs: await extraClassStubs(request: request, existing: existing), request: request)
+        await classItems(stubs: await extraClassStubs(request: request, existing: existing), request: request)
     }
 
-    private func classItems(stubs: [JavaClassStub], request: Request) -> [CompletionItem] {
+    private func classItems(stubs: [JavaClassStub], request: Request) async -> [CompletionItem] {
         let ownNames = Set(request.context.enclosingTypeQualifiedNames)
+        let usage = await usageProfile(for: stubs)
         return stubs.map { stub in
             let decision = ownNames.contains(stub.qualifiedName) ? JavaImportInserter.Decision.none : request.importer.decision(for: stub)
-            return request.factory.classItem(stub, importDecision: decision, priority: classPriority(stub, decision: decision, request: request))
+            return request.factory.classItem(stub, importDecision: decision, priority: classPriority(stub, decision: decision, request: request, usage: usage))
         }
     }
 
@@ -1510,10 +1551,10 @@ public actor JavaCompletionProvider: CompletionProvider {
         if request.prefix.isEmpty {
             return finished(await annotationItems(request: request))
         }
-        let fast = classItems(
+        let fast = await classItems(
             stubs: await inScopeClassStubs(request: request).filter { $0.kind == .annotationKind }, request: request
         )
-        let slow = classItems(
+        let slow = await classItems(
             stubs: await extraClassStubs(request: request, existing: fast).filter { $0.kind == .annotationKind }, request: request
         )
         return phased(fast: fast, slow: slow, request: request, expected: [], offersClasses: true)
@@ -1589,7 +1630,13 @@ public actor JavaCompletionProvider: CompletionProvider {
     /// the file names explicitly (same package, single-type import) beats `java.lang`, which beats
     /// an on-demand import; out of scope, `java.*` beats other libraries, which beat JDK internals.
     /// Named steps of 0.25 keep this below the scope buckets in ``JavaCompletionPriority``.
-    private func classPriority(_ stub: JavaClassStub, decision: JavaImportInserter.Decision, request: Request) -> Double {
+    private func classPriority(
+        _ stub: JavaClassStub, decision: JavaImportInserter.Decision, request: Request, usage: JavaUsageProfile = .empty
+    ) -> Double {
+        classBucketPriority(stub, decision: decision, request: request) + usage.bonus(for: stub, cap: JavaCompletionPriority.usageCap)
+    }
+
+    private func classBucketPriority(_ stub: JavaClassStub, decision: JavaImportInserter.Decision, request: Request) -> Double {
         if case .none = decision {
             let context = request.context
             let owner = stub.outerQualifiedName ?? stub.packageName

@@ -337,6 +337,11 @@ public final class JavaNameIndexShardReader: @unchecked Sendable {
         return ids
     }
 
+    /// How many files contain `identifier`, without decoding the posting list.
+    public func fileCount(containing identifier: String) -> Int {
+        postingTable[identifier]?.1 ?? 0
+    }
+
     public func relativePaths(containing identifier: String) -> [String] {
         fileIDs(containing: identifier).map { files[$0].relativePath }
     }
