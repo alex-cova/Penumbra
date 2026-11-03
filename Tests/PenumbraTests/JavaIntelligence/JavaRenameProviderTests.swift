@@ -180,6 +180,62 @@ final class JavaRenameProviderTests: XCTestCase {
         XCTAssertTrue(text.contains("return count + sum + this.count;"))
     }
 
+    /// Pattern bindings are locals too: `o instanceof String s` and `Point(int x, int y)` had no
+    /// declaration for the walker to rename.
+    func testInstanceofAndRecordPatternBindingsRename() async throws {
+        try add("p/T.java", """
+        package p;
+        class T {
+            record Point(int x, int y) {}
+            int m(Object o) {
+                if (!(o instanceof String €text)) return 0;
+                int sum = text.length();
+                if (o instanceof Point(int px, int py)) { sum += px + py; }
+                return sum + text.length();
+            }
+        }
+        """)
+        let (provider, context) = try await makeProvider(caretIn: "p/T.java")
+        let prepared = await provider.prepareRename(context)
+        XCTAssertEqual(prepared?.currentName, "text")
+        let plan = try await provider.rename(context, to: "str")
+        XCTAssertEqual(plan.entries.count, 3)
+        let text = try XCTUnwrap(apply(plan)["p/T.java"])
+        XCTAssertTrue(text.contains("o instanceof String str)) return 0;"))
+        XCTAssertTrue(text.contains("int sum = str.length();"))
+        XCTAssertTrue(text.contains("return sum + str.length();"))
+    }
+
+    /// From a use, the caret has to find the binding: a pattern variable, a classic `for` variable
+    /// and a catch parameter are all locals, and a field of the same name must not capture them.
+    func testRenameFromAUseOfPatternForAndCatchVariables() async throws {
+        let sources: [(name: String, marked: String, expect: [String])] = [
+            ("pattern", """
+             package p;
+             class T { int text; int m(Object o) { if (!(o instanceof String text)) return text; return €text.length(); } }
+             """, ["o instanceof String str)", "return str;", "return str.length();"]),
+            ("for", """
+             package p;
+             class T { int i; int m() { int s = 0; for (int i = 0; i < 3; i++) { s += €i; } return s + i; } }
+             """, ["for (int num = 0; num < 3; num++)", "s += num;", "return s + i;"]),
+            ("catch", """
+             package p;
+             class T { Exception e; String m() { try { return ""; } catch (RuntimeException e) { return €e.getMessage(); } } }
+             """, ["catch (RuntimeException ex)", "return ex.getMessage();"]),
+        ]
+        for (index, entry) in sources.enumerated() {
+            let file = "p/R\(index).java"
+            try add(file, entry.marked)
+            let (provider, context) = try await makeProvider(caretIn: file)
+            let newName = ["str", "num", "ex"][index]
+            let plan = try await provider.rename(context, to: newName)
+            let text = try XCTUnwrap(apply(plan)[file], entry.name)
+            for expected in entry.expect {
+                XCTAssertTrue(text.contains(expected), "\(entry.name): missing `\(expected)` in\n\(text)")
+            }
+        }
+    }
+
     // MARK: - Not renamable
 
     func testJarTypeIsNotRenamable() async throws {

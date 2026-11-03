@@ -59,6 +59,11 @@ enum JavaDeclarationLocator {
     }
 
     static func localDeclarationRange(name: String, in tree: JavaSyntaxTree, atByteOffset offset: Int) -> Range<Int>? {
+        // The scope tree knows every binding form (patterns, `for` variables, catch parameters,
+        // switch rules); the ancestor walk below stays for what it recovers inside `ERROR` regions.
+        if let range = JavaScopeTree.localDeclarationRange(in: tree, named: name, atByteOffset: offset) {
+            return range
+        }
         var current: SyntaxNode? = tree.node(atByteOffset: offset)
         while let node = current {
             switch node.type {

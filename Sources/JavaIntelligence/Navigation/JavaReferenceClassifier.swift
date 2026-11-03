@@ -147,6 +147,13 @@ enum JavaReferenceClassifier {
                 || parent.child(byFieldName: "name")?.byteRange == token.byteRange
         case "lambda_expression":
             return parent.child(byFieldName: "parameters")?.byteRange == token.byteRange
+        case "instanceof_expression":
+            // `o instanceof String s`: the binding, not the tested expression.
+            return parent.child(byFieldName: "name")?.byteRange == token.byteRange
+        case "type_pattern", "record_pattern_component":
+            // `case String s`, `Point(int x, ...)`: the last identifier, unless it nests a pattern.
+            return parent.namedChildren(ofType: "identifier").last?.byteRange == token.byteRange
+                && parent.firstNamedChild(ofType: "record_pattern") == nil
         default:
             if typeDeclarations.contains(parent.type) {
                 return parent.child(byFieldName: "name")?.byteRange == token.byteRange

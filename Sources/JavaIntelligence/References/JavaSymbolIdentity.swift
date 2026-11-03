@@ -186,6 +186,14 @@ extension JavaNavigationSession {
             return [JavaResolvedID(id: .local(file: localFileURL, declarationRange: token.byteRange), kind: declaration)]
         case "enhanced_for_statement", "resource", "catch_formal_parameter", "lambda_expression", "inferred_parameters":
             return [JavaResolvedID(id: .local(file: localFileURL, declarationRange: token.byteRange), kind: declaration)]
+        case "instanceof_expression":
+            // `o instanceof String s`: only the binding is a declaration, not the tested name.
+            guard parent.child(byFieldName: "name")?.byteRange == token.byteRange else { return [] }
+            return [JavaResolvedID(id: .local(file: localFileURL, declarationRange: token.byteRange), kind: declaration)]
+        case "type_pattern", "record_pattern_component":
+            guard parent.namedChildren(ofType: "identifier").last?.byteRange == token.byteRange,
+                  parent.firstNamedChild(ofType: "record_pattern") == nil else { return [] }
+            return [JavaResolvedID(id: .local(file: localFileURL, declarationRange: token.byteRange), kind: declaration)]
         case "enum_constant":
             guard let owner else { return [] }
             return [JavaResolvedID(id: .field(declaringClass: owner, name: token.text), kind: declaration)]

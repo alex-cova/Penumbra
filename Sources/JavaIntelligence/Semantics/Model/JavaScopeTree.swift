@@ -90,6 +90,12 @@ public final class JavaScopeTree: Sendable {
     /// the offset is not inside such a member (a field initializer, an initializer block, an
     /// `ERROR` region), where the caller uses the whole-file tree or another source.
     public static func locals(in tree: JavaSyntaxTree, enclosingExecutableAtByteOffset offset: Int) -> [JavaLocalVariable]? {
+        executableTree(in: tree, atByteOffset: offset)?.locals(atByteOffset: offset)
+    }
+
+    /// The scope tree of the outermost method or constructor containing `offset`, memoized per
+    /// parse by the member's start.
+    private static func executableTree(in tree: JavaSyntaxTree, atByteOffset offset: Int) -> JavaScopeTree? {
         var executable: SyntaxNode?
         var current: SyntaxNode? = tree.node(atByteOffset: offset)
         while let node = current {
@@ -104,7 +110,7 @@ public final class JavaScopeTree: Sendable {
             let url = URL(fileURLWithPath: "/__umbra_locals_only__.java")
             let builder = ScopeBuilder(tree: tree, url: url, withoutStubs: ())
             return builder.buildExecutable(executable, owner: "").map { JavaScopeTree(url: url, root: $0) }
-        }?.locals(atByteOffset: offset)
+        }
     }
 
     // MARK: - Queries
@@ -148,6 +154,27 @@ public final class JavaScopeTree: Sendable {
             }
         }
         return result
+    }
+
+    /// Where the local or parameter `name` visible at `offset` is declared (the byte range of its
+    /// name), from only the outermost method or constructor around the offset, like
+    /// ``locals(in:enclosingExecutableAtByteOffset:)``. `nil` when no such member contains the
+    /// offset or the name is not a local there. Sees pattern bindings, `for` variables, catch
+    /// parameters and `switch` bindings, which the older ancestor walk in
+    /// `JavaDeclarationLocator.localDeclarationRange` did not.
+    public static func localDeclarationRange(in tree: JavaSyntaxTree, named name: String, atByteOffset offset: Int) -> Range<Int>? {
+        guard let scopeTree = executableTree(in: tree, atByteOffset: offset) else { return nil }
+        for scope in scopeTree.scopeChain(atByteOffset: offset).reversed() {
+            for declaration in scope.declarations.reversed() where declaration.visibleRange.contains(offset) {
+                switch declaration.symbol {
+                case .local(let declared, _, let range, _), .parameter(let declared, _, let range, _):
+                    if declared == name { return range }
+                default:
+                    continue
+                }
+            }
+        }
+        return nil
     }
 
     /// The innermost declaration of `name` visible at the offset: locals, parameters, pattern

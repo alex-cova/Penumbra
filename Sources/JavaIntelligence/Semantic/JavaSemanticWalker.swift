@@ -164,8 +164,10 @@ final class JavaSemanticWalker {
             return walkParameter(node)
         case "resource":
             return walkParameter(node)
-        case "type_pattern", "record_pattern":
+        case "type_pattern", "record_pattern", "record_pattern_component":
             return walkParameter(node)
+        case "instanceof_expression":
+            return walkInstanceof(node)
         case "method_invocation":
             return walkInvocation(node)
         case "object_creation_expression":
@@ -329,9 +331,14 @@ final class JavaSemanticWalker {
             }
             return true
         }
-        let nameNode = node.child(byFieldName: "name") ?? node.namedChildren(ofType: "variable_declarator").first?.child(byFieldName: "name")
+        var nameNode = node.child(byFieldName: "name") ?? node.namedChildren(ofType: "variable_declarator").first?.child(byFieldName: "name")
             ?? (node.type == "type_pattern" || node.type == "catch_formal_parameter" ? node.namedChildren(ofType: "identifier").last : nil)
-        let isLocal = node.type == "resource" || node.type == "type_pattern"
+        // `Point(int x, int y)`: a component that names a variable has a type then an identifier; one
+        // that nests another record pattern has no name of its own.
+        if node.type == "record_pattern_component", nameNode == nil, node.firstNamedChild(ofType: "record_pattern") == nil {
+            nameNode = node.namedChildren(ofType: "identifier").last
+        }
+        let isLocal = node.type == "resource" || node.type == "type_pattern" || node.type == "record_pattern_component"
         if let nameNode {
             bindLocal(nameNode, isLocal ? .local(nameNode.byteRange) : .parameter(nameNode.byteRange))
             emit(nameNode, isLocal ? .localVariable : .parameter, isDeclaration: true)
@@ -344,6 +351,22 @@ final class JavaSemanticWalker {
             } else if !walk(child) {
                 return false
             }
+        }
+        return true
+    }
+
+    /// `o instanceof String s`: the tested expression and the type are walked as usual, and `s`
+    /// is a local declared here. It lands in the innermost enclosing scope, so it is still bound
+    /// where flow scoping keeps it alive (`if (!(o instanceof String s)) return; s.length();`);
+    /// a later binding of the same name shadows it from there on.
+    private func walkInstanceof(_ node: SyntaxNode) -> Bool {
+        let nameNode = node.child(byFieldName: "name")
+        for child in node.children where child.isNamed && child.byteRange != nameNode?.byteRange {
+            if !walk(child) { return false }
+        }
+        if let nameNode {
+            bindLocal(nameNode, .local(nameNode.byteRange))
+            emit(nameNode, .localVariable, isDeclaration: true)
         }
         return true
     }
