@@ -21,6 +21,19 @@ final class IDEAgentSlashInvocationTests: XCTestCase {
         XCTAssertNil(IDEAgentSlashInvocation.parse(""))
     }
 
+    func testLoopIntervalsParse() {
+        XCTAssertEqual(IDEAgentLoopInterval.parse("5m"), 300)
+        XCTAssertEqual(IDEAgentLoopInterval.parse("30s"), 30)
+        XCTAssertEqual(IDEAgentLoopInterval.parse("1h"), 3_600)
+        XCTAssertEqual(IDEAgentLoopInterval.parse("2"), 120, "a bare number means minutes")
+        XCTAssertNil(IDEAgentLoopInterval.parse("soon"))
+        XCTAssertNil(IDEAgentLoopInterval.parse("0m"))
+        XCTAssertNil(IDEAgentLoopInterval.parse(""))
+        XCTAssertEqual(IDEAgentLoopInterval.describe(300), "5m")
+        XCTAssertEqual(IDEAgentLoopInterval.describe(90), "90s")
+        XCTAssertEqual(IDEAgentLoopInterval.describe(3_600), "1h")
+    }
+
     func testModesAreUnderstoodAsPeopleWriteThem() {
         XCTAssertEqual(PermissionMode(spoken: "Accept Edits"), .acceptEdits)
         XCTAssertEqual(PermissionMode(spoken: "accept-edits"), .acceptEdits)
@@ -75,6 +88,70 @@ final class IDEAgentSlashInvocationTests: XCTestCase {
         ] {
             XCTAssertTrue(markdown.contains(expected), "missing \(expected)\n\(markdown)")
         }
+    }
+
+    func testMarkdownExportCanHideTheToolCalls() {
+        var tool = IDEAgentEntry(kind: .toolCall(name: "read_file"), text: #"{"path":"A.java"}"#, callID: "c")
+        tool.output = ToolOutput("1\tlet secret = 1\n")
+        let entries = [IDEAgentEntry(kind: .user, text: "Please fix it"), tool, IDEAgentEntry(kind: .assistant, text: "Done.")]
+        let shown = IDEAgentTranscriptExport.markdown(title: "Fix", entries: entries, exportedAt: Date(timeIntervalSince1970: 0))
+        XCTAssertTrue(shown.contains("Ran `read_file`"))
+        let hidden = IDEAgentTranscriptExport.markdown(
+            title: "Fix", entries: entries, exportedAt: Date(timeIntervalSince1970: 0), hideTools: true)
+        XCTAssertFalse(hidden.contains("Ran `read_file`"), "a hidden-tools export names no tool call")
+        for expected in ["## You\n\nPlease fix it", "## Agent\n\nDone."] {
+            XCTAssertTrue(hidden.contains(expected), "missing \(expected)")
+        }
+    }
+
+    func testJSONExportIsScrubbedHostlessAndReadsBackThroughSessionStore() throws {
+        let secret = "AKIAIOSFODNN7EXAMPLE"
+        let snapshot = SessionSnapshot(
+            id: UUID(), projectRoot: "/tmp/export-probe", title: "Fix the parser",
+            createdAt: Date(timeIntervalSince1970: 1_000), updatedAt: Date(timeIntervalSince1970: 2_000),
+            items: [
+                .user("the key is \(secret)"),
+                .assistant("noted \(secret)"),
+                .toolCall(id: "c1", name: "run_command", arguments: #"{"command":"echo \#(secret)"}"#),
+                .toolOutput(callID: "c1", output: "printed \(secret)"),
+            ],
+            totalUsage: TokenUsage(inputTokens: 10, outputTokens: 5),
+            host: Data(#"{"entries":[]}"#.utf8),
+            children: [
+                ChildSnapshot(
+                    id: "child", agent: "explore", description: "search", canEdit: false,
+                    items: [.user("child holds \(secret)")]),
+            ])
+        XCTAssertEqual(IDEAgentTranscriptExport.jsonFileName(for: "Fix the parser / now!"), "fix-the-parser-now.json")
+
+        let data = try IDEAgentTranscriptExport.jsonData(snapshot)
+        let back = try XCTUnwrap(SessionStore.decode(data), "an /export json file reads back through SessionStore")
+        XCTAssertNil(back.host, "the export drops the opaque host blob")
+        XCTAssertEqual(back.items.count, snapshot.items.count)
+        XCTAssertEqual(back.children.count, 1)
+        for item in back.items + back.children.flatMap(\.items) {
+            switch item {
+            case .user(let text), .assistant(let text):
+                XCTAssertFalse(text.contains(secret), "user and assistant text is scrubbed")
+            case .userParts(let parts):
+                for part in parts {
+                    if case .text(let text) = part { XCTAssertFalse(text.contains(secret)) }
+                }
+            case .toolCall(_, _, let arguments):
+                XCTAssertFalse(arguments.contains(secret))
+            case .toolOutput(_, let output):
+                XCTAssertFalse(output.contains(secret))
+            case .opaque:
+                break
+            }
+        }
+        XCTAssertTrue(back.items.contains { ($0.userText ?? "").contains(IDEAgentOutputScrubber.replacement) })
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("export-json-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = SessionStore(directory: dir)
+        try store.save(back)
+        XCTAssertNotNil(store.load(back.id, projectRoot: back.projectRoot), "the store reads the exported file back")
     }
 
     func testExportShowsWhatAFileToolReturnedSoARefusedWriteIsNotMistakenForOne() {
@@ -377,6 +454,80 @@ final class IDEAgentCommandRunTests: XCTestCase {
         let result = try XCTUnwrap(saved)
         XCTAssertEqual(result.name, "explain-the-build.md")
         XCTAssertTrue(result.text.contains("## You\n\nExplain the build") && result.text.contains("## Agent\n\nanswer"))
+    }
+
+    func testExportJSONHandsAReadableSnapshotToTheSavePanel() async throws {
+        let (controller, _) = makeController([.text("answer")])
+        type(controller, "Explain the build")
+        await waitFor("done") { !controller.isRunning }
+        var saved: (name: String, text: String)?
+        controller.exportHandler = { saved = ($0, $1) }
+        type(controller, "/export json")
+        for _ in 0..<800 where saved == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        let result = try XCTUnwrap(saved)
+        XCTAssertEqual(result.name, "explain-the-build.json")
+        let back = try XCTUnwrap(
+            SessionStore.decode(Data(result.text.utf8)), "an /export json file reads back through SessionStore")
+        XCTAssertNil(back.host)
+        XCTAssertFalse(back.items.isEmpty)
+    }
+
+    func testExportHideToolsKeepsTheTranscriptButDropsToolCards() async throws {
+        let (controller, _) = makeController([
+            .toolCalls((id: "t", name: "todo", arguments: #"{"items":["[x] read"]}"#)), .text("done"),
+        ])
+        type(controller, "Show A")
+        await waitFor("done") { !controller.isRunning }
+        var saved: (name: String, text: String)?
+        controller.exportHandler = { saved = ($0, $1) }
+        type(controller, "/export")
+        for _ in 0..<800 where saved == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(try XCTUnwrap(saved).text.contains("Ran `todo`"))
+        saved = nil
+        type(controller, "/export --hide-tools")
+        for _ in 0..<800 where saved == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        let hidden = try XCTUnwrap(saved)
+        XCTAssertEqual(hidden.name, "show-a.md")
+        XCTAssertFalse(hidden.text.contains("Ran `todo`"))
+        XCTAssertTrue(hidden.text.contains("## You\n\nShow A") && hidden.text.contains("## Agent\n\ndone"))
+    }
+
+    func testLoopRunsThePromptNTimesThenFinishes() async throws {
+        let (controller, client) = makeController([.text("one"), .text("two")])
+        type(controller, "/loop 1s 2 ping")
+        for _ in 0..<1_500 where !controller.entries.contains(where: { $0.text == "Loop finished its runs." }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(client.requests.count, 2, "the prompt went out twice")
+        XCTAssertEqual(controller.entries.filter { $0.kind == .user && $0.text == "ping" }.count, 2)
+        XCTAssertTrue(controller.entries.contains { $0.text == "Loop finished its runs." })
+    }
+
+    func testLoopNeedsAnIntervalAndAPrompt() async throws {
+        let (controller, client) = makeController([.text("ok")])
+        type(controller, "/loop")
+        XCTAssertTrue(try XCTUnwrap(lastNotice(controller)).contains("/loop <interval>"))
+        type(controller, "/loop soon do the thing")
+        XCTAssertTrue(try XCTUnwrap(lastNotice(controller)).contains("/loop <interval>"))
+        type(controller, "/loop 5m")
+        XCTAssertTrue(try XCTUnwrap(lastNotice(controller)).contains("/loop <interval>"))
+        XCTAssertTrue(client.requests.isEmpty, "no run started for any of these")
+        XCTAssertFalse(controller.selected.isLooping)
+    }
+
+    func testStopEndsTheLoop() async throws {
+        let (controller, client) = makeController([.text("a"), .text("b"), .text("c")])
+        type(controller, "/loop 1s 5 ping")
+        for _ in 0..<800 where client.requests.isEmpty {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(client.requests.count, 1, "the first tick sent the prompt")
+        controller.stop()
+        try? await Task.sleep(for: .seconds(3))
+        XCTAssertEqual(client.requests.count, 1, "no further ticks sent after Stop")
+        XCTAssertEqual(controller.entries.filter { $0.kind == .user && $0.text == "ping" }.count, 1)
+        XCTAssertTrue(controller.entries.contains { $0.text == "Loop stopped." })
+        XCTAssertFalse(controller.selected.isLooping)
     }
 
     func testModelAndPermissionsAskTheWindow() {

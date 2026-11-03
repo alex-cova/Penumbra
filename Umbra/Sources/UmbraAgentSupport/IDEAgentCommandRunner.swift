@@ -4,17 +4,28 @@ import SubprocessKit
 
 /// A shell command for the agent: run with `/bin/zsh -c` (not a login shell) in the project, with
 /// stdin closed and a built environment rather than the app's own.
-nonisolated struct AgentCommandSpec: Sendable {
-    var command: String
-    var workingDirectory: URL
-    var environment: [String: String]
-    var timeout: TimeInterval
+public nonisolated struct AgentCommandSpec: Sendable {
+    public var command: String
+    public var workingDirectory: URL
+    public var environment: [String: String]
+    public var timeout: TimeInterval
     /// A Seatbelt profile for `/usr/bin/sandbox-exec -p`. `nil` runs the command directly.
-    var sandboxProfile: String?
+    public var sandboxProfile: String?
+
+    public init(
+        command: String, workingDirectory: URL, environment: [String: String],
+        timeout: TimeInterval, sandboxProfile: String? = nil
+    ) {
+        self.command = command
+        self.workingDirectory = workingDirectory
+        self.environment = environment
+        self.timeout = timeout
+        self.sandboxProfile = sandboxProfile
+    }
 
     /// The process to spawn: `/bin/zsh -c`, wrapped in `sandbox-exec -p` when a profile is set.
     /// SubprocessKit stays generic; the sandbox is just argv.
-    func request() -> SubprocessRequest {
+    public func request() -> SubprocessRequest {
         if let sandboxProfile {
             return SubprocessRequest(
                 executable: IDEAgentSandbox.executable,
@@ -24,22 +35,36 @@ nonisolated struct AgentCommandSpec: Sendable {
     }
 }
 
-nonisolated struct AgentCommandResult: Sendable, Equatable {
+public nonisolated struct AgentCommandResult: Sendable, Equatable {
     /// `nil` when the process was killed by a signal.
-    var exitCode: Int32?
-    var signal: Int32?
+    public var exitCode: Int32?
+    public var signal: Int32?
     /// stdout and stderr interleaved as they arrived; the middle is dropped past the cap.
-    var output: String
-    var omittedBytes: Int
-    var timedOut: Bool
-    var cancelled: Bool
-    var duration: TimeInterval
+    public var output: String
+    public var omittedBytes: Int
+    public var timedOut: Bool
+    public var cancelled: Bool
+    public var duration: TimeInterval
+
+    public init(
+        exitCode: Int32? = nil, signal: Int32? = nil, output: String = "",
+        omittedBytes: Int = 0, timedOut: Bool = false, cancelled: Bool = false,
+        duration: TimeInterval = 0
+    ) {
+        self.exitCode = exitCode
+        self.signal = signal
+        self.output = output
+        self.omittedBytes = omittedBytes
+        self.timedOut = timedOut
+        self.cancelled = cancelled
+        self.duration = duration
+    }
 }
 
-nonisolated enum AgentCommandError: Error, LocalizedError, Equatable {
+public nonisolated enum AgentCommandError: Error, LocalizedError, Equatable {
     case launchFailed(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .launchFailed(let detail): "The command could not be started: \(detail)"
         }
@@ -48,12 +73,12 @@ nonisolated enum AgentCommandError: Error, LocalizedError, Equatable {
 
 /// What a command's environment holds. Built, not inherited: the app's own environment can carry
 /// credentials the user never meant a model-driven command to see.
-nonisolated enum AgentCommandEnvironment {
-    static let basePath = ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin", "/usr/local/bin"]
+public nonisolated enum AgentCommandEnvironment {
+    public static let basePath = ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin", "/usr/local/bin"]
 
     /// - Parameter loginPath: the entries of the user's login-shell `PATH` (`IDELoginShellPath`), which
     ///   go after the JDK and before the system directories, so `gradle` from sdkman is found.
-    static func make(
+    public static func make(
         javaHome: URL?,
         loginPath: [String] = [],
         extras: [String: String] = [:],
@@ -84,12 +109,12 @@ nonisolated enum AgentCommandEnvironment {
 /// Runs a command in its own process group, so a timeout or Stop ends its children too (killing
 /// only the shell leaves them running), and nothing it started outlives it. The spawning, the
 /// bounded capture and the kill live in SubprocessKit; this is the agent's policy on top.
-nonisolated enum AgentCommandRunner {
+public nonisolated enum AgentCommandRunner {
     /// Keep the start and the end of the output. A build's verdict is at the bottom, so the tail
     /// gets the larger share.
-    static let outputCapture = OutputCapture.bounded(head: 64 * 1_024, tail: 192 * 1_024)
+    public static let outputCapture = OutputCapture.bounded(head: 64 * 1_024, tail: 192 * 1_024)
 
-    static func run(_ spec: AgentCommandSpec, onOutput: @escaping @Sendable (String) -> Void) async throws -> AgentCommandResult {
+    public static func run(_ spec: AgentCommandSpec, onOutput: @escaping @Sendable (String) -> Void) async throws -> AgentCommandResult {
         var request = spec.request()
         request.workingDirectory = spec.workingDirectory
         request.environment = spec.environment

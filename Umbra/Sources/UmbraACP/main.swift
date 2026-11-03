@@ -1,17 +1,20 @@
 import AgentKit
-import AgentKitMLX
 import Foundation
-import LocalModelStore
-import Security
+import UmbraAgentSupport
 
-/// Umbra as an ACP agent (plan Phase 2): hosts an `AgentSession` on stdio so any ACP client
-/// (e.g. Zed) can drive Umbra's built-in agent. Build/run: `swift run UmbraACP [--provider
-/// ollama|openai|chat|mlx] [--model <name>] [--base-url <url>]`.
+/// Umbra as an ACP agent (server) on stdio: any ACP client (e.g. Zed) can drive Umbra's
+/// built-in agent. Build/run: `swift run UmbraACP [--provider openai|chat|anthropic|meta|ollama|mlx|apple|apple-pcc]
+/// [--model <name>] [--base-url <url>] [--allow-mcp] [--sandbox]`.
 ///
 /// Provider configuration comes from, in order: flags, `UMBRA_ACP_*` environment, then the
-/// user's Umbra settings (`com.umbra.editor` defaults; the API key from Umbra's Keychain
-/// service when no key is in the environment). Nothing is printed to stdout except ACP frames;
-/// diagnostics go to stderr.
+/// user's Umbra settings (`com.umbra.editor` defaults; the API key from the environment or
+/// Umbra's Keychain service). Nothing is printed to stdout except ACP frames; diagnostics
+/// go to stderr.
+///
+/// Parity with the app comes from `UmbraAgentSupport` (docs/harness/agent-harness-6.md
+/// Phase 3): every provider through the shared factory, the same permission files, the
+/// host-independent `run_command`, and project MCP servers behind `--allow-mcp`. Command
+/// approvals reach the ACP client as `session/request_permission` (see `ACPAgentEndpoint`).
 final class ACPStdioTransport: ACPTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: AsyncStream<Data>.Continuation?
@@ -60,6 +63,8 @@ struct ACPOptions {
     var model: String
     var baseURL: String?
     var reasoning: String?
+    var allowMCP: Bool
+    var sandbox: Bool
 
     /// Umbra's settings live under the app's defaults domain and `com.umbra.editor.agent` keys.
     static func load() -> ACPOptions {
@@ -87,24 +92,9 @@ struct ACPOptions {
             provider: flag("--provider") ?? env["UMBRA_ACP_PROVIDER"] ?? provider,
             model: flag("--model") ?? env["UMBRA_ACP_MODEL"] ?? field("model") ?? "",
             baseURL: flag("--base-url") ?? env["UMBRA_ACP_BASE_URL"] ?? field("baseURL"),
-            reasoning: field("reasoning"))
-    }
-
-    func apiKey(forHost host: String?) -> String? {
-        let env = ProcessInfo.processInfo.environment
-        if let key = env["UMBRA_ACP_API_KEY"] ?? env["OPENAI_API_KEY"], !key.isEmpty { return key }
-        guard let host else { return nil }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "com.umbra.editor.agent",
-            kSecAttrAccount as String: host,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+            reasoning: field("reasoning"),
+            allowMCP: arguments.contains("--allow-mcp") || env["UMBRA_ACP_ALLOW_MCP"] == "1",
+            sandbox: arguments.contains("--sandbox") || env["UMBRA_ACP_SANDBOX"] == "1")
     }
 }
 
@@ -113,62 +103,30 @@ enum ACPHostError: Error, CustomStringConvertible {
     var description: String { if case .message(let text) = self { text } else { "" } }
 }
 
-struct ProviderSetup {
-    var client: any LLMClient
-    var contextWindow: Int?
-    var compactionThreshold: Double = 0.75
-    var model: String
-    var reasoning: String?
+/// The `UmbraAgentCommandHost` for ACP sessions: commands run in the session's cwd with a
+/// built environment; progress goes to stderr (stdout carries ACP frames only).
+struct ACPCommandHost: UmbraAgentCommandHost {
+    var projectRoot: URL
+    var environment: [String: String]
+
+    func commandEnvironment() async -> [String: String] { environment }
+
+    func showCommand(id: UUID, title: String, line: String?) {
+        if let line { FileHandle.standardError.write(Data(line.utf8)) }
+    }
 }
 
-func makeProvider(_ options: ACPOptions) async throws -> ProviderSetup {
-    let model = options.model.trimmingCharacters(in: .whitespaces)
-    guard !model.isEmpty else {
-        throw ACPHostError.message("No model configured. Set one in Umbra's agent settings, pass --model, or set UMBRA_ACP_MODEL.")
-    }
-    let reasoning = options.reasoning == "off" ? nil : options.reasoning
-    switch options.provider {
-    case "ollama":
-        let url = try endpointURL(options.baseURL, fallback: OllamaClient.defaultBaseURL.absoluteString)
-        let models = try await OllamaModelCatalog(baseURL: url).models()
-        guard let info = models.first(where: { $0.name == model }) else {
-            throw ACPHostError.message("Ollama has no model “\(model)”. Installed: \(models.map(\.name).joined(separator: ", "))")
+/// MCP hubs by project root, kept for the life of the process so a session's tools stay live.
+actor ACPHubStore {
+    private var hubs: [String: MCPHub] = [:]
+
+    func hub(for root: URL, environment: [String: String]) async throws -> MCPHub? {
+        if let existing = hubs[root.path] { return existing }
+        guard let hub = try await UmbraAgentHeadlessRun.startProjectMCP(root: root, environment: environment) else {
+            return nil
         }
-        if !info.capabilities.isEmpty, !info.supportsTools {
-            throw ACPHostError.message("“\(model)” does not support tool calling, which the agent needs.")
-        }
-        let context = min(32_768, info.contextLength ?? 32_768)
-        return ProviderSetup(
-            client: OllamaClient(endpoint: LLMEndpoint(baseURL: url, apiKey: nil), contextLength: context, supportsThinking: info.supportsThinking),
-            contextWindow: context, compactionThreshold: 0.60, model: model, reasoning: reasoning)
-    case "openai", "chat":
-        let url = try endpointURL(options.baseURL, fallback: "https://api.openai.com/v1")
-        let key = options.apiKey(forHost: url.host())
-        let isLocal = ["localhost", "127.0.0.1", "::1"].contains(url.host()?.lowercased() ?? "")
-        if key == nil, !isLocal {
-            throw ACPHostError.message("No API key for \(url.host() ?? "the server"). Set UMBRA_ACP_API_KEY or save one in Umbra's agent settings.")
-        }
-        let endpoint = LLMEndpoint(baseURL: url, apiKey: key)
-        let client: any LLMClient = options.provider == "openai"
-            ? OpenAIResponsesClient(endpoint: endpoint)
-            : OpenAIChatCompletionsClient(endpoint: endpoint, capabilities: url.host() == "api.openai.com" ? .openAI : .compatible)
-        return ProviderSetup(client: client, contextWindow: options.baseURL == nil ? nil : nil, model: model, reasoning: reasoning)
-    case "mlx":
-        let status = MLXAvailability.currentStatus()
-        guard status == .available else { throw ACPHostError.message(MLXAvailability.message(for: status)) }
-        let root = try LocalModelPaths.defaultRoot(folderName: "com.umbra.editor")
-        let installed = LocalModelCatalog(paths: LocalModelPaths(root: root)).installed()
-        guard let found = installed.first(where: { $0.id == model }) else {
-            throw ACPHostError.message("“\(model)” is not an installed on-device model.")
-        }
-        let info = MLXModelInspector.inspect(directory: found.directory)
-        if info.hasChatTemplate, !info.supportsTools {
-            throw ACPHostError.message("“\(model)” has a chat template without tool support.")
-        }
-        let context = min(32_768, info.contextLength ?? 32_768)
-        return ProviderSetup(client: MLXLLMClient(model: found, settings: MLXGenerationSettings()), contextWindow: context, model: model, reasoning: reasoning)
-    default:
-        throw ACPHostError.message("Unknown provider “\(options.provider)”. Use ollama, openai, chat or mlx.")
+        hubs[root.path] = hub
+        return hub
     }
 }
 
@@ -184,9 +142,16 @@ func endpointURL(_ text: String?, fallback: String) throws -> URL {
 struct UmbraACP {
     static func main() async {
         let options = ACPOptions.load()
-        let setup: ProviderSetup
+        guard let provider = UmbraAgentProvider(name: options.provider) else {
+            FileHandle.standardError.write(Data(
+                "UmbraACP: unknown provider “\(options.provider)”. Use openai|chat|anthropic|meta|ollama|mlx|apple|apple-pcc.\n".utf8))
+            exit(2)
+        }
+        let setup: UmbraAgentProviderSetup
         do {
-            setup = try await makeProvider(options)
+            setup = try await UmbraAgentProviderFactory.make(UmbraAgentProviderConfig(
+                provider: provider, model: options.model, baseURL: options.baseURL,
+                reasoningEffort: options.reasoning, keyStore: IDEAgentKeychain()))
         } catch {
             FileHandle.standardError.write(Data("UmbraACP: \(error)\n".utf8))
             exit(2)
@@ -195,26 +160,40 @@ struct UmbraACP {
         // Tests and operators can redirect session storage; otherwise the app's own store is used.
         let store: URL? = ProcessInfo.processInfo.environment["UMBRA_ACP_SESSIONS_DIR"].map { URL(fileURLWithPath: $0) }
             ?? (try? SessionStore.defaultDirectory(appFolder: "com.umbra.editor"))
+        let hubs = ACPHubStore()
         let endpoint = ACPAgentEndpoint(
             transport: transport,
             agentInfo: ACPImplementation(name: "Umbra Agent", version: "1.0"),
             contextWindow: setup.contextWindow,
             sessionStore: store.map(SessionStore.init(directory:))
         ) { request in
+            let root = URL(fileURLWithPath: request.cwd)
             let workspace = ACPRemoteWorkspace(
-                local: DiskAgentWorkspace(root: URL(fileURLWithPath: request.cwd)),
+                local: DiskAgentWorkspace(root: root),
                 remoteFileReader: request.remoteFileReader)
-            let tools: [any AgentTool] = ReadOnlyTools.all() + EditingTools.all()
-                + [TodoTool(), AskUserTool(), ExitPlanModeTool()]
+            let environment = AgentCommandEnvironment.make(javaHome: nil)
+            let sandbox: IDEAgentSandboxChoice? =
+                (options.sandbox && IDEAgentSandbox.isAvailable)
+                ? IDEAgentSandboxChoice(profile: IDEAgentSandboxProfile.make(projectRoot: root.path)) : nil
+            var tools: [any AgentTool] = ReadOnlyTools.all() + EditingTools.all()
+            tools.append(UmbraAgentRunCommandTool(
+                host: ACPCommandHost(projectRoot: root, environment: environment), sandbox: sandbox))
+            tools += [TodoTool(), AskUserTool(), ExitPlanModeTool()]
+            if options.allowMCP, let hub = try await hubs.hub(for: root, environment: environment) {
+                tools += await hub.tools
+            }
             return AgentSession(
                 client: setup.client, tools: tools, workspace: workspace,
                 configuration: AgentConfiguration(
                     model: setup.model,
                     systemPrompt: SystemPrompt.make(projectRoot: request.cwd),
-                    reasoningEffort: setup.reasoning,
+                    reasoningEffort: setup.reasoningEffort,
                     contextWindow: setup.contextWindow,
-                    compactionThreshold: setup.compactionThreshold,
-                    mode: .acceptEdits),
+                    compactionThreshold: provider == .ollama ? 0.60 : setup.compactionThreshold,
+                    mode: .acceptEdits,
+                    permissions: IDEAgentPermissionFiles.load(
+                        projectRoot: root, appFile: IDEAgentPermissionFiles.appFile()),
+                    shapeToolOutput: { IDEAgentOutputScrubber.shape($0) }),
                 history: request.history,
                 totalUsage: request.totalUsage,
                 sessionID: request.sessionID ?? UUID())

@@ -852,9 +852,101 @@ final class IDEAgentConversation: Identifiable {
         if let acpSession { Task { await acpSession.setRules(rules) } }
     }
 
+    // MARK: - Loop
+
+    /// A `/loop` repetition: resends a prompt on a timer, one run at a time, while the app is open.
+    /// A schedule that survives quitting needs a launchd job and the headless CLI instead.
+    private var loopTask: Task<Void, Never>?
+    private var loopPrompt = ""
+    private var loopInterval: TimeInterval = 0
+    private var loopRunsLeft = 0
+
+    /// Whether a `/loop` repetition is going. Shown nowhere yet; the transcript's notices say so.
+    var isLooping: Bool { loopTask != nil }
+
+    /// The default when `/loop` names no count.
+    static let defaultLoopRuns = 10
+
+    static func loopStartNotice(interval: TimeInterval, prompt: String, maxRuns: Int) -> String {
+        "Looping every \(IDEAgentLoopInterval.describe(interval)): “\(firstLine(of: prompt, limit: 80))” — up to \(maxRuns) \(maxRuns == 1 ? "run" : "runs"). Stop ends the loop."
+    }
+
+    func startLoop(interval: TimeInterval, prompt: String, maxRuns: Int) {
+        stopLoop(silent: true)
+        guard host != nil, effectiveRoot != nil else {
+            appendNotice("Loop needs an open project first: the agent works inside one.")
+            return
+        }
+        guard hasConsent else {
+            appendNotice("Loop needs the agent's disclosure first.")
+            return
+        }
+        loopPrompt = prompt
+        loopInterval = interval
+        loopRunsLeft = maxRuns
+        appendNotice(Self.loopStartNotice(interval: interval, prompt: prompt, maxRuns: maxRuns))
+        loopTask = Task { [weak self] in await self?.runLoop() }
+    }
+
+    func stopLoop(silent: Bool = false) {
+        guard loopTask != nil else { return }
+        loopTask?.cancel()
+        loopTask = nil
+        if !silent { appendNotice("Loop stopped.") }
+    }
+
+    private func runLoop() async {
+        while loopTask != nil, loopRunsLeft > 0 {
+            try? await Task.sleep(for: .milliseconds(Int(loopInterval * 1_000)))
+            guard loopTask != nil, !Task.isCancelled else { break }
+            // One run at a time: while a run is going or an approval is waiting, wait for the
+            // next tick instead of queueing behind it.
+            if isRunning || isAwaitingUser { continue }
+            loopRunsLeft -= 1
+            submit(text: loopPrompt)
+            guard isRunning else {
+                // Consent was withdrawn or the project closed mid-loop: end it instead of spinning.
+                stopLoop(silent: true)
+                appendNotice("Loop stopped: the prompt could not be sent.")
+                break
+            }
+            while isRunning, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(200)) }
+            if Task.isCancelled { break }
+            if !loopShouldContinue() { break }
+        }
+        if loopTask != nil {
+            stopLoop(silent: true)
+            if loopRunsLeft <= 0 { appendNotice("Loop finished its runs.") }
+        }
+    }
+
+    /// Whether the loop carries on after the run that just ended.
+    private func loopShouldContinue() -> Bool {
+        switch lastEnding {
+        case nil, .completed:
+            return loopRunsLeft > 0
+        case .stopped:
+            appendNotice("Loop stopped.")
+            return false
+        case .budget:
+            appendNotice("Loop stopped: the run reached its token, time or cost budget.")
+            return false
+        case .failed, .contentFiltered, .degenerateOutput, .lengthLimit, .iterationCap, .repeatedCall:
+            if let ending = lastEnding,
+               let message = IDEAgentToolSummary.endingMessage(ending, iterationLimit: settings.iterationCap)
+            {
+                appendNotice("Loop stopped: \(message.text)")
+            } else {
+                appendNotice("Loop stopped.")
+            }
+            return false
+        }
+    }
+
     /// Cancels the stream and running tools. The run ends with a "Stopped." notice and the next
     /// message continues the conversation.
     func stop() {
+        stopLoop()
         shellTask?.cancel()
         // A run still being set up (the session, a local model loading) has no session to stop yet: the run
         // looks at this before it starts. (Not Task cancellation: that would also end the loop that reads
@@ -876,6 +968,7 @@ final class IDEAgentConversation: Identifiable {
 
     /// Empties the conversation in place, under a new identity. The one being left stays in the history.
     func reset() {
+        stopLoop(silent: true)
         endSession()
         entries = []
         usage = TokenUsage()
@@ -964,6 +1057,7 @@ final class IDEAgentConversation: Identifiable {
     /// Replaces the conversation with a saved one.
     func load(_ snapshot: SessionSnapshot) {
         guard !isRunning else { return }
+        stopLoop(silent: true)
         endSession()
         let saved = IDEAgentSavedTranscript.decode(snapshot.host)
         rootOverride = saved.chatRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -1046,6 +1140,20 @@ final class IDEAgentConversation: Identifiable {
         onPersisted?()
     }
 
+    /// The session as `/export json` writes it (scrubbed of secrets, without the host blob at
+    /// encode time): the live session's items and children, else what was restored from disk.
+    /// The items are empty when the chat has sent nothing yet.
+    func exportSnapshot() async -> SessionSnapshot {
+        let items = await session?.items ?? restoredItems ?? []
+        let children = await session?.childSnapshots() ?? restoredChildren
+        let root = effectiveRoot?.path ?? ""
+        return SessionSnapshot(
+            id: conversationID, projectRoot: root,
+            title: customTitle ?? SessionStore.title(from: items),
+            createdAt: createdAt, updatedAt: Date(), items: items, totalUsage: usage,
+            host: nil, children: children)
+    }
+
     /// Names the tab. A saved conversation is saved again so the name outlives the window.
     func rename(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1062,6 +1170,7 @@ final class IDEAgentConversation: Identifiable {
     /// Cancels the run and drops the session. A session that outlives its window would keep the
     /// workspace alive through its tools.
     func teardown() {
+        stopLoop(silent: true)
         saveInterrupted()
         endSession()
         host = nil
@@ -1220,6 +1329,12 @@ final class IDEAgentConversation: Identifiable {
                 IDEGoToDefinitionTool(navigator: navigator, lineText: lineText),
                 IDEFindUsagesTool(navigator: navigator, lineText: lineText),
             ]
+            if let hover = host.agentHoverEngine() {
+                tools.append(IDEHoverTool(engine: hover))
+            }
+            if let renamer = host.agentRenameProvider() {
+                tools.append(IDERenameSymbolTool(renamer: renamer, lineText: lineText))
+            }
         }
         if let skills { tools.append(SkillTool(catalog: skills)) }
         tools.append(IDEDiagnosticsTool(

@@ -48,6 +48,8 @@ public struct Options: Sendable {
       ollama   a local Ollama server (default http://localhost:11434); needs --model
       openai   OpenAI Responses API; key from OPENAI_API_KEY
       chat     any OpenAI-compatible Chat Completions server (--base-url, optional key)
+      anthropic  Anthropic Messages API (Claude); key from ANTHROPIC_API_KEY
+      meta     Meta Model API, Responses-compatible; key from META_API_KEY
       mlx      an on-device MLX model installed through Umbra (--model is its repository id)
       apple    Apple's on-device foundation model (Apple Intelligence); no --model
       apple-pcc  Apple's Private Cloud Compute model (macOS 27); no --model

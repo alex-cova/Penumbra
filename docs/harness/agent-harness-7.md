@@ -12,6 +12,8 @@ Part of the series `agent-harness-1.md` to `agent-harness-7.md` (index: `README.
 
 **Done when.** The tolerant-arguments line in the plan carries a measured number. **Size:** S.
 
+**Measured 2026-11-02** (`Tools/AgentEval/Results/2026-11-02-tolerant-arguments.json`): ollama · qwen-fixed:latest · full toolset · 14 tasks × 3 trials, 21/42 passes. The first run's `trace-default` trials failed environmentally (ollama unreachable for the last task); they were re-run the same day on the same model and merged in (2/3).
+
 ## 2. Session export
 
 **What exists.** `IDEAgentTranscriptExport.markdown(title:entries:exportedAt:)` (`Umbra/Sources/Umbra/Agent/Commands/IDEAgentTranscriptExport.swift`), reached from `/export` and saved as `.md` (`IDEAgentController+Commands`). No JSON export.

@@ -2,18 +2,18 @@ import Foundation
 import Security
 
 /// Where agent API keys live. One key per endpoint host; never `UserDefaults`, never a session file.
-protocol IDEAgentKeyStore: Sendable {
+public protocol IDEAgentKeyStore: Sendable {
     func load(account: String) throws -> String?
     func save(_ key: String, account: String) throws
     func delete(account: String) throws
 }
 
-enum IDEAgentKeychainError: Error, Equatable, LocalizedError {
+public enum IDEAgentKeychainError: Error, Equatable, LocalizedError {
     case saveFailed(OSStatus)
     case loadFailed(OSStatus)
     case deleteFailed(OSStatus)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .saveFailed(let status): "Could not save the API key to the Keychain (status \(status))."
         case .loadFailed(let status): "Could not read the API key from the Keychain (status \(status))."
@@ -23,8 +23,9 @@ enum IDEAgentKeychainError: Error, Equatable, LocalizedError {
 }
 
 /// Generic-password items under one service. Readable only while the Mac is unlocked.
-struct IDEAgentKeychain: IDEAgentKeyStore {
-    static let service = "com.umbra.editor.agent"
+public struct IDEAgentKeychain: IDEAgentKeyStore {
+    public init() {}
+    public static let service = "com.umbra.editor.agent"
 
     private func query(account: String) -> [String: Any] {
         [
@@ -34,7 +35,7 @@ struct IDEAgentKeychain: IDEAgentKeyStore {
         ]
     }
 
-    func save(_ key: String, account: String) throws {
+    public func save(_ key: String, account: String) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return try delete(account: account) }
         SecItemDelete(query(account: account) as CFDictionary)
@@ -46,7 +47,7 @@ struct IDEAgentKeychain: IDEAgentKeyStore {
     }
 
     /// `nil` when no key has been saved.
-    func load(account: String) throws -> String? {
+    public func load(account: String) throws -> String? {
         var request = query(account: account)
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -57,23 +58,25 @@ struct IDEAgentKeychain: IDEAgentKeyStore {
         return String(data: data, encoding: .utf8)
     }
 
-    func delete(account: String) throws {
+    public func delete(account: String) throws {
         let status = SecItemDelete(query(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw IDEAgentKeychainError.deleteFailed(status) }
     }
 }
 
 /// For tests: the same contract without touching the user's Keychain.
-final class IDEAgentMemoryKeyStore: IDEAgentKeyStore, @unchecked Sendable {
+public final class IDEAgentMemoryKeyStore: IDEAgentKeyStore, @unchecked Sendable {
     private let lock = NSLock()
     private var keys: [String: String] = [:]
 
-    func load(account: String) throws -> String? { lock.withLock { keys[account] } }
+    public init() {}
 
-    func save(_ key: String, account: String) throws {
+    public func load(account: String) throws -> String? { lock.withLock { keys[account] } }
+
+    public func save(_ key: String, account: String) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         lock.withLock { keys[account] = trimmed.isEmpty ? nil : trimmed }
     }
 
-    func delete(account: String) throws { lock.withLock { keys[account] = nil } }
+    public func delete(account: String) throws { lock.withLock { keys[account] = nil } }
 }

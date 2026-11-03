@@ -11,24 +11,26 @@ import Foundation
 ///    has Claude Code rules keeps them.
 ///
 /// All of them are the same shape: `{"permissions": {"allow": [...], "ask": [...], "deny": [...]}}`.
-enum IDEAgentPermissionFiles {
-    enum Scope: Sendable {
+public enum IDEAgentPermissionFiles {
+    public enum Scope: Sendable {
         /// `.umbra/settings.local.json` in the project.
         case project
         /// The app's own file.
         case app
     }
 
-    struct WriteError: LocalizedError, Equatable {
-        let message: String
-        var errorDescription: String? { message }
+    public struct WriteError: LocalizedError, Equatable {
+        public let message: String
+        public var errorDescription: String? { message }
+
+        public init(message: String) { self.message = message }
     }
 
-    static let projectLocalPath = ".umbra/settings.local.json"
+    public static let projectLocalPath = ".umbra/settings.local.json"
 
     /// `.gitignore` with `line` added, or `nil` when a line already matches after trimming.
     /// An empty file becomes the line. A file without a trailing newline keeps its last line intact.
-    static func gitignore(adding line: String, to existing: String?) -> String? {
+    public static func gitignore(adding line: String, to existing: String?) -> String? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
         let current = existing ?? ""
@@ -40,17 +42,17 @@ enum IDEAgentPermissionFiles {
     }
 
     /// `~/Library/Application Support/com.umbra.editor/permissions.json`.
-    static func appFile() -> URL? {
+    public static func appFile() -> URL? {
         (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))?
             .appendingPathComponent("com.umbra.editor", isDirectory: true)
             .appendingPathComponent("permissions.json")
     }
 
     /// Which file a set of rules came from, for a settings page that lists them.
-    enum Origin: Sendable, Equatable {
+    public enum Origin: Sendable, Equatable {
         case app, projectShared, projectLocal, claudeShared, claudeLocal
 
-        var title: String {
+        public var title: String {
             switch self {
             case .app: "This Mac"
             case .projectShared: ".umbra/settings.json"
@@ -61,11 +63,11 @@ enum IDEAgentPermissionFiles {
         }
 
         /// Rules from `.claude` are Claude Code's; Umbra reads them and never writes them.
-        var isEditable: Bool { self != .claudeShared && self != .claudeLocal }
+        public var isEditable: Bool { self != .claudeShared && self != .claudeLocal }
     }
 
     /// Each source with the rules in it, in the order of `sources`, whether or not the file exists.
-    static func loadEach(projectRoot: URL?, appFile: URL?) -> [(origin: Origin, url: URL, rules: PermissionRules)] {
+    public static func loadEach(projectRoot: URL?, appFile: URL?) -> [(origin: Origin, url: URL, rules: PermissionRules)] {
         var list: [(Origin, URL)] = []
         if let appFile { list.append((.app, appFile)) }
         if let projectRoot {
@@ -83,7 +85,7 @@ enum IDEAgentPermissionFiles {
 
     /// The files to read, lowest precedence first (it does not matter for the union, but it is the
     /// order a settings page lists them in).
-    static func sources(projectRoot: URL?, appFile: URL?) -> [URL] {
+    public static func sources(projectRoot: URL?, appFile: URL?) -> [URL] {
         var urls: [URL] = []
         if let appFile { urls.append(appFile) }
         if let projectRoot {
@@ -94,14 +96,14 @@ enum IDEAgentPermissionFiles {
         return urls
     }
 
-    static func load(projectRoot: URL?, appFile: URL?) -> PermissionRules {
+    public static func load(projectRoot: URL?, appFile: URL?) -> PermissionRules {
         sources(projectRoot: projectRoot, appFile: appFile).reduce(PermissionRules()) { rules, url in
             guard let data = try? Data(contentsOf: url) else { return rules }
             return rules.merged(with: PermissionRules.fromSettings(data))
         }
     }
 
-    static func file(for scope: Scope, projectRoot: URL?, appFile: URL?) -> URL? {
+    public static func file(for scope: Scope, projectRoot: URL?, appFile: URL?) -> URL? {
         switch scope {
         case .project: projectRoot?.appendingPathComponent(projectLocalPath)
         case .app: appFile
@@ -112,7 +114,7 @@ enum IDEAgentPermissionFiles {
     /// everything else in it. A file that is not valid JSON is never overwritten: it may be hand-written.
     /// Returns whether the file changed.
     @discardableResult
-    static func add(_ rule: PermissionRule, to kind: PermissionRules.Kind, in file: URL) throws -> Bool {
+    public static func add(_ rule: PermissionRule, to kind: PermissionRules.Kind, in file: URL) throws -> Bool {
         var root = try readObject(file)
         var permissions = root["permissions"] as? [String: Any] ?? [:]
         let key = Self.key(kind)
@@ -127,7 +129,7 @@ enum IDEAgentPermissionFiles {
 
     /// Removes every entry equal to `rule` from the file's `kind` list. Returns whether it changed.
     @discardableResult
-    static func remove(_ rule: PermissionRule, from kind: PermissionRules.Kind, in file: URL) throws -> Bool {
+    public static func remove(_ rule: PermissionRule, from kind: PermissionRules.Kind, in file: URL) throws -> Bool {
         guard FileManager.default.fileExists(atPath: file.path) else { return false }
         var root = try readObject(file)
         guard var permissions = root["permissions"] as? [String: Any], let list = permissions[key(kind)] as? [Any] else { return false }

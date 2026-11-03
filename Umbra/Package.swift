@@ -29,6 +29,9 @@ let package = Package(
     platforms: [
         .macOS(.v26)
     ],
+    products: [
+        .executable(name: "umbra-agent", targets: ["UmbraAgent"]),
+    ],
     dependencies: [
         .package(name: "Penumbra", path: ".."),
         .package(path: "../Packages/AgentKit"),
@@ -44,20 +47,46 @@ let package = Package(
         // Zig 0.17.0, macOS arm64+x86_64 only). Rebuild procedure and gate
         // resolutions live in .agents/plans/2026-10-27-ghostty-terminal.md (G1).
         .binaryTarget(name: "GhosttyVt", path: "Vendor/GhosttyVt.xcframework"),
+        // Headless agent pieces shared by the app, the CLI and the ACP agent
+        // (docs/harness/agent-harness-6.md Phase 1): the provider factory, permission
+        // files, command runner/environment, output scrubber, sandbox, key store, and
+        // the host-independent `run_command` plus the headless run driver.
+        .target(
+            name: "UmbraAgentSupport",
+            dependencies: [
+                .product(name: "AgentKit", package: "AgentKit"),
+                .product(name: "AgentKitMLX", package: "AgentKitMLX"),
+                .product(name: "LocalModelStore", package: "AgentKitMLX"),
+                .product(name: "AgentKitApple", package: "AgentKitApple"),
+                .product(name: "SubprocessKit", package: "Penumbra"),
+            ],
+            swiftSettings: swift6
+        ),
         // Umbra as an ACP agent on stdio (docs/ACP_PLAN.md Phase 2): any ACP client can drive
         // an AgentSession built from the user's configured provider.
         .executableTarget(
             name: "UmbraACP",
             dependencies: [
+                "UmbraAgentSupport",
                 .product(name: "AgentKit", package: "AgentKit"),
                 .product(name: "AgentKitMLX", package: "AgentKitMLX"),
                 .product(name: "LocalModelStore", package: "AgentKitMLX"),
             ],
             swiftSettings: swift6
         ),
+        // Headless agent CLI (docs/harness/agent-harness-6.md Phase 2): `umbra-agent run`
+        // for scripts, git hooks and CI. Links the app's UI never: Foundation only.
+        .executableTarget(
+            name: "UmbraAgent",
+            dependencies: [
+                "UmbraAgentSupport",
+            ],
+            swiftSettings: swift6
+        ),
         .executableTarget(
             name: "Umbra",
             dependencies: [
+                "UmbraAgentSupport",
                 .product(name: "Penumbra", package: "Penumbra"),
                 .product(name: "PenumbraLanguages", package: "Penumbra"),
                 .product(name: "PenumbraMarkdownLanguage", package: "Penumbra"),
@@ -125,6 +154,7 @@ let package = Package(
             name: "UmbraTests",
             dependencies: [
                 "Umbra",
+                "UmbraAgentSupport",
                 .product(name: "Penumbra", package: "Penumbra"),
                 .product(name: "PenumbraLanguages", package: "Penumbra"),
                 .product(name: "EditorIntelligence", package: "Penumbra"),

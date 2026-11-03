@@ -1,4 +1,5 @@
 import AgentKit
+import EditorIntelligence
 import JavaIntelligence
 import Foundation
 import XCTest
@@ -383,5 +384,225 @@ final class IDEAgentJavaNavigationIntegrationTests: XCTestCase {
         XCTAssertEqual(
             output.text, "No definition found. The symbol may be unresolved (check `diagnostics`), or the index is still building.",
             "println is in the JDK, which this fixture does not index")
+    }
+}
+
+private struct FakeHoverProvider: HoverProvider {
+    let name = "fake"
+    var result: HoverResult?
+    func provide(context: HoverContext) async -> HoverResult? { result }
+}
+
+final class IDEHoverToolTests: XCTestCase {
+    private var project: URL!
+
+    override func setUpWithError() throws {
+        project = FileManager.default.temporaryDirectory.appendingPathComponent("agent-hover-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: project.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try "class A {\n  int total = 0;\n}\n".write(
+            to: project.appendingPathComponent("src/A.java"), atomically: true, encoding: .utf8)
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: project) }
+
+    private func run(_ tool: IDEHoverTool, _ json: String) async -> ToolOutput {
+        await tool.execute(
+            argumentsJSON: json, context: ToolContext(workspace: DiskAgentWorkspace(root: project), ledger: ReadLedger(), callID: "c"))
+    }
+
+    func testHoverReturnsTheProviderContents() async {
+        let contents = "int total\n\nThe running total."
+        let tool = IDEHoverTool(engine: HoverEngine(providers: [FakeHoverProvider(result: HoverResult(contents: contents, source: "fake"))]))
+        let output = await run(tool, #"{"path":"src/A.java","line":2,"symbol":"total"}"#)
+        XCTAssertFalse(output.isError, output.text)
+        XCTAssertEqual(output.text, contents)
+    }
+
+    func testHoverWithoutAResultSaysSo() async {
+        let tool = IDEHoverTool(engine: HoverEngine(providers: [FakeHoverProvider(result: nil)]))
+        let output = await run(tool, #"{"path":"src/A.java","line":2,"symbol":"total"}"#)
+        XCTAssertFalse(output.isError)
+        XCTAssertTrue(output.text.contains("No documentation found"), output.text)
+    }
+
+    func testLongHoverContentsAreClipped() async {
+        let contents = String(repeating: "x", count: IDEHoverTool.maxContentsLength + 100)
+        let tool = IDEHoverTool(engine: HoverEngine(providers: [FakeHoverProvider(result: HoverResult(contents: contents, source: "fake"))]))
+        let output = await run(tool, #"{"path":"src/A.java","line":2,"symbol":"total"}"#)
+        XCTAssertFalse(output.isError)
+        XCTAssertTrue(output.text.hasSuffix("…"), "long hover cards are clipped")
+        XCTAssertLessThan(output.text.count, contents.count)
+    }
+}
+
+private struct FakeRenamer: RenameProviding {
+    var target: RenameTarget?
+    var plan = RenamePlan()
+    var failure: String?
+    func prepareRename(_ context: NavigationContext) async -> RenameTarget? { target }
+    func rename(_ context: NavigationContext, to newName: String) async throws -> RenamePlan {
+        if let failure { throw ToolError(failure) }
+        return plan
+    }
+}
+
+final class IDERenameSymbolToolTests: XCTestCase {
+    private var project: URL!
+    private let aSource = "class A {\n  int total = 0;\n  int get() { return total; }\n}\n"
+    private let bSource = "class B {\n  int sum = A.total;\n}\n"
+
+    override func setUpWithError() throws {
+        project = FileManager.default.temporaryDirectory.appendingPathComponent("agent-rename-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: project.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try aSource.write(to: project.appendingPathComponent("src/A.java"), atomically: true, encoding: .utf8)
+        try bSource.write(to: project.appendingPathComponent("src/B.java"), atomically: true, encoding: .utf8)
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: project) }
+
+    private func entry(file: String, line: Int, old: String, new: String, ambiguous: Bool = false) throws -> WorkspaceEditPlanEntry {
+        let source = try String(contentsOf: project.appendingPathComponent(file), encoding: .utf8)
+        let offset = try IDEAgentSymbolLocator.offset(in: source, line: line, symbol: old)
+        let index = IDEAgentLineIndex(source)
+        let start = TextPosition(line: line - 1, column: offset - index.start(ofLine: line), utf16Offset: offset)
+        let lines = source.components(separatedBy: "\n")
+        return WorkspaceEditPlanEntry(
+            url: project.appendingPathComponent(file),
+            range: TextRange(start: start, end: TextPosition(line: line - 1, column: start.column + old.count, utf16Offset: offset + old.count)),
+            oldText: old, newText: new, lineText: lines[line - 1], isAmbiguous: ambiguous)
+    }
+
+    private func target() throws -> RenameTarget {
+        let offset = try IDEAgentSymbolLocator.offset(in: aSource, line: 2, symbol: "total")
+        let position = TextPosition(line: 1, column: 6, utf16Offset: offset)
+        return RenameTarget(range: TextRange(start: position, end: position), currentName: "total", kindDescription: "field")
+    }
+
+    private func tool(plan: RenamePlan, target: RenameTarget? = nil, providesTarget: Bool = true, failure: String? = nil) throws -> IDERenameSymbolTool {
+        IDERenameSymbolTool(
+            renamer: FakeRenamer(
+                target: providesTarget ? (try target ?? self.target()) : nil, plan: plan, failure: failure),
+            lineText: { [project] url, line in
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+                let lines = text.components(separatedBy: "\n")
+                return line >= 1 && line <= lines.count ? lines[line - 1] : nil
+            })
+    }
+
+    private func makeContext(log: CheckpointLog? = nil) async -> (ToolContext, DiskAgentWorkspace) {
+        let workspace = DiskAgentWorkspace(root: project)
+        var scope: CheckpointScope?
+        if let log { scope = CheckpointScope(log: log, run: await log.beginRun(label: "test")) }
+        return (ToolContext(workspace: workspace, ledger: ReadLedger(), callID: "c", checkpoint: scope), workspace)
+    }
+
+    private func contents(_ path: String) throws -> String {
+        try String(contentsOf: project.appendingPathComponent(path), encoding: .utf8)
+    }
+
+    func testRenameAcrossFilesAppliesCheckpointedEditsAndRevertRestoresThem() async throws {
+        let plan = RenamePlan(entries: [
+            try entry(file: "src/A.java", line: 2, old: "total", new: "sum"),
+            try entry(file: "src/A.java", line: 3, old: "total", new: "sum"),
+            try entry(file: "src/B.java", line: 2, old: "total", new: "sum"),
+        ])
+        let log = CheckpointLog()
+        let (context, workspace) = await makeContext(log: log)
+        let output = await (try tool(plan: plan)).execute(
+            argumentsJSON: #"{"path":"src/A.java","line":2,"symbol":"total","newName":"sum"}"#, context: context)
+        XCTAssertFalse(output.isError, output.text)
+        XCTAssertTrue(output.text.hasPrefix("Renamed “total” to “sum”: 3 occurrences in 2 files"), output.text)
+        XCTAssertTrue(output.text.contains("src/A.java:2:"), output.text)
+        XCTAssertTrue(output.text.contains("src/B.java:2:"), output.text)
+        XCTAssertTrue(try contents("src/A.java").contains("int sum = 0;"))
+        XCTAssertTrue(try contents("src/A.java").contains("return sum;"))
+        XCTAssertTrue(try contents("src/B.java").contains("A.sum;"))
+
+        let runs = await log.runs
+        let run = try XCTUnwrap(runs.first?.id, "the rename was checkpointed")
+        _ = await log.revert(run, using: workspace, ledger: ReadLedger())
+        XCTAssertEqual(try contents("src/A.java"), aSource, "Revert Run restores the rename")
+        XCTAssertEqual(try contents("src/B.java"), bSource)
+    }
+
+    func testRenameRefusedWhenNothingIsRenamable() async throws {
+        let (context, _) = await makeContext()
+        let output = await (try tool(plan: RenamePlan(), providesTarget: false)).execute(
+            argumentsJSON: #"{"path":"src/A.java","line":2,"symbol":"total","newName":"sum"}"#, context: context)
+        XCTAssertFalse(output.isError)
+        XCTAssertTrue(output.text.contains("cannot be renamed"), output.text)
+        XCTAssertEqual(try contents("src/A.java"), aSource, "nothing changed")
+    }
+
+    func testRenameToTheSameNameIsANoOp() async throws {
+        let (context, _) = await makeContext()
+        let output = await (try tool(plan: RenamePlan())).execute(
+            argumentsJSON: #"{"path":"src/A.java","line":2,"symbol":"total","newName":"total"}"#, context: context)
+        XCTAssertFalse(output.isError)
+        XCTAssertTrue(output.text.contains("already named"), output.text)
+        XCTAssertEqual(try contents("src/A.java"), aSource)
+    }
+
+    func testInvalidNewNameIsAnError() async throws {
+        let (context, _) = await makeContext()
+        let output = await (try tool(plan: RenamePlan())).execute(
+            argumentsJSON: #"{"path":"src/A.java","line":2,"symbol":"total","newName":"9bad"}"#, context: context)
+        XCTAssertTrue(output.isError, "an invalid name fails instead of renaming")
+        XCTAssertEqual(try contents("src/A.java"), aSource)
+    }
+
+    func testBlockedPlanIsAnError() async throws {
+        let (context, _) = await makeContext()
+        let output = await (try tool(plan: RenamePlan(blockingError: "total is not visible here"))).execute(
+            argumentsJSON: #"{"path":"src/A.java","line":2,"symbol":"total","newName":"sum"}"#, context: context)
+        XCTAssertTrue(output.isError)
+        XCTAssertTrue(output.text.contains("not visible"), output.text)
+        XCTAssertEqual(try contents("src/A.java"), aSource)
+    }
+
+    func testOutsideProjectEntriesAreSkipped() async throws {
+        let outside = URL(fileURLWithPath: "/elsewhere/F.java")
+        let plan = RenamePlan(entries: [
+            try entry(file: "src/A.java", line: 2, old: "total", new: "sym"),
+            WorkspaceEditPlanEntry(
+                url: outside, range: TextRange(
+                    start: TextPosition(line: 0, column: 0, utf16Offset: 0),
+                    end: TextPosition(line: 0, column: 5, utf16Offset: 5)),
+                oldText: "total", newText: "sym", lineText: "total"),
+        ])
+        let (context, _) = await makeContext()
+        let output = await (try tool(plan: plan)).execute(
+            argumentsJSON: #"{"path":"src/A.java","line":2,"symbol":"total","newName":"sym"}"#, context: context)
+        XCTAssertFalse(output.isError, output.text)
+        XCTAssertTrue(output.text.contains("1 occurrence in 1 file"), output.text)
+        XCTAssertTrue(output.text.contains("outside the project"), output.text)
+        XCTAssertTrue(try contents("src/A.java").contains("int sym = 0;"))
+    }
+
+    func testAmbiguousOccurrencesAreLeftOutForFindUsages() async throws {
+        let plan = RenamePlan(entries: [
+            try entry(file: "src/A.java", line: 2, old: "total", new: "sum"),
+            try entry(file: "src/A.java", line: 3, old: "total", new: "sum", ambiguous: true),
+        ])
+        let (context, _) = await makeContext()
+        let output = await (try tool(plan: plan)).execute(
+            argumentsJSON: #"{"path":"src/A.java","line":2,"symbol":"total","newName":"sum"}"#, context: context)
+        XCTAssertFalse(output.isError, output.text)
+        XCTAssertTrue(output.text.contains("1 occurrence in 1 file"), output.text)
+        XCTAssertTrue(output.text.contains("check it with find_usages"), output.text)
+        XCTAssertTrue(try contents("src/A.java").contains("int sum = 0;"))
+        XCTAssertTrue(try contents("src/A.java").contains("return total;"), "the ambiguous use is untouched")
+    }
+
+    func testPreviewShowsTheDiffWithoutChangingFiles() async throws {
+        let plan = RenamePlan(entries: [try entry(file: "src/A.java", line: 2, old: "total", new: "sum")])
+        let (context, _) = await makeContext()
+        let preview = await (try tool(plan: plan)).editPreview(
+            for: try ToolArguments(json: #"{"path":"src/A.java","line":2,"symbol":"total","newName":"sum"}"#), context: context)
+        let diff = try XCTUnwrap(preview?.diff)
+        XCTAssertTrue(diff.contains("total") && diff.contains("sum"), diff)
+        XCTAssertEqual(try contents("src/A.java"), aSource, "a preview changes nothing")
     }
 }

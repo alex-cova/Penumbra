@@ -26,7 +26,7 @@ struct IDEAgentSlashInvocation: Equatable {
 
 /// The commands the editor itself provides.
 enum IDEAgentBuiltInCommand: String, CaseIterable {
-    case new, clear, resume, rewind, fork, compact, plan, mode, permissions, model, history, export, initialize = "init", cost, rename, help
+    case new, clear, resume, rewind, fork, compact, plan, mode, permissions, model, history, export, loop, initialize = "init", cost, rename, help
 
     var summary: String {
         switch self {
@@ -41,7 +41,8 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .permissions: "Open the permission rules"
         case .model: "Choose the model and provider"
         case .history: "Show this file's local history"
-        case .export: "Save this chat as a Markdown file"
+        case .export: "Save this chat as Markdown or JSON"
+        case .loop: "Resend a prompt on a timer, up to 10 runs"
         case .initialize: "Have the agent write an AGENTS.md for this project"
         case .cost: "Show this chat's token use and cost"
         case .rename: "Name this chat's tab"
@@ -55,6 +56,8 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .compact: "[what to keep in detail]"
         case .plan: "[what to plan]"
         case .mode: "manual | accept-edits | auto | plan"
+        case .export: "[json] [--hide-tools]"
+        case .loop: "<interval> [count] <prompt>"
         case .rename: "<name>"
         default: nil
         }
@@ -74,11 +77,36 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .model: "cpu"
         case .history: "clock"
         case .export: "square.and.arrow.up"
+        case .loop: "repeat"
         case .initialize: "doc.badge.plus"
         case .cost: "dollarsign.circle"
         case .rename: "pencil"
         case .help: "questionmark.circle"
         }
+    }
+}
+
+/// An interval as `/loop` takes it: `30s`, `5m`, `1h`, or a bare number of minutes.
+/// A schedule that survives quitting needs a launchd job, so this is a floor of in-app repeats.
+enum IDEAgentLoopInterval {
+    /// `nil` for anything that is not a positive duration.
+    static func parse(_ text: String) -> TimeInterval? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return nil }
+        var number = trimmed
+        var multiplier = 60.0
+        if let last = trimmed.last, "smh".contains(last) {
+            number = String(trimmed.dropLast())
+            multiplier = last == "s" ? 1 : last == "m" ? 60 : 3_600
+        }
+        guard let value = Double(number), value > 0, value.isFinite else { return nil }
+        return value * multiplier
+    }
+
+    static func describe(_ interval: TimeInterval) -> String {
+        if interval.truncatingRemainder(dividingBy: 3_600) == 0 { return "\(Int(interval / 3_600))h" }
+        if interval.truncatingRemainder(dividingBy: 60) == 0 { return "\(Int(interval / 60))m" }
+        return "\(Int(interval))s"
     }
 }
 

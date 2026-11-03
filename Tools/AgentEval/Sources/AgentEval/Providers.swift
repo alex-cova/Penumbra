@@ -31,9 +31,9 @@ enum Providers {
         guard let model = options.model, !model.isEmpty else { throw ProviderError.message("--model is required.") }
         switch options.provider {
         case "ollama": return try await ollama(model: model, options: options)
-        case "openai", "chat": return try remote(model: model, options: options)
+        case "openai", "chat", "anthropic", "meta": return try remote(model: model, options: options)
         case "mlx": return try mlx(model: model, options: options)
-        default: throw ProviderError.message("Unknown provider “\(options.provider)”. Use ollama, openai, chat, mlx, apple or apple-pcc.")
+        default: throw ProviderError.message("Unknown provider “\(options.provider)”. Use ollama, openai, chat, anthropic, meta, mlx, apple or apple-pcc.")
         }
     }
 
@@ -76,14 +76,28 @@ enum Providers {
     }
 
     private static func remote(model: String, options: Options) throws -> ProviderSetup {
-        let url = try endpointURL(options, fallback: "https://api.openai.com/v1")
-        let variable = options.apiKeyEnvironment ?? "OPENAI_API_KEY"
+        let fallback: String
+        let defaultVariable: String
+        switch options.provider {
+        case "anthropic": fallback = "https://api.anthropic.com/v1"; defaultVariable = "ANTHROPIC_API_KEY"
+        case "meta": fallback = "https://api.meta.ai/v1"; defaultVariable = "META_API_KEY"
+        default: fallback = "https://api.openai.com/v1"; defaultVariable = "OPENAI_API_KEY"
+        }
+        let url = try endpointURL(options, fallback: fallback)
+        let variable = options.apiKeyEnvironment ?? defaultVariable
         let key = ProcessInfo.processInfo.environment[variable].flatMap { $0.isEmpty ? nil : $0 }
         let isLocalHost = ["localhost", "127.0.0.1", "::1"].contains(url.host()?.lowercased() ?? "")
         if key == nil, !isLocalHost { throw ProviderError.message("Set \(variable) to an API key for \(url.host() ?? "the server").") }
         let endpoint = LLMEndpoint(baseURL: url, apiKey: key)
         if options.provider == "openai" {
             return ProviderSetup(client: OpenAIResponsesClient(endpoint: endpoint), label: "openai · \(model)", contextWindow: options.contextWindow, isLocal: isLocalHost)
+        }
+        if options.provider == "anthropic" {
+            return ProviderSetup(client: AnthropicMessagesClient(endpoint: endpoint), label: "anthropic · \(model)", contextWindow: options.contextWindow, isLocal: isLocalHost)
+        }
+        if options.provider == "meta" {
+            // Meta's Model API speaks the OpenAI Responses format with a Bearer [REDACTED].
+            return ProviderSetup(client: OpenAIResponsesClient(endpoint: endpoint), label: "meta · \(model)", contextWindow: options.contextWindow, isLocal: isLocalHost)
         }
         let capabilities: ChatCompletionsCapabilities = url.host() == "api.openai.com" ? .openAI : .compatible
         return ProviderSetup(

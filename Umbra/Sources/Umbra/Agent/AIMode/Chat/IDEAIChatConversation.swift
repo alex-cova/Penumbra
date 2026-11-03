@@ -353,6 +353,16 @@ final class IDEAIChatConversation: Identifiable {
         createdAt = Date()
     }
 
+    /// The session as `/export json` writes it (scrubbed of secrets, without the host blob at
+    /// encode time): the live session's items, else what was restored from disk.
+    /// The items are empty when the chat has sent nothing yet.
+    func exportSnapshot() async -> SessionSnapshot {
+        let items = await session?.items ?? restoredItems ?? []
+        return SessionSnapshot(
+            id: conversationID, projectRoot: Self.storeRoot, title: title,
+            createdAt: createdAt, updatedAt: Date(), items: items, totalUsage: usage, host: nil)
+    }
+
     /// Replaces the chat with a saved one.
     func load(_ snapshot: SessionSnapshot) {
         guard !isRunning else { return }

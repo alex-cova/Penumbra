@@ -13,11 +13,15 @@ private final class FakeAgentHost: IDEAgentHost {
     var mcpQuestions = 0
     var navigator: (any IDEAgentNavigating)?
     var symbolSearch: (any IDEAgentSymbolSearching)?
+    var hoverEngine: HoverEngine?
+    var renameProvider: (any RenameProviding)?
 
     init(root: URL?) { agentProjectRoot = root }
 
     func agentJavaNavigator() -> (any IDEAgentNavigating)? { navigator }
     func agentSymbolSearch() -> (any IDEAgentSymbolSearching)? { symbolSearch }
+    func agentHoverEngine() -> HoverEngine? { hoverEngine }
+    func agentRenameProvider() -> (any RenameProviding)? { renameProvider }
 
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> {
         mcpQuestions += 1
@@ -44,6 +48,11 @@ private final class FakeAgentHost: IDEAgentHost {
 private struct NoNavigation: IDEAgentNavigating {
     func definitions(file: URL, source: String, utf16Offset: Int) async -> [IDEAgentCodeLocation] { [] }
     func usages(file: URL, source: String, utf16Offset: Int) async -> [IDEAgentCodeLocation] { [] }
+}
+
+private struct NoRename: RenameProviding {
+    func prepareRename(_ context: NavigationContext) async -> RenameTarget? { nil }
+    func rename(_ context: NavigationContext, to newName: String) async throws -> RenamePlan { RenamePlan() }
 }
 
 private struct NoSearch: IDEAgentSymbolSearching {
@@ -342,12 +351,16 @@ final class IDEAgentControllerTests: XCTestCase {
         let withSearch = try makeController(turns: [.text("hi")])
         withSearch.2.navigator = NoNavigation()
         withSearch.2.symbolSearch = NoSearch()
+        withSearch.2.hoverEngine = HoverEngine(providers: [])
+        withSearch.2.renameProvider = NoRename()
         withSearch.0.draft = "hello"
         withSearch.0.send()
         await eventually("the run should finish") { !withSearch.0.isRunning }
         let names = try XCTUnwrap(withSearch.1.requests.first).tools.map(\.name)
         let start = try XCTUnwrap(names.firstIndex(of: "find_symbol"), "\(names)")
-        XCTAssertEqual(Array(names[start...].prefix(4)), ["find_symbol", "explore_symbol", "go_to_definition", "find_usages"])
+        XCTAssertEqual(
+            Array(names[start...].prefix(6)),
+            ["find_symbol", "explore_symbol", "go_to_definition", "find_usages", "hover", "rename_symbol"])
 
         let navigationOnly = try makeController(turns: [.text("hi")])
         navigationOnly.2.navigator = NoNavigation()
@@ -357,6 +370,7 @@ final class IDEAgentControllerTests: XCTestCase {
         let plain = try XCTUnwrap(navigationOnly.1.requests.first).tools.map(\.name)
         XCTAssertTrue(plain.contains("go_to_definition") && plain.contains("find_usages"))
         XCTAssertFalse(plain.contains("find_symbol") || plain.contains("explore_symbol"), "\(plain)")
+        XCTAssertFalse(plain.contains("hover") || plain.contains("rename_symbol"), "\(plain)")
     }
 
     func testTheModelReadsUnsavedEditsNotTheStaleDiskCopy() async throws {

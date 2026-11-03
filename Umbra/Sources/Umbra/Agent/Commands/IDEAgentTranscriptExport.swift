@@ -6,9 +6,12 @@ import Foundation
 /// Any call that failed says so with the model's error, and a file edit or `diagnostics` shows its
 /// result, so a refused write cannot read as "Ran `write_file`".
 enum IDEAgentTranscriptExport {
-    static func markdown(title: String, entries: [IDEAgentEntry], exportedAt: Date = Date()) -> String {
+    static func markdown(
+        title: String, entries: [IDEAgentEntry], exportedAt: Date = Date(), hideTools: Bool = false
+    ) -> String {
         var out = "# \(title)\n\n_Exported \(exportedAt.formatted(date: .abbreviated, time: .shortened)) from Umbra._\n"
         for entry in entries {
+            if hideTools, case .toolCall = entry.kind { continue }
             switch entry.kind {
             case .user:
                 out += "\n## You\n\n\(entry.text)\n"
@@ -84,8 +87,59 @@ enum IDEAgentTranscriptExport {
 
     /// A file name for the chat: letters, digits and dashes.
     static func fileName(for title: String) -> String {
+        slug(for: title) + ".md"
+    }
+
+    /// The same slug with a `.json` extension, for `/export json`.
+    static func jsonFileName(for title: String) -> String {
+        slug(for: title) + ".json"
+    }
+
+    private static func slug(for title: String) -> String {
         let slug = title.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" }
         let collapsed = String(slug).split(separator: "-", omittingEmptySubsequences: true).joined(separator: "-")
-        return (collapsed.isEmpty ? "chat" : String(collapsed.prefix(60))) + ".md"
+        return collapsed.isEmpty ? "chat" : String(collapsed.prefix(60))
+    }
+
+    // MARK: - JSON
+
+    /// The session as `/export json` writes it: the items with text scrubbed, and no host blob.
+    /// Decoding uses the same `iso8601` dates as `SessionStore`, so the file reads back through it.
+    static func exportSnapshot(from snapshot: SessionSnapshot) -> SessionSnapshot {
+        SessionSnapshot(
+            id: snapshot.id, projectRoot: snapshot.projectRoot, title: snapshot.title,
+            createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt,
+            items: snapshot.items.map(scrubItem), totalUsage: snapshot.totalUsage, host: nil,
+            children: snapshot.children.map {
+                ChildSnapshot(
+                    id: $0.id, agent: $0.agent, description: $0.description, canEdit: $0.canEdit,
+                    items: $0.items.map(scrubItem), totalUsage: $0.totalUsage)
+            })
+    }
+
+    static func jsonData(_ snapshot: SessionSnapshot) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(exportSnapshot(from: snapshot))
+    }
+
+    private static func scrubItem(_ item: ConversationItem) -> ConversationItem {
+        switch item {
+        case .user(let text):
+            return .user(IDEAgentOutputScrubber.scrub(text))
+        case .userParts(let parts):
+            return .userParts(parts.map {
+                if case .text(let text) = $0 { .text(IDEAgentOutputScrubber.scrub(text)) } else { $0 }
+            })
+        case .assistant(let text):
+            return .assistant(IDEAgentOutputScrubber.scrub(text))
+        case .toolCall(let id, let name, let arguments):
+            return .toolCall(id: id, name: name, arguments: IDEAgentOutputScrubber.scrub(arguments))
+        case .toolOutput(let callID, let output):
+            return .toolOutput(callID: callID, output: IDEAgentOutputScrubber.scrub(output))
+        case .opaque:
+            return item
+        }
     }
 }

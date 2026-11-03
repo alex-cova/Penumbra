@@ -179,6 +179,36 @@ private struct SymbolQuery {
     ]
 }
 
+/// The editor document a symbol query points at, so hover, rename and navigation all address
+/// the same text the agent read.
+private struct AgentSymbolDocument {
+    let document: Document
+    let position: TextPosition
+
+    static func make(query: SymbolQuery) -> Self {
+        make(file: query.url, source: query.source, utf16Offset: query.offset)
+    }
+
+    static func make(file: URL, source: String, utf16Offset: Int) -> Self {
+        let position = IDEEngineAgentNavigator.position(in: source, utf16Offset: utf16Offset)
+        let range = TextRange(start: position, end: position)
+        let document = Document(
+            url: file, displayName: file.lastPathComponent,
+            contentSnapshot: TextSnapshot(version: 0, text: source),
+            selection: Selection(range: range), cursor: Cursor(position: position),
+            viewport: Viewport(x: 0, y: 0, width: 0, height: 0),
+            languageIdentifier: SymbolQuery.languageIdentifier(for: file.path))
+        return Self(document: document, position: position)
+    }
+
+    func navigationContext(kind: NavigationKind, trigger: RequestTrigger) -> NavigationContext {
+        let range = TextRange(start: position, end: position)
+        return NavigationContext(
+            document: document, cursor: Cursor(position: position),
+            selection: Selection(range: range), trigger: trigger, kind: kind)
+    }
+}
+
 struct IDEGoToDefinitionTool: AgentTool {
     let navigator: any IDEAgentJavaNavigating
     let lineText: @Sendable (URL, Int) async -> String?
@@ -229,6 +259,220 @@ struct IDEFindUsagesTool: AgentTool {
         }
         let lines = await NavigationOutput.render(found, root: URL(fileURLWithPath: context.workspace.rootPath), lineText: lineText)
         return "\(found.count) \(found.count == 1 ? "usage" : "usages"):\n" + lines.joined(separator: "\n")
+    }
+}
+
+struct IDEHoverTool: AgentTool {
+    /// Long doc comments are clipped: the model needs the signature, not the whole page.
+    static let maxContentsLength = 4_000
+
+    let engine: HoverEngine
+
+    var risk: ToolRisk { .read }
+    var definition: ToolDefinition {
+        ToolDefinition(
+            name: "hover",
+            description: """
+            The type and documentation of a symbol: what the editor shows on hover. Give the file, \
+            the line and the identifier as written there.
+            """,
+            parameters: SymbolQuery.parameters)
+    }
+
+    func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
+        let query = try await SymbolQuery(arguments, context: context)
+        let symbol = try arguments.string("symbol")
+        let made = AgentSymbolDocument.make(query: query)
+        let hoverContext = HoverContext(
+            document: made.document, cursor: Cursor(position: made.position),
+            selection: Selection(range: TextRange(start: made.position, end: made.position)),
+            trigger: .manual)
+        guard var contents = await engine.hover(context: hoverContext)?.contents
+            .trimmingCharacters(in: .whitespacesAndNewlines), !contents.isEmpty
+        else {
+            return "No documentation found for “\(symbol)”. It may not be a known symbol (check `diagnostics`)."
+        }
+        if contents.count > Self.maxContentsLength {
+            contents = String(contents.prefix(Self.maxContentsLength)) + "…"
+        }
+        return contents
+    }
+}
+
+struct IDERenameSymbolTool: AgentTool {
+    let renamer: any RenameProviding
+    let lineText: @Sendable (URL, Int) async -> String?
+
+    var risk: ToolRisk { .edit }
+    var definition: ToolDefinition {
+        ToolDefinition(
+            name: "rename_symbol",
+            description: """
+            Rename a symbol everywhere the language's own rename finds it, across files in one call. \
+            Give the file, the line, the identifier as written there, and the new name. Applies through \
+            the same checkpointed edits as edit_file, so Revert Run restores them; approve-each-edit mode \
+            shows the diff first. Safer than edit_file across find_usages results, which can miss or \
+            over-match.
+            """,
+            parameters: SymbolQuery.parameters + [
+                ToolParameter("newName", .string, "The new name for the symbol."),
+            ])
+    }
+
+    /// One file the plan touches, with the text the plan was checked against.
+    private struct RenamedFile {
+        let url: URL
+        let relativePath: String
+        let before: String
+        let edits: [AgentTextEdit]
+    }
+
+    private struct PreparedRename {
+        let symbol: String
+        let newName: String
+        let files: [RenamedFile]
+        let skipped: [String]
+    }
+
+    /// A checked rename with nothing to apply: reported, not thrown, so the run carries on.
+    private struct RenameAbort: Error {
+        let message: String
+    }
+
+    func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
+        let prepared: PreparedRename
+        do {
+            prepared = try await prepare(arguments, context: context)
+        } catch let abort as RenameAbort {
+            return abort.message
+        }
+        var failures: [String] = []
+        var applied: [(path: String, count: Int)] = []
+        for file in prepared.files {
+            do {
+                await context.checkpoint?.willChange(path: file.relativePath, original: file.before)
+                try await context.workspace.replaceText(path: file.relativePath, expecting: file.before, edits: file.edits)
+                let after = try await context.workspace.readText(path: file.relativePath)
+                await context.checkpoint?.didChange(path: file.relativePath, written: after)
+                await context.editFailures?.recordSuccess(file.relativePath)
+                await context.ledger.record(path: file.relativePath, text: after)
+                applied.append((file.relativePath, file.edits.count))
+            } catch {
+                await context.editFailures?.recordFailure(file.relativePath)
+                failures.append("\(file.relativePath): \(error.localizedDescription)")
+            }
+        }
+        return try await finish(prepared, applied: applied, failures: failures, context: context)
+    }
+
+    func editPreview(for arguments: ToolArguments, context: ToolContext) async -> EditPreview? {
+        guard let prepared = try? await prepare(arguments, context: context) else { return nil }
+        var parts: [String] = []
+        for file in prepared.files {
+            guard let after = try? AgentTextEdit.apply(file.edits, to: file.before) else { return nil }
+            parts.append(UnifiedDiff.make(path: file.relativePath, old: file.before, new: after))
+        }
+        guard !parts.isEmpty else { return nil }
+        return EditPreview(
+            summary: "Rename \(prepared.symbol) to \(prepared.newName) (\(prepared.files.count) \(prepared.files.count == 1 ? "file" : "files"))",
+            diff: parts.joined(separator: "\n"))
+    }
+
+    /// Checks the rename and reads every file it touches. Throws `RenameAbort` when there is
+    /// nothing to apply (reported by `run`, no preview by `editPreview`); anything else thrown
+    /// is a failure.
+    private func prepare(_ arguments: ToolArguments, context: ToolContext) async throws -> PreparedRename {
+        let query = try await SymbolQuery(arguments, context: context)
+        let symbol = try arguments.string("symbol")
+        let rawName = try arguments.string("newName")
+        let newName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty else { throw ToolError("Missing `newName`.") }
+        let made = AgentSymbolDocument.make(query: query)
+        let navContext = made.navigationContext(kind: .references, trigger: .idle)
+        guard let target = await renamer.prepareRename(navContext) else {
+            throw RenameAbort(message: "“\(symbol)” cannot be renamed here. It may not be a renamable symbol.")
+        }
+        if target.currentName == newName {
+            throw RenameAbort(message: "“\(symbol)” is already named “\(newName)”: nothing to do.")
+        }
+        if let problem = target.validate(newName) { throw ToolError(problem) }
+        let plan: RenamePlan
+        do {
+            plan = try await renamer.rename(navContext, to: newName)
+        } catch {
+            throw ToolError(error.localizedDescription)
+        }
+        if let blocking = plan.blockingError { throw ToolError(blocking) }
+        if !plan.fileRenames.isEmpty || !plan.fileDeletions.isEmpty {
+            throw ToolError(
+                "Renaming “\(symbol)” would move or delete files, which rename_symbol does not apply. Rename it in the editor instead.")
+        }
+        let root = URL(fileURLWithPath: context.workspace.rootPath)
+        var skipped: [String] = []
+        var files: [RenamedFile] = []
+        var ordered: [URL] = []
+        for url in plan.entries.map(\.url) where !ordered.contains(url) { ordered.append(url) }
+        for url in ordered {
+            guard let relative = NavigationOutput.relativePath(of: url, root: root) else {
+                skipped.append("\(url.lastPathComponent) is outside the project and was left out")
+                continue
+            }
+            let entries = plan.entries.filter { $0.url == url && $0.isSelectedByDefault }
+            if entries.isEmpty { continue }
+            let text = try await context.workspace.readText(path: relative)
+            let ns = text as NSString
+            var edits: [AgentTextEdit] = []
+            var mismatch = false
+            for entry in entries {
+                let start = entry.range.start.utf16Offset
+                let end = entry.range.end.utf16Offset
+                guard start >= 0, end >= start, end <= ns.length,
+                      ns.substring(with: NSRange(location: start, length: end - start)) == entry.oldText
+                else { mismatch = true; break }
+                edits.append(AgentTextEdit(location: start, length: end - start, replacement: entry.newText))
+            }
+            if mismatch {
+                throw ToolError(
+                    "\(relative) changed since the rename was computed. Read the file again and call rename_symbol again.")
+            }
+            edits.sort { $0.location < $1.location }
+            files.append(RenamedFile(url: url, relativePath: relative, before: text, edits: edits))
+        }
+        for entry in plan.entries where !entry.isSelectedByDefault {
+            let where_ = NavigationOutput.relativePath(of: entry.url, root: root) ?? "outside the project"
+            skipped.append("\(where_): an occurrence was left out (ambiguous or read-only); check it with find_usages")
+        }
+        guard !files.isEmpty else {
+            throw RenameAbort(message: "Renaming “\(symbol)” to “\(newName)” found no occurrences to apply.")
+        }
+        return PreparedRename(symbol: symbol, newName: newName, files: files, skipped: skipped)
+    }
+
+    private func finish(
+        _ prepared: PreparedRename, applied: [(path: String, count: Int)], failures: [String], context: ToolContext
+    ) async throws -> String {
+        let root = URL(fileURLWithPath: context.workspace.rootPath)
+        var locations: [IDEAgentCodeLocation] = []
+        for file in prepared.files {
+            let index = IDEAgentLineIndex(file.before)
+            for edit in file.edits {
+                locations.append(IDEAgentCodeLocation(
+                    fileURL: file.url, line: index.line(at: edit.location), label: "\(prepared.symbol) → \(prepared.newName)"))
+            }
+        }
+        let ordered = locations.sorted { ($0.fileURL?.path ?? "", $0.line) < ($1.fileURL?.path ?? "", $1.line) }
+        let lines = await NavigationOutput.render(ordered, root: root, lineText: lineText)
+        let total = prepared.files.reduce(0) { $0 + $1.edits.count }
+        var head = "Renamed “\(prepared.symbol)” to “\(prepared.newName)”: \(total) \(total == 1 ? "occurrence" : "occurrences") in \(applied.count) \(applied.count == 1 ? "file" : "files")"
+        if !failures.isEmpty {
+            head += " (\(failures.count) \(failures.count == 1 ? "file" : "files") failed: \(failures.joined(separator: "; ")))"
+        }
+        let out = ([head] + lines + prepared.skipped).joined(separator: "\n")
+        if !failures.isEmpty { throw ToolError(out) }
+        if let first = applied.first {
+            return await context.finishFileTool(out, path: first.path)
+        }
+        return out
     }
 }
 
@@ -513,16 +757,9 @@ struct IDEEngineAgentNavigator: IDEAgentNavigating {
     }
 
     private func locate(file: URL, source: String, utf16Offset: Int, kind: NavigationKind) async -> [IDEAgentCodeLocation] {
-        let position = Self.position(in: source, utf16Offset: utf16Offset)
-        let range = TextRange(start: position, end: position)
-        let document = Document(
-            url: file, displayName: file.lastPathComponent,
-            contentSnapshot: TextSnapshot(version: 0, text: source),
-            selection: Selection(range: range), cursor: Cursor(position: position),
-            viewport: Viewport(x: 0, y: 0, width: 0, height: 0),
-            languageIdentifier: SymbolQuery.languageIdentifier(for: file.path))
-        let context = NavigationContext(
-            document: document, cursor: document.cursor, selection: document.selection, trigger: .idle, kind: kind)
+        let made = AgentSymbolDocument.make(file: file, source: source, utf16Offset: utf16Offset)
+        let context = made.navigationContext(kind: kind, trigger: .idle)
+        let document = made.document
         let locations: [Location]
         switch await engine.navigate(context: context) {
         case .single(let location)?: locations = [location]

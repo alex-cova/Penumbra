@@ -242,7 +242,9 @@ extension IDEAgentController {
         case .history:
             host?.agentShowLocalHistory()
         case .export:
-            exportTranscript()
+            exportTranscript(arguments: arguments)
+        case .loop:
+            startLoopCommand(arguments: arguments)
         case .initialize:
             guard selected.canRunCommands else { return }
             selected.submit(text: "/init", modelText: Self.initPrompt)
@@ -292,17 +294,63 @@ extension IDEAgentController {
 
     // MARK: - Export
 
-    func exportTranscript() {
+    func exportTranscript(arguments: String = "") {
+        let words = Set(arguments.split(whereSeparator: \.isWhitespace).map { $0.lowercased() })
+        if words.contains("json") {
+            let conversation = selected
+            Task { await exportJSON(from: conversation) }
+            return
+        }
+        let hideTools = words.contains("--hide-tools") || words.contains("hide-tools") || words.contains("--no-tools")
         let title = selected.title
-        let markdown = IDEAgentTranscriptExport.markdown(title: title, entries: selected.entries)
+        let markdown = IDEAgentTranscriptExport.markdown(title: title, entries: selected.entries, hideTools: hideTools)
         exportHandler(IDEAgentTranscriptExport.fileName(for: title), markdown)
+    }
+
+    /// `/loop <interval> [count] <prompt>`: resend the prompt on a timer, one run at a time,
+    /// while the app is open. Stops on Stop, an error, a budget stop or the count (default 10).
+    func startLoopCommand(arguments: String) {
+        let words = arguments.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let intervalText = words.first, let interval = IDEAgentLoopInterval.parse(intervalText) else {
+            selected.appendNotice(Self.loopUsage)
+            return
+        }
+        var rest = Array(words.dropFirst())
+        var maxRuns = IDEAgentConversation.defaultLoopRuns
+        if let first = rest.first, let count = Int(first), count > 0 {
+            maxRuns = count
+            rest.removeFirst()
+        }
+        let prompt = rest.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else {
+            selected.appendNotice(Self.loopUsage)
+            return
+        }
+        selected.startLoop(interval: interval, prompt: prompt, maxRuns: maxRuns)
+    }
+
+    static let loopUsage =
+        "Loop repeats a prompt on a timer: /loop <interval> [count] <prompt>, e.g. /loop 5m check git status. Intervals like 30s, 5m or 1h; a bare number means minutes."
+
+    private func exportJSON(from conversation: IDEAgentConversation) async {
+        let snapshot = await conversation.exportSnapshot()
+        do {
+            let data = try IDEAgentTranscriptExport.jsonData(snapshot)
+            exportHandler(IDEAgentTranscriptExport.jsonFileName(for: snapshot.title), String(decoding: data, as: UTF8.self))
+        } catch {
+            conversation.appendNotice("Could not export this chat as JSON: \(error.localizedDescription)")
+        }
     }
 
     /// The default way a transcript is saved: a save panel.
     static func presentSavePanel(name: String, text: String) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = name
-        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        if name.hasSuffix(".json") {
+            panel.allowedContentTypes = [.json]
+        } else {
+            panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        }
         panel.canCreateDirectories = true
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }

@@ -112,7 +112,7 @@ extension IDEAIChatController {
         case .model:
             modelRequest += 1
         case .export:
-            exportTranscript()
+            exportTranscript(arguments: arguments)
         case .cost:
             selected.appendNotice(IDEAgentController.costNotice(usage: selected.usage, cost: selected.cost))
         case .rename:
@@ -123,7 +123,7 @@ extension IDEAIChatController {
             }
         case .help:
             selected.appendNotice(helpText())
-        case .rewind, .fork, .plan, .mode, .permissions, .history, .initialize:
+        case .rewind, .fork, .plan, .mode, .permissions, .history, .loop, .initialize:
             selected.appendNotice("There is no /\(command.rawValue) in Chat.")
         }
     }
@@ -141,10 +141,27 @@ extension IDEAIChatController {
 
     // MARK: - Export
 
-    func exportTranscript() {
+    func exportTranscript(arguments: String = "") {
+        let words = Set(arguments.split(whereSeparator: \.isWhitespace).map { $0.lowercased() })
+        if words.contains("json") {
+            let conversation = selected
+            Task { await exportJSON(from: conversation) }
+            return
+        }
+        let hideTools = words.contains("--hide-tools") || words.contains("hide-tools") || words.contains("--no-tools")
         let title = selected.title
         exportHandler(
             IDEAgentTranscriptExport.fileName(for: title),
-            IDEAgentTranscriptExport.markdown(title: title, entries: selected.entries))
+            IDEAgentTranscriptExport.markdown(title: title, entries: selected.entries, hideTools: hideTools))
+    }
+
+    private func exportJSON(from conversation: IDEAIChatConversation) async {
+        let snapshot = await conversation.exportSnapshot()
+        do {
+            let data = try IDEAgentTranscriptExport.jsonData(snapshot)
+            exportHandler(IDEAgentTranscriptExport.jsonFileName(for: snapshot.title), String(decoding: data, as: UTF8.self))
+        } catch {
+            conversation.appendNotice("Could not export this chat as JSON: \(error.localizedDescription)")
+        }
     }
 }

@@ -302,6 +302,7 @@ public final class IDEWorkspace {
     /// Every language's intelligence, routed by the active document's language.
     var languages: LanguageServiceRegistry { intelligenceServices.languages }
     var navigationEngine: NavigationEngine { intelligenceServices.navigationEngine }
+    var hoverEngine: HoverEngine { intelligenceServices.hoverEngine }
 
     /// The window this workspace is shown in, set by `IDEWindowConfiguratorView`. Sheets, alerts and
     /// first-responder changes target this window, not whichever one happens to be key.

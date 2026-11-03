@@ -289,6 +289,12 @@ public struct SessionStore: Sendable {
     }
 
     private func decode(_ data: Data) -> SessionSnapshot? {
+        Self.decode(data)
+    }
+
+    /// Reads back a snapshot from bytes, including an `/export json` file: `nil` when the data is
+    /// not a snapshot this build can read.
+    public static func decode(_ data: Data) -> SessionSnapshot? {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let snapshot = try? decoder.decode(SessionSnapshot.self, from: data),

@@ -1,4 +1,5 @@
 import AgentKit
+import EditorIntelligence
 import Foundation
 
 /// A problem as the agent sees it: project-relative, 1-based lines.
@@ -65,13 +66,17 @@ protocol IDEAgentHost: AnyObject {
     /// again. Hooks from an unapproved block never run.
     func agentConfirmToolHooks(_ hooks: [IDEAgentHookEntry]) async -> Bool
 
-    // Navigation. Both are optional (see the extension below).
+    // Navigation. All optional (see the extension below).
     /// Java symbol navigation, or `nil` when the project has no Java to resolve.
     func agentJavaNavigator() -> (any IDEAgentNavigating)?
     /// Name search over the project's indexes, or `nil` when there is nothing to search.
     func agentSymbolSearch() -> (any IDEAgentSymbolSearching)?
     /// The text of 1-based `line` of a file, from its open buffer or from disk.
     func agentLineText(url: URL, line: Int) -> String?
+    /// Type and documentation lookup, or `nil` when the project has no navigable source.
+    func agentHoverEngine() -> HoverEngine?
+    /// Language-driven rename, or `nil` when the project has no navigable source.
+    func agentRenameProvider() -> (any RenameProviding)?
 
     // Mentions. All optional (see the extension below).
     /// The active editor's selection, or `nil` when nothing is selected.
@@ -125,6 +130,8 @@ extension IDEAgentHost {
     func agentConfirmToolHooks(_ hooks: [IDEAgentHookEntry]) async -> Bool { false }
     func agentJavaNavigator() -> (any IDEAgentNavigating)? { nil }
     func agentSymbolSearch() -> (any IDEAgentSymbolSearching)? { nil }
+    func agentHoverEngine() -> HoverEngine? { nil }
+    func agentRenameProvider() -> (any RenameProviding)? { nil }
     func agentProjectTaskNames() -> [String] { [] }
     func agentRunProjectTask(_ name: String) async -> String { "This folder has no project tasks." }
     func agentLineText(url: URL, line: Int) -> String? { nil }

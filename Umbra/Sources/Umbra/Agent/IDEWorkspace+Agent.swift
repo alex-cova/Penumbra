@@ -253,6 +253,16 @@ extension IDEWorkspace: IDEAgentHost {
         return IDEEngineAgentNavigator(engine: navigationEngine)
     }
 
+    func agentHoverEngine() -> HoverEngine? {
+        guard hasAgentNavigableSource else { return nil }
+        return hoverEngine
+    }
+
+    func agentRenameProvider() -> (any RenameProviding)? {
+        guard hasAgentNavigableSource else { return nil }
+        return languages.rename
+    }
+
     private var hasAgentNavigableSource: Bool {
         let extensions = ["java", "swift", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"]
         return gradle.isActive || swiftPM.isActive || xcode.isActive || npm.isActive

@@ -6,8 +6,8 @@ import Foundation
 /// `.toolCallFinished` event still carries the original for the live transcript. Deterministic for
 /// a given input, so prefix caching is unaffected. Command and web output are scrubbed, since those
 /// echo the outside world, and so is a line the agent saves to its memory file; file reads and edits pass through.
-nonisolated enum IDEAgentOutputScrubber {
-    static let replacement = "[redacted]"
+public nonisolated enum IDEAgentOutputScrubber {
+    public static let replacement = "[redacted]"
 
     /// AWS access keys, GitHub tokens, `sk-` keys, PEM private-key blocks.
     private static let patterns = [
@@ -17,7 +17,7 @@ nonisolated enum IDEAgentOutputScrubber {
         #"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----"#,
     ]
 
-    static func scrub(_ text: String) -> String {
+    public static func scrub(_ text: String) -> String {
         var result = text
         for pattern in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
@@ -27,11 +27,11 @@ nonisolated enum IDEAgentOutputScrubber {
         return result
     }
 
-    static func shape(_ input: ToolOutputShapingInput) -> String {
+    public static func shape(_ input: ToolOutputShapingInput) -> String {
         // A memory line leaves the history for a file that every later chat loads, so it is scrubbed
         // whatever risk the session presents it with (`ToolContext.redactForMemory` says `.edit`).
         guard input.risk == .command || input.toolName == "web_search" || input.toolName == "remember"
-            || input.toolName == IDEBrowserInspectTool.toolName
+            || input.toolName == "browser_inspect"
         else { return input.text }
         return scrub(input.text)
     }
