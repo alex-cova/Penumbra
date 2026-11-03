@@ -69,7 +69,7 @@ public enum JavaExpressionTyper {
               let exprNode = outermostExpression(in: syntheticTree.rootNode) else {
             return nil
         }
-        let locals = JavaLocalScope.locals(in: realTree, atByteOffset: dotOffset)
+        let locals = realTree.visibleLocals(atByteOffset: dotOffset)
         guard let result = await typed(exprNode, locals: locals, context: context, index: index) else { return nil }
         if let packageName = result.packageName {
             return JavaReceiverInfo(type: .unresolved(simpleName: packageName, arguments: []), isTypeReference: true, packageName: packageName)
@@ -243,7 +243,10 @@ public enum JavaExpressionTyper {
 
         case "object_creation_expression":
             guard let typeNode = node.child(byFieldName: "type") else { return nil }
-            return .value(await diamondResolved(JavaTypeNodeConverter.convert(typeNode), context: context, index: index))
+            return .value(await diamondResolved(
+                JavaTypeNodeConverter.convert(typeNode), creation: node, typeNode: typeNode,
+                locals: locals, context: context, index: index
+            ))
 
         case "array_creation_expression":
             guard let typeNode = node.child(byFieldName: "type") else { return nil }
@@ -1015,9 +1018,71 @@ public enum JavaExpressionTyper {
         return .classType(qualifiedName: "java.lang.\(name)", arguments: [], outer: nil)
     }
 
-    /// `new ArrayList<>()` gets no arguments here; members then show their declared (generic) types.
-    private static func diamondResolved(_ type: JavaTypeRef, context: JavaResolutionContext, index: JavaIndex) async -> JavaTypeRef {
-        type
+    /// `new ArrayList<>(List.of("a"))`: the class's own type parameters are bound from the
+    /// constructor arguments (JLS 15.9.3, the part of diamond inference that needs no target).
+    /// Anything the arguments leave open keeps the type raw (`new ArrayList<>()` stays
+    /// `ArrayList`, so a declared target such as `List<String> l = new ArrayList<>()` is what
+    /// supplies the arguments, as before).
+    private static func diamondResolved(
+        _ type: JavaTypeRef, creation: SyntaxNode, typeNode: SyntaxNode,
+        locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
+    ) async -> JavaTypeRef {
+        guard typeNode.type == "generic_type",
+              let typeArguments = typeNode.namedChildren.first(where: { $0.type == "type_arguments" }),
+              typeArguments.namedChildren.isEmpty else { return type }
+        let argumentNodes = creation.child(byFieldName: "arguments")?.namedChildren ?? []
+        guard !argumentNodes.isEmpty else { return type }
+        let resolved = await JavaTypeResolver.resolve(type, context: context, index: index)
+        guard case .classType(let qualifiedName, let existing, let outer) = resolved, existing.isEmpty,
+              let stub = await index.classStub(qualifiedName: qualifiedName), !stub.typeParameters.isEmpty else { return type }
+        let constructors = await JavaMemberLookup.constructors(of: resolved, context: context, index: index)
+        guard !constructors.isEmpty else { return type }
+
+        var argumentTypes: [JavaTypeRef?] = []
+        for argument in argumentNodes {
+            argumentTypes.append(isFunctionalArgument(argument) ? nil : await typed(argument, locals: locals, context: context, index: index)?.type)
+        }
+        // Only constructors that can take this many arguments compete.
+        let arityMatches = constructors.filter {
+            $0.parameters.count == argumentNodes.count
+                || ($0.modifiers.contains(.varargs) && argumentNodes.count >= $0.parameters.count - 1)
+        }
+        // Choose on erased parameter types: `Collection<? extends E>` cannot be checked against
+        // `List<String>` while `E` is still free. Binding below uses the original generic signature.
+        func signature(_ parameters: [JavaParameterStub]) -> String {
+            parameters.map { JavaTypeSystem.erasedName(of: $0.type) }.joined(separator: ",")
+        }
+        var originals: [String: JavaMethodStub] = [:]
+        var erasedCandidates: [JavaMethodStub] = []
+        for constructor in arityMatches {
+            let erased = JavaMethodStub(
+                name: constructor.name,
+                typeParameters: constructor.typeParameters,
+                parameters: constructor.parameters.map { JavaParameterStub(name: $0.name, type: JavaTypeSystem.erasure(of: $0.type)) },
+                returnType: constructor.returnType,
+                thrownTypes: constructor.thrownTypes,
+                modifiers: constructor.modifiers,
+                isConstructor: true,
+                javadoc: constructor.javadoc
+            )
+            originals[signature(erased.parameters)] = constructor
+            erasedCandidates.append(erased)
+        }
+        guard let picked = await resolveOverloads(erasedCandidates, argumentTypes: argumentTypes, context: context, index: index).first,
+              let chosen = originals[signature(picked.parameters)] else { return type }
+
+        let names = Set(stub.typeParameters.map(\.name))
+        var bindings: [String: JavaTypeRef] = [:]
+        for (position, argument) in argumentTypes.enumerated() {
+            guard let argument, position < chosen.parameters.count else { continue }
+            bind(chosen.parameters[position].type, to: argument, names: names, bindings: &bindings)
+        }
+        guard names.allSatisfy({ bindings[$0] != nil }) else { return type }
+        return .classType(
+            qualifiedName: qualifiedName,
+            arguments: stub.typeParameters.compactMap { bindings[$0.name] }.map { .type($0) },
+            outer: outer
+        )
     }
 
     /// The type of an implicit/explicit `this`: the innermost enclosing type. Its own declared

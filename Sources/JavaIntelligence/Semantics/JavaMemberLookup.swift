@@ -99,18 +99,27 @@ public enum JavaMemberLookup {
         var seenSignatures = Set<String>()
         var result: [JavaResolvedMember] = []
         var visitedClasses = Set<String>()
-        var queue: [(qualifiedName: String, substitution: [String: JavaTypeRef])] = [
-            (qualifiedName, await substitutionMap(forTypeArguments: arguments, appliedTo: qualifiedName, index: index))
+        var queue: [(qualifiedName: String, substitution: [String: JavaTypeRef], lowerOnly: Set<String>)] = [
+            (qualifiedName,
+             await substitutionMap(forTypeArguments: arguments, appliedTo: qualifiedName, index: index),
+             await lowerBoundedParameters(forTypeArguments: arguments, appliedTo: qualifiedName, index: index))
         ]
         // Processed as a FIFO queue (not a stack) so the class itself and its direct supertypes
         // are visited -- and their members recorded as "more derived" -- before Object/deeper
         // ancestors, which is what the dedup-by-override logic below relies on.
         var queueIndex = 0
         while queueIndex < queue.count {
-            let (currentName, substitution) = queue[queueIndex]
+            let (currentName, substitution, lowerOnly) = queue[queueIndex]
             queueIndex += 1
             guard visitedClasses.insert(currentName).inserted else { continue }
             guard let stub = await index.classStub(qualifiedName: currentName) else { continue }
+            // What a *read* of a type variable gives. `? super X` accepts an X going in, but only
+            // its upper bound comes out (`List<? super Integer>.get(0)` is an `Object`, JLS 5.1.10).
+            var readSubstitution = substitution
+            for name in lowerOnly {
+                readSubstitution[name] = stub.typeParameters.first { $0.name == name }?.bounds.first
+                    ?? .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
+            }
             // Source stubs keep type names as written (`List<StockSet>`); they must be resolved
             // against the *declaring* file's imports, not the file asking for completion.
             let declaringContext = await sourceDeclarationContext(of: stub, cache: fileCache)
@@ -122,7 +131,7 @@ public enum JavaMemberLookup {
                 }
                 let key = "field:\(field.name)"
                 guard seenSignatures.insert(key).inserted else { continue }
-                let substituted = substitute(await resolvedDeclaration(field.type, in: declaringContext, index: index), using: substitution)
+                let substituted = substitute(await resolvedDeclaration(field.type, in: declaringContext, index: index), using: readSubstitution)
                 result.append(.field(JavaFieldStub(name: field.name, type: substituted, modifiers: field.modifiers, javadoc: field.javadoc), declaringClass: currentName))
             }
             for method in stub.methods where !method.isConstructor && !method.modifiers.contains(.synthetic) && !method.modifiers.contains(.bridge) && !method.name.hasPrefix("lambda$") {
@@ -147,7 +156,7 @@ public enum JavaMemberLookup {
                     name: method.name,
                     typeParameters: method.typeParameters,
                     parameters: substitutedParams,
-                    returnType: substitute(declaredReturn, using: substitution),
+                    returnType: substitute(declaredReturn, using: readSubstitution),
                     thrownTypes: method.thrownTypes,
                     modifiers: method.modifiers,
                     isConstructor: false,
@@ -160,17 +169,25 @@ public enum JavaMemberLookup {
                 let substitutedSuper = substitute(superclass, using: substitution)
                 let resolvedSuper = await resolveSupertype(substitutedSuper, declaredOn: stub, context: context, index: index, cache: fileCache)
                 if case .classType(let superName, let superArgs, _) = resolvedSuper {
-                    queue.append((superName, await substitutionMap(forTypeArguments: superArgs, appliedTo: superName, index: index)))
+                    queue.append((
+                        superName,
+                        await substitutionMap(forTypeArguments: superArgs, appliedTo: superName, index: index),
+                        await inheritedLowerBounded(declared: superclass, lowerOnly: lowerOnly, appliedTo: superName, index: index)
+                    ))
                 }
             } else if (stub.kind == .classKind || stub.kind == .enumKind || stub.kind == .recordKind),
                       stub.superclass == nil, currentName != "java.lang.Object" {
-                queue.append(("java.lang.Object", [:]))
+                queue.append(("java.lang.Object", [:], []))
             }
             for iface in stub.interfaces {
                 let substitutedIface = substitute(iface, using: substitution)
                 let resolvedIface = await resolveSupertype(substitutedIface, declaredOn: stub, context: context, index: index, cache: fileCache)
                 if case .classType(let ifaceName, let ifaceArgs, _) = resolvedIface {
-                    queue.append((ifaceName, await substitutionMap(forTypeArguments: ifaceArgs, appliedTo: ifaceName, index: index)))
+                    queue.append((
+                        ifaceName,
+                        await substitutionMap(forTypeArguments: ifaceArgs, appliedTo: ifaceName, index: index),
+                        await inheritedLowerBounded(declared: iface, lowerOnly: lowerOnly, appliedTo: ifaceName, index: index)
+                    ))
                 }
             }
         }
@@ -453,6 +470,29 @@ public enum JavaMemberLookup {
             }
         }
         return map
+    }
+
+    /// Names of `qualifiedName`'s own type parameters that `arguments` bind to `? super X`.
+    private static func lowerBoundedParameters(forTypeArguments arguments: [JavaTypeArgument], appliedTo qualifiedName: String, index: JavaIndex) async -> Set<String> {
+        guard !arguments.isEmpty, let stub = await index.classStub(qualifiedName: qualifiedName) else { return [] }
+        var names = Set<String>()
+        for (parameter, argument) in zip(stub.typeParameters, arguments) {
+            if case .wildcard(.superBound) = argument { names.insert(parameter.name) }
+        }
+        return names
+    }
+
+    /// A supertype written `AbstractList<E>` in a class whose `E` is `? super X` keeps that
+    /// variable lower-bounded one level up: `ArrayList<? super Integer>.get` is declared on
+    /// `AbstractList`, and must not turn `E` back into `Integer` there.
+    private static func inheritedLowerBounded(declared: JavaTypeRef, lowerOnly: Set<String>, appliedTo qualifiedName: String, index: JavaIndex) async -> Set<String> {
+        guard !lowerOnly.isEmpty, case .classType(_, let arguments, _) = declared,
+              let stub = await index.classStub(qualifiedName: qualifiedName) else { return [] }
+        var names = Set<String>()
+        for (parameter, argument) in zip(stub.typeParameters, arguments) {
+            if case .type(.typeVariable(let name)) = argument, lowerOnly.contains(name) { names.insert(parameter.name) }
+        }
+        return names
     }
 
     private static func substitute(_ type: JavaTypeRef, using map: [String: JavaTypeRef]) -> JavaTypeRef {

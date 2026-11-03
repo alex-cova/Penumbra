@@ -79,6 +79,30 @@ public final class JavaScopeTree: Sendable {
         self.root = ScopeBuilder(tree: tree, url: url).buildFile()
     }
 
+    private init(url: URL, root: Scope) {
+        self.url = url
+        self.root = root
+    }
+
+    /// The locals visible at `offset`, built from only the outermost method or constructor that
+    /// contains it (outermost, so locals captured by an anonymous or local class body are seen).
+    /// Cost follows that one member, not the file: this is the completion-path query. `nil` when
+    /// the offset is not inside such a member (a field initializer, an initializer block, an
+    /// `ERROR` region), where the caller uses the whole-file tree or another source.
+    public static func locals(in tree: JavaSyntaxTree, enclosingExecutableAtByteOffset offset: Int) -> [JavaLocalVariable]? {
+        var executable: SyntaxNode?
+        var current: SyntaxNode? = tree.node(atByteOffset: offset)
+        while let node = current {
+            if node.type == "method_declaration" || node.type == "constructor_declaration" { executable = node }
+            current = node.parent
+        }
+        guard let executable else { return nil }
+        let url = URL(fileURLWithPath: "/__umbra_locals_only__.java")
+        let builder = ScopeBuilder(tree: tree, url: url, withoutStubs: ())
+        guard let scope = builder.buildExecutable(executable, owner: "") else { return nil }
+        return JavaScopeTree(url: url, root: scope).locals(atByteOffset: offset)
+    }
+
     // MARK: - Queries
 
     /// Scopes containing the offset, outermost first.
@@ -98,7 +122,9 @@ public final class JavaScopeTree: Sendable {
         var result: [JavaLocalVariable] = []
         var seen = Set<String>()
         for scope in scopeChain(atByteOffset: offset).reversed() {
-            for declaration in scope.declarations where declaration.visibleRange.contains(offset) {
+            // Latest declaration first within a scope, like `JavaLocalScope`: callers that resolve
+            // `var` locals in passes depend on that order.
+            for declaration in scope.declarations.reversed() where declaration.visibleRange.contains(offset) {
                 let variable: JavaLocalVariable
                 switch declaration.symbol {
                 case .local(let name, _, _, let type):
@@ -108,7 +134,9 @@ public final class JavaScopeTree: Sendable {
                         isIterationVariable: declaration.isIterationVariable
                     )
                 case .parameter(let name, _, _, let type):
-                    variable = JavaLocalVariable(name: name, type: type)
+                    // Inferred lambda parameters are parameters here; their origin is how the typer
+                    // reads the real type off the called method's functional-interface parameter.
+                    variable = JavaLocalVariable(name: name, type: type, lambdaOrigin: declaration.lambdaOrigin)
                 default:
                     continue
                 }
@@ -152,6 +180,15 @@ private struct ScopeBuilder {
             fileStubs.classes.map { ($0.qualifiedName, $0) },
             uniquingKeysWith: { first, _ in first }
         )
+    }
+
+    /// For executable-only builds: no stub pass over the whole file. Type and field symbols need
+    /// the stubs, local and parameter bindings do not.
+    init(tree: JavaSyntaxTree, url: URL, withoutStubs: Void) {
+        self.tree = tree
+        self.url = url
+        self.packageName = ""
+        self.stubsByName = [:]
     }
 
     func qualifiedName(for simpleName: String, enclosing: [String]) -> String {

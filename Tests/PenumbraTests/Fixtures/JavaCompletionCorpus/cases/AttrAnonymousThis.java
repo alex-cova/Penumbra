@@ -1,0 +1,17 @@
+//! gap: F01-anonymous
+//! contains: run, hashCode
+package com.acme.cases;
+
+import com.acme.model.*;
+import com.acme.service.*;
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class AttrAnonymousThis {
+    void test() {
+        new Runnable() { public void run() { this./*|*/
+            }
+        };
+    }
+}

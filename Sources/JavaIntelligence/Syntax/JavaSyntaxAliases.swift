@@ -37,4 +37,21 @@ extension JavaSyntaxTree {
         attachment.object(JavaScopeTreeCache.self, create: JavaScopeTreeCache.init)
             .tree(for: url, build: { JavaScopeTree(tree: self, url: url) })
     }
+
+    /// The locals visible at `offset`, from the memoized scope tree (JLS 6.3): pattern bindings in
+    /// `switch` rules, negated `instanceof` flow-out, record patterns and guards included, which the
+    /// older per-query `JavaLocalScope.locals(in:atByteOffset:)` does not see. For callers that need
+    /// the variables only, not declaration sites, so no file URL is involved.
+    ///
+    /// The scope tree loses locals inside `ERROR` regions (an unfinished statement around the
+    /// caret, F14), which `JavaLocalScope` recovers, so its answers are kept for any name the tree
+    /// does not know. The result is only ever larger than either source alone.
+    func visibleLocals(atByteOffset offset: Int) -> [JavaLocalVariable] {
+        let fromTree = JavaScopeTree.locals(in: self, enclosingExecutableAtByteOffset: offset)
+            ?? scopeTree(for: Self.localsOnlyURL).locals(atByteOffset: offset)
+        let known = Set(fromTree.map(\.name))
+        return fromTree + JavaLocalScope.locals(in: self, atByteOffset: offset).filter { !known.contains($0.name) }
+    }
+
+    private static var localsOnlyURL: URL { URL(fileURLWithPath: "/__umbra_locals_only__.java") }
 }
