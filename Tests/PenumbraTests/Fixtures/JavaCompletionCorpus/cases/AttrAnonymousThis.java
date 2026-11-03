@@ -1,4 +1,3 @@
-//! gap: F01-anonymous
 //! contains: run, hashCode
 package com.acme.cases;
 

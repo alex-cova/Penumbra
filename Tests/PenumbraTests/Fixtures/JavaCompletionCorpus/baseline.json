@@ -1,6 +1,14 @@
 {
   "jdkVersion" : 27,
   "passing" : [
+    "AttrAnonymousCapturesLocal",
+    "AttrAnonymousClassSuper",
+    "AttrAnonymousGenericThis",
+    "AttrAnonymousNested",
+    "AttrAnonymousThis",
+    "AttrAnonymousUnqualified",
+    "AttrAnonymousVarMember",
+    "AttrAnonymousVarMethodChain",
     "AttrCaptureExtendsGet",
     "AttrCaptureForEach",
     "AttrCaptureMapValue",

@@ -243,6 +243,12 @@ public enum JavaExpressionTyper {
 
         case "object_creation_expression":
             guard let typeNode = node.child(byFieldName: "type") else { return nil }
+            // `new Foo() { … }` has the anonymous type, not `Foo` (JLS 15.9.5), when the caller can
+            // resolve it; otherwise `Foo`, as before.
+            if node.firstNamedChild(ofType: "class_body") != nil,
+               let anonymous = await JavaAnonymousClass.stub(for: node, context: context, index: index) {
+                return .value(.classType(qualifiedName: anonymous.qualifiedName, arguments: [], outer: nil))
+            }
             return .value(await diamondResolved(
                 JavaTypeNodeConverter.convert(typeNode), creation: node, typeNode: typeNode,
                 locals: locals, context: context, index: index

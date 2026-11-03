@@ -79,6 +79,8 @@ public enum JavaMemberLookup {
         // A request that sees the buffer's own classes (`JavaIndex.liveStubs`) must not read or fill
         // a cache that other requests share.
         let isCacheable = sourceTextProvider == nil && JavaIndex.liveStubs == nil
+            && !JavaAnonymousClass.isAnonymous(qualifiedName)
+            && !context.enclosingTypeQualifiedNames.contains(where: JavaAnonymousClass.isAnonymous)
         if isCacheable, let cached = await index.cachedMemberSet(cacheKey) {
             return cached
         }

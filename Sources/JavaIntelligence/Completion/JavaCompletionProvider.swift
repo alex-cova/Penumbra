@@ -96,14 +96,18 @@ public actor JavaCompletionProvider: CompletionProvider {
         guard context.document.languageIdentifier == "java" else {
             return [CompletionUpdate(items: [], isFinished: true)]
         }
-        // A second Ctrl+Space looks past the source set's classpath, like IntelliJ's second
-        // basic-completion invocation.
-        if context.invocationCount < 2, let scope = scope(for: context.document.url) {
-            return await JavaIndex.$queryScope.withValue(scope) {
-                await self.provideInScope(context: context)
+        // Anonymous class bodies become types for the length of this request (`this.` inside
+        // `new Runnable() { … }`, `var o = new Object() { int x; }`).
+        return await withAnonymousClasses(for: context) {
+            // A second Ctrl+Space looks past the source set's classpath, like IntelliJ's second
+            // basic-completion invocation.
+            if context.invocationCount < 2, let scope = self.scope(for: context.document.url) {
+                return await JavaIndex.$queryScope.withValue(scope) {
+                    await self.provideInScope(context: context)
+                }
             }
+            return await self.provideInScope(context: context)
         }
-        return await provideInScope(context: context)
     }
 
     func scope(for file: URL?) -> Set<String>? {
@@ -155,7 +159,7 @@ public actor JavaCompletionProvider: CompletionProvider {
         let prefix: String
         let prefixStart: Int
         let cursor: Int
-        let context: JavaResolutionContext
+        var context: JavaResolutionContext
         let factory: JavaCompletionItemFactory
         let importer: JavaImportInserter
         let invocationCount: Int
@@ -243,6 +247,24 @@ public actor JavaCompletionProvider: CompletionProvider {
         return !methodDepths.isEmpty
     }
 
+    /// Runs `body` with anonymous class bodies resolvable as types (see ``JavaAnonymousClass``).
+    private func withAnonymousClasses<T>(for context: CompletionContext, _ body: () async -> T) async -> T {
+        let fileURL = context.document.url ?? URL(fileURLWithPath: "/unsaved/\(context.document.id).java")
+        return await JavaAnonymousClass.$registry.withValue(JavaAnonymousClass.Registry(fileURL: fileURL)) { await body() }
+    }
+
+    /// ``makeRequest(context:)`` plus the anonymous class bodies around the caret entered as the
+    /// innermost types, outermost body first. Needs a registry in scope.
+    private func makeScopedRequest(context: CompletionContext) async -> Request? {
+        guard var request = makeRequest(context: context) else { return nil }
+        for creation in JavaAnonymousClass.enclosingCreations(in: request.tree, atByteOffset: request.cursor).reversed() {
+            if let anonymous = await JavaAnonymousClass.stub(for: creation, context: request.context, index: index) {
+                request.context = request.context.entering(type: anonymous)
+            }
+        }
+        return request
+    }
+
     private func makeRequest(context: CompletionContext) -> Request? {
         // Open project files are file-backed: the snapshot keeps the bytes behind a range reader
         // and `text` is nil. Completion still has to parse the buffer the caret is in.
@@ -281,7 +303,11 @@ public actor JavaCompletionProvider: CompletionProvider {
     }
 
     func diagnose(context: CompletionContext) async -> Diagnosis? {
-        guard let request = makeRequest(context: context) else { return nil }
+        await withAnonymousClasses(for: context) { await diagnoseInScope(context: context) }
+    }
+
+    private func diagnoseInScope(context: CompletionContext) async -> Diagnosis? {
+        guard let request = await makeScopedRequest(context: context) else { return nil }
         let site = JavaCompletionContextClassifier.classify(bytes: request.bytes, tree: request.tree, prefixStart: request.prefixStart)
         var receiverType: JavaTypeRef?
         var isTypeReference = false
@@ -323,7 +349,7 @@ public actor JavaCompletionProvider: CompletionProvider {
     }
 
     private func provideInScope(context: CompletionContext) async -> [CompletionUpdate] {
-        guard let request = makeRequest(context: context) else { return finished([]) }
+        guard let request = await makeScopedRequest(context: context) else { return finished([]) }
         let bytes = request.bytes
         let tree = request.tree
         let text = request.text

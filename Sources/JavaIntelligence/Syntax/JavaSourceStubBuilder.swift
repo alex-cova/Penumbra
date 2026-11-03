@@ -209,6 +209,28 @@ public enum JavaSourceStubBuilder {
         result.append(stub)
     }
 
+    /// The stub of an anonymous class body (`new Foo() { … }`): a class that extends `supertype`
+    /// (or implements it, for an interface) and declares the body's fields and methods.
+    static func anonymousStub(
+        body: SyntaxNode, qualifiedName: String, supertype: JavaTypeRef, supertypeIsInterface: Bool,
+        packageName: String, url: URL, nameRange: Range<Int>
+    ) -> JavaClassStub {
+        var fields: [JavaFieldStub] = []
+        var methods: [JavaMethodStub] = []
+        var innerTypeNames: [String] = []
+        var nestedTypes: [JavaClassStub] = []
+        collectMembers(body.namedChildren, packageName: packageName, outerQualifiedName: qualifiedName, url: url,
+                        declaringKind: .classKind, fields: &fields, methods: &methods, innerTypeNames: &innerTypeNames,
+                        nestedTypes: &nestedTypes)
+        return JavaClassStub(
+            binaryName: qualifiedName, qualifiedName: qualifiedName, simpleName: "", packageName: packageName,
+            kind: .classKind, modifiers: [],
+            superclass: supertypeIsInterface ? nil : supertype, interfaces: supertypeIsInterface ? [supertype] : [],
+            fields: fields, methods: methods, innerTypeNames: innerTypeNames,
+            origin: .source(url, nameRange: nameRange)
+        )
+    }
+
     /// The kind of the type declaration `node` is directly nested in, if any.
     private static func outerKind(of node: SyntaxNode) -> JavaTypeKind? {
         guard let body = node.parent, let owner = body.parent else { return nil }

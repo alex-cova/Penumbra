@@ -278,6 +278,9 @@ public actor JavaIndex {
         if let live = Self.liveStubs?[qualifiedName] {
             return live
         }
+        if let anonymous = JavaAnonymousClass.registry?.stub(named: qualifiedName) {
+            return anonymous
+        }
         if let overlaid = overlay[qualifiedName] {
             return overlaid
         }

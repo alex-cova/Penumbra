@@ -1,4 +1,3 @@
-//! gap: F01-anonymous
 //! contains: secret, toString
 package com.acme.cases;
 
