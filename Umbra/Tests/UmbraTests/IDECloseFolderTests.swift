@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 import Penumbra
 import XCTest
@@ -109,6 +110,65 @@ final class IDECloseFolderTests: XCTestCase {
         XCTAssertTrue(workspace.showsWelcome)
         XCTAssertFalse(workspace.isSidebarVisible)
         assertTerminalsAreHome()
+    }
+
+    /// Problems and Debug belong to the project: after Close Folder, even with an Untitled file
+    /// open (⌘N), neither the tab strip nor the stripe offers them and the panel is back on the shell.
+    func testCloseFolderHidesProblemsAndDebugEvenWithAnUntitledFileOpen() {
+        XCTAssertTrue(workspace.showsProblemsTab)
+        workspace.dapDebugSession.beginLaunch(of: "app")
+        workspace.showBottomTab(.debug)
+        XCTAssertTrue(workspace.showsDebugTab)
+
+        workspace.closeFolder()
+        workspace.newFile()
+
+        XCTAssertTrue(workspace.hasOpenDocuments)
+        XCTAssertFalse(workspace.showsProblemsTab)
+        XCTAssertFalse(workspace.showsDebugTab)
+        XCTAssertEqual(workspace.selectedBottomTab, .terminal)
+        let windows = workspace.toolWindows.map(\.id)
+        XCTAssertFalse(windows.contains("problems"))
+        XCTAssertFalse(windows.contains("debug"))
+
+        workspace.showBottomTab(.problems)
+        XCTAssertEqual(workspace.selectedBottomTab, .terminal)
+    }
+
+    /// What the project ran or produced belongs to it: a running program is stopped and its Run tab
+    /// goes, and coverage, pinned hierarchies and the SwiftUI canvas are dropped.
+    func testCloseFolderStopsRunsAndClearsProjectResults() {
+        let session = IDERunSession(configurationID: UUID(), title: "Main", providerID: "java")
+        workspace.runs.add(session)
+        workspace.showBottomTab(.run)
+        workspace.coverage.beginReport(message: "Building the coverage report…")
+        workspace.typeHierarchy.show(
+            root: HierarchyItem(id: "Base", name: "Base", kind: .classType, origin: .project), file: nil
+        )
+        workspace.pinTypeHierarchy()
+        workspace.isSwiftUIPreviewVisible = true
+        XCTAssertTrue(workspace.showsRunTab)
+        XCTAssertTrue(workspace.showsCoverageTab)
+        XCTAssertTrue(workspace.showsTypeHierarchyTab)
+        XCTAssertTrue(session.isActive)
+
+        workspace.closeFolder()
+        workspace.newFile()
+
+        XCTAssertFalse(session.isActive, "a program the closed project started must not keep running")
+        XCTAssertFalse(workspace.showsRunTab)
+        XCTAssertFalse(workspace.showsCoverageTab)
+        XCTAssertFalse(workspace.showsTypeHierarchyTab)
+        XCTAssertTrue(workspace.pinnedTypeHierarchies.isEmpty)
+        XCTAssertFalse(workspace.isSwiftUIPreviewVisible)
+        XCTAssertEqual(workspace.selectedBottomTab, .terminal)
+    }
+
+    /// Stopping a debugger that never ran must not make the Debug tab appear.
+    func testStoppingAnIdleDebuggerKeepsTheDebugTabHidden() {
+        workspace.stopDebugging()
+
+        XCTAssertFalse(workspace.showsDebugTab)
     }
 
     func testCloseFolderWithUnsavedChangesCancelKeepsTheFolderAndTheTerminal() async {

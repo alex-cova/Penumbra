@@ -92,6 +92,14 @@ final class IDERunSessions {
         for session in sessions where session.isActive { session.stop() }
     }
 
+    /// Stops every running program and drops every session: the Run tab goes away. Close Folder uses
+    /// it, since the sessions belong to the project that was closed.
+    func reset() {
+        stopAll()
+        sessions.removeAll()
+        selectedID = nil
+    }
+
     /// A chip title that tells two runs of one configuration apart: `Main`, `Main (2)`.
     func title(for session: IDERunSession) -> String {
         let same = sessions.filter { $0.title == session.title }

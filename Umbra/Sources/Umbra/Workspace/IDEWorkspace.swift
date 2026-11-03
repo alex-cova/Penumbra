@@ -674,11 +674,11 @@ public final class IDEWorkspace {
     var visibleCallHierarchy: IDECallHierarchyStore {
         pinnedCallHierarchies.first { $0.id == selectedCallHierarchyPinID }?.store ?? callHierarchy
     }
+    /// The Debug tool window: a Java session, or a Swift / JavaScript / TypeScript one (the DAP
+    /// session), has been started and not been dismissed.
     var showsDebugTab: Bool {
-        switch debugSession.state {
-        case .idle: return false
-        default: return true
-        }
+        if case .idle = debugSession.state, !dapDebugSession.presentsDebugger { return false }
+        return true
     }
     var showsUsagesTab: Bool { usages.hasContent }
     var showsTestResultsTab: Bool { testResults.hasContent }
@@ -693,6 +693,7 @@ public final class IDEWorkspace {
     /// Selects `tab` and reveals the bottom panel. Every tab, built in or contributed by a language
     /// module, is shown this way.
     func showBottomTab(_ tab: IDEBottomPanelTab) {
+        if tab == .problems, !showsProblemsTab { return }
         selectedBottomTab = tab
         if !isTerminalVisible {
             isTerminalVisible = true
@@ -724,8 +725,9 @@ public final class IDEWorkspace {
     var showsHTTPTab: Bool {
         statusLanguage == "http" || httpSupport.isSending || !httpSupport.responseLog.lines.isEmpty
     }
-    /// The Problems tab is always offered; it shows an empty state when there is nothing to report.
-    var showsProblemsTab: Bool { true }
+    /// The Problems tab belongs to a project: it is offered while a folder is open (and shows an
+    /// empty state when there is nothing to report), not for loose files or an Untitled buffer.
+    var showsProblemsTab: Bool { hasOpenProject }
     /// Whether the "Source Control" tab should appear for the open git repository.
     var showsSourceControlTab: Bool {
         gitStatus.isRepository
@@ -1568,6 +1570,7 @@ public final class IDEWorkspace {
         closeAllOpenDocuments()
         dismissProjectChrome()
         stopProjectActivity()
+        dismissProjectBottomTabs()
         applyProjectRoot(nil)
         resetTerminalsToDefaultDirectory()
         openEmptyFileIfNeeded()
@@ -1829,7 +1832,9 @@ public final class IDEWorkspace {
             guard let self, !self.isBottomToolWindowOpen(.terminal) else { return }
             self.toggleBottomToolWindow(.terminal)
         }
-        add("problems", "Problems") { [weak self] in self?.showBottomTab(.problems) }
+        if showsProblemsTab {
+            add("problems", "Problems") { [weak self] in self?.showBottomTab(.problems) }
+        }
         if showsSourceControlTab {
             add("sourceControl", "History") { [weak self] in self?.showBottomTab(.sourceControl) }
         }
@@ -4397,6 +4402,38 @@ public final class IDEWorkspace {
                 closeDocument(documentID, in: pane)
             }
         }
+    }
+
+    /// Problems, Debug and what the project ran or produced (Run output, coverage, hierarchies, the
+    /// SwiftUI canvas) belong to the project that was closed: the debugger goes back to idle (a
+    /// finished session would keep its tab), and the panel falls back to the shell when it was
+    /// showing a tab that is gone, so a later Untitled file does not show a blank Problems page.
+    private func dismissProjectBottomTabs() {
+        debugSession.reset()
+        dapDebugSession.retire()
+        gradleDebugActive = false
+        // What the project started or produced goes with it, as when the window closes.
+        runs.reset()
+        runProviders.stopAll()
+        coverage.clear()
+        closeAllHierarchies()
+        swiftUIPreviewSwitchTask?.cancel()
+        swiftUIPreviewSwitchTask = nil
+        hideSwiftUIPreview()
+        swiftUIPreview = nil
+        deselectBottomTab(.run)
+        deselectBottomTab(.coverage)
+        if selectedBottomTab != .terminal, !isBottomTabAvailable(selectedBottomTab) {
+            selectedBottomTab = .terminal
+        }
+    }
+
+    private func isBottomTabAvailable(_ tab: IDEBottomPanelTab) -> Bool {
+        if tab == .problems { return showsProblemsTab }
+        if tab == .debug { return showsDebugTab }
+        if tab == .usages { return showsUsagesTab }
+        if tab == .sourceControl { return showsSourceControlTab }
+        return languageModuleBottomTabs().contains { $0.tab == tab }
     }
 
     private func dismissProjectChrome() {

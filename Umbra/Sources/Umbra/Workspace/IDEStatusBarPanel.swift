@@ -126,7 +126,7 @@ struct IDEStatusBarPanel: View {
     private var problemsStatus: some View {
         let errors = workspace.problems.errorCount
         let warnings = workspace.problems.warningCount
-        if errors > 0 || warnings > 0 {
+        if workspace.showsProblemsTab, errors > 0 || warnings > 0 {
             Button {
                 workspace.showProblems()
             } label: {

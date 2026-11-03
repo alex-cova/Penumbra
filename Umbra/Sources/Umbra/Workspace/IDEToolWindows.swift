@@ -78,10 +78,12 @@ extension IDEWorkspace {
                     order: IDEToolWindow.Order.usages
                 ))
             }
-            windows.append(bottomToolWindow(
-                .problems, "exclamationmark.triangle", "Problems", "⌘⇧M", .orange, .leadingBottom,
-                order: IDEToolWindow.Order.problems
-            ))
+            if showsProblemsTab {
+                windows.append(bottomToolWindow(
+                    .problems, "exclamationmark.triangle", "Problems", "⌘⇧M", .orange, .leadingBottom,
+                    order: IDEToolWindow.Order.problems
+                ))
+            }
             windows.append(bottomToolWindow(
                 .terminal, "terminal", "Terminal", "⌃`", .secondary, .leadingBottom, order: IDEToolWindow.Order.terminal
             ))

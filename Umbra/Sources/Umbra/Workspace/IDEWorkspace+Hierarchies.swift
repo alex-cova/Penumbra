@@ -175,6 +175,19 @@ extension IDEWorkspace {
             if !showsCallHierarchyTab { deselectBottomTab(.callHierarchy) }
         }
 
+        /// Drops every hierarchy, live and pinned, and the tabs with them. Close Folder uses it: a
+        /// hierarchy describes the project that was closed.
+        func closeAllHierarchies() {
+            typeHierarchy.clear()
+            callHierarchy.clear()
+            pinnedTypeHierarchies.removeAll()
+            pinnedCallHierarchies.removeAll()
+            selectedTypeHierarchyPinID = nil
+            selectedCallHierarchyPinID = nil
+            deselectBottomTab(.typeHierarchy)
+            deselectBottomTab(.callHierarchy)
+        }
+
         func openCallHierarchyNode(_ node: HierarchyItem, in store: IDECallHierarchyStore) {
             guard let provider = languages.callHierarchy(for: store.languageIdentifier) else { return }
             let file = store.file

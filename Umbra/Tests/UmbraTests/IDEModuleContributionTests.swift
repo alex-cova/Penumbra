@@ -162,6 +162,9 @@ final class IDEModuleContributionTests: XCTestCase {
         defer { workspace.teardown() }
         XCTAssertFalse(workspace.isTerminalVisible)
         workspace.showBottomTab(.problems)
+        XCTAssertFalse(workspace.isTerminalVisible, "Problems belongs to a project: no folder, no tab")
+        workspace.project.setRoot(FileManager.default.temporaryDirectory)
+        workspace.showBottomTab(.problems)
         XCTAssertTrue(workspace.isTerminalVisible, "Showing a tab reveals the panel")
         XCTAssertTrue(workspace.isBottomTabSelected(.problems))
         XCTAssertFalse(workspace.isBottomTabSelected(.usages))

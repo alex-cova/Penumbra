@@ -616,8 +616,17 @@ final class JavaDebugSession {
         breakpointVerification = [:]
         if hadVerification { onBreakpointVerificationChanged?() }
         isGradleAttachSession = false
+        // Stopping a session that never started must not make the Debug tool window appear.
         if case .failed = state { return }
+        if case .idle = state { return }
         state = .terminated
+    }
+
+    /// Stops the session and forgets it: the Debug tool window goes away until the next launch.
+    /// Close Folder uses it, because a finished session belongs to the project that was closed.
+    func reset() {
+        stop()
+        state = .idle
     }
 
     /// Tries every 250 ms while `keepTrying` holds, for at most `maxAttempts` (10 minutes). The
