@@ -445,7 +445,7 @@ enum JavaLineMarkers {
     private static func narrowed(_ targets: [MethodTarget], call: SyntaxNode, session: JavaNavigationSession) async -> [MethodTarget] {
         guard targets.count > 1, let arguments = call.child(byFieldName: "arguments") else { return targets }
         let locals = await JavaExpressionTyper.resolvingVarLocals(
-            JavaLocalScope.locals(in: session.tree, atByteOffset: arguments.startByte), context: session.context, index: session.index
+            session.tree.visibleLocals(atByteOffset: arguments.startByte), context: session.context, index: session.index
         )
         var types: [JavaTypeRef?] = []
         for argument in arguments.namedChildren {

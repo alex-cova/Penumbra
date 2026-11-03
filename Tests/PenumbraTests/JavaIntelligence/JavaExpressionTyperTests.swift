@@ -268,7 +268,7 @@ final class JavaExpressionTyperTests: XCTestCase {
         // `list` is a parameter, not a local declared earlier in the same statement: a receiver
         // chain (`list.get(0)`, a method_invocation) ending in a bare trigger `.` reliably
         // collapses tree-sitter's error recovery for the *whole* enclosing declaration (see
-        // JavaReceiverScanner's and JavaLocalScope's doc comments), and in that collapse only a
+        // JavaReceiverScanner's and JavaErrorRecoveredLocals's doc comments), and in that collapse only a
         // `parameters:` field survives -- an earlier local_variable_declaration in the same
         // corrupted body does not. Using a parameter here exercises the real, supported path.
         let type = await typeOfReceiver(

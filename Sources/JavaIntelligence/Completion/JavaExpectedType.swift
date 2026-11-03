@@ -72,7 +72,7 @@ enum JavaExpectedType {
         let context = request.context
         let index = request.index
         if let lambda = node.parent, lambda.type == "lambda_expression", lambda.child(byFieldName: "body")?.startByte == node.startByte {
-            guard let target = JavaLocalScope.expressionTarget(of: lambda) else { return [] }
+            guard let target = JavaExpressionTarget.target(of: lambda) else { return [] }
             for functional in await JavaExpressionTyper.functionalTargets(of: target, locals: request.locals, context: context, index: index) {
                 guard let signature = await JavaExpressionTyper.functionalSignature(of: functional, context: context, index: index) else { continue }
                 let returned = await JavaTypeResolver.resolve(signature.returnType, context: context, index: index)
@@ -82,7 +82,7 @@ enum JavaExpectedType {
             }
             return []
         }
-        guard let target = JavaLocalScope.expressionTarget(of: node) else { return [] }
+        guard let target = JavaExpressionTarget.target(of: node) else { return [] }
         // Call arguments are answered by `callSite`, which knows every overload.
         if case .argument = target { return [] }
         return await JavaExpressionTyper.functionalTargets(of: target, locals: request.locals, context: context, index: index)

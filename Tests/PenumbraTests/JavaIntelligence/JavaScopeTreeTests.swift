@@ -21,21 +21,31 @@ final class JavaScopeTreeTests: XCTestCase {
         Set(tree.locals(atByteOffset: offset).map(\.name))
     }
 
-    // MARK: - parity with JavaLocalScope
+    // MARK: - what is visible where
 
-    func testLocalsMatchJavaLocalScope() {
-        let sources = [
-            "class Foo { void m(int a, String b) { int c = a; €x; } }",
-            "class Foo { void m() { int outer = 1; if (true) { int inner = 2; €x; } } }",
-            "class Foo { void m(java.util.List<String> list) { for (String s : list) { €x; } } }",
-            "class Foo { void m() { try (AutoCloseable c = get()) { €x; } } }",
-            "class Foo { void m() { int a = 1, b = 2; €x; } }",
+    /// The scope model's basic shapes, with the answers the old per-query walk (`JavaLocalScope`,
+    /// since removed) gave on the same sources.
+    func testBasicVisibility() {
+        let cases: [(source: String, expected: Set<String>)] = [
+            ("class Foo { void m(int a, String b) { int c = a; €x; } }", ["a", "b", "c"]),
+            ("class Foo { void m() { int outer = 1; if (true) { int inner = 2; €x; } } }", ["outer", "inner"]),
+            ("class Foo { void m(java.util.List<String> list) { for (String s : list) { €x; } } }", ["list", "s"]),
+            ("class Foo { void m() { try (AutoCloseable c = get()) { €x; } } }", ["c"]),
+            ("class Foo { void m() { int a = 1, b = 2; €x; } }", ["a", "b"]),
         ]
-        for source in sources {
-            let (parsed, tree, offset) = scopes(source)
-            let expected = Set(JavaLocalScope.locals(in: parsed, atByteOffset: offset).map(\.name))
+        for (source, expected) in cases {
+            let (_, tree, offset) = scopes(source)
             XCTAssertEqual(names(tree, at: offset), expected, "source: \(source)")
         }
+    }
+
+    /// Callers depend on the order: an inner scope's locals first, a scope's locals in source order,
+    /// then its parameters in source order (extract method lists captured parameters in declaration
+    /// order, and `var` locals are resolved against the ones before them).
+    func testOrderIsInnermostScopeFirstThenSourceOrderThenParameters() {
+        let (_, tree, offset) = scopes(
+            "class Foo { void m(int p, int q) { int a = 1, b = 2; { int c = 3; €x; } } }")
+        XCTAssertEqual(tree.locals(atByteOffset: offset).map(\.name), ["c", "a", "b", "p", "q"])
     }
 
     // MARK: - documented deltas

@@ -337,7 +337,7 @@ extension JavaNavigationSession {
         guard targets.count > 1, let arguments else { return (targets, false) }
         let argumentNodes = arguments.namedChildren
         let locals = await JavaExpressionTyper.resolvingVarLocals(
-            JavaLocalScope.locals(in: tree, atByteOffset: arguments.startByte), context: context, index: index
+            tree.visibleLocals(atByteOffset: arguments.startByte), context: context, index: index
         )
         var types: [JavaTypeRef?] = []
         for argument in argumentNodes {

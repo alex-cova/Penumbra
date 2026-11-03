@@ -1671,7 +1671,7 @@ public actor JavaCompletionProvider: CompletionProvider {
     /// Walks up from the node at `byteOffset` collecting enclosing type declarations (innermost
     /// first) by node type. The names are *not* package-qualified; use
     /// ``resolutionContext(in:fileStubs:atByteOffset:)`` for a ready-to-use context. Best-effort,
-    /// like `JavaLocalScope`: a trailing bare `.` on anything beyond a simple identifier can
+    /// like the other tree readers: a trailing bare `.` on anything beyond a simple identifier can
     /// collapse the whole declaration into one `ERROR` node with no recoverable class name (see
     /// `JavaReceiverScanner`'s doc comment), in which case this simply returns empty for that one
     /// request -- self-correcting on the next keystroke once the tree is well-formed again.

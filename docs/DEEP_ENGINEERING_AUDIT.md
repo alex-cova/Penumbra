@@ -65,7 +65,7 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 - [F28 — Keyboard gaps: presets, folding bindings, rebinding UI](/Users/alex/Developer/Penumbra/docs/audit/findings/F28-keyboard-gaps.md) — Medium / Confirmed / A+B
 - [F29 — Duplicate signposts and single-implementation protocols](/Users/alex/Developer/Penumbra/docs/audit/findings/F29-simplification.md) — Low / Confirmed / A+B
 
-**Execution status (2026-11-03):** F02, F03, F04, F05, F06, F14, F15 (project sources), F17 (verified, no change needed) done (F01 in progress: wildcard reads, diamond, scope-tree locals, anonymous classes) — see each brief's *Implementation notes* for what was and was not verified. F01 (attributor, the long pole) and P1–P3 are not started. F05 deviates from its sketch (priority kept, bounded grace) because provider order is priority.
+**Execution status (2026-11-03):** F02, F03, F04, F05, F06, F14 (complete: `JavaLocalScope` retired), F15 (project sources), F17 (verified, no change needed) done (F01 in progress: wildcard reads, diamond, scope-tree locals, anonymous classes) — see each brief's *Implementation notes* for what was and was not verified. F01 (attributor, the long pole) and P1–P3 are not started. F05 deviates from its sketch (priority kept, bounded grace) because provider order is priority.
 
 ## 3. Text buffer summary
 

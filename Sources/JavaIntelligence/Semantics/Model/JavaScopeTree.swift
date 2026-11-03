@@ -2,13 +2,13 @@ import Foundation
 
 /// The lexical scope tree of one parse (JLS 6.3): every scope that declares a name, built once
 /// per parse and attached to it (`JavaSyntaxTree.scopeTree(for:)`), instead of re-walked per
-/// query like `JavaLocalScope.locals(in:atByteOffset:)`.
+/// query, the way the per-query walk it replaced did.
 ///
 /// Each declaration carries the UTF-8 byte range it is visible in, so queries are range checks,
 /// not tree walks. Shadowing resolves innermost-first; a name redeclared in an inner scope hides
 /// the outer one.
 ///
-/// Deliberate differences from `JavaLocalScope` (all JLS-closer, all pinned by tests):
+/// Deliberate differences from that walk (all JLS-closer, all pinned by tests):
 /// - a local is visible in its own initializer (`int x = x` names `x`; `javac` reports
 ///   "might not have been initialized", not "cannot find symbol");
 /// - a `switch` block is one scope, so a local declared in one group is visible in later ones;
@@ -127,14 +127,15 @@ public final class JavaScopeTree: Sendable {
     }
 
     /// The locals visible at the offset, innermost first, shadowed names dropped: the same
-    /// answers as `JavaLocalScope.locals(in:atByteOffset:)` except for the documented deltas.
+    /// answers as the walk it replaced except for the documented deltas.
     public func locals(atByteOffset offset: Int) -> [JavaLocalVariable] {
         var result: [JavaLocalVariable] = []
         var seen = Set<String>()
         for scope in scopeChain(atByteOffset: offset).reversed() {
-            // Latest declaration first within a scope, like `JavaLocalScope`: callers that resolve
-            // `var` locals in passes depend on that order.
-            for declaration in scope.declarations.reversed() where declaration.visibleRange.contains(offset) {
+            // A scope's locals in source order, then its parameters in source order: the order
+            // callers have always been given. `resolvingVarLocals` wants body locals before the
+            // parameters, and extract-method lists captured parameters in the order they were declared.
+            for declaration in Self.localsBeforeParameters(scope.declarations) where declaration.visibleRange.contains(offset) {
                 let variable: JavaLocalVariable
                 switch declaration.symbol {
                 case .local(let name, _, _, let type):
@@ -154,6 +155,14 @@ public final class JavaScopeTree: Sendable {
             }
         }
         return result
+    }
+
+    private static func localsBeforeParameters(_ declarations: [Declaration]) -> [Declaration] {
+        func isParameter(_ declaration: Declaration) -> Bool {
+            if case .parameter = declaration.symbol { return true }
+            return false
+        }
+        return declarations.filter { !isParameter($0) } + declarations.filter(isParameter)
     }
 
     /// Where the local or parameter `name` visible at `offset` is declared (the byte range of its
@@ -427,7 +436,8 @@ private struct ScopeBuilder {
             buildStatements(body.namedChildren, scopeEnd: body.byteRange.upperBound,
                             declarations: &declarations, children: &children)
         } else {
-            // Corrupt body: recover whatever parameters survived inside, like JavaLocalScope.
+            // Corrupt body: recover whatever parameters survived inside (`JavaErrorRecoveredLocals`
+            // also reads back the locals declared before the damage).
             for descendant in errorDescendants(of: node) {
                 for parameter in descendant.namedChildren where parameter.type == "formal_parameter" {
                     guard let typeNode = parameter.child(byFieldName: "type"),
@@ -1022,7 +1032,7 @@ private struct ScopeBuilder {
                 } else {
                     names = []
                 }
-                let target = JavaLocalScope.expressionTarget(of: node)
+                let target = JavaExpressionTarget.target(of: node)
                 for (position, identifier) in names.enumerated() {
                     declarations.append(JavaScopeTree.Declaration(
                         symbol: .parameter(name: identifier.text, file: url, declarationRange: identifier.byteRange,

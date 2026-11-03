@@ -1,7 +1,7 @@
 import XCTest
 @testable import JavaIntelligence
 
-final class JavaLocalScopeTests: XCTestCase {
+final class JavaVisibleLocalsTests: XCTestCase {
     /// Parses `source`, finds the byte offset of the (single) `€` marker (a cheap "cursor here"
     /// marker that can't collide with real Java source), and returns the locals visible there.
     private func locals(_ source: String) -> [JavaLocalVariable] {
@@ -9,7 +9,7 @@ final class JavaLocalScopeTests: XCTestCase {
         let offset = source.utf8.distance(from: source.utf8.startIndex, to: markerRange.lowerBound.samePosition(in: source.utf8)!)
         let withoutMarker = source.replacingOccurrences(of: "€", with: "")
         let tree = JavaSyntaxParser().parse(withoutMarker)!
-        return JavaLocalScope.locals(in: tree, atByteOffset: offset)
+        return tree.visibleLocals(atByteOffset: offset)
     }
 
     private func names(_ locals: [JavaLocalVariable]) -> Set<String> {

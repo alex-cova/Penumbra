@@ -63,7 +63,7 @@ extension JavaNavigationSession {
 
     func scopeLocals(atByteOffset offset: Int) async -> [JavaLocalVariable] {
         await JavaExpressionTyper.resolvingVarLocals(
-            JavaLocalScope.locals(in: tree, atByteOffset: offset), context: context, index: index
+            tree.visibleLocals(atByteOffset: offset), context: context, index: index
         )
     }
 
@@ -91,6 +91,16 @@ extension JavaNavigationSession {
         case "catch_formal_parameter":
             let caught = parent.firstNamedChild(ofType: "catch_type")?.namedChild(at: 0)
             return await typeNodeHits(caught)
+        case "instanceof_expression":
+            // `o instanceof String s`: the binding is typed by what it was tested against.
+            guard parent.child(byFieldName: "name")?.byteRange == token.byteRange else { return [] }
+            return await typeNodeHits(parent.child(byFieldName: "right"))
+        case "type_pattern", "record_pattern_component":
+            guard parent.namedChildren(ofType: "identifier").last?.byteRange == token.byteRange,
+                  parent.firstNamedChild(ofType: "record_pattern") == nil,
+                  let typeNode = parent.namedChildren.first(where: { $0.type != "identifier" && $0.type != "modifiers" }),
+                  typeNode.text != "var" else { return [] }
+            return await typeNodeHits(typeNode)
         case "lambda_expression":
             let scope = parent.child(byFieldName: "body")?.startByte ?? parent.endByte
             return await variableTypeHits(name: token.text, typeNode: nil, scopeOffset: scope)

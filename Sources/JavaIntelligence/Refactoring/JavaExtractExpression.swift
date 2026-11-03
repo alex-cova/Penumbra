@@ -163,7 +163,7 @@ enum JavaExtractExpression {
     static func capturedParameters(
         in context: MethodExtractionContext, index: JavaIndex
     ) async -> [JavaLocalVariable] {
-        let locals = JavaLocalScope.locals(in: context.tree, atByteOffset: context.selectedRange.lowerBound)
+        let locals = context.tree.visibleLocals(atByteOffset: context.selectedRange.lowerBound)
         let resolved = await JavaExpressionTyper.resolvingVarLocals(
             locals, context: context.resolutionContext, index: index
         )
@@ -214,7 +214,7 @@ enum JavaExtractExpression {
         if let problem = validateExtractable(context.expression) {
             return (nil, blocked(problem, title: title))
         }
-        let locals = JavaLocalScope.locals(in: context.tree, atByteOffset: context.expression.startByte)
+        let locals = context.tree.visibleLocals(atByteOffset: context.expression.startByte)
         let resolvedLocals = await JavaExpressionTyper.resolvingVarLocals(locals, context: context.resolutionContext, index: index)
         guard let typed = await JavaExpressionTyper.typeOfExpression(
             context.expression.text, locals: resolvedLocals, context: context.resolutionContext, index: index
@@ -432,7 +432,7 @@ enum JavaExtractExpression {
     }
 
     private static func usedLocalNames(in context: MethodExtractionContext) -> Set<String> {
-        let locals = JavaLocalScope.locals(in: context.tree, atByteOffset: context.selectedRange.lowerBound)
+        let locals = context.tree.visibleLocals(atByteOffset: context.selectedRange.lowerBound)
         let localNames = Set(locals.map(\.name))
         var used = Set<String>()
         collectUsedLocalNames(in: context.tree.rootNode, range: context.selectedRange, localNames: localNames, into: &used)

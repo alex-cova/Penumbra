@@ -104,7 +104,7 @@ enum JavaExtractMethod {
         index: JavaIndex
     ) async -> ReturnInfo {
         if let expression = context.expression {
-            let locals = JavaLocalScope.locals(in: context.tree, atByteOffset: context.selectedRange.lowerBound)
+            let locals = context.tree.visibleLocals(atByteOffset: context.selectedRange.lowerBound)
             let resolvedLocals = await JavaExpressionTyper.resolvingVarLocals(
                 locals, context: context.resolutionContext, index: index
             )
@@ -124,7 +124,7 @@ enum JavaExtractMethod {
         if context.statements.count == 1, context.statements[0].type == "return_statement",
            let value = context.statements[0].child(byFieldName: "value")
                ?? context.statements[0].namedChild(at: 0) {
-            let locals = JavaLocalScope.locals(in: context.tree, atByteOffset: context.selectedRange.lowerBound)
+            let locals = context.tree.visibleLocals(atByteOffset: context.selectedRange.lowerBound)
             let resolvedLocals = await JavaExpressionTyper.resolvingVarLocals(
                 locals, context: context.resolutionContext, index: index
             )

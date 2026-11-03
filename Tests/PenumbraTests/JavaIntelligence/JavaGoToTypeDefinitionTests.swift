@@ -54,6 +54,25 @@ final class JavaGoToTypeDefinitionTests: XCTestCase {
         XCTAssertEqual(try selected(single(declaration), in: bar), "Bar")
     }
 
+    /// Pattern bindings are variables too: from the name and from a use, for `instanceof`, a `case`
+    /// pattern and a record pattern component; a `var` component has no written type to go to.
+    func testFromPatternBindingsAndTheirUses() async throws {
+        let sources = [
+            "class T { void m(Object o) { if (o instanceof Bar €b) { b.run(); } } }",
+            "class T { void m(Object o) { if (o instanceof Bar b) { €b.run(); } } }",
+            "class T { void m(Object o) { if (!(o instanceof Bar b)) return; €b.run(); } }",
+            "class T { void m(Object o) { switch (o) { case Bar €b -> b.run(); default -> {} } } }",
+            "class T { void m(Object o) { int n = switch (o) { case Bar b -> { b.run(); yield 1; } default -> 0; }; } }"
+                .replacingOccurrences(of: "b.run(); yield", with: "€b.run(); yield"),
+            "class T { record P(Bar a) {} void m(Object o) { if (o instanceof P(Bar €a)) { a.run(); } } }",
+            "class T { record P(Bar a) {} void m(Object o) { if (o instanceof P(Bar a)) { €a.run(); } } }",
+        ]
+        for source in sources {
+            let result = try await typeDeclaration(source)
+            XCTAssertEqual(try selected(single(result), in: bar), "Bar", "source: \(source)")
+        }
+    }
+
     func testAnArrayGoesToItsElementType() async throws {
         let result = try await typeDeclaration("class T { void m(Bar[] items) { €items.toString(); } }")
         XCTAssertEqual(try selected(single(result), in: bar), "Bar")

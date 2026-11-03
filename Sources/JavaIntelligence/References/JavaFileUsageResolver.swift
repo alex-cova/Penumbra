@@ -82,7 +82,7 @@ public enum JavaFileUsageResolver {
     ) async -> JavaUsage? {
         guard let receiverNode = reference.namedChild(at: 0), receiverNode.byteRange != node.byteRange else { return nil }
         let locals = await JavaExpressionTyper.resolvingVarLocals(
-            JavaLocalScope.locals(in: session.tree, atByteOffset: reference.startByte),
+            session.tree.visibleLocals(atByteOffset: reference.startByte),
             context: session.context, index: session.index
         )
         guard let typed = await JavaExpressionTyper.typed(receiverNode, locals: locals, context: session.context, index: session.index),

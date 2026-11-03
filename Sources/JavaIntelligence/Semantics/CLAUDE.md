@@ -16,7 +16,7 @@ Umbra reaches it through providers, never directly.
   qualified name, so usages and rename name them by site. Tests: `JavaSymbolTests`.
 - **Scope tree** (`Model/JavaScopeTree.swift`). The lexical scopes of one parse, built once and
   memoized on the parse (`JavaSyntaxTree.scopeTree(for:)`, via `JavaScopeTreeCache`) instead of
-  re-walked per query like `JavaLocalScope.locals(in:atByteOffset:)`. Each declaration carries
+  re-walked per query like the walk it replaced. Each declaration carries
   the byte range it is visible in, so `locals(atByteOffset:)`, `symbol(named:atByteOffset:)`
   and `scopeChain(atByteOffset:)` are range checks, not tree walks. Covers file, types (member
   types qualify as `Outer.Inner`; body-local types identify by site), methods/constructors/
@@ -28,14 +28,14 @@ Umbra reaches it through providers, never directly.
   with polarity (`&&` left-to-right, `||` under negation, `!` flips; bindings also visible
   inside their own right operands in any statement position) and flow-out past guard returns,
   record patterns (components typed from the pattern itself), local types, labels, and member
-  recovery inside `ERROR` regions. Deliberate JLS-closer deltas from `JavaLocalScope`, pinned
+  recovery inside `ERROR` regions. Deliberate JLS-closer deltas from that walk, pinned
   by tests: a local is visible in its own initializer, switch groups share one scope.
   Out of v1, documented at each site: qualifier resolution, single-static-import names,
   do-while pattern flow, `var` resources naming an existing variable, operand visibility under
   an explicit `!`. Cost: ~6 ms build on a 2k-line file in Release
   (`swift run -c release PerfHarness java-scope-tree synthetic --lines 2000`, exit ≤ 50 ms);
   the debug unit test only guards against pathological blowups (1 s). Tests:
-  `JavaScopeTreeTests` (parity against `JavaLocalScope` on shared cases, plus every delta).
+  `JavaScopeTreeTests` (the basic shapes, the order callers depend on, plus every delta).
 - **Type system** (`Model/JavaTypeSystem.swift`). The one place for operations over
   `JavaTypeRef`: `substitute` (absorbed from `JavaMemberLookup`, which delegates),
   `erasure` (JLS 4.6; unresolvable variables go to `Object`, unresolved names stay
@@ -48,8 +48,7 @@ Umbra reaches it through providers, never directly.
   `JavaMemberLookup.asSupertype` until attribution; the lub reaches it through the public
   query. No `JavaType` nominal yet — that needs the attributor. Tests: `JavaTypeSystemTests`
   (substitution, erasure, lub over a shard-built stub hierarchy, the var seam).
-- **Incumbents the model is absorbing.** `JavaLocalScope` still answers per-query locals for
-  live buffers (the tree is its tested successor for parsed files); `JavaExpressionTyper`
+- **Incumbents the model is absorbing.** `JavaExpressionTyper`
   keeps its public API (`receiverInfo`, `typeOfExpression`, `resolvingVarLocals`) and will
   become a façade over the attributor; `JavaMemberLookup` (generic-aware members,
   `asSupertype`, `supertypeClosure`) and `JavaTypeResolver` (simple names against
@@ -57,7 +56,7 @@ Umbra reaches it through providers, never directly.
   stay the resolution workhorses. `JavaReceiverScanner` finds the pre-dot expression
   textually (reparsing a dangling `.` collapses too much into `ERROR`); `JavaStaticImports`
   names single and on-demand static-import members.
-- **Member-completion locals** (`JavaSyntaxTree.visibleLocals(atByteOffset:)`, used by `JavaExpressionTyper.receiverInfo`). Scope-tree locals for the outermost method/constructor around the offset (`JavaScopeTree.locals(in:enclosingExecutableAtByteOffset:)`, no stub pass, cost follows that member, not the file: building the whole-file tree added ~5 ms per large-file completion), plus any name only `JavaLocalScope` finds, because the tree loses locals inside `ERROR` regions. Gives pattern bindings in `switch` rules (including a `switch` used as a value: `expressionScopes` builds its block) and negated `instanceof` to completion; drops the variable whose own initializer holds the caret (JLS 6.3 keeps it in scope, javac rejects the use). Every `JavaLocalScope.locals` call in `Completion/` goes through it; the per-member build is memoized per parse. `JavaLocalScope` itself recovers locals declared before the damage in a method that collapsed into a flat `ERROR` (`collectFlatLocals`). Corpus cases `AttrPattern*`, `Err*`.
+- **Locals** (`JavaSyntaxTree.visibleLocals(atByteOffset:)`, `Syntax/JavaSyntaxAliases.swift`). The one answer to "which locals are visible here", used by completion, receiver typing, usage resolution, inlay hints, go to type definition, the type intention and the extract refactorings; the per-query `JavaLocalScope` walk it replaced is gone (`Semantics/JavaLocalVariable.swift` keeps `JavaLocalVariable`, `JavaLambdaOrigin`, `JavaExpressionTarget` and `JavaExpressionTarget.target(of:)`). It is the scope tree's locals for the outermost method or constructor around the offset (`JavaScopeTree.locals(in:enclosingExecutableAtByteOffset:)`: no stub pass, so the cost follows that member, not the file; the whole-file tree added ~5 ms per large-file completion; memoized per parse), plus `JavaErrorRecoveredLocals` for a method that collapsed into a flat `ERROR` (the parameters and the locals declared before the damage, which stay direct children in source order; a balanced block stays a `block` child that is never entered, so its locals do not leak), minus the variable whose own initializer holds the offset (JLS 6.3 keeps it in scope, javac rejects the use). Order is the contract: an inner scope first, a scope's locals in source order, then its parameters (`JavaScopeTreeTests`). Gives completion pattern bindings in `switch` rules (including a `switch` used as a value: `expressionScopes` builds its block) and negated `instanceof`. Corpus cases `AttrPattern*`, `Err*`.
 - **Type-argument reads vs writes** (`JavaMemberLookup`). A `? super X` argument supplies `X` to parameters but only its upper bound to returns and fields (`readSubstitution`), through supertype levels (`inheritedLowerBounded`). Diamond: `JavaExpressionTyper.diamondResolved` binds class type parameters from constructor arguments; unbound leaves the type raw.
 - **Anonymous classes** (`JavaAnonymousClass`). `new Foo() { … }` is a synthetic `JavaClassStub` (`$Anonymous<hash of the text>` under the top-level type; `JavaSourceStubBuilder.anonymousStub`) registered in a request-scoped task-local `JavaAnonymousClass.registry` that `JavaIndex.classStub` consults after `liveStubs`. Only the completion provider sets a registry (`withAnonymousClasses`), so `JavaExpressionTyper` types the expression as the anonymous type there and as `Foo` everywhere else; the provider also enters the anonymous bodies around the caret as the innermost types (`makeScopedRequest`). Member sets of such types are never cached. Tests: `AttrAnonymous*` corpus cases.
-- **Four scope implementations.** `JavaScopeTree` (completion, local declaration lookup), `JavaLocalScope` (older per-query walk; ERROR recovery, remaining receiver-typing callers), `JavaSemanticWalker` (Find Usages of locals, Rename, highlighting) and `JavaDeclarationLocator.localDeclarationRange` (a use to its declaration; asks the tree first). A binding form added to one has to be added to the others until they merge: `instanceof` bindings and record pattern components were missing from the walker, the classifier and the identity step (`JavaPatternBindingUsagesTests`).
+- **Three scope readers.** `JavaScopeTree` (completion, receiver typing, local declaration lookup), `JavaSemanticWalker` (Find Usages of locals, Rename, highlighting) and `JavaDeclarationLocator.localDeclarationRange` (a use to its declaration; asks the tree first, its ancestor walk is the ERROR-region backstop). A binding form added to one has to be added to the others until they merge: `instanceof` bindings and record pattern components were missing from the walker, the classifier and the identity step (`JavaPatternBindingUsagesTests`).

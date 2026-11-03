@@ -30,7 +30,7 @@ enum JavaTypeIntentions {
             openBuffer: nil, decompile: JavaDecompileGate(policy: .denied)
         )
         let locals = await JavaExpressionTyper.resolvingVarLocals(
-            JavaLocalScope.locals(in: node.tree, atByteOffset: scope),
+            node.tree.visibleLocals(atByteOffset: scope),
             context: session.context, index: index
         )
         guard let local = locals.first(where: { $0.name == name.text }), !local.isVarDeclaration,

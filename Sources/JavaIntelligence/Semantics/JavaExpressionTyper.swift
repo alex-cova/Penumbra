@@ -27,7 +27,7 @@ public struct JavaReceiverInfo: Sendable, Equatable {
 ///    scanner and re-parsed on its own, wrapped in a tiny syntactically-complete synthetic snippet,
 ///    never re-parsing the live buffer's dangling dot directly.
 /// 2. Locals in scope at the cursor (which the receiver might reference) come from the *real*
-///    file's tree, via ``JavaLocalScope``, since the synthetic snippet obviously has none of its
+///    file's tree, via ``JavaSyntaxTree/visibleLocals(atByteOffset:)``, since the synthetic snippet obviously has none of its
 ///    own.
 ///
 /// Lambdas and method references passed to a call are typed against the functional interface of

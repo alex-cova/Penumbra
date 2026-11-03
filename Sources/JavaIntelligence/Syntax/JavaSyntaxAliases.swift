@@ -38,21 +38,19 @@ extension JavaSyntaxTree {
             .tree(for: url, build: { JavaScopeTree(tree: self, url: url) })
     }
 
-    /// The locals visible at `offset`, from the memoized scope tree (JLS 6.3): pattern bindings in
-    /// `switch` rules, negated `instanceof` flow-out, record patterns and guards included, which the
-    /// older per-query `JavaLocalScope.locals(in:atByteOffset:)` does not see. For callers that need
-    /// the variables only, not declaration sites, so no file URL is involved.
+    /// The locals visible at `offset`: the scope tree's (JLS 6.3 scopes, pattern bindings in
+    /// `switch` rules and negated `instanceof` included) for the outermost method or constructor
+    /// around it, plus what ``JavaErrorRecoveredLocals`` reads back from a collapsed `ERROR` region.
+    /// No file URL is involved: callers need the variables, not declaration sites.
     ///
-    /// The scope tree loses locals inside `ERROR` regions (an unfinished statement around the
-    /// caret, F14), which `JavaLocalScope` recovers, so its answers are kept for any name the tree
-    /// does not know. The result is only ever larger than either source alone.
+    /// The tree puts a local in scope inside its own initializer (JLS 6.3), which is right for the
+    /// tree and wrong for completion and receiver typing: `String s = <caret>` must not offer `s`
+    /// (javac rejects it), so the variable whose declarator holds the offset is dropped.
     func visibleLocals(atByteOffset offset: Int) -> [JavaLocalVariable] {
         let fromTree = JavaScopeTree.locals(in: self, enclosingExecutableAtByteOffset: offset)
             ?? scopeTree(for: Self.localsOnlyURL).locals(atByteOffset: offset)
         let known = Set(fromTree.map(\.name))
-        let merged = fromTree + JavaLocalScope.locals(in: self, atByteOffset: offset).filter { !known.contains($0.name) }
-        // JLS 6.3 puts a local in scope in its own initializer, which is right for the tree and
-        // wrong for completion: `String s = <caret>` must not offer `s` (javac rejects it).
+        let merged = fromTree + JavaErrorRecoveredLocals.locals(in: self, atByteOffset: offset).filter { !known.contains($0.name) }
         let initializing = namesBeingInitialized(atByteOffset: offset)
         return initializing.isEmpty ? merged : merged.filter { !initializing.contains($0.name) }
     }

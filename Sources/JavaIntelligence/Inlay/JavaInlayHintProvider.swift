@@ -243,7 +243,7 @@ enum JavaInlayHints {
                     decompile: JavaDecompileGate(policy: .denied)
                 )
                 resolved = await JavaExpressionTyper.resolvingVarLocals(
-                    JavaLocalScope.locals(in: tree, atByteOffset: candidate.scopeOffset),
+                    tree.visibleLocals(atByteOffset: candidate.scopeOffset),
                     context: session.context, index: index
                 )
                 resolvedByScope[candidate.scopeOffset] = resolved

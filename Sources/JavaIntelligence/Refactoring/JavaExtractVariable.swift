@@ -26,8 +26,7 @@ enum JavaExtractVariable {
         guard let typed else {
             return WorkspaceEditPlan(blockingError: "Select a complete expression to extract.", title: title)
         }
-        let locals = JavaLocalScope.locals(
-            in: typed.context.tree, atByteOffset: typed.context.expression.startByte
+        let locals = typed.context.tree.visibleLocals(atByteOffset: typed.context.expression.startByte
         )
         let resolvedLocals = await JavaExpressionTyper.resolvingVarLocals(
             locals, context: typed.context.resolutionContext, index: index
