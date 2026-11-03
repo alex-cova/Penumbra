@@ -471,6 +471,38 @@ extension JavaGradleProjectModel {
         }
     }
 
+    /// Every annotation-processor output directory the model declares, whether or not it exists
+    /// yet: a first build creates them, and a clean removes them.
+    public var declaredGeneratedSourceDirectories: [URL] {
+        var seen = Set<URL>()
+        var result: [URL] = []
+        for subproject in subprojects {
+            for sourceSet in subproject.sourceSets {
+                for directory in sourceSet.generatedSourceDirs {
+                    let standardized = directory.standardizedFileURL
+                    if seen.insert(standardized).inserted { result.append(standardized) }
+                }
+            }
+        }
+        return result
+    }
+
+    /// Whether any of `changed` (paths from the file watcher) can alter what the generated roots
+    /// hold: a `.java` file or a directory inside one, the directory itself, or a parent of it
+    /// (`build/` appearing after a first build, vanishing on a clean). Other files are noise.
+    public func affectsGeneratedSources(_ changed: [URL]) -> Bool {
+        let roots = declaredGeneratedSourceDirectories.map(\.path)
+        guard !roots.isEmpty else { return false }
+        for url in changed {
+            let path = url.standardizedFileURL.path
+            for root in roots {
+                if path == root || root.hasPrefix(path + "/") { return true }
+                if path.hasPrefix(root + "/"), url.pathExtension == "java" || url.pathExtension.isEmpty { return true }
+            }
+        }
+        return false
+    }
+
     /// Annotation-processor output directories that exist on disk, deduplicated.
     public var existingGeneratedSourceDirectories: [URL] {
         var seen = Set<URL>()

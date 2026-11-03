@@ -147,6 +147,8 @@ final class IDEJavaSupport {
     @ObservationIgnored private var nameIndexRoots: [URL] = []
     @ObservationIgnored private var pendingStubRefresh: Set<URL> = []
     @ObservationIgnored private var stubRefreshTask: Task<Void, Never>?
+    /// Waits for a build to stop writing before the generated roots are looked at again.
+    @ObservationIgnored private var generatedRefreshTask: Task<Void, Never>?
     /// Bumped on every `projectDidChange` so an in-flight index for the previous folder cannot
     /// publish over the new one. Distinct from `Task.isCancelled`: a reload of the *same* root
     /// cancels the previous task without changing the generation.
@@ -545,6 +547,8 @@ final class IDEJavaSupport {
         projectIndexingTask?.cancel()
         stubRefreshTask?.cancel()
         stubRefreshTask = nil
+        generatedRefreshTask?.cancel()
+        generatedRefreshTask = nil
         pendingStubRefresh = []
         projectRootURL = url
         clearTestIndex()
@@ -598,6 +602,8 @@ final class IDEJavaSupport {
         nameIndexTask = nil
         stubRefreshTask?.cancel()
         stubRefreshTask = nil
+        generatedRefreshTask?.cancel()
+        generatedRefreshTask = nil
         projectRootURL = nil
         // Turns `javac` off for this window and drops its configuration.
         refreshCompilerDiagnostics()
@@ -660,6 +666,12 @@ final class IDEJavaSupport {
     /// them and rebuild the stub shard of every source root that changed, bypassing the
     /// directory-mtime stamp (which does not move when a file is merely edited).
     func filesDidChange(_ changed: [URL]) {
+        // Annotation-processor output is not a name-index root, so the per-root path below never
+        // sees it. A build that did not go through Umbra (a terminal, another tool, `clean`)
+        // rewrites or removes it all the same.
+        if projectRootURL != nil, projectModel?.affectsGeneratedSources(changed) == true {
+            scheduleGeneratedSourcesRefresh()
+        }
         guard projectRootURL != nil, !nameIndexRoots.isEmpty else { return }
         // Extension-less paths may be directories that were added, removed or renamed.
         let urls = changed.filter { $0.pathExtension == "java" || $0.pathExtension.isEmpty }
@@ -904,18 +916,39 @@ final class IDEJavaSupport {
         jarSources = loaded.1
     }
 
-    /// After a build, annotation processors may have written (or rewritten) sources under the
-    /// model's generated directories. A root's stamp is its directory's own mtime, which misses
-    /// nested changes, so the generated shards are dropped and rebuilt.
-    func reindexGeneratedSources() {
+    /// A burst of writes under a generated directory (a build runs for seconds) becomes one look
+    /// at the end of it.
+    private func scheduleGeneratedSourcesRefresh() {
+        generatedRefreshTask?.cancel()
+        let generation = projectGeneration
+        generatedRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled, let self, self.isCurrent(generation) else { return }
+            self.refreshGeneratedSources()
+        }
+    }
+
+    /// After a build, or whenever the files under a generated directory moved, annotation
+    /// processors may have written, rewritten or removed sources there. A generated root is stamped
+    /// by what it holds (`SourceRoot.stamp`), so the scheduler re-reads exactly the roots that
+    /// changed and skips the rest; nothing is deleted first, and nothing is published when nothing
+    /// changed. The targets are worked out now: a first build creates directories that did not exist
+    /// when the model was read, and a clean removes them, which drops their shard from the sources.
+    func refreshGeneratedSources() {
         guard let model = projectModel else { return }
         let generation = projectGeneration
         Task { [paths, scheduler] in
             let all = model.sourceIndexTargets(paths: paths)
             let generated = all.filter { ($0.root as? SourceRoot)?.isGenerated == true }
-            guard !generated.isEmpty else { return }
-            for target in generated { try? FileManager.default.removeItem(at: target.shardURL) }
-            for await _ in await scheduler.index(generated) {}
+            // A cleaned directory has no root left to re-read, but its shard is still published.
+            let declared = Set(model.declaredGeneratedSourceDirectories.map { paths.projectSourcesShard(for: $0).path })
+            let wanted = Set(all.map(\.shardURL.path))
+            var reindexed = false
+            for await event in await scheduler.index(generated) {
+                if case .rootFinished = event { reindexed = true }
+            }
+            let removed = projectSources.contains { declared.contains($0.shardPath) && !wanted.contains($0.shardPath) }
+            guard reindexed || removed else { return }
             let sources = await Task.detached(priority: .userInitiated) {
                 all.compactMap { target -> JavaIndex.Source? in
                     guard let reader = try? JavaIndexShardReader(url: target.shardURL) else { return nil }
@@ -1109,7 +1142,7 @@ extension IDEJavaSupport: IDEJavaModelConsumer {
     }
 
     func buildSucceeded() {
-        reindexGeneratedSources()
+        refreshGeneratedSources()
     }
 }
 

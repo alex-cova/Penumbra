@@ -54,7 +54,7 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 - [F20 — Whole-document materialization on ordinary commands](/Users/alex/Developer/Penumbra/docs/audit/findings/F20-document-materialization.md) — Medium / Confirmed / A+B
 - [F21 — IDEWorkspace god object and forced root recompute](/Users/alex/Developer/Penumbra/docs/audit/findings/F21-ideworkspace-god-object.md) — High / Confirmed / A
 - [F22 — Watcher batch synchronous 9-way fan-out](/Users/alex/Developer/Penumbra/docs/audit/findings/F22-watcher-fanout.md) — Medium / Confirmed shape / A
-- [F23 — Generated-source staleness and index double-truth](/Users/alex/Developer/Penumbra/docs/audit/findings/F23-index-staleness.md) — Medium / Confirmed / B
+- [F23 — Generated-source staleness and index double-truth](/Users/alex/Developer/Penumbra/docs/audit/findings/F23-index-staleness.md) — **✅ Done (2026-11-03)** — Medium / Confirmed / B
 - [F24 — Navigation awaits before caret move; breadcrumb QoS](/Users/alex/Developer/Penumbra/docs/audit/findings/F24-navigation-qos.md) — Medium / Confirmed / B
 - [F25 — No large-file safe mode](/Users/alex/Developer/Penumbra/docs/audit/findings/F25-large-file-safe-mode.md) — Medium / Confirmed / B
 
@@ -65,7 +65,7 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 - [F28 — Keyboard gaps: presets, folding bindings, rebinding UI](/Users/alex/Developer/Penumbra/docs/audit/findings/F28-keyboard-gaps.md) — Medium / Confirmed / A+B
 - [F29 — Duplicate signposts and single-implementation protocols](/Users/alex/Developer/Penumbra/docs/audit/findings/F29-simplification.md) — Low / Confirmed / A+B
 
-**Execution status (2026-11-03):** F02, F03, F04, F05, F06, F14 (complete: `JavaLocalScope` retired), F15 (project sources), F17 (verified, no change needed) done (F01 in progress: wildcard reads, diamond, scope-tree locals, anonymous classes) — see each brief's *Implementation notes* for what was and was not verified. F01 (attributor, the long pole) and P1–P3 are not started. F05 deviates from its sketch (priority kept, bounded grace) because provider order is priority.
+**Execution status (2026-11-03):** F02, F03, F04, F05, F06, F14 (complete: `JavaLocalScope` retired), F15 (project sources), F17 (verified, no change needed), F23 (generated-source staleness fixed; `docs/INDEX_STALENESS.md`) done (F01 in progress: wildcard reads, diamond, scope-tree locals, anonymous classes) — see each brief's *Implementation notes* for what was and was not verified. F01 (attributor, the long pole) and P1–P3 are not started. F05 deviates from its sketch (priority kept, bounded grace) because provider order is priority.
 
 ## 3. Text buffer summary
 

@@ -30,15 +30,54 @@ public struct SourceRoot: JavaIndexableRoot {
     }
 
     public var stamp: JavaStamp {
-        // A directory's own mtime changes whenever an entry is added/removed/renamed, and
-        // JavaIndexScheduler re-reads this root (all its files) whenever *any* file underneath it
-        // changes anyway via the FSEvents watcher invalidating it -- see IDEJavaSupport (Umbra
-        // wiring). For the root's own coarse staleness check, the directory's own mtime is enough.
+        // A regular root is kept fresh by the project watcher: a `.java` change under it makes
+        // `IDEJavaSupport.filesDidChange` re-index it with `force`, so for the scheduler's own
+        // coarse check the directory's mtime is enough (it moves when an entry is added, removed or
+        // renamed). That does not hold for annotation-processor output: a processor rewrites
+        // `build/generated/.../p/Foo_Impl.java` in place, which never touches the root's mtime, and
+        // those directories are not name-index roots, so the watcher's per-root path does not apply
+        // to them. A generated root is therefore stamped by what is in it.
+        if isGenerated { return contentStamp }
         // `JavaStamp(url:)` isn't reusable here: `.fileSizeKey` resolves to `nil` for directories
         // on APFS, so that initializer always fails for a directory URL.
         let modificationDate = (try? directory.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate?.timeIntervalSince1970 ?? 0
         return JavaStamp(size: 0, modificationDate: modificationDate)
+    }
+
+    /// Size: how many `.java` files and how many bytes they hold. Date: the newest modification
+    /// time among them and the directories above them. Any file added, removed, rewritten or
+    /// renamed under the root moves at least one of the three. A stat per entry, no reads, so
+    /// checking an unchanged root stays far cheaper than parsing it.
+    var contentStamp: JavaStamp {
+        var count: Int64 = 0
+        var bytes: Int64 = 0
+        var newest: TimeInterval = 0
+        func note(_ url: URL, _ values: URLResourceValues?) {
+            if let date = values?.contentModificationDate?.timeIntervalSince1970 { newest = max(newest, date) }
+        }
+        let keys: [URLResourceKey] = [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey]
+        note(directory, try? directory.resourceValues(forKeys: Set(keys)))
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
+        ) else { return JavaStamp(size: 0, modificationDate: newest) }
+        for case let url as URL in enumerator {
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            if values?.isDirectory == true {
+                if Self.ignoredDirectoryNames.contains(url.lastPathComponent) {
+                    enumerator.skipDescendants()
+                } else {
+                    note(url, values)
+                }
+                continue
+            }
+            guard url.pathExtension == "java" else { continue }
+            count += 1
+            bytes += Int64(values?.fileSize ?? 0)
+            note(url, values)
+        }
+        // Count and bytes share the size field: either alone can stay equal across an edit.
+        return JavaStamp(size: count << 40 ^ bytes, modificationDate: newest)
     }
 
     public func readStubs() throws -> [JavaClassStub] {

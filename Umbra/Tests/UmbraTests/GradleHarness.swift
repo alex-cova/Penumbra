@@ -44,6 +44,12 @@ final class GradleHarness {
     private let cacheRoot: URL
     /// The window's one watcher, feeding the system as `IDEWorkspace` does.
     private let watcher = IDEProjectWatcher()
+    /// Whether watcher batches also reach the Java language support, as `IDEWorkspace` does through
+    /// `languages.filesDidChange`. Off by default: the Gradle tests do not want the name index and the
+    /// stub shards reacting to every file they write.
+    var forwardsFilesToJava = false
+    /// The index the Java support publishes its sources to.
+    var javaIndex: JavaIndex { java.javaIndex }
 
     private(set) var asked: [String] = []
     private(set) var outcomes: [Outcome] = []
@@ -85,7 +91,12 @@ final class GradleHarness {
             }
         }
         gradle.environment.syncFailed = { [weak self] in self?.failures += 1 }
-        watcher.onBatch = [{ [weak gradle] batch in gradle?.filesDidChange(batch.paths) }]
+        watcher.onBatch = [{ [weak self, weak gradle] batch in
+            gradle?.filesDidChange(batch.paths)
+            if self?.forwardsFilesToJava == true {
+                self?.java.filesDidChange(batch.paths.map { URL(fileURLWithPath: $0) })
+            }
+        }]
         gradle.environment.tasksFinished = { [weak self] report in
             self?.finishedTasks.append(FinishedTasks(tasks: report.tasks, root: report.root, exitCode: report.exitCode))
         }
