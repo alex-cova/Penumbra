@@ -38,6 +38,7 @@ func printUsageAndExit() -> Never {
       java-completion synthetic [--jars N]
       java-name-index <java-source-directory|synthetic> [--files N]
       java-members <java-source-directory>
+      java-inheritors synthetic [--files N]
       java-inspections <path|synthetic> [--lines N] [--samples N] [--jdk]
       java-diagnostics (survival|latency|typing) <path|synthetic> [--lines N] [--samples N]
       java-analysis-server <path|synthetic> [--lines N] [--samples N]
@@ -97,7 +98,7 @@ let options = Commands.Options(
 
 let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
     || command == "java-profile-import" || command == "java-coverage-bands"
-    || command == "enter-session" || command == "markdown-preview" || command == "java-name-index"
+    || command == "enter-session" || command == "markdown-preview" || command == "java-name-index" || command == "java-inheritors"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
 guard usesSynthetic || command == "java-diagnostics" || FileManager.default.fileExists(atPath: path) else {
@@ -114,6 +115,8 @@ do {
         MetalCommands.snapshotMetal(pathOrSynthetic: path, outputDir: flagValue("--out", in: rest))
     case "java-completion":
         try JavaCompletionProfile.run(jars: Int(flagValue("--jars", in: rest) ?? "") ?? 0)
+    case "java-inheritors":
+        try JavaInheritorsProfile.run(files: Int(flagValue("--files", in: rest) ?? "") ?? 5_000)
     case "java-name-index":
         try JavaNameIndexProfile.run(
             pathOrSynthetic: path,

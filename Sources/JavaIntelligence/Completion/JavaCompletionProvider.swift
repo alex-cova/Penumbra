@@ -336,7 +336,7 @@ public actor JavaCompletionProvider: CompletionProvider {
             expected = await JavaExpectedType.infer(at: Self.newKeywordStart(before: request.prefixStart, bytes: request.bytes), request: request.semantic)
         case .statement, .caseLabel:
             let locals = await JavaExpressionTyper.resolvingVarLocals(
-                JavaLocalScope.locals(in: request.tree, atByteOffset: request.cursor), context: request.context, index: index
+                request.tree.visibleLocals(atByteOffset: request.cursor), context: request.context, index: index
             )
             let semantic = JavaSemanticRequest(
                 source: request.text, bytes: request.bytes, tree: request.tree, locals: locals, context: request.context, index: index
@@ -456,11 +456,19 @@ public actor JavaCompletionProvider: CompletionProvider {
 
     // MARK: - Member access
 
+    /// The last few dozen bytes before `offset`, for a log line that says which receiver failed.
+    static func receiverSnippet(before offset: Int, in bytes: [UInt8]) -> String {
+        let end = min(max(offset, 0), bytes.count)
+        return String(decoding: bytes[max(0, end - 48)..<end], as: UTF8.self)
+    }
+
     private func memberAccessItems(dotOffset: Int, source: String, request: Request) async -> [CompletionItem] {
         guard let receiver = await JavaExpressionTyper.receiverInfo(
             source: source, realTree: request.tree, dotOffset: dotOffset, context: request.context, index: index
         ) else {
-            javaCompletionLog.debug("java receiver could not be typed")
+            // Unresolved, not empty: a receiver that does not type is the usual reason for "no
+            // suggestions", and it should be told apart from a type that simply has no members.
+            javaCompletionLog.debug("java receiver could not be typed: \(Self.receiverSnippet(before: dotOffset, in: request.bytes), privacy: .private)")
             return []
         }
         javaCompletionLog.debug("java receiver=\(String(describing: receiver.type), privacy: .public) static=\(receiver.isTypeReference)")
@@ -538,7 +546,7 @@ public actor JavaCompletionProvider: CompletionProvider {
         let imports = await postfixImports(request)
         let templates = JavaPostfixTemplates(
             bytes: request.bytes, dotOffset: dotOffset, factory: request.factory, source: name,
-            takenNames: Set(JavaLocalScope.locals(in: request.tree, atByteOffset: request.cursor).map(\.name)),
+            takenNames: Set(request.tree.visibleLocals(atByteOffset: request.cursor).map(\.name)),
             configuration: postfixConfiguration, prefix: request.prefix, importer: request.importer
         )
         var items = templates.items(candidates: candidates, imports: imports)
@@ -572,7 +580,7 @@ public actor JavaCompletionProvider: CompletionProvider {
         guard !ranges.isEmpty else { return [] }
         let primary = JavaExpressionTyper.treeReceiverRange(in: request.tree, dotOffset: dotOffset)
             ?? JavaReceiverScanner.receiverRange(in: request.bytes, dotOffset: dotOffset)
-        let locals = JavaLocalScope.locals(in: request.tree, atByteOffset: dotOffset)
+        let locals = request.tree.visibleLocals(atByteOffset: dotOffset)
         let assignability = JavaAssignability(index: index, context: request.context)
         let throwable = JavaTypeRef.classType(qualifiedName: "java.lang.Throwable", arguments: [], outer: nil)
         let closeable = JavaTypeRef.classType(qualifiedName: "java.lang.AutoCloseable", arguments: [], outer: nil)
@@ -779,7 +787,10 @@ public actor JavaCompletionProvider: CompletionProvider {
         let source = String(decoding: bytes, as: UTF8.self)
         guard let receiver = await JavaExpressionTyper.receiverInfo(
             source: source, realTree: request.tree, dotOffset: colonOffset + 1, context: request.context, index: index
-        ), receiver.packageName == nil else { return [] }
+        ), receiver.packageName == nil else {
+            javaCompletionLog.debug("java method-reference receiver could not be typed: \(Self.receiverSnippet(before: colonOffset, in: request.bytes), privacy: .private)")
+            return []
+        }
         // `Type::instanceMethod` is legal (the receiver becomes the first argument), so a type
         // reference offers instance methods too.
         let members = await JavaMemberLookup.members(of: receiver.type, mode: .instance, context: request.context, index: index)
@@ -937,8 +948,10 @@ public actor JavaCompletionProvider: CompletionProvider {
 
     /// `List<User> x = new |` with nothing typed: concrete classes assignable to the expected type
     /// from the packages the code is likely to use -- the expected type's own package, this
-    /// file's package, its imports, and `java.lang` (`ArrayList`, `LinkedList`, … for `List`).
-    /// There is no inheritor index, so types elsewhere on the classpath need a typed prefix.
+    /// file's package, its imports, and `java.lang` (`ArrayList`, `LinkedList`, … for `List`) --
+    /// and every project class that extends or implements it, wherever it lives (the inheritor
+    /// index, ``JavaInheritors``). Library implementations outside those packages still need a
+    /// typed prefix.
     private func implementationStubs(
         request: Request, expected: [JavaTypeRef], assignability: JavaAssignability, excluding: Set<String>
     ) async -> [JavaClassStub] {
@@ -956,18 +969,23 @@ public actor JavaCompletionProvider: CompletionProvider {
             }
         }
         var seenPackages = Set<String>()
+        var candidates: [JavaClassStub] = []
+        for package in packages where seenPackages.insert(package).inserted {
+            candidates += await index.classes(inPackage: package)
+        }
+        for target in targets {
+            candidates += await JavaInheritors.subtypes(of: target, index: index)
+        }
         var seen = excluding
         var stubs: [JavaClassStub] = []
-        for package in packages where seenPackages.insert(package).inserted {
-            for stub in await index.classes(inPackage: package) {
-                guard stub.kind == .classKind || stub.kind == .recordKind, !stub.modifiers.contains(.abstractFlag),
-                      stub.outerQualifiedName == nil, !stub.qualifiedName.hasPrefix("com.sun."),
-                      isAccessibleClass(stub, request: request), !seen.contains(stub.qualifiedName) else { continue }
-                let classType = JavaTypeRef.classType(qualifiedName: stub.qualifiedName, arguments: [], outer: nil)
-                guard await Self.matchesExpected(classType, expected: expected, assignability: assignability) else { continue }
-                seen.insert(stub.qualifiedName)
-                stubs.append(stub)
-            }
+        for stub in candidates {
+            guard stub.kind == .classKind || stub.kind == .recordKind, !stub.modifiers.contains(.abstractFlag),
+                  stub.outerQualifiedName == nil, !stub.qualifiedName.hasPrefix("com.sun."),
+                  isAccessibleClass(stub, request: request), !seen.contains(stub.qualifiedName) else { continue }
+            let classType = JavaTypeRef.classType(qualifiedName: stub.qualifiedName, arguments: [], outer: nil)
+            guard await Self.matchesExpected(classType, expected: expected, assignability: assignability) else { continue }
+            seen.insert(stub.qualifiedName)
+            stubs.append(stub)
         }
         return stubs
     }
@@ -1043,7 +1061,7 @@ public actor JavaCompletionProvider: CompletionProvider {
 
     private func caseLabelItems(selectorText: String, request: Request) async -> [CompletionItem] {
         let locals = await JavaExpressionTyper.resolvingVarLocals(
-            JavaLocalScope.locals(in: request.tree, atByteOffset: request.prefixStart), context: request.context, index: index
+            request.tree.visibleLocals(atByteOffset: request.prefixStart), context: request.context, index: index
         )
         guard let selector = await JavaExpressionTyper.typeOfExpression(selectorText, locals: locals, context: request.context, index: index),
               let name = selector.type.erasedQualifiedName,
@@ -1170,7 +1188,7 @@ public actor JavaCompletionProvider: CompletionProvider {
     }
 
     private func statementDraft(request: Request) async -> StatementDraft {
-        let rawLocals = JavaLocalScope.locals(in: request.tree, atByteOffset: request.cursor)
+        let rawLocals = request.tree.visibleLocals(atByteOffset: request.cursor)
         let locals = await JavaExpressionTyper.resolvingVarLocals(rawLocals, context: request.context, index: index)
         let semantic = JavaSemanticRequest(source: request.text, bytes: request.bytes, tree: request.tree, locals: locals, context: request.context, index: index)
         let expected = await JavaExpectedType.infer(at: request.prefixStart, request: semantic)
@@ -1411,7 +1429,7 @@ public actor JavaCompletionProvider: CompletionProvider {
     }
 
     private func castUpdates(request: Request) async -> [CompletionUpdate] {
-        let rawLocals = JavaLocalScope.locals(in: request.tree, atByteOffset: request.cursor)
+        let rawLocals = request.tree.visibleLocals(atByteOffset: request.cursor)
         let locals = await JavaExpressionTyper.resolvingVarLocals(rawLocals, context: request.context, index: index)
         let semantic = JavaSemanticRequest(
             source: request.text, bytes: request.bytes, tree: request.tree, locals: locals, context: request.context, index: index

@@ -63,9 +63,9 @@ public struct JavaLocalVariable: Sendable, Equatable {
 /// comment). tree-sitter still attaches whatever fields it matched before giving up directly onto
 /// that `ERROR` node, so a `parameters:` field survives even when the method's `body:`/`block`
 /// wrapper is lost entirely -- meaning any local variable declared earlier in the same corrupted
-/// method body is genuinely unrecoverable from this parse, not just harder to reach. This collector
-/// still recovers parameters in that case (the most common thing a receiver chain continues from),
-/// documented here rather than silently missing locals with no explanation.
+/// method body is hard to reach. This collector recovers the parameters, and the locals declared
+/// before the damage: they stay direct children of the flat `ERROR` in source order, with their
+/// braces (see ``collectFlatLocals(in:before:into:seenNames:)``).
 ///
 /// Also collected: classic `for` init variables, catch parameters (a multi-catch binds its first
 /// alternative's type), implicitly typed lambda parameters (typed `Object` -- no functional
@@ -147,6 +147,7 @@ public enum JavaLocalScope {
                         collectFormalParameter(parameter, into: &result, seenNames: &seenNames)
                     }
                 }
+                collectFlatLocals(in: node, before: offset, into: &result, seenNames: &seenNames)
             case "enhanced_for_statement":
                 if let body = node.child(byFieldName: "body"), offset >= body.startByte,
                    let typeNode = node.child(byFieldName: "type"), let nameNode = node.child(byFieldName: "name") {
@@ -172,6 +173,35 @@ public enum JavaLocalScope {
             current = node.parent
         }
         return result
+    }
+
+    /// Locals declared earlier in a method that collapsed into one flat `ERROR` node. The
+    /// declarations are not lost, they are direct children in source order. A balanced
+    /// `{ … }` inside the method stays a `block` child that is never entered, so its locals do not
+    /// leak; the `{` and `}` tokens that remain flat are the unmatched ones, and are tracked so a
+    /// stray `}` drops what its block declared while anything still open stays visible.
+    /// Innermost, latest declaration first.
+    private static func collectFlatLocals(
+        in node: SyntaxNode, before offset: Int, into result: inout [JavaLocalVariable], seenNames: inout Set<String>
+    ) {
+        var frames: [[SyntaxNode]] = [[]]
+        for child in node.children where child.startByte < offset {
+            switch child.type {
+            case "{":
+                frames.append([])
+            case "}":
+                if frames.count > 1 { frames.removeLast() }
+            case "local_variable_declaration":
+                if child.endByte <= offset { frames[frames.count - 1].append(child) }
+            default:
+                break
+            }
+        }
+        for frame in frames.reversed() {
+            for declaration in frame.reversed() {
+                collectLocalVariableDeclaration(declaration, into: &result, seenNames: &seenNames)
+            }
+        }
     }
 
     /// `var x = ...;` declarations keep `.unresolved(simpleName: "var")` as their type -- typing

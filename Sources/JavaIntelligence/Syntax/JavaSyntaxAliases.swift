@@ -50,7 +50,26 @@ extension JavaSyntaxTree {
         let fromTree = JavaScopeTree.locals(in: self, enclosingExecutableAtByteOffset: offset)
             ?? scopeTree(for: Self.localsOnlyURL).locals(atByteOffset: offset)
         let known = Set(fromTree.map(\.name))
-        return fromTree + JavaLocalScope.locals(in: self, atByteOffset: offset).filter { !known.contains($0.name) }
+        let merged = fromTree + JavaLocalScope.locals(in: self, atByteOffset: offset).filter { !known.contains($0.name) }
+        // JLS 6.3 puts a local in scope in its own initializer, which is right for the tree and
+        // wrong for completion: `String s = <caret>` must not offer `s` (javac rejects it).
+        let initializing = namesBeingInitialized(atByteOffset: offset)
+        return initializing.isEmpty ? merged : merged.filter { !initializing.contains($0.name) }
+    }
+
+    /// Variables whose declarator contains `offset` after the name, i.e. the caret is in their
+    /// own initializer.
+    private func namesBeingInitialized(atByteOffset offset: Int) -> Set<String> {
+        var names = Set<String>()
+        var current: SyntaxNode? = node(atByteOffset: offset)
+        while let node = current {
+            if node.type == "variable_declarator", let name = node.child(byFieldName: "name"),
+               offset >= name.endByte, offset <= node.endByte {
+                names.insert(name.text)
+            }
+            current = node.parent
+        }
+        return names
     }
 
     private static var localsOnlyURL: URL { URL(fileURLWithPath: "/__umbra_locals_only__.java") }

@@ -22,7 +22,7 @@ extension JavaCompletionProvider: SignatureHelpProviding {
         let offset = Self.utf8ByteOffset(forUTF16Offset: position.utf16Offset, in: text)
         let context = Self.resolutionContext(in: tree, fileStubs: fileStubs, atByteOffset: offset)
         let locals = await JavaExpressionTyper.resolvingVarLocals(
-            JavaLocalScope.locals(in: tree, atByteOffset: offset), context: context, index: javaIndex
+            tree.visibleLocals(atByteOffset: offset), context: context, index: javaIndex
         )
         let request = JavaSemanticRequest(source: text, bytes: Array(text.utf8), tree: tree, locals: locals, context: context, index: javaIndex)
         guard let site = await JavaExpectedType.callSite(at: offset, request: request), !site.candidates.isEmpty else { return nil }

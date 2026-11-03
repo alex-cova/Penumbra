@@ -40,6 +40,43 @@ final class JavaGoToImplementationTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    /// A project class below a library interface through a library class (`MyList extends
+    /// AbstractList`, below `List`): the inheritor table does not see through the library, so this
+    /// target keeps the closure scan.
+    func testProjectClassBelowALibraryTypeThroughALibraryClassIsFound() async throws {
+        func ref(_ name: String) -> JavaTypeRef { .classType(qualifiedName: name, arguments: [], outer: nil) }
+        let library = [
+            JavaClassStub(
+                binaryName: "lib.Base", qualifiedName: "lib.Base", simpleName: "Base", packageName: "lib", kind: .interfaceKind,
+                modifiers: [.publicFlag, .abstractFlag], origin: .jdkModule("test")
+            ),
+            JavaClassStub(
+                binaryName: "lib.AbstractBase", qualifiedName: "lib.AbstractBase", simpleName: "AbstractBase", packageName: "lib",
+                kind: .classKind, modifiers: [.publicFlag, .abstractFlag], interfaces: [ref("lib.Base")], origin: .jdkModule("test")
+            ),
+        ]
+        let mine = try write("Mine.java", "package app; import lib.AbstractBase; class Mine extends AbstractBase { }")
+        let unrelated = try write("Unrelated.java", "package app; class Unrelated { }")
+        let index = JavaIndex()
+        await index.setSources([
+            .init(precedence: 1, reader: try writeShard((stubs(of: mine) + stubs(of: unrelated)))),
+            .init(precedence: 3, reader: try writeShard(library)),
+        ])
+        let provider = JavaGoToDefinitionProvider(
+            index: index, indexPaths: JavaIndexPaths(root: scratch.appendingPathComponent("cache", isDirectory: true))
+        )
+        let result = await provide(
+            "package app; import lib.Base; class T { €Base b; }", url: scratch.appendingPathComponent("T.java"), provider: provider
+        )
+        let location: Location
+        switch result {
+        case .single(let only)?: location = only
+        case .multiple(let all)?: location = try XCTUnwrap(all.first); XCTAssertEqual(all.count, 1)
+        case nil: return XCTFail("expected Mine as the implementation")
+        }
+        XCTAssertEqual(location.url?.lastPathComponent, "Mine.java")
+    }
+
     // MARK: - Methods
 
     func testAbstractMethodCallListsEveryOverride() async throws {

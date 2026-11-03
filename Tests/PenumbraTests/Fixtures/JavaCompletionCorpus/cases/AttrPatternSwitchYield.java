@@ -1,4 +1,3 @@
-//! gap: F14-error-recovery
 //! receiver: java.lang.String
 //! contains: length, isEmpty
 package com.acme.cases;

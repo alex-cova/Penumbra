@@ -45,10 +45,10 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 
 ### P2 — code intelligence and language support
 
-- [F14 — JavaScopeTree unwired; ERROR-node local loss](/Users/alex/Developer/Penumbra/docs/audit/findings/F14-scope-tree-error-recovery.md) — High / Confirmed / A+B
-- [F15 — No inheritor/member index for `new` completion](/Users/alex/Developer/Penumbra/docs/audit/findings/F15-inheritor-index.md) — High / Confirmed / A+B
+- [F14 — JavaScopeTree unwired; ERROR-node local loss](/Users/alex/Developer/Penumbra/docs/audit/findings/F14-scope-tree-error-recovery.md) — **✅ Done (2026-11-03)** — High / Confirmed / A+B
+- [F15 — No inheritor/member index for `new` completion](/Users/alex/Developer/Penumbra/docs/audit/findings/F15-inheritor-index.md) — **✅ Done for project sources (2026-11-03)** — High / Confirmed / A+B
 - [F16 — No module-aware (JPMS) visibility](/Users/alex/Developer/Penumbra/docs/audit/findings/F16-module-visibility.md) — Medium / Strongly suspected / A+B
-- [F17 — No persistent reference index](/Users/alex/Developer/Penumbra/docs/audit/findings/F17-reference-index.md) — High / Confirmed / B
+- [F17 — No persistent reference index](/Users/alex/Developer/Penumbra/docs/audit/findings/F17-reference-index.md) — **✅ Closed: premise stale, verified (2026-11-03)** — High / Confirmed / B
 - [F18 — Completion ranking has no statistics](/Users/alex/Developer/Penumbra/docs/audit/findings/F18-ranking-statistics.md) — Medium / Confirmed / A+B
 - [F19 — EditorIntelligence indexing parser is full-parse only](/Users/alex/Developer/Penumbra/docs/audit/findings/F19-ei-full-parse.md) — Medium / Confirmed / A
 - [F20 — Whole-document materialization on ordinary commands](/Users/alex/Developer/Penumbra/docs/audit/findings/F20-document-materialization.md) — Medium / Confirmed / A+B
@@ -65,7 +65,7 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 - [F28 — Keyboard gaps: presets, folding bindings, rebinding UI](/Users/alex/Developer/Penumbra/docs/audit/findings/F28-keyboard-gaps.md) — Medium / Confirmed / A+B
 - [F29 — Duplicate signposts and single-implementation protocols](/Users/alex/Developer/Penumbra/docs/audit/findings/F29-simplification.md) — Low / Confirmed / A+B
 
-**Execution status (2026-11-03):** F02, F03, F04, F05, F06 implemented — see each brief's *Implementation notes* for what was and was not verified. F01 (attributor, the long pole) and P1–P3 are not started. F05 deviates from its sketch (priority kept, bounded grace) because provider order is priority.
+**Execution status (2026-11-03):** F02, F03, F04, F05, F06, F14, F15 (project sources), F17 (verified, no change needed) done (F01 in progress: wildcard reads, diamond, scope-tree locals, anonymous classes) — see each brief's *Implementation notes* for what was and was not verified. F01 (attributor, the long pole) and P1–P3 are not started. F05 deviates from its sketch (priority kept, bounded grace) because provider order is priority.
 
 ## 3. Text buffer summary
 

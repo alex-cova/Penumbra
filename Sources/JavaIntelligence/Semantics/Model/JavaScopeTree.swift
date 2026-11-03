@@ -97,10 +97,14 @@ public final class JavaScopeTree: Sendable {
             current = node.parent
         }
         guard let executable else { return nil }
-        let url = URL(fileURLWithPath: "/__umbra_locals_only__.java")
-        let builder = ScopeBuilder(tree: tree, url: url, withoutStubs: ())
-        guard let scope = builder.buildExecutable(executable, owner: "") else { return nil }
-        return JavaScopeTree(url: url, root: scope).locals(atByteOffset: offset)
+        // One build per member per parse: a request asks several times (statement items, expected
+        // types, receiver typing) and each ask is a range check once the member is built.
+        let cache = tree.attachment.object(JavaExecutableScopeCache.self, create: JavaExecutableScopeCache.init)
+        return cache.tree(forExecutableStartingAt: executable.startByte) {
+            let url = URL(fileURLWithPath: "/__umbra_locals_only__.java")
+            let builder = ScopeBuilder(tree: tree, url: url, withoutStubs: ())
+            return builder.buildExecutable(executable, owner: "").map { JavaScopeTree(url: url, root: $0) }
+        }?.locals(atByteOffset: offset)
     }
 
     // MARK: - Queries
@@ -923,6 +927,18 @@ private struct ScopeBuilder {
                 scopes.append(buildTypeBody(body, qualifiedName: "", kind: .type(name: "")))
                 continue
             }
+            // A `switch` used as a value (`int n = switch (o) { case String s -> … }`, an argument,
+            // a `return`): its block is one scope with the rules beneath it, like a statement
+            // switch. Only the selector is walked as an ordinary expression.
+            if current.type == "switch_expression",
+               let block = current.namedChildren.first(where: { $0.type == "switch_block" }) {
+                scopes.append(buildSwitchBlock(block))
+                for index in (0..<current.namedChildCount).reversed() {
+                    let child = current.namedChild(at: index)!
+                    if child.startByte != block.startByte { stack.append(child) }
+                }
+                continue
+            }
             for index in (0..<current.namedChildCount).reversed() {
                 stack.append(current.namedChild(at: index)!)
             }
@@ -1013,6 +1029,24 @@ final class JavaScopeTreeCache: @unchecked Sendable {
         let built = build()
         lock.lock()
         trees[url] = built
+        lock.unlock()
+        return built
+    }
+}
+
+/// Per-parse memo of the scope trees built for single members (see
+/// ``JavaScopeTree/locals(in:enclosingExecutableAtByteOffset:)``), keyed by the member's start.
+final class JavaExecutableScopeCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var trees: [Int: JavaScopeTree?] = [:]
+
+    func tree(forExecutableStartingAt start: Int, build: () -> JavaScopeTree?) -> JavaScopeTree? {
+        lock.lock()
+        if let existing = trees[start] { lock.unlock(); return existing }
+        lock.unlock()
+        let built = build()
+        lock.lock()
+        trees[start] = .some(built)
         lock.unlock()
         return built
     }

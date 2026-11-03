@@ -36,7 +36,7 @@ public struct JavaMethodHierarchyNode: Identifiable, Hashable, Sendable {
 /// The hierarchy of one method (IntelliJ's Method Hierarchy): the classes from the topmost one that
 /// declares it, down through its subtypes, each marked by what it does with the method. It is the
 /// type hierarchy of those classes plus the method's family (``JavaMethodFamily``), so it expands
-/// lazily like it and is as costly: a subtype expansion scans the project.
+/// lazily like it and costs the same: a subtype expansion resolves the few project classes that name the type.
 public struct JavaMethodHierarchyProvider: Sendable {
     private let typeHierarchy: JavaTypeHierarchyProvider
     private let index: JavaIndex

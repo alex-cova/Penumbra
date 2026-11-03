@@ -79,20 +79,32 @@ extension JavaNavigationSession {
             closures[stub.qualifiedName] = computed
             return computed
         }
+        /// The project classes below `name`. A project type's subtypes cannot pass through a
+        /// library class (a jar does not extend the project), so the inheritor table answers
+        /// without computing a closure per project class. A library type's can (`MyList extends
+        /// AbstractList` below `java.util.List`), and the table does not see through the library,
+        /// so those keep the closure scan.
+        func subtypes(of name: String) async -> [JavaClassStub] {
+            if let stub = await index.classStub(qualifiedName: name), case .source = stub.origin {
+                return await JavaInheritors.subtypes(of: name, index: index)
+            }
+            var found: [JavaClassStub] = []
+            for stub in projectClasses where stub.qualifiedName != name {
+                if await closure(of: stub).contains(name) { found.append(stub) }
+            }
+            return found
+        }
         for target in targets {
             switch target {
             case .type(let qualifiedName):
-                for stub in projectClasses where stub.qualifiedName != qualifiedName {
-                    if await closure(of: stub).contains(qualifiedName) {
-                        hits.append(contentsOf: await typeHits(qualifiedName: stub.qualifiedName))
-                    }
+                for stub in await subtypes(of: qualifiedName) {
+                    hits.append(contentsOf: await typeHits(qualifiedName: stub.qualifiedName))
                 }
             case .method(let method):
                 let ownerStub = await index.classStub(qualifiedName: method.declaringClass)
                     ?? currentClasses.first { $0.qualifiedName == method.declaringClass }
                 let variables = Set((ownerStub?.typeParameters ?? []).map(\.name) + method.method.typeParameters.map(\.name))
-                for stub in projectClasses where stub.qualifiedName != method.declaringClass {
-                    guard await closure(of: stub).contains(method.declaringClass) else { continue }
+                for stub in await subtypes(of: method.declaringClass) {
                     let overrides = stub.methods.filter { candidate in
                         candidate.name == method.method.name
                             && !candidate.isConstructor

@@ -52,6 +52,31 @@ final class JavaScopeTreeTests: XCTestCase {
         XCTAssertTrue(names(tree, at: offset).contains("a"))
     }
 
+    // MARK: - switch used as a value
+
+    /// A `switch` that is an initializer, argument or `return` value builds its rule scopes too.
+    func testSwitchExpressionAsInitializerBindsPatterns() {
+        let (_, tree, offset) = scopes(
+            "class Foo { void m(Object o) { int n = switch (o) { case String s -> s.length€(); default -> 0; }; } }")
+        XCTAssertTrue(names(tree, at: offset).contains("s"))
+    }
+
+    func testSwitchExpressionAsArgumentAndReturnBindPatterns() {
+        for source in [
+            "class Foo { void m(Object o) { use(switch (o) { case Integer i -> i€; default -> 0; }); } }",
+            "class Foo { int m(Object o) { return switch (o) { case Integer i -> i€; default -> 0; }; } }",
+        ] {
+            let (_, tree, offset) = scopes(source)
+            XCTAssertTrue(names(tree, at: offset).contains("i"), "source: \(source)")
+        }
+    }
+
+    func testSwitchExpressionBindingDoesNotEscapeItsRule() {
+        let (_, tree, offset) = scopes(
+            "class Foo { void m(Object o) { int n = switch (o) { case String s -> 1; default -> 0; }; €x; } }")
+        XCTAssertFalse(names(tree, at: offset).contains("s"))
+    }
+
     // MARK: - shadowing
 
     func testShadowingKeepsInnermostDeclaration() {

@@ -36,8 +36,8 @@ public struct JavaTypeHierarchyLocation: Sendable, Equatable {
 }
 
 /// Supertype and subtype trees for a Java type. Supertypes come from the whole classpath and the
-/// JDK; subtypes are the project's own classes (a scan of every project class per expansion, so it
-/// belongs behind an explicit request, not typing).
+/// JDK; subtypes are the project's own classes, found through the inheritor table (``JavaInheritors``)
+/// and resolved one by one, so it belongs behind an explicit request, not typing).
 public actor JavaTypeHierarchyProvider {
     nonisolated let index: JavaIndex
     private let indexPaths: JavaIndexPaths
@@ -120,20 +120,13 @@ public actor JavaTypeHierarchyProvider {
         let index = self.index
         let model = classpathModel
         return await scoped(file) {
-            let simple = node.displayName.split(separator: ".").last.map(String.init) ?? node.displayName
             var result: [JavaTypeHierarchyNode] = []
-            for stub in await index.projectClassStubs() where !node.path.contains(stub.qualifiedName) {
+            // The inheritor table names the few classes that mention the type; only those are
+            // resolved, instead of decoding every project class for each expansion.
+            for stub in await JavaInheritors.directSubtypes(of: node.qualifiedName, index: index)
+            where !node.path.contains(stub.qualifiedName) {
                 guard JavaHierarchyScope.contains(stub, scope: scope, model: model) else { continue }
-                // Cheap pre-filter: only a class that names the type at all is worth resolving.
-                let referenced = ([stub.superclass].compactMap { $0 } + stub.interfaces).contains { ref in
-                    let name = ref.simpleDisplayName
-                    return name == simple || name.hasSuffix("." + simple)
-                }
-                guard referenced else { continue }
-                let supers = await JavaMemberLookup.directSupertypeNames(of: stub.qualifiedName, index: index)
-                if supers.contains(node.qualifiedName) {
-                    result.append(Self.node(for: stub, path: node.path + [stub.qualifiedName]))
-                }
+                result.append(Self.node(for: stub, path: node.path + [stub.qualifiedName]))
             }
             return result.sorted { $0.qualifiedName < $1.qualifiedName }
         }

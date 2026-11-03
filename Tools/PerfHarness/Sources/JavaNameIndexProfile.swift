@@ -77,8 +77,41 @@ enum JavaNameIndexProfile {
             if iteration >= 1 { changed.append(elapsed) }
         }
 
+        // F17: the question usages and rename ask first, "which files mention this identifier?".
+        // A rare one (one file in the project) and a common one (every file) through the index, and
+        // the rare one through the text scan it replaced, which reads every file.
+        let rareIdentifier = "Type\(javaFiles.count / 2)"
+        let commonIdentifier = vocabulary[0]
+        var rareIndexed: [Double] = []
+        var commonIndexed: [Double] = []
+        var rareScanned: [Double] = []
+        var rareHits = 0
+        var scanHits = 0
+        for iteration in 0..<(samples + 1) {
+            var start = DispatchTime.now().uptimeNanoseconds
+            let rare = await index.candidateFiles(containing: rareIdentifier, in: [root])
+            var elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+            if iteration >= 1 { rareIndexed.append(elapsed) }
+            rareHits = rare.count
+
+            start = DispatchTime.now().uptimeNanoseconds
+            _ = await index.candidateFiles(containing: commonIdentifier, in: [root])
+            elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+            if iteration >= 1 { commonIndexed.append(elapsed) }
+
+            start = DispatchTime.now().uptimeNanoseconds
+            let scan = await JavaTextScanCandidateSource().candidateFiles(containing: rareIdentifier, in: [root])
+            elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+            if iteration >= 1 { rareScanned.append(elapsed) }
+            scanHits = scan.count
+        }
+
         emit(band: "unchanged", samples: unchanged)
         emit(band: "file_changed", samples: changed)
+        emit(band: "candidates_rare_indexed", samples: rareIndexed)
+        emit(band: "candidates_common_indexed", samples: commonIndexed)
+        emit(band: "candidates_rare_text_scan", samples: rareScanned)
+        note("  rare identifier \(rareIdentifier): index files=\(rareHits) scan files=\(scanHits)")
         let bytes = (try? FileManager.default.attributesOfItem(atPath: shard.path)[.size] as? NSNumber)?.int64Value ?? 0
         note("  files=\(javaFiles.count) shard_bytes=\(bytes)")
     }

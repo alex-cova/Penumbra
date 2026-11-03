@@ -36,7 +36,7 @@ extension JavaCompletionProvider: InlineCompletionValidating {
             text: spliced, bytes: Array(spliced.utf8), tree: splicedTree, fileStubs: stubs,
             policy: .intellij
         )
-        let locals = Set(JavaLocalScope.locals(in: splicedTree, atByteOffset: caretByte).map(\.name))
+        let locals = Set(splicedTree.visibleLocals(atByteOffset: caretByte).map(\.name))
         let declaredNames = Set(stubs.classes.flatMap { stub in
             [stub.simpleName] + stub.methods.map(\.name) + stub.fields.map(\.name)
         })

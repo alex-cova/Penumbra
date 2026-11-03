@@ -143,6 +143,48 @@ public actor JavaIndex {
 
     func overlayStubs() -> [String: JavaClassStub] { overlay }
 
+    // MARK: - Inheritor table (what extends X)
+
+    private var baseInheritors: JavaInheritorTable?
+    private var baseInheritorsBuild: Task<JavaInheritorTable, Never>?
+    private var overlayInheritors: (generation: Int, table: JavaInheritorTable)?
+
+    /// The project shards' subtype table, built lazily off the actor and dropped with the sources
+    /// (same lifecycle as ``baseMemberTable()``).
+    func baseInheritorTable() async -> JavaInheritorTable {
+        while true {
+            if let baseInheritors { return baseInheritors }
+            let version = sourcesVersion
+            let task: Task<JavaInheritorTable, Never>
+            if let running = baseInheritorsBuild {
+                task = running
+            } else {
+                let snapshot = sortedSources
+                task = Task.detached(priority: .userInitiated) { JavaInheritorTable.build(from: snapshot) }
+                baseInheritorsBuild = task
+            }
+            let table = await task.value
+            if sourcesVersion == version {
+                baseInheritors = table
+                baseInheritorsBuild = nil
+                return table
+            }
+        }
+    }
+
+    /// The open buffers' classes, rebuilt when anything the index sees changed.
+    func overlayInheritorTable() -> JavaInheritorTable {
+        if let cached = overlayInheritors, cached.generation == generation { return cached.table }
+        var table = JavaInheritorTable()
+        for stub in overlay.values { table.add(stub, shardPath: "", precedence: -1) }
+        overlayInheritors = (generation, table)
+        return table
+    }
+
+    func isInheritorSourceVisible(shardPath: String, precedence: Int) -> Bool {
+        isVisible(shardPath: shardPath, precedence: precedence)
+    }
+
     func isMemberOwnerVisible(_ owner: JavaMemberTable.Owner) -> Bool {
         isVisible(shardPath: owner.shardPath, precedence: owner.precedence)
     }
@@ -152,6 +194,8 @@ public actor JavaIndex {
     public func setSources(_ sources: [Source]) {
         baseMembers = nil
         baseMembersBuild = nil
+        baseInheritors = nil
+        baseInheritorsBuild = nil
         sourcesVersion += 1
         self.sources = sources
         self.sortedSources = sources.sorted { $0.precedence < $1.precedence }
