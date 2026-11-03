@@ -102,38 +102,40 @@ private struct IDEStructureRowView: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Color.clear.frame(width: CGFloat(row.depth) * 14, height: 1)
-            Button(action: onToggle) {
-                IDEDisclosureChevron(isExpanded: row.isExpanded)
-                    .opacity(row.canExpand ? 1 : 0)
+        Button(action: onSelect) {
+            HStack(spacing: 6) {
+                Color.clear.frame(width: CGFloat(row.depth) * 14, height: 1)
+                Button(action: onToggle) {
+                    IDEDisclosureChevron(isExpanded: row.isExpanded)
+                        .opacity(row.canExpand ? 1 : 0)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .disabled(!row.canExpand)
+                .accessibilityLabel(row.isExpanded ? "Collapse" : "Expand")
+
+                Image(systemName: kindSymbol)
+                    .font(.system(size: 11))
+                    .foregroundStyle(kindTint)
+                    .frame(width: 14)
+
+                Text(row.node.title)
+                    .font(IDEAppearance.Typography.body)
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .disabled(!row.canExpand)
-            .accessibilityLabel(row.isExpanded ? "Collapse" : "Expand")
-
-            Image(systemName: kindSymbol)
-                .font(.system(size: 11))
-                .foregroundStyle(kindTint)
-                .frame(width: 14)
-
-            Text(row.node.title)
-                .font(IDEAppearance.Typography.body)
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
+            .padding(.horizontal, IDEAppearance.Spacing.sm)
+            .padding(.vertical, 3)
+            .background(background)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, IDEAppearance.Spacing.sm)
-        .padding(.vertical, 3)
-        .background(background)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
+        .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.node.title)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
     private var background: some View {

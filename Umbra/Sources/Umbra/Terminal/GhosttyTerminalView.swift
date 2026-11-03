@@ -169,15 +169,15 @@ final class GhosttyTerminalView: NSView {
             keyEncoder = GhosttyKeystrokeEncoder()
             mouseEncoder = GhosttyMouseReportEncoder()
             terminal?.onEvent = { [weak self] event in
-                DispatchQueue.main.async { [weak self] in self?.handleTerminalEvent(event) }
+                Task { @MainActor [weak self] in self?.handleTerminalEvent(event) }
             }
             let backend = terminal
             process.onOutput = { [weak self] data in
                 backend?.write(data)
-                DispatchQueue.main.async { [weak self] in self?.needsDisplay = true }
+                Task { @MainActor [weak self] in self?.needsDisplay = true }
             }
             process.onExit = { [weak self] _ in
-                DispatchQueue.main.async { [weak self] in
+                Task { @MainActor [weak self] in
                     self?.started = false
                     self?.needsDisplay = true
                     self?.onProcessTerminated?()
@@ -201,7 +201,8 @@ final class GhosttyTerminalView: NSView {
             // flash suits an editor better than a system beep anyway.
             bellFlashUntil = Date().addingTimeInterval(0.15)
             needsDisplay = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(200))
                 self?.needsDisplay = true
             }
         case let .writePty(data):
@@ -523,8 +524,8 @@ final class GhosttyTerminalView: NSView {
 
     func pasteFromPasteboard() {
         guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
-        var payload = text.replacingOccurrences(of: "\r\n", with: "\n")
-        payload = payload.replacingOccurrences(of: "\r", with: "\n")
+        var payload = text.replacing("\r\n", with: "\n")
+        payload = payload.replacing("\r", with: "\n")
         if terminal?.isModeSet(GhosttyTerminalModes.bracketedPaste) == true {
             payload = "\u{1B}[200~" + payload + "\u{1B}[201~"
         }

@@ -51,7 +51,7 @@ extension IDEWorkspace {
         })
         items.append(IDEClosureMenuItem(title: "Copy Path/Reference…") { [weak self] in
             // The context menu is still closing; open the next one after it has.
-            DispatchQueue.main.async { self?.showEditorCopyPopup(paneID: paneID, url: url) }
+            Task { @MainActor [weak self] in self?.showEditorCopyPopup(paneID: paneID, url: url) }
         })
         return items
     }

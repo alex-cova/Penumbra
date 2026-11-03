@@ -135,7 +135,7 @@ final class IDEJavaRunProvider: IDERunProvider {
     }
 
     static func simpleName(_ qualifiedName: String) -> String {
-        String(qualifiedName.split(separator: ".").last ?? Substring(qualifiedName)).replacingOccurrences(of: "$", with: ".")
+        String(qualifiedName.split(separator: ".").last ?? Substring(qualifiedName)).replacing("$", with: ".")
     }
 
     // MARK: - Run, Debug, Stop

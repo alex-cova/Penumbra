@@ -899,7 +899,7 @@ final class IDESwiftUIPreviewSession {
                 try await simulatorBoot?.value
                 guard isCurrent(token) else { return }
                 let waited = Date().timeIntervalSince(waitStarted)
-                if waited >= 1 { append(String(format: "Waited %.1f s for %@ to start.\n", waited, simulatorTarget.device.name)) }
+                if waited >= 1 { append("Waited \(waited.formatted(.number.precision(.fractionLength(1)))) s for \(simulatorTarget.device.name) to start.\n") }
                 phase = .building("Installing the preview on the simulator…")
                 onChange?()
                 try await simulator.install(bundlePath: bundle, on: simulatorTarget)
@@ -1612,7 +1612,7 @@ final class IDESwiftUIPreviewSession {
         // A phone's content keeps clear of its status bar and home indicator.
         let safeArea = currentFixedSize == nil && !isSimulatorPreview
             ? (top: sizePreset.device?.safeTop ?? 0, bottom: sizePreset.device?.safeBottom ?? 0) : (top: 0, bottom: 0)
-        let path = framePrefix.replacingOccurrences(of: ".png", with: "-\(counter).png")
+        let path = framePrefix.replacing(".png", with: "-\(counter).png")
         do {
             let reply = try await connection.request(.render(
                 generation: generation, width: size.width, height: size.height,

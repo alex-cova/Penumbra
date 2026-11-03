@@ -69,9 +69,10 @@ private struct IDEReopenCenteringView: NSViewRepresentable {
             window.alphaValue = 0
             window.center()
             // SwiftUI sizes the window to its content after this, which moves the center; place it
-            // again once that layout has run, then show it.
-            DispatchQueue.main.async { [weak window] in
-                DispatchQueue.main.async {
+            // again once that layout has run, then show it. The nested task preserves the
+            // original double main-queue hop: one turn to enqueue, a second to recenter.
+            Task { @MainActor [weak window] in
+                Task { @MainActor [weak window] in
                     guard let window else { return }
                     if !window.styleMask.contains(.fullScreen) {
                         window.center()

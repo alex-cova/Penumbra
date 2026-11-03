@@ -175,7 +175,7 @@ final class IDETerminalHostView: NSView {
         pendingFocus = true
         if bounds.width > 0, bounds.height > 0 {
             pendingFocus = false
-            DispatchQueue.main.async { [weak self] in
+            Task { @MainActor [weak self] in
                 self?.requestFocus()
             }
         }
@@ -262,7 +262,8 @@ final class IDETerminalHostView: NSView {
 
     func handleProcessTerminated() {
         guard runsShell, !mirrorsOutput else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
             self?.startProcessIfNeeded()
         }
     }

@@ -65,7 +65,7 @@ final class IDEProfileLineHints {
             let relative = String(path.dropFirst(prefix.count).dropLast(".java".count))
             if best == nil || relative.count < best!.count { best = relative }
         }
-        return best?.replacingOccurrences(of: "/", with: ".")
+        return best?.replacing("/", with: ".")
     }
 
     /// The costs of the lines of `url`, or `nil` when the profile has nothing in that file.

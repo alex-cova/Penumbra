@@ -399,7 +399,7 @@ enum HTTPRequestParser {
         environment: HTTPTemplateEnvironment
     ) throws -> Data {
         let pathText = node.child(byFieldName: "path")?.text
-            ?? node.text.replacingOccurrences(of: "<", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? node.text.replacing("<", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
         let expanded = try HTTPSyntax.expand(pathText, in: environment)
         return try loadExternalBody(expanded, fileURL: fileURL)
     }

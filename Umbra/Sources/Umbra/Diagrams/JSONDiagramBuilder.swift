@@ -32,8 +32,8 @@ nonisolated enum JSONDiagramBuilder {
             return parent + "." + key
         }
         let escaped = key
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacing("\\", with: "\\\\")
+            .replacing("\"", with: "\\\"")
         return parent + "[\"" + escaped + "\"]"
     }
 

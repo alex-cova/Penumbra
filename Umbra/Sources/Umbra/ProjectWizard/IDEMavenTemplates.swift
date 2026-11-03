@@ -45,12 +45,12 @@ struct IDEMavenApplicationTemplate: IDEProjectTemplate {
     /// `com.example` plus the artifact id. A hyphen in the organization becomes `_` so the name is a
     /// Java package.
     private func packageName(_ options: IDENewProjectOptions) -> String {
-        let organization = groupId(options).replacingOccurrences(of: "-", with: "_")
+        let organization = groupId(options).replacing("-", with: "_")
         return organization + "." + artifactId(options)
     }
 
     private func packagePath(_ options: IDENewProjectOptions) -> String {
-        packageName(options).replacingOccurrences(of: ".", with: "/")
+        packageName(options).replacing(".", with: "/")
     }
 
     /// The newest installed JDK, or 17 when none is found.

@@ -296,7 +296,7 @@ final class IDESwiftRunProvider: IDERunProvider {
         else { return location.title }
         let module = document.url.flatMap { manifest.moduleResolver(root: root)($0) }
         let prefix = module.map { "\($0)." } ?? ""
-        let bareName = location.title.replacingOccurrences(of: "()", with: "")
+        let bareName = location.title.replacing("()", with: "")
         func find(_ declarations: [SwiftFileModel.Declaration], owner: String?) -> String? {
             for declaration in declarations {
                 let line = parsed.text.position(atByte: declaration.nameBytes.lowerBound).line + 1
@@ -377,7 +377,7 @@ final class IDESwiftRunProvider: IDERunProvider {
         }
         var filters: [String] = []
         for testCase in workspace.testResults.cases where testCase.status == .failed || testCase.status == .aborted {
-            let method = testCase.name.replacingOccurrences(of: "()", with: "")
+            let method = testCase.name.replacing("()", with: "")
             filters.append("\(testCase.className)/\(method)")
         }
         guard !filters.isEmpty else { return }

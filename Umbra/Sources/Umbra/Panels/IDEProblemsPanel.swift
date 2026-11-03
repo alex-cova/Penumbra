@@ -36,23 +36,25 @@ struct IDEProblemsPanel: View {
             stripButton("File", isSelected: runs.selection == .file) { runs.selection = .file }
             stripButton("Project Errors", isSelected: runs.selection == .project) { runs.selection = .project }
             ForEach(runs.runs) { run in
-                HStack(spacing: 4) {
-                    if run.state == .running { ProgressView().controlSize(.mini) }
-                    Text(run.title)
-                        .font(IDEAppearance.Typography.tabLabel)
-                        .lineLimit(1)
-                        .foregroundStyle(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                    Button { runs.close(run.id) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .semibold)) }
-                        .buttonStyle(.borderless)
-                        .help("Close results")
+                Button { runs.selection = .run(run.id) } label: {
+                    HStack(spacing: 4) {
+                        if run.state == .running { ProgressView().controlSize(.mini) }
+                        Text(run.title)
+                            .font(IDEAppearance.Typography.tabLabel)
+                            .lineLimit(1)
+                            .foregroundStyle(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                        Button { runs.close(run.id) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .semibold)) }
+                            .buttonStyle(.borderless)
+                            .help("Close results")
+                    }
+                    .padding(.horizontal, IDEAppearance.Spacing.sm)
+                    .padding(.vertical, 3)
+                    .background(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.tabActive : .clear)
+                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, IDEAppearance.Spacing.sm)
-                .padding(.vertical, 3)
-                .background(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.tabActive : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-                .contentShape(Rectangle())
-                .accessibilityAddTraits(.isButton)
-                .onTapGesture { runs.selection = .run(run.id) }
+                .buttonStyle(.plain)
+                .accessibilityLabel(run.title)
             }
             Spacer(minLength: 0)
         }

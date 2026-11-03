@@ -124,6 +124,6 @@ final class IDEACPTerminalStore: @unchecked Sendable {
 
     static func shellQuoted(_ value: String) -> String {
         if !value.isEmpty, value.allSatisfy({ $0.isLetter || $0.isNumber || "-._/=:".contains($0) }) { return value }
-        return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return "'" + value.replacing("'", with: "'\\''") + "'"
     }
 }

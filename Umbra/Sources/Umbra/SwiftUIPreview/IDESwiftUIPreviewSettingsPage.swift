@@ -100,7 +100,7 @@ struct IDESwiftUIPreviewSettingsPage: View {
             ForEach(model.devices) { device in
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(device.name.replacingOccurrences(of: IDESimulatorCatalog.deviceNamePrefix, with: ""))
+                        Text(device.name.replacing(IDESimulatorCatalog.deviceNamePrefix, with: ""))
                         Text(Self.detail(of: device)).font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()

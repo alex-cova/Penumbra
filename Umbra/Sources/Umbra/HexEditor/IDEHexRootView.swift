@@ -113,7 +113,7 @@ struct IDEHexRootView: View {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 9, weight: .semibold))
                 Text("Data Inspector")
-                    .font(.caption2)
+                    .font(.caption)
                     .fixedSize()
                     .rotationEffect(.degrees(-90))
                     .frame(width: 14, height: 96)

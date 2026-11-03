@@ -172,7 +172,7 @@ extension IDEAgentApprovalView {
 
     /// "git status:*" as the user thinks of it: "git status …".
     private func described(_ rule: PermissionRule) -> String {
-        (rule.pattern ?? rule.tool).replacingOccurrences(of: ":*", with: " …")
+        (rule.pattern ?? rule.tool).replacing(":*", with: " …")
     }
 
     @ViewBuilder fileprivate var alwaysAllowMenu: some View {

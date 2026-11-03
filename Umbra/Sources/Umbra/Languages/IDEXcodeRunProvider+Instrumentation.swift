@@ -201,7 +201,7 @@ extension IDEXcodeRunProvider {
 
     private func record(name: String, binary: URL) {
         guard let workspace, let root = xcode.rootURL else { return }
-        let runID = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let runID = ISO8601DateFormatter().string(from: Date()).replacing(":", with: "-")
         let folder = IDESwiftRunProvider.profileFolder(for: root).appendingPathComponent(runID, isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let trace = folder.appendingPathComponent("\(name).trace")

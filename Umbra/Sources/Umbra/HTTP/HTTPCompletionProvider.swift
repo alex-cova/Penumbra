@@ -307,7 +307,7 @@ enum HTTPCompletion {
     }
 
     static func preview(_ value: String) -> String {
-        let singleLine = value.replacingOccurrences(of: "\n", with: " ")
+        let singleLine = value.replacing("\n", with: " ")
         guard singleLine.count > 40 else { return singleLine }
         return String(singleLine.prefix(40)) + "…"
     }

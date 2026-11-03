@@ -25,7 +25,7 @@ final class IDEXcodeRunProvider: IDERunProvider {
     private(set) var lastResultBundle: URL?
     /// Sortable run IDs double as bundle names, so pruning keeps the newest ten.
     static func runID(date: Date = Date()) -> String {
-        let stamp = ISO8601DateFormatter().string(from: date).replacingOccurrences(of: ":", with: "-")
+        let stamp = ISO8601DateFormatter().string(from: date).replacing(":", with: "-")
         return "\(stamp)-\(UUID().uuidString.prefix(8))"
     }
 
@@ -218,7 +218,7 @@ final class IDEXcodeRunProvider: IDERunProvider {
         guard let parsed = SwiftAnalysis.parse(document.text),
               let url = document.url, let model = xcode.model,
               let target = testTarget(for: url, in: model) else { return location.title }
-        let bareName = location.title.replacingOccurrences(of: "()", with: "")
+        let bareName = location.title.replacing("()", with: "")
         func find(_ declarations: [SwiftFileModel.Declaration], owner: String?) -> String? {
             for declaration in declarations {
                 let line = parsed.text.position(atByte: declaration.nameBytes.lowerBound).line + 1
@@ -400,7 +400,7 @@ final class IDEXcodeRunProvider: IDERunProvider {
         }
         var filters: [String] = []
         for testCase in workspace.testResults.cases where testCase.status == .failed || testCase.status == .aborted {
-            let method = testCase.name.replacingOccurrences(of: "()", with: "")
+            let method = testCase.name.replacing("()", with: "")
             if let target = lastTargets[testCase.className], !target.isEmpty {
                 filters.append(XcodeTestCommand.onlyTesting(target: target, class: testCase.className, method: method))
             } else {

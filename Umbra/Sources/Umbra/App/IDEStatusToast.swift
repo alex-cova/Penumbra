@@ -136,7 +136,7 @@ struct IDEStatusToast: View {
         var parts = [message]
         if let startedAt = statusSystem?.console.startedAt {
             let elapsed = max(0, Int(now.timeIntervalSince(startedAt)))
-            parts.append(String(format: "%d:%02d", elapsed / 60, elapsed % 60))
+            parts.append(Duration.seconds(elapsed).formatted(.time(pattern: .minuteSecond)))
         }
         if let latest = statusSystem?.console.latestLine {
             parts.append(latest)

@@ -38,7 +38,7 @@ struct IDETerminalTab: Identifiable, Equatable {
 
     /// A tab title short enough for the terminal strip.
     static func commandTitle(for command: String) -> String {
-        let flat = command.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        let flat = command.replacing("\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         let limit = 48
         guard flat.count > limit else { return flat.isEmpty ? "Command" : flat }
         return String(flat.prefix(limit - 1)) + "…"
@@ -5885,7 +5885,7 @@ extension IDEWorkspace: IDEWorkspaceEditHost {
         showDocument(in: pane, host: host(for: pane.id))
         for _ in 0..<40 {
             if let host = liveHost() { return .live(host.textView) }
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            try? await Task.sleep(for: .milliseconds(50))
         }
         return .unavailable("The open tab couldn't be loaded; save or close it and try again.")
     }

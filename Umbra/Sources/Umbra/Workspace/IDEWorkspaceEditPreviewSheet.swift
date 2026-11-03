@@ -261,7 +261,7 @@ private struct IDEWorkspaceEditPreviewRow: View {
     }
 
     private var highlightedLine: AttributedString {
-        let line = entry.lineText.replacingOccurrences(of: "\t", with: "    ")
+        let line = entry.lineText.replacing("\t", with: "    ")
         var text = AttributedString(line)
         if !entry.oldText.isEmpty, let range = text.range(of: entry.oldText) {
             text[range].font = IDEAppearance.Typography.monoSmall.bold()

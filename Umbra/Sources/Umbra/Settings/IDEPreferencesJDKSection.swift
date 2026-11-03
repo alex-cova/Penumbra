@@ -128,7 +128,7 @@ private struct IDEJDKSettingsRow: View {
                         .foregroundStyle(IDEAppearance.ColorToken.foreground)
                     ForEach(badges, id: \.self) { badge in
                         Text(badge)
-                            .font(.caption2)
+                            .font(.caption)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(IDEAppearance.ColorToken.card, in: Capsule())

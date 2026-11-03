@@ -119,7 +119,7 @@ struct JavaBreakpoint: Codable, Equatable, Identifiable, Sendable {
     }
 
     private static func simpleName(_ className: String) -> String {
-        String(className.split(separator: ".").last ?? Substring(className)).replacingOccurrences(of: "$", with: ".")
+        String(className.split(separator: ".").last ?? Substring(className)).replacing("$", with: ".")
     }
 }
 

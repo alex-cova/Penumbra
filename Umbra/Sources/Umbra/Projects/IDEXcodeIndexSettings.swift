@@ -148,6 +148,6 @@ enum IDEXcodeIndexSettings {
 
     /// One argument as a response file reads it: quoted, with `\` and `"` escaped.
     static func quoted(_ argument: String) -> String {
-        "\"" + argument.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        "\"" + argument.replacing("\\", with: "\\\\").replacing("\"", with: "\\\"") + "\""
     }
 }

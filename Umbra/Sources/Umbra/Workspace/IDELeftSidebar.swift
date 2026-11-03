@@ -99,29 +99,31 @@ private struct IDESidebarTabItem: View {
     private var descriptor: IDESidebarTabDescriptor? { IDESidebarTabs.descriptor(for: tab) }
 
     var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: tab.systemImage)
-                .font(.system(size: descriptor?.iconSize ?? 11, weight: .medium))
-                .foregroundStyle(iconColor)
-                .frame(width: 14)
+        Button(action: onSelect) {
+            HStack(spacing: 5) {
+                Image(systemName: tab.systemImage)
+                    .font(.system(size: descriptor?.iconSize ?? 11, weight: .medium))
+                    .foregroundStyle(iconColor)
+                    .frame(width: 14)
 
-            if isSelected {
-                Text(tab.title)
-                    .font(IDEAppearance.Typography.panelTab)
-                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                    .lineLimit(1)
-                if badge > 0 {
-                    Text("\(badge)")
-                        .font(IDEAppearance.Typography.monoSmall)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                if isSelected {
+                    Text(tab.title)
+                        .font(IDEAppearance.Typography.panelTab)
+                        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                        .lineLimit(1)
+                    if badge > 0 {
+                        Text("\(badge)")
+                            .font(IDEAppearance.Typography.monoSmall)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    }
                 }
             }
+            .padding(.horizontal, isSelected ? IDEAppearance.Spacing.sm : 6)
+            .frame(minHeight: IDEAppearance.Spacing.iconButton - 2)
+            .background(background, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, isSelected ? IDEAppearance.Spacing.sm : 6)
-        .frame(minHeight: IDEAppearance.Spacing.iconButton - 2)
-        .background(background, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
+        .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .help(badge > 0 ? "\(tab.title) (\(badge))" : tab.title)
         .contextMenu {
@@ -131,7 +133,7 @@ private struct IDESidebarTabItem: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(badge > 0 ? "\(tab.title), \(badge)" : tab.title)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .focusable(false)
     }
 

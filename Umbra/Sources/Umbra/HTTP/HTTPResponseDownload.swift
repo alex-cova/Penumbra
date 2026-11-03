@@ -89,7 +89,7 @@ enum HTTPResponseDownload {
             } else if key == "filename" {
                 if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") {
                     value = String(value.dropFirst().dropLast())
-                    value = value.replacingOccurrences(of: "\\\"", with: "\"")
+                    value = value.replacing("\\\"", with: "\"")
                 }
                 plain = value
             }
@@ -128,7 +128,7 @@ enum HTTPResponseDownload {
     /// and no leading dot that would hide the file.
     static func sanitized(_ name: String) -> String {
         let lastComponent = name
-            .replacingOccurrences(of: "\\", with: "/")
+            .replacing("\\", with: "/")
             .split(separator: "/", omittingEmptySubsequences: true)
             .last
             .map(String.init) ?? ""

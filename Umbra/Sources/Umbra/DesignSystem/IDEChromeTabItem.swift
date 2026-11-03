@@ -16,35 +16,37 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            leading()
-                .frame(width: 12)
+        Button(action: onSelect) {
+            HStack(spacing: 6) {
+                leading()
+                    .frame(width: 12)
 
-            Text(title)
-                .foregroundStyle(isSelected || isShown ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                .lineLimit(1)
-                .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
+                Text(title)
+                    .foregroundStyle(isSelected || isShown ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                    .lineLimit(1)
+                    .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
 
-            trailing()
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-        .overlay(alignment: .top) {
-            if isSelected {
-                RoundedRectangle(cornerRadius: IDEAppearance.Radius.indicator)
-                    .fill(IDEAppearance.ColorToken.accent)
-                    .frame(height: 2)
-                    .padding(.horizontal, 6)
+                trailing()
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(backgroundColor)
+            .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+            .overlay(alignment: .top) {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: IDEAppearance.Radius.indicator)
+                        .fill(IDEAppearance.ColorToken.accent)
+                        .frame(height: 2)
+                        .padding(.horizontal, 6)
+                }
+            }
+            .contentShape(Rectangle())
         }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
+        .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel ?? title)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .focusable(false)
     }
 

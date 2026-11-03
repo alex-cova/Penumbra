@@ -90,30 +90,33 @@ struct IDEDatabaseSidebar: View {
     }
 
     private func connectionLabel(_ connection: DatabaseConnection) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: support.isConnected(connection.id) ? "cylinder.split.1x2.fill" : "cylinder")
-                .foregroundStyle(
-                    support.isConnected(connection.id)
-                        ? IDEAppearance.ColorToken.accent
-                        : IDEAppearance.ColorToken.muted
-                )
-            VStack(alignment: .leading, spacing: 0) {
-                Text(connection.name)
-                    .font(IDEAppearance.Typography.caption)
-                    .lineLimit(1)
-                Text("\(connection.engine.displayName) · \(connection.host)")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
+        Button {
             support.selectedConnectionID = connection.id
             support.selectedMongoDatabase = nil
             support.selectedMongoCollection = nil
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: support.isConnected(connection.id) ? "cylinder.split.1x2.fill" : "cylinder")
+                    .foregroundStyle(
+                        support.isConnected(connection.id)
+                            ? IDEAppearance.ColorToken.accent
+                            : IDEAppearance.ColorToken.muted
+                    )
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(connection.name)
+                        .font(IDEAppearance.Typography.caption)
+                        .lineLimit(1)
+                    Text("\(connection.engine.displayName) · \(connection.host)")
+                        .font(IDEAppearance.Typography.monoSmall)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(connection.name)
         .simultaneousGesture(TapGesture(count: 2).onEnded {
             support.selectedConnectionID = connection.id
             Task {

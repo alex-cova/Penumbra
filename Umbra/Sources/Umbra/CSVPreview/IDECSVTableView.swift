@@ -271,7 +271,7 @@ final class IDECSVTableView: NSView {
         guard value.contains(delimiter) || value.contains("\"") || value.contains("\n") || value.contains("\r") else {
             return value
         }
-        return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        return "\"" + value.replacing("\"", with: "\"\"") + "\""
     }
 
     private func applyColors() {

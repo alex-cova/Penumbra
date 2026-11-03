@@ -296,7 +296,7 @@ extension IDEWorkspace {
     }
 
     private static func simpleName(_ qualifiedName: String) -> String {
-        String(qualifiedName.split(separator: ".").last ?? Substring(qualifiedName)).replacingOccurrences(of: "$", with: ".")
+        String(qualifiedName.split(separator: ".").last ?? Substring(qualifiedName)).replacing("$", with: ".")
     }
 
     /// Runs a command reached by a secondary key (``IDESecondaryShortcutMonitor``).

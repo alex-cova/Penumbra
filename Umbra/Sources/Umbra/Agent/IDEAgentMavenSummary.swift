@@ -94,7 +94,7 @@ nonisolated enum IDEMavenSummary {
     static func failedGoal(in output: String) -> String? {
         guard let line = output.split(whereSeparator: \.isNewline).first(where: { $0.contains("Failed to execute goal") })
         else { return nil }
-        let text = line.replacingOccurrences(of: "[ERROR]", with: "").trimmingCharacters(in: .whitespaces)
+        let text = line.replacing("[ERROR]", with: "").trimmingCharacters(in: .whitespaces)
         return String(text.prefix(500))
     }
 

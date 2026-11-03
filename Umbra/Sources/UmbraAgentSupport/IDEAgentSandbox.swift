@@ -93,7 +93,7 @@ public nonisolated enum IDEAgentSandboxProfile {
     }
 
     public static func escape(_ literal: String) -> String {
-        literal.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        literal.replacing("\\", with: "\\\\").replacing("\"", with: "\\\"")
     }
 
     public static func regexEscape(_ literal: String) -> String {

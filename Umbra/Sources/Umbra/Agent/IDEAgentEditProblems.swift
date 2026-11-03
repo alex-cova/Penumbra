@@ -23,7 +23,7 @@ enum IDEAgentEditProblems {
             "[Editor] \(errors.count) error\(errors.count == 1 ? "" : "s") in the files you just changed, from the editor's own analysis (not a build; call diagnostics to compile):",
         ]
         for row in errors.prefix(maxRows) {
-            let message = row.message.replacingOccurrences(of: "\n", with: " ")
+            let message = row.message.replacing("\n", with: " ")
             lines.append("\(row.path):\(row.line): \(message.count > maxMessageLength ? String(message.prefix(maxMessageLength)) + "…" : message)")
         }
         if errors.count > maxRows { lines.append("… and \(errors.count - maxRows) more.") }

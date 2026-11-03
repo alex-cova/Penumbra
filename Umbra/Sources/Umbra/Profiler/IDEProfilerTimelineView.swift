@@ -178,7 +178,7 @@ private struct IDEProfilerTimelineChart: View {
                 let x = layout.x(forTime: timeline.span.lowerBound + Int32(seconds * 1000), width: size.width, span: timeline.span)
                 context.fill(Path(CGRect(x: x, y: plot.maxY, width: 1, height: 4)), with: .color(.secondary))
                 context.draw(
-                    Text(String(format: step < 1 ? "%.1f s" : "%.0f s", seconds)).font(.caption2).foregroundColor(.secondary),
+                    Text("\(seconds.formatted(.number.precision(.fractionLength(step < 1 ? 1 : 0)))) s").font(.caption2).foregroundColor(.secondary),
                     at: CGPoint(x: x + 3, y: plot.maxY + 12), anchor: .leading
                 )
                 seconds += step

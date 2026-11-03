@@ -419,7 +419,7 @@ extension IDEWorkspace {
 
     /// `app/Outer.java` for a class of that file, relative to a source root.
     static func profileSourcePath(ofClass className: String) -> String {
-        topLevelClassName(of: className).replacingOccurrences(of: ".", with: "/") + ".java"
+        topLevelClassName(of: className).replacing(".", with: "/") + ".java"
     }
 
     /// Opens the source of `className` (a binary name: `app.Spin$Worker`, `app.Cart$$Lambda/0x…`) at

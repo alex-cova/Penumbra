@@ -41,7 +41,7 @@ enum IDEAgentBrowserNotesBlock {
         let text = note.note.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         // The user's words, with their own line breaks kept under the numbered line.
-        return "\"" + text.replacingOccurrences(of: "\n", with: "\n   ") + "\""
+        return "\"" + text.replacing("\n", with: "\n   ") + "\""
     }
 
     private static func elementDetails(_ note: IDEAIAnnotation) -> String {
@@ -67,7 +67,7 @@ enum IDEAgentBrowserNotesBlock {
     }
 
     private static func singleLine(_ text: String, limit: Int) -> String {
-        let flat = text.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+        let flat = text.replacing("\n", with: " ").replacing("\r", with: " ")
         return flat.count > limit ? String(flat.prefix(limit)) + "…" : flat
     }
 }

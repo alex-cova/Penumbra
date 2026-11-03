@@ -12,7 +12,7 @@ enum IDEBase64Text {
     static func decode(_ text: String) -> String? {
         var cleaned = String(text.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) })
         guard !cleaned.isEmpty else { return nil }
-        cleaned = cleaned.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        cleaned = cleaned.replacing("-", with: "+").replacing("_", with: "/")
         let remainder = cleaned.count % 4
         if remainder == 1 { return nil }
         if remainder != 0 { cleaned += String(repeating: "=", count: 4 - remainder) }

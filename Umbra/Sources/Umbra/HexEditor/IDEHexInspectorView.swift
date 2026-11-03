@@ -48,9 +48,9 @@ struct IDEHexInspectorView: View {
                     Text("Length \(length.decimal) (\(length.hex))")
                         .font(.caption.monospaced())
                     if let hashes {
-                        Text("MD5 \(hashes.md5)").font(.caption2.monospaced())
-                        Text("SHA-1 \(hashes.sha1)").font(.caption2.monospaced())
-                        Text("SHA-256 \(hashes.sha256)").font(.caption2.monospaced())
+                        Text("MD5 \(hashes.md5)").font(.caption.monospaced())
+                        Text("SHA-1 \(hashes.sha1)").font(.caption.monospaced())
+                        Text("SHA-256 \(hashes.sha256)").font(.caption.monospaced())
                     } else {
                         Button("Hash") { hash() }
                     }

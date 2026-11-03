@@ -79,7 +79,7 @@ enum IDEConversionText {
     /// A decimal, `0x` hex, `0b` binary or `0o` octal number, with an optional sign, Java-style `_`
     /// separators and a trailing `L`.
     private static func parseNumber(_ value: String) -> (sign: String, magnitude: UInt64)? {
-        var digits = value.replacingOccurrences(of: "_", with: "")
+        var digits = value.replacing("_", with: "")
         if let last = digits.last, last == "l" || last == "L" { digits.removeLast() }
         var sign = ""
         if let first = digits.first, first == "-" || first == "+" {

@@ -236,17 +236,16 @@ struct IDETestResultsPanel: View {
                                      help: store.showsSkipped ? "Hide Ignored" : "Show Ignored") {
                 store.showsSkipped.toggle()
             }
-            Menu {
-                Picker("Sort", selection: Binding(get: { store.sort }, set: { store.sort = $0 })) {
+            Menu("Sort and Expand", systemImage: "arrow.up.arrow.down") {
+                Picker("Sort", selection: Bindable(store).sort) {
                     ForEach(IDETestResultsStore.Sort.allCases, id: \.self) { Text("By \($0.rawValue)").tag($0) }
                 }
                 .pickerStyle(.inline)
                 Divider()
                 Button("Expand All") { store.collapsedClasses = [] }
                 Button("Collapse All") { store.collapsedClasses = Set(store.groups.map(\.className)) }
-            } label: {
-                Image(systemName: "arrow.up.arrow.down")
             }
+            .labelStyle(.iconOnly)
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Sort and Expand")
@@ -266,24 +265,26 @@ struct IDETestResultsPanel: View {
     }
 
     private func tree(_ store: IDETestResultsStore) -> some View {
-        List(selection: Binding(get: { store.selectedID }, set: { store.selectedID = $0 })) {
+        List(selection: Bindable(store).selectedID) {
             ForEach(store.groups) { group in
                 let collapsed = store.collapsedClasses.contains(group.className)
-                HStack(spacing: IDEAppearance.Spacing.xs) {
-                    IDEDisclosureChevron(isExpanded: !collapsed)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    statusIcon(group.status)
-                    Text(group.className.split(separator: ".").last.map(String.init) ?? group.className)
-                        .font(IDEAppearance.Typography.body.weight(.medium))
-                        .help(group.className)
-                    Spacer(minLength: 0)
-                    durationText(group.duration)
-                }
-                .contentShape(Rectangle())
-                .accessibilityAddTraits(.isButton)
-                .onTapGesture {
+                Button {
                     if collapsed { store.collapsedClasses.remove(group.className) } else { store.collapsedClasses.insert(group.className) }
+                } label: {
+                    HStack(spacing: IDEAppearance.Spacing.xs) {
+                        IDEDisclosureChevron(isExpanded: !collapsed)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        statusIcon(group.status)
+                        Text(group.className.split(separator: ".").last.map(String.init) ?? group.className)
+                            .font(IDEAppearance.Typography.body.weight(.medium))
+                            .help(group.className)
+                        Spacer(minLength: 0)
+                        durationText(group.duration)
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(group.className)
                 .tag(nil as String?)
                 if !collapsed {
                     ForEach(group.cases) { testCase in

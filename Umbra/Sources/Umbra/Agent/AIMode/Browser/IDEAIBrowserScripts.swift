@@ -114,7 +114,7 @@ enum IDEAIBrowserScripts {
             enumerable: false, configurable: false, writable: false
           });
         })();
-        """#.replacingOccurrences(of: "__NAME__", with: name)
+        """#.replacing("__NAME__", with: name)
     }
 
     // MARK: - Inspector world: reading the page

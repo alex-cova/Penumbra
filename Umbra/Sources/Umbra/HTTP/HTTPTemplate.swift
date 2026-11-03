@@ -223,7 +223,7 @@ enum HTTPSyntax {
 
     /// Drop `>>`, `>>!`, and response-handler lines. Comment lines go only when this text is not a real body.
     static func cleaningBody(_ text: String, dropComments: Bool) -> String {
-        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let normalized = text.replacing("\r\n", with: "\n").replacing("\r", with: "\n")
         let parts = normalized.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
         let kept = parts.filter { line in
             if outputLine(line) != nil || isResponseScriptLine(line) { return false }
@@ -235,7 +235,7 @@ enum HTTPSyntax {
         }
         guard kept.count != parts.count else { return text }
         let joined = kept.joined(separator: "\n")
-        return text.contains("\r\n") ? joined.replacingOccurrences(of: "\n", with: "\r\n") : joined
+        return text.contains("\r\n") ? joined.replacing("\n", with: "\r\n") : joined
     }
 
     static func encodedURL(_ text: String, autoEncode: Bool) -> String {
@@ -381,8 +381,8 @@ enum HTTPSyntax {
 
     private static func lines(of text: String) -> [String] {
         text
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
+            .replacing("\r\n", with: "\n")
+            .replacing("\r", with: "\n")
             .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
             .map(String.init)
     }
@@ -725,8 +725,8 @@ enum HTTPDigest {
 
     private static func quote(_ value: String) -> String {
         let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacing("\\", with: "\\\\")
+            .replacing("\"", with: "\\\"")
         return "\"\(escaped)\""
     }
 

@@ -81,7 +81,7 @@ enum IDEAIBrowserAddress {
             for match in matches.reversed() {
                 var raw = nsText.substring(with: match.range)
                 while let last = raw.last, ".,;:".contains(last) { raw.removeLast() }
-                raw = raw.replacingOccurrences(of: "0.0.0.0", with: "localhost")
+                raw = raw.replacing("0.0.0.0", with: "localhost")
                 guard let url = URL(string: raw), seen.insert(url.absoluteString).inserted else { continue }
                 found.append(url)
                 if found.count == limit { return found }
@@ -129,7 +129,7 @@ final class IDEAIBrowserModel {
     @ObservationIgnored private let controller = WKUserContentController()
     @ObservationIgnored private let bridge = IDEAIBrowserBridge()
     /// The name the page-world recorder hides its reader under, different for every page object.
-    @ObservationIgnored let recorderName = "__umbraRec" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+    @ObservationIgnored let recorderName = "__umbraRec" + UUID().uuidString.replacing("-", with: "")
     /// The address of the page, readable from any thread: a permission rule is matched on it before a tool runs.
     @ObservationIgnored let pageInfo: IDEAIBrowserPageInfo
     /// Where the console and network listing last stopped, for `since_last`.

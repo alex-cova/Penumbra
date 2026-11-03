@@ -45,7 +45,7 @@ struct IDEJavaPackageIndex: Sendable, Equatable {
         let relativeToSource = String(directoryPath.dropFirst(prefix.count))
         guard !relativeToSource.isEmpty else { return nil }
         return Entry(
-            name: relativeToSource.replacingOccurrences(of: "/", with: "."),
+            name: relativeToSource.replacing("/", with: "."),
             url: URL(fileURLWithPath: directoryPath),
             relativePath: relativePath(of: directoryPath, projectRoot: projectRoot),
             module: sourceRoot.module,

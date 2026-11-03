@@ -177,7 +177,7 @@ enum GraphQLLexer {
     /// The spec's BlockStringValue: common indentation of every line but the first is removed, and
     /// blank lines at both ends are dropped.
     static func dedentBlockString(_ raw: String) -> String {
-        var lines = raw.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var lines = raw.replacing("\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var common = Int.max
         for line in lines.dropFirst() {
             let indent = line.prefix { $0 == " " || $0 == "\t" }.count

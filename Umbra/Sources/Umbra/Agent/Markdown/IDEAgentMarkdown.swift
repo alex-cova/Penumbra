@@ -16,7 +16,7 @@ enum IDEAgentMarkdownBlock: Equatable {
 
 enum IDEAgentMarkdown {
     static func parse(_ text: String) -> [IDEAgentMarkdownBlock] {
-        let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        let lines = text.replacing("\r\n", with: "\n").components(separatedBy: "\n")
         var blocks: [IDEAgentMarkdownBlock] = []
         var paragraph: [String] = []
         var quote: [String] = []

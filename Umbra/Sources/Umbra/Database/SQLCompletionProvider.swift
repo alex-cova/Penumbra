@@ -355,7 +355,7 @@ enum SQLCompletion {
             return text
         }
         let single = quoteCharacter(quote)
-        return text.replacingOccurrences(of: single + single, with: single)
+        return text.replacing(single + single, with: single)
     }
 
     private static func quoteCharacter(_ quote: UInt16) -> String {
