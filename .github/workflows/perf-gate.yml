@@ -1,0 +1,73 @@
+name: Perf gate
+
+# Nightly Release PerfHarness regression gate (docs/audit/findings/F06-ci-perf-gate.md).
+# Measures HEAD and a baseline commit back to back in one session (timings drift up to ~2x
+# between days, docs/PERFORMANCE_RULES.md section 9), then fails on a pairwise regression or on a
+# checked-in absolute budget (Scripts/perf-budgets.json). Needs a runner with a live display:
+# `caffeinate -u -d -i -s` keeps it and the system awake, and headless runs flake.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: 'Commit to compare against (default: the commit one day before HEAD on main)'
+        required: false
+
+concurrency:
+  group: perf-gate
+  cancel-in-progress: false
+
+jobs:
+  perf-gate:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick the baseline commit
+        id: baseline
+        run: |
+          set -euo pipefail
+          base="${{ github.event.inputs.baseline }}"
+          if [ -z "${base}" ]; then
+            base="$(git rev-list -n 1 --before='24 hours ago' HEAD || true)"
+          fi
+          if [ -z "${base}" ]; then base="$(git rev-parse HEAD~1)"; fi
+          echo "sha=${base}" >> "$GITHUB_OUTPUT"
+          echo "head=$(git rev-parse HEAD) baseline=${base}"
+
+      - name: Build and measure HEAD
+        run: |
+          set -euo pipefail
+          caffeinate -u -d -i -s Scripts/perf-gate.py run \
+            --out "${RUNNER_TEMP}/head.json" --repeats 3 --build-path "${RUNNER_TEMP}/build-head"
+
+      # A separate worktree and build path per commit: a shared .build is overwritten by the next
+      # checkout and resource bundles must stay next to the binary.
+      - name: Build and measure the baseline commit
+        run: |
+          set -euo pipefail
+          git worktree add "${RUNNER_TEMP}/baseline-src" "${{ steps.baseline.outputs.sha }}"
+          # The gate script is the HEAD version, so both sides are parsed identically.
+          caffeinate -u -d -i -s Scripts/perf-gate.py run --source "${RUNNER_TEMP}/baseline-src" \
+            --out "${RUNNER_TEMP}/parent.json" --repeats 3 --build-path "${RUNNER_TEMP}/build-parent"
+
+      - name: Gate
+        run: |
+          Scripts/perf-gate.py check "${RUNNER_TEMP}/head.json" --parent "${RUNNER_TEMP}/parent.json"
+
+      - name: Keep the numbers (trend per commit)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/head.json
+            ${{ runner.temp }}/parent.json
+          retention-days: 90

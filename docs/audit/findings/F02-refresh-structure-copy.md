@@ -1,7 +1,7 @@
 # F02 — refreshStructure copies whole document per caret move
 
 - **Priority:** P0 · **Severity:** Critical · **Confidence:** Confirmed · **Provenance:** A
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Implemented (see Implementation notes) · **Owner:** Unassigned
 
 ## Evidence
 
@@ -34,3 +34,7 @@ M. No dependencies. Coordinate with F20 (same materialization pattern).
 ## Out of scope
 
 Debounce policy changes; provider internals.
+
+## Implementation notes
+
+Done 2026-11-03 — `refreshStructure` captures `exportDocumentText()` (piece-tree snapshot, no materialize) on the main actor and builds the string in a detached task; results dropped when `contentGeneration` moved. Not done: gating on the Structure sidebar being visible (would need every show path to refresh); no Release caret-move measurement yet. Existing UmbraTests structure suite not re-run in full.

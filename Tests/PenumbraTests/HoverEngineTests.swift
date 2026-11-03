@@ -11,6 +11,79 @@ final class HoverEngineTests: XCTestCase {
         XCTAssertEqual(result?.contents, "first")
     }
 
+    /// Priority is list order: a quick generic answer must not beat a richer provider listed
+    /// ahead of it when that provider answers inside the grace period.
+    func testHigherPriorityAnswerWinsOverFasterLowerPriorityOne() async {
+        let rich = MockHoverProvider(
+            name: "Rich",
+            result: HoverResult(contents: "rich", source: "Rich"),
+            delay: .milliseconds(100)
+        )
+        let quick = MockHoverProvider(name: "Quick", result: HoverResult(contents: "quick", source: "Quick"))
+        let engine = HoverEngine(providers: [rich, quick], priorityGrace: .seconds(10))
+        let result = await engine.hover(context: makeHoverContext(text: "foo", offset: 0))
+        XCTAssertEqual(result?.contents, "rich")
+    }
+
+    func testHigherPriorityNilFallsThroughWithoutWaitingForGrace() async {
+        let empty = MockHoverProvider(name: "Empty", result: nil)
+        let quick = MockHoverProvider(name: "Quick", result: HoverResult(contents: "quick", source: "Quick"))
+        let engine = HoverEngine(providers: [empty, quick], priorityGrace: .seconds(30))
+        let started = ContinuousClock.now
+        let result = await engine.hover(context: makeHoverContext(text: "foo", offset: 0))
+        XCTAssertEqual(result?.contents, "quick")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(5))
+    }
+
+    func testStalledHigherPriorityProviderIsNotWaitedForPastTheGracePeriod() async {
+        let slow = MockHoverProvider(
+            name: "Slow",
+            result: HoverResult(contents: "slow", source: "Slow"),
+            delay: .seconds(30)
+        )
+        let fast = MockHoverProvider(name: "Fast", result: HoverResult(contents: "fast", source: "Fast"))
+        let engine = HoverEngine(providers: [slow, fast], priorityGrace: .milliseconds(50))
+        let started = ContinuousClock.now
+        let result = await engine.hover(context: makeHoverContext(text: "foo", offset: 0))
+        XCTAssertEqual(result?.contents, "fast")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(5))
+        // The stalled provider is cancelled once the answer is chosen.
+        // Cancellation is delivered as the engine returns; the provider records it a moment later.
+        var cancelled = false
+        for _ in 0..<50 where !cancelled {
+            cancelled = await slow.wasCancelled
+            if !cancelled { try? await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(cancelled)
+    }
+
+    func testStalledNilProviderDoesNotBlockResultPastTheGracePeriod() async {
+        let slowNil = MockHoverProvider(name: "SlowNil", result: nil, delay: .seconds(30))
+        let fast = MockHoverProvider(name: "Fast", result: HoverResult(contents: "fast", source: "Fast"))
+        let engine = HoverEngine(providers: [slowNil, fast], priorityGrace: .milliseconds(50))
+        let result = await engine.hover(context: makeHoverContext(text: "foo", offset: 0))
+        XCTAssertEqual(result?.contents, "fast")
+    }
+
+    func testProviderThatIgnoresCancellationDoesNotHoldTheAnswer() async {
+        let stuck = UncooperativeHoverProvider(seconds: 3)
+        let fast = MockHoverProvider(name: "Fast", result: HoverResult(contents: "fast", source: "Fast"))
+        let engine = HoverEngine(providers: [stuck, fast], priorityGrace: .milliseconds(50))
+        let started = ContinuousClock.now
+        let result = await engine.hover(context: makeHoverContext(text: "foo", offset: 0))
+        XCTAssertEqual(result?.contents, "fast")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(1))
+    }
+
+    func testReturnsNilWhenAllProvidersReturnNil() async {
+        let engine = HoverEngine(providers: [
+            MockHoverProvider(name: "A", result: nil),
+            MockHoverProvider(name: "B", result: nil),
+        ])
+        let result = await engine.hover(context: makeHoverContext(text: "foo", offset: 0))
+        XCTAssertNil(result)
+    }
+
     func testReturnsNilWhenNoProviderMatches() async {
         let engine = HoverEngine(providers: [])
         let context = makeHoverContext(text: "foo", offset: 0)
@@ -43,18 +116,42 @@ final class HoverEngineTests: XCTestCase {
     }
 }
 
+/// Waits on a dispatch timer, so cancelling its task does not end the wait.
+private struct UncooperativeHoverProvider: HoverProvider {
+    let seconds: Double
+    let name = "Uncooperative"
+
+    func provide(context: HoverContext) async -> HoverResult? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { continuation.resume() }
+        }
+        return HoverResult(contents: "stuck", source: "Stuck")
+    }
+}
+
 private actor MockHoverProvider: HoverProvider {
     let name: String
     let result: HoverResult?
+    let delay: Duration?
     var callCount = 0
+    var wasCancelled = false
 
-    init(name: String, result: HoverResult?) {
+    init(name: String, result: HoverResult?, delay: Duration? = nil) {
         self.name = name
         self.result = result
+        self.delay = delay
     }
 
     func provide(context: HoverContext) async -> HoverResult? {
         callCount += 1
+        if let delay {
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                wasCancelled = true
+                return nil
+            }
+        }
         return result
     }
 }

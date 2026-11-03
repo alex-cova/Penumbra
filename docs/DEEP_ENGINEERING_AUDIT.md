@@ -27,11 +27,11 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 ### P0 — blockers before expansion
 
 - [F01 — No Java attributor](/Users/alex/Developer/Penumbra/docs/audit/findings/F01-java-attributor.md) — Critical / Confirmed / A+B
-- [F02 — refreshStructure copies whole document per caret move](/Users/alex/Developer/Penumbra/docs/audit/findings/F02-refresh-structure-copy.md) — Critical / Confirmed / A
-- [F03 — PieceTree.split O(file-offset) on first edit](/Users/alex/Developer/Penumbra/docs/audit/findings/F03-piece-tree-split.md) — High / Confirmed / A
-- [F04 — Sequential typing rescans up to 64 KiB per keystroke](/Users/alex/Developer/Penumbra/docs/audit/findings/F04-checkpoint-rescan.md) — High / Confirmed / A
-- [F05 — Hover head-of-line blocking](/Users/alex/Developer/Penumbra/docs/audit/findings/F05-hover-head-of-line.md) — High / Confirmed / B
-- [F06 — No CI performance gate; variance unmeasured](/Users/alex/Developer/Penumbra/docs/audit/findings/F06-ci-perf-gate.md) — High / Confirmed / A+B
+- [F02 — refreshStructure copies whole document per caret move](/Users/alex/Developer/Penumbra/docs/audit/findings/F02-refresh-structure-copy.md) — **✅ Done (2026-11-03)** — Critical / Confirmed / A
+- [F03 — PieceTree.split O(file-offset) on first edit](/Users/alex/Developer/Penumbra/docs/audit/findings/F03-piece-tree-split.md) — **✅ Done (2026-11-03)** — High / Confirmed / A
+- [F04 — Sequential typing rescans up to 64 KiB per keystroke](/Users/alex/Developer/Penumbra/docs/audit/findings/F04-checkpoint-rescan.md) — **✅ Done (2026-11-03)** — High / Confirmed / A
+- [F05 — Hover head-of-line blocking](/Users/alex/Developer/Penumbra/docs/audit/findings/F05-hover-head-of-line.md) — **✅ Done (2026-11-03)** — High / Confirmed / B
+- [F06 — No CI performance gate; variance unmeasured](/Users/alex/Developer/Penumbra/docs/audit/findings/F06-ci-perf-gate.md) — **✅ Done (2026-11-03)** — High / Confirmed / A+B
 
 ### P1 — performance and editing experience
 
@@ -64,6 +64,8 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 - [F27 — Parse-cache caps and linear symbol scans at scale](/Users/alex/Developer/Penumbra/docs/audit/findings/F27-scale-caps.md) — Low / Confirmed / A
 - [F28 — Keyboard gaps: presets, folding bindings, rebinding UI](/Users/alex/Developer/Penumbra/docs/audit/findings/F28-keyboard-gaps.md) — Medium / Confirmed / A+B
 - [F29 — Duplicate signposts and single-implementation protocols](/Users/alex/Developer/Penumbra/docs/audit/findings/F29-simplification.md) — Low / Confirmed / A+B
+
+**Execution status (2026-11-03):** F02, F03, F04, F05, F06 implemented — see each brief's *Implementation notes* for what was and was not verified. F01 (attributor, the long pole) and P1–P3 are not started. F05 deviates from its sketch (priority kept, bounded grace) because provider order is priority.
 
 ## 3. Text buffer summary
 

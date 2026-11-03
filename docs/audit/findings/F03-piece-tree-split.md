@@ -1,7 +1,7 @@
 # F03 — PieceTree.split O(file-offset) on first edit
 
 - **Priority:** P0 · **Severity:** High · **Confidence:** Confirmed · **Provenance:** A
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Implemented (see Implementation notes) · **Owner:** Unassigned
 
 ## Evidence
 
@@ -33,3 +33,7 @@ M. None. Pairs with F04.
 ## Out of scope
 
 Storage redesign; add-buffer compaction policy.
+
+## Implementation notes
+
+Done 2026-11-03 — `split` resolves offsets through `resolveUTF8Offset` (piece/original checkpoints) and derives the left UTF-16 length instead of re-walking. `PieceTreeTests.testFirstEditInLargeOriginalDoesNotWalkWholePiece` asserts bytes walked via `checkpointScanByteCount` (≤ two 64 KiB strides per edit on a >1M-unit file, incl. a split inside a surrogate pair). Add-piece splits still rescan their (≤64 KiB) halves; no 10/100 MB Release timing yet.

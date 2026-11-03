@@ -288,6 +288,9 @@ final class PieceTree {
     /// ``addBufferUTF8Offset(in:localUTF16:bytes:)``.
     private var addBufferOffsetCursor: (pieceUTF8Offset: Int, localUTF16: Int, utf8Offset: Int)?
     private(set) var materializeCount = 0
+    /// Bytes walked by checkpoint (re)computation for add-buffer pieces and by `split`'s offset
+    /// resolution. Tests assert these stay bounded by the edit, not by the piece or file size.
+    private(set) var checkpointScanByteCount = 0
     var addBufferByteCount: Int {
         addBuffer.count
     }
@@ -787,7 +790,10 @@ final class PieceTree {
             extendNode.data.piece.utf8Length += utf8.count
             extendNode.data.piece.utf16Length += utf16
             extendNode.data.piece.lineFeedCount += lineFeeds
-            extendNode.data.piece.checkpoints = checkpoints(for: extendNode.data.piece)
+            extendNode.data.piece.checkpoints = extendedCheckpoints(
+                for: extendNode.data.piece,
+                previous: extendNode.data.piece.checkpoints
+            )
             extendNode.value = extendNode.data.piece.utf16Length
             tree.updateAfterChangingChildren(of: extendNode)
             utf16Length += utf16
@@ -881,17 +887,14 @@ final class PieceTree {
         }
         let piece = node.data.piece
         let localUTF16 = utf16Offset - pieceStart
-        let localUTF8 = withUTF8(of: piece) { bytes in
-            let position = UTF8DocumentScanner.utf8Position(forUTF16Offset: localUTF16, in: bytes)
-            if position.skip > 0 {
-                return UTF8DocumentScanner.utf8EndOffset(forUTF16Offset: localUTF16, in: bytes)
-            }
-            return position.utf8Offset
-        }
-        let actualLeftUTF16 = withUTF8(of: piece) { bytes in
-            let slice = UnsafeRawBufferPointer(rebasing: bytes[..<min(localUTF8, bytes.count)])
-            return UTF8DocumentScanner.utf16Length(ofUTF8: slice)
-        }
+        // Resolve through the piece's checkpoints (or the original-file checkpoints) so only the
+        // distance from the nearest checkpoint is walked, not the whole piece. A split inside a
+        // surrogate pair moves to the end of the scalar, which is one more UTF-16 unit.
+        let beginUTF8 = utf8Offset(in: piece, localUTF16: localUTF16)
+        let endUTF8 = utf8EndOffset(in: piece, localUTF16: localUTF16)
+        let splitsScalar = endUTF8 != beginUTF8
+        let localUTF8 = splitsScalar ? endUTF8 : beginUTF8
+        let actualLeftUTF16 = splitsScalar ? localUTF16 + 1 : localUTF16
         if actualLeftUTF16 <= 0 {
             return .node(node)
         }
@@ -958,12 +961,49 @@ final class PieceTree {
         invalidateCache()
     }
 
+    /// Checkpoints for an add piece that just grew at its tail. Checkpoints before the last one
+    /// cannot change (each depends only on the bytes before it, and none is created at the very
+    /// end of the data), so the scan resumes from the last checkpoint instead of byte 0.
+    private func extendedCheckpoints(
+        for piece: Piece,
+        previous: [UTF8DocumentScanner.Checkpoint]
+    ) -> [UTF8DocumentScanner.Checkpoint] {
+        guard piece.source == .add, let last = previous.last,
+              last.utf8Offset <= piece.utf8Length else {
+            return checkpoints(for: piece)
+        }
+        let tail = withUTF8(of: piece) { bytes -> [UTF8DocumentScanner.Checkpoint] in
+            let rest = UnsafeRawBufferPointer(
+                start: bytes.baseAddress.map { $0 + last.utf8Offset },
+                count: max(bytes.count - last.utf8Offset, 0)
+            )
+            checkpointScanByteCount += rest.count
+            return UTF8DocumentScanner.scan(
+                rest,
+                onLine: nil,
+                onProgress: nil,
+                checkpointStride: Self.addCheckpointStride
+            ).checkpoints
+        }
+        var result = previous
+        // The sub-scan's first checkpoint is its own origin, which is `last`.
+        for checkpoint in tail.dropFirst() {
+            result.append(UTF8DocumentScanner.Checkpoint(
+                utf8Offset: last.utf8Offset + checkpoint.utf8Offset,
+                utf16Offset: last.utf16Offset + checkpoint.utf16Offset,
+                lineCount: last.lineCount + checkpoint.lineCount
+            ))
+        }
+        return result
+    }
+
     private func checkpoints(for piece: Piece) -> [UTF8DocumentScanner.Checkpoint] {
         guard piece.source == .add else {
             return []
         }
         return withUTF8(of: piece) { bytes in
-            UTF8DocumentScanner.scan(
+            checkpointScanByteCount += bytes.count
+            return UTF8DocumentScanner.scan(
                 bytes,
                 onLine: nil,
                 onProgress: nil,
@@ -1125,6 +1165,7 @@ final class PieceTree {
         let extra = end
             ? UTF8DocumentScanner.utf8EndOffset(forUTF16Offset: relative, in: bytes)
             : UTF8DocumentScanner.utf8Offset(forUTF16Offset: relative, in: bytes)
+        checkpointScanByteCount += extra
         return (startUTF8 + extra) - piece.utf8Offset
     }
 

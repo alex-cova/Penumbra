@@ -342,6 +342,17 @@ final class StringView {
         }
     }
 
+    /// Bytes walked by piece checkpoint recomputation and `split` (see `PieceTree`); 0 for
+    /// contiguous storage. Tests assert it stays bounded by the edit.
+    var checkpointScanByteCount: Int {
+        withLock {
+            if case .pieceTree(let tree) = storage {
+                return tree.checkpointScanByteCount
+            }
+            return 0
+        }
+    }
+
     var pieceCount: Int {
         withLock {
             if case .pieceTree(let tree) = storage {

@@ -1,7 +1,7 @@
 # F04 — Sequential typing rescans up to 64 KiB per keystroke
 
 - **Priority:** P0 · **Severity:** High · **Confidence:** Confirmed algorithm, Requires-measurement duration · **Provenance:** A
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Implemented (see Implementation notes) · **Owner:** Unassigned
 
 ## Evidence
 
@@ -32,3 +32,7 @@ M. None. Pairs with F03.
 ## Out of scope
 
 Changing the 64 KiB stride without measurement.
+
+## Implementation notes
+
+Done 2026-11-03 — tail extension resumes the scan from the last 4 KiB checkpoint (`extendedCheckpoints`). `testSequentialTypingScansBoundedBytesAndStaysCorrect` types 20k mixed keystrokes across the 64 KiB piece boundary (ASCII, é, 😀, LF, CRLF), asserts <4 KiB+64 B scanned per keystroke and every probed substring. `keystroke-budget` Release shows no regression vs the recorded baseline, but that baseline was taken after the change (no parent pair).

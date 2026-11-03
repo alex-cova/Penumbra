@@ -1,7 +1,7 @@
 # F05 — Hover head-of-line blocking
 
 - **Priority:** P0 · **Severity:** High · **Confidence:** Confirmed (prior audit; cited, not re-traced in workflow audit) · **Provenance:** B
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Implemented (see Implementation notes) · **Owner:** Unassigned
 
 ## Evidence
 
@@ -31,3 +31,7 @@ S. None.
 ## Out of scope
 
 Hover content/formatting; LSP hover latency itself.
+
+## Implementation notes
+
+Done 2026-11-03, with a deviation from the sketch: pure first-wins was tried and rejected. Provider order is priority (language services first, generic `SymbolHoverProvider` last; LSP-backed languages and `.http` do not opt out of symbol hover), so first-to-finish would let the index beat a richer server hover. `HoverEngine` now returns the highest-priority answer once all providers ahead of it have finished, or the best answer in hand after `priorityGrace` (250 ms); a nil from a higher-priority provider falls through immediately; unstructured tasks so a provider that ignores cancellation cannot hold the result. Tests in `HoverEngineTests` (priority, nil fall-through, grace, uncooperative provider).

@@ -426,6 +426,71 @@ final class PieceTreeTests: XCTestCase {
         XCTAssertEqual(actualData, expectedData, "chunk \(chunk): byte content mismatch", file: file, line: line)
     }
 
+    /// F04: typing at the tail of an add piece must not rescan the whole piece, and the
+    /// incrementally extended checkpoints must still resolve every offset correctly.
+    func testSequentialTypingScansBoundedBytesAndStaysCorrect() throws {
+        let url = try writeTemp(String(repeating: "base line\n", count: 20))
+        let view = try awaitLoad(url)
+        var groundTruth = (try String(contentsOf: url, encoding: .utf8)) as NSString
+        let insertAt = 50
+        let samples = ["a", "é", "😀", "\n", "\r\n", "x"]
+        let keystrokes = 20_000   // > one 64 KiB add piece, so the piece rolls over
+        view.replaceText(in: NSRange(location: insertAt, length: 0), with: "")
+        let before = view.checkpointScanByteCount
+        var location = insertAt
+        for index in 0..<keystrokes {
+            let text = samples[index % samples.count]
+            view.replaceText(in: NSRange(location: location, length: 0), with: text)
+            groundTruth = groundTruth.replacingCharacters(in: NSRange(location: location, length: 0), with: text) as NSString
+            location += (text as NSString).length
+        }
+        let scanned = view.checkpointScanByteCount - before
+        // Each keystroke may rescan from the last 4 KiB checkpoint plus its own bytes; the old
+        // behaviour averaged ~32 KiB per keystroke here.
+        XCTAssertLessThan(scanned / keystrokes, 4 * 1024 + 64, "scanned \(scanned) bytes over \(keystrokes) keystrokes")
+        XCTAssertEqual(view.length, groundTruth.length)
+        var probe = 0
+        while probe < groundTruth.length {
+            let range = NSRange(location: probe, length: min(37, groundTruth.length - probe))
+            XCTAssertEqual(view.substring(in: range), groundTruth.substring(with: range), "range \(range)")
+            probe += 4093
+        }
+        XCTAssertEqual(view.substring(in: NSRange(location: 0, length: groundTruth.length)), groundTruth as String)
+    }
+
+    /// F03: the first edit in the middle of a large single original piece resolves its offset
+    /// through the original checkpoints, not by walking the file from byte 0.
+    func testFirstEditInLargeOriginalDoesNotWalkWholePiece() throws {
+        var text = ""
+        for index in 0..<60_000 {
+            text += index % 7 == 0 ? "línea \(index) 😀\n" : "plain ascii line \(index)\n"
+        }
+        let url = try writeTemp(text)
+        let view = try awaitLoad(url)
+        XCTAssertTrue(view.isFileBacked)
+        var groundTruth = text as NSString
+        XCTAssertGreaterThan(groundTruth.length, 1_000_000)
+        let before = view.checkpointScanByteCount
+        // Land between the two units of a surrogate pair, too, to cover the scalar-boundary move.
+        let emoji = groundTruth.range(of: "😀", options: [], range: NSRange(location: groundTruth.length / 2, length: 4000))
+        XCTAssertNotEqual(emoji.location, NSNotFound)
+        for location in [groundTruth.length / 2, emoji.location + 1, groundTruth.length - 100] {
+            view.replaceText(in: NSRange(location: location, length: 0), with: "Q")
+            groundTruth = groundTruth.replacingCharacters(in: NSRange(location: location, length: 0), with: "Q") as NSString
+        }
+        XCTAssertEqual(view.length, groundTruth.length)
+        let probes = [0, groundTruth.length / 2 - 10, emoji.location - 5, groundTruth.length - 60]
+        for start in probes {
+            let range = NSRange(location: start, length: 40)
+            XCTAssertEqual(view.substring(in: range), groundTruth.substring(with: range), "range \(range)")
+        }
+        // Three edits, each resolving an offset twice from the nearest 64 KiB checkpoint; walking
+        // from the file start would be several megabytes here.
+        let scanned = view.checkpointScanByteCount - before
+        XCTAssertGreaterThan(scanned, 0)
+        XCTAssertLessThan(scanned, 3 * 2 * (64 * 1024 + 512) + 64 * 1024, "scanned \(scanned) bytes")
+    }
+
     private func writeTemp(_ text: String) throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try text.write(to: url, atomically: true, encoding: .utf8)

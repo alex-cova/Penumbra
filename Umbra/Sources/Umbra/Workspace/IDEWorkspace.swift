@@ -5123,11 +5123,19 @@ public final class IDEWorkspace {
             return
         }
         let textView = host(for: workbench.activePaneID).textView
-        let text = textView.text
+        // `textView.text` would copy a whole file-backed document on every caret move. Capture the
+        // cheap piece-tree snapshot here and build the string off the main actor.
+        let export = textView.exportDocumentText()
+        let generation = textView.contentGeneration
         let caret = textView.selectedRange.location
-        structureRefreshTask = Task { @MainActor [weak self] in
+        structureRefreshTask = Task { @MainActor [weak self, weak textView] in
             guard let self, !Task.isCancelled else { return }
-            guard let root = await provider.structure(forSource: text, atUTF16Offset: caret) else {
+            let root = await Task.detached(priority: .userInitiated) {
+                await provider.structure(forSource: export.materializeUTF16Text(), atUTF16Offset: caret)
+            }.value
+            // A newer edit or caret move has its own refresh in flight; drop this result.
+            guard !Task.isCancelled, textView?.contentGeneration == generation else { return }
+            guard let root else {
                 self.structureStore.show(message: "No type at the caret")
                 return
             }
