@@ -77,12 +77,19 @@ public protocol LineMarkerProviding: Sendable {
 // MARK: - Structure
 
 public enum StructureKind: String, Sendable {
+    /// A class, interface, enum, record, struct, trait or protocol: anything with members.
     case type
     case field
     case method
     case constructor
     case enumConstant
     case recordComponent
+    /// A free function: a top-level `def`, `fn` or `func`, which belongs to no type (F26).
+    case function
+    /// A module, namespace or package that holds declarations.
+    case module
+    /// A top-level or local variable or constant that is not a field of a type.
+    case variable
 }
 
 /// One row of the Structure outline: a declaration with its members.
@@ -139,6 +146,22 @@ public protocol StructureProviding: Sendable {
 
     /// Every top-level type of `source` with its members; nil when it does not parse.
     func allStructure(forSource source: String) async -> [StructureNode]?
+
+    /// The same for a document a language server has to know about: a provider that asks a server
+    /// needs the document's identity and synced text, not only a string. `source` is the live text.
+    /// Providers that read just the text keep the default, which ignores `document`.
+    func structure(forSource source: String, document: Document?, atUTF16Offset utf16Offset: Int) async -> StructureNode?
+    func allStructure(forSource source: String, document: Document?) async -> [StructureNode]?
+}
+
+public extension StructureProviding {
+    func structure(forSource source: String, document: Document?, atUTF16Offset utf16Offset: Int) async -> StructureNode? {
+        await structure(forSource: source, atUTF16Offset: utf16Offset)
+    }
+
+    func allStructure(forSource source: String, document: Document?) async -> [StructureNode]? {
+        await allStructure(forSource: source)
+    }
 }
 
 // MARK: - Hierarchies
@@ -150,6 +173,12 @@ public enum HierarchyItemKind: Sendable, Hashable {
     case recordType
     case annotationType
     case method
+    /// A struct (Go, Rust, Swift, C#) (F26).
+    case structType
+    /// A trait or protocol-like type that is not drawn as an interface.
+    case traitType
+    /// A free function (call hierarchy of Python, Rust or Go code).
+    case function
 }
 
 /// Where a hierarchy item comes from, which decides how it is drawn and whether it can be opened.

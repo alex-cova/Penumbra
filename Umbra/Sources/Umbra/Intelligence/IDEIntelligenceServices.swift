@@ -154,6 +154,10 @@ final class IDEIntelligenceServices {
         ])
     }
 
+    /// The languages with an inline-completion validator, registered in ``makeController``: the ones
+    /// whose suggestions are checked before they are shown (Settings ▸ Editor ▸ Code Completion).
+    static let inlineValidatedLanguages: Set<String> = ["java"]
+
     func makeController(
         textView: TextView,
         adapter: PenumbraWorkbenchEditorAdapter,
@@ -162,7 +166,8 @@ final class IDEIntelligenceServices {
         let services = EditorIntelligenceServices(
             languages: languages, symbolIndex: symbolIndex, workspace: workspace,
             inlineCompletionEngine: InlineCompletionEngine(
-                model: IDEInlineCompletionService.shared, validator: javaSupport.completionProvider
+                model: IDEInlineCompletionService.shared,
+                validators: ["java": javaSupport.completionProvider]
             )
         )
         let controller = EditorIntelligenceController(

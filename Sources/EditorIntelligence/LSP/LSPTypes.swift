@@ -223,3 +223,29 @@ public struct LSPSemanticToken: Sendable, Hashable {
         self.modifiers = modifiers
     }
 }
+
+
+/// One symbol of a `textDocument/documentSymbol` answer, with the server's own kind number
+/// (LSP `SymbolKind`, 1...26), so a host can map it to its vocabulary without a string round trip.
+public struct LSPDocumentSymbol: Sendable, Hashable {
+    public let name: String
+    public let detail: String?
+    public let kind: Int
+    /// The whole declaration.
+    public let range: LSPRange
+    /// The name inside it.
+    public let selectionRange: LSPRange
+    public let children: [LSPDocumentSymbol]
+
+    public init(
+        name: String, detail: String? = nil, kind: Int, range: LSPRange, selectionRange: LSPRange,
+        children: [LSPDocumentSymbol] = []
+    ) {
+        self.name = name
+        self.detail = detail
+        self.kind = kind
+        self.range = range
+        self.selectionRange = selectionRange
+        self.children = children
+    }
+}

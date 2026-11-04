@@ -6,6 +6,8 @@ import Foundation
 public actor InlineCompletionEngine {
     private let model: any InlineCompletionModel
     private let validator: (any InlineCompletionValidating)?
+    /// Per-language validators, by language identifier; `validator` checks the languages not listed.
+    private let validators: [String: any InlineCompletionValidating]
     public let debounceInterval: TimeInterval
     public nonisolated let filter = InlineCompletionFilter()
     private var generation = 0
@@ -14,10 +16,12 @@ public actor InlineCompletionEngine {
     public init(
         model: any InlineCompletionModel,
         validator: (any InlineCompletionValidating)? = nil,
+        validators: [String: any InlineCompletionValidating] = [:],
         debounceInterval: TimeInterval = 0.15
     ) {
         self.model = model
         self.validator = validator
+        self.validators = validators
         self.debounceInterval = debounceInterval
     }
 
@@ -68,7 +72,9 @@ public actor InlineCompletionEngine {
                       indentation: bounded.indentation),
                   filter.accepts(formatted, for: bounded) else { return nil }
             var suggestion = InlineSuggestion(text: formatted)
-            if let validator {
+            // The document's own language decides who checks the suggestion (F26): a Java validator
+            // has no say over Python.
+            if let validator = validators[document.languageIdentifier ?? ""] ?? validator {
                 guard let validated = await validator.validate(suggestion, in: document, at: position) else {
                     return nil
                 }

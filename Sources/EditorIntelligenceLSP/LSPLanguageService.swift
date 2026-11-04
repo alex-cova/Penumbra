@@ -107,6 +107,7 @@ public final class LSPLanguageService: LanguageService, @unchecked Sendable {
         var inlayHints: (any InlayHintProviding)?
         var typeHierarchy: (any TypeHierarchyProviding)?
         var callHierarchy: (any CallHierarchyProviding)?
+        var structure: (any StructureProviding)?
         if features.contains(.completion) {
             completion = [LSPReadyCompletion(name: name, languages: languages, connections: connections)]
         }
@@ -147,10 +148,13 @@ public final class LSPLanguageService: LanguageService, @unchecked Sendable {
         if features.contains(.callHierarchy) {
             callHierarchy = LSPReadyCallHierarchy(languages: languages, connections: connections)
         }
+        if features.contains(.structure) {
+            structure = LSPReadyStructure(languages: languages, connections: connections)
+        }
         providers = LanguageProviders(
             completion: completion, hover: hover, diagnostics: diagnostics, navigation: navigation,
             formatting: formatting, signatureHelp: signatureHelp, codeActions: codeActions, rename: rename,
-            inlayHints: inlayHints, semanticTokens: semanticTokens,
+            inlayHints: inlayHints, semanticTokens: semanticTokens, structure: structure,
             typeHierarchy: typeHierarchy, callHierarchy: callHierarchy
         )
     }

@@ -44,6 +44,9 @@ public protocol LSPClient: Sendable {
     /// Request signature help at the given position.
     func requestSignatureHelp(for document: Document, at position: TextPosition) async throws -> LSPSignatureHelp?
 
+    /// The document's symbols as a tree (`textDocument/documentSymbol`), for an outline.
+    func requestDocumentSymbolTree(for document: Document) async throws -> [LSPDocumentSymbol]
+
     /// Request full semantic tokens for the document.
     func requestSemanticTokens(for document: Document) async throws -> LSPSemanticTokens
 
@@ -64,6 +67,7 @@ public extension LSPClient {
         diagnostics: [LSPDiagnostic]
     ) async throws -> [LSPCodeAction] { [] }
     func requestSignatureHelp(for document: Document, at position: TextPosition) async throws -> LSPSignatureHelp? { nil }
+    func requestDocumentSymbolTree(for document: Document) async throws -> [LSPDocumentSymbol] { [] }
     func requestSemanticTokens(for document: Document) async throws -> LSPSemanticTokens { LSPSemanticTokens(resultId: nil, data: []) }
     func requestSemanticTokensDelta(for document: Document, previousResultId: String) async throws -> LSPSemanticTokensDelta {
         LSPSemanticTokensDelta(resultId: nil, data: [])

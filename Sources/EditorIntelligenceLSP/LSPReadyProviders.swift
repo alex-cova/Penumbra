@@ -172,7 +172,7 @@ struct LSPReadyTypeHierarchy: TypeHierarchyProviding {
 }
 
 private func hierarchyItem(from symbol: LSPHierarchySymbol, parentID: String) -> HierarchyItem {
-    let kind: HierarchyItemKind = symbol.kind == .call ? .method : hierarchyKind(symbol.symbolKind)
+    let kind: HierarchyItemKind = symbol.kind == .call ? (symbol.symbolKind == 12 || symbol.symbolKind == 25 ? .function : .method) : hierarchyKind(symbol.symbolKind)
     return HierarchyItem(
         id: parentID + "/" + symbol.uri + "/" + symbol.name,
         name: symbol.name,
@@ -184,12 +184,7 @@ private func hierarchyItem(from symbol: LSPHierarchySymbol, parentID: String) ->
 }
 
 private func hierarchyKind(_ symbolKind: Int) -> HierarchyItemKind {
-    switch symbolKind {
-    case 11: return .interfaceType
-    case 10: return .enumType
-    case 6, 9, 12: return .method
-    default: return .classType
-    }
+    LSPSymbolKinds.hierarchyKind(symbolKind)
 }
 
 private func hierarchyLocation(of item: HierarchyItem, file: URL?) -> HierarchyLocation? {

@@ -1349,6 +1349,7 @@ public final class IDEPreferences {
         controller.commandCompletionSettings = commandCompletion
         var inline = InlineCompletionSettings()
         inline.isEnabled = inlineCompletionEnabled
+        inline.languageIDs = IDEIntelligenceServices.inlineValidatedLanguages
         inline.multiLineEnabled = inlineCompletionMultiLine
         inline.syncWithPopup = inlineCompletionSyncWithPopup
         inline.otherLanguagesEnabled = inlineCompletionOtherLanguages

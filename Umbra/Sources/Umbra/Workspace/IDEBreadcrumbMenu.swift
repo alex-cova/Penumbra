@@ -99,6 +99,9 @@ extension StructureKind {
         case .method, .constructor: "m.circle.fill"
         case .enumConstant: "e.circle.fill"
         case .recordComponent: "r.circle.fill"
+        case .function: "function"
+        case .module: "shippingbox.fill"
+        case .variable: "v.circle.fill"
         }
     }
 
@@ -109,6 +112,9 @@ extension StructureKind {
         case .method, .constructor: .systemOrange
         case .enumConstant: .systemGreen
         case .recordComponent: .systemTeal
+        case .function: .systemOrange
+        case .module: .systemBrown
+        case .variable: .systemIndigo
         }
     }
 }

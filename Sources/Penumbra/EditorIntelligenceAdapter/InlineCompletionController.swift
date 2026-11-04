@@ -19,9 +19,10 @@ public enum InlineAcceptKey: String, Sendable, CaseIterable {
 /// Host settings for full-line (inline) completion.
 public struct InlineCompletionSettings: Sendable, Equatable {
     public var isEnabled = false
-    /// Languages with validation-grade suggestions; others get none unless listed in
-    /// `otherLanguageIDs` too. Java is on by default, everything else off.
-    public var languageIDs: Set<String> = ["java"]
+    /// Languages with validation-grade suggestions (the host registers a validator for each);
+    /// others get none unless `otherLanguagesEnabled`. Empty by default: which languages have a
+    /// validator is the host's to say, not this framework's.
+    public var languageIDs: Set<String> = []
     public var otherLanguagesEnabled = false
     public var multiLineEnabled = false
     public var syncWithPopup = false

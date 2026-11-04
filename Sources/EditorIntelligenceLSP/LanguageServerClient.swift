@@ -540,6 +540,33 @@ public actor LanguageServerClient: LSPClient {
         }
     }
 
+    public func requestDocumentSymbolTree(for document: Document) async throws -> [EditorIntelligence.LSPDocumentSymbol] {
+        guard await allows(.structure) else { return [] }
+        await ensureSynced(document)
+        guard let response = try await server.documentSymbol(DocumentSymbolParams(textDocument: textDocument(for: document))) else {
+            return []
+        }
+        func convert(_ symbol: DocumentSymbol) -> EditorIntelligence.LSPDocumentSymbol {
+            EditorIntelligence.LSPDocumentSymbol(
+                name: symbol.name, detail: symbol.detail, kind: symbol.kind.rawValue,
+                range: eipRange(from: symbol.range), selectionRange: eipRange(from: symbol.selectionRange),
+                children: (symbol.children ?? []).map(convert)
+            )
+        }
+        switch response {
+        case .optionA(let symbols):
+            return symbols.map(convert)
+        case .optionB(let symbols):
+            // The flat form has no nesting and one range: a container name is all there is to nest by.
+            return symbols.map { symbol in
+                let range = eipRange(from: symbol.location.range)
+                return EditorIntelligence.LSPDocumentSymbol(
+                    name: symbol.name, detail: symbol.containerName, kind: symbol.kind.rawValue, range: range, selectionRange: range
+                )
+            }
+        }
+    }
+
     public func requestWorkspaceSymbols(matching query: String) async throws -> [LSPOutlineSymbol] {
         guard let capabilities = await capabilities(), LSPServerCapabilities.supportsWorkspaceSymbols(capabilities) else { return [] }
         guard let response = try await server.workspaceSymbol(WorkspaceSymbolParams(query: query)) else {

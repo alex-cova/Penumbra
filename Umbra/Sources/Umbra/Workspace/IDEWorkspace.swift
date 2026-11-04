@@ -5134,7 +5134,7 @@ public final class IDEWorkspace {
     private func structureBreadcrumbMenu(for range: EditorIntelligence.TextRange) async -> NSMenu? {
         guard let provider = languages.structure(for: statusLanguage) else { return nil }
         let text = host(for: workbench.activePaneID).textView.text
-        guard let roots = await provider.allStructure(forSource: text) else { return nil }
+        guard let roots = await provider.allStructure(forSource: text, document: adapter.currentDocument) else { return nil }
         let utf16Offset = min(max(range.start.utf16Offset, 0), text.utf16.count)
         // The path from a root to the segment's declaration, found by its name's start.
         guard let chain = StructureNode.path(toNameAt: utf16Offset, in: roots), let target = chain.last else { return nil }
@@ -5150,7 +5150,7 @@ public final class IDEWorkspace {
         guard let provider = languages.structure(for: statusLanguage) else { return nil }
         let textView = host(for: workbench.activePaneID).textView
         let text = textView.text
-        guard let roots = await provider.allStructure(forSource: text) else { return nil }
+        guard let roots = await provider.allStructure(forSource: text, document: adapter.currentDocument) else { return nil }
         var entries: [FileStructureEntry] = []
         func visit(_ node: StructureNode) {
             let range = NSRange(location: node.nameRange.lowerBound, length: node.nameRange.count)
@@ -5184,10 +5184,12 @@ public final class IDEWorkspace {
         let export = textView.exportDocumentText()
         let generation = textView.contentGeneration
         let caret = textView.selectedRange.location
+        // A provider that asks a language server needs the document, not just its text (F26).
+        let document = adapter.currentDocument
         structureRefreshTask = Task { @MainActor [weak self, weak textView] in
             guard let self, !Task.isCancelled else { return }
             let root = await Task.detached(priority: .userInitiated) {
-                await provider.structure(forSource: export.materializeUTF16Text(), atUTF16Offset: caret)
+                await provider.structure(forSource: export.materializeUTF16Text(), document: document, atUTF16Offset: caret)
             }.value
             // A newer edit or caret move has its own refresh in flight; drop this result.
             guard !Task.isCancelled, textView?.contentGeneration == generation else { return }

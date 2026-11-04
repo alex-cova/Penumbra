@@ -377,6 +377,9 @@ private struct IDETypeHierarchyRowView: View {
         case .recordType: return "r.square"
         case .annotationType: return "at"
         case .method: return "m.square"
+        case .structType: return "s.square"
+        case .traitType: return "t.square"
+        case .function: return "f.square"
         }
     }
 
@@ -388,6 +391,9 @@ private struct IDETypeHierarchyRowView: View {
         case .recordType: return "record"
         case .annotationType: return "annotation"
         case .method: return "method"
+        case .structType: return "struct"
+        case .traitType: return "trait"
+        case .function: return "function"
         }
     }
 
