@@ -10,6 +10,7 @@ struct IDEToolbarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
+        let _ = IDEBodyDiagnostics.note("IDEToolbarPanel")
         if workspace.isAIMode {
             IDEAIToolbarRow()
         } else {

@@ -21,6 +21,7 @@ struct IDEStatusToast: View {
     }
 
     var body: some View {
+        let _ = IDEBodyDiagnostics.note("IDEStatusToast")
         VStack(alignment: .trailing, spacing: IDEAppearance.Spacing.sm) {
             if let content {
                 card(content)

@@ -7,6 +7,7 @@ struct IDELeftSidebar: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
+        let _ = IDEBodyDiagnostics.note("IDELeftSidebar")
         let active = workspace.activeSidebarTab
         VStack(spacing: 0) {
             IDESidebarTabBar()

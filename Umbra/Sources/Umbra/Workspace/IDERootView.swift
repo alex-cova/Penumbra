@@ -2,6 +2,21 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// How many times SwiftUI has evaluated the `body` of the views that call ``note(_:)``. A root
+/// re-evaluation re-reads every property the body touches and re-diffs the whole window, so what makes
+/// it happen (F21) is worth being able to count in a test, without Instruments. One dictionary
+/// increment per evaluation, on the main actor, in the views that matter most.
+@MainActor
+enum IDEBodyDiagnostics {
+    private(set) static var counts: [String: Int] = [:]
+
+    static func note(_ view: String) {
+        counts[view, default: 0] &+= 1
+    }
+
+    static func count(_ view: String) -> Int { counts[view] ?? 0 }
+}
+
 public struct IDERootView: View {
     @State private var agentPanelWidth: Double
     @State private var aiInspectorWidth: Double
@@ -39,6 +54,7 @@ public struct IDERootView: View {
     }
 
     public var body: some View {
+        let _ = IDEBodyDiagnostics.note("IDERootView")
         let _ = workspace.layoutEpoch
         let _ = workspace.windowMode
         let _ = workspace.showsWelcome

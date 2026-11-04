@@ -385,6 +385,7 @@ struct IDEEditorLayoutNode: View {
     let layout: EditorLayout
 
     var body: some View {
+        let _ = IDEBodyDiagnostics.note("IDEEditorLayoutNode")
         let _ = workspace.layoutEpoch
         switch layout {
         case .pane(let pane):

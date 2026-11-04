@@ -52,7 +52,7 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 - [F18 — Completion ranking has no statistics](/Users/alex/Developer/Penumbra/docs/audit/findings/F18-ranking-statistics.md) — **✅ Done for types (2026-11-03)** — Medium / Confirmed / A+B
 - [F19 — EditorIntelligence indexing parser is full-parse only](/Users/alex/Developer/Penumbra/docs/audit/findings/F19-ei-full-parse.md) — Medium / Confirmed / A
 - [F20 — Whole-document materialization on ordinary commands](/Users/alex/Developer/Penumbra/docs/audit/findings/F20-document-materialization.md) — Medium / Confirmed / A+B
-- [F21 — IDEWorkspace god object and forced root recompute](/Users/alex/Developer/Penumbra/docs/audit/findings/F21-ideworkspace-god-object.md) — High / Confirmed / A
+- [F21 — IDEWorkspace god object and forced root recompute](/Users/alex/Developer/Penumbra/docs/audit/findings/F21-ideworkspace-god-object.md) — **◐ Measured; premise mostly refuted; one seam extracted (2026-11-03)** — High / Confirmed / A
 - [F22 — Watcher batch synchronous 9-way fan-out](/Users/alex/Developer/Penumbra/docs/audit/findings/F22-watcher-fanout.md) — Medium / Confirmed shape / A
 - [F23 — Generated-source staleness and index double-truth](/Users/alex/Developer/Penumbra/docs/audit/findings/F23-index-staleness.md) — **✅ Done (2026-11-03)** — Medium / Confirmed / B
 - [F24 — Navigation awaits before caret move; breadcrumb QoS](/Users/alex/Developer/Penumbra/docs/audit/findings/F24-navigation-qos.md) — Medium / Confirmed / B

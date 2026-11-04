@@ -519,8 +519,17 @@ public final class IDEWorkspace {
     var headerContext = IDEHeaderContext()
     /// Standardized paths of the open files with unsaved changes (Mark Modified in the Explorer).
     var unsavedPaths: Set<String> = []
-    var statusLine = 1
-    var statusColumn = 1
+    /// The caret position for the status bar (see ``IDEEditorPosition``). `statusLine`,
+    /// `statusColumn` and `statusSelectionLength` forward to it, and only notify on a change.
+    let position = IDEEditorPosition()
+    var statusLine: Int {
+        get { position.line }
+        set { if position.line != newValue { position.line = newValue } }
+    }
+    var statusColumn: Int {
+        get { position.column }
+        set { if position.column != newValue { position.column = newValue } }
+    }
     var statusLanguage = ""
     /// The active text document's file encoding, shown (and changed) from the status bar.
     var statusEncoding = TextFileEncoding.utf8
@@ -621,7 +630,10 @@ public final class IDEWorkspace {
     @ObservationIgnored var swiftUIPreviewSwitchTask: Task<Void, Never>?
     var isJSONDiagramVisible = false
     var isCSVTableVisible = false
-    var statusSelectionLength = 0
+    var statusSelectionLength: Int {
+        get { position.selectionLength }
+        set { if position.selectionLength != newValue { position.selectionLength = newValue } }
+    }
     var tabsByPane: [UUID: [IDETabRow]] = [:]
     /// Standardized paths of every open document, so the Explorer can mark files open in a tab.
     private(set) var openDocumentPaths: Set<String> = []

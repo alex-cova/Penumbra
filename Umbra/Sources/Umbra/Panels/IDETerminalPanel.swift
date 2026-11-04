@@ -386,6 +386,7 @@ struct IDETerminalPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
+        let _ = IDEBodyDiagnostics.note("IDETerminalPanel")
         let _ = workspace.uiColorSchemeEpoch
         VStack(spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.sm) {

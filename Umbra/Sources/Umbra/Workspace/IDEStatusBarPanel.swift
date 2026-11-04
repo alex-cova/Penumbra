@@ -5,6 +5,7 @@ struct IDEStatusBarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
+        let _ = IDEBodyDiagnostics.note("IDEStatusBarPanel")
         let _ = workspace.uiColorSchemeEpoch
         HStack(spacing: IDEAppearance.Spacing.sm) {
             IDEStatusBarBreadcrumb(
@@ -18,14 +19,7 @@ struct IDEStatusBarPanel: View {
             Spacer(minLength: IDEAppearance.Spacing.md)
             moduleItems(.leading)
             problemsStatus
-            if workspace.statusSelectionLength > 0 {
-                Text("\(workspace.statusSelectionLength) selected  ·")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            }
-            Text(leadingSummary)
-                .font(IDEAppearance.Typography.monoSmall)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            IDEStatusPositionLabel()
             Text("·")
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -167,16 +161,33 @@ struct IDEStatusBarPanel: View {
         }
     }
 
-    private var leadingSummary: String {
-        "Ln \(workspace.statusLine)  ·  Col \(workspace.statusColumn)"
-    }
-
     private var trailingSummary: String {
         var parts = ["LF"]
         if workspace.isTerminalVisible {
             parts.append("Terminal")
         }
         return parts.joined(separator: "  ·  ")
+    }
+}
+
+/// "N selected · Ln 12 · Col 4". The only part of the status bar that follows the caret, in a view
+/// of its own so a caret move re-evaluates this and not the bar around it.
+private struct IDEStatusPositionLabel: View {
+    @Environment(IDEWorkspace.self) private var workspace
+
+    var body: some View {
+        let _ = IDEBodyDiagnostics.note("IDEStatusPositionLabel")
+        let position = workspace.position
+        HStack(spacing: IDEAppearance.Spacing.sm) {
+            if position.selectionLength > 0 {
+                Text("\(position.selectionLength) selected  ·")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            Text("Ln \(position.line)  ·  Col \(position.column)")
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        }
     }
 }
 
