@@ -78,11 +78,12 @@ public actor JavaCodeActionProvider: CodeActionProviding {
         let text = JavaNavigationText.fullText(of: document)
         guard !text.isEmpty else { return [] }
         let scope = scope(for: document.url)
+        let modules = document.url.flatMap { url in classpathModel.flatMap { model in classpathPaths.flatMap { model.moduleVisibility(forFile: url, paths: $0) } } }
         var diagnostics = diagnostics
         if let source = quietFindingsSource, let url = document.url {
             diagnostics.append(contentsOf: await source(url))
         }
-        return await JavaIndex.$queryScope.withValue(scope) { [diagnostics] in
+        return await JavaIndex.$queryModules.withValue(modules) { await JavaIndex.$queryScope.withValue(scope) { [diagnostics] in
             var actions = await importActions(in: text, at: position, diagnostics: diagnostics)
             actions.append(contentsOf: await JavaCompilerQuickFixes.actions(
                 in: text, at: position, diagnostics: diagnostics, index: index))
@@ -104,7 +105,7 @@ public actor JavaCodeActionProvider: CodeActionProviding {
                 ))
             }
             return actions
-        }
+        } }
     }
 
     public func bulb(

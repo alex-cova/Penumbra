@@ -27,6 +27,10 @@ public actor JavaIndex {
     /// Shard paths a single completion may see. `nil` (the default) sees every source. JDK shards
     /// (precedence 3), the overlay, and sources with an empty `shardPath` stay visible either way.
     @TaskLocal public static var queryScope: Set<String>?
+    /// Package restrictions of the module the query comes from (JPMS, F16). They narrow the lists
+    /// of class names offered to the user, never `classStub(qualifiedName:)`: a value's type may
+    /// come from a package its module does not export, and its members still resolve.
+    @TaskLocal public static var queryModules: JavaModuleVisibility?
 
     /// The classes of the buffer a request is about, by qualified name. They win over whatever is
     /// indexed under the same names for the length of that request: the overlay follows an edit
@@ -293,10 +297,10 @@ public actor JavaIndex {
     /// only packages that still have a visible class, so import completion doesn't offer a
     /// test-only package from `src/main`.
     private func visiblePackagePools() -> [Set<String>] {
-        guard Self.queryScope != nil else { return [basePackages, overlayPackages] }
+        guard Self.queryScope != nil || Self.queryModules != nil else { return [basePackages, overlayPackages] }
         var scoped = Set<String>()
         for table in [baseNameIndex, overlayNameIndex] {
-            for entry in table where isVisible(shardPath: entry.shardPath, precedence: entry.precedence) {
+            for entry in table where isNameVisible(entry) {
                 if let lastDot = entry.qualifiedName.range(of: ".", options: .backwards) {
                     insertPackages(of: String(entry.qualifiedName[..<lastDot.lowerBound]), into: &scoped)
                 }
@@ -352,6 +356,14 @@ public actor JavaIndex {
         return scope.contains(shardPath)
     }
 
+    /// ``isVisible(shardPath:precedence:)`` plus the module's package exports, for the lists of
+    /// class names offered to the user.
+    private func isNameVisible(_ entry: NameEntry) -> Bool {
+        guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { return false }
+        guard let restriction = Self.queryModules?.restrictions[entry.shardPath] else { return true }
+        return restriction.allows(qualifiedName: entry.qualifiedName)
+    }
+
     /// Classes whose simple name starts with `prefix` (case-insensitive), or matches it as an
     /// all-uppercase camel-hump abbreviation (e.g. "ALE" matches "ArrayListEntry" by lining up
     /// against its uppercase letters in order). Results are deduplicated by qualified name
@@ -365,7 +377,7 @@ public actor JavaIndex {
         for table in [baseNameIndex, overlayNameIndex] {
             var i = lowerBoundIndex(for: lowerPrefix, in: table)
             while i < table.count, table[i].lowerSimpleName.hasPrefix(lowerPrefix) {
-                if isVisible(shardPath: table[i].shardPath, precedence: table[i].precedence) {
+                if isNameVisible(table[i]) {
                     considerMatch(table[i], bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
                 }
                 i += 1
@@ -381,19 +393,19 @@ public actor JavaIndex {
                 for id in baseNameBuckets[Int(key)] {
                     let entry = baseNameIndex[Int(id)]
                     guard bestPrecedence[entry.qualifiedName] == nil,
-                          isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
+                          isNameVisible(entry),
                           matchesCamelHump(prefix, entry.simpleName) else { continue }
                     considerMatch(entry, bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
                 }
                 for entry in overlayNameIndex where bestPrecedence[entry.qualifiedName] == nil {
-                    guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
+                    guard isNameVisible(entry),
                           matchesCamelHump(prefix, entry.simpleName) else { continue }
                     considerMatch(entry, bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
                 }
             } else {
                 for table in [baseNameIndex, overlayNameIndex] {
                     for entry in table where bestPrecedence[entry.qualifiedName] == nil {
-                        guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence) else { continue }
+                        guard isNameVisible(entry) else { continue }
                         if matchesCamelHump(prefix, entry.simpleName) {
                             considerMatch(entry, bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
                         }
@@ -426,7 +438,7 @@ public actor JavaIndex {
         for table in [baseNameIndex, overlayNameIndex] {
             var i = lowerBoundIndex(for: lower, in: table)
             while i < table.count, table[i].lowerSimpleName == lower {
-                if table[i].simpleName == name, isVisible(shardPath: table[i].shardPath, precedence: table[i].precedence) {
+                if table[i].simpleName == name, isNameVisible(table[i]) {
                     considerMatch(table[i], bestPrecedence: &bestPrecedence, matchedNames: &matchedNames)
                 }
                 i += 1
@@ -485,7 +497,7 @@ public actor JavaIndex {
         }
 
         func consume(_ entry: NameEntry) {
-            guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
+            guard isNameVisible(entry),
                   JavaWordBuckets.isSubsequence(lowered, of: entry.lowerSimpleName),
                   let tier = CompletionMatcher.tier(query, in: entry.simpleName) else { return }
             consider(entry, tier)
@@ -572,7 +584,7 @@ public actor JavaIndex {
         var owners = [packageName]
         while let owner = owners.popLast() {
             for entry in baseEntriesByOwner[owner] ?? [] {
-                guard isVisible(shardPath: entry.shardPath, precedence: entry.precedence),
+                guard isNameVisible(entry),
                       seenQualified.insert(entry.qualifiedName).inserted,
                       let stub = classStub(qualifiedName: entry.qualifiedName), stub.packageName == packageName else { continue }
                 results.append(stub)

@@ -189,6 +189,11 @@ public enum JavaSourceStubBuilder {
         } else if kind == .recordKind, superclass == nil {
             superclass = .classType(qualifiedName: "java.lang.Record", arguments: [], outer: nil)
         }
+        if kind == .classKind {
+            methods.append(contentsOf: JavaLombokMembers.synthesize(
+                classNode: node, body: node.child(byFieldName: "body"), selfType: selfType, existing: methods
+            ))
+        }
         if outerKind(of: node) == .interfaceKind {
             // Member types of an interface are implicitly `public static`.
             modifiers.formUnion([.publicFlag, .staticFlag])

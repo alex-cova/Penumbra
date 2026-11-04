@@ -117,8 +117,12 @@ public actor JavaCompletionProvider: CompletionProvider {
             // A second Ctrl+Space looks past the source set's classpath, like IntelliJ's second
             // basic-completion invocation.
             if context.invocationCount < 2, let scope = self.scope(for: context.document.url) {
-                return await JavaIndex.$queryScope.withValue(scope) {
-                    await self.provideInScope(context: context)
+                // In a named module, only the exported packages of the modules it reads (F16).
+                let modules = self.moduleVisibility(for: context.document.url)
+                return await JavaIndex.$queryModules.withValue(modules) {
+                    await JavaIndex.$queryScope.withValue(scope) {
+                        await self.provideInScope(context: context)
+                    }
                 }
             }
             return await self.provideInScope(context: context)
@@ -128,6 +132,11 @@ public actor JavaCompletionProvider: CompletionProvider {
     func scope(for file: URL?) -> Set<String>? {
         guard let file, let classpathModel, let classpathPaths else { return nil }
         return classpathModel.visibleShardPaths(forFile: file, paths: classpathPaths)
+    }
+
+    func moduleVisibility(for file: URL?) -> JavaModuleVisibility? {
+        guard let file, let classpathModel, let classpathPaths else { return nil }
+        return classpathModel.moduleVisibility(forFile: file, paths: classpathPaths)
     }
 
     var javaIndex: JavaIndex {
