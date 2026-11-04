@@ -112,7 +112,7 @@ extension JavaTypeHierarchyProvider: TypeHierarchyProviding {
     }
 }
 
-extension JavaMethodHierarchyProvider: MethodHierarchyProviding {
+extension JavaMethodHierarchyProvider: TypeHierarchyProviding {
     public func rootItem(source: String, fileURL: URL?, utf16Offset: Int) async -> HierarchyItem? {
         await rootNode(source: source, fileURL: fileURL, utf16Offset: utf16Offset).map(Self.item)
     }

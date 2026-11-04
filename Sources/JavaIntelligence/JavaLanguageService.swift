@@ -27,7 +27,7 @@ public struct JavaLanguageService: LanguageService {
     private let inlayHints: JavaInlayHintProvider
     private let lineMarkers: JavaLineMarkerProvider
     private let typeHierarchy: JavaTypeHierarchyProvider
-    private let callHierarchy: any CallHierarchyProviding
+    private let callHierarchy: any CallHierarchyProviding & JavaOpenBufferReading
 
     public init(
         completion: JavaCompletionProvider,
@@ -49,7 +49,7 @@ public struct JavaLanguageService: LanguageService {
         lineMarkers: JavaLineMarkerProvider,
         structure: JavaStructureProvider,
         typeHierarchy: JavaTypeHierarchyProvider,
-        callHierarchy: any CallHierarchyProviding,
+        callHierarchy: any CallHierarchyProviding & JavaOpenBufferReading,
         symbolReference: JavaSymbolReferenceProvider? = nil
     ) {
         self.hover = hover
@@ -96,19 +96,17 @@ public struct JavaLanguageService: LanguageService {
 
     // MARK: - Lifecycle
 
+    /// The providers that read other files, which read them through the open buffer first so a
+    /// rename, a hierarchy or a hover sees unsaved edits. The registered call hierarchy is the bytecode
+    /// wrapper (which falls back to the source provider for every non-class file); the buffer reaches
+    /// the source index behind it through its own `setOpenBufferLookup`.
+    private var openBufferReaders: [any JavaOpenBufferReading] {
+        [navigation, hover, findUsages, rename, refactoring, inlayHints, lineMarkers, typeHierarchy, callHierarchy]
+    }
+
     public func start(environment: LanguageEnvironment) async {
-        // Every provider that reads another file reads it through the open buffer first, so a rename,
-        // a hierarchy or a hover sees unsaved edits.
         let openBuffer: @Sendable (URL) async -> String? = environment.openBufferText
-        await navigation.setOpenBufferLookup(openBuffer)
-        await hover.setOpenBufferLookup(openBuffer)
-        await findUsages.setOpenBufferLookup(openBuffer)
-        await rename.setOpenBufferLookup(openBuffer)
-        await refactoring.setOpenBufferLookup(openBuffer)
-        await inlayHints.setOpenBufferLookup(openBuffer)
-        await lineMarkers.setOpenBufferLookup(openBuffer)
-        await typeHierarchy.setOpenBufferLookup(openBuffer)
-        await setCallHierarchyOpenBuffer(openBuffer)
+        for reader in openBufferReaders { await reader.setOpenBufferLookup(openBuffer) }
         await formatting.setIndentUnitProvider(environment.indentUnit)
         // Decompiling class files needs the user's agreement; only a manual navigation may ask.
         await navigation.setDecompilerConsent(
@@ -118,29 +116,28 @@ public struct JavaLanguageService: LanguageService {
     }
 
     public func stop() async {
-        await navigation.setOpenBufferLookup(nil)
-        await hover.setOpenBufferLookup(nil)
-        await findUsages.setOpenBufferLookup(nil)
-        await rename.setOpenBufferLookup(nil)
-        await refactoring.setOpenBufferLookup(nil)
-        await inlayHints.setOpenBufferLookup(nil)
-        await lineMarkers.setOpenBufferLookup(nil)
-        await typeHierarchy.setOpenBufferLookup(nil)
-        await setCallHierarchyOpenBuffer(nil)
+        for reader in openBufferReaders { await reader.setOpenBufferLookup(nil) }
         await formatting.setIndentUnitProvider(nil)
         await navigation.setDecompilerConsent(accepted: false, request: nil)
     }
-
-    /// The registered hierarchy is the bytecode wrapper (which falls back to the source provider
-    /// for every non-class file); the open buffer must still reach the source index behind it.
-    private func setCallHierarchyOpenBuffer(_ lookup: (@Sendable (URL) async -> String?)?) async {
-        if let source = callHierarchy as? JavaCallHierarchyProvider {
-            await source.setOpenBufferLookup(lookup)
-        } else if let bytecode = callHierarchy as? JavaBytecodeCallHierarchyProvider {
-            await bytecode.setOpenBufferLookup(lookup)
-        }
-    }
 }
+
+/// A Java provider that is handed the window's open-buffer reader when the service starts and drops it
+/// when the service stops (see ``JavaLanguageService``).
+public protocol JavaOpenBufferReading: Sendable {
+    func setOpenBufferLookup(_ lookup: (@Sendable (URL) async -> String?)?) async
+}
+
+extension JavaHoverProvider: JavaOpenBufferReading {}
+extension JavaGoToDefinitionProvider: JavaOpenBufferReading {}
+extension JavaFindUsagesProvider: JavaOpenBufferReading {}
+extension JavaRenameProvider: JavaOpenBufferReading {}
+extension JavaRefactoringProvider: JavaOpenBufferReading {}
+extension JavaInlayHintProvider: JavaOpenBufferReading {}
+extension JavaLineMarkerProvider: JavaOpenBufferReading {}
+extension JavaTypeHierarchyProvider: JavaOpenBufferReading {}
+extension JavaCallHierarchyProvider: JavaOpenBufferReading {}
+extension JavaBytecodeCallHierarchyProvider: JavaOpenBufferReading {}
 
 public extension ConsentTopic {
     /// Decompiling a dependency's class files when no source is attached (see `JavaDecompilerAgreement`).

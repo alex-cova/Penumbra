@@ -53,7 +53,12 @@ public struct LanguageProviders: Sendable {
     public var structure: (any StructureProviding)?
     public var typeHierarchy: (any TypeHierarchyProviding)?
     public var callHierarchy: (any CallHierarchyProviding)?
-    public var methodHierarchy: (any MethodHierarchyProviding)?
+    /// The hierarchy of one method (IntelliJ's Method Hierarchy): the same tree as a type hierarchy,
+    /// over the classes that declare the method and the ones between them, where each item's `badge`
+    /// says what the class does with it (`defines`, `inherits`, `missing`). The root is the topmost
+    /// class that declares the method at `rootItem`'s offset. A ``TypeHierarchyProviding``: the
+    /// separate slot, not a separate protocol, is what says it answers for a method.
+    public var methodHierarchy: (any TypeHierarchyProviding)?
     public var symbolReference: (any SymbolReferenceProviding)?
 
     public init(
@@ -75,7 +80,7 @@ public struct LanguageProviders: Sendable {
         structure: (any StructureProviding)? = nil,
         typeHierarchy: (any TypeHierarchyProviding)? = nil,
         callHierarchy: (any CallHierarchyProviding)? = nil,
-        methodHierarchy: (any MethodHierarchyProviding)? = nil,
+        methodHierarchy: (any TypeHierarchyProviding)? = nil,
         symbolReference: (any SymbolReferenceProviding)? = nil
     ) {
         self.completion = completion
@@ -116,8 +121,6 @@ public protocol LanguageService: Sendable {
     /// Syntactic services are the fallback. A semantic service is asked first while it is ready.
     var tier: LanguageServiceTier { get }
 
-    /// `nil` means "derive from ``tier``".
-    func fidelity(of feature: LanguageFeature) -> FeatureFidelity?
     /// Features this service will not answer yet. Empty means ready. A property, not a method:
     /// the registry lives in this module, and a method with a default implementation is not
     /// dispatched to the conforming type from here.
@@ -126,8 +129,6 @@ public protocol LanguageService: Sendable {
     /// ``unavailableFeatures``: a defaulted method would not reach an override. The default
     /// returns `false` as soon as the task is cancelled, and no result before that.
     var cancellableRequest: @Sendable () async -> Bool { get }
-    /// Read on every request, so this must not await. The default is ready.
-    func isReady(for feature: LanguageFeature) -> Bool
 
     /// Called once when the editor window starts, before any request. Take what the service needs
     /// from `environment` (open buffers, the indent unit, consent). The default does nothing.
@@ -154,7 +155,7 @@ public protocol LanguageService: Sendable {
 }
 
 /// How complete a service's answers are. A syntactic service is always available. A semantic one
-/// answers only while ``LanguageService/isReady(for:)`` is true; the registry falls through to the
+/// answers only while ``LanguageService/unavailableFeatures`` does not name the feature; the registry falls through to the
 /// lower tier until then.
 public enum LanguageServiceTier: Int, Comparable, Sendable {
     case syntactic = 1
@@ -187,10 +188,6 @@ public extension LanguageService {
     var policy: LanguagePolicy { .none }
     var tier: LanguageServiceTier { .syntactic }
 
-    /// `nil` means "derive from ``tier``". A service that has no provider for `feature` is absent
-    /// from the capability report whether or not this returns a value.
-    func fidelity(of feature: LanguageFeature) -> FeatureFidelity? { nil }
-
     var unavailableFeatures: Set<LanguageFeature> { [] }
 
     var cancellableRequest: @Sendable () async -> Bool {
@@ -201,9 +198,6 @@ public extension LanguageService {
             return false
         }
     }
-
-    /// Read on every request, so this must not await. The default follows ``unavailableFeatures``.
-    func isReady(for feature: LanguageFeature) -> Bool { !unavailableFeatures.contains(feature) }
 
     func start(environment: LanguageEnvironment) async {}
     @MainActor func projectDidChange(root: URL?) {}

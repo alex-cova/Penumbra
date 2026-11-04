@@ -51,7 +51,8 @@ public struct LanguageServiceRegistry: Sendable {
             guard let service = services(for: languageIdentifier).first(where: { service in
                 !service.unavailableFeatures.contains(feature) && provides(feature, service.providers)
             }) else { continue }
-            let fidelity = service.fidelity(of: feature) ?? (service.tier == .semantic ? .semantic : .syntactic)
+            // A service's fidelity is its tier's: no service has ever reported a different one per feature.
+            let fidelity: FeatureFidelity = service.tier == .semantic ? .semantic : .syntactic
             features[feature] = LanguageFeatureOwner(service: service.name, fidelity: fidelity)
         }
         return LanguageCapabilityReport(features: features)
@@ -224,7 +225,7 @@ public struct LanguageServiceRegistry: Sendable {
     public func callHierarchy(for languageIdentifier: String?) -> (any CallHierarchyProviding)? {
         owner(of: languageIdentifier, feature: .callHierarchy, \.callHierarchy)
     }
-    public func methodHierarchy(for languageIdentifier: String?) -> (any MethodHierarchyProviding)? {
+    public func methodHierarchy(for languageIdentifier: String?) -> (any TypeHierarchyProviding)? {
         owner(of: languageIdentifier, feature: .methodHierarchy, \.methodHierarchy)
     }
 

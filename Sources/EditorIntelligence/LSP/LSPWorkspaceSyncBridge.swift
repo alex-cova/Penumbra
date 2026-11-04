@@ -61,8 +61,8 @@ public actor LSPWorkspaceSyncBridge {
     }
 
     private func handle(_ event: WorkspaceEvent) async {
-        let signpost = EditorIntelligenceSignposts.performance.beginInterval("LSPWorkspaceSyncBridge.handle")
-        defer { EditorIntelligenceSignposts.performance.endInterval("LSPWorkspaceSyncBridge.handle", signpost) }
+        let signpost = PerformanceSignposter.editorIntelligence.signposter.beginInterval("LSPWorkspaceSyncBridge.handle")
+        defer { PerformanceSignposter.editorIntelligence.signposter.endInterval("LSPWorkspaceSyncBridge.handle", signpost) }
         switch event {
         case .documentOpened(let document):
             let version = bumpVersion(for: document.id)

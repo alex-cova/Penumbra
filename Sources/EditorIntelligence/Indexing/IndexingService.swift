@@ -54,8 +54,8 @@ public actor IndexingService {
 
     /// Manually index a single document. Useful for seeding the index outside of workspace events.
     public func indexDocument(_ document: Document) async {
-        let signpost = EditorIntelligenceSignposts.performance.beginInterval("IndexingService.indexDocument")
-        defer { EditorIntelligenceSignposts.performance.endInterval("IndexingService.indexDocument", signpost) }
+        let signpost = PerformanceSignposter.editorIntelligence.signposter.beginInterval("IndexingService.indexDocument")
+        defer { PerformanceSignposter.editorIntelligence.signposter.endInterval("IndexingService.indexDocument", signpost) }
         if document.contentSnapshot.isElided {
             return
         }

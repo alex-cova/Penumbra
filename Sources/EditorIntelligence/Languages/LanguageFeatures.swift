@@ -281,12 +281,6 @@ public extension TypeHierarchyProviding {
     }
 }
 
-/// The hierarchy of one method (IntelliJ's Method Hierarchy): the same tree as a type hierarchy,
-/// over the classes that declare the method and the ones between them, where each item's `badge`
-/// says what the class does with it (`defines`, `inherits`, `missing`). The root is the topmost
-/// class that declares the method at `rootItem`'s offset.
-public protocol MethodHierarchyProviding: TypeHierarchyProviding {}
-
 public protocol CallHierarchyProviding: Sendable {
     /// The method at `utf16Offset` of `source`; nil when there is none.
     func rootItem(source: String, fileURL: URL?, utf16Offset: Int) async -> HierarchyItem?
