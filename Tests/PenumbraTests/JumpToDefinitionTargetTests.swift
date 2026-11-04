@@ -175,4 +175,73 @@ final class JumpToDefinitionTargetTests: XCTestCase {
         XCTAssertEqual(controller.identifierRange(at: 0, in: textView), NSRange(location: 0, length: 4))
         XCTAssertEqual(controller.identifierRange(at: 3, in: textView), NSRange(location: 0, length: 4))
     }
+
+    // MARK: - Late answers (F24)
+
+    private struct SlowProvider: NavigationProvider {
+        let name = "Slow"
+        let location: Location
+        let delay: UInt64
+
+        func provide(context: NavigationContext) async -> NavigationResult? {
+            try? await Task.sleep(nanoseconds: delay)
+            return .single(location)
+        }
+        func isPrimary(for context: NavigationContext) -> Bool { true }
+    }
+
+    /// Clicks, edits the buffer while the engine is still working, and returns what the late answer did.
+    private func jumpWithEditInBetween(to location: Location) async throws -> (selection: NSRange, opened: [Location]) {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.text = "import com.acme.model.Dog;"
+        let adapter = PenumbraEditorAdapter(textView: textView, context: EditorContext())
+        try await Task.sleep(nanoseconds: 100_000_000)
+        textView.selectedRange = NSRange(location: 1, length: 0)
+        let controller = JumpToDefinitionController(
+            textView: textView, adapter: adapter,
+            navigationEngine: NavigationEngine(providers: [SlowProvider(location: location, delay: 250_000_000)])
+        )
+        var opened: [Location] = []
+        controller.onOpenInOtherDocument = { opened.append($0); return true }
+        controller.jumpToDefinition(at: TextPosition(line: 0, column: 12, utf16Offset: 12))
+        try await Task.sleep(nanoseconds: 50_000_000)
+        textView.selectedRange = NSRange(location: 0, length: 0)
+        textView.insertText("// edited\n")
+        try await Task.sleep(nanoseconds: 500_000_000)
+        return (textView.selectedRange, opened)
+    }
+
+    func testAnswerForEditedTextDoesNotMoveTheCaret() async throws {
+        var location = makeLocation(target: .source, utf16Offset: 17)
+        location = Location(
+            documentID: location.documentID, url: nil, range: location.range, displayName: "same", target: .source
+        )
+        let result = try await jumpWithEditInBetween(to: location)
+        XCTAssertEqual(result.selection, NSRange(location: 10, length: 0), "the caret stays where the user's edit left it")
+        XCTAssertTrue(result.opened.isEmpty)
+    }
+
+    func testAnswerInAnotherFileStillOpensAfterAnEdit() async throws {
+        let location = makeLocation(target: .source, utf16Offset: 4) // /tmp/model, not the buffer's file
+        let result = try await jumpWithEditInBetween(to: location)
+        XCTAssertEqual(result.opened.map(\.id), [location.id])
+    }
+
+    func testANewerNavigationReplacesAnOlderOne() async throws {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.text = "import com.acme.model.Dog;"
+        let adapter = PenumbraEditorAdapter(textView: textView, context: EditorContext())
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let first = makeLocation(target: .directory)
+        let controller = JumpToDefinitionController(
+            textView: textView, adapter: adapter,
+            navigationEngine: NavigationEngine(providers: [SlowProvider(location: first, delay: 200_000_000)])
+        )
+        var opened: [Location] = []
+        controller.onOpenInOtherDocument = { opened.append($0); return true }
+        controller.jumpToDefinition(at: TextPosition(line: 0, column: 12, utf16Offset: 12))
+        controller.jumpToDefinition(at: TextPosition(line: 0, column: 14, utf16Offset: 14))
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(opened.count, 1, "the superseded request must not deliver")
+    }
 }

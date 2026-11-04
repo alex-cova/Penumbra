@@ -620,8 +620,10 @@ public final class CommandPaletteController {
 
     private func makeBufferTextProvider() -> BufferTextPaletteProvider {
         BufferTextPaletteProvider(
-            text: { [weak self] in self?.textView?.text ?? "" },
-            search: { [weak self] query in self?.textView?.search(for: query) ?? [] },
+            search: { [weak self] query, limit in
+                guard let matches = await self?.textView?.bufferTextMatches(for: query, limit: limit) else { return [] }
+                return matches.map { .init(range: $0.range, lineNumber: $0.lineNumber, preview: $0.preview) }
+            },
             onSelect: { [weak self] range in
                 guard let textView = self?.textView else { return }
                 textView.selectedRange = range

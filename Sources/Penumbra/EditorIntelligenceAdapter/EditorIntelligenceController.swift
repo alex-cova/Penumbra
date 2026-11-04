@@ -1033,30 +1033,41 @@ public final class EditorIntelligenceController {
         let utf16 = utf16Offset ?? textView.selectedRange.location
         let position = TextPosition(line: 0, column: utf16, utf16Offset: utf16)
         let cursor = Cursor(position: position)
-        let document = Document(
-            id: base.id,
-            url: textView.documentURL ?? base.url,
-            displayName: base.displayName,
-            contentSnapshot: TextSnapshot(version: base.version, text: textView.text),
-            selection: Selection(range: TextRange(start: position, end: position)),
-            cursor: cursor,
-            viewport: base.viewport,
-            languageIdentifier: base.languageIdentifier
-        )
-        let context = NavigationContext(
-            document: document,
-            cursor: cursor,
-            selection: document.selection,
-            trigger: .manual,
-            kind: kind
-        )
+        // The buffer is captured here and its string is built off the main actor (`textView.text`
+        // copied the whole document on every navigation key). A result computed for this
+        // generation is not applied to a buffer that has changed since (F24).
+        let generation = textView.contentGeneration
+        let export = textView.exportDocumentText()
+        let documentURL = textView.documentURL ?? base.url
         let searchTask = Task { [weak self] in
+            let text = await Task.detached(priority: .userInitiated) { export.materializeUTF16Text() }.value
+            guard !Task.isCancelled else { return }
+            let document = Document(
+                id: base.id,
+                url: documentURL,
+                displayName: base.displayName,
+                contentSnapshot: TextSnapshot(version: base.version, text: text),
+                selection: Selection(range: TextRange(start: position, end: position)),
+                cursor: cursor,
+                viewport: base.viewport,
+                languageIdentifier: base.languageIdentifier
+            )
+            let context = NavigationContext(
+                document: document,
+                cursor: cursor,
+                selection: document.selection,
+                trigger: .manual,
+                kind: kind
+            )
             let result = await navigationEngine.navigate(context: context)
             await MainActor.run {
                 guard let self else { return }
                 self.onNavigationSearchFinished?(kind)
                 if Task.isCancelled { return }
-                switch result {
+                let kept = result?.discardingTargets(in: self.textView, changedSince: generation)
+                // An answer for text that has since changed is dropped without a "no result" hint.
+                if kept == nil, result != nil { return }
+                switch kept {
                 case .single(let location):
                     self.focus(location)
                 case .multiple(let locations) where locations.count == 1:

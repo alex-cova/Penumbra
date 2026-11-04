@@ -149,6 +149,17 @@ final class JavaGeneratedSourcesTests: XCTestCase {
         XCTAssertFalse(self.model(generated: []).affectsGeneratedSources([gen.appendingPathComponent("p/Foo_Impl.java")]))
     }
 
+    /// Normal paths skip standardizing (it costs milliseconds per 10k-path batch on the main
+    /// actor); a path with dot segments must still be judged by where it really points.
+    func testPathsWithDotSegmentsAreStillStandardized() {
+        let model = model(generated: ["build/generated/sources/annotationProcessor/java/main"])
+        let gen = root.appendingPathComponent("build/generated/sources/annotationProcessor/java/main")
+        let viaParent = URL(fileURLWithPath: gen.path + "/p/../p/Foo_Impl.java")
+        XCTAssertTrue(model.affectsGeneratedSources([viaParent]))
+        let escaping = URL(fileURLWithPath: gen.path + "/../../../../../../src/main/java/p/Foo.java")
+        XCTAssertFalse(model.affectsGeneratedSources([escaping]))
+    }
+
     func testADeclaredDirectoryThatDoesNotExistYetStillCounts() throws {
         let model = model(generated: ["build/generated/sources/annotationProcessor/java/main"])
         XCTAssertEqual(model.existingGeneratedSourceDirectories, [], "nothing built yet")

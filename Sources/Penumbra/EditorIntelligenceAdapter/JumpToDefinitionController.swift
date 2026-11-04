@@ -9,6 +9,8 @@ public final class JumpToDefinitionController {
     private let navigationEngine: NavigationEngine
     private let adapter: EditorAdapter
     private var hoverTask: Task<Void, Never>?
+    /// The click or key navigation in flight. A newer one replaces it, so the last request is the one that lands.
+    private var navigateTask: Task<Void, Never>?
     private var hoverIdentifierStart: Int?
     private var showingLinkCursor = false
     /// The buffer as of one `generation`: ⌘-hover asks about every word the pointer stops on, and
@@ -74,7 +76,9 @@ public final class JumpToDefinitionController {
             return
         }
         let text = currentBufferText(of: textView)
-        Task {
+        navigateTask?.cancel()
+        navigateTask = Task { [weak self] in
+            guard let self else { return }
             guard let document = await navigationDocument(cursor: Cursor(position: position), text: text) else {
                 return
             }
@@ -85,10 +89,12 @@ public final class JumpToDefinitionController {
                 trigger: .manual,
                 kind: kind
             )
-            guard let result = await navigationEngine.navigate(context: context) else {
-                return
-            }
-            self.deliver(result, kind: kind, clickedIdentifier: clickedIdentifier)
+            guard let result = await navigationEngine.navigate(context: context), !Task.isCancelled,
+                  // Text edited while the engine ran: its answer is about text that no longer
+                  // exists, and must not move the caret away from what the user just did (F24).
+                  let current = result.discardingTargets(in: self.textView, changedSince: text.generation)
+            else { return }
+            self.deliver(current, kind: kind, clickedIdentifier: clickedIdentifier)
         }
     }
 

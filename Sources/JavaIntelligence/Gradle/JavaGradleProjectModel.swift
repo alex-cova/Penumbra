@@ -494,7 +494,12 @@ extension JavaGradleProjectModel {
         let roots = declaredGeneratedSourceDirectories.map(\.path)
         guard !roots.isEmpty else { return false }
         for url in changed {
-            let path = url.standardizedFileURL.path
+            // The watcher's paths are already absolute and normalized; `standardizedFileURL` costs
+            // ~6 µs a path, which adds up to tens of milliseconds on the main actor for a checkout.
+            let raw = url.path
+            let needsStandardizing = raw.contains("/./") || raw.contains("/../")
+                || raw.hasSuffix("/.") || raw.hasSuffix("/..") || raw.hasPrefix("/private/")
+            let path = needsStandardizing ? url.standardizedFileURL.path : raw
             for root in roots {
                 if path == root || root.hasPrefix(path + "/") { return true }
                 if path.hasPrefix(root + "/"), url.pathExtension == "java" || url.pathExtension.isEmpty { return true }

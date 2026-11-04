@@ -153,7 +153,7 @@ final class CodeFoldingManager {
         guard foldingModel.isEnabled else {
             return
         }
-        let document = makeDocument()
+        let document = await makeDocument()
         let descriptors = await fetchDescriptors(for: document)
         apply(descriptors: descriptors, generation: generation, incrementalRows: pendingDirtyRows)
         pendingDirtyRows = nil
@@ -185,9 +185,20 @@ private extension CodeFoldingManager {
         foldingEngine = FoldingEngine(providers: [foldingProvider, IndentationFoldingProvider()])
     }
 
-    private func makeDocument() -> Document {
-        let text = foldingModel.stringView.string as String
-        let snapshot = TextSnapshot(version: contentVersion, text: text)
+    /// The text is read on a snapshot and built off the main actor: for a file-backed buffer
+    /// `stringView.string` copied the whole file on the main thread at every fold update (F20).
+    private func makeDocument() async -> Document {
+        let stringView = foldingModel.stringView
+        let version = contentVersion
+        let pieces = stringView.contentSnapshot()
+        let text: String
+        if let pieces {
+            let export = DocumentTextExport(snapshot: pieces, fallback: "")
+            text = await Task.detached(priority: .utility) { export.materializeUTF16Text() }.value
+        } else {
+            text = stringView.string as String
+        }
+        let snapshot = TextSnapshot(version: version, text: text)
         let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
         return Document(
             displayName: "Editor",
@@ -211,7 +222,7 @@ private extension CodeFoldingManager {
             guard let self, !Task.isCancelled else {
                 return
             }
-            let descriptors = await fetchDescriptors(for: makeDocument())
+            let descriptors = await fetchDescriptors(for: await makeDocument())
             guard !Task.isCancelled else {
                 return
             }

@@ -388,7 +388,7 @@ public enum FindSearchEngine {
         return matches
     }
 
-    private enum LiteralEnumerateResult {
+    enum LiteralEnumerateResult {
         case completed
         case cancelled
         case stopped
@@ -396,7 +396,7 @@ public enum FindSearchEngine {
 
     /// Invokes `body` for each accepted literal match in document coordinates.
     /// `body` returns `false` to stop.
-    private static func enumerateLiteralMatches(
+    static func enumerateLiteralMatches(
         options: FindSearchOptions,
         in source: any FindTextSource,
         from startOffset: Int = 0,

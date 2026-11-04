@@ -2819,6 +2819,13 @@ extension TextInputView {
         applySelectedRanges(ranges)
     }
 
+    /// What the occurrence commands search: a piece-tree buffer is read through a ranged snapshot
+    /// (copying it into one string made ⌘D, ⌘K ⌘D and ⌘⇧L O(document) on the main thread, F20);
+    /// a contiguous buffer is bounded by the piece-tree threshold, so its string is used as is.
+    private func occurrenceSource() -> any FindTextSource {
+        stringView.contentSnapshot() ?? StringFindTextSource(stringView.string as String)
+    }
+
     func selectNextOccurrence() {
         if selection?.length == 0,
            let wordRange = SelectNextOccurrence.wordRange(at: selection?.location ?? 0, documentLength: stringView.length, tokenizer: tokenizer) {
@@ -2826,7 +2833,6 @@ extension TextInputView {
             applySelectedRanges([wordRange])
             return
         }
-        let string = stringView.string
         guard let queryRange = selection, queryRange.length > 0,
               let query = text(in: queryRange), !query.isEmpty else {
             return
@@ -2838,7 +2844,7 @@ extension TextInputView {
         let searchStart = ranges.map(\.upperBound).max() ?? queryRange.upperBound
         guard let next = SelectNextOccurrence.nextMatch(for: query,
                                                           length: queryRange.length,
-                                                          in: string,
+                                                          in: occurrenceSource(),
                                                           after: searchStart) else {
             return
         }
@@ -2855,7 +2861,6 @@ extension TextInputView {
     /// the next match after it, rather than appending — lets you skip a match you don't want to
     /// rename without losing the ones already selected. No-op with fewer than two ranges.
     func skipCurrentOccurrence() {
-        let string = stringView.string
         var ranges = selectedRanges
         guard ranges.count > 1, let mostRecent = ranges.max(by: { $0.location < $1.location }) else {
             return
@@ -2867,7 +2872,7 @@ extension TextInputView {
         let searchStart = mostRecent.upperBound
         guard let next = SelectNextOccurrence.nextMatch(for: query,
                                                           length: mostRecent.length,
-                                                          in: string,
+                                                          in: occurrenceSource(),
                                                           after: searchStart),
               !ranges.contains(where: { $0.location == next.location }) else {
             return
@@ -2919,17 +2924,16 @@ extension TextInputView {
     /// Selects every occurrence of the current query in the document. If the selection is empty,
     /// the word under the caret becomes the query first (matching `selectNextOccurrence()`).
     func selectAllOccurrences() {
-        let string = stringView.string
         let queryRange: NSRange?
         if let selection, selection.length > 0 {
             queryRange = selection
         } else {
-            queryRange = SelectNextOccurrence.wordRange(at: selection?.location ?? 0, documentLength: string.length, tokenizer: tokenizer)
+            queryRange = SelectNextOccurrence.wordRange(at: selection?.location ?? 0, documentLength: stringView.length, tokenizer: tokenizer)
         }
         guard let queryRange, let query = text(in: queryRange), !query.isEmpty else {
             return
         }
-        let matches = SelectNextOccurrence.allMatches(for: query, in: string)
+        let matches = SelectNextOccurrence.allMatches(for: query, in: occurrenceSource())
         guard !matches.isEmpty else {
             return
         }

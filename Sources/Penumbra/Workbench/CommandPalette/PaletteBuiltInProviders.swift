@@ -379,40 +379,46 @@ public final class GoToLinePaletteProvider: SearchEverywhereProvider {
 }
 
 /// In-buffer text search (`#` sigil) — Sublime's "search this file" mode. Backed by
-/// `TextView.search(for:)` rather than any disk I/O.
+/// `TextView.bufferTextMatches(for:limit:)` rather than any disk I/O.
 public final class BufferTextPaletteProvider: SearchEverywhereProvider {
+    /// One row: where the text matched, its line, and the line's text for the title.
+    public struct Hit: Sendable {
+        public let range: NSRange
+        public let lineNumber: Int
+        public let preview: String
+
+        public init(range: NSRange, lineNumber: Int, preview: String) {
+            self.range = range
+            self.lineNumber = lineNumber
+            self.preview = preview
+        }
+    }
+
     public let sectionTitle = "Text"
     public let sectionOrder = 15
-    private let text: @MainActor @Sendable () -> String
-    private let search: @MainActor @Sendable (SearchQuery) -> [SearchResult]
+    private let search: @MainActor @Sendable (String, Int) async -> [Hit]
     private let onSelect: @MainActor @Sendable (NSRange) -> Void
 
+    /// - Parameter search: the first `limit` case-insensitive occurrences of the text, in document
+    ///   order. It must not copy the buffer on the main actor: this runs for every debounced keystroke.
     public init(
-        text: @escaping @MainActor @Sendable () -> String,
-        search: @escaping @MainActor @Sendable (SearchQuery) -> [SearchResult],
+        search: @escaping @MainActor @Sendable (String, Int) async -> [Hit],
         onSelect: @escaping @MainActor @Sendable (NSRange) -> Void
     ) {
-        self.text = text
         self.search = search
         self.onSelect = onSelect
     }
 
     public func items(matching query: String, limit: Int) async -> [PaletteItem] {
         guard !query.isEmpty else { return [] }
-        let searchQuery = SearchQuery(text: query, matchMethod: .contains, isCaseSensitive: false)
-        let (results, fullText) = await MainActor.run { (search(searchQuery), text()) }
-        guard !results.isEmpty else { return [] }
-        let nsText = fullText as NSString
+        let hits = await search(query, limit)
         let onSelect = self.onSelect
-        return results.prefix(limit).enumerated().map { index, result in
-            let clampedLocation = min(result.range.location, nsText.length)
-            let lineRange = nsText.lineRange(for: NSRange(location: clampedLocation, length: 0))
-            let preview = nsText.substring(with: lineRange).trimmingCharacters(in: .whitespacesAndNewlines)
-            let range = result.range
+        return hits.prefix(limit).enumerated().map { index, hit in
+            let range = hit.range
             return PaletteItem(
                 id: "text:\(range.location):\(range.length)",
-                title: preview.isEmpty ? " " : preview,
-                subtitle: "Line \(result.startLocation.lineNumber + 1)",
+                title: hit.preview.isEmpty ? " " : hit.preview,
+                subtitle: "Line \(hit.lineNumber + 1)",
                 sectionTitle: sectionTitle,
                 score: limit - index,
                 action: { onSelect(range) }

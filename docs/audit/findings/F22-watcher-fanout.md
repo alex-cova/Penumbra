@@ -1,7 +1,7 @@
 # F22 — Watcher batch synchronous 9-way fan-out
 
 - **Priority:** P2 · **Severity:** Medium · **Confidence:** Confirmed shape, Requires-measurement cost · **Provenance:** A
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** ✅ Done (2026-11-04) — measured by shape; two main-actor costs fixed, the rest cleared · **Owner:** Unassigned
 
 ## Evidence
 
@@ -32,3 +32,20 @@ M worst case; possibly zero if measurement clears it. Same shape as F13.
 ## Out of scope
 
 The single-watcher design itself; FSEvents latency tuning.
+
+## Implementation notes (2026-11-04)
+
+Measured by reading each handler and timing the suspect loops on a 10,000-file tree (release `swiftc -O`, not a full checkout trace in Time Profiler; that is still unrun).
+
+**Already off the main actor (no change):** `project.applyChanges` (detached listing; more than 200 directories becomes one rebuild), `gitStatus.refresh` (async `loadSnapshot`, coalesced by `needsAnotherPass`), `localHistory.recordExternalChanges` (at most 40 files, reads detached), `diskSync.handle` (loops open entries, not batch paths; hashing detached), `fileIndexer.handle` (more than 500 paths skips the check and schedules a detached rebuild; at most 500 `stat`s otherwise), the Swift/TypeScript/Java index hooks (a `Task` after a cheap extension filter), Gradle/Maven/npm `filesDidChange` (build-file match, content compare in a `Task`).
+
+**Two real main-actor costs, both per path, both fixed:**
+
+| Cost | Where | 10k paths |
+|---|---|---|
+| `URL(fileURLWithPath:)` stats each path to decide directory-ness | `IDEWorkspace.subscribeToProjectWatcher` | 28–46 ms → 9 ms with `isDirectory: false` |
+| `standardizedFileURL` per path (only when the model declares generated-source dirs) | `JavaGradleProjectModel.affectsGeneratedSources` | ~58 ms → skipped unless the path has `.`/`..` segments or a `/private/` prefix |
+
+Nothing downstream reads the directory flag (`JavaNameIndex.filesChanged` standardizes on its own actor). Test: `JavaGeneratedSourcesTests.testPathsWithDotSegmentsAreStillStandardized`.
+
+**Not done:** a scripted 10k-file `git checkout` trace with signposts, and the residual ~9 ms URL construction plus the per-service extension filters (still O(paths) on the main actor). If a trace shows them mattering, pass `Set<String>` to the services and build URLs only for the filtered subset.

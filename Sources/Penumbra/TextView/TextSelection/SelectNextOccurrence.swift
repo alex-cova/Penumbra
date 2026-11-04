@@ -64,4 +64,48 @@ enum SelectNextOccurrence {
         }
         return matches
     }
+
+    // MARK: - Over a `FindTextSource`
+
+    // The same searches over a ranged source, so a file-backed (piece-tree) buffer is read in
+    // windows rather than copied into one string on the main thread (F20). The windowing and its
+    // overlap come from `FindSearchEngine`'s literal enumerator, so a match across a window cut is
+    // found; results equal the `NSString` versions above.
+
+    static func nextMatch(for query: String,
+                          length: Int,
+                          in source: any FindTextSource,
+                          after location: Int,
+                          caseSensitive: Bool = true) -> NSRange? {
+        guard !query.isEmpty, length > 0 else {
+            return nil
+        }
+        let start = min(max(location, 0), source.utf16Length)
+        guard start < source.utf16Length else {
+            return nil
+        }
+        let options = FindSearchOptions(query: query, matchCase: caseSensitive)
+        var next: NSRange?
+        _ = FindSearchEngine.enumerateLiteralMatches(options: options, in: source, from: start) { found in
+            // Like the `NSString` version, a match of another length (a canonically equivalent
+            // spelling) is skipped.
+            guard found.length == length else { return true }
+            next = found
+            return false
+        }
+        return next
+    }
+
+    static func allMatches(for query: String, in source: any FindTextSource, caseSensitive: Bool = true) -> [NSRange] {
+        guard !query.isEmpty else {
+            return []
+        }
+        let options = FindSearchOptions(query: query, matchCase: caseSensitive)
+        var matches: [NSRange] = []
+        _ = FindSearchEngine.enumerateLiteralMatches(options: options, in: source) { found in
+            matches.append(found)
+            return true
+        }
+        return matches
+    }
 }

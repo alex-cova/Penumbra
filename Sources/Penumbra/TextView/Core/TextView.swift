@@ -196,6 +196,51 @@ public struct DocumentTextExport: Sendable {
         return StringFindTextSource(textInputView.string as String)
     }
 
+    /// One hit of ``bufferTextMatches(for:limit:)``.
+    public struct BufferTextMatch: Sendable, Equatable {
+        public let range: NSRange
+        /// Zero-based line of the match's start.
+        public let lineNumber: Int
+        /// The match's line, trimmed and cut to a bounded window around the match.
+        public let preview: String
+    }
+
+    /// The first `limit` case-insensitive literal occurrences of `text`, in document order, for
+    /// the palette's in-buffer search. The scan runs off the main actor over a ranged snapshot and
+    /// stops at `limit`; the buffer is never copied into one string (`search(for:)` followed by
+    /// `text` did both, per keystroke, and built every match, F20). Previews are cut at 400 units
+    /// either side of the match, so a minified one-line file stays cheap.
+    public func bufferTextMatches(for text: String, limit: Int) async -> [BufferTextMatch] {
+        guard !text.isEmpty, limit > 0 else { return [] }
+        let source = makeFindTextSource()
+        let options = FindSearchOptions(query: text, matchCase: false)
+        let hits: [(range: NSRange, preview: String)] = await Task.detached(priority: .userInitiated) {
+            var ranges: [NSRange] = []
+            _ = FindSearchEngine.enumerateLiteralMatches(options: options, in: source) { found in
+                ranges.append(found)
+                return ranges.count < limit
+            }
+            let length = source.utf16Length
+            return ranges.map { range in
+                let from = max(0, range.location - 400)
+                let to = min(length, NSMaxRange(range) + 400)
+                let window = source.substring(utf16Offset: from, length: to - from) as NSString
+                let local = NSRange(location: range.location - from, length: min(range.length, max(0, window.length - (range.location - from))))
+                let line = window.lineRange(for: NSRange(location: min(local.location, window.length), length: 0))
+                let lineEnd = max(line.location, NSMaxRange(line))
+                let preview = window.substring(with: NSRange(location: line.location, length: lineEnd - line.location))
+                return (range, preview.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }.value
+        return hits.map { hit in
+            BufferTextMatch(
+                range: hit.range,
+                lineNumber: textLocation(at: hit.range.location)?.lineNumber ?? 0,
+                preview: hit.preview
+            )
+        }
+    }
+
     /// Bumped on every mutation of the live buffer. Hosts can compare this across tab switches
     /// to detect edits without reading ``text`` (which materializes file-backed documents).
     public var contentGeneration: UInt64 {
