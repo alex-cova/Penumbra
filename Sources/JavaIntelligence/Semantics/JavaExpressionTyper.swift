@@ -280,12 +280,14 @@ public enum JavaExpressionTyper {
             return .value(.classType(qualifiedName: "java.lang.Class", arguments: argument, outer: nil))
 
         case "ternary_expression":
-            if let consequence = node.child(byFieldName: "consequence"),
-               let result = await typed(consequence, locals: locals, context: context, index: index), !isNullType(result.type) {
-                return .value(result.type)
+            var arms: [JavaTypeRef] = []
+            for field in ["consequence", "alternative"] {
+                if let arm = node.child(byFieldName: field),
+                   let result = await typed(arm, locals: locals, context: context, index: index) {
+                    arms.append(result.type)
+                }
             }
-            guard let alternative = node.child(byFieldName: "alternative") else { return nil }
-            return await typed(alternative, locals: locals, context: context, index: index).map { .value($0.type) }
+            return await conditionalType(of: arms, index: index).map { .value($0) }
 
         case "binary_expression":
             return await typedBinary(node, locals: locals, context: context, index: index)
@@ -331,19 +333,64 @@ public enum JavaExpressionTyper {
         }
     }
 
-    /// A `switch` expression's type from its first arm that types: an arrow arm's expression, or
-    /// the value of a `yield` in an arm's block. (Java takes the arms' common type; the first arm
-    /// is the usual stand-in, like the ternary above.)
+    /// A `switch` expression's type from the values of all its arms: an arrow arm's expression, or
+    /// the value of a `yield` in an arm's block, combined like the arms of a conditional.
     private static func typedSwitchExpression(_ node: SyntaxNode, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex) async -> Typed? {
         guard let body = node.child(byFieldName: "body") else { return nil }
+        var arms: [JavaTypeRef] = []
         for arm in body.namedChildren {
             for value in armValues(arm) {
-                if let result = await typed(value, locals: locals, context: context, index: index), !isNullType(result.type) {
-                    return .value(result.type)
+                if let result = await typed(value, locals: locals, context: context, index: index) {
+                    arms.append(result.type)
                 }
             }
         }
-        return nil
+        return await conditionalType(of: arms, index: index).map { .value($0) }
+    }
+
+    /// The type of a conditional or `switch` expression given the types of its arms (JLS 15.25):
+    /// `null` arms give way to the others; numeric arms promote (`c ? 1 : 2.5` is `double`);
+    /// boolean arms stay boolean; reference arms (primitives boxed) meet in their lub. An arm that
+    /// does not type is left out, and nothing typed at all gives `nil`.
+    static func conditionalType(of arms: [JavaTypeRef], index: JavaIndex) async -> JavaTypeRef? {
+        let known = arms.filter { !isNullType($0) }
+        guard let first = known.first else { return arms.first }
+        let hadNull = known.count < arms.count
+        if known.count == 1 { return hadNull ? boxed(first) : first }
+        let unboxedArms = known.map(unboxed)
+        if unboxedArms.allSatisfy({ if case .primitive(.boolean)? = $0 { return true } else { return false } }) {
+            return .primitive(.boolean)
+        }
+        let numeric = unboxedArms.compactMap { arm -> JavaPrimitive? in
+            if case .primitive(let primitive)? = arm, primitive != .boolean { return primitive }
+            return nil
+        }
+        if numeric.count == known.count, !hadNull {
+            if Set(numeric).count == 1 { return .primitive(numeric[0]) }
+            let order: [JavaPrimitive] = [.byte, .short, .char, .int, .long, .float, .double]
+            if Set(numeric).isSubset(of: [.byte, .short]) { return .primitive(.short) }
+            let widest = numeric.map { order.firstIndex(of: $0) ?? 3 }.max() ?? 3
+            return .primitive(order[max(widest, 3)])
+        }
+        return await JavaTypeSystem.lubKeepingArguments(of: known.map(boxed), index: index) ?? boxed(first)
+    }
+
+    /// The primitive a wrapper class unboxes to (`Integer` → `int`); other types pass through.
+    private static func unboxed(_ type: JavaTypeRef) -> JavaTypeRef? {
+        guard case .classType(let name, _, _) = type else { return type }
+        let primitive: JavaPrimitive?
+        switch name {
+        case "java.lang.Boolean": primitive = .boolean
+        case "java.lang.Byte": primitive = .byte
+        case "java.lang.Character": primitive = .char
+        case "java.lang.Short": primitive = .short
+        case "java.lang.Integer": primitive = .int
+        case "java.lang.Long": primitive = .long
+        case "java.lang.Float": primitive = .float
+        case "java.lang.Double": primitive = .double
+        default: primitive = nil
+        }
+        return primitive.map { .primitive($0) } ?? type
     }
 
     /// Value expressions of one switch arm: `case A -> expr;`, or `yield expr;` statements inside
@@ -529,33 +576,135 @@ public enum JavaExpressionTyper {
         }
         guard let chosen = await resolveOverloads(candidates, argumentTypes: argumentTypes, context: context, index: index).first else { return nil }
 
-        // Generic calls passed as arguments get the parameter type as their target.
-        for (position, argument) in argumentNodes.enumerated() where argument.type == "method_invocation" {
-            guard let parameterType = functionalParameterType(of: chosen, at: position),
-                  let retyped = await typedMethodInvocation(argument, locals: locals, context: context, index: index, target: parameterType) else { continue }
-            argumentTypes[position] = retyped.type
-        }
-
-        var extraBindings: [String: JavaTypeRef] = [:]
+        // Constraints are collected in the order javac weighs them, then lambdas and method
+        // references are typed against what is already known (JLS 18.5): explicit type arguments,
+        // the call's own target, the other arguments (several arguments for one variable meet in
+        // their lub), and only then what each lambda body or method reference returns. A lambda
+        // typed first saw `T` unbound, so `Stream.iterate(1, i -> i + 1)` became `Stream<Object>`.
+        var bindings: [String: JavaTypeRef] = [:]
         let methodTypeVariables = Set(chosen.typeParameters.map(\.name))
-        for (position, argument) in argumentNodes.enumerated() where isFunctionalArgument(argument) {
-            guard let parameterType = functionalParameterType(of: chosen, at: position),
-                  let signature = await functionalSignature(of: parameterType, context: context, index: index),
-                  let result = await resultType(ofFunctional: argument, signature: signature, locals: locals, context: context, index: index) else { continue }
-            bind(signature.returnType, to: result, names: methodTypeVariables, bindings: &extraBindings, fromTarget: false)
-        }
         // `Collections.<User>emptyList()`: explicit type arguments bind the method's type
         // parameters in order and win over anything inferred.
         if let explicit = node.child(byFieldName: "type_arguments") {
             for (parameter, argument) in zip(chosen.typeParameters, explicit.namedChildren) {
-                extraBindings[parameter.name] = await JavaTypeResolver.resolve(JavaTypeNodeConverter.convert(argument), context: context, index: index)
+                bindings[parameter.name] = await JavaTypeResolver.resolve(JavaTypeNodeConverter.convert(argument), context: context, index: index)
             }
         }
         if let target {
-            bind(chosen.returnType, to: target, names: methodTypeVariables, bindings: &extraBindings, fromTarget: true)
+            bind(chosen.returnType, to: target, names: methodTypeVariables, bindings: &bindings, fromTarget: true)
         }
-        let returnType = inferMethodTypeVariables(chosen, argumentTypes: argumentTypes, extraBindings: extraBindings)
+        let isGenericCall = { (position: Int) in argumentNodes[position].type == "method_invocation" }
+        let plainArguments = argumentTypes.enumerated().map { isGenericCall($0.offset) ? nil : $0.element }
+        for (name, type) in await argumentBindings(of: chosen, argumentTypes: plainArguments, index: index) where bindings[name] == nil {
+            bindings[name] = type
+        }
+        // Generic calls passed as arguments get the parameter type as their target, with what is
+        // known so far substituted into it (`Collectors.toMap(Function.identity(), …)` passed to
+        // `collect` already knows `T` is the stream's element type). A target that still mentions
+        // a variable only a lambda can bind (`mapping(s -> s.trim(), toList())`: `toList()` needs
+        // `U`) waits until the lambdas have been typed.
+        var deferred: [Int] = []
+        for (position, argument) in argumentNodes.enumerated() where argument.type == "method_invocation" {
+            guard let parameterType = functionalParameterType(of: chosen, at: position) else { continue }
+            let known = substitute(parameterType, bindings)
+            if mentions(known, anyOf: methodTypeVariables) {
+                deferred.append(position)
+                argumentTypes[position] = nil
+                continue
+            }
+            if let retyped = await typedMethodInvocation(argument, locals: locals, context: context, index: index, target: known) {
+                argumentTypes[position] = retyped.type
+            }
+        }
+        for (name, type) in await argumentBindings(of: chosen, argumentTypes: argumentTypes, index: index) where bindings[name] == nil {
+            bindings[name] = type
+        }
+        for (position, argument) in argumentNodes.enumerated() where isFunctionalArgument(argument) {
+            guard let declared = functionalParameterType(of: chosen, at: position),
+                  let signature = await functionalSignature(of: substitute(declared, bindings), context: context, index: index),
+                  let result = await resultType(ofFunctional: argument, signature: signature, locals: locals, context: context, index: index) else { continue }
+            var fromLambda: [String: JavaTypeRef] = [:]
+            bind(signature.returnType, to: result, names: methodTypeVariables, bindings: &fromLambda, fromTarget: false)
+            for (name, type) in fromLambda where bindings[name] == nil { bindings[name] = type }
+        }
+        for position in deferred {
+            guard let parameterType = functionalParameterType(of: chosen, at: position),
+                  let retyped = await typedMethodInvocation(
+                      argumentNodes[position], locals: locals, context: context, index: index, target: substitute(parameterType, bindings)
+                  ) else { continue }
+            argumentTypes[position] = retyped.type
+        }
+        if !deferred.isEmpty {
+            for (name, type) in await argumentBindings(of: chosen, argumentTypes: argumentTypes, index: index) where bindings[name] == nil {
+                bindings[name] = type
+            }
+        }
+        let returnType = inferMethodTypeVariables(chosen, argumentTypes: argumentTypes, extraBindings: bindings)
         return .value(returnType)
+    }
+
+    /// Whether `type` mentions one of the type variables `names`.
+    private static func mentions(_ type: JavaTypeRef, anyOf names: Set<String>) -> Bool {
+        switch type {
+        case .typeVariable(let name): return names.contains(name)
+        case .unresolved(let name, let arguments):
+            return (arguments.isEmpty && names.contains(name)) || arguments.contains { mentions($0, anyOf: names) }
+        case .array(let element): return mentions(element, anyOf: names)
+        case .classType(_, let arguments, let outer):
+            return arguments.contains { mentions($0, anyOf: names) } || (outer.map { mentions($0, anyOf: names) } ?? false)
+        case .wildcard(let bound): return bound.map { mentions($0, anyOf: names) } ?? false
+        case .primitive, .void: return false
+        }
+    }
+
+    private static func mentions(_ argument: JavaTypeArgument, anyOf names: Set<String>) -> Bool {
+        switch argument {
+        case .type(let type): return mentions(type, anyOf: names)
+        case .wildcard(let bound): return bound.map { mentions($0, anyOf: names) } ?? false
+        }
+    }
+
+    private static func mentions(_ bound: JavaWildcardBound, anyOf names: Set<String>) -> Bool {
+        switch bound {
+        case .extends(let type), .superBound(let type): return mentions(type, anyOf: names)
+        }
+    }
+
+    /// The method type variables the plain (non-lambda) arguments bind. Several arguments for one
+    /// variable (`List.of(1, 2.5)`) do not pick the first: the variable stands for the least upper
+    /// bound of what they supply (JLS 18.5.2).
+    private static func argumentBindings(
+        of method: JavaMethodStub, argumentTypes: [JavaTypeRef?], index: JavaIndex
+    ) async -> [String: JavaTypeRef] {
+        guard !method.typeParameters.isEmpty else { return [:] }
+        let names = Set(method.typeParameters.map(\.name))
+        var candidates: [String: [JavaTypeRef]] = [:]
+        for (position, argument) in argumentTypes.enumerated() {
+            guard let argument, let target = parameterTarget(of: method, at: position, argument: argument) else { continue }
+            var single: [String: JavaTypeRef] = [:]
+            bind(target, to: argument, names: names, bindings: &single)
+            for (name, type) in single { candidates[name, default: []].append(type) }
+        }
+        var result: [String: JavaTypeRef] = [:]
+        for (name, types) in candidates {
+            var distinct: [JavaTypeRef] = []
+            for type in types where !distinct.contains(type) { distinct.append(type) }
+            if distinct.count == 1 {
+                result[name] = distinct[0]
+            } else {
+                result[name] = await JavaTypeSystem.lub(of: distinct, index: index) ?? distinct[0]
+            }
+        }
+        return result
+    }
+
+    /// The parameter type an argument at `position` is matched against, with a varargs tail
+    /// matched against the element type.
+    private static func parameterTarget(of method: JavaMethodStub, at position: Int, argument: JavaTypeRef) -> JavaTypeRef? {
+        let isVarargsTail = method.modifiers.contains(.varargs) && position >= method.parameters.count - 1
+        guard let parameter = position < method.parameters.count ? method.parameters[position].type : method.parameters.last?.type else { return nil }
+        if isVarargsTail, case .array(let element) = parameter, !isArray(argument) { return element }
+        return parameter
     }
 
     /// The overloads a `method_invocation` node could call: members of its receiver, or for an
@@ -622,7 +771,7 @@ public enum JavaExpressionTyper {
         locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
     ) async -> JavaTypeRef? {
         if node.type == "method_reference" {
-            return await methodReferenceResult(node, arity: signature.parameters.count, locals: locals, context: context, index: index)
+            return await methodReferenceResult(node, parameters: signature.parameters, locals: locals, context: context, index: index)
         }
         guard let body = node.child(byFieldName: "body") else { return nil }
         var scope = lambdaParameters(of: node).enumerated().map { position, name in
@@ -667,9 +816,14 @@ public enum JavaExpressionTyper {
     }
 
     /// `Type::method` (unbound receiver or static), `expr::method` (bound), `Type::new`.
+    ///
+    /// For an unbound receiver (`Map.Entry::getKey` as `Function<Entry<String, Integer>, R>`) the
+    /// receiver is the functional interface's first parameter, viewed as `Type`: its type
+    /// arguments are what make `getKey` return `String` instead of the declaration's `K`.
     private static func methodReferenceResult(
-        _ node: SyntaxNode, arity: Int, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
+        _ node: SyntaxNode, parameters: [JavaTypeRef], locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
     ) async -> JavaTypeRef? {
+        let arity = parameters.count
         let named = node.namedChildren
         guard let objectNode = named.first,
               let object = await typed(objectNode, locals: locals, context: context, index: index), object.packageName == nil else { return nil }
@@ -677,7 +831,13 @@ public enum JavaExpressionTyper {
             return object.type
         }
         let name = named[named.count - 1].text
-        let candidates = await methods(named: name, on: object.type, mode: .instance, context: context, index: index)
+        var receiver = object.type
+        if object.isTypeReference, arity >= 1, let referenced = object.type.erasedQualifiedName,
+           let first = concreteType(of: parameters[0]),
+           let viewed = await JavaMemberLookup.asSupertype(first, named: referenced, index: index) {
+            receiver = viewed
+        }
+        let candidates = await methods(named: name, on: receiver, mode: .instance, context: context, index: index)
         let chosen: JavaMethodStub?
         if object.isTypeReference {
             chosen = candidates.first { $0.modifiers.contains(.staticFlag) && $0.parameters.count == arity }
@@ -686,6 +846,16 @@ public enum JavaExpressionTyper {
             chosen = candidates.first { $0.parameters.count == arity }
         }
         return (chosen ?? candidates.first).map { inferMethodTypeVariables($0, argumentTypes: []) }
+    }
+
+    /// The class type a functional interface parameter stands for: `? super X` and `? extends X`
+    /// read as `X`, which is what a method reference's receiver is.
+    private static func concreteType(of type: JavaTypeRef) -> JavaTypeRef? {
+        switch type {
+        case .classType: return type
+        case .wildcard(.extends(let bound)?), .wildcard(.superBound(let bound)?): return concreteType(of: bound)
+        default: return nil
+        }
     }
 
     /// Type of an implicitly typed lambda parameter, from the functional interface of its target:

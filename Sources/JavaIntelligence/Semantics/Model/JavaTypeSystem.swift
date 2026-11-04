@@ -31,6 +31,9 @@ public enum JavaTypeSystem {
         case .wildcard(let bound):
             return .wildcard(bound: bound.map { substituteBound($0, using: map) })
         case .unresolved(let simpleName, let arguments):
+            // A type variable of an enclosing class, seen from a member class (`T` inside
+            // `Outer<T>.Inner`), is written as a bare name that resolution could not place.
+            if arguments.isEmpty, let bound = map[simpleName] { return bound }
             return .unresolved(simpleName: simpleName, arguments: arguments.map { substituteArgument($0, using: map) })
         }
     }
@@ -130,7 +133,78 @@ public enum JavaTypeSystem {
             if let position = names.firstIndex(of: winner) { return alternatives[position] }
             return .classType(qualifiedName: winner, arguments: [], outer: nil)
         }
+        // No single most specific type: the JLS lub is the intersection of the minimal ones
+        // (`Integer` and `Double` meet in `Number & Comparable<…> & Constable & ConstantDesc`).
+        // There is no intersection type here, so the representative is the minimal class when
+        // there is one (its members are the ones people mean), else the first minimal interface.
+        if let winner = await preferredMinimal(in: meeting, index: index) {
+            return .classType(qualifiedName: winner, arguments: [], outer: nil)
+        }
         return nil
+    }
+
+    /// Of the minimal members of `candidates` (those no other member sits below), the class
+    /// other than `Object` if there is one, else the first by name. `nil` past 16 candidates.
+    static func preferredMinimal(in candidates: Set<String>, index: JavaIndex) async -> String? {
+        guard candidates.count <= 16 else { return nil }
+        var minimal: [String] = []
+        for candidate in candidates.sorted() where candidate != "java.lang.Object" {
+            var hasSubtype = false
+            for other in candidates where other != candidate && other != "java.lang.Object" {
+                let viewed = JavaTypeRef.classType(qualifiedName: other, arguments: [], outer: nil)
+                if await JavaMemberLookup.asSupertype(viewed, named: candidate, index: index) != nil {
+                    hasSubtype = true
+                    break
+                }
+            }
+            if !hasSubtype { minimal.append(candidate) }
+        }
+        for name in minimal {
+            if let stub = await index.classStub(qualifiedName: name), stub.kind == .classKind { return name }
+        }
+        return minimal.first
+    }
+
+    /// The type of a conditional (`c ? a : b`) or a `switch` expression whose arms are reference
+    /// types: the lub, with type arguments kept where the arms agree on them (JLS 15.25.3, 4.10.4).
+    /// `ArrayList<String>` and `LinkedList<String>` give `AbstractList<String>`; where the arms'
+    /// views of the bound disagree on an argument it becomes `?`, which reads as `Object`. Arms
+    /// that cannot be compared (an unresolved name, no common class in the index) leave the first.
+    public static func lubKeepingArguments(of types: [JavaTypeRef], index: JavaIndex) async -> JavaTypeRef? {
+        guard var first = types.first else { return nil }
+        if types.dropFirst().allSatisfy({ $0 == first }) { return first }
+        let erased = types.map { erasure(of: $0) }
+        guard erased.allSatisfy({ $0.erasedQualifiedName != nil }) else { return nil }
+        let names = erased.compactMap(\.erasedQualifiedName)
+        let boundName: String
+        if Set(names).count == 1 {
+            boundName = names[0]
+        } else {
+            guard let bound = await lub(of: erased, index: index)?.erasedQualifiedName else { return nil }
+            boundName = bound
+        }
+        var views: [JavaTypeRef] = []
+        for type in types {
+            if type.erasedQualifiedName == boundName {
+                views.append(type)
+            } else if let view = await JavaMemberLookup.asSupertype(type, named: boundName, index: index) {
+                views.append(view)
+            } else {
+                return .classType(qualifiedName: boundName, arguments: [], outer: nil)
+            }
+        }
+        first = views[0]
+        guard case .classType(let name, let firstArguments, let outer) = first else { return first }
+        var merged = firstArguments
+        for view in views.dropFirst() {
+            guard case .classType(_, let arguments, _) = view, arguments.count == merged.count else {
+                return .classType(qualifiedName: name, arguments: [], outer: outer)
+            }
+            for position in merged.indices where merged[position] != arguments[position] {
+                merged[position] = .wildcard(nil)
+            }
+        }
+        return .classType(qualifiedName: name, arguments: merged, outer: outer)
     }
 
     /// The effective type of a multi-catch parameter: the lub of its alternatives, or the

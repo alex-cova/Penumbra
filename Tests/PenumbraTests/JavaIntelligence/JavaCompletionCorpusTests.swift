@@ -83,6 +83,9 @@ final class JavaCompletionCorpusTests: XCTestCase {
         let items = await provider.provide(context: context)
         let elapsed = clock.now - start
         let diagnosis = await provider.diagnose(context: context)
+        if ProcessInfo.processInfo.environment["JAVA_COMPLETION_DEBUG"] == "1" {
+            print("DEBUGTYPE \(corpusCase.name): \(diagnosis?.receiverType.map { String(describing: $0) } ?? "nil")")
+        }
         let ranked = DefaultRanker(recency: CompletionRecency()).rankSynchronously(items: items, prefix: context.prefix).map(\.item)
         var result = CaseResult(
             name: corpusCase.name, gap: corpusCase.directives["gap"],

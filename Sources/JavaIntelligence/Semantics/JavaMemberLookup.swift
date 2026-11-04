@@ -68,7 +68,7 @@ public enum JavaMemberLookup {
                 mode: mode, context: context, index: index, checkAccess: checkAccess
             )
         }
-        guard case .classType(let qualifiedName, let arguments, _) = type else {
+        guard case .classType(let qualifiedName, let arguments, let outer) = type else {
             return []
         }
         // Everything the walk reads: the type, the mode, what access is checked against, the
@@ -84,7 +84,7 @@ public enum JavaMemberLookup {
         if isCacheable, let cached = await index.cachedMemberSet(cacheKey) {
             return cached
         }
-        let result = await walkMembers(of: qualifiedName, arguments: arguments, mode: mode, context: context, index: index, checkAccess: checkAccess)
+        let result = await walkMembers(of: qualifiedName, arguments: arguments, outer: outer, mode: mode, context: context, index: index, checkAccess: checkAccess)
         if isCacheable {
             await index.storeMemberSet(result, for: cacheKey)
         }
@@ -92,7 +92,7 @@ public enum JavaMemberLookup {
     }
 
     private static func walkMembers(
-        of qualifiedName: String, arguments: [JavaTypeArgument], mode: JavaMemberLookupMode,
+        of qualifiedName: String, arguments: [JavaTypeArgument], outer: JavaTypeRef?, mode: JavaMemberLookupMode,
         context: JavaResolutionContext, index: JavaIndex, checkAccess: Bool
     ) async -> [JavaResolvedMember] {
         let selfHierarchy = await enclosingHierarchy(of: context, index: index)
@@ -103,7 +103,8 @@ public enum JavaMemberLookup {
         var visitedClasses = Set<String>()
         var queue: [(qualifiedName: String, substitution: [String: JavaTypeRef], lowerOnly: Set<String>)] = [
             (qualifiedName,
-             await substitutionMap(forTypeArguments: arguments, appliedTo: qualifiedName, index: index),
+             await substitutionMap(forTypeArguments: arguments, appliedTo: qualifiedName, index: index)
+                .merging(await outerSubstitution(of: outer, index: index)) { own, _ in own },
              await lowerBoundedParameters(forTypeArguments: arguments, appliedTo: qualifiedName, index: index))
         ]
         // Processed as a FIFO queue (not a stack) so the class itself and its direct supertypes
@@ -133,7 +134,7 @@ public enum JavaMemberLookup {
                 }
                 let key = "field:\(field.name)"
                 guard seenSignatures.insert(key).inserted else { continue }
-                let substituted = substitute(await resolvedDeclaration(field.type, in: declaringContext, index: index), using: readSubstitution)
+                let substituted = substitute(await attachingOuter(await resolvedDeclaration(field.type, in: declaringContext, index: index), declaredIn: stub, index: index), using: readSubstitution)
                 result.append(.field(JavaFieldStub(name: field.name, type: substituted, modifiers: field.modifiers, javadoc: field.javadoc), declaringClass: currentName))
             }
             for method in stub.methods where !method.isConstructor && !method.modifiers.contains(.synthetic) && !method.modifiers.contains(.bridge) && !method.name.hasPrefix("lambda$") {
@@ -148,10 +149,10 @@ public enum JavaMemberLookup {
                 let methodContext = declaringContext?.entering(methodTypeParameters: method.typeParameters)
                 var substitutedParams: [JavaParameterStub] = []
                 for parameter in method.parameters {
-                    let declared = await resolvedDeclaration(parameter.type, in: methodContext, index: index)
+                    let declared = await attachingOuter(await resolvedDeclaration(parameter.type, in: methodContext, index: index), declaredIn: stub, index: index)
                     substitutedParams.append(JavaParameterStub(name: parameter.name, type: substitute(declared, using: substitution)))
                 }
-                let declaredReturn = await resolvedDeclaration(method.returnType, in: methodContext, index: index)
+                let declaredReturn = await attachingOuter(await resolvedDeclaration(method.returnType, in: methodContext, index: index), declaredIn: stub, index: index)
                 let key = "method:\(method.name)(\(substitutedParams.map { erasedKey($0.type) }.joined(separator: ",")))"
                 guard seenSignatures.insert(key).inserted else { continue }
                 let substitutedMethod = JavaMethodStub(
@@ -191,6 +192,13 @@ public enum JavaMemberLookup {
                         await inheritedLowerBounded(declared: iface, lowerOnly: lowerOnly, appliedTo: ifaceName, index: index)
                     ))
                 }
+            }
+            if stub.kind == .interfaceKind || stub.kind == .annotationKind, currentName != "java.lang.Object" {
+                // An interface has the public methods of `Object` as implicit members (JLS 9.2):
+                // `runnable.toString()` and `comparable.equals(x)` are legal and complete. Queued
+                // after the superinterfaces, so a declaration of `equals` or `toString` on any
+                // interface above wins.
+                queue.append(("java.lang.Object", [:], []))
             }
         }
         return result
@@ -387,6 +395,39 @@ public enum JavaMemberLookup {
             ))
         }
         return result
+    }
+
+    /// The type variables of the enclosing types an inner class instance carries (`Outer<String>.Inner`
+    /// maps `T` to `String`), walked outward through the `outer` links.
+    private static func outerSubstitution(of outer: JavaTypeRef?, index: JavaIndex) async -> [String: JavaTypeRef] {
+        guard case .classType(let name, let arguments, let next)? = outer else { return [:] }
+        var map = await substitutionMap(forTypeArguments: arguments, appliedTo: name, index: index)
+        for (variable, type) in await outerSubstitution(of: next, index: index) where map[variable] == nil { map[variable] = type }
+        return map
+    }
+
+    /// A member class of a generic class, written by its simple name inside that class (`Inner`),
+    /// is `Outer<T>.Inner`: the reference carries the enclosing type's variables, so a receiver
+    /// `Outer<String>` hands `String` on to what it returns (`outer.inner().get()` is a `String`).
+    /// Static member classes, interfaces, enums and records have no enclosing instance.
+    private static func attachingOuter(_ type: JavaTypeRef, declaredIn stub: JavaClassStub, index: JavaIndex) async -> JavaTypeRef {
+        guard !stub.typeParameters.isEmpty else { return type }
+        switch type {
+        case .classType(let name, let arguments, nil) where name.hasPrefix(stub.qualifiedName + "."):
+            guard !name.dropFirst(stub.qualifiedName.count + 1).contains("."),
+                  let member = await index.classStub(qualifiedName: name),
+                  member.kind == .classKind, !member.modifiers.contains(.staticFlag) else { return type }
+            let enclosing = JavaTypeRef.classType(
+                qualifiedName: stub.qualifiedName,
+                arguments: stub.typeParameters.map { .type(.typeVariable(name: $0.name)) },
+                outer: nil
+            )
+            return .classType(qualifiedName: name, arguments: arguments, outer: enclosing)
+        case .array(let element):
+            return .array(element: await attachingOuter(element, declaredIn: stub, index: index))
+        default:
+            return type
+        }
     }
 
     private static func resolvedDeclaration(_ type: JavaTypeRef, in context: JavaResolutionContext?, index: JavaIndex) async -> JavaTypeRef {

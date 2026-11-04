@@ -31,8 +31,11 @@ for every shipped check).
 
 ## Completion corpus
 
-Pass count: **214/253** (`Tests/PenumbraTests/Fixtures/JavaCompletionCorpus`, ratcheted by
-`JavaCompletionCorpusTests`; gap tags live in the case files).
+Pass count: **419/419** on JDK 27 as of 2026-11-04 (`Tests/PenumbraTests/Fixtures/JavaCompletionCorpus`,
+ratcheted by `JavaCompletionCorpusTests`; gap tags live in the case files). The 214/253 this section used
+to quote was a JDK 26 ratchet recorded when the corpus had 253 cases; it was never a ceiling of the typer
+(see `docs/audit/findings/F01-java-attributor.md`). This file's generator (`JavaParityCorpusTests`) is skipped
+when the machine's JDK is not the one the baseline names, so this number was updated by hand.
 
 ## Not yet measured
 
