@@ -633,6 +633,9 @@ public final class IDEWorkspace {
         set { if position.selectionLength != newValue { position.selectionLength = newValue } }
     }
     var tabsByPane: [UUID: [IDETabRow]] = [:]
+    /// Derived from `tabsByPane` so the toolbar's close group does not re-evaluate on every tab
+    /// click (`tabsByPane` is rewritten, and so notifies, on every `refreshPresentation()`).
+    private(set) var hasMultiplePanes = false
     /// Standardized paths of every open document, so the Explorer can mark files open in a tab.
     private(set) var openDocumentPaths: Set<String> = []
     @ObservationIgnored private var lastAutoRevealedDocumentID: UUID?
@@ -3235,7 +3238,7 @@ public final class IDEWorkspace {
     }
 
     func selectTab(_ id: UUID, in paneID: UUID? = nil) {
-        isSettingsVisible = false
+        if isSettingsVisible { isSettingsVisible = false }
         agent.dismissPage()
         let pane: EditorPane
         if let paneID, let found = workbench.layout.findPane(id: paneID) {
@@ -4940,7 +4943,7 @@ public final class IDEWorkspace {
             syncTextViewToDocument(outgoingTextView, document: outgoingDocument, from: outgoingHost)
         }
         workbench.activatePane(paneID)
-        activePaneID = workbench.activePaneID
+        if activePaneID != workbench.activePaneID { activePaneID = workbench.activePaneID }
         adapter.textView = host.textView
         host.textView.editorDelegate = adapter
         paletteController?.attach(to: host.textView)
@@ -4958,7 +4961,7 @@ public final class IDEWorkspace {
     }
 
     func refreshPresentation() {
-        activePaneID = workbench.activePaneID
+        if activePaneID != workbench.activePaneID { activePaneID = workbench.activePaneID }
         var tabs: [UUID: [IDETabRow]] = [:]
         for pane in workbench.panes {
             tabs[pane.id] = pane.documents.map { document in
@@ -4974,6 +4977,8 @@ public final class IDEWorkspace {
             }
         }
         tabsByPane = tabs
+        let multiplePanes = tabs.count > 1
+        if hasMultiplePanes != multiplePanes { hasMultiplePanes = multiplePanes }
         updateUnsavedMarkers()
         let openPaths = Set(workbench.panes.flatMap(\.documents).compactMap { $0.url?.standardizedFileURL.path })
         if openPaths != openDocumentPaths { openDocumentPaths = openPaths }
@@ -4989,7 +4994,8 @@ public final class IDEWorkspace {
         syncHexPaletteCommands()
         noteSwiftUIPreviewActiveDocumentMayHaveChanged()
         if let document = workbench.activePane.selectedDocument {
-            windowTitle = "\(document.displayName) · \(projectTitle)"
+            let title = "\(document.displayName) · \(projectTitle)"
+            if windowTitle != title { windowTitle = title }
             let pathItems = pathBreadcrumbItems(for: document)
             let symbolItems = headerContext.documentID == document.id ? headerContext.symbolItems : []
             let newContext = IDEHeaderContext(
@@ -5002,7 +5008,7 @@ public final class IDEWorkspace {
                 headerContext = newContext
             }
         } else {
-            windowTitle = projectTitle
+            if windowTitle != projectTitle { windowTitle = projectTitle }
             if headerContext != IDEHeaderContext() {
                 headerContext = IDEHeaderContext()
             }

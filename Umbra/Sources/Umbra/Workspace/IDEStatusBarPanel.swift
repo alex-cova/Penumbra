@@ -8,12 +8,7 @@ struct IDEStatusBarPanel: View {
         let _ = IDEBodyDiagnostics.note("IDEStatusBarPanel")
         let _ = workspace.uiColorSchemeEpoch
         HStack(spacing: IDEAppearance.Spacing.sm) {
-            IDEStatusBarBreadcrumb(
-                headerContext: workspace.headerContext,
-                marksModified: workspace.preferences.markModifiedTabs,
-                makeMenu: workspace.breadcrumbMenu,
-                onSelect: workspace.selectBreadcrumb
-            )
+            IDEStatusBarBreadcrumb()
             // Takes whatever the row has left, so the trailing items never truncate.
             .layoutPriority(-1)
             Spacer(minLength: IDEAppearance.Spacing.md)
@@ -191,13 +186,17 @@ private struct IDEStatusPositionLabel: View {
     }
 }
 
+/// The breadcrumb reads the header context itself: handed down as a value, it made the whole status
+/// bar depend on it, so every change of the open document's path or symbols (and its first
+/// edit, which marks it modified) re-evaluated the bar around it (F21).
 private struct IDEStatusBarBreadcrumb: View {
-    let headerContext: IDEHeaderContext
-    let marksModified: Bool
-    let makeMenu: (IDEBreadcrumbItem) async -> NSMenu?
-    let onSelect: (IDEBreadcrumbItem) -> Void
+    @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
+        let headerContext = workspace.headerContext
+        let marksModified = workspace.preferences.markModifiedTabs
+        let makeMenu = workspace.breadcrumbMenu
+        let onSelect = workspace.selectBreadcrumb
         let items = headerContext.items
         if !items.isEmpty {
             HStack(spacing: IDEAppearance.Spacing.xs) {

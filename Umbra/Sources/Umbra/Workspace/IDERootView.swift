@@ -228,7 +228,6 @@ public struct IDERootView: View {
         // The frame color is `NSWindow.backgroundColor` (set in `IDEWindowConfiguratorView`); an
         // opaque SwiftUI fill here would paint over the traffic lights.
         .background(IDEWindowConfigurator(
-            title: workspace.windowTitle,
             workspace: workspace,
             uiColorSchemeID: workspace.preferences.uiColorSchemeID
         ))
@@ -626,9 +625,12 @@ struct IDEWindowChrome: Equatable {
 
 /// Configures the SwiftUI window for a hidden, movable titlebar without a hosting view controller.
 private struct IDEWindowConfigurator: NSViewRepresentable {
-    let title: String
     let workspace: IDEWorkspace
     let uiColorSchemeID: String
+
+    /// Read in `makeNSView`/`updateNSView`, not in the root's body: a tab click changes the title
+    /// and must update the window, not re-evaluate the whole shell.
+    private var title: String { workspace.windowTitle }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(workspace: workspace)

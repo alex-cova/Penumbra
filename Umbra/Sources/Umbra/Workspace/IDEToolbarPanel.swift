@@ -44,7 +44,7 @@ struct IDEToolbarPanel: View {
 
             HStack(spacing: 2) {
                 IDEToolbarActionCluster(
-                    showsCloseGroup: workspace.tabsByPane.count > 1,
+                    showsCloseGroup: workspace.hasMultiplePanes,
                     items: workspace.toolbarItems(),
                     closeActivePane: workspace.closeActivePane
                 )

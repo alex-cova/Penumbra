@@ -151,8 +151,27 @@ final class IDERootViewInvalidationTests: XCTestCase {
         let second = try write("Second.java", lines: 200)
         await workspace.openDocument(from: first)
         await settle(1.0)
+        var epoch = workspace.layoutEpoch
         _ = await evaluations("opening a second tab") { await workspace.openDocument(from: second) }
+        print("EPOCH opening a second tab bumped layoutEpoch by \(workspace.layoutEpoch - epoch)")
+        epoch = workspace.layoutEpoch
         _ = await evaluations("switching back to the first tab") { await workspace.openDocument(from: first) }
+        print("EPOCH switching back bumped layoutEpoch by \(workspace.layoutEpoch - epoch)")
+        // The common way to change tab is a click, which does not rebuild the layout.
+        let pane = workspace.workbench.activePane
+        let firstTab = try XCTUnwrap(pane.documents.first { $0.url?.standardizedFileURL == first.standardizedFileURL })
+        let secondTab = try XCTUnwrap(pane.documents.first { $0.url?.standardizedFileURL == second.standardizedFileURL })
+        let epochBeforeClicks = workspace.layoutEpoch
+        let clicks = await evaluations("clicking between two tabs 6 times") {
+            for index in 0..<6 {
+                workspace.selectTab(index % 2 == 0 ? firstTab.id : secondTab.id)
+                await Task.yield()
+            }
+        }
+        print("EPOCH clicking tabs bumped layoutEpoch by \(workspace.layoutEpoch - epochBeforeClicks)")
+        XCTAssertEqual(workspace.layoutEpoch, epochBeforeClicks, "a tab click does not rebuild the layout")
+        XCTAssertEqual(clicks["IDERootView"], 0, "a tab click does not re-evaluate the root")
+        XCTAssertEqual(clicks["IDEEditorLayoutNode"], 0, "or the editor layout")
         _ = await evaluations("toggling the sidebar") { workspace.isSidebarVisible.toggle() }
         _ = await evaluations("toggling the bottom terminal") { workspace.isTerminalVisible.toggle() }
     }
