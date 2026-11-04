@@ -32,6 +32,8 @@ final class IDESwiftSupport {
     /// Bumped on every trigger so an older trigger's buffered run cannot publish over a newer one.
     private var indexGeneration = 0
     /// Called with each finished index pass's diagnostics for one file (empty when it is clean).
+    /// Source files the last index walk skipped for being over the size limit.
+    @ObservationIgnored var onOversizedFiles: (@MainActor ([URL]) -> Void)?
     @ObservationIgnored var onInspectionDiagnostics: (@MainActor (URL, [Diagnostic]) -> Void)?
     /// The window's open Swift documents, read when a save asks for a fresh project-wide pass.
     /// The closure does not retain the window.
@@ -95,9 +97,13 @@ final class IDESwiftSupport {
         rebuild?.cancel()
         // Marked before the task starts: until the walk's first line runs the index looks empty, not unbuilt.
         let token = activity.begin(.swift)
-        rebuild = Task { [activity] in
+        let index = index
+        rebuild = Task { @MainActor [activity, weak self] in
             defer { activity.end(token) }
             await index.setRoot(root)
+            // Source files over the index size limit are left out; say so (F25).
+            let oversized = await index.oversizedFiles
+            if !Task.isCancelled, !oversized.isEmpty { self?.onOversizedFiles?(oversized) }
         }
     }
 

@@ -121,6 +121,16 @@ public final class IDEWorkspace {
     /// Paths opened as hex because the first 8 KB did not look like text. Consumed when the session starts.
     @ObservationIgnored
     var hexSniffedPaths: Set<String> = []
+    /// Files the user chose to open with full service although they are over the large-file size
+    /// (Enable Anyway, `IDEWorkspace+LargeFiles.swift`). For this window's session only.
+    @ObservationIgnored
+    var liftedLargeFilePaths: Set<String> = []
+    /// The size tiers files open under. Tests lower them; the app always uses the standard ones.
+    @ObservationIgnored
+    var largeFileBasePolicy: LargeFilePolicy = .standard
+    /// Oversized-source-file notices already posted, so a re-walk does not repeat one.
+    @ObservationIgnored
+    var postedOversizedNotices: Set<String> = []
     var diagramSessions: [UUID: IDEDiagramSession] = [:]
     /// One per open Flight Recorder profile tab, by document id.
     var profileSessions: [UUID: IDEProfilerSession] = [:]
@@ -1029,6 +1039,12 @@ public final class IDEWorkspace {
         }
         intelligenceServices.swiftSupport.openSwiftDocuments = { [weak self] in
             self?.openSwiftDocuments() ?? []
+        }
+        intelligenceServices.swiftSupport.onOversizedFiles = { [weak self] urls in
+            self?.noteOversizedSourceFiles(urls, language: "Swift")
+        }
+        intelligenceServices.typescriptSupport.onOversizedFiles = { [weak self] urls in
+            self?.noteOversizedSourceFiles(urls, language: "TypeScript")
         }
         intelligenceServices.swiftSupport.onInspectionDiagnostics = { [weak self] url, diagnostics in
             self?.applySwiftInspectionDiagnostics(diagnostics, for: url)
@@ -2492,6 +2508,11 @@ public final class IDEWorkspace {
         document.rangeReader = loaded.rangeReader
         document.text = loaded.text
         document.encoding = loaded.encoding
+        // A reload can cross a size tier either way (the file grew, or Enable Anyway).
+        if loaded.largeFileNotice != document.largeFileNotice {
+            document.largeFileNotice = loaded.largeFileNotice
+            document.language = loaded.language
+        }
         document.isDirty = false
     }
 
@@ -4282,7 +4303,7 @@ public final class IDEWorkspace {
 
     func semanticHighlightingPreferenceChanged() {
         for pane in workbench.panes {
-            scheduleSemanticHighlighting(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.languageIdentifier, delay: 0)
+            scheduleSemanticHighlighting(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.intelligenceLanguageIdentifier, delay: 0)
         }
     }
 
@@ -4298,7 +4319,7 @@ public final class IDEWorkspace {
     /// other files' subtypes and overrides may have too.
     func javaGutterIconsPreferenceChanged() {
         for pane in workbench.panes {
-            scheduleLineMarkers(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.languageIdentifier, delay: 0)
+            scheduleLineMarkers(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.intelligenceLanguageIdentifier, delay: 0)
         }
     }
 
@@ -4326,7 +4347,7 @@ public final class IDEWorkspace {
         case .implemented, .overridden:
             host.intelligenceController?.navigate(kind: .implementation, atUTF16Offset: lineMarker.anchorUTF16Offset)
         case .siblingInherited:
-            guard let provider = languages.lineMarkers(for: workbench.activePane.selectedDocument?.languageIdentifier) else { return }
+            guard let provider = languages.lineMarkers(for: workbench.activePane.selectedDocument?.intelligenceLanguageIdentifier) else { return }
             let source = textView.text
             let url = textView.documentURL
             Task { [weak self] in
@@ -4357,8 +4378,8 @@ public final class IDEWorkspace {
         for pane in workbench.panes {
             let paneHost = host(for: pane.id)
             if paneHost.textView === textView {
-                scheduleSemanticHighlighting(host: paneHost, languageIdentifier: pane.selectedDocument?.languageIdentifier)
-                scheduleLineMarkers(host: paneHost, languageIdentifier: pane.selectedDocument?.languageIdentifier)
+                scheduleSemanticHighlighting(host: paneHost, languageIdentifier: pane.selectedDocument?.intelligenceLanguageIdentifier)
+                scheduleLineMarkers(host: paneHost, languageIdentifier: pane.selectedDocument?.intelligenceLanguageIdentifier)
             }
         }
     }
@@ -5577,7 +5598,7 @@ public final class IDEWorkspace {
                 sibling.host.markdownPreviewController.refresh()
                 sibling.host.noteJSONDiagramEdited()
                 sibling.host.noteCSVTableEdited()
-                scheduleSemanticHighlighting(host: sibling.host, languageIdentifier: document.languageIdentifier)
+                scheduleSemanticHighlighting(host: sibling.host, languageIdentifier: document.intelligenceLanguageIdentifier)
             } else {
                 needsReload.append(sibling)
             }
@@ -5653,7 +5674,7 @@ public final class IDEWorkspace {
         }
         host.diffViewer.hide()
         host.imageViewerController.hide()
-        host.textView.languageIdentifier = document.languageIdentifier
+        host.textView.languageIdentifier = document.intelligenceLanguageIdentifier
         host.markdownPreviewController.documentBaseURL = document.url
         host.markdownPreviewController.closeIfNotMarkdown()
         host.closeJSONDiagramIfNotJSON()
@@ -5875,6 +5896,8 @@ public final class IDEWorkspace {
         // uses that document's last-known position instead.
         let isSameDocumentRefresh = host.loadedDocumentID == document.id
         host.textView.setState(state)
+        // Before preferences and editability are applied below: the tier overrides both (F25).
+        host.textView.largeFileTier = document.largeFileNotice?.tier ?? .normal
         if isSameDocumentRefresh, let lastSelectedRange = host.lastSelectedRange {
             host.textView.selectedRange = lastSelectedRange
         } else {
@@ -5907,8 +5930,8 @@ public final class IDEWorkspace {
         host.markdownPreviewController.refresh()
         host.refreshJSONDiagram()
         host.refreshCSVTable()
-        scheduleSemanticHighlighting(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
-        scheduleLineMarkers(host: host, languageIdentifier: document.languageIdentifier, delay: 0)
+        scheduleSemanticHighlighting(host: host, languageIdentifier: document.intelligenceLanguageIdentifier, delay: 0)
+        scheduleLineMarkers(host: host, languageIdentifier: document.intelligenceLanguageIdentifier, delay: 0)
         scheduleNameIndexOverlay(for: host.textView, delay: 0)
         // `setState` cleared the blame column and the change spans; bring both back.
         blame.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true)

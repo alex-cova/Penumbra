@@ -259,10 +259,37 @@ public struct DocumentTextExport: Sendable {
     /// opened afterwards.
     public var isEditable = true {
         didSet {
+            if !isApplyingLargeFileTier { requestedEditable = isEditable }
+            if largeFileTier == .readOnly, isEditable {
+                // A read-only large file stays read-only whatever the host sets (F25).
+                isEditable = false
+                return
+            }
             guard isEditable != oldValue else {
                 return
             }
             beginCaretSessionIfFocused()
+        }
+    }
+    private var requestedEditable = true
+    private var requestedLineFolding = false // what the host last asked for, kept while a tier overrides it
+    private var isApplyingLargeFileTier = false
+
+    /// The size tier of the open file (``LargeFilePolicy``). Above `.normal` code folding is off
+    /// whatever the host sets, and at `.readOnly` the view is not editable. Going back to `.normal`
+    /// restores what the host last asked for. Syntax highlighting is not switched here: a
+    /// degraded document is opened without a language (``WorkbenchDocument/load(contentsOf:theme:lineHeightMultiplier:language:languageIdentifier:languageProvider:parsePolicy:io:encoding:largeFilePolicy:)``).
+    public var largeFileTier: LargeFilePolicy.Tier = .normal {
+        didSet {
+            guard largeFileTier != oldValue else { return }
+            isApplyingLargeFileTier = true
+            defer { isApplyingLargeFileTier = false }
+            if oldValue == .normal {
+                requestedLineFolding = textInputView.isLineFoldingEnabled
+                requestedEditable = isEditable
+            }
+            textInputView.isLineFoldingEnabled = requestedLineFolding && largeFileTier == .normal
+            isEditable = requestedEditable && largeFileTier != .readOnly
         }
     }
     /// A Boolean value that indicates whether the text view is selectable.
@@ -850,7 +877,8 @@ public struct DocumentTextExport: Sendable {
             textInputView.isLineFoldingEnabled
         }
         set {
-            textInputView.isLineFoldingEnabled = newValue
+            requestedLineFolding = newValue
+            textInputView.isLineFoldingEnabled = newValue && largeFileTier == .normal
         }
     }
     /// Whether Focus Mode is enabled. When on, the sentence or paragraph (see

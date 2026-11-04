@@ -63,6 +63,15 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     /// The encoding of the file on disk. The buffer is always UTF-8; ``save(from:to:options:progress:)``
     /// converts to this on the way out.
     public var encoding: TextFileEncoding = .utf8
+    /// Set when the file opened under a size tier above normal (``LargeFilePolicy``): the language
+    /// was dropped, so it opened as plain text. The host shows this and offers "Enable anyway"
+    /// (a reload with ``LargeFilePolicy/disabled``).
+    public var largeFileNotice: LargeFileNotice?
+    /// The language that language services, indexing and semantic highlighting should see: nil
+    /// for a degraded large file (it is plain text there), else ``languageIdentifier``.
+    public var intelligenceLanguageIdentifier: String? {
+        largeFileNotice == nil ? languageIdentifier : nil
+    }
 
     public init(
         id: UUID = UUID(),
@@ -103,8 +112,17 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
         languageProvider: TreeSitterLanguageProvider? = nil,
         parsePolicy: SyntaxParsePolicy = .viewport,
         io: DocumentLoadIO = .memoryMapped,
-        encoding requested: TextFileEncoding? = nil
+        encoding requested: TextFileEncoding? = nil,
+        largeFilePolicy: LargeFilePolicy = .disabled
     ) async throws -> WorkbenchDocument {
+        // The default is `.disabled`: a host opts in with `.standard` once it shows the notice
+        // (`largeFileNotice`), because degrading silently is what F25 is about.
+        // A file over the policy's size opens as plain text: no tree-sitter language, so no parse,
+        // no highlight queries and no fold scan. The identifier stays, for the host's own use.
+        let byteCount = LargeFilePolicy.byteCount(of: url) ?? 0
+        let tier = largeFilePolicy.tier(forByteCount: byteCount)
+        let language = tier == .normal ? language : nil
+        let languageProvider = tier == .normal ? languageProvider : nil
         func prepare(_ encoding: TextFileEncoding) async throws -> PenumbraStateBuilder.PreparedState {
             try await PenumbraStateBuilder.load(
                 contentsOf: url,
@@ -141,6 +159,7 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
             languageIdentifier: languageIdentifier
         )
         document.encoding = resolved
+        if tier != .normal { document.largeFileNotice = LargeFileNotice(tier: tier, byteCount: byteCount) }
         document.pendingState = prepared.state
         document.isFileBacked = prepared.state.stringView.isFileBacked
         if document.isFileBacked, let snapshot = prepared.state.stringView.contentSnapshot() {
@@ -228,7 +247,7 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
             selection: selection,
             cursor: Cursor(position: start),
             viewport: Viewport(x: Double(scrollOffset.x), y: Double(scrollOffset.y), width: 0, height: 0),
-            languageIdentifier: languageIdentifier
+            languageIdentifier: intelligenceLanguageIdentifier
         )
     }
 

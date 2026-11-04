@@ -433,7 +433,8 @@ extension IDEWorkspace {
                     language: language,
                     languageIdentifier: identifier,
                     languageProvider: Self.languageProvider,
-                    encoding: attempt
+                    encoding: attempt,
+                    largeFilePolicy: largeFilePolicy(for: url)
                 )
                 break
             } catch DocumentLoadError.invalidEncoding where index < attempts.count - 1 {
@@ -441,7 +442,8 @@ extension IDEWorkspace {
             }
         }
         guard let document = loaded else { throw DocumentLoadError.invalidEncoding }
-        document.language = language
+        // A degraded large file stays without a language: it opens as plain text (F25).
+        if document.largeFileNotice == nil { document.language = language }
         return document
     }
 }

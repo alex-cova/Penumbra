@@ -411,6 +411,8 @@ struct IDEEditorPaneView: View {
             IDEEditorTabsBar(paneID: paneID)
                 .opacity(workspace.chromeOpacity)
 
+            IDELargeFileBanner(paneID: paneID)
+
             IDEExternalChangeBanner(paneID: paneID)
 
             IDETextViewRepresentable(paneID: paneID, workspace: workspace)

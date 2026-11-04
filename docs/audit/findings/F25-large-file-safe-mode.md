@@ -1,7 +1,7 @@
 # F25 — No large-file safe mode
 
 - **Priority:** P2 · **Severity:** Medium · **Confidence:** Confirmed · **Provenance:** B
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** ✅ Done (2026-11-04) — policy, engine switches, index-skip report, Umbra banner, Enable Anyway and the oversized-files notice; 520 MB open measured · **Owner:** Unassigned
 
 ## Evidence
 
@@ -32,3 +32,29 @@ M. Re-measure the stale 500 MB/2 GB figures first (F06 infrastructure).
 ## Out of scope
 
 Streaming editors for multi-GB files beyond the read-only tier.
+
+## Implementation notes (2026-11-04)
+
+**Decided (with the user).** Tiers: 50 MB degrades, 500 MB is read-only (`LargeFilePolicy.standard`; the doc's 100 MB open is ~250 ms, so degrading earlier would cost features for no gain). The Umbra banner is a follow-up because the Umbra package could not be compiled on this machine (Metal Toolchain missing for `mlx-swift`).
+
+**Done in the libraries.**
+- `LargeFilePolicy` (`Workbench/LargeFilePolicy.swift`): `Tier` (`normal`, `degraded`, `readOnly`), `Feature` names for the banner, `standard` / `disabled`, `tier(forByteCount:)`. `LargeFileNotice` carries the tier, the size and a one-line `message` ("Large file (120 MB): syntax highlighting, code folding and indexing and code intelligence are off.").
+- `WorkbenchDocument.load(…, largeFilePolicy:)`: a file over the degrade size opens with no tree-sitter language (no parse, highlight queries or fold scan; `languageIdentifier` is kept) and sets `largeFileNotice`. **The default is `.disabled`**: a host opts in with `.standard` when it can show the notice, so nothing degrades silently. "Enable anyway" is a reload with `.disabled`.
+- `TextView.largeFileTier`: above `.normal` folding stays off and, at `.readOnly`, `isEditable` stays false, whatever the host sets afterwards (Umbra's `preferences.apply(to:)` runs after `setState`); back to `.normal` restores what the host last asked for.
+- Index skip made visible: `SourceFileIndex.enumerateReportingOversized`, and `SwiftIndex.oversizedFiles` / `TypeScriptIndex.oversizedFiles` list the source files a walk left out for being over `maxBytes` (1 MiB). Cleared with the root.
+- Tests (`LargeFileModeTests`, 9): tiers, notice text, degraded/read-only/enable-anyway loads, a real 52 MB file under `.standard`, the `TextView` tier round trip, the Swift index's oversized list.
+
+**Done in Umbra (follow-up, built and tested once the Metal Toolchain was installed).**
+- `loadTextDocument` opens under `IDEWorkspace.largeFilePolicy(for:)` (`largeFileBasePolicy` = `.standard`; a path in `liftedLargeFilePaths` gets `.disabled`) and keeps a degraded file's language nil. `installReloaded` carries the notice across a reload, either way.
+- `showDocument` sets `host.textView.largeFileTier` right after `setState`, before preferences and editability are applied (the tier overrides both), and gives the text view, the workspace bridge (`makeEIPDocument`), semantic highlighting and line markers `WorkbenchDocument.intelligenceLanguageIdentifier`, which is nil for a degraded file: no language services, no indexing of it, no semantic colours. The status bar still shows the real language.
+- `IDELargeFileBanner` (above the external-change banner in `IDEEditorPaneView`): the notice's message, and **Enable Anyway** (disabled with a tooltip while the tab has unsaved edits, because the reload would drop them). `enableLargeFileFeatures(for:)` adds the path to `liftedLargeFilePaths`, reloads, and resyncs the bridge; lasts for the window's session.
+- `IDESwiftSupport` / `IDETypeScriptSupport.onOversizedFiles` → `IDEWorkspace.noteOversizedSourceFiles`: one notification per set ("2 Swift files over 1 MB not indexed", with names), so the silent 1 MiB skip is visible.
+- Tests (`LargeFileModeUmbraTests`, 5, with the 50 MB tier lowered to 1 MB through `largeFileBasePolicy` so files stay small): open degraded, Enable Anyway, unsaved edits block it, read-only holds in the window, the notice posts once.
+
+**Measured (release, `PerfHarness open <file> --mmap`, plain, 520 MB):** 1.83 s to load, 331 MB resident (the stale doc figure for 500 MB was 5.25 s and 1.42 GB, highlighted). A debug `swift test` run of the whole open path (load, `setState`, layout) took 24 s with the same RSS; `swift test -c release` does not build today because some tests use DEBUG-only helpers (`lineManagerForTesting`), so the full-path release number is not recorded. `LARGE_FILE_MEASURE_MB=520 swift test --filter LargeFileModeTests/testMeasureOpen` reproduces the debug one.
+
+**Not done / decided.**
+- No user setting for the tiers or to turn the mode off (`largeFileBasePolicy` is code-only); a Settings ▸ Editor switch would be the next step if the thresholds need tuning.
+- The minimap is not tier-aware in the engine.
+- Hex-sniffed and hex-forced files are unaffected (they never reach this path).
+- Opening a degraded file still builds its line index and a full piece tree: that is the 1.8 s above and is the floor of this design (streaming editors for multi-GB files are out of scope).

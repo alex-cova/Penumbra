@@ -19,6 +19,10 @@ public actor TypeScriptIndex {
         public var ranges: [Range<Int>]
     }
 
+    /// Source files the last walk left out because they are over the size limit (1 MiB). Without
+    /// this the skip is silent: the file opens, but nothing in it is indexed (F25).
+    public var oversizedFiles: [URL] { storage.oversizedFiles }
+
     private var storage = SourceFileIndex<TypeScriptFileModel>(configuration: .typeScriptFiles)
     public struct PaletteSymbol: Sendable, Equatable {
         public var name: String
@@ -55,13 +59,14 @@ public actor TypeScriptIndex {
         if Task.isCancelled { return }
         let walk = storage.beginWalk(root: root)
         guard let standardized = walk.root else {
+            storage.setOversizedFiles([])
             publish([:])
             storage.finishWalk(walk.token)
             return
         }
         let configuration = storage.configuration
-        let urls = await Task.detached {
-            SourceFileIndex<TypeScriptFileModel>.enumerate(root: standardized, configuration: configuration)
+        let (urls, oversized) = await Task.detached {
+            SourceFileIndex<TypeScriptFileModel>.enumerateReportingOversized(root: standardized, configuration: configuration)
         }.value
         guard storage.isCurrent(walk.token), !Task.isCancelled else {
             storage.cancelWalk(walk.token)
@@ -73,6 +78,7 @@ public actor TypeScriptIndex {
             return
         }
         let merged = storage.mergingPending(into: parsed)
+        storage.setOversizedFiles(oversized)
         publish(merged)
         storage.finishWalk(walk.token)
     }

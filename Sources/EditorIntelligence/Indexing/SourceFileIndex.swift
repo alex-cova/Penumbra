@@ -114,6 +114,13 @@ public struct SourceFileIndex<Model: Sendable> {
         return merged
     }
 
+    /// Source files the last completed walk skipped for being over `Configuration.maxBytes`.
+    public private(set) var oversizedFiles: [URL] = []
+
+    public mutating func setOversizedFiles(_ files: [URL]) {
+        oversizedFiles = files
+    }
+
     public mutating func finishWalk(_ token: Int) {
         pendingEdits = [:]
         if buildingToken == token { buildingToken = nil }
@@ -155,13 +162,22 @@ public struct SourceFileIndex<Model: Sendable> {
     }
 
     public static func enumerate(root: URL, configuration: Configuration) -> [URL] {
+        enumerateReportingOversized(root: root, configuration: configuration).urls
+    }
+
+    /// The files a walk will parse, and the source files it left out for being over `maxBytes`.
+    /// The second list is what a host shows so the skip is not silent (F25).
+    public static func enumerateReportingOversized(
+        root: URL, configuration: Configuration
+    ) -> (urls: [URL], oversized: [URL]) {
         let fileManager = FileManager.default
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
-        ) else { return [] }
+        ) else { return ([], []) }
         var urls: [URL] = []
+        var oversized: [URL] = []
         while let url = enumerator.nextObject() as? URL {
             let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
             if values?.isDirectory == true {
@@ -171,10 +187,13 @@ public struct SourceFileIndex<Model: Sendable> {
                 continue
             }
             guard configuration.isSourceFile(url), !configuration.isSkipped(url) else { continue }
-            if let size = values?.fileSize, size > configuration.maxBytes { continue }
+            if let size = values?.fileSize, size > configuration.maxBytes {
+                oversized.append(url.standardizedFileURL)
+                continue
+            }
             urls.append(url.standardizedFileURL)
         }
-        return urls
+        return (urls, oversized)
     }
 
     public static func parseAll(_ urls: [URL], configuration: Configuration) async -> [URL: Model] {

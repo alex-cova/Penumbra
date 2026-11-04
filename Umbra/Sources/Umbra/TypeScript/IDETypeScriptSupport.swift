@@ -14,6 +14,8 @@ final class IDETypeScriptSupport {
     let rename: TypeScriptRenameProvider
     let structure = TypeScriptStructureProvider()
     let semanticTokens = TypeScriptSemanticTokenProvider()
+    /// Source files the last index walk skipped for being over the size limit.
+    @ObservationIgnored var onOversizedFiles: (@MainActor ([URL]) -> Void)?
     private var rebuild: Task<Void, Never>?
     private let activity: IDEIndexActivity
 
@@ -49,9 +51,13 @@ final class IDETypeScriptSupport {
         rebuild?.cancel()
         // Marked before the task starts: until the walk's first line runs the index looks empty, not unbuilt.
         let token = activity.begin(.typeScript)
-        rebuild = Task { [activity] in
+        let index = index
+        rebuild = Task { @MainActor [activity, weak self] in
             defer { activity.end(token) }
             await index.setRoot(root)
+            // Source files over the index size limit are left out; say so (F25).
+            let oversized = await index.oversizedFiles
+            if !Task.isCancelled, !oversized.isEmpty { self?.onOversizedFiles?(oversized) }
         }
     }
 

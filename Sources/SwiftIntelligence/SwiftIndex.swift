@@ -45,6 +45,10 @@ public actor SwiftIndex {
         public var ranges: [Range<Int>]
     }
 
+    /// Source files the last walk left out because they are over the size limit (1 MiB). Without
+    /// this the skip is silent: the file opens, but nothing in it is indexed (F25).
+    public var oversizedFiles: [URL] { storage.oversizedFiles }
+
     private var storage = SourceFileIndex<SwiftFileModel>(configuration: .swiftFiles)
     private var moduleByFile: [URL: String] = [:]
     private var moduleResolver: (@Sendable (URL) -> String?)?
@@ -102,13 +106,14 @@ public actor SwiftIndex {
         if Task.isCancelled { return }
         let walk = storage.beginWalk(root: root)
         guard let standardized = walk.root else {
+            storage.setOversizedFiles([])
             replaceAll([:])
             storage.finishWalk(walk.token)
             return
         }
         let configuration = storage.configuration
-        let urls = await Task.detached {
-            SourceFileIndex<SwiftFileModel>.enumerate(root: standardized, configuration: configuration)
+        let (urls, oversized) = await Task.detached {
+            SourceFileIndex<SwiftFileModel>.enumerateReportingOversized(root: standardized, configuration: configuration)
         }.value
         guard storage.isCurrent(walk.token), !Task.isCancelled else {
             storage.cancelWalk(walk.token)
@@ -120,6 +125,7 @@ public actor SwiftIndex {
             return
         }
         let merged = storage.mergingPending(into: parsed)
+        storage.setOversizedFiles(oversized)
         replaceAll(merged)
         storage.finishWalk(walk.token)
     }
