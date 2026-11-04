@@ -59,7 +59,16 @@ public actor SwiftIndex {
     private var topLevelByName: [String: [TypeRef]] = [:]
     private var subtypesByName: [String: [TypeRef]] = [:]
     private var names: [String: Set<URL>] = [:]
-    private var symbolsByFile: [URL: [PaletteSymbol]] = [:]
+    /// A file's palette symbols with each name's signature, so a lookup skips a name that cannot match
+    /// without running the matcher on it (F27).
+    private struct FileSymbols {
+        var symbols: [PaletteSymbol]
+        var signatures: [NameSignature]
+    }
+    private var symbolsByFile: [URL: FileSymbols] = [:]
+    /// The names of ``typesByName`` and ``topLevelByName`` with their signatures, flat for a fast scan.
+    /// Built on the first lookup after a change and dropped by the next one.
+    private var exportScan: (types: [(name: String, signature: NameSignature)], topLevel: [(name: String, signature: NameSignature)])?
     /// Module surfaces by module name: built on demand from the indexed models, and dropped on
     /// every mutation (a file's declarations, imports or operators may have changed).
     private var surfaceCache: [String: SwiftModuleSurface] = [:]
@@ -316,21 +325,34 @@ public actor SwiftIndex {
     /// Project declarations whose names match `prefix`, for completion across files and modules.
     public func exports(matching prefix: String, limit: Int) -> [ExportRef] {
         var matches: [ExportRef] = []
-        func scan(_ table: [String: [TypeRef]]) {
-            for (name, refs) in table where prefix.isEmpty || (CompletionMatcher.couldMatch(prefix, name) && CompletionMatcher.matches(prefix, name)) {
+        let query = NameSignature(prefix)
+        let scan = exportScan ?? makeExportScan()
+        func collect(_ names: [(name: String, signature: NameSignature)], _ table: [String: [TypeRef]]) {
+            for entry in names where prefix.isEmpty || entry.signature.couldMatch(query) {
+                guard prefix.isEmpty || (CompletionMatcher.couldMatch(prefix, entry.name) && CompletionMatcher.matches(prefix, entry.name)),
+                      let refs = table[entry.name] else { continue }
                 for ref in refs where ref.declaration.access > .fileprivate {
                     matches.append(ExportRef(
-                        name: name, url: ref.url, kind: ref.declaration.kind,
+                        name: entry.name, url: ref.url, kind: ref.declaration.kind,
                         signature: ref.declaration.signature, module: ref.module
                     ))
                 }
                 if matches.count >= limit { return }
             }
         }
-        scan(typesByName)
-        if matches.count < limit { scan(topLevelByName) }
+        collect(scan.types, typesByName)
+        if matches.count < limit { collect(scan.topLevel, topLevelByName) }
         if matches.count > limit { matches.removeSubrange(limit...) }
         return matches
+    }
+
+    private func makeExportScan() -> (types: [(name: String, signature: NameSignature)], topLevel: [(name: String, signature: NameSignature)]) {
+        let scan = (
+            types: typesByName.keys.map { (name: $0, signature: NameSignature($0)) },
+            topLevel: topLevelByName.keys.map { (name: $0, signature: NameSignature($0)) }
+        )
+        exportScan = scan
+        return scan
     }
 
     /// Files that mention `name` anywhere, a superset of the files that use the symbol.
@@ -341,9 +363,11 @@ public actor SwiftIndex {
     /// Types and members whose names match `query`, in index order, up to `limit`.
     public func symbols(matching query: String, limit: Int) -> [PaletteSymbol] {
         guard limit > 0, !query.isEmpty else { return [] }
+        let signature = NameSignature(query)
         var matches: [PaletteSymbol] = []
-        for symbols in symbolsByFile.values {
-            for symbol in symbols {
+        for file in symbolsByFile.values {
+            for index in file.symbols.indices where file.signatures[index].couldMatch(signature) {
+                let symbol = file.symbols[index]
                 guard CompletionMatcher.couldMatch(query, symbol.name),
                       CompletionMatcher.matches(query, symbol.name) else { continue }
                 matches.append(symbol)
@@ -375,6 +399,7 @@ public actor SwiftIndex {
     // MARK: Publishing
 
     private func clearTables() {
+        exportScan = nil
         typesByName = [:]
         extensionsByName = [:]
         topLevelByName = [:]
@@ -406,7 +431,8 @@ public actor SwiftIndex {
         }
         var symbols: [PaletteSymbol] = []
         collectPaletteSymbols(model.declarations, container: "", url: url, into: &symbols)
-        symbolsByFile[url] = symbols
+        symbolsByFile[url] = FileSymbols(symbols: symbols, signatures: symbols.map { NameSignature($0.name) })
+        exportScan = nil
     }
 
     private func remove(_ url: URL) {
@@ -414,6 +440,7 @@ public actor SwiftIndex {
         surfaceCache = [:]
         moduleByFile[url] = nil
         symbolsByFile[url] = nil
+        exportScan = nil
         for name in old.identifiers {
             names[name]?.remove(url)
             if names[name]?.isEmpty == true { names[name] = nil }

@@ -70,6 +70,11 @@ enum IDEMenuShortcuts {
                     return override
                 }
                 return base[command] ?? nil
+            case .vsCode:
+                if let override = vsCodeOverrides[command] {
+                    return override
+                }
+                return base[command] ?? nil
             }
         }()
         // The Go to File override takes its key from whatever held it: Open Folder in the
@@ -201,6 +206,31 @@ enum IDEMenuShortcuts {
         .focusTerminalDown: KeyboardShortcut(.downArrow, modifiers: [.control, .option, .command])
     ]
 
+    /// Visual Studio Code's macOS keys where they differ from the shared column: ⌘T Go to Symbol,
+    /// ⌃G Go to Line, ⇧⌘O the file outline (so Open Folder, which VS Code puts on ⌘K ⌘O, has no
+    /// key), ⌃- / ⌃⇧- Back and Forward (⌘[ and ⌘] indent), ⌘B the sidebar (so the Markdown preview
+    /// takes ⇧⌘V), ⌘. quick fixes, ⇧⌘Space parameter hints and F8 / ⇧F8 for problems. These also
+    /// free the keys the ⌘K fold chords end in (⌘0, ⌘[, ⌘]).
+    private static let vsCodeOverrides: [IDEMenuCommand: KeyboardShortcut?] = [
+        .goToSymbol: KeyboardShortcut("t"),
+        .goToLine: KeyboardShortcut("g", modifiers: .control),
+        .openFolder: nil,
+        .fileStructure: KeyboardShortcut("o", modifiers: [.command, .shift]),
+        .navigateBack: KeyboardShortcut("-", modifiers: .control),
+        .navigateForward: KeyboardShortcut("-", modifiers: [.control, .shift]),
+        .toggleSidebar: KeyboardShortcut("b"),
+        .markdownPreview: KeyboardShortcut("v", modifiers: [.command, .shift]),
+        .showContextActions: KeyboardShortcut(".", modifiers: .command),
+        .parameterInfo: KeyboardShortcut(.space, modifiers: [.command, .shift]),
+        .nextProblem: KeyboardShortcut(functionKey8, modifiers: []),
+        .previousProblem: KeyboardShortcut(functionKey8, modifiers: .shift),
+        // F2 is Rename in VS Code, so the Sublime bookmark stepping keys move to IntelliJ's ⌃⌥↓ / ⌃⌥↑;
+        // ⇧⌘\ is Go to Matching Bracket, so Split Down has no key (VS Code's is the ⌘K ⌘\ chord).
+        .nextBookmark: KeyboardShortcut(.downArrow, modifiers: [.control, .option]),
+        .previousBookmark: KeyboardShortcut(.upArrow, modifiers: [.control, .option]),
+        .splitDown: nil
+    ]
+
     /// IntelliJ IDEA's macOS keys. ⇧⌘O is Go to File there (the keymap binds it, and the menu
     /// used to take it for Open Folder), ⇧⌘A is Find Action, ⌘F12 is File Structure, and tool
     /// windows are numbered (⌘1 Project, ⌘6 Problems, ⌘7 Structure, ⌘9 Version Control, ⌥F12
@@ -280,7 +310,7 @@ extension IDEMenuShortcuts {
         case .intelliJ:
             // Version Control (⌘9), next to ⌘K.
             return [(.toggleSourceControl, "9", .command)]
-        case .sublime, .default_:
+        case .sublime, .default_, .vsCode:
             return []
         }
     }

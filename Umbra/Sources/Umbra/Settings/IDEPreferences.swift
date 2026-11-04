@@ -1801,6 +1801,7 @@ enum KeymapPreset: String, Codable, CaseIterable, Identifiable {
     case sublime
     case default_
     case intelliJ
+    case vsCode
 
     var id: String { rawValue }
 
@@ -1809,6 +1810,7 @@ enum KeymapPreset: String, Codable, CaseIterable, Identifiable {
         case .sublime: "Sublime Text"
         case .default_: "Default"
         case .intelliJ: "IntelliJ IDEA"
+        case .vsCode: "Visual Studio Code"
         }
     }
 
@@ -1817,6 +1819,7 @@ enum KeymapPreset: String, Codable, CaseIterable, Identifiable {
         case .sublime: .sublime
         case .default_: .default_
         case .intelliJ: .intelliJ
+        case .vsCode: .vsCode
         }
     }
 }

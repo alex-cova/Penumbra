@@ -13,9 +13,10 @@ enum IDETypeScriptServer {
     /// and the LSP semantic-token provider asks the server about a document it never opened
     /// (`untitled:…`), so it can never answer and the native colours would freeze. `.formatting` stays:
     /// the native TypeScript service has no formatter, and that request names the real document.
+    /// Not `.structure`: the LSP outline would take over from `TypeScriptStructureProvider`'s while connected.
     static let features: Set<LanguageFeature> = [
         .completion, .hover, .signatureHelp, .definition, .implementation, .typeDefinition, .references,
-        .rename, .codeActions, .formatting, .diagnostics, .inlayHints, .structure,
+        .rename, .codeActions, .formatting, .diagnostics, .inlayHints,
         .callHierarchy
     ]
 

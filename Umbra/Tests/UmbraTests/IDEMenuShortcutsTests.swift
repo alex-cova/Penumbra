@@ -240,11 +240,13 @@ final class IDEMenuShortcutsTests: XCTestCase {
         XCTAssertEqual(keymap.action(for: KeyStroke(KeyChord(code: 0x1E, [.command, .option, .shift]))), .selectToCodeBlockEnd)
     }
 
-    func testFileStructureMenuUsesCommandF12InEveryPreset() {
+    func testFileStructureMenuUsesCommandF12ExceptInVSCode() {
         let commandF12 = KeyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF12FunctionKey)!)), modifiers: .command)
-        for preset in KeymapPreset.allCases {
+        for preset in KeymapPreset.allCases where preset != .vsCode {
             XCTAssertEqual(shortcut(.fileStructure, preset), commandF12, "\(preset)")
         }
+        // ⌘F12 is Go to Implementation in VS Code; its file outline is ⇧⌘O.
+        XCTAssertEqual(shortcut(.fileStructure, .vsCode), KeyboardShortcut("o", modifiers: [.command, .shift]))
     }
 
     func testIntelliJKeymapBindsFindInFilesAndFileStructure() {

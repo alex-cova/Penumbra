@@ -29,7 +29,9 @@ final class IntelliJEditorActionTests: XCTestCase {
 
     func testOtherPresetsKeepTheirFindKeys() {
         XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord("g", .command))), .goToLine)
-        XCTAssertNil(Keymap.default_.action(for: KeyStroke(KeyChord("g", .command))))
+        // Default gained Find Next on ⌘G (F28); Sublime keeps ⌘G for Go to Line and moves Find Next to ⌥⌘G.
+        XCTAssertEqual(Keymap.default_.action(for: KeyStroke(KeyChord("g", .command))), .findNext)
+        XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord("g", [.command, .option]))), .findNext)
     }
 
     // MARK: Move Caret to Matching Brace

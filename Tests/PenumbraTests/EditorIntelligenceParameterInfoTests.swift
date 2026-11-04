@@ -69,9 +69,10 @@ final class EditorIntelligenceParameterInfoTests: XCTestCase {
         XCTAssertEqual(provider.requestedOffsets, [8])
     }
 
-    func testCommandPIsBoundOnlyInTheIntelliJKeymap() {
+    func testCommandPIsParameterInfoOnlyInTheIntelliJKeymap() {
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("p", .command))), .showParameterInfo)
-        XCTAssertNil(Keymap.default_.action(for: KeyStroke(KeyChord("p", .command))))
+        // Everywhere else ⌘P is Go to File (Default gained it with the F28 palette keys).
+        XCTAssertEqual(Keymap.default_.action(for: KeyStroke(KeyChord("p", .command))), .quickOpenFile)
         XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord("p", .command))), .quickOpenFile)
     }
 }

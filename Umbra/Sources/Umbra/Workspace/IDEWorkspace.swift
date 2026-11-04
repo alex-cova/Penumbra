@@ -3632,6 +3632,12 @@ public final class IDEWorkspace {
             workspace: workspaceBridge.workspace
         )
         host.intelligenceController?.inlayHintsEnabled = preferences.areInlayHintsEnabled
+        // A bound key that no layer handled is swallowed (it must not become text); say so rather
+        // than let it vanish (F28). It cannot tell "no handler" from "nothing to do here", so the
+        // wording fits both.
+        host.textView.onUnhandledKeymapAction = { [weak controller = host.intelligenceController] action in
+            controller?.showHint("\(action.title): nothing to do here")
+        }
         host.intelligenceController?.onOpenInlineCompletionSettings = { [weak self] in
             self?.showSettings()
         }

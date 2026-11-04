@@ -14,10 +14,11 @@ enum IDESourceKitServer {
     /// and `SwiftSemanticTokenProvider`. The LSP semantic-token provider asks the server about a
     /// document it never opened (`untitled:…`, error -32001), so it can never answer and the colours
     /// freeze; and SourceKit's formatter is swift-format with its own style, not the editor's
-    /// indentation settings.
+    /// indentation settings. Not `.structure` either: it would put the server's `documentSymbol` outline
+    /// in front of `SwiftStructureProvider`'s while connected (F26 gave the LSP service an outline).
     static let features: Set<LanguageFeature> = [
         .completion, .hover, .signatureHelp, .definition, .implementation, .typeDefinition, .references,
-        .rename, .codeActions, .diagnostics, .inlayHints, .structure,
+        .rename, .codeActions, .diagnostics, .inlayHints,
         .typeHierarchy, .callHierarchy
     ]
 

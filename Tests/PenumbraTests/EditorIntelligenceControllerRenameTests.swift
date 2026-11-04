@@ -170,9 +170,12 @@ final class EditorIntelligenceControllerRenameTests: XCTestCase {
         XCTAssertNil(target.validate("_ok$1"))
     }
 
-    func testRenameIsBoundOnlyInIntelliJKeymap() {
+    func testRenameIsBoundInEveryPreset() {
+        // ⇧F6 is IntelliJ's key, and Default and Sublime use it too; VS Code has F2 (F28).
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord(code: 0x61, .shift))), .rename)
-        XCTAssertNil(Keymap.default_.stroke(for: .rename))
+        XCTAssertEqual(Keymap.default_.action(for: KeyStroke(KeyChord(code: 0x61, .shift))), .rename)
+        XCTAssertEqual(Keymap.sublime.action(for: KeyStroke(KeyChord(code: 0x61, .shift))), .rename)
+        XCTAssertEqual(Keymap.vsCode.action(for: KeyStroke(KeyChord(code: 0x78))), .rename)
         XCTAssertEqual(EditorActionID.rename.title, "Rename…")
     }
 }

@@ -36,7 +36,16 @@ public actor TypeScriptIndex {
     private var names: [String: Set<URL>] = [:]
     private var exportsByName: [String: [ExportRef]] = [:]
     /// Each file's palette symbols, kept per file so a changed file replaces its own and no more.
-    private var paletteSymbolsByFile: [URL: [PaletteSymbol]] = [:]
+    private struct FileSymbols {
+        var symbols: [PaletteSymbol]
+        var signatures: [NameSignature]
+    }
+    /// A file's palette symbols with each name's signature, so a lookup skips a name that cannot match
+    /// without running the matcher on it (F27).
+    private var paletteSymbolsByFile: [URL: FileSymbols] = [:]
+    /// The names of ``exportsByName`` with their signatures, flat for a fast scan. Built on the first
+    /// lookup after the set of names changed.
+    private var exportNameScan: [(name: String, signature: NameSignature)]?
     /// What each published file put into ``names`` and ``exportsByName``, so it can be taken out
     /// again without looking through the whole project.
     private var contributions: [URL: Contribution] = [:]
@@ -169,11 +178,21 @@ public actor TypeScriptIndex {
             return all
         }
         var matches: [ExportRef] = []
-        for (name, list) in exportsByName where CompletionMatcher.couldMatch(prefix, name) && CompletionMatcher.matches(prefix, name) {
+        let query = NameSignature(prefix)
+        let scan = exportNameScan ?? makeExportNameScan()
+        for entry in scan where entry.signature.couldMatch(query) {
+            guard CompletionMatcher.couldMatch(prefix, entry.name), CompletionMatcher.matches(prefix, entry.name),
+                  let list = exportsByName[entry.name] else { continue }
             matches.append(contentsOf: list)
             if matches.count >= 200 { break }
         }
         return matches
+    }
+
+    private func makeExportNameScan() -> [(name: String, signature: NameSignature)] {
+        let scan = exportsByName.keys.map { (name: $0, signature: NameSignature($0)) }
+        exportNameScan = scan
+        return scan
     }
 
     /// Uses of `exportNames` outside `definingFile`: matching imports, and re-exports.
@@ -240,8 +259,10 @@ public actor TypeScriptIndex {
         guard limit > 0, !query.isEmpty else { return [] }
         var matches: [PaletteSymbol] = []
         matches.reserveCapacity(min(limit, 32))
-        search: for symbols in paletteSymbolsByFile.values {
-            for symbol in symbols {
+        let signature = NameSignature(query)
+        search: for file in paletteSymbolsByFile.values {
+            for index in file.symbols.indices where file.signatures[index].couldMatch(signature) {
+                let symbol = file.symbols[index]
                 guard CompletionMatcher.couldMatch(query, symbol.name),
                       CompletionMatcher.matches(query, symbol.name) else { continue }
                 matches.append(symbol)
@@ -258,6 +279,7 @@ public actor TypeScriptIndex {
         names = [:]
         exportsByName = [:]
         paletteSymbolsByFile = [:]
+        exportNameScan = nil
         contributions = [:]
         for (url, model) in models { addContribution(of: url, model: model) }
     }
@@ -281,14 +303,17 @@ public actor TypeScriptIndex {
         }
         for name in old.exportNames {
             exportsByName[name]?.removeAll { $0.url == url }
-            if exportsByName[name]?.isEmpty == true { exportsByName[name] = nil }
+            if exportsByName[name]?.isEmpty == true {
+                exportsByName[name] = nil
+                exportNameScan = nil
+            }
         }
     }
 
     private func addContribution(of url: URL, model: TypeScriptFileModel) {
         var symbols: [PaletteSymbol] = []
         collectPaletteSymbols(model.declarations, container: "", url: url, into: &symbols)
-        paletteSymbolsByFile[url] = symbols
+        paletteSymbolsByFile[url] = FileSymbols(symbols: symbols, signatures: symbols.map { NameSignature($0.name) })
         for name in model.identifiers {
             names[name, default: []].insert(url)
         }
@@ -296,6 +321,7 @@ public actor TypeScriptIndex {
         for declaration in model.declarations where declaration.isTopLevel {
             let typeOnly = declaration.kind == .interface || declaration.kind == .typeAlias
             for name in declaration.exportNames where name != "default" {
+                if exportsByName[name] == nil { exportNameScan = nil }
                 exportsByName[name, default: []].append(ExportRef(
                     name: name, url: url, kind: declaration.kind, signature: declaration.signature, isTypeOnly: typeOnly
                 ))
@@ -303,6 +329,7 @@ public actor TypeScriptIndex {
             }
         }
         for reexport in model.reexports where reexport.exportedName != "default" {
+            if exportsByName[reexport.exportedName] == nil { exportNameScan = nil }
             exportsByName[reexport.exportedName, default: []].append(ExportRef(
                 name: reexport.exportedName, url: url, kind: .variable, signature: reexport.exportedName, isTypeOnly: false
             ))

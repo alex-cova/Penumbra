@@ -66,9 +66,77 @@ enum LanguageIndexProfile {
 
         if synthetic {
             try await measureFileChange(language: language, root: root, files: files)
+            await measureLookups(language: language, root: root, files: files)
+            await measureParseCache(language: language)
         }
         guard mode == .completion else { return }
         try await measureCompletion(language: language, root: root, lines: lines)
+    }
+
+    private static func makeParseCache(languageIdentifier: String, maxEntries: Int) -> DocumentParseCache {
+        let grammar = languageIdentifier == "swift" ? SwiftAnalysis.language : TypeScriptAnalysis.language
+        return DocumentParseCache(languageIdentifier: languageIdentifier, language: grammar, maxEntries: maxEntries)
+    }
+
+    /// F27: the per-language parse cache under many open documents. The same 200 documents are asked
+    /// for in the same order three times (what a re-analysis of every open tab does after a save):
+    /// a least-recently-used cache smaller than that misses every time, so the cap decides whether
+    /// the second and third passes cost a parse each or a string comparison.
+    private static func measureParseCache(language: Language) async {
+        let documents = 200
+        let languageIdentifier = language.rawValue
+        let ext = language == .swift ? "swift" : "ts"
+        let body = (0..<300).map { language == .swift ? "let value\($0) = \($0) + 1" : "const value\($0) = \($0) + 1" }.joined(separator: "\n")
+        for cap in [64, 256] {
+            let cache = makeParseCache(languageIdentifier: languageIdentifier, maxEntries: cap)
+            var passSeconds: [Double] = []
+            for _ in 0..<3 {
+                let start = DispatchTime.now().uptimeNanoseconds
+                for index in 0..<documents {
+                    let url = URL(fileURLWithPath: "/tmp/perf-cache/file\(index).\(ext)")
+                    _ = await cache.tree(for: makeDocument(languageIdentifier: languageIdentifier, url: url, text: body + "\n// \(index)", version: 1))
+                }
+                passSeconds.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9)
+            }
+            let stats = await cache.statistics
+            let total = stats.hits + stats.fullParses + stats.incremental
+            let rate = total == 0 ? 0 : Double(stats.hits) / Double(total)
+            print("stage \(language == .swift ? "swift" : "ts")_parse_cache cap=\(cap) documents=\(documents) hit_rate=\(String(format: "%.3f", rate)) full_parses=\(stats.fullParses) evictions=\(stats.evictions) pass1_s=\(format(passSeconds[0])) pass2_s=\(format(passSeconds[1])) pass3_s=\(format(passSeconds[2]))")
+        }
+    }
+
+    /// F27: palette lookups (`symbols(matching:)`) and completion's `exports(matching:)` against a
+    /// project of `files` files, for a query that matches at once, one that matches only the last
+    /// file's type, and one that matches nothing. The scans stop at the limit, so the last two show
+    /// how the cost grows with the project.
+    private static func measureLookups(language: Language, root: URL, files: Int) async {
+        let queries: [(label: String, text: String)] = [
+            ("early", "Type1"), ("late", "Type\(files - 1)"), ("miss", "Zzqxv")
+        ]
+        let swiftIndex = SwiftIndex()
+        let tsIndex = TypeScriptIndex()
+        switch language {
+        case .swift: await swiftIndex.setRoot(root)
+        case .typescript: await tsIndex.setRoot(root)
+        }
+        for (label, query) in queries {
+            for kind in ["symbols", "exports"] {
+                var times: [Double] = []
+                for sample in 0..<9 {
+                    let start = DispatchTime.now().uptimeNanoseconds
+                    switch (language, kind) {
+                    case (.swift, "symbols"): _ = await swiftIndex.symbols(matching: query, limit: 50)
+                    case (.swift, _): _ = await swiftIndex.exports(matching: query, limit: 50)
+                    case (.typescript, "symbols"): _ = await tsIndex.symbols(matching: query, limit: 50)
+                    case (.typescript, _): _ = await tsIndex.exports(matching: query, limit: 50)
+                    }
+                    if sample > 0 { times.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9) }
+                }
+                let distribution = LatencyDistributionReducer.reduce(times)
+                let stage = language == .swift ? "swift_lookup" : "ts_lookup"
+                print("stage \(stage) \(kind)_\(label) count=\(distribution.count) median_s=\(format(distribution.median)) p95_s=\(format(distribution.p95)) files=\(files)")
+            }
+        }
     }
 
     /// F09: what saving one file costs the index. Each sample rewrites one file of a synthetic

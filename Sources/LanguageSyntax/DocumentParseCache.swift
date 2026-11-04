@@ -21,16 +21,34 @@ public actor DocumentParseCache {
     private var order: [URL] = []
     private var sourceBytes = 0
     /// Past this many documents the least recently parsed one is re-parsed on demand.
-    nonisolated(unsafe) static var maxEntries = 64
+    nonisolated(unsafe) static var maxEntries = 256
     /// Past this many cached source bytes the least recently parsed documents go, even under the entry cap.
     nonisolated(unsafe) static var maxSourceBytes = 32 * 1024 * 1024
     private let languageIdentifier: String
     private let language: OpaquePointer
+    private let entryLimit: Int
+    private let byteLimit: Int
+
+    /// What the cache has done since it was made (F27): `hits` found the same text, `incremental`
+    /// reparsed an edited document against its old tree, `fullParses` started from nothing (a new
+    /// document, or one whose entry was evicted), and `evictions` counts entries pushed out.
+    public struct Statistics: Sendable, Equatable {
+        public var hits = 0
+        public var incremental = 0
+        public var fullParses = 0
+        public var evictions = 0
+    }
+
+    public private(set) var statistics = Statistics()
 
     /// `language` is a `tree_sitter_*()` pointer and must stay valid for the cache's lifetime.
-    public init(languageIdentifier: String, language: OpaquePointer) {
+    /// The caps default to ``maxEntries`` and ``maxSourceBytes``; a host (or a benchmark) can give one
+    /// cache its own.
+    public init(languageIdentifier: String, language: OpaquePointer, maxEntries: Int? = nil, maxSourceBytes: Int? = nil) {
         self.languageIdentifier = languageIdentifier
         self.language = language
+        entryLimit = maxEntries ?? Self.maxEntries
+        byteLimit = maxSourceBytes ?? Self.maxSourceBytes
     }
 
     /// Returns a syntax tree for `document`, incrementally when possible.
@@ -45,22 +63,26 @@ public actor DocumentParseCache {
                 entry.version = document.version
                 entries[key] = entry
                 touch(key)
+                statistics.hits += 1
                 return entry.tree
             }
             if document.version > entry.version {
                 if let edits, !edits.isEmpty,
                    let updated = applyIncremental(entry: &entry, text: text, version: document.version, edits: edits) {
                     store(key: key, entry: entry)
+                    statistics.incremental += 1
                     return updated
                 }
                 if let updated = applyDiff(entry: &entry, text: text, version: document.version) {
                     store(key: key, entry: entry)
+                    statistics.incremental += 1
                     return updated
                 }
             }
         }
         let parser = SyntaxParser(language: language)
         guard let tree = parser.parse(text) else { return nil }
+        statistics.fullParses += 1
         store(key: key, entry: Entry(source: text, version: document.version, tree: tree, parser: parser))
         return tree
     }
@@ -77,11 +99,12 @@ public actor DocumentParseCache {
         // The entry just stored is exempt: a single document larger than a cap stays cached
         // (re-parsing it on every request would cost more than keeping it) and only pushes
         // out older entries.
-        while entries.count > Self.maxEntries || sourceBytes > Self.maxSourceBytes, order.count > 1 {
+        while entries.count > entryLimit || sourceBytes > byteLimit, order.count > 1 {
             guard let oldest = order.first else { break }
             order.removeFirst()
             if let removed = entries.removeValue(forKey: oldest) {
                 sourceBytes -= removed.source.utf8.count
+                statistics.evictions += 1
             }
         }
     }
