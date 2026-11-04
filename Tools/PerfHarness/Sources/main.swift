@@ -36,6 +36,7 @@ func printUsageAndExit() -> Never {
       scroll-frames <path|synthetic> [--frames N] [--baseline baseline.csv]
       snapshot-metal <path|synthetic> [--out DIR] [--discrete-atlas]
       typeset-long synthetic [--samples N]
+      index-parse <path|synthetic> [--lang java] [--lines N] [--samples N]
       metal-waits <path|synthetic> [--lines N] [--frames N] [--no-deferred] [--discrete-atlas]
       java-completion synthetic [--jars N]
       java-name-index <java-source-directory|synthetic> [--files N]
@@ -98,7 +99,7 @@ let options = Commands.Options(
     language: flagValue("--lang", in: rest)
 )
 
-let allowsSyntheticPath = command == "scroll-frames" || command == "metal-waits" || command == "typeset-long" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
+let allowsSyntheticPath = command == "scroll-frames" || command == "metal-waits" || command == "typeset-long" || command == "index-parse" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
     || command == "java-profile-import" || command == "java-coverage-bands"
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index" || command == "java-inheritors"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
@@ -113,6 +114,13 @@ do {
     case "scroll-frames":
         let frames = Int(flagValue("--frames", in: rest) ?? "") ?? 120
         MetalCommands.scrollFrames(pathOrSynthetic: path, frames: frames, baselinePath: flagValue("--baseline", in: rest))
+    case "index-parse":
+        IndexingParseProfile.run(
+            pathOrSynthetic: path,
+            language: flagValue("--lang", in: rest) ?? "java",
+            lines: Int(flagValue("--lines", in: rest) ?? "") ?? 5_000,
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 7
+        )
     case "typeset-long":
         TypesetProfile.run(samples: Int(flagValue("--samples", in: rest) ?? "") ?? 9)
     case "metal-waits":

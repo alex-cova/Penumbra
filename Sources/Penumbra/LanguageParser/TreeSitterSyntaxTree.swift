@@ -26,7 +26,7 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
 
     // MARK: - Symbol extraction
 
-    private static func extractSymbols(
+    static func extractSymbols(
         tree: TreeSitterTree?,
         documentID: EditorIntelligence.DocumentID,
         text: String,
@@ -189,14 +189,14 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
 
     // MARK: - Word extraction
 
-    private static func extractWords(from text: String) -> [String] {
+    static func extractWords(from text: String) -> [String] {
         let separators = CharacterSet.alphanumerics.inverted
         return Set(text.components(separatedBy: separators).filter { !$0.isEmpty }).sorted()
     }
 
     // MARK: - Import extraction
 
-    private static func extractImports(tree: TreeSitterTree?, text: String) -> [String] {
+    static func extractImports(tree: TreeSitterTree?, text: String) -> [String] {
         guard let root = tree?.rootNode else { return [] }
         var imports: [String] = []
         walkImports(node: root, into: &imports, text: text)

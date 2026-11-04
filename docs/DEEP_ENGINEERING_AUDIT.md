@@ -41,7 +41,7 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 - [F10 — Metal/GPU blocking waits (non-default paths)](/Users/alex/Developer/Penumbra/docs/audit/findings/F10-metal-gpu-waits.md) — **✅ Done as far as this hardware goes (2026-11-03): default path zero waits; non-unified atlas fixed, unverified on a discrete GPU** — Medium / Strongly suspected / A+B
 - [F11 — Synchronous highlight/typeset on edited lines; long-token typesetter](/Users/alex/Developer/Penumbra/docs/audit/findings/F11-sync-highlight-typeset.md) — **✅ Done (2026-11-03)** — Medium / Confirmed / A+B
 - [F12 — Teardown cancellation gaps](/Users/alex/Developer/Penumbra/docs/audit/findings/F12-teardown-cancellation.md) — **✅ Done (2026-11-04)** — Medium / Confirmed / B
-- [F13 — Single-event amplification through the adapter](/Users/alex/Developer/Penumbra/docs/audit/findings/F13-event-amplification.md) — Medium / Confirmed / B
+- [F13 — Single-event amplification through the adapter](/Users/alex/Developer/Penumbra/docs/audit/findings/F13-event-amplification.md) — **✅ Closed by measurement (2026-11-04)** — Medium / Confirmed / B
 
 ### P2 — code intelligence and language support
 
@@ -50,7 +50,7 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 - [F16 — No module-aware (JPMS) visibility](/Users/alex/Developer/Penumbra/docs/audit/findings/F16-module-visibility.md) — Medium / Strongly suspected / A+B
 - [F17 — No persistent reference index](/Users/alex/Developer/Penumbra/docs/audit/findings/F17-reference-index.md) — **✅ Closed: premise stale, verified (2026-11-03)** — High / Confirmed / B
 - [F18 — Completion ranking has no statistics](/Users/alex/Developer/Penumbra/docs/audit/findings/F18-ranking-statistics.md) — **✅ Done for types (2026-11-03)** — Medium / Confirmed / A+B
-- [F19 — EditorIntelligence indexing parser is full-parse only](/Users/alex/Developer/Penumbra/docs/audit/findings/F19-ei-full-parse.md) — Medium / Confirmed / A
+- [F19 — EditorIntelligence indexing parser is full-parse only](/Users/alex/Developer/Penumbra/docs/audit/findings/F19-ei-full-parse.md) — **✅ Done (2026-11-04)** — Medium / Confirmed / A
 - [F20 — Whole-document materialization on ordinary commands](/Users/alex/Developer/Penumbra/docs/audit/findings/F20-document-materialization.md) — Medium / Confirmed / A+B
 - [F21 — IDEWorkspace god object and forced root recompute](/Users/alex/Developer/Penumbra/docs/audit/findings/F21-ideworkspace-god-object.md) — **✅ Done as far as the evidence goes (2026-11-03): runtime premise refuted, two clean seams extracted, unhandled keys observable** — High / Confirmed / A
 - [F22 — Watcher batch synchronous 9-way fan-out](/Users/alex/Developer/Penumbra/docs/audit/findings/F22-watcher-fanout.md) — Medium / Confirmed shape / A
@@ -65,7 +65,7 @@ Priority is sequencing advice, not severity alone. Full briefs are linked per ro
 - [F28 — Keyboard gaps: presets, folding bindings, rebinding UI](/Users/alex/Developer/Penumbra/docs/audit/findings/F28-keyboard-gaps.md) — Medium / Confirmed / A+B
 - [F29 — Duplicate signposts and single-implementation protocols](/Users/alex/Developer/Penumbra/docs/audit/findings/F29-simplification.md) — Low / Confirmed / A+B
 
-**Execution status (2026-11-03):** F02, F03, F04, F05, F06, F14 (complete: `JavaLocalScope` retired), F15 (project sources), F17 (verified, no change needed), F23 (generated-source staleness fixed; `docs/INDEX_STALENESS.md`), F18 (project usage counts rank types; no substring tier), F07 (lazy handle rows), F08 (single-unit reads allocate nothing), F10 (default path has no GPU waits; non-unified atlas no longer blocks), F11 (typesetter fit search and word-wrap lookback; sync highlight measured, unchanged), F12 (workspace, index and editor-controller leaks, post-teardown open, Explorer refresh ordering), F09 (incremental TypeScript index) done (F01 in progress: wildcard reads, diamond, scope-tree locals, anonymous classes) — see each brief's *Implementation notes* for what was and was not verified. F01 (attributor, the long pole) and P1–P3 are not started. F05 deviates from its sketch (priority kept, bounded grace) because provider order is priority.
+**Execution status (2026-11-03):** F02, F03, F04, F05, F06, F14 (complete: `JavaLocalScope` retired), F15 (project sources), F17 (verified, no change needed), F23 (generated-source staleness fixed; `docs/INDEX_STALENESS.md`), F18 (project usage counts rank types; no substring tier), F07 (lazy handle rows), F08 (single-unit reads allocate nothing), F10 (default path has no GPU waits; non-unified atlas no longer blocks), F11 (typesetter fit search and word-wrap lookback; sync highlight measured, unchanged), F12 (workspace, index and editor-controller leaks, post-teardown open, Explorer refresh ordering), F13 (measured: already coalesced at the adapter, regression tests added), F19 (incremental reparse in the workspace-index parser), F09 (incremental TypeScript index) done (F01 in progress: wildcard reads, diamond, scope-tree locals, anonymous classes) — see each brief's *Implementation notes* for what was and was not verified. F01 (attributor, the long pole) and P1–P3 are not started. F05 deviates from its sketch (priority kept, bounded grace) because provider order is priority.
 
 ## 3. Text buffer summary
 
