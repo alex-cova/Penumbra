@@ -123,6 +123,11 @@ typealias PackedLeafNode = RedBlackTreeNode<PackedLeafID, Int, PackedLeafData>
 final class PackedLineIndex {
     private let tree: PackedLeafTree
     private var nextID: UInt32 = 1
+    /// The leaf that holds each line a ``LineManager`` handle exists for, so a handle can ask for
+    /// its current row (``row(ofRegisteredID:)``) instead of being renumbered on every edit. Only
+    /// lines with a handle are here (thousands at most, never one entry per line). Tree rotations
+    /// relink nodes and never move a line between them; only a leaf split does, and it updates this.
+    private var leafOfRegisteredID: [UInt32: PackedLeafNode] = [:]
     /// Height of a line that has not been typeset. Change it with `setEstimatedLineHeight(_:)`.
     private(set) var estimatedLineHeight: CGFloat
     private(set) var longestRow = 0
@@ -208,6 +213,8 @@ final class PackedLineIndex {
 
     func prepareStreamingRebuild(estimatedLineHeight: CGFloat) {
         self.estimatedLineHeight = estimatedLineHeight
+        // Every leaf is replaced below, and a registered line's leaf with it.
+        leafOfRegisteredID.removeAll(keepingCapacity: false)
         // `nextID` is deliberately NOT reset here. `DocumentLineNodeID` is a bare `UInt32` counter
         // (not the UUID it once was), and callers key long-lived caches on it — `LineController`s,
         // cached line widths, reused line-number / line-fragment views. If a rebuild handed out
@@ -385,6 +392,11 @@ final class PackedLineIndex {
             let newNode = tree.insertNode(value: newData.utf16Sum, data: newData, after: leaf)
             tree.updateAfterChangingChildren(of: leaf)
             tree.updateAfterChangingChildren(of: newNode)
+            if !leafOfRegisteredID.isEmpty {
+                for moved in newData.lines where leafOfRegisteredID[moved.id] != nil {
+                    leafOfRegisteredID[moved.id] = newNode
+                }
+            }
         }
         return id
     }
@@ -392,6 +404,7 @@ final class PackedLineIndex {
     func removeLine(atRow row: Int) -> UInt32 {
         let (leaf, slot, _) = locate(row: row)
         let id = leaf.data.lines[slot].id
+        leafOfRegisteredID.removeValue(forKey: id)
         leaf.data.lines.remove(at: slot)
         if leaf.data.lines.isEmpty {
             if lineCount > 1 {
@@ -409,6 +422,31 @@ final class PackedLineIndex {
             tree.updateAfterChangingChildren(of: leaf)
         }
         return id
+    }
+
+    // MARK: - Handle registry
+
+    func registerHandle(id: UInt32, atRow row: Int) {
+        leafOfRegisteredID[id] = locate(row: row).leaf
+    }
+
+    func unregisterHandle(id: UInt32) {
+        leafOfRegisteredID.removeValue(forKey: id)
+    }
+
+    func unregisterAllHandles() {
+        leafOfRegisteredID.removeAll(keepingCapacity: false)
+    }
+
+    var registeredHandleCount: Int { leafOfRegisteredID.count }
+
+    /// The row of a line that has a registered handle: the lines before its leaf plus its slot.
+    /// O(tree height + leaf size), whatever the line count. `nil` when the line is gone or was never
+    /// registered.
+    func row(ofRegisteredID id: UInt32) -> Int? {
+        guard let leaf = leafOfRegisteredID[id],
+              let slot = leaf.data.lines.firstIndex(where: { $0.id == id }) else { return nil }
+        return lineIndex(of: leaf) + slot
     }
 
     func dataSnapshot(atRow row: Int, location: Int, estimatedFallbackHeight: CGFloat) -> DocumentLineNodeData {

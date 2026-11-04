@@ -28,9 +28,19 @@ public actor TypeScriptIndex {
         public var nameBytes: Range<Int>
     }
 
+    /// Identifier → the files that mention it.
     private var names: [String: Set<URL>] = [:]
     private var exportsByName: [String: [ExportRef]] = [:]
-    private var paletteSymbols: [PaletteSymbol] = []
+    /// Each file's palette symbols, kept per file so a changed file replaces its own and no more.
+    private var paletteSymbolsByFile: [URL: [PaletteSymbol]] = [:]
+    /// What each published file put into ``names`` and ``exportsByName``, so it can be taken out
+    /// again without looking through the whole project.
+    private var contributions: [URL: Contribution] = [:]
+
+    private struct Contribution {
+        var identifiers: Set<String>
+        var exportNames: Set<String>
+    }
     public func setOpenBufferLookup(_ lookup: (@Sendable (URL) async -> String?)?) {
         storage.setOpenBufferLookup(lookup)
     }
@@ -68,6 +78,7 @@ public actor TypeScriptIndex {
     }
 
     public func applyFileChanges(_ urls: [URL]) async {
+        var changed: [URL] = []
         for url in urls {
             let standardized = url.standardizedFileURL
             guard TypeScriptPaths.isSourceFile(standardized), !TypeScriptPaths.isSkipped(standardized) else { continue }
@@ -84,9 +95,12 @@ public actor TypeScriptIndex {
             } else {
                 _ = storage.remove(standardized)
             }
+            changed.append(standardized)
         }
+        // While a walk is in flight the published tables stay as they are; the walk merges these
+        // edits as pending ones and publishes everything when it finishes.
         if !storage.isBuilding {
-            publish(storage.storedFiles)
+            for url in changed { replaceContribution(of: url, with: storage.file(at: url)) }
         }
     }
 
@@ -220,42 +234,75 @@ public actor TypeScriptIndex {
         guard limit > 0, !query.isEmpty else { return [] }
         var matches: [PaletteSymbol] = []
         matches.reserveCapacity(min(limit, 32))
-        for symbol in paletteSymbols {
-            guard CompletionMatcher.couldMatch(query, symbol.name),
-                  CompletionMatcher.matches(query, symbol.name) else { continue }
-            matches.append(symbol)
-            if matches.count == limit { break }
+        search: for symbols in paletteSymbolsByFile.values {
+            for symbol in symbols {
+                guard CompletionMatcher.couldMatch(query, symbol.name),
+                      CompletionMatcher.matches(query, symbol.name) else { continue }
+                matches.append(symbol)
+                if matches.count == limit { break search }
+            }
         }
         return matches
     }
 
+    /// Replaces everything published with `models`: the cold walk, and clearing the project. The
+    /// same per-file step as an edit, so a rebuilt index and an incrementally updated one agree.
     private func publish(_ models: [URL: TypeScriptFileModel]) {
         storage.replaceFiles(with: models)
-        var names: [String: Set<URL>] = [:]
-        var exports: [String: [ExportRef]] = [:]
+        names = [:]
+        exportsByName = [:]
+        paletteSymbolsByFile = [:]
+        contributions = [:]
+        for (url, model) in models { addContribution(of: url, model: model) }
+    }
+
+    /// Takes `url`'s old identifiers, exports and palette symbols out and puts the new model's in.
+    /// Costs what the file holds (plus the length of the export lists its names appear in), not
+    /// what the project holds. A nil model removes the file.
+    private func replaceContribution(of url: URL, with model: TypeScriptFileModel?) {
+        removeContribution(of: url)
+        if let model { addContribution(of: url, model: model) }
+    }
+
+    private func removeContribution(of url: URL) {
+        paletteSymbolsByFile[url] = nil
+        guard let old = contributions.removeValue(forKey: url) else { return }
+        // Mutated through the dictionary, never through a local copy: `var files = names[name]`
+        // would copy a set that holds every file mentioning a common word, once per edit.
+        for name in old.identifiers {
+            names[name]?.remove(url)
+            if names[name]?.isEmpty == true { names[name] = nil }
+        }
+        for name in old.exportNames {
+            exportsByName[name]?.removeAll { $0.url == url }
+            if exportsByName[name]?.isEmpty == true { exportsByName[name] = nil }
+        }
+    }
+
+    private func addContribution(of url: URL, model: TypeScriptFileModel) {
         var symbols: [PaletteSymbol] = []
-        for (url, model) in models {
-            collectPaletteSymbols(model.declarations, container: "", url: url, into: &symbols)
-            for name in model.identifiers {
-                names[name, default: []].insert(url)
-            }
-            for declaration in model.declarations where declaration.isTopLevel {
-                let typeOnly = declaration.kind == .interface || declaration.kind == .typeAlias
-                for name in declaration.exportNames where name != "default" {
-                    exports[name, default: []].append(ExportRef(
-                        name: name, url: url, kind: declaration.kind, signature: declaration.signature, isTypeOnly: typeOnly
-                    ))
-                }
-            }
-            for reexport in model.reexports where reexport.exportedName != "default" {
-                exports[reexport.exportedName, default: []].append(ExportRef(
-                    name: reexport.exportedName, url: url, kind: .variable, signature: reexport.exportedName, isTypeOnly: false
+        collectPaletteSymbols(model.declarations, container: "", url: url, into: &symbols)
+        paletteSymbolsByFile[url] = symbols
+        for name in model.identifiers {
+            names[name, default: []].insert(url)
+        }
+        var exportNames = Set<String>()
+        for declaration in model.declarations where declaration.isTopLevel {
+            let typeOnly = declaration.kind == .interface || declaration.kind == .typeAlias
+            for name in declaration.exportNames where name != "default" {
+                exportsByName[name, default: []].append(ExportRef(
+                    name: name, url: url, kind: declaration.kind, signature: declaration.signature, isTypeOnly: typeOnly
                 ))
+                exportNames.insert(name)
             }
         }
-        self.names = names
-        exportsByName = exports
-        paletteSymbols = symbols
+        for reexport in model.reexports where reexport.exportedName != "default" {
+            exportsByName[reexport.exportedName, default: []].append(ExportRef(
+                name: reexport.exportedName, url: url, kind: .variable, signature: reexport.exportedName, isTypeOnly: false
+            ))
+            exportNames.insert(reexport.exportedName)
+        }
+        contributions[url] = Contribution(identifiers: model.identifiers, exportNames: exportNames)
     }
 
     private func collectPaletteSymbols(

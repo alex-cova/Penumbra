@@ -126,6 +126,89 @@ final class LineManagerTests: XCTestCase {
     }
 }
 
+// MARK: - Lazy row resolution (F07)
+
+extension LineManagerTests {
+    /// A tiny deterministic generator, so a failing sequence can be replayed.
+    private struct SplitMix64: RandomNumberGenerator {
+        var state: UInt64
+        mutating func next() -> UInt64 {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            return z ^ (z >> 31)
+        }
+    }
+
+    /// Handles are no longer renumbered on every edit; each resolves its row from its line when read.
+    /// Whatever the edits do to the tree (leaf splits past 64 lines, leaves emptied and dropped), a held
+    /// handle must always name the row its line is on.
+    func testHeldHandlesKeepTheirRowsThroughRandomInsertsAndRemovals() {
+        var random = SplitMix64(state: 7)
+        let lineManager = makeLineManager((0 ..< 1_500).map { "line \($0)" }.joined(separator: "\n"))
+        var held = stride(from: 0, to: 1_500, by: 7).map { lineManager.line(atRow: $0) }
+
+        func check(_ step: Int) {
+            var rowOfID: [UInt32: Int] = [:]
+            for row in 0 ..< lineManager.lineCount { rowOfID[lineManager.lineInfo(atRow: row).id.value] = row }
+            for handle in held {
+                guard let expected = rowOfID[handle.id.value] else { continue } // its line was removed
+                XCTAssertEqual(handle.row, expected, "step \(step): handle \(handle.id.value)")
+                XCTAssertTrue(lineManager.line(atRow: expected) === handle, "step \(step): the table still hands out the held handle")
+            }
+        }
+
+        for step in 0 ..< 400 {
+            let row = Int.random(in: 0 ..< lineManager.lineCount, using: &random)
+            if Bool.random(using: &random) || lineManager.lineCount < 200 {
+                // More than a leaf's worth of lines at a time, so leaves split.
+                let count = Int.random(in: 1 ... 150, using: &random)
+                _ = lineManager.insert(String(repeating: "new\n", count: count) as NSString, at: lineManager.location(ofRow: row))
+            } else {
+                let last = min(row + Int.random(in: 1 ... 120, using: &random), lineManager.lineCount - 1)
+                let start = lineManager.location(ofRow: row)
+                let end = lineManager.location(ofRow: last)
+                if end > start { _ = lineManager.removeCharacters(in: NSRange(location: start, length: end - start)) }
+            }
+            if step % 5 == 0 { check(step) }
+            // New handles appear too, as layout asks for lines.
+            if step % 11 == 0 { held.append(lineManager.line(atRow: Int.random(in: 0 ..< lineManager.lineCount, using: &random))) }
+        }
+        check(400)
+    }
+
+    /// The point of the change: pasting lines costs the same however many handles are alive.
+    func testPastingLinesDoesNotWalkTheLiveHandles() {
+        func work(liveHandles: Int) -> Int {
+            let lineManager = makeLineManager((0 ..< 10_000).map { "line \($0)" }.joined(separator: "\n"))
+            let held = (0 ..< liveHandles).map { lineManager.line(atRow: 200 + $0 * 2) }
+            lineManager.resetHandleCounters()
+            _ = lineManager.insert(String(repeating: "new\n", count: 500) as NSString, at: lineManager.location(ofRow: 50))
+            let pasteWork = lineManager.handleShiftVisits
+            // The handles below the paste all moved by 500, and each says so when asked.
+            for (offset, handle) in held.enumerated() {
+                XCTAssertEqual(handle.row, 700 + offset * 2)
+            }
+            return pasteWork
+        }
+        let few = work(liveHandles: 10)
+        let many = work(liveHandles: 3_000)
+        XCTAssertEqual(many, few, "the work of a paste does not depend on how many handles exist")
+        XCTAssertLessThan(many, 4 * 500, "a few row resolutions per pasted line")
+    }
+
+    /// A handle read after the manager is gone must not crash: `row` goes through a weak reference.
+    func testAHandleOutlivingItsManagerKeepsItsLastRow() {
+        var lineManager: LineManager? = makeLineManager("a\nb\nc")
+        let handle = lineManager!.line(atRow: 2)
+        _ = lineManager!.insert("x\n" as NSString, at: 0)
+        XCTAssertEqual(handle.row, 3)
+        lineManager = nil
+        XCTAssertEqual(handle.row, 3)
+    }
+}
+
 private extension LineManagerTests {
     func makeLineManager(_ string: String) -> LineManager {
         let stringView = StringView(string: string)

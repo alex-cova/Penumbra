@@ -249,6 +249,31 @@ enum EnterSessionProfile {
             warn("  WARNING: \(textView.lineMarkers.count) of \(markers.count) markers survived Enter/Backspace")
         }
 
+        // F07: a multi-line paste while many handles are live. Every inserted line used to renumber
+        // every live handle, so this cost lines x handles; it runs last because it makes the
+        // document longer.
+        do {
+            let pasteLines = 5_000
+            let pasted = String(repeating: "int pasted = 0;\n", count: pasteLines)
+            _ = textView.goToLine(middle, select: .end)
+            pump(textView)
+            let before = textView.lineHandleStatistics
+            textView.resetLineHandleCounters()
+            let start = CFAbsoluteTimeGetCurrent()
+            autoreleasepool {
+                textView.insertText(pasted)
+                textView.layoutIfNeeded()
+            }
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            let after = textView.lineHandleStatistics
+            let added = after.lineCount - before.lineCount
+            warn(String(format: "  Paste %d lines           %8.3f ms  shiftVisits=%d  live=%d  (lines +%d)",
+                        pasteLines, elapsed * 1000, after.shiftVisits, before.liveHandles, added))
+            ResultLog.row("paste_\(pasteLines)_lines", file: file, sizeBytes: sizeBytes, seconds: elapsed,
+                          extra: "shiftVisits=\(after.shiftVisits) live=\(before.liveHandles) linesAdded=\(added)")
+            pump(textView)
+        }
+
         // Keep the process (and text view) alive for `heap <pid>` / `vmmap` inspection.
         if holdSeconds > 0 {
             warn("  holding for \(holdSeconds)s: pid \(ProcessInfo.processInfo.processIdentifier)")

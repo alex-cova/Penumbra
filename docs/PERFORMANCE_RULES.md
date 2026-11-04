@@ -39,8 +39,11 @@ separators, folding, selection chrome, highlighting).
 
 ## 2. Don't create line handles to read a value
 
-`LineManager.line(atRow:)` returns a `DocumentLineNode` handle, and every live handle is visited
-on every line insert/removal.
+`LineManager.line(atRow:)` returns a `DocumentLineNode` handle. A handle costs a table entry and a
+registry entry in `PackedLineIndex`, and it is created once per row you ask for (a loop over N rows
+makes N). Line insertions and removals no longer renumber live handles: a handle resolves its row
+from its line the first time it is read after an edit (`LineManager.rowVersion`,
+`handleShiftVisits` counts those resolutions), so a paste costs the same however many handles exist.
 
 - To read an ID, position, range or height, use `lineID(atRow:)`, `lineInfo(atRow:)`,
   `location(ofRow:)`, `contentRange(atRow:)`, `yPosition(ofRow:)`,

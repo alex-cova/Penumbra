@@ -64,8 +64,44 @@ enum LanguageIndexProfile {
         let stage = language == .swift ? "swift_index" : "ts_index"
         print("stage \(stage) cold count=1 median_s=\(format(elapsed)) files=\(indexed) resident_bytes=\(after) delta_bytes=\(after &- before)")
 
+        if synthetic {
+            try await measureFileChange(language: language, root: root, files: files)
+        }
         guard mode == .completion else { return }
         try await measureCompletion(language: language, root: root, lines: lines)
+    }
+
+    /// F09: what saving one file costs the index. Each sample rewrites one file of a synthetic
+    /// project (a renamed class, so names, exports and palette symbols all change) and applies it;
+    /// the time should not depend on how many other files the project has.
+    private static func measureFileChange(language: Language, root: URL, files: Int) async throws {
+        let samples = 8
+        let ext = language == .swift ? "swift" : "ts"
+        let url = root.appendingPathComponent("p0/Type0.\(ext)")
+        let original = try String(contentsOf: url, encoding: .utf8)
+        defer { try? original.write(to: url, atomically: true, encoding: .utf8) }
+        var times: [Double] = []
+        switch language {
+        case .swift:
+            let index = SwiftIndex()
+            await index.setRoot(root)
+            for sample in 0...samples {
+                try original.replacingOccurrences(of: "Type0", with: "Type0Edit\(sample)").write(to: url, atomically: true, encoding: .utf8)
+                let start = DispatchTime.now().uptimeNanoseconds
+                await index.applyFileChanges([url])
+                if sample > 0 { times.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9) }
+            }
+        case .typescript:
+            let index = TypeScriptIndex()
+            await index.setRoot(root)
+            for sample in 0...samples {
+                try original.replacingOccurrences(of: "Type0", with: "Type0Edit\(sample)").write(to: url, atomically: true, encoding: .utf8)
+                let start = DispatchTime.now().uptimeNanoseconds
+                await index.applyFileChanges([url])
+                if sample > 0 { times.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9) }
+            }
+        }
+        emit(stage: language == .swift ? "swift_index_file_changed" : "ts_index_file_changed", samples: times)
     }
 
     private static func measureCompletion(language: Language, root: URL, lines: Int) async throws {

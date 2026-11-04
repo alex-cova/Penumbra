@@ -31,9 +31,31 @@ extension DocumentLineNodeID: CustomDebugStringConvertible {
 /// refreshed when lines are inserted or removed above it.
 final class DocumentLineNode: Hashable {
     let id: DocumentLineNodeID
-    var row: Int
     unowned let lineManager: LineManager
     let data: DocumentLineNodeData
+
+    /// The line's current row. Edits do not renumber handles (that cost every live handle for every
+    /// inserted or removed line, so pasting N lines paid N x handles); the row is resolved from the
+    /// line's id the first time it is read after an edit and cached until the next one. A line that
+    /// has been removed keeps the last row it had. Read through a weak reference so a handle that
+    /// outlives its manager still answers.
+    var row: Int {
+        get {
+            guard let source = rowSource else { return storedRow }
+            if storedRowVersion != source.rowVersion {
+                if let current = source.resolvedRow(of: id) { storedRow = current }
+                storedRowVersion = source.rowVersion
+            }
+            return storedRow
+        }
+        set {
+            storedRow = newValue
+            storedRowVersion = rowSource?.rowVersion ?? 0
+        }
+    }
+    private var storedRow: Int
+    private var storedRowVersion: Int
+    private weak var rowSource: LineManager?
 
     var location: Int {
         lineManager.location(ofRow: row)
@@ -66,7 +88,9 @@ final class DocumentLineNode: Hashable {
 
     init(id: DocumentLineNodeID, row: Int, lineManager: LineManager, data: DocumentLineNodeData) {
         self.id = id
-        self.row = row
+        self.storedRow = row
+        self.storedRowVersion = lineManager.rowVersion
+        self.rowSource = lineManager
         self.lineManager = lineManager
         self.data = data
         data.node = self
@@ -148,8 +172,17 @@ final class LineManager {
     /// cheap enough to keep in release builds.
     var handleCount: Int { handles.count }
     private(set) var handlesCreated = 0
-    /// Handles visited by the row-shift loops that run on every line insert/removal.
+    /// Handle rows resolved from the line index. A handle is renumbered lazily, the first time its
+    /// row is read after an edit (``rowVersion`` moved), so this counts reads, not edits x handles.
     private(set) var handleShiftVisits = 0
+    /// Bumped by every line insertion and removal. A handle's cached row is good while it matches.
+    private(set) var rowVersion = 0
+
+    /// The row of the line `id`, from the line index; `nil` when the line is gone.
+    func resolvedRow(of id: DocumentLineNodeID) -> Int? {
+        handleShiftVisits += 1
+        return packed.row(ofRegisteredID: id.value)
+    }
     func resetHandleCounters() {
         handlesCreated = 0
         handleShiftVisits = 0
@@ -190,6 +223,8 @@ final class LineManager {
     /// Rebuilds the line tree from precomputed per-line UTF-16 lengths, skipping a second newline scan.
     func rebuild(fromLineMetrics metrics: [LineMetric]) {
         handles.removeAll(keepingCapacity: false)
+        packed.unregisterAllHandles()
+        rowVersion &+= 1
         packed.rebuild(from: metrics, estimatedLineHeight: estimatedLineHeight)
         if packed.lineCount > 0 {
             initialLongestLine = line(atRow: packed.longestRow)
@@ -340,6 +375,7 @@ final class LineManager {
             data: data
         )
         handles[packedLine.id] = node
+        packed.registerHandle(id: packedLine.id, atRow: row)
         handlesCreated += 1
         if handles.count > handlePruneThreshold {
             releaseUnreferencedHandles()
@@ -435,6 +471,7 @@ final class LineManager {
     func releaseUnreferencedHandles() {
         for lineID in Array(handles.keys) where isKnownUniquelyReferenced(&handles[lineID]) {
             handles.removeValue(forKey: lineID)
+            packed.unregisterHandle(id: lineID)
         }
         handlePruneThreshold = max(Self.minimumHandlePruneThreshold, handles.count * 2)
     }
@@ -532,11 +569,10 @@ private extension LineManager {
         node.data.cachedStartByte = ByteCount(utf16Length: location)
     }
 
+    /// A line was inserted: every handle below it has a new row, which each resolves when it is
+    /// next read. O(1), whatever the number of live handles.
     private func shiftHandlesAfterInsert(atRow row: Int) {
-        handleShiftVisits += handles.count
-        for handle in handles.values where handle.row >= row {
-            handle.row += 1
-        }
+        rowVersion &+= 1
     }
 
     private func shiftHandlesAfterRemoval(atRow row: Int, removedID: UInt32) {
@@ -544,10 +580,8 @@ private extension LineManager {
             initialLongestLine = nil
         }
         handles.removeValue(forKey: removedID)
-        handleShiftVisits += handles.count
-        for handle in handles.values where handle.row > row {
-            handle.row -= 1
-        }
+        packed.unregisterHandle(id: removedID)
+        rowVersion &+= 1
     }
 }
 
