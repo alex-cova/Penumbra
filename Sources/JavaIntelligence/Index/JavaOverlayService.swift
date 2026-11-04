@@ -32,6 +32,19 @@ public actor JavaOverlayService {
         self.debounceNanoseconds = debounceMilliseconds * 1_000_000
     }
 
+    deinit {
+        workspaceEventTask?.cancel()
+        for task in debounceTasks.values { task.cancel() }
+    }
+
+    /// Stops following the workspace and drops the rebuilds still waiting.
+    public func disconnect() {
+        workspaceEventTask?.cancel()
+        workspaceEventTask = nil
+        for task in debounceTasks.values { task.cancel() }
+        debounceTasks.removeAll()
+    }
+
     /// Subscribes to workspace events and keeps the overlay updated in the background. Cancels any
     /// previous subscription first, so calling this again re-targets a new `Workspace`.
     @discardableResult

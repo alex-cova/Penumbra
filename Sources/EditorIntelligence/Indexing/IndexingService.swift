@@ -24,14 +24,28 @@ public actor IndexingService {
         self.debounceNanoseconds = debounceMilliseconds * 1_000_000
     }
 
+    deinit {
+        workspaceEventTask?.cancel()
+        for task in pendingTasks.values { task.cancel() }
+    }
+
+    /// Stops following the workspace and drops the parses still waiting. The index keeps what it has.
+    public func disconnect() {
+        workspaceEventTask?.cancel()
+        workspaceEventTask = nil
+        for task in pendingTasks.values { task.cancel() }
+        pendingTasks.removeAll()
+    }
+
     /// Subscribe to workspace events and index documents in the background.
     @discardableResult
     public func connect(to workspace: Workspace) -> Task<Void, Never> {
         workspaceEventTask?.cancel()
         let events = workspace.eventBus.events
-        let task = Task {
+        let task = Task { [weak self] in
             for await event in events {
-                await handleWorkspaceEvent(event)
+                guard let self else { return }
+                await self.handleWorkspaceEvent(event)
             }
         }
         workspaceEventTask = task

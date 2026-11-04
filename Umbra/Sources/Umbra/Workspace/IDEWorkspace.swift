@@ -545,6 +545,8 @@ public final class IDEWorkspace {
     /// The language the Type and Call Hierarchy tabs were last asked for (their items belong to it).
     @ObservationIgnored let javaRunAvailability = Debouncer()
     @ObservationIgnored private var structureRefreshTask: Task<Void, Never>?
+    /// Connects the workspace bridge, the index and the Java overlay at launch; cancelled by `teardown()`.
+    @ObservationIgnored private var bootstrapConnectTask: Task<Void, Never>?
     /// The last configuration Run launched in this project, restored across launches. Run Last
     /// Configuration reruns it, whatever file is active.
     var lastRunConfiguration: JavaRunConfiguration?
@@ -1076,12 +1078,18 @@ public final class IDEWorkspace {
         navigationBuffers.workspace = self
         let languages = self.languages
         let environment = languageEnvironment()
-        Task {
+        // Tracked so a window that closes before it finishes does not connect services after its
+        // teardown (F12); each step checks for that, since the steps are awaits.
+        bootstrapConnectTask = Task { [weak self] in
             await languages.start(environment: environment)
-            await workspaceBridge.syncWorkbench(workbench)
-            await workspaceBridge.workspace.connect(to: adapter)
-            await intelligenceServices.indexingService.connect(to: workspaceBridge.workspace)
-            await intelligenceServices.javaSupport.connect(to: workspaceBridge.workspace)
+            guard let self, !Task.isCancelled, !self.isTornDown else { return }
+            await self.workspaceBridge.syncWorkbench(self.workbench)
+            guard !Task.isCancelled, !self.isTornDown else { return }
+            await self.workspaceBridge.workspace.connect(to: adapter)
+            guard !Task.isCancelled, !self.isTornDown else { return }
+            await self.intelligenceServices.indexingService.connect(to: self.workspaceBridge.workspace)
+            guard !Task.isCancelled, !self.isTornDown else { return }
+            await self.intelligenceServices.javaSupport.connect(to: self.workspaceBridge.workspace)
         }
 
         IDEWindowRegistry.shared.register(self)
@@ -1152,6 +1160,13 @@ public final class IDEWorkspace {
         javaAutoImport.cancel()
         structureRefreshTask?.cancel()
         structureRefreshTask = nil
+        // The loops that follow the shared workspace end with the window, not with the process.
+        bootstrapConnectTask?.cancel()
+        bootstrapConnectTask = nil
+        Task { [workspace = workspaceBridge.workspace, indexing = intelligenceServices.indexingService] in
+            await workspace.disconnect()
+            await indexing.disconnect()
+        }
         blame.cancelAll()
         changeMarkers.cancelAll()
         agent.teardown()
@@ -3857,6 +3872,9 @@ public final class IDEWorkspace {
         }
         do {
             let document = try await loadDocument(from: url, openAsHex: asHex)
+            // The window may have closed while the file was read: opening it now would build
+            // editors, a layout and index work for a window that is gone (F12).
+            guard !isTornDown else { return }
             if inRightSplit {
                 activatePaneToTheRight()
             }
@@ -3877,6 +3895,7 @@ public final class IDEWorkspace {
             }
             if document.contentKind == .text {
                 await workspaceBridge.syncWorkbench(workbench)
+                guard !isTornDown else { return }
             }
             refreshPresentation()
             // A newly opened Swift file gets its project-wide findings once the index is ready
@@ -3894,6 +3913,7 @@ public final class IDEWorkspace {
                 }
             }
         } catch {
+            guard !isTornDown else { return }
             presentError(error)
         }
     }

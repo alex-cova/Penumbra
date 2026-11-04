@@ -1719,8 +1719,9 @@ public final class EditorIntelligenceController {
         }
         intentionBulb.isHidden = true
         textView.addFixedOverlaySubview(intentionBulb)
-        textView.addScrollObserver { [weak self] in
-            guard let self else { return }
+        // The text view stores this closure, so it must not capture the text view (F12).
+        textView.addScrollObserver { [weak self, weak textView] in
+            guard let self, let textView else { return }
             self.repositionIntentionBulb()
             self.refreshInlayHintsIfViewportLeftRange()
             self.refreshCodeVisionIfViewportLeftRange()
@@ -1757,9 +1758,14 @@ public final class EditorIntelligenceController {
     }
 
     private func startObservingEvents() {
+        // The stream, not `self`, is what the loop waits on: a strong `self` held across the loop
+        // kept the controller (and through it the editor) alive until the adapter's stream ended,
+        // which it never does (F12). The stream is still taken when the task starts, as before, so
+        // the events the adapter publishes while the controller is being built stay unseen.
         eventTask = Task { [weak self] in
-            guard let self else { return }
-            for await event in adapter.events {
+            guard let events = self?.adapter.events else { return }
+            for await event in events {
+                guard let self else { return }
                 await MainActor.run {
                     self.handleEditorEvent(event)
                 }

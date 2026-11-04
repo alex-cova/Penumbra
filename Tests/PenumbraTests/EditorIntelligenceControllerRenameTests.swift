@@ -57,17 +57,20 @@ final class EditorIntelligenceControllerRenameTests: XCTestCase {
 
     func testRenameActionIsHandledWithoutProviderAndDoesNotPrompt() async throws {
         let (controller, textView) = try await makeController(provider: nil)
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView)) {} }
         var prompted = false
         controller.onRequestRename = { _, _ in prompted = true }
         XCTAssertTrue(textView.perform(.rename))
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertFalse(prompted)
-        withExtendedLifetime(controller) {}
     }
 
     func testPrepareReturningNilNeverPrompts() async throws {
         let provider = MockRenameProvider(target: nil)
-        let (controller, _) = try await makeController(provider: provider)
+        let (controller, textView) = try await makeController(provider: provider)
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView)) {} }
         var prompted = false
         controller.onRequestRename = { _, _ in prompted = true }
         XCTAssertTrue(controller.rename())
@@ -78,7 +81,9 @@ final class EditorIntelligenceControllerRenameTests: XCTestCase {
 
     func testCancelledPromptDoesNotPlan() async throws {
         let provider = MockRenameProvider(target: RenameTarget(range: makeRange(6, 9), currentName: "Foo"))
-        let (controller, _) = try await makeController(provider: provider)
+        let (controller, textView) = try await makeController(provider: provider)
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView)) {} }
         controller.onRequestRename = { _, completion in completion(nil) }
         var presented = false
         controller.onPresentRenamePlan = { _, _ in presented = true }
@@ -93,7 +98,9 @@ final class EditorIntelligenceControllerRenameTests: XCTestCase {
             target: RenameTarget(range: makeRange(6, 9), currentName: "Foo"),
             plan: RenamePlan(entries: [entry()], blockingError: "Overrides a library method")
         )
-        let (controller, _) = try await makeController(provider: provider)
+        let (controller, textView) = try await makeController(provider: provider)
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView)) {} }
         controller.onRequestRename = { _, completion in completion("Bar") }
         var presented = false
         controller.onPresentRenamePlan = { _, _ in presented = true }
@@ -111,7 +118,9 @@ final class EditorIntelligenceControllerRenameTests: XCTestCase {
             target: RenameTarget(range: makeRange(6, 9), currentName: "Foo", kindDescription: "class"),
             plan: RenamePlan(entries: [entry(), entry("Bar", ambiguous: true)])
         )
-        let (controller, _) = try await makeController(provider: provider)
+        let (controller, textView) = try await makeController(provider: provider)
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView)) {} }
         var promptedTarget: RenameTarget?
         controller.onRequestRename = { target, completion in
             promptedTarget = target
@@ -144,7 +153,9 @@ final class EditorIntelligenceControllerRenameTests: XCTestCase {
 
     func testUnchangedNameIsIgnored() async throws {
         let provider = MockRenameProvider(target: RenameTarget(range: makeRange(6, 9), currentName: "Foo"))
-        let (controller, _) = try await makeController(provider: provider)
+        let (controller, textView) = try await makeController(provider: provider)
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView)) {} }
         controller.onRequestRename = { _, completion in completion("Foo") }
         controller.rename()
         try await Task.sleep(nanoseconds: 150_000_000)

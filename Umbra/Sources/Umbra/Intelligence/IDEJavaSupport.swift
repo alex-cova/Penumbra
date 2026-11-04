@@ -597,6 +597,7 @@ final class IDEJavaSupport {
     /// does not publish. The shared stores and the shared JDK shard stay: other windows use them.
     func teardown() {
         projectGeneration += 1
+        Task { [overlayService] in await overlayService.disconnect() }
         jdkIndexingTask?.cancel()
         jdkIndexingTask = nil
         projectIndexingTask?.cancel()

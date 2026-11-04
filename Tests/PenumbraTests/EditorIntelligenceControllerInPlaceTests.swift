@@ -54,7 +54,9 @@ final class EditorIntelligenceControllerInPlaceTests: XCTestCase {
     }
 
     func testInPlaceRenameAppliesAPlanThatNeedsNoJudgmentWithoutAPreview() async throws {
-        let (controller, _, _) = try await makeController(plan: RenamePlan(entries: [entry()]))
+        let (controller, textView, provider) = try await makeController(plan: RenamePlan(entries: [entry()]))
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView, provider)) {} }
         controller.appliesRefactoringsInPlace = true
         controller.onRequestRename = { _, completion in completion("Bar") }
         var previewed = false
@@ -76,7 +78,9 @@ final class EditorIntelligenceControllerInPlaceTests: XCTestCase {
     }
 
     func testAmbiguousEntriesStillGoThroughThePreview() async throws {
-        let (controller, _, _) = try await makeController(plan: RenamePlan(entries: [entry(), entry(ambiguous: true)]))
+        let (controller, textView, provider) = try await makeController(plan: RenamePlan(entries: [entry(), entry(ambiguous: true)]))
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView, provider)) {} }
         controller.appliesRefactoringsInPlace = true
         controller.onRequestRename = { _, completion in completion("Bar") }
         var previewed = false
@@ -92,7 +96,9 @@ final class EditorIntelligenceControllerInPlaceTests: XCTestCase {
     }
 
     func testWithInPlaceModeOffTheRenameIsAlwaysPreviewed() async throws {
-        let (controller, _, _) = try await makeController(plan: RenamePlan(entries: [entry()]))
+        let (controller, textView, provider) = try await makeController(plan: RenamePlan(entries: [entry()]))
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView, provider)) {} }
         XCTAssertFalse(controller.appliesRefactoringsInPlace)
         controller.onRequestRename = { _, completion in completion("Bar") }
         var previewed = false
@@ -105,6 +111,8 @@ final class EditorIntelligenceControllerInPlaceTests: XCTestCase {
     func testInPlaceRenameMarksTheAffectedRangesWhileThePromptIsOpen() async throws {
         let second = RenamePlanEntry(url: url, range: range(16, 19), oldText: "Foo", newText: "x", lineText: "class Foo {} // Foo")
         let (controller, textView, provider) = try await makeController(plan: RenamePlan(entries: [entry(), second]))
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView, provider)) {} }
         controller.appliesRefactoringsInPlace = true
         textView.documentURL = url
         var finish: ((String?) -> Void)?
@@ -149,7 +157,9 @@ final class EditorIntelligenceControllerInPlaceTests: XCTestCase {
     }
 
     func testShowErrorDescriptionHintsWhenThereIsNothingAtTheCaret() async throws {
-        let (controller, textView, _) = try await makeController(plan: RenamePlan())
+        let (controller, textView, provider) = try await makeController(plan: RenamePlan())
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView, provider)) {} }
         textView.selectedRange = NSRange(location: 0, length: 0)
         controller.showErrorDescription()
         textView.diagnostics = [TextViewDiagnostic(range: NSRange(location: 6, length: 3), severity: .error, message: "boom")]

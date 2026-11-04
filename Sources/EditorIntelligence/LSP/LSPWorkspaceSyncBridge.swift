@@ -36,13 +36,24 @@ public actor LSPWorkspaceSyncBridge {
         self.languageResolver = languageResolver
     }
 
+    deinit {
+        subscription?.cancel()
+    }
+
+    /// Stops following the workspace.
+    public func disconnect() {
+        subscription?.cancel()
+        subscription = nil
+    }
+
     @discardableResult
     public func connect(to workspace: Workspace) -> Task<Void, Never> {
         subscription?.cancel()
         let stream = workspace.eventBus.events
-        let task = Task {
+        let task = Task { [weak self] in
             for await event in stream {
-                await handle(event)
+                guard let self else { return }
+                await self.handle(event)
             }
         }
         subscription = task

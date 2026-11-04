@@ -42,6 +42,15 @@ final class IDEProjectModel {
     /// The project folder was deleted or moved out from under the open window.
     private(set) var isRootMissing = false
     @ObservationIgnored private var generation = 0
+    /// Orders overlapping refreshes (F12). Each `refresh` takes the next number before it reads the
+    /// disk; a listing is applied only if no newer read of the same directory was applied first, so
+    /// a slow older listing cannot put back what a newer one already removed.
+    @ObservationIgnored private var refreshSequence = 0
+    @ObservationIgnored private var appliedListingSequence: [String: Int] = [:]
+    @ObservationIgnored private var appliedRebuildSequence = 0
+    /// Tests only: runs between a refresh's disk read and its splice, to hold one refresh back
+    /// while another completes. Never set in the app.
+    @ObservationIgnored var refreshHookForTesting: (@MainActor (Int) async -> Void)?
     /// The Explorer row highlighted as current (last clicked, or the revealed file).
     var selectedPath: String?
     private(set) var revealRequest: RevealRequest?
@@ -91,6 +100,8 @@ final class IDEProjectModel {
     func setRoot(_ url: URL?) {
         rootURL = url
         generation += 1
+        appliedListingSequence = [:]
+        appliedRebuildSequence = 0
         isRootMissing = false
         if let url {
             rootNode = Self.buildNode(at: url, isDirectory: true)
@@ -222,6 +233,8 @@ final class IDEProjectModel {
     func refresh(directories: Set<String>) async {
         guard let rootURL, !directories.isEmpty else { return }
         let generation = self.generation
+        refreshSequence += 1
+        let sequence = refreshSequence
         let rootPath = rootURL.path
         let rebuildEverything = directories.count > Self.fullRebuildThreshold
         let knownChildren = directories.reduce(into: [String: [String: Bool]]()) { result, path in
@@ -230,26 +243,29 @@ final class IDEProjectModel {
             }
         }
 
-        do {
-            let outcome = await Task.detached(priority: .utility) { () -> RefreshOutcome in
-                guard FileManager.default.fileExists(atPath: rootPath) else { return .rootMissing }
-                if rebuildEverything {
-                    return .rebuilt(Self.buildNode(at: URL(fileURLWithPath: rootPath), isDirectory: true))
+        let outcome = await Task.detached(priority: .utility) { () -> RefreshOutcome in
+            guard FileManager.default.fileExists(atPath: rootPath) else { return .rootMissing }
+            if rebuildEverything {
+                return .rebuilt(Self.buildNode(at: URL(fileURLWithPath: rootPath), isDirectory: true))
+            }
+            var listings: [DirectoryListing] = []
+            var seen: Set<String> = []
+            for path in directories {
+                let directory = Self.nearestExistingDirectory(from: path, root: rootPath)
+                guard seen.insert(directory).inserted else { continue }
+                let known = knownChildren[directory] ?? [:]
+                if let listing = Self.listDirectory(directory, known: known) {
+                    listings.append(listing)
                 }
-                var listings: [DirectoryListing] = []
-                var seen: Set<String> = []
-                for path in directories {
-                    let directory = Self.nearestExistingDirectory(from: path, root: rootPath)
-                    guard seen.insert(directory).inserted else { continue }
-                    let known = knownChildren[directory] ?? [:]
-                    if let listing = Self.listDirectory(directory, known: known) {
-                        listings.append(listing)
-                    }
-                }
-                return .listings(listings)
-            }.value
-            guard self.generation == generation else { return }
-            apply(outcome)
+            }
+            return .listings(listings)
+        }.value
+        await refreshHookForTesting?(sequence)
+        guard self.generation == generation else { return }
+        if apply(outcome, sequence: sequence) == .retry {
+            // Part of what was read is older than something already applied and cannot be told apart
+            // from the rest: read it again.
+            await refresh(directories: directories)
         }
     }
 
@@ -270,20 +286,36 @@ final class IDEProjectModel {
         let entries: [Entry]
     }
 
-    private func apply(_ outcome: RefreshOutcome) {
+    private enum ApplyResult { case done, retry }
+
+    @discardableResult
+    private func apply(_ outcome: RefreshOutcome, sequence: Int) -> ApplyResult {
         switch outcome {
         case .rootMissing:
             rootNode = nil
             isRootMissing = true
             expandedPaths = []
         case .rebuilt(let node):
+            // A full tree read older than a newer rebuild is dropped; older than a newer splice it is
+            // read again, since its other directories may still be news.
+            guard sequence > appliedRebuildSequence else { return .done }
+            if appliedListingSequence.values.contains(where: { $0 > sequence }) { return .retry }
             rootNode = node
             isRootMissing = false
+            appliedRebuildSequence = sequence
+            appliedListingSequence = [:]
             pruneExpandedPaths()
         case .listings(let listings):
             isRootMissing = false
-            for listing in listings { splice(listing) }
+            for listing in listings {
+                // Newer information about this directory is already in the tree.
+                guard sequence > appliedRebuildSequence,
+                      sequence >= (appliedListingSequence[listing.path] ?? 0) else { continue }
+                splice(listing)
+                appliedListingSequence[listing.path] = sequence
+            }
         }
+        return .done
     }
 
     private func splice(_ listing: DirectoryListing) {

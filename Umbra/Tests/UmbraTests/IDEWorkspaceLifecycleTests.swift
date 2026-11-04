@@ -53,6 +53,19 @@ final class IDEWorkspaceLifecycleTests: XCTestCase {
         XCTAssertTrue(workspace.isTornDown)
     }
 
+    /// A file read that finishes after the window closed must not open a tab (F12): the editors,
+    /// layout and index work it would start belong to a window that is gone.
+    func testAFileThatFinishesLoadingAfterTeardownIsNotOpened() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("late-\(UUID().uuidString).txt")
+        try "hello".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let workspace = IDEWorkspace()
+        let opening = Task { await workspace.openDocument(from: url) }
+        workspace.teardown()
+        await opening.value
+        XCTAssertTrue(workspace.workbench.allDocuments().isEmpty, "a torn-down window opened a tab")
+    }
+
     func testATornDownWorkspaceStopsBeingATarget() {
         let registry = IDEWindowRegistry.shared
         let keeper = IDEWorkspace()

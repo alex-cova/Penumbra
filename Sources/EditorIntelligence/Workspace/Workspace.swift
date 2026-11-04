@@ -20,6 +20,22 @@ public actor Workspace {
         self.eventBus = EventBus()
     }
 
+    deinit {
+        fileSystemWatcherTask?.cancel()
+        adapterEventTask?.cancel()
+    }
+
+    /// Ends the subscriptions this workspace made (the adapter's events and the file watcher's).
+    /// A host calls it when the window goes; dropping the workspace has the same effect.
+    public func disconnect() async {
+        adapterEventTask?.cancel()
+        adapterEventTask = nil
+        fileSystemWatcherTask?.cancel()
+        fileSystemWatcherTask = nil
+        await fileSystemWatcher?.stop()
+        fileSystemWatcher = nil
+    }
+
     // MARK: - Projects
 
     public func addProject(_ project: Project) {
@@ -174,10 +190,13 @@ public actor Workspace {
         await fileSystemWatcher?.stop()
         fileSystemWatcher = watcher
         fileSystemWatcherTask?.cancel()
-        fileSystemWatcherTask = Task {
+        // Weak: the task lives as long as the watcher's stream does, and a strong capture made the
+        // workspace and its own task keep each other alive (F12).
+        fileSystemWatcherTask = Task { [weak self] in
             await watcher.start()
             for await event in watcher.events {
-                self.handleFileSystemEvent(event)
+                guard let self else { return }
+                await self.handleFileSystemEvent(event)
             }
         }
     }
@@ -195,9 +214,10 @@ public actor Workspace {
     public func connect(to adapter: EditorAdapter) -> Task<Void, Never> {
         adapterEventTask?.cancel()
         let stream = adapter.events
-        let task = Task {
+        let task = Task { [weak self] in
             for await event in stream {
-                await handleEditorEvent(event)
+                guard let self else { return }
+                await self.handleEditorEvent(event)
             }
         }
         adapterEventTask = task

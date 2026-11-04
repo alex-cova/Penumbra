@@ -60,6 +60,8 @@ final class EditorIntelligenceControllerGenerateTests: XCTestCase {
     func testGenerateActionPromptsWithTheMenuAndAppliesThePickedEdit() async throws {
         let provider = MockCodeGenerationProvider(menu: menu, url: url)
         let (controller, textView) = try await makeController(provider: provider)
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView)) {} }
         var offered: CodeGenerationMenu?
         controller.onRequestGeneration = { menu, completion in
             offered = menu
@@ -71,12 +73,13 @@ final class EditorIntelligenceControllerGenerateTests: XCTestCase {
         XCTAssertEqual(provider.generated.count, 1)
         XCTAssertEqual(provider.generated.first?.1, ["a", "b"])
         XCTAssertEqual(textView.text, "class Foo {}\n// constructor: a,b")
-        withExtendedLifetime(controller) {}
     }
 
     func testCancellingThePromptGeneratesNothing() async throws {
         let provider = MockCodeGenerationProvider(menu: menu, url: url)
         let (controller, textView) = try await makeController(provider: provider)
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView)) {} }
         controller.onRequestGeneration = { _, completion in completion(nil) }
         XCTAssertTrue(controller.generate())
         try await Task.sleep(nanoseconds: 300_000_000)
@@ -86,7 +89,9 @@ final class EditorIntelligenceControllerGenerateTests: XCTestCase {
 
     func testNoMenuNeverPrompts() async throws {
         let provider = MockCodeGenerationProvider(menu: nil, url: url)
-        let (controller, _) = try await makeController(provider: provider)
+        let (controller, textView) = try await makeController(provider: provider)
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView)) {} }
         var prompted = false
         controller.onRequestGeneration = { _, _ in prompted = true }
         XCTAssertTrue(controller.generate())
@@ -96,11 +101,12 @@ final class EditorIntelligenceControllerGenerateTests: XCTestCase {
 
     func testGenerateIsHandledWithoutAProvider() async throws {
         let (controller, textView) = try await makeController(provider: nil)
+        // Only this test holds them: the controller keeps its text view weakly and would be released after its last use.
+        defer { withExtendedLifetime((controller, textView)) {} }
         var prompted = false
         controller.onRequestGeneration = { _, _ in prompted = true }
         XCTAssertTrue(textView.perform(.generate))
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertFalse(prompted)
-        withExtendedLifetime(controller) {}
     }
 }
