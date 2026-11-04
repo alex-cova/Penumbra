@@ -158,11 +158,11 @@ struct IDECallHierarchyPanel: View {
     var body: some View {
         let store = workspace.visibleCallHierarchy
         VStack(spacing: 0) {
-            if !workspace.pinnedCallHierarchies.isEmpty {
+            if !workspace.callPins.isEmpty {
                 IDEHierarchyPinStrip(
-                    pins: workspace.pinnedCallHierarchies.map { ($0.id, $0.title) },
-                    selected: workspace.selectedCallHierarchyPinID,
-                    onSelect: { workspace.selectedCallHierarchyPinID = $0 },
+                    pins: workspace.callPins.pins.map { ($0.id, $0.title) },
+                    selected: workspace.callPins.selectedID,
+                    onSelect: { workspace.callPins.selectedID = $0 },
                     onUnpin: { workspace.unpinCallHierarchy($0) }
                 )
                 Divider()

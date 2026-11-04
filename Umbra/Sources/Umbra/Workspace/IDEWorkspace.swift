@@ -202,13 +202,11 @@ public final class IDEWorkspace {
     /// The Type Hierarchy tab's content; empty until ⌃H (or Java > Type Hierarchy) asks for one.
     let typeHierarchy = IDETypeHierarchyStore()
     /// Hierarchies kept with Pin Tab, and which one the tab shows (nil: the live one).
-    var pinnedTypeHierarchies: [IDEPinnedHierarchy<IDETypeHierarchyStore>] = []
-    var selectedTypeHierarchyPinID: UUID?
+    let typePins = IDEHierarchyPinSet<IDETypeHierarchyStore>()
     /// The Structure tool window's member tree for the type at the caret.
     let structureStore = IDEStructureStore()
     let callHierarchy = IDECallHierarchyStore()
-    var pinnedCallHierarchies: [IDEPinnedHierarchy<IDECallHierarchyStore>] = []
-    var selectedCallHierarchyPinID: UUID?
+    let callPins = IDEHierarchyPinSet<IDECallHierarchyStore>()
     let debugSession = JavaDebugSession()
     /// Swift debugging through `lldb-dap`. The Debug tool window shows this while it is active.
     let dapDebugSession = DAPDebugSession()
@@ -677,15 +675,11 @@ public final class IDEWorkspace {
     var showsRunTab: Bool { runs.hasContent }
     /// The Type Hierarchy tab appears once a hierarchy (or a message about why there is none) has
     /// been requested, and goes when it is closed.
-    var showsTypeHierarchyTab: Bool { typeHierarchy.hasContent || !pinnedTypeHierarchies.isEmpty }
-    var showsCallHierarchyTab: Bool { callHierarchy.hasContent || !pinnedCallHierarchies.isEmpty }
+    var showsTypeHierarchyTab: Bool { typeHierarchy.hasContent || !typePins.isEmpty }
+    var showsCallHierarchyTab: Bool { callHierarchy.hasContent || !callPins.isEmpty }
     /// What the Type Hierarchy tab shows: the pinned hierarchy that is selected, else the live one.
-    var visibleTypeHierarchy: IDETypeHierarchyStore {
-        pinnedTypeHierarchies.first { $0.id == selectedTypeHierarchyPinID }?.store ?? typeHierarchy
-    }
-    var visibleCallHierarchy: IDECallHierarchyStore {
-        pinnedCallHierarchies.first { $0.id == selectedCallHierarchyPinID }?.store ?? callHierarchy
-    }
+    var visibleTypeHierarchy: IDETypeHierarchyStore { typePins.visible(live: typeHierarchy) }
+    var visibleCallHierarchy: IDECallHierarchyStore { callPins.visible(live: callHierarchy) }
     /// The Debug tool window: a Java session, or a Swift / JavaScript / TypeScript one (the DAP
     /// session), has been started and not been dismissed.
     var showsDebugTab: Bool {

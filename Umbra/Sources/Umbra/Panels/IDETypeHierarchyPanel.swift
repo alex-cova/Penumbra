@@ -193,11 +193,11 @@ struct IDETypeHierarchyPanel: View {
     var body: some View {
         let store = workspace.visibleTypeHierarchy
         VStack(spacing: 0) {
-            if !workspace.pinnedTypeHierarchies.isEmpty {
+            if !workspace.typePins.isEmpty {
                 IDEHierarchyPinStrip(
-                    pins: workspace.pinnedTypeHierarchies.map { ($0.id, $0.title) },
-                    selected: workspace.selectedTypeHierarchyPinID,
-                    onSelect: { workspace.selectedTypeHierarchyPinID = $0 },
+                    pins: workspace.typePins.pins.map { ($0.id, $0.title) },
+                    selected: workspace.typePins.selectedID,
+                    onSelect: { workspace.typePins.selectedID = $0 },
                     onUnpin: { workspace.unpinTypeHierarchy($0) }
                 )
                 Divider()

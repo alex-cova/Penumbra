@@ -159,7 +159,7 @@ final class IDECloseFolderTests: XCTestCase {
         XCTAssertFalse(workspace.showsRunTab)
         XCTAssertFalse(workspace.showsCoverageTab)
         XCTAssertFalse(workspace.showsTypeHierarchyTab)
-        XCTAssertTrue(workspace.pinnedTypeHierarchies.isEmpty)
+        XCTAssertTrue(workspace.typePins.isEmpty)
         XCTAssertFalse(workspace.isSwiftUIPreviewVisible)
         XCTAssertEqual(workspace.selectedBottomTab, .terminal)
     }

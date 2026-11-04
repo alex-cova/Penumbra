@@ -92,3 +92,41 @@ struct IDEHierarchyScopeMenu: View {
         .help(isEnabled ? "Which sources the search covers" : "The scope applies to subtypes and callers")
     }
 }
+
+/// The hierarchies kept with Pin Tab for one kind of hierarchy, and which one the tab shows (nil:
+/// the live one). The type and the call hierarchy each had their own list, selection and
+/// pin/unpin/clear logic on `IDEWorkspace`; this is that logic once, so the workspace holds two of
+/// these instead of four loose properties and a copy of the code per kind.
+@MainActor
+@Observable
+final class IDEHierarchyPinSet<Store: AnyObject> {
+    private(set) var pins: [IDEPinnedHierarchy<Store>] = []
+    /// The pinned hierarchy the tab shows, or nil for the live view.
+    var selectedID: UUID?
+
+    var isEmpty: Bool { pins.isEmpty }
+
+    /// What the tab shows: the selected pin's copy, else `live`.
+    func visible(live: Store) -> Store {
+        pins.first { $0.id == selectedID }?.store ?? live
+    }
+
+    /// Keeps `store` (a copy of what is on screen) under `title` and shows it. Does nothing while a
+    /// pin is already showing: only the live view can be pinned.
+    func pin(title: String, store: Store) {
+        guard selectedID == nil else { return }
+        let pin = IDEPinnedHierarchy(title: title, store: store)
+        pins.append(pin)
+        selectedID = pin.id
+    }
+
+    func unpin(_ id: UUID) {
+        pins.removeAll { $0.id == id }
+        if selectedID == id { selectedID = nil }
+    }
+
+    func removeAll() {
+        pins.removeAll()
+        selectedID = nil
+    }
+}

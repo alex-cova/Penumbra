@@ -40,7 +40,7 @@ extension IDEWorkspace {
             let url = textView.documentURL
             let languageIdentifier = workbench.activePane.selectedDocument?.languageIdentifier
             // A new request goes to the live view, whichever pinned one was showing.
-            selectedTypeHierarchyPinID = nil
+            typePins.selectedID = nil
             // Each store keeps its own provider lookup, so a pinned copy still expands after the live
             // view has moved on to another kind or language.
             typeHierarchy.loader = { [weak self] node, direction, scope, file in
@@ -77,7 +77,7 @@ extension IDEWorkspace {
         /// Closes what the Type Hierarchy tab shows: a pinned hierarchy goes, the live one is cleared.
         /// The tab itself goes when nothing is left.
         func closeTypeHierarchy() {
-            if let pin = selectedTypeHierarchyPinID {
+            if let pin = typePins.selectedID {
                 unpinTypeHierarchy(pin)
             } else {
                 typeHierarchy.clear()
@@ -88,15 +88,12 @@ extension IDEWorkspace {
         /// Pin Tab: keeps the hierarchy on screen as a copy, so the next one opens in the live view.
         func pinTypeHierarchy() {
             let store = visibleTypeHierarchy
-            guard let root = store.root, selectedTypeHierarchyPinID == nil else { return }
-            let pin = IDEPinnedHierarchy(title: "\(store.kind.title): \(root.name)", store: store.copy())
-            pinnedTypeHierarchies.append(pin)
-            selectedTypeHierarchyPinID = pin.id
+            guard let root = store.root else { return }
+            typePins.pin(title: "\(store.kind.title): \(root.name)", store: store.copy())
         }
 
         func unpinTypeHierarchy(_ id: UUID) {
-            pinnedTypeHierarchies.removeAll { $0.id == id }
-            if selectedTypeHierarchyPinID == id { selectedTypeHierarchyPinID = nil }
+            typePins.unpin(id)
             if !showsTypeHierarchyTab { deselectBottomTab(.typeHierarchy) }
         }
 
@@ -124,7 +121,7 @@ extension IDEWorkspace {
             let textView = host.textView
             let url = textView.documentURL
             let languageIdentifier = workbench.activePane.selectedDocument?.languageIdentifier
-            selectedCallHierarchyPinID = nil
+            callPins.selectedID = nil
             callHierarchy.loader = { [weak self] node, direction, scope, file in
                 guard let provider = self?.languages.callHierarchy(for: languageIdentifier) else { return [] }
                 switch direction {
@@ -153,7 +150,7 @@ extension IDEWorkspace {
         }
 
         func closeCallHierarchy() {
-            if let pin = selectedCallHierarchyPinID {
+            if let pin = callPins.selectedID {
                 unpinCallHierarchy(pin)
             } else {
                 callHierarchy.clear()
@@ -163,15 +160,12 @@ extension IDEWorkspace {
 
         func pinCallHierarchy() {
             let store = visibleCallHierarchy
-            guard let root = store.root, selectedCallHierarchyPinID == nil else { return }
-            let pin = IDEPinnedHierarchy(title: "Call Hierarchy: \(root.name)", store: store.copy())
-            pinnedCallHierarchies.append(pin)
-            selectedCallHierarchyPinID = pin.id
+            guard let root = store.root else { return }
+            callPins.pin(title: "Call Hierarchy: \(root.name)", store: store.copy())
         }
 
         func unpinCallHierarchy(_ id: UUID) {
-            pinnedCallHierarchies.removeAll { $0.id == id }
-            if selectedCallHierarchyPinID == id { selectedCallHierarchyPinID = nil }
+            callPins.unpin(id)
             if !showsCallHierarchyTab { deselectBottomTab(.callHierarchy) }
         }
 
@@ -180,10 +174,8 @@ extension IDEWorkspace {
         func closeAllHierarchies() {
             typeHierarchy.clear()
             callHierarchy.clear()
-            pinnedTypeHierarchies.removeAll()
-            pinnedCallHierarchies.removeAll()
-            selectedTypeHierarchyPinID = nil
-            selectedCallHierarchyPinID = nil
+            typePins.removeAll()
+            callPins.removeAll()
             deselectBottomTab(.typeHierarchy)
             deselectBottomTab(.callHierarchy)
         }

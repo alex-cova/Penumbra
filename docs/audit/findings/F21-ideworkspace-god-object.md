@@ -1,7 +1,7 @@
 # F21 — IDEWorkspace god object and forced root recompute
 
 - **Priority:** P2 · **Severity:** High · **Confidence:** Confirmed · **Provenance:** A
-- **Status:** Partly implemented: runtime premise measured and mostly refuted; one seam extracted (see Implementation notes) · **Owner:** Unassigned
+- **Status:** Implemented as far as the evidence goes (see Implementation notes); the structural refactor beyond two clean seams is deliberately not done · **Owner:** Unassigned
 
 ## Evidence
 
@@ -69,3 +69,11 @@ The hierarchy pins are the least coupled and the obvious next seam; `statusLangu
 **Also noted, not fixed:** opening a tab evaluates `IDEEditorLayoutNode` and `IDEStatusBarPanel` four times each (the `.id(layoutEpoch)` rebuild and the presentation refresh each trigger one); a handful per tab open, not per keystroke. The brief's other items (`TextInputView`, `TextView`, `EditorIntelligenceController` size; the keymap's four layers) are untouched.
 
 **To re-run:** `UMBRA_UI_TESTS=1 swift test --filter IDERootViewInvalidationTests` (needs a window server; prints `ROOTBODY` lines per scenario).
+
+### Second pass: the remaining work
+
+- **Hierarchy pins extracted.** The type and the call hierarchy each kept a list of pinned copies, a selected id and their own pin/unpin/clear logic on `IDEWorkspace` (four properties, two copies of the code). `IDEHierarchyPinSet<Store>` (`Panels/IDEHierarchyChrome.swift`) is that logic once; the workspace holds `typePins` and `callPins`, `visibleTypeHierarchy`/`visibleCallHierarchy` ask the set, and `pinTypeHierarchy` and its siblings shrink to a few lines. Rules kept: only the live view can be pinned; unpinning the shown pin returns to the live view; the tab goes when nothing is left. `IDEHierarchyPinSetTests` (7 tests, including that the two kinds stay apart in a workspace).
+- **Unhandled keys are no longer silent.** The claim holds: a key bound to an action that the core, the host and the built-in fallback all decline is swallowed on purpose (so it never becomes text) and left no trace. `TextView.onUnhandledKeymapAction` is called in that branch, with a debug log line. It deliberately does not beep: "no handler" and "a handler found nothing to do" (Next Problem with no problems) both return `false`, and telling them apart needs the handler contract to change. `UnhandledKeymapActionTests` (bound and unhandled: reported and not typed; handled: not reported; unbound: not reported); removing the call fails the first.
+- **The order the brief proposed was already done.** "Appearance/preferences, then problems, then run/agent" are all separate stores today (`preferences`, `problems`, `runs`, `agent`, plus `usages`, `testResults`, `coverage`, `inspections`, `project`, `gitStatus` and others).
+- **Why no further extraction.** I looked at the next-least-coupled cluster, run availability (`runFileCanRun`, `javaFileCanTest`, `runFileURL`, `activeJavaTestClass`). The properties are written by logic that reaches the workbench, the run providers, the gutter, HTTP and database support and the text view (`IDEWorkspace+RunAvailability.swift`); extracting the four properties alone gains nothing and extracting the logic needs wide dependency injection, with no measured benefit (the root and the chrome are already quiet while editing). The debugger, run-configuration, AI-mode and sidebar clusters are coupled the same way or wider (see the table above). That is a decision to take with a feature in hand, not as a refactor for its own sake.
+- **Still true, still not done:** `TextInputView` (5.6k lines), `TextView` (3.7k) and `EditorIntelligenceController` (3.5k) are as large as the brief says; the keymap still threads four layers. Opening a tab re-evaluates `IDEEditorLayoutNode` four times, two of them because `\IDEWorkspace.headerContext` changed (`_printChanges`), through a read I could not pin down from the view's own body; per tab open, not per keystroke. `.id(layoutEpoch)` still rebuilds the layout subtree on a tab change (the host cache keeps the editors).

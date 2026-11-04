@@ -1,4 +1,5 @@
 @preconcurrency import AppKit
+import os
 import Foundation
 
 extension TextInputView {
@@ -204,8 +205,12 @@ extension TextInputView {
                 return
             }
             // Neither core nor host handled it — try a built-in fallback, then swallow so the
-            // key doesn't fall through to text insertion.
-            _ = performFallbackAction(action, isEditable: isEditable)
+            // key doesn't fall through to text insertion. A handler that returns `false` for "nothing
+            // to do here" looks the same as no handler at all, so this reports it instead of beeping.
+            if !performFallbackAction(action, isEditable: isEditable) {
+                keymapLog.debug("key bound to \(String(describing: action), privacy: .public) was not handled and was swallowed")
+                onUnhandledKeymapAction?(action)
+            }
             return
         case .unhandled:
             break
@@ -812,3 +817,5 @@ extension TextInputView {
         return false
     }
 }
+
+private let keymapLog = Logger(subsystem: "Penumbra", category: "Keymap")

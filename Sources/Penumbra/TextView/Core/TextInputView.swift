@@ -1233,6 +1233,10 @@ final class TextInputView: EditorView {
     }
     /// Resolves key events against ``keymap``, including two-step chords (e.g. ⌘K ⌘D).
     var keymapDispatcher = KeymapDispatcher()
+    /// Called when a bound key's action was declined by the core, the delegate and the built-in
+    /// fallback. The key is swallowed all the same (so it never becomes text); this is how anyone
+    /// can tell it happened. See ``TextView/onUnhandledKeymapAction``.
+    var onUnhandledKeymapAction: ((EditorActionID) -> Void)?
     /// Detects a double tap of bare Shift for Search Everywhere.
     var doubleShiftDetector = DoubleModifierDetector()
     /// Whether a double-tap of bare Shift opens Quick Open. Hosts with a dedicated key for

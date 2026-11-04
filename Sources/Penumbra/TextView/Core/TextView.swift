@@ -69,6 +69,14 @@ public struct DocumentTextExport: Sendable {
     /// navigation, formatting, surround-with). Return `true` if handled. `EditorIntelligenceController`
     /// and the command-palette controller install handlers here.
     public var editorActionHandler: ((EditorActionID) -> Bool)?
+    /// Called when a key bound to an action reaches no handler: the core does not own it,
+    /// ``editorActionHandler`` and the key-down interceptors declined it, and the built-in
+    /// fallback had nothing to do. The key is still swallowed, so it does not turn into text; this
+    /// is the only trace of it. It cannot tell "no handler is installed" from "a handler found
+    /// nothing to do" (Next Problem with no problems), so hosts should not beep on it.
+    public var onUnhandledKeymapAction: ((EditorActionID) -> Void)? {
+        didSet { textInputView.onUnhandledKeymapAction = onUnhandledKeymapAction }
+    }
     private var keyDownInterceptors: [(NSEvent) -> Bool] = []
 
     /// Registers an additional key-down interceptor. Interceptors run after ``keyDownHandler``,
