@@ -34,7 +34,7 @@ final class MetalContext {
             return nil
         }
         if _glyphAtlas == nil {
-            _glyphAtlas = GlyphAtlas(context: self)
+            _glyphAtlas = GlyphAtlas(context: self, hasUnifiedMemory: MetalWaitStats.simulatesDiscreteGPUAtlas ? false : nil)
         }
         return _glyphAtlas
     }

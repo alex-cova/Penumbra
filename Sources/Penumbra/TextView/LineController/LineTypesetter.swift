@@ -36,6 +36,9 @@ final class LineTypesetter {
     var topInset: CGFloat = 0
     private(set) var lineFragments: [LineFragment] = []
     private(set) var maximumLineWidth: CGFloat = 0
+    /// `CTTypesetterCreateLine` calls made by this typesetter; tests and benchmarks compare it with
+    /// the number of fragments to see how many lines were built and thrown away.
+    private(set) var createdLineCount = 0
     var bestGuessNumberOfLineFragments: Int {
         if startOffset >= stringLength {
             return lineFragments.count
@@ -173,23 +176,74 @@ private extension LineTypesetter {
     }
 
     private func makeNextLineFragment(using typesetter: CTTypesetter) -> LineFragment? {
-        // suggestNextLineBreak(using:) uses CTTypesetterSuggestLineBreak but it may return lines that are longer than our constraining width.
-        // In that case we keep removeing characters from the line until we're below the constraining width.
-        var length = suggestNextLineBreak(using: typesetter)
-        var lineFragment: LineFragment?
-        while length > 0 && (lineFragment == nil || lineFragment!.scaledSize.width > constrainingWidth) {
-            let visibleRange = CFRangeMake(startOffset, length)
-            lineFragment = makeLineFragment(for: visibleRange, in: typesetter, lineFragmentIndex: lineFragmentIndex, yPosition: nextYPosition)
-            length -= 1
-        }
-        guard let lineFragment else {
+        // suggestNextLineBreak(using:) uses CTTypesetterSuggestLineBreak but it may return lines that are longer than our constraining width
+        // (it lets trailing whitespace hang past the edge). In that case we take the longest prefix that fits.
+        let suggestedLength = suggestNextLineBreak(using: typesetter)
+        guard suggestedLength > 0, let (lineFragment, length) = longestFittingLineFragment(upTo: suggestedLength, using: typesetter) else {
             return nil
         }
-        let whitespaceLength = lengthOfWhitespace(after: startOffset + length)
+        // `lengthOfWhitespace(after:)` takes the index of the fragment's last character.
+        let whitespaceLength = lengthOfWhitespace(after: startOffset + length - 1)
         guard whitespaceLength > 0 else {
             return lineFragment
         }
         return lineFragment.withHiddenLength(whitespaceLength)
+    }
+
+    /// The fragment for the longest prefix of at most `maximumLength` characters that is no wider
+    /// than the constraining width, or the one-character fragment when not even that fits.
+    ///
+    /// The prefix is usually the whole suggestion: one `CTLine`. When it overhangs (a long run of
+    /// spaces after the break, say) the old search dropped one character at a time and rebuilt the
+    /// line each time, 1,900 lines for a 2,000-space run. `CTTypesetterSuggestClusterBreak` says
+    /// how many characters fit, so the search starts there, checks its neighbours, and falls back to
+    /// bisection when the guess is off, which bounds it at log2(length) lines either way.
+    private func longestFittingLineFragment(
+        upTo maximumLength: Int,
+        using typesetter: CTTypesetter
+    ) -> (LineFragment, Int)? {
+        func fragment(_ length: Int) -> LineFragment {
+            makeLineFragment(
+                for: CFRangeMake(startOffset, length),
+                in: typesetter,
+                lineFragmentIndex: lineFragmentIndex,
+                yPosition: nextYPosition
+            )
+        }
+        let whole = fragment(maximumLength)
+        if whole.scaledSize.width <= constrainingWidth || maximumLength == 1 {
+            return (whole, maximumLength)
+        }
+        var best: (LineFragment, Int)?
+        var low = 1
+        var high = maximumLength - 1
+        let guess = CTTypesetterSuggestClusterBreak(typesetter, startOffset, Double(constrainingWidth))
+        var probe = min(max(guess, low), high)
+        var probesNearGuess = 2
+        while low <= high {
+            let candidate = fragment(probe)
+            if candidate.scaledSize.width <= constrainingWidth {
+                best = (candidate, probe)
+                low = probe + 1
+            } else {
+                high = probe - 1
+            }
+            if probesNearGuess > 0 {
+                // First the guess, then the neighbour on the side the guess says the answer is on.
+                probesNearGuess -= 1
+                probe = best?.1 == probe ? probe + 1 : probe - 1
+                if probe < low || probe > high {
+                    probesNearGuess = 0
+                    probe = (low + high) / 2
+                }
+            } else {
+                probe = (low + high) / 2
+            }
+        }
+        if let best {
+            return best
+        }
+        return (fragment(1), 1)
     }
 
     private func suggestNextLineBreak(using typesetter: CTTypesetter) -> Int {
@@ -224,6 +278,7 @@ private extension LineTypesetter {
         lineFragmentIndex: Int,
         yPosition: CGFloat
     ) -> LineFragment {
+        createdLineCount += 1
         let line = CTTypesetterCreateLine(typesetter, visibleRange)
         var ascent: CGFloat = 0
         var descent: CGFloat = 0

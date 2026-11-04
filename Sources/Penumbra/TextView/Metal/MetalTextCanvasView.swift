@@ -434,7 +434,7 @@ final class MetalTextCanvasView: EditorView {
         )
         blit.endEncoding()
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
+        MetalWaitStats.waitUntilCompleted(commandBuffer, site: .snapshotReadback)
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil,
             pixelsWide: width,
@@ -542,7 +542,7 @@ private extension MetalTextCanvasView {
             context.markUnavailable(reason: "Failed to create Metal render command encoder")
             commandBuffer.present(drawable)
             commandBuffer.commit()
-            commandBuffer.waitUntilScheduled()
+            MetalWaitStats.waitUntilScheduled(commandBuffer, site: .presentScheduled)
             onRenderingFailure?()
             return false
         }
@@ -574,7 +574,7 @@ private extension MetalTextCanvasView {
         commandBuffer.present(drawable)
         commandBuffer.commit()
         if let captureBuffer {
-            commandBuffer.waitUntilCompleted()
+            MetalWaitStats.waitUntilCompleted(commandBuffer, site: .presentReadback)
             let pixels = captureBuffer.contents().bindMemory(to: UInt8.self, capacity: captureBuffer.length)
             var painted = 0
             for index in stride(from: 3, to: captureBuffer.length, by: 4) where pixels[index] != 0 {
@@ -588,13 +588,13 @@ private extension MetalTextCanvasView {
                 bytesPerRow: captureBytesPerRow
             )
         } else if waitForReadback {
-            commandBuffer.waitUntilCompleted()
+            MetalWaitStats.waitUntilCompleted(commandBuffer, site: .presentReadback)
         } else if !usesDeferredPresent {
             PenumbraSignposts.event("MetalCanvas.waitUntilScheduled")
             if EditorPerformanceTrace.shared.isEnabled {
                 EditorPerformanceTrace.shared.recordCount(.metalWaits, count: 1)
             }
-            commandBuffer.waitUntilScheduled()
+            MetalWaitStats.waitUntilScheduled(commandBuffer, site: .presentScheduled)
         }
         return true
     }

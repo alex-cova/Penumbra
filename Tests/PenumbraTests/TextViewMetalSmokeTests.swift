@@ -3,7 +3,7 @@ import PenumbraLanguages
 import SwiftUI
 import XCTest
 import simd
-@testable import Penumbra
+@_spi(Benchmarks) @testable import Penumbra
 
 /// Runs the same kind of exercises as `TextViewSmokeTests` with the Metal paint backend forced on.
 /// Skipped when no Metal device is available (CI VMs) or the `UserDefaults` kill switch is set.
@@ -61,6 +61,35 @@ final class TextViewMetalSmokeTests: XCTestCase {
         let originsAfter = textView.metalDebugGlyphOrigins(atLocation: lowerLocation + 1)
         XCTAssertEqual(originsAfter.count, originsBefore.count)
         XCTAssertEqual(textView.text.hasPrefix("let Xvalue0"), true)
+    }
+
+    /// F10: with the shipping settings (deferred present on, unified memory or a managed atlas) the
+    /// main thread never blocks on the GPU while the user scrolls and types. A wait that reappears
+    /// here is a frame that stalls on real hardware.
+    func testDefaultPathNeverBlocksOnTheGPUWhileScrollingAndTyping() throws {
+        try skipUnlessMetalActivatable()
+        XCTAssertNil(UserDefaults.standard.object(forKey: MetalDeferredPresent.defaultsKey), "run with the default settings")
+        let source = (0 ..< 4000).map { "let value\($0) = \"héllo→\($0)\" // 日本語 line \($0)" }.joined(separator: "\n")
+        let textView = makeFocusedTextView(text: source)
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.isMetalRenderingActive)
+        MetalWaitStats.reset()
+        let scrollable = max(textView.contentSize.height - textView.frame.height, 1)
+        for step in 0 ..< 60 {
+            textView.contentOffset = CGPoint(x: 0, y: scrollable * Double(step) / 59)
+            textView.layoutIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.004))
+        }
+        textView.selectedRange = NSRange(location: 40, length: 0)
+        for _ in 0 ..< 20 {
+            textView.insertText("x")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.004))
+        }
+        XCTAssertTrue(
+            MetalWaitStats.snapshot().isEmpty,
+            "the default path blocked on the GPU: \(MetalWaitStats.snapshot())"
+        )
     }
 
     /// Plain text never counts as paint-stable (its highlighter cannot highlight), so the layout

@@ -81,7 +81,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                         }
                     }
                     PenumbraSignposts.event("MetalRenderer.slotWait")
-                    slotCondition.wait()
+                    MetalWaitStats.measure(.glyphSlot) { slotCondition.wait() }
                 }
             }
         }
@@ -209,7 +209,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                         }
                     }
                     PenumbraSignposts.event("MetalRenderer.slotWait")
-                    slotCondition.wait()
+                    MetalWaitStats.measure(.decorationSlot) { slotCondition.wait() }
                 }
             }
         }

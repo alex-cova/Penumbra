@@ -1,6 +1,6 @@
 @preconcurrency import AppKit
 import Foundation
-import Penumbra
+@_spi(Benchmarks) import Penumbra
 
 /// Metal-specific PerfHarness subcommands. Both host a real `NSWindow` (the Metal present path
 /// no-ops without one) and are meant for manual / nightly runs — they print numbers and never
@@ -60,7 +60,8 @@ enum MetalCommands {
     }
 
     @MainActor
-    static func snapshotMetal(pathOrSynthetic: String, outputDir: String?) {
+    static func snapshotMetal(pathOrSynthetic: String, outputDir: String?, discreteAtlas: Bool = false) {
+        MetalWaitStats.simulatesDiscreteGPUAtlas = discreteAtlas
         let text = loadText(pathOrSynthetic)
         // Must be set before `TextView` init so the canvas layer is created with
         // `framebufferOnly = false` (required for `cacheDisplay` of the presented drawable).
@@ -146,7 +147,7 @@ enum MetalCommands {
     }
 }
 
-private extension MetalCommands {
+extension MetalCommands {
     @MainActor
     static func makeWindowedTextView(text: String, metal: Bool) -> (NSWindow, TextView) {
         let frame = CGRect(x: 0, y: 0, width: 1200, height: 800)

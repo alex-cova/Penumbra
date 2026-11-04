@@ -1,3 +1,4 @@
+import os
 import XCTest
 @testable import Penumbra
 
@@ -491,6 +492,79 @@ final class PieceTreeTests: XCTestCase {
         XCTAssertLessThan(scanned, 3 * 2 * (64 * 1024 + 512) + 64 * 1024, "scanned \(scanned) bytes")
     }
 
+    /// The delimiter probe in `LineManager.setLength` reads one unit per edit through
+    /// `character(at:)`/`unichar(at:)`: it agrees with the string on every offset, in the original
+    /// mapping and after edits move text into the add buffer.
+    func testSingleUnitReadsAgreeWithTheStringAfterEdits() throws {
+        let original = "let café = 1\r\nlet 😀 = 2\nplain ascii abcdefgh abcdefgh\n→ end"
+        let view = try awaitLoad(try writeTemp(original))
+        let reference = StringView(string: original)
+        func check(_ label: String) {
+            let expected = Array((reference.string as String).utf16)
+            XCTAssertEqual(view.length, expected.count, label)
+            for offset in 0 ..< expected.count {
+                XCTAssertEqual(view.unichar(at: offset), expected[offset], "\(label) offset \(offset)")
+            }
+            XCTAssertNil(view.unichar(at: expected.count), label)
+        }
+        check("loaded")
+        for (range, text) in [
+            (NSRange(location: 4, length: 0), "é😀"),
+            (NSRange(location: 20, length: 3), "ñ"),
+            (NSRange(location: 0, length: 0), "// \r\n")
+        ] {
+            view.replaceText(in: range, with: text)
+            reference.replaceText(in: range, with: text)
+            check("after inserting \(text.debugDescription)")
+        }
+    }
+
+    /// Acceptance for F08: a one-unit read allocates nothing (it used to build a Data, a String
+    /// and an Array: four to five allocations). Counts `malloc` calls through the system's
+    /// `malloc_logger` hook, in the original mapping and in the add buffer.
+    func testSingleUnitReadDoesNotAllocate() throws {
+        let view = try awaitLoad(try writeTemp(String(repeating: "let value = 42 // héllo\n", count: 400)))
+        view.replaceText(in: NSRange(location: 10, length: 0), with: "x")
+        view.replaceText(in: NSRange(location: 11, length: 0), with: "y")
+        let offsets = [0, 9, 10, 11, 12, 200, 5000, 9000]
+        for offset in offsets { _ = view.unichar(at: offset) } // warm the caches
+        // A `while` loop: a `for ... in` over a range allocates in a debug build.
+        // The hook sees every thread, so take the quietest of three runs. Each offset is read once
+        // before counting: finding a piece in the tree after the caret moved is not this read.
+        var count = Int.max
+        for _ in 0 ..< 3 {
+            var total = 0
+            for offset in offsets {
+                _ = view.unichar(at: offset)
+                total += try mallocCount {
+                    var repeats = 0
+                    while repeats < 50 {
+                        _ = view.unichar(at: offset)
+                        repeats += 1
+                    }
+                }
+            }
+            count = min(count, total)
+        }
+        XCTAssertEqual(count, 0, "a single-unit read allocated \(count) times in \(offsets.count * 50) reads")
+    }
+
+    private func mallocCount(_ body: () -> Void) throws -> Int {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "malloc_logger") else {
+            throw XCTSkip("malloc_logger is not available")
+        }
+        typealias Logger = @convention(c) (UInt32, UInt, UInt, UInt, UInt, UInt32) -> Void
+        let slot = symbol.assumingMemoryBound(to: Logger?.self)
+        let previous = slot.pointee
+        mallocEvents.withLock { $0 = 0 }
+        slot.pointee = { type, _, _, _, _, _ in
+            if type & 2 != 0 { mallocEvents.withLock { $0 += 1 } }
+        }
+        body()
+        slot.pointee = previous
+        return mallocEvents.withLock { $0 }
+    }
+
     private func writeTemp(_ text: String) throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try text.write(to: url, atomically: true, encoding: .utf8)
@@ -560,3 +634,5 @@ private final class BlockingBox: @unchecked Sendable {
     var view: StringView?
     var error: Error?
 }
+
+private let mallocEvents = OSAllocatedUnfairLock(initialState: 0)

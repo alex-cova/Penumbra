@@ -79,6 +79,60 @@ enum UTF8DocumentScanner {
         return (bytes.count, 0)
     }
 
+    /// The UTF-16 unit at `utf16Offset`, decoded in place: no `Data`, `String` or `Array`. A
+    /// surrogate half comes back as the unpaired unit, as ``appendUTF16Units`` emits it. Nil for an
+    /// offset past the end or bytes that are not valid UTF-8 (the range API appends nothing there).
+    static func utf16Unit(from bytes: UnsafeRawBufferPointer, utf16Offset: Int) -> unichar? {
+        guard utf16Offset >= 0 else {
+            return nil
+        }
+        let position = utf8Position(forUTF16Offset: utf16Offset, in: bytes)
+        let index = position.utf8Offset
+        guard index < bytes.count, let scalar = validScalar(at: index, in: bytes) else {
+            return nil
+        }
+        let value = scalar.value
+        if value <= 0xFFFF {
+            return unichar(value)
+        }
+        let offset = value - 0x10000
+        return position.skip == 0
+            ? unichar(0xD800 + (offset >> 10))
+            : unichar(0xDC00 + (offset & 0x3FF))
+    }
+
+    /// Strictly decodes the scalar at `index`: nil for a truncated, overlong, surrogate or
+    /// out-of-range sequence, which is what `String(bytes:encoding:.utf8)` rejects.
+    private static func validScalar(at index: Int, in bytes: UnsafeRawBufferPointer) -> Unicode.Scalar? {
+        let lead = UInt32(bytes[index])
+        if lead < 0x80 {
+            return Unicode.Scalar(lead)
+        }
+        let continuationCount: Int
+        var value: UInt32
+        let minimum: UInt32
+        switch lead {
+        case 0xC0 ..< 0xE0: continuationCount = 1; value = lead & 0x1F; minimum = 0x80
+        case 0xE0 ..< 0xF0: continuationCount = 2; value = lead & 0x0F; minimum = 0x800
+        case 0xF0 ..< 0xF8: continuationCount = 3; value = lead & 0x07; minimum = 0x10000
+        default: return nil
+        }
+        guard index + continuationCount < bytes.count else {
+            return nil
+        }
+        for offset in 1 ... continuationCount {
+            let byte = UInt32(bytes[index + offset])
+            guard byte & 0xC0 == 0x80 else {
+                return nil
+            }
+            value = (value << 6) | (byte & 0x3F)
+        }
+        guard value >= minimum else {
+            return nil
+        }
+        return Unicode.Scalar(value)
+    }
+
     /// Appends `length` UTF-16 units starting at `utf16Offset`. A range that starts or ends
     /// inside a surrogate pair emits the unpaired unit rather than dropping or duplicating it.
     static func appendUTF16Units(
@@ -88,6 +142,14 @@ enum UTF8DocumentScanner {
         into result: inout [unichar]
     ) {
         guard length > 0 else {
+            return
+        }
+        if length == 1 {
+            // Delimiter probes read one unit per edit; the general path below builds a Data, a
+            // String and an Array for it.
+            if let unit = utf16Unit(from: bytes, utf16Offset: utf16Offset) {
+                result.append(unit)
+            }
             return
         }
         let start = utf8Position(forUTF16Offset: utf16Offset, in: bytes)

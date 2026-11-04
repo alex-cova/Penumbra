@@ -1,7 +1,7 @@
 import CoreText
 import Metal
 import XCTest
-@testable import Penumbra
+@_spi(Benchmarks) @testable import Penumbra
 
 final class GlyphAtlasTests: XCTestCase {
     func testDefaultBudgetAndCaps() {
@@ -261,15 +261,23 @@ final class GlyphAtlasTests: XCTestCase {
         let sharedPixels = try XCTUnwrap(sharedAtlas.copyPixels(from: sharedSlot), "Shared readback failed")
         XCTAssertTrue(sharedPixels.contains { $0 > 0 })
 
-        let privateAtlas = GlyphAtlas(device: device, commandQueue: queue, hasUnifiedMemory: false)
-        XCTAssertEqual(privateAtlas.storageMode, .private)
-        guard case .hit(let privateSlot) = privateAtlas.lookup(font: font, glyph: glyph, scale: 2, isColor: false) else {
-            XCTFail("Private-storage lookup failed")
+        // Without unified memory the atlas is managed, not private: an upload is `texture.replace`,
+        // not a staging buffer, a blit and a main-thread `waitUntilCompleted` per glyph (F10).
+        let managedAtlas = GlyphAtlas(device: device, commandQueue: queue, hasUnifiedMemory: false)
+        XCTAssertEqual(managedAtlas.storageMode, .managed)
+        MetalWaitStats.reset()
+        guard case .hit(let managedSlot) = managedAtlas.lookup(font: font, glyph: glyph, scale: 2, isColor: false) else {
+            XCTFail("Managed-storage lookup failed")
             return
         }
-        XCTAssertEqual(privateSlot.texture?.storageMode, .private)
-        let privatePixels = try XCTUnwrap(privateAtlas.copyPixels(from: privateSlot), "Private blit readback failed")
-        XCTAssertTrue(privatePixels.contains { $0 > 0 })
+        XCTAssertTrue(
+            MetalWaitStats.snapshot().isEmpty,
+            "uploading a glyph into the atlas must not wait on the GPU: \(MetalWaitStats.snapshot())"
+        )
+        XCTAssertEqual(managedSlot.texture?.storageMode, .managed)
+        let managedPixels = try XCTUnwrap(managedAtlas.copyPixels(from: managedSlot), "Managed blit readback failed")
+        XCTAssertTrue(managedPixels.contains { $0 > 0 })
+        XCTAssertEqual(managedPixels, sharedPixels, "the same glyph reads back the same through either storage mode")
     }
 
     @MainActor

@@ -77,7 +77,10 @@ final class GlyphAtlas {
         self.device = device
         self.commandQueue = commandQueue
         self.configuration = configuration
-        self.storageMode = configuration.hasUnifiedMemory ? .shared : .private
+        // Managed, not private, without unified memory: `MTLTexture.replace` works on it, so a glyph
+        // upload is a memcpy the driver syncs to the GPU copy, not a staging buffer, a blit and a
+        // `waitUntilCompleted` on the main thread per glyph (F10).
+        self.storageMode = configuration.hasUnifiedMemory ? .shared : .managed
     }
 
     convenience init?(context: MetalContext = .shared, hasUnifiedMemory: Bool? = nil) {
@@ -455,7 +458,7 @@ final class GlyphAtlas {
         )
         blit.endEncoding()
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
+        MetalWaitStats.waitUntilCompleted(commandBuffer, site: .atlasReadback)
         let data = Data(bytes: buffer.contents(), count: length)
         return tightlyPacked(data, width: slot.width, height: slot.height, bytesPerRow: bytesPerRow, bytesPerPixel: bytesPerPixel)
     }
@@ -636,43 +639,18 @@ private extension GlyphAtlas {
         let alignment = max(bytesPerPixel, device.minimumLinearTextureAlignment(for: texture.pixelFormat))
         let bytesPerRow = alignedStride(width * bytesPerPixel, alignment: alignment)
         let length = bytesPerRow * height
-        if storageMode == .shared {
-            let zeros = Data(count: length)
-            zeros.withUnsafeBytes { raw in
-                guard let base = raw.baseAddress else {
-                    return
-                }
-                texture.replace(
-                    region: MTLRegionMake2D(0, 0, width, height),
-                    mipmapLevel: 0,
-                    withBytes: base,
-                    bytesPerRow: bytesPerRow
-                )
+        let zeros = Data(count: length)
+        zeros.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else {
+                return
             }
-            return true
+            texture.replace(
+                region: MTLRegionMake2D(0, 0, width, height),
+                mipmapLevel: 0,
+                withBytes: base,
+                bytesPerRow: bytesPerRow
+            )
         }
-        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
-            return false
-        }
-        memset(buffer.contents(), 0, length)
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let blit = commandBuffer.makeBlitCommandEncoder() else {
-            return false
-        }
-        blit.copy(
-            from: buffer,
-            sourceOffset: 0,
-            sourceBytesPerRow: bytesPerRow,
-            sourceBytesPerImage: length,
-            sourceSize: MTLSize(width: width, height: height, depth: 1),
-            to: texture,
-            destinationSlice: 0,
-            destinationLevel: 0,
-            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-        )
-        blit.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
         return true
     }
 
@@ -682,46 +660,17 @@ private extension GlyphAtlas {
         let alignment = max(bytesPerPixel, device.minimumLinearTextureAlignment(for: format))
         let alignedRow = alignedStride(bitmap.width * bytesPerPixel, alignment: alignment)
         let staging = stagingData(from: bitmap, alignedBytesPerRow: alignedRow, bytesPerPixel: bytesPerPixel)
-        if storageMode == .shared {
-            staging.withUnsafeBytes { raw in
-                guard let base = raw.baseAddress else {
-                    return
-                }
-                page.texture.replace(
-                    region: MTLRegionMake2D(x, y, bitmap.width, bitmap.height),
-                    mipmapLevel: 0,
-                    withBytes: base,
-                    bytesPerRow: alignedRow
-                )
-            }
-            return true
-        }
-        guard let buffer = device.makeBuffer(length: staging.count, options: .storageModeShared) else {
-            return false
-        }
         staging.withUnsafeBytes { raw in
-            if let base = raw.baseAddress {
-                memcpy(buffer.contents(), base, staging.count)
+            guard let base = raw.baseAddress else {
+                return
             }
+            page.texture.replace(
+                region: MTLRegionMake2D(x, y, bitmap.width, bitmap.height),
+                mipmapLevel: 0,
+                withBytes: base,
+                bytesPerRow: alignedRow
+            )
         }
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let blit = commandBuffer.makeBlitCommandEncoder() else {
-            return false
-        }
-        blit.copy(
-            from: buffer,
-            sourceOffset: 0,
-            sourceBytesPerRow: alignedRow,
-            sourceBytesPerImage: alignedRow * bitmap.height,
-            sourceSize: MTLSize(width: bitmap.width, height: bitmap.height, depth: 1),
-            to: page.texture,
-            destinationSlice: 0,
-            destinationLevel: 0,
-            destinationOrigin: MTLOrigin(x: x, y: y, z: 0)
-        )
-        blit.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
         return true
     }
 
