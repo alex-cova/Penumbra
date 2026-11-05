@@ -1,17 +1,27 @@
 import Foundation
 
-/// The parses Go to Definition asked for, kept by what they parsed: the same text is the same
-/// tree whoever asks and whenever, so hovering over a word and then clicking it, hovering over the
-/// next one, and clicking into a class that was just opened all find their parse already done.
+/// The parses of unchanged text, kept by what they parsed: the same text is the same tree whoever
+/// asks and whenever, so every feature that wants a tree of the buffer as it is now shares one
+/// parse of it.
 ///
-/// ⌘-hover runs a full definition request for every identifier the pointer stops on, and a click
-/// right after is another: without this each paid to parse the whole current file and rebuild its
-/// stubs (about 3 ms per 1,000 lines), and each cross-file jump parsed its destination again.
+/// Two kinds of caller. Go to Definition: ⌘-hover runs a full definition request for every
+/// identifier the pointer stops on, and a click right after is another, so without this each
+/// paid to parse the whole current file and rebuild its stubs (about 3 ms per 1,000 lines), and
+/// each cross-file jump parsed its destination again. And everything that runs once typing
+/// pauses (semantic colours, gutter markers, breadcrumbs, auto-import, the role index's overlay,
+/// hover, the bulb): each used to parse the buffer on its own, ten parses of one text per pause.
+///
+/// Concurrent requests for text that is being parsed wait for that parse instead of starting
+/// another (the waiting thread is a thread that would have spent the same time parsing).
+///
+/// Trees handed out are shared and read-only: edit a ``JavaSyntaxTree/copy()``, never the tree
+/// itself (`JavaCompletionProvider` does). Do not route bulk work through it (indexing thousands
+/// of files would push out the buffer's tree): it is for the buffers the user is looking at.
 ///
 /// Keyed by length and a 64-bit hash of the UTF-8 bytes, not by path or document version: a
 /// navigation snapshot can lag the buffer, and a path says nothing about a file that changed.
-final class JavaNavigationParseMemo: @unchecked Sendable {
-    static let shared = JavaNavigationParseMemo()
+final class JavaParseMemo: @unchecked Sendable {
+    static let shared = JavaParseMemo()
 
     private struct Key: Hashable {
         let length: Int
@@ -35,6 +45,8 @@ final class JavaNavigationParseMemo: @unchecked Sendable {
     /// Least recently used first.
     private var entries: [Entry] = []
     private var totalBytes = 0
+    private var pendingParses: [Key: PendingParse] = [:]
+    private var parses = 0
     private let maximumEntries: Int
     private let maximumBytes: Int
     /// A source past this size is parsed but not kept: one very large file would push out everything else.
@@ -49,29 +61,68 @@ final class JavaNavigationParseMemo: @unchecked Sendable {
 
     /// The tree for `source`, parsed now only when no request has parsed this text recently.
     func tree(for source: String) -> JavaSyntaxTree? {
-        let key = Self.key(of: source)
-        if let cached = lock.withLock({ lookup(key) }) { return cached.tree }
-        guard let tree = JavaSyntaxParser().parse(source) else { return nil }
-        lock.withLock { insert(Entry(key: key, tree: tree, bytes: source.utf8.count)) }
-        return tree
+        entry(for: source, key: Self.key(of: source))?.tree
     }
 
     /// The tree for `source` and the stubs of its declarations as the file at `url`.
     func parsed(source: String, url: URL?) -> (tree: JavaSyntaxTree, stubs: JavaSourceFileStubs)? {
-        let key = Self.key(of: source)
+        guard let entry = entry(for: source, key: Self.key(of: source)) else { return nil }
         let path = url?.standardizedFileURL.path ?? ""
-        if let cached = lock.withLock({ lookup(key) }) {
-            if let stubs = lock.withLock({ cached.stubsByPath[path] }) { return (cached.tree, stubs) }
-            let stubs = Self.stubs(of: cached.tree, url: url)
-            lock.withLock { cached.stubsByPath[path] = stubs }
-            return (cached.tree, stubs)
+        if let stubs = lock.withLock({ entry.stubsByPath[path] }) { return (entry.tree, stubs) }
+        let stubs = Self.stubs(of: entry.tree, url: url)
+        lock.withLock { entry.stubsByPath[path] = stubs }
+        return (entry.tree, stubs)
+    }
+
+    /// Parses made since the memo was created, for tests that hold a feature to one parse per text.
+    var parseCount: Int { lock.withLock { parses } }
+
+    /// The entry for `source`: kept from an earlier request, or the parse another thread is making
+    /// right now (waited for), or a parse made here.
+    private func entry(for source: String, key: Key) -> Entry? {
+        lock.lock()
+        if let cached = lookup(key) {
+            lock.unlock()
+            return cached
         }
-        guard let tree = JavaSyntaxParser().parse(source) else { return nil }
-        let stubs = Self.stubs(of: tree, url: url)
-        let entry = Entry(key: key, tree: tree, bytes: source.utf8.count)
-        entry.stubsByPath[path] = stubs
-        lock.withLock { insert(entry) }
-        return (tree, stubs)
+        if let pending = pendingParses[key] {
+            lock.unlock()
+            return pending.wait()
+        }
+        let pending = PendingParse()
+        pendingParses[key] = pending
+        parses += 1
+        lock.unlock()
+
+        let entry = JavaSyntaxParser().parse(source).map { Entry(key: key, tree: $0, bytes: source.utf8.count) }
+        lock.lock()
+        if let entry { insert(entry) }
+        pendingParses[key] = nil
+        lock.unlock()
+        pending.finish(entry)
+        return entry
+    }
+
+    /// A parse in progress, which other threads asking for the same text wait on.
+    private final class PendingParse {
+        private let condition = NSCondition()
+        private var result: Entry?
+        private var isFinished = false
+
+        func wait() -> Entry? {
+            condition.lock()
+            defer { condition.unlock() }
+            while !isFinished { condition.wait() }
+            return result
+        }
+
+        func finish(_ entry: Entry?) {
+            condition.lock()
+            result = entry
+            isFinished = true
+            condition.broadcast()
+            condition.unlock()
+        }
     }
 
     func removeAll() {

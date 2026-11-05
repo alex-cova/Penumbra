@@ -20,7 +20,7 @@ enum JavaGoToDefinition {
         openBuffer: (@Sendable (URL) async -> String?)?,
         decompile: JavaDecompileGate
     ) async -> [JavaDefinitionHit] {
-        guard let parsed = JavaNavigationParseMemo.shared.parsed(source: source, url: fileURL) else { return [] }
+        guard let parsed = JavaParseMemo.shared.parsed(source: source, url: fileURL) else { return [] }
         let tree = parsed.tree
         let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: utf16Offset, in: source)
         func makeSession(at offset: Int, decompile: JavaDecompileGate) -> JavaNavigationSession {
@@ -599,7 +599,7 @@ struct JavaNavigationSession {
             if JavaNavigationText.sameFile(url, fileURL) {
                 return (fileURL, source, tree, nil)
             }
-            if let text = await load(url), let parsed = JavaNavigationParseMemo.shared.tree(for: text) {
+            if let text = await load(url), let parsed = JavaParseMemo.shared.tree(for: text) {
                 return (url, text, parsed, nil)
             }
             if currentClasses.contains(where: { $0.qualifiedName == stub.qualifiedName }) {
@@ -609,14 +609,14 @@ struct JavaNavigationSession {
         case .jdkModule(let module):
             if let extracted = JavaAttachedSources.extract(
                 jdkHome: jdkHome, module: module, binaryJar: nil, topLevel: top, cacheRoot: cacheRoot
-            ), let parsed = JavaNavigationParseMemo.shared.tree(for: extracted.text) {
+            ), let parsed = JavaParseMemo.shared.tree(for: extracted.text) {
                 return (extracted.url, extracted.text, parsed, nil)
             }
             return await decompiledSourceFile(stub)
         case .jar(let jar):
             if let extracted = JavaAttachedSources.extract(
                 jdkHome: nil, module: nil, binaryJar: jar, topLevel: top, cacheRoot: cacheRoot
-            ), let parsed = JavaNavigationParseMemo.shared.tree(for: extracted.text) {
+            ), let parsed = JavaParseMemo.shared.tree(for: extracted.text) {
                 return (extracted.url, extracted.text, parsed, nil)
             }
             return await decompiledSourceFile(stub)

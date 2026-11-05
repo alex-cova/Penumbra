@@ -32,7 +32,7 @@ public actor JavaBreadcrumbProvider: BreadcrumbProviding {
 
     private func outline(of text: String) -> [Entry]? {
         if cachedText == text { return cachedEntries }
-        guard let tree = JavaSyntaxParser().parse(text) else { return nil }
+        guard let tree = JavaParseMemo.shared.tree(for: text) else { return nil }
         var entries: [Entry] = []
         collect(tree.rootNode, into: &entries)
         cachedText = text

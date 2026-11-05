@@ -34,7 +34,7 @@ enum JavaHover {
         cacheRoot: URL,
         openBuffer: (@Sendable (URL) async -> String?)?
     ) async -> JavaHoverContent? {
-        guard let tree = JavaSyntaxParser().parse(source) else { return nil }
+        guard let tree = JavaParseMemo.shared.tree(for: source) else { return nil }
         let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: utf16Offset, in: source)
         guard let reference = JavaReferenceClassifier.classify(in: tree, atByteOffset: byteOffset) else { return nil }
         let session = JavaNavigationSession(

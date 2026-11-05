@@ -153,7 +153,7 @@ public actor JavaRoleIndex: JavaUsageCandidateSource {
     /// Uses `text` (an open, possibly unsaved buffer) instead of the file's indexed roles. The
     /// buffer is parsed here; the caller debounces, as with the name index.
     public func setOverlay(_ url: URL, text: String) {
-        if let tree = JavaSyntaxParser().parse(text) {
+        if let tree = JavaParseMemo.shared.tree(for: text) {
             overlay[url.standardizedFileURL.path] = JavaRoleExtractor.roles(in: tree).mapValues { $0.rawValue }
         } else {
             // Unparseable text keeps every name a candidate, as the name index does.

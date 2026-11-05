@@ -30,7 +30,7 @@ public enum JavaAutoImport {
     static func expandStarEdits(
         in source: String, caretUTF16: Int, index: JavaIndex, policy: JavaImportPolicy
     ) async -> [TextEdit] {
-        guard let tree = JavaSyntaxParser().parse(source) else { return [] }
+        guard let tree = JavaParseMemo.shared.tree(for: source) else { return [] }
         let list = JavaImportList(tree: tree)
         let caret = JavaNavigationText.utf8ByteOffset(forUTF16Offset: caretUTF16, in: source)
         guard let star = list.entries.first(where: { $0.isOnDemand && ($0.range.contains(caret) || $0.range.contains(caret - 1)) }) else {
@@ -61,7 +61,7 @@ public enum JavaAutoImport {
     private static func classEdits(
         in source: String, index: JavaIndex, policy: JavaImportPolicy, caretUTF16: Int?, onlyNames: Set<String>?
     ) async -> [TextEdit] {
-        guard let tree = JavaSyntaxParser().parse(source) else { return [] }
+        guard let tree = JavaParseMemo.shared.tree(for: source) else { return [] }
         let walker = JavaSemanticWalker(tree: tree, source: source)
         guard walker.run() else { return [] }
         let fileStubs = JavaSourceStubBuilder.build(tree: tree, url: URL(fileURLWithPath: "/unsaved/AutoImport.java"))

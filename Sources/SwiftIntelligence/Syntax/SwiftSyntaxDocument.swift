@@ -25,7 +25,7 @@ public struct SwiftSyntaxDocument: Sendable {
 /// The last few parses, so the queries that follow one another on unchanged text (an inspection run, a
 /// quick fix, a refactoring preview) parse once.
 ///
-/// Keyed by the text's length and hash, the way `JavaNavigationParseMemo` is: a document version would
+/// Keyed by the text's length and hash, the way `JavaParseMemo` is: a document version would
 /// miss when two views of a buffer lag each other. Bounded by count and by size, because a tree is much
 /// larger than its source: a text over `maximumUTF8Length` is parsed and returned but not kept.
 public final class SwiftSyntaxParseCache: @unchecked Sendable {

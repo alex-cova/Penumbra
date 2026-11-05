@@ -19,7 +19,7 @@ public actor JavaSemanticTokenProvider {
 
     /// The tokens of `source` ordered by position, or `nil` when the task was cancelled.
     public func tokens(for source: String) async -> [JavaSemanticToken]? {
-        guard let tree = JavaSyntaxParser().parse(source) else { return nil }
+        guard let tree = JavaParseMemo.shared.tree(for: source) else { return nil }
         let walker = JavaSemanticWalker(tree: tree, source: source)
         guard walker.run() else { return nil }
         var kinds: [String: JavaTypeKind] = [:]

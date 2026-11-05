@@ -58,26 +58,33 @@ public actor DocumentParseCache {
         // Standardized: `invalidate(_:)` standardizes too, so both spellings of a path hit one entry.
         let key = url.standardizedFileURL
         let text = document.text
-        if var entry = entries[key], entry.version <= document.version {
+        // The text decides what is reused, not the version. Several producers build documents of
+        // one file (the adapter's snapshot, the editor's live document, the completion request's)
+        // and number them on their own, so a document can carry the same or a lower version than
+        // the cached text while its text differs; treating that as a miss re-parsed the whole file
+        // and replaced the entry, and the next producer missed in turn.
+        if var entry = entries[key] {
             if entry.source == text {
-                entry.version = document.version
+                entry.version = max(entry.version, document.version)
                 entries[key] = entry
                 touch(key)
                 statistics.hits += 1
                 return entry.tree
             }
-            if document.version > entry.version {
-                if let edits, !edits.isEmpty,
-                   let updated = applyIncremental(entry: &entry, text: text, version: document.version, edits: edits) {
-                    store(key: key, entry: entry)
-                    statistics.incremental += 1
-                    return updated
-                }
-                if let updated = applyDiff(entry: &entry, text: text, version: document.version) {
-                    store(key: key, entry: entry)
-                    statistics.incremental += 1
-                    return updated
-                }
+            // Edits describe a change from the text of an older version, so they only apply to a
+            // newer document; `applyIncremental` checks that the result is `text` and declines otherwise.
+            if document.version > entry.version, let edits, !edits.isEmpty,
+               let updated = applyIncremental(entry: &entry, text: text, version: document.version, edits: edits) {
+                store(key: key, entry: entry)
+                statistics.incremental += 1
+                return updated
+            }
+            // Any other difference: one diff from the cached text to this one, reparsed against the
+            // cached tree. It holds whatever the versions say.
+            if let updated = applyDiff(entry: &entry, text: text, version: document.version) {
+                store(key: key, entry: entry)
+                statistics.incremental += 1
+                return updated
             }
         }
         let parser = SyntaxParser(language: language)

@@ -120,7 +120,7 @@ enum JavaLineMarkers {
         source: String, fileURL: URL?, kinds: Set<JavaLineMarkerKind>, subtypes indexedSubtypes: [String: [JavaClassStub]],
         index: JavaIndex, cacheRoot: URL, openBuffer: (@Sendable (URL) async -> String?)?
     ) async -> [JavaLineMarker]? {
-        guard let tree = JavaSyntaxParser().parse(source) else { return nil }
+        guard let tree = JavaParseMemo.shared.tree(for: source) else { return nil }
         let file = JavaSourceStubBuilder.build(tree: tree, url: fileURL ?? URL(fileURLWithPath: "/unsaved/LineMarkers.java"))
         let lines = JavaLineTable(source)
         func session(at byte: Int) -> JavaNavigationSession {
@@ -208,7 +208,7 @@ enum JavaLineMarkers {
         _ ids: [JavaSymbolID], source: String, fileURL: URL?, index: JavaIndex, cacheRoot: URL,
         openBuffer: (@Sendable (URL) async -> String?)?
     ) async -> [JavaDefinitionHit] {
-        guard let tree = JavaSyntaxParser().parse(source) else { return [] }
+        guard let tree = JavaParseMemo.shared.tree(for: source) else { return [] }
         let session = JavaNavigationSession(
             source: source, fileURL: fileURL, tree: tree, byteOffset: 0,
             index: index, jdkHome: nil, cacheRoot: cacheRoot, openBuffer: openBuffer,

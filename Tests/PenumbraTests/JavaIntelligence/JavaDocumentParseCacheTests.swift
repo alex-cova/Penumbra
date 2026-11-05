@@ -53,6 +53,66 @@ final class JavaDocumentParseCacheTests: XCTestCase {
         XCTAssertEqual(tree?.rootNode.namedChildren.first?.type, "interface_declaration")
     }
 
+    // MARK: - Versions from different producers
+
+    /// The adapter's snapshot, the editor's live document and a completion request all describe one
+    /// file and number their documents on their own. The text decides what is reused.
+    func testTheSameTextWithALowerVersionIsAHit() async {
+        let cache = JavaDocumentParseCache()
+        let source = "class T { int x; }"
+        let first = await cache.tree(for: document(source, version: 9))
+
+        let second = await cache.tree(for: document(source, version: 3))
+
+        XCTAssertTrue(first === second)
+        let statistics = await cache.statistics
+        XCTAssertEqual(statistics.fullParses, 1)
+        XCTAssertEqual(statistics.hits, 1)
+    }
+
+    func testDifferentTextAtTheSameVersionIsReparsedIncrementally() async {
+        let cache = JavaDocumentParseCache()
+        _ = await cache.tree(for: document("class T { int x; }", version: 4))
+
+        let tree = await cache.tree(for: document("class T { int y; }", version: 4))
+
+        XCTAssertEqual(tree?.rootNode.namedChildren.first?.child(byFieldName: "name")?.text, "T")
+        let statistics = await cache.statistics
+        XCTAssertEqual(statistics.fullParses, 1, "a file already parsed was parsed from scratch again")
+        XCTAssertEqual(statistics.incremental, 1)
+    }
+
+    func testDifferentTextAtALowerVersionIsReparsedIncrementally() async {
+        let cache = JavaDocumentParseCache()
+        _ = await cache.tree(for: document("class T { int x; int z; }", version: 8))
+
+        let tree = await cache.tree(for: document("class T { int x; }", version: 2))
+
+        XCTAssertEqual(tree?.rootNode.namedChildren.first?.child(byFieldName: "name")?.text, "T")
+        let statistics = await cache.statistics
+        XCTAssertEqual(statistics.fullParses, 1)
+        XCTAssertEqual(statistics.incremental, 1)
+    }
+
+    func testEditsThatDoNotDescribeTheCachedTextFallBackToTheDiff() async {
+        let cache = JavaDocumentParseCache()
+        _ = await cache.tree(for: document("class T { int x; }", version: 0))
+        // Edits from some other base: they do not turn the cached text into the new one.
+        let stale = TextEdit(
+            range: TextRange(
+                start: TextPosition(line: 0, column: 0, utf16Offset: 0),
+                end: TextPosition(line: 0, column: 1, utf16Offset: 1)
+            ),
+            replacement: "zzz"
+        )
+
+        let tree = await cache.tree(for: document("class T { int y; }", version: 5), edits: [stale])
+
+        XCTAssertEqual(tree?.rootNode.namedChildren.first?.child(byFieldName: "name")?.text, "T")
+        let statistics = await cache.statistics
+        XCTAssertEqual(statistics.fullParses, 1)
+    }
+
     // MARK: - Memory bounds
 
     func testCacheStaysWithinTheEntryCap() async {

@@ -1,7 +1,6 @@
 import EditorIntelligence
 import Foundation
 import LanguageSyntax
-import TreeSitterJava
 
 /// Tree-sitter syntax errors for Java, plus the composite that pairs them with `javac`.
 ///
@@ -17,10 +16,14 @@ enum JavaSyntaxDiagnostics {
             languageIdentifiers: ["java"],
             severity: .error,
             tokenName: SyntaxProblem.javacTokenName,
-            adjustProblem: JavaMissingSemicolon.adjust,
-            cache: cache,
-            language: tree_sitter_java()
-        )
+            adjustProblem: JavaMissingSemicolon.adjust
+        ) { document in
+            // A file with a URL reuses the inspection pass's incremental tree. A buffer without
+            // one shares the parse of that text with every other feature asking for it.
+            if document.url != nil { return await cache.tree(for: document) }
+            guard !document.contentSnapshot.isElided else { return nil }
+            return JavaParseMemo.shared.tree(for: document.text)
+        }
     }
 }
 

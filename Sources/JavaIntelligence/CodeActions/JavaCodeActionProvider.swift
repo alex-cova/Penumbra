@@ -66,7 +66,7 @@ public actor JavaCodeActionProvider: CodeActionProviding {
 
     private func syntaxTree(for document: Document, source: String) async -> JavaSyntaxTree? {
         if let parseCache, let tree = await parseCache.tree(for: document) { return tree }
-        return JavaSyntaxParser().parse(source)
+        return JavaParseMemo.shared.tree(for: source)
     }
 
     public func codeActions(

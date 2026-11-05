@@ -64,6 +64,7 @@ final class IDEHostEditCostTests: XCTestCase {
         XCTAssertNil(workspace.structureStore.root)
         // One settle's worth of semantic / marker / inspection passes, never one per keystroke.
         XCTAssertLessThanOrEqual(cost.parses.total, Bounds.parsesPerTypingBurst, "\(cost)")
+        XCTAssertLessThanOrEqual(cost.parses.full, Bounds.fullParsesPerTypingBurst, "\(cost)")
         XCTAssertLessThanOrEqual(cost.mainBufferCopies, Bounds.mainCopiesPerTypingBurst, "\(cost)")
         XCTAssertLessThanOrEqual(cost.exportedTexts, Bounds.exportsPerTypingBurst, "\(cost)")
     }
@@ -81,6 +82,8 @@ final class IDEHostEditCostTests: XCTestCase {
         XCTAssertNotNil(workspace.structureStore.root)
         XCTAssertLessThanOrEqual(
             cost.parses.total, Bounds.parsesPerTypingBurst + Bounds.parsesForAShowingStructureTab, "\(cost)")
+        XCTAssertLessThanOrEqual(
+            cost.parses.full, Bounds.fullParsesPerTypingBurst + Bounds.parsesForAShowingStructureTab, "\(cost)")
         XCTAssertLessThanOrEqual(cost.mainBufferCopies, Bounds.mainCopiesPerTypingBurst, "\(cost)")
         XCTAssertLessThanOrEqual(cost.exportedTexts, Bounds.exportsPerTypingBurst, "\(cost)")
     }
@@ -126,12 +129,17 @@ final class IDEHostEditCostTests: XCTestCase {
     /// Measured on this fixture (Debug build), then given a little room. Raise one only for a change
     /// that is meant to cost more, and say why in the commit.
     ///
-    /// Typing 120 characters measured 11 parses with the Structure tab hidden and 12 showing, after
-    /// the fixes in 81f8f344; the sources before them measured 130 in both (a full parse of the file
-    /// per keystroke, whether or not anyone looked at the result). The ten that remain are one
-    /// settle's worth of independent features each parsing the same text (F-02, F-03): semantic
-    /// tokens, line markers, run locations, name-index and role-index overlays, auto-import,
-    /// inspections. Making them share one parse should take this bound down to two or three.
+    /// Typing 120 characters: the sources before the F-01 fix measured 130 full parses (one of the
+    /// whole file per keystroke, shown or not); after it 11 parses, ten of them full, because every
+    /// feature that runs once typing pauses parsed the buffer on its own (semantic tokens, line
+    /// markers, breadcrumbs ×2, the bulb ×2, syntax diagnostics, the name and role index overlays,
+    /// auto-import); now 7 parses, 3 full (2 with the Structure tab showing) and 4 incremental. The
+    /// features share one parse of unchanged text (`JavaParseMemo`), and `DocumentParseCache` reuses
+    /// by content instead of by version, so documents of one file numbered by different producers no
+    /// longer make it re-parse from scratch. What is still full: completion (it parses the text
+    /// with a dummy identifier at the caret, so it is a different text) and the first request of
+    /// each distinct text. Full parses are bounded separately because they are the costly kind
+    /// (about 3 ms per 1,000 lines in a release build, an incremental one is a small fraction).
     /// Whole-buffer copies measured 7 to 9 before and after: they are the `textView.text` reads of
     /// run availability and friends (F-07, not yet fixed).
     ///
@@ -140,7 +148,8 @@ final class IDEHostEditCostTests: XCTestCase {
     /// last one to find it had not changed) and none after. Typing measured 8 to 9 exports, one per
     /// settled feature that wants the text.
     private enum Bounds {
-        static let parsesPerTypingBurst = 14
+        static let parsesPerTypingBurst = 9
+        static let fullParsesPerTypingBurst = 4
         static let parsesForAShowingStructureTab = 2
         static let mainCopiesPerTypingBurst = 10
         /// Text that did not change is never parsed again: exact, not measured.
