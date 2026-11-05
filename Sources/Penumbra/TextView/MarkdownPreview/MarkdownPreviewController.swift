@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 @preconcurrency import AppKit
 
 /// Toggles and maintains a rendered markdown preview that covers a host ``TextView``.
@@ -334,11 +335,11 @@ public final class MarkdownPreviewController: NSObject {
             let inputs = self.rasterInputs(style: style)
             let cache = self.rasterCache
             let parseCache = self.parseCache
-            let parsed = await Task.detached(priority: .userInitiated) {
+            let parsed = await runDetached(priority: .userInitiated) {
                 let document = MarkdownPreviewDocument.parse(source, cache: parseCache)
                 let pass = MarkdownPreviewRasterWorker.resolve(document: document, inputs: inputs, cache: cache)
                 return ParsedPreview(document: document, pass: pass)
-            }.value
+            }
             guard self.parseGeneration == generation else { return }
             self.show(parsed, style: style)
             if !parsed.pass.pendingMermaid.isEmpty {

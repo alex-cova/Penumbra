@@ -196,6 +196,37 @@ public struct DocumentTextExport: Sendable {
         return DocumentTextExport(snapshot: nil, fallback: text)
     }
 
+    /// Past this many UTF-16 units a materialized text is not kept for the next caller: holding a
+    /// copy of a very large file for as long as the buffer is idle costs more than building it again.
+    static let maximumSharedMaterializedUnits = 4_000_000
+
+    /// The document's text, built off the main actor from a snapshot taken now, with the content
+    /// generation it describes; `nil` when the caller was cancelled while it waited.
+    ///
+    /// Everything that wants the buffer's text once typing pauses (diagnostics, the bulb, hover,
+    /// run availability, auto-import, the name index) asks here, and the buffer is turned into a
+    /// string once per generation, not once per feature: callers that ask while it is being built
+    /// wait for that build, and callers that ask later for unchanged text (a caret move) get the
+    /// string already built. A text past ``maximumSharedMaterializedUnits`` is built for its caller
+    /// alone. Reading `text` instead copies the whole document on the main actor.
+    public func materializedText(priority: TaskPriority = .utility) async -> (text: String, generation: UInt64)? {
+        let generation = contentGeneration
+        // Kept on the `StringView`, not here: `setState` can swap the text for another file's, whose
+        // generation starts again from zero, and a cache that outlived its text would answer for it.
+        let stringView = textInputView.stringView
+        let task: Task<String, Never>
+        if let shared = stringView.sharedMaterialization, shared.generation == generation {
+            task = shared.task
+        } else {
+            let export = exportDocumentText()
+            task = Task.detached(priority: priority) { export.materializeUTF16Text() }
+            stringView.sharedMaterialization = documentLength <= Self.maximumSharedMaterializedUnits ? (generation, task) : nil
+        }
+        let text = await task.value
+        guard !Task.isCancelled else { return nil }
+        return (text, generation)
+    }
+
     /// Times the piece tree has been copied into a contiguous string. Stays at zero when a
     /// keystroke reads the buffer through a ranged snapshot.
     var pieceTreeMaterializeCount: Int {
@@ -236,7 +267,7 @@ public struct DocumentTextExport: Sendable {
         guard !text.isEmpty, limit > 0 else { return [] }
         let source = makeFindTextSource()
         let options = FindSearchOptions(query: text, matchCase: false)
-        let hits: [(range: NSRange, preview: String)] = await Task.detached(priority: .userInitiated) {
+        let hits: [(range: NSRange, preview: String)] = await runDetached(priority: .userInitiated) {
             var ranges: [NSRange] = []
             _ = FindSearchEngine.enumerateLiteralMatches(options: options, in: source) { found in
                 ranges.append(found)
@@ -253,7 +284,7 @@ public struct DocumentTextExport: Sendable {
                 let preview = window.substring(with: NSRange(location: line.location, length: lineEnd - line.location))
                 return (range, preview.trimmingCharacters(in: .whitespacesAndNewlines))
             }
-        }.value
+        }
         return hits.map { hit in
             BufferTextMatch(
                 range: hit.range,

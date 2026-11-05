@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 import AppKit
 import Penumbra
 import SwiftUI
@@ -285,11 +286,11 @@ final class IDEEditorPaneHost: NSView {
         let text = textView.text
         let identifier = textView.languageIdentifier
         csvParseTask = Task { [weak self] in
-            let table = await Task.detached(priority: .userInitiated) {
+            let table = await runDetached(priority: .userInitiated) {
                 let sample = String(text.prefix(4096))
                 let delimiter = IDECSVTable.delimiter(forIdentifier: identifier, sample: sample)
                 return IDECSVTable.parse(text, delimiter: delimiter)
-            }.value
+            }
             guard !Task.isCancelled else { return }
             self?.csvTableView.update(table)
         }

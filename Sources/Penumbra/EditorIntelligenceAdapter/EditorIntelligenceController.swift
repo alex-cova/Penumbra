@@ -1040,7 +1040,7 @@ public final class EditorIntelligenceController {
         let export = textView.exportDocumentText()
         let documentURL = textView.documentURL ?? base.url
         let searchTask = Task { [weak self] in
-            let text = await Task.detached(priority: .userInitiated) { export.materializeUTF16Text() }.value
+            let text = await runDetached(priority: .userInitiated) { export.materializeUTF16Text() }
             guard !Task.isCancelled else { return }
             let document = Document(
                 id: base.id,
@@ -1210,22 +1210,36 @@ public final class EditorIntelligenceController {
     /// that follows a resting caret (a provider may stay quiet then) and `.manual` for an explicit
     /// request such as Quick Documentation.
     public func requestHover(trigger: RequestTrigger = .manual) {
-        guard let document = liveDocument() ?? adapter.currentDocument else {
+        hoverTask?.cancel()
+        guard let parts = liveDocumentParts() else {
+            guard let document = adapter.currentDocument else { return }
+            startHover(for: document, trigger: trigger)
             return
         }
-        hoverTask?.cancel()
+        // The caret is read now; the text is built off the main actor, so a hover on a large file
+        // does not copy it here.
+        hoverTask = Task { [weak self] in
+            guard let self, let document = await self.liveDocument(parts) else { return }
+            await self.runHover(for: document, trigger: trigger)
+        }
+    }
+
+    private func startHover(for document: Document, trigger: RequestTrigger) {
+        hoverTask = Task { [weak self] in
+            await self?.runHover(for: document, trigger: trigger)
+        }
+    }
+
+    private func runHover(for document: Document, trigger: RequestTrigger) async {
         let context = HoverContext(
             document: document,
             cursor: document.cursor,
             selection: document.selection,
             trigger: trigger
         )
-        hoverTask = Task { [weak self] in
-            guard let self else { return }
-            if let result = await hoverEngine.hover(context: context) {
-                await MainActor.run {
-                    self.showHover(result, document: document)
-                }
+        if let result = await hoverEngine.hover(context: context) {
+            await MainActor.run {
+                self.showHover(result, document: document)
             }
         }
     }
@@ -1237,26 +1251,30 @@ public final class EditorIntelligenceController {
         }
         // Diagnostics need the whole file, but file-backed snapshots bridge elided
         // (`text == nil`) so opening a file never pays its size: providers fed from the
-        // snapshot alone all see an empty file and stay silent. Materialize once here, per
-        // debounced refresh, keeping the snapshot's id, url and language.
-        let document: Document
-        if base.contentSnapshot.isElided {
-            document = Document(
-                id: base.id,
-                url: base.url,
-                displayName: base.displayName,
-                contentSnapshot: TextSnapshot(version: base.version, text: textView.text),
-                selection: base.selection,
-                cursor: base.cursor,
-                viewport: base.viewport,
-                languageIdentifier: base.languageIdentifier
-            )
-        } else {
-            document = base
-        }
+        // snapshot alone all see an empty file and stay silent. Materialize once per debounced
+        // refresh, off the main actor, keeping the snapshot's id, url and language.
         let generation = textView.contentGeneration
+        let needsText = base.contentSnapshot.isElided
         diagnosticsTask?.cancel()
-        diagnosticsTask = Task { [weak self, diagnosticEngine] in
+        diagnosticsTask = Task { [weak self, diagnosticEngine, weak textView] in
+            let document: Document
+            if needsText {
+                guard let textView, let snapshot = await textView.materializedText(priority: .userInitiated),
+                      snapshot.generation == generation else { return }
+                let text = snapshot.text
+                document = Document(
+                    id: base.id,
+                    url: base.url,
+                    displayName: base.displayName,
+                    contentSnapshot: TextSnapshot(version: base.version, text: text),
+                    selection: base.selection,
+                    cursor: base.cursor,
+                    viewport: base.viewport,
+                    languageIdentifier: base.languageIdentifier
+                )
+            } else {
+                document = base
+            }
             let report = await diagnosticEngine.diagnostics(for: document)
             guard !Task.isCancelled, let self, let textView = self.textView else { return }
             // The text moved while the providers worked: drop the report and keep the
@@ -1514,13 +1532,22 @@ public final class EditorIntelligenceController {
         }
     }
 
-    /// The document as it is on screen: the adapter's snapshot lags the live buffer, so code
-    /// actions get the live text and a caret with its real line and column.
-    private func liveDocument(caretAt overrideOffset: Int? = nil) -> Document? {
+    /// What describes the document on screen apart from its text: the adapter's snapshot lags the
+    /// live buffer, so code actions get the live caret with its real line and column, taken from the
+    /// line index (cheap, main actor) while the text is built where it suits the caller.
+    private struct LiveDocumentParts {
+        let base: Document
+        let url: URL?
+        let selection: Selection
+        let cursor: Cursor
+        /// The buffer's `contentGeneration` the parts were read at.
+        let generation: UInt64
+    }
+
+    private func liveDocumentParts(caretAt overrideOffset: Int? = nil) -> LiveDocumentParts? {
         guard let textView, let base = adapter.currentDocument else {
             return nil
         }
-        let text = textView.text
         let length = textView.documentLength
         // Line and column come from the line index, as in `buildLiveDocument`. Counting line breaks
         // in a copy of the text before the caret made every call O(document) per position.
@@ -1532,19 +1559,48 @@ public final class EditorIntelligenceController {
         }
         let selected = overrideOffset.map { [NSRange(location: min(max(0, $0), length), length: 0)] } ?? textView.selectedRanges
         let caret = position(overrideOffset ?? textView.selectedRange.location)
-        return Document(
-            id: base.id,
+        return LiveDocumentParts(
+            base: base,
             url: textView.documentURL ?? base.url,
-            displayName: base.displayName,
-            contentSnapshot: TextSnapshot(version: base.version, text: text),
             selection: Selection(
                 range: range(selected.first ?? textView.selectedRange),
                 additionalRanges: selected.dropFirst().map(range)
             ),
             cursor: Cursor(position: caret),
-            viewport: base.viewport,
-            languageIdentifier: base.languageIdentifier
+            generation: textView.contentGeneration
         )
+    }
+
+    private func composeLiveDocument(_ parts: LiveDocumentParts, text: String) -> Document {
+        Document(
+            id: parts.base.id,
+            url: parts.url,
+            displayName: parts.base.displayName,
+            contentSnapshot: TextSnapshot(version: parts.base.version, text: text),
+            selection: parts.selection,
+            cursor: parts.cursor,
+            viewport: parts.base.viewport,
+            languageIdentifier: parts.base.languageIdentifier
+        )
+    }
+
+    /// The document as it is on screen, with its text copied here on the main actor. For a command
+    /// the user just gave (format, a refactoring), which answers once. Work scheduled from a pause
+    /// (the bulb, hover) uses ``liveDocument(_:)`` so a large buffer is not copied on the main actor.
+    private func liveDocument(caretAt overrideOffset: Int? = nil) -> Document? {
+        guard let textView, let parts = liveDocumentParts(caretAt: overrideOffset) else {
+            return nil
+        }
+        return composeLiveDocument(parts, text: textView.text)
+    }
+
+    /// The document for `parts` with its text built off the main actor from a snapshot taken now;
+    /// `nil` when the buffer changed meanwhile (whatever scheduled this has a newer request coming)
+    /// or the caller was cancelled.
+    private func liveDocument(_ parts: LiveDocumentParts) async -> Document? {
+        guard let textView, let snapshot = await textView.materializedText(priority: .userInitiated),
+              snapshot.generation == parts.generation, textView.contentGeneration == parts.generation else { return nil }
+        return composeLiveDocument(parts, text: snapshot.text)
     }
 
     /// Apply a code action's edits to the current document.
@@ -2677,7 +2733,7 @@ public final class EditorIntelligenceController {
         completionDocumentationTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 180_000_000)
             guard !Task.isCancelled else { return }
-            let result = await Task.detached(priority: .userInitiated) { () -> HoverResult? in
+            let result = await runDetached(priority: .userInitiated) { () -> HoverResult? in
                 let text = document.text as NSString
                 guard caret <= text.length else { return nil }
                 let hypothetical = text.replacingCharacters(in: NSRange(location: anchor, length: caret - anchor), with: item.insertText)
@@ -2690,7 +2746,7 @@ public final class EditorIntelligenceController {
                     languageIdentifier: document.languageIdentifier
                 )
                 return await engine.hover(context: HoverContext(document: preview, cursor: preview.cursor, selection: preview.selection, trigger: .manual))
-            }.value
+            }
             guard !Task.isCancelled, let self, self.completionDocumentationKey == key, self.isCompletionVisible else { return }
             if let result, !result.contents.isEmpty {
                 self.showCompletionDocumentation(result.contents)
@@ -2898,10 +2954,12 @@ public final class EditorIntelligenceController {
     }
 
     private func refreshIntentionBulb() async {
-        guard let codeActionProvider, let document = liveDocument(), let textView else {
+        guard let codeActionProvider, let textView, let parts = liveDocumentParts() else {
             intentionBulb.isHidden = true
             return
         }
+        // The text is built off the main actor; a buffer edited meanwhile has a newer bulb check coming.
+        guard let document = await liveDocument(parts) else { return }
         let offset = document.cursor.position.utf16Offset
         let kind = await codeActionProvider.bulb(for: document, at: document.cursor.position, diagnostics: latestDiagnostics)
         guard !Task.isCancelled, textView.selectedRange.location == offset else { return }

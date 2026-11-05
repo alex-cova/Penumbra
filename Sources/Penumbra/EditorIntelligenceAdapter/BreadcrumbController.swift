@@ -79,11 +79,9 @@ final class BreadcrumbController {
         if let cached = source, cached.generation == generation {
             text = cached.text
         } else if textView.pieceTreeContentSnapshot() != nil {
-            let export = textView.exportDocumentText()
-            text = await Task.detached(priority: .utility) {
-                export.materializeUTF16Text()
-            }.value
-            guard !Task.isCancelled, textView.contentGeneration == generation else { return nil }
+            guard let snapshot = await textView.materializedText(),
+                  snapshot.generation == generation, textView.contentGeneration == generation else { return nil }
+            text = snapshot.text
             source = (generation, text)
         } else {
             text = textView.text

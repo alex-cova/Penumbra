@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 import Foundation
 
 /// Stateful find/replace session driving ``FindSearchEngine`` — the headless counterpart to the
@@ -168,9 +169,9 @@ public final class FindSession {
             return
         }
         highlightRefreshTask = Task { @MainActor in
-            let outcome = await Task.detached(priority: .userInitiated) {
+            let outcome = await runDetached(priority: .userInitiated) {
                 FindSearchEngine.search(options: options, in: source, anchorLocation: anchor)
-            }.value
+            }
             guard !Task.isCancelled else { return }
             highlightRanges = outcome.highlightRanges
         }

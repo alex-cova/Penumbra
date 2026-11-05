@@ -39,14 +39,12 @@ final class IDEEditorOverlayController {
             return
         }
         semanticHighlights.schedule(key, after: delay) { [weak textView] in
-            guard let textView else { return }
-            let generation = textView.contentGeneration
-            let export = textView.exportDocumentText()
+            guard let textView, let snapshot = await textView.snapshotText() else { return }
             let highlights = await runDetached(priority: .utility) { () -> [SemanticHighlight]? in
                 guard !Task.isCancelled else { return nil }
-                return await provider.semanticHighlights(forSource: export.materializeUTF16Text())
+                return await provider.semanticHighlights(forSource: snapshot.text)
             }
-            guard !Task.isCancelled, let highlights, textView.contentGeneration == generation else { return }
+            guard !Task.isCancelled, let highlights, textView.contentGeneration == snapshot.generation else { return }
             textView.setSemanticHighlights(highlights.map {
                 SyntaxHighlightRange(range: NSRange(location: $0.range.lowerBound, length: $0.range.count), highlightName: $0.highlightName)
             })
@@ -82,15 +80,14 @@ final class IDEEditorOverlayController {
         }
         markerRefreshes.schedule(key, after: delay) { [weak self, weak textView] in
             guard let textView else { return }
-            let generation = textView.contentGeneration
             let url = textView.documentURL
-            let export = textView.exportDocumentText()
-            let work = Task.detached(priority: .utility) {
-                await provider.lineMarkers(source: export.materializeUTF16Text(), fileURL: url, kinds: kinds)
+            guard let snapshot = await textView.snapshotText() else { return }
+            let markers = await runDetached(priority: .utility) { () -> [LineMarker]? in
+                guard !Task.isCancelled else { return nil }
+                return await provider.lineMarkers(source: snapshot.text, fileURL: url, kinds: kinds)
             }
-            let markers = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
-            guard !Task.isCancelled, let self, let markers, textView.contentGeneration == generation else { return }
-            self.shownMarkers[key] = (generation, markers)
+            guard !Task.isCancelled, let self, let markers, textView.contentGeneration == snapshot.generation else { return }
+            self.shownMarkers[key] = (snapshot.generation, markers)
             textView.setLineMarkers(markers.enumerated().map { index, marker in
                 GutterLineMarker(id: index, line: marker.line, icon: marker.kind.gutterIcon, tooltip: marker.tooltip)
             })

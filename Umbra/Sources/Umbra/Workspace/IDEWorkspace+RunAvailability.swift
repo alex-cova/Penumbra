@@ -66,19 +66,31 @@ extension IDEWorkspace {
     func refreshJavaRunAvailability(from textView: TextView) {
         javaRunAvailability.schedule(after: .milliseconds(300)) { [weak self, weak textView] in
             guard let self, let textView else { return }
-            self.refreshJavaRunAvailabilityNow(from: textView)
+            await self.refreshJavaRunAvailabilityNow(from: textView)
         }
     }
 
-    /// `containsMain` copies the whole buffer. That stays off the keystroke; the Run button
-    /// catches up once typing pauses.
-    func refreshJavaRunAvailabilityNow(from textView: TextView) {
+    /// Whether Run and Test apply and where the gutter's buttons go, for the buffer as it is once
+    /// typing pauses. The run providers read the text (does this file have a `main`, where are its
+    /// tests); on a piece-tree buffer that is a whole-document copy, so it is built once, off the
+    /// main actor, for both the button and the gutter. A buffer edited again meanwhile is left to
+    /// the refresh that edit scheduled.
+    func refreshJavaRunAvailabilityNow(from textView: TextView) async {
         let document = workbench.activePane.selectedDocument
+        let documentID = document?.id
         let isJava = document?.languageIdentifier == "java"
         let fileURL = document?.url
+        let readsText = document.map { databaseSupport.consoles[$0.id] == nil && $0.languageIdentifier != "http" } ?? true
+        var content: String?
+        if readsText, activeRunProvider != nil {
+            guard let snapshot = await textView.snapshotText(),
+                  textView.contentGeneration == snapshot.generation,
+                  workbench.activePane.selectedDocument?.id == documentID else { return }
+            content = snapshot.text
+        }
         if let provider = activeRunProvider {
             runFileCanRun = provider.canRun(IDERunDocument(
-                url: fileURL, languageIdentifier: document?.languageIdentifier, text: textView.text
+                url: fileURL, languageIdentifier: document?.languageIdentifier, text: content ?? textView.text
             ))
         } else {
             runFileCanRun = false
@@ -96,7 +108,7 @@ extension IDEWorkspace {
         } else {
             httpGutterStamp = nil
             databaseGutterStamp = nil
-            Task { await refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: isJava) }
+            await refreshJavaTestDecorations(from: textView, fileURL: fileURL, isJava: isJava, content: content)
         }
     }
 
@@ -104,14 +116,16 @@ extension IDEWorkspace {
     /// on a breakpoint removes it, a click on a run button opens its Run / Debug menu, and a click
     /// on any other Java line number adds a breakpoint. A file that is not Java gets run buttons
     /// only, and only when its provider names locations.
-    func refreshJavaTestDecorations(from textView: TextView, fileURL: URL?, isJava: Bool) async {
+    func refreshJavaTestDecorations(from textView: TextView, fileURL: URL?, isJava: Bool, content: String? = nil) async {
         let language = isJava ? "java" : workbench.activePane.selectedDocument?.languageIdentifier
         let runDocument = IDERunDocument(
             url: fileURL, languageIdentifier: language,
-            caretUTF16Offset: textView.selectedRange.location, text: textView.text
+            caretUTF16Offset: textView.selectedRange.location, text: content ?? textView.text
         )
         let provider = runProviders.provider(forLanguage: language)
         let locations = await provider?.runnableLocations(in: runDocument) ?? []
+        // Typing resumed while the locations were worked out: the pause after it refreshes again.
+        guard !Task.isCancelled else { return }
         let wantsBreakpoints = isJava || language == "swift" || language == "javascript" || language == "typescript"
         guard wantsBreakpoints, let fileURL else {
             javaFileCanTest = false
@@ -153,9 +167,9 @@ extension IDEWorkspace {
             return cached.locations
         }
         let text = textView.text
-        let locations = await Task.detached(priority: .utility) {
+        let locations = await runDetached(priority: .utility) {
             JavaMainMethod.containsMain(in: text) ? JavaMainMethod.locations(in: text, fileName: fileName) : []
-        }.value
+        }
         javaMainLocations = JavaMainLocations(view: view, generation: generation, locations: locations)
         return locations
     }

@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 import Foundation
 
 /// Debounces and offloads ``FindSearchEngine`` scans driven by a ``FindSession``, so query typing
@@ -120,14 +121,14 @@ public final class FindSearchScheduler {
                     apply()
                 }
             }
-            let outcome = await Task.detached(priority: .userInitiated) {
+            let outcome = await runDetached(priority: .userInitiated) {
                 FindSearchEngine.search(
                     options: options,
                     in: searchSource,
                     anchorLocation: anchor,
                     onProgress: applyPartial
                 )
-            }.value
+            }
 
             gate.finish()
             guard let self, generation == self.searchGeneration else { return }

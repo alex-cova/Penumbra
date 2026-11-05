@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 import Foundation
 import GitIntelligence
 import Observation
@@ -211,9 +212,9 @@ final class IDEChangeMarkerController {
             guard let head = await self.readHead(relativePath: relative, git: git) else { return }
             guard !Task.isCancelled, textView.contentGeneration == generation else { return }
             let blob = head.data
-            let changes = await Task.detached {
+            let changes = await runDetached {
                 IDEChangeMarkerPresentation.changes(head: blob, buffer: export.materializeUTF16Text())
-            }.value
+            }
             guard !Task.isCancelled, textView.contentGeneration == generation, self.isEnabled else { return }
             textView.setGutterChanges(changes)
             self.stamps[key] = Stamp(path: relative, generation: generation)

@@ -194,7 +194,7 @@ private extension CodeFoldingManager {
         let text: String
         if let pieces {
             let export = DocumentTextExport(snapshot: pieces, fallback: "")
-            text = await Task.detached(priority: .utility) { export.materializeUTF16Text() }.value
+            text = await runDetached(priority: .utility) { export.materializeUTF16Text() }
         } else {
             text = stringView.string as String
         }

@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 import Foundation
 import GitIntelligence
 
@@ -132,12 +133,12 @@ final class IDEMergeSession {
             if !immediately { try? await Task.sleep(for: .milliseconds(120)) }
             guard !Task.isCancelled else { return }
             let resultText = IDEDiffText(current)
-            let (leftChunks, rightChunks) = await Task.detached(priority: .userInitiated) {
+            let (leftChunks, rightChunks) = await runDetached(priority: .userInitiated) {
                 (
                     IDEDiffComputer.lineChunks(left: leftText, right: resultText, maximumMiddle: IDEMergeComputer.defaultMaximumMiddle),
                     IDEDiffComputer.lineChunks(left: resultText, right: rightText, maximumMiddle: IDEMergeComputer.defaultMaximumMiddle)
                 )
-            }.value
+            }
             guard let self, !Task.isCancelled, token == self.generation else { return }
             self.result = resultText
             self.leftChunks = leftChunks

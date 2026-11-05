@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 import Foundation
 
 /// Highlights other occurrences of the current selection (or the word under the caret when the
@@ -148,9 +149,9 @@ private extension OccurrenceHighlightController {
         // The search runs detached; this main-actor task only awaits it, so `self` never
         // crosses into nonisolated code (Swift 6 `SendingRisksDataRace`).
         searchTask = Task { [weak self] in
-            let matches = await Task.detached(priority: .userInitiated) {
+            let matches = await runDetached(priority: .userInitiated) {
                 FindSearchEngine.search(options: options, in: source, anchorLocation: anchor, maxHighlights: cap).highlightRanges
-            }.value
+            }
             guard !Task.isCancelled, let self, generation == self.generation else { return }
             self.apply(matches: matches, current: term.currentRange, generation: generation)
         }

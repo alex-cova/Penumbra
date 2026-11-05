@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 import AppKit
 import Foundation
 import GitIntelligence
@@ -223,9 +224,9 @@ final class IDEDiffSession {
         let whitespace = settings.whitespace
         let highlight = settings.highlight
         computeTask = Task { [weak self] in
-            let chunks = await Task.detached(priority: .userInitiated) {
+            let chunks = await runDetached(priority: .userInitiated) {
                 IDEDiffComputer.chunks(left: left, right: right, whitespace: whitespace, highlight: highlight)
-            }.value
+            }
             guard let self, !Task.isCancelled, generation == self.computeGeneration else { return }
             self.chunks = chunks
             self.isStale = false

@@ -161,9 +161,9 @@ public final class JumpToDefinitionController {
         guard let document = adapter.currentDocument, let textView else { return nil }
         let url = textView.documentURL ?? document.url
         let version = document.version
-        let snapshot = await Task.detached(priority: .userInitiated) {
+        let snapshot = await runDetached(priority: .userInitiated) {
             TextSnapshot(version: version, text: text.string())
-        }.value
+        }
         guard !Task.isCancelled else { return nil }
         let selection = Selection(range: TextRange(start: cursor.position, end: cursor.position))
         return Document(

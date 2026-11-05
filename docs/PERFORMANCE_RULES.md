@@ -61,6 +61,12 @@ from its line the first time it is read after an edit (`LineManager.rowVersion`,
   `pieceTreeContentSnapshot()` and read it elsewhere.
 - Things that need the whole text (breadcrumbs, diagnostics, indexing) run after typing pauses,
   debounced and cancellable, off the main thread.
+- Ask for that text with `TextView.materializedText()`: it is built off the main actor, once per
+  buffer generation, and shared by everyone who asks (concurrent callers wait for one build; a
+  caret move, which changes no text, builds nothing). Do not build your own from
+  `exportDocumentText()` for pause-time work, and do not read `text` for it. The cache lives on the
+  `StringView`, so `setState` cannot serve a file the previous file's text, and a text past
+  4,000,000 units is built for its caller alone (`MaterializedTextTests`).
 - Guard it with `pieceTreeMaterializeCount` in tests (see
   `InteractivePathTests.testLargeUntitledKeystrokeDoesNotMaterializeForCompletion`).
 
@@ -73,6 +79,16 @@ from its line the first time it is read after an edit (`LineManager.rowVersion`,
   result must not touch the document or the UI (`InteractivePathTests`).
 - Repeated background updates to UI (console output, status, progress) are batched (≈100 ms), not
   posted per item.
+- A background hop that a newer request replaces goes through `runDetached` (`EditorIntelligence`),
+  not `await Task.detached { … }.value`. Cancelling the awaiting task does not cancel a detached
+  child, so the superseded work ran to the end and a loop that checks `Task.isCancelled` (every scan
+  in `FindSearchEngine` does) could never see it. `runDetached` passes the cancellation on; start the
+  work with `guard !Task.isCancelled` so a request superseded while it queued costs nothing
+  (`DetachedWorkTests`). A save, a one-shot read, or a task its owner stores and cancels needs no
+  helper.
+- What the window starts around an edit is counted, not timed: `IDEHostEditCostTests` (parses,
+  main-thread buffer copies, text exports per 120 keystrokes and 200 caret moves on a 20,000-line
+  file). A change that adds work to that path should fail a bound there.
 - A parse that is not incremental is O(file) and runs after a pause, a save or on demand, never on a
   keystroke or in a completion/hover request. That is swift-syntax (`SwiftSyntaxDocument`): about 3 ms
   for 2,000 lines and 28 ms for 20,000, plus about 8 µs per identifier reference for a scope lookup
@@ -166,6 +182,6 @@ swift run -c release PerfHarness swift-syntax-parse synthetic --lines 2000   # a
       visible rows or edit size?
 - [ ] Any `line(atRow:)` that only reads a value? Any `textView.text` on a hot path?
 - [ ] Any new per-line or per-document cache? Is it bounded and invalidated by row?
-- [ ] Any async result applied without a staleness check?
+- [ ] Any async result applied without a staleness check? Any `await Task.detached { … }.value` that a newer request supersedes (use `runDetached`)?
 - [ ] Any main-thread access to tree-sitter trees or `StringView` storage without the lock/copy?
 - [ ] `enter-session` at 20k and 120k lines, before and after, in Release.

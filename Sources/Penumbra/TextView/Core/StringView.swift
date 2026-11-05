@@ -34,6 +34,10 @@ final class StringView {
     /// Bumped on storage mutation so a save can detect concurrent edits.
     private(set) var contentGeneration: UInt64 = 0
 
+    /// The text as a string for ``TextView/materializedText(priority:)``, built for `generation`.
+    /// Read and written on the main actor only; it lives and dies with this text.
+    var sharedMaterialization: (generation: UInt64, task: Task<String, Never>)?
+
     /// ``contentGeneration`` read under the lock, for a caller off the main thread (the language
     /// mode's background parse compares it with the generation its tree was last edited for).
     var contentGenerationSnapshot: UInt64 {

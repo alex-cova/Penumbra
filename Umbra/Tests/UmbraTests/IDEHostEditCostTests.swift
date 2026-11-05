@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 import LanguageSyntax
 @_spi(Benchmarks) import Penumbra
@@ -140,22 +141,27 @@ final class IDEHostEditCostTests: XCTestCase {
     /// with a dummy identifier at the caret, so it is a different text) and the first request of
     /// each distinct text. Full parses are bounded separately because they are the costly kind
     /// (about 3 ms per 1,000 lines in a release build, an incremental one is a small fraction).
-    /// Whole-buffer copies measured 7 to 9 before and after: they are the `textView.text` reads of
-    /// run availability and friends (F-07, not yet fixed).
+    /// Whole-buffer copies on the main actor: 7 while typing and 2 to 4 per caret pause before F-07,
+    /// none after. Five call sites made them (diagnostics, the bulb and hover through `liveDocument`,
+    /// the Java run button and its gutter); the text is now built off the main actor, once per buffer
+    /// generation and shared (`TextView.materializedText`), so a caret move, which changes no text,
+    /// builds nothing.
     ///
-    /// 200 caret moves measured 200 exported texts before the fixes (the Structure refresh copied
-    /// the whole document off the main actor on every move, shown or not, and compared it with the
-    /// last one to find it had not changed) and none after. Typing measured 8 to 9 exports, one per
-    /// settled feature that wants the text.
+    /// 200 caret moves measured 200 exported texts before the F-05 work (the Structure refresh built
+    /// the whole document on every move, shown or not, and compared it with the last one to find it
+    /// had not changed), then 1 to 3 once run availability read the text off-main per pause, and none
+    /// with the shared text. Typing 120 characters measured 8 exports with a main-thread copy each
+    /// before, 14 when every feature built its own, and now 5 to 6: the texts of the mid-burst and
+    /// final pause, plus the few features that still export on their own.
     private enum Bounds {
-        static let parsesPerTypingBurst = 9
-        static let fullParsesPerTypingBurst = 4
+        static let parsesPerTypingBurst = 8
+        static let fullParsesPerTypingBurst = 3
         static let parsesForAShowingStructureTab = 2
-        static let mainCopiesPerTypingBurst = 10
+        static let mainCopiesPerTypingBurst = 1
         /// Text that did not change is never parsed again: exact, not measured.
         static let parsesPerCaretBurst = 0
-        static let mainCopiesPerCaretBurst = 4
-        static let exportsPerTypingBurst = 12
+        static let mainCopiesPerCaretBurst = 0
+        static let exportsPerTypingBurst = 8
         /// A caret move does not change the text, so nothing may ask for it again.
         static let exportsPerCaretBurst = 0
     }

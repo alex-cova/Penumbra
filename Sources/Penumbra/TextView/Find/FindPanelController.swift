@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 import Foundation
 @preconcurrency import AppKit
 
@@ -289,13 +290,13 @@ private extension FindPanelController {
         replaceAllTask = Task { @MainActor [weak self, weak target] in
             let matches: [FindReplaceMatch]
             do {
-                matches = try await Task.detached(priority: .userInitiated) {
+                matches = try await runDetached(priority: .userInitiated) {
                     try FindSearchEngine.replaceAllMatches(
                         options: options,
                         in: source,
                         replacement: replacement
                     )
-                }.value
+                }
             } catch {
                 return
             }
