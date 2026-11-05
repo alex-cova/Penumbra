@@ -61,6 +61,7 @@ enum JavaErrorRecoveredLocals {
     private static func collect(_ node: SyntaxNode, into result: inout [JavaLocalVariable], seen: inout Set<String>) {
         guard let typeNode = node.child(byFieldName: "type") else { return }
         let isVar = typeNode.text == "var"
+            || (typeNode.text == "val" && JavaLombokMembers.importsLombok(node))
         let type = JavaTypeNodeConverter.convert(typeNode)
         for declarator in node.namedChildren(ofType: "variable_declarator") {
             guard let nameNode = declarator.child(byFieldName: "name"), seen.insert(nameNode.text).inserted else { continue }

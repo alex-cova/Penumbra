@@ -90,6 +90,24 @@ final class JavaVisibleLocalsTests: XCTestCase {
         XCTAssertEqual(args.count, 1)
     }
 
+    /// F-17: Lombok `val` infers like `var` — but only where Lombok is imported, since a
+    /// class named `val` is legal plain Java.
+    func testValWithLombokImportInfersLikeVar() {
+        let result = locals("import lombok.val; class Foo { void m() { val x = \"s\"; €x; } }")
+        let x = result.first { $0.name == "x" }
+        XCTAssertNotNil(x)
+        XCTAssertTrue(x?.isVarDeclaration == true)
+        XCTAssertEqual(x?.initializerText, "\"s\"")
+    }
+
+    func testValWithoutLombokImportIsATypeName() {
+        let result = locals("class Foo { void m() { val x = new val(); €x; } }")
+        let x = result.first { $0.name == "x" }
+        XCTAssertNotNil(x)
+        XCTAssertFalse(x?.isVarDeclaration == true)
+        XCTAssertEqual(x?.type, .unresolved(simpleName: "val", arguments: []))
+    }
+
     func testEmptyMethodBodyReturnsOnlyParameters() {
         let result = locals("class Foo { void m(int a) { €x } }")
         XCTAssertEqual(names(result), ["a"])

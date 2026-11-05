@@ -119,6 +119,44 @@ final class JavaGradleProjectModelTests: XCTestCase {
         XCTAssertNil(model.visibleShardPaths(forFile: root.appendingPathComponent("README.md"), paths: paths))
     }
 
+    /// F-17: the write path (`sourceSets(seeing:)`, used by Find Usages) must union generated
+    /// roots exactly like the read path (`visibleShardPaths`) does, or references from
+    /// generated code are invisible to reference search.
+    func testSourceSetsSeeingIncludesGeneratedShards() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let srcDir = root.appendingPathComponent("src/main/java", isDirectory: true)
+        let genDir = root.appendingPathComponent("build/generated/sources/annotationProcessor/java/main", isDirectory: true)
+        let clientDir = root.appendingPathComponent("client/src/main/java", isDirectory: true)
+        for directory in [srcDir, genDir, clientDir] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let model = JavaGradleProjectModel(
+            formatVersion: 2,
+            gradleVersion: "9.0",
+            subprojects: [
+                .init(
+                    path: ":",
+                    directory: root,
+                    sourceSets: [.init(name: "main", sourceDirs: [srcDir], generatedSourceDirs: [genDir])]
+                ),
+                .init(
+                    path: ":client",
+                    directory: root.appendingPathComponent("client"),
+                    sourceSets: [.init(
+                        name: "main",
+                        sourceDirs: [clientDir],
+                        projectDependencies: [.init(projectPath: ":", sourceSetName: "main")]
+                    )]
+                ),
+            ]
+        )
+        let paths = JavaIndexPaths(root: root.appendingPathComponent("index-cache"))
+        let genShard = paths.projectSourcesShard(for: genDir.standardizedFileURL).path
+        let seeing = model.sourceSets(seeing: genShard, paths: paths).map(\.subproject.path).sorted()
+        XCTAssertEqual(seeing, [":", ":client"])
+    }
+
     func testClasspathJarsDedupesSharedDependencyAcrossSubprojects() throws {
         let model = try JSONDecoder().decode(JavaGradleProjectModel.self, from: GradleFixtures.modelData("multi-module"))
         let guavaJars = model.classpathJars.filter { $0.path.contains("guava") }

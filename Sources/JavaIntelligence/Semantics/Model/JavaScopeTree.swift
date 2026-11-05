@@ -571,7 +571,9 @@ private struct ScopeBuilder {
         declarations: inout [JavaScopeTree.Declaration], children: inout [JavaScopeTree.Scope]
     ) {
         guard let typeNode = node.child(byFieldName: "type") else { return }
+        // Lombok `val` infers exactly like `var`, but only where Lombok is imported.
         let isVar = typeNode.text == "var"
+            || (typeNode.text == "val" && JavaLombokMembers.importsLombok(node))
         let type = JavaTypeNodeConverter.convert(typeNode)
         for declarator in node.namedChildren(ofType: "variable_declarator") {
             guard let nameNode = declarator.child(byFieldName: "name") else { continue }
@@ -740,7 +742,9 @@ private struct ScopeBuilder {
         var declarations: [JavaScopeTree.Declaration] = []
         if let nameNode = node.child(byFieldName: "name") {
             if let typeNode = node.child(byFieldName: "type") {
-                if typeNode.text == "var", let iterated = node.child(byFieldName: "value") {
+                let isInferred = typeNode.text == "var"
+                    || (typeNode.text == "val" && JavaLombokMembers.importsLombok(node))
+                if isInferred, let iterated = node.child(byFieldName: "value") {
                     declarations.append(JavaScopeTree.Declaration(
                         symbol: .local(name: nameNode.text, file: url, declarationRange: nameNode.byteRange,
                                        type: .unresolved(simpleName: "var", arguments: [])),

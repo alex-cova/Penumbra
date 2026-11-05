@@ -341,13 +341,13 @@ extension JavaGradleProjectModel {
         for subproject in subprojects {
             for sourceSet in subproject.sourceSets {
                 var shards = Set<String>()
-                addSourceDirShards(sourceSet.sourceDirs, to: &shards, paths: paths)
+                addSourceDirShards(sourceSet.sourceDirs + sourceSet.generatedSourceDirs, to: &shards, paths: paths)
                 for jar in sourceSet.compileClasspathJars { shards.insert(paths.jarShard(jar).path) }
                 for dependency in sourceSet.projectDependencies {
                     guard let target = subprojects.first(where: { $0.path == dependency.projectPath }) else { continue }
                     let set = target.sourceSets.first { $0.name == dependency.sourceSetName }
                         ?? target.sourceSets.first { $0.name == "main" }
-                    if let set { addSourceDirShards(set.sourceDirs, to: &shards, paths: paths) }
+                    if let set { addSourceDirShards(set.sourceDirs + set.generatedSourceDirs, to: &shards, paths: paths) }
                 }
                 if shards.contains(shardPath) { result.append((subproject, sourceSet)) }
             }

@@ -77,6 +77,7 @@ public enum MavenProjectReader {
             outputDirectory: module.outputDirectory,
             testOutputDirectory: module.testOutputDirectory,
             generatedSourceDirectories: module.generatedSourceDirectories,
+            testGeneratedSourceDirectories: module.testGeneratedSourceDirectories,
             languageLevel: module.languageLevel,
             compileClasspathJars: resolution?.compileJars ?? [],
             runtimeClasspathJars: resolution?.runtimeJars ?? [],

@@ -164,6 +164,20 @@ final class JavaLombokMembersTests: XCTestCase {
     }
 
     /// F-07: without a Lombok import, `@Builder`/`@With` generate nothing.
+    func testUtilityClassSynthesizesAPrivateConstructor() throws {
+        let util = try stub("""
+        package p;
+        import lombok.experimental.UtilityClass;
+        @UtilityClass
+        public class Strings {
+            public static String join(String a, String b) { return a + b; }
+        }
+        """, named: "Strings")
+        let constructors = util.methods.filter(\.isConstructor)
+        XCTAssertEqual(constructors.count, 1)
+        XCTAssertTrue(constructors.first?.modifiers.contains(.privateFlag) == true)
+    }
+
     func testBuilderAndWithNeedTheLombokImport() throws {
         let person = try stub("""
         @Builder @With class Person { private String name; }

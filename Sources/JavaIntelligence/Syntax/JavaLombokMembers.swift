@@ -16,7 +16,7 @@ import Foundation
 enum JavaLombokMembers {
     private static let classAnnotations: Set<String> = [
         "Getter", "Setter", "Data", "Value", "NoArgsConstructor", "AllArgsConstructor", "RequiredArgsConstructor", "Accessors",
-        "Builder", "With"
+        "Builder", "With", "UtilityClass"
     ]
 
     private struct Annotation {
@@ -115,6 +115,13 @@ enum JavaLombokMembers {
             )
         }
         var constructors: [JavaMethodStub] = []
+        // `@UtilityClass` seals the class behind a private constructor (the members stay as
+        // written; only the instantiation entry point is synthesized).
+        if has("UtilityClass") != nil, !hasExplicitConstructor {
+            constructors.append(JavaMethodStub(
+                name: simple, parameters: [], returnType: .void, modifiers: [.privateFlag], isConstructor: true
+            ))
+        }
         if let annotation = has("NoArgsConstructor") { constructors.append(constructor([], of: annotation)) }
         if let annotation = has("AllArgsConstructor") {
             constructors.append(constructor(instanceFields.filter { !($0.modifiers.contains(.finalFlag) && $0.hasInitializer) }, of: annotation))
@@ -281,7 +288,9 @@ enum JavaLombokMembers {
         return result
     }
 
-    private static func importsLombok(_ node: SyntaxNode) -> Bool {
+    /// Whether the file containing `node` imports from Lombok: the gate for every `val`
+    /// inference, since a class named `val` is legal plain Java.
+    static func importsLombok(_ node: SyntaxNode) -> Bool {
         var root = node
         while let parent = root.parent { root = parent }
         return root.namedChildren.contains { $0.type == "import_declaration" && $0.text.contains("lombok") }

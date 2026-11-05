@@ -8,6 +8,13 @@ import Foundation
 /// It narrows name listings (completion, import suggestions), not type resolution: a method of
 /// module `a` may return a type from a package `a` does not export, and members of that value
 /// still complete.
+///
+/// Policy (F-17): jars and the JDK are unrestricted by design. Their `module-info` graphs are
+/// not modelled — `javac` still rejects a bad import at build time, and resolving into an
+/// internal package (go-to-definition, hover) is a feature, not a leak. Measured by
+/// `testAModularJarsNonExportedPackageIsOfferedWhileJavacRejectsIt`: Umbra offers what
+/// `javac` rejects, on purpose. A `not exported` diagnostic would need the jars' module
+/// graph first; until then, offering more is the safer error.
 public struct JavaModuleVisibility: Sendable, Equatable {
     /// One restricted shard: every package of the module, and the ones the reader may use.
     public struct Restriction: Sendable, Equatable {

@@ -63,6 +63,7 @@ public struct MavenModule: Codable, Sendable, Equatable {
     public var outputDirectory: URL
     public var testOutputDirectory: URL
     public var generatedSourceDirectories: [URL]
+    public var testGeneratedSourceDirectories: [URL]
     public var languageLevel: Int?
     public var compileClasspathJars: [URL]
     public var runtimeClasspathJars: [URL]
@@ -80,7 +81,7 @@ public struct MavenModule: Codable, Sendable, Equatable {
         path: String, directory: URL, groupId: String, artifactId: String, version: String,
         packaging: String = "jar", plugins: [MavenPlugin] = [], dependencyTree: [MavenDependencyNode] = [],
         sourceDirectories: [URL] = [], testSourceDirectories: [URL] = [], outputDirectory: URL, testOutputDirectory: URL,
-        generatedSourceDirectories: [URL] = [], languageLevel: Int? = nil,
+        generatedSourceDirectories: [URL] = [], testGeneratedSourceDirectories: [URL] = [], languageLevel: Int? = nil,
         compileClasspathJars: [URL] = [], runtimeClasspathJars: [URL] = [], testClasspathJars: [URL] = [],
         compileProjectDependencies: [MavenModuleDependency] = [],
         runtimeProjectDependencies: [MavenModuleDependency] = [],
@@ -101,6 +102,7 @@ public struct MavenModule: Codable, Sendable, Equatable {
         self.outputDirectory = outputDirectory
         self.testOutputDirectory = testOutputDirectory
         self.generatedSourceDirectories = generatedSourceDirectories
+        self.testGeneratedSourceDirectories = testGeneratedSourceDirectories
         self.languageLevel = languageLevel
         self.compileClasspathJars = compileClasspathJars
         self.runtimeClasspathJars = runtimeClasspathJars
@@ -190,7 +192,10 @@ public struct MavenProjectModel: Codable, Sendable, Equatable {
                 projectDependencies: testProjects,
                 runtimeClasspathJars: module.testClasspathJars,
                 runtimeProjectDependencies: testProjects,
-                generatedSourceDirs: [],
+                // Test compilation sees the main generated roots plus its own: `javac` puts
+                // both `target/generated-sources` and `target/generated-test-sources` on the
+                // test sourcepath.
+                generatedSourceDirs: module.generatedSourceDirectories + module.testGeneratedSourceDirectories,
                 annotationProcessorJars: module.annotationProcessorJars
             )
             let testTask = JavaGradleProjectModel.GradleTestTask(

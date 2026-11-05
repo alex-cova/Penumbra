@@ -42,6 +42,7 @@ struct MavenEffectiveModule: Sendable {
     var outputDirectory: URL
     var testOutputDirectory: URL
     var generatedSourceDirectories: [URL]
+    var testGeneratedSourceDirectories: [URL]
     var annotationProcessors: [MavenDependency]
     var languageLevel: Int?
     var modules: [String]
@@ -476,7 +477,11 @@ enum MavenModelBuilder {
         let (extraMain, extraTest) = buildHelperSources(plugins: model.plugins, base: directory)
         let output = resolvePath(model.outputDirectory, base: directory)
         let testOutput = resolvePath(model.testOutputDirectory, base: directory)
-        let generated = generatedSources(base: directory)
+        let generated = generatedSources(base: directory, directory: "target/generated-sources", defaultLeaf: "annotations")
+        // Test annotation processors write beside the main output, not in it
+        // (`target/generated-test-sources/test-annotations` by default).
+        let testGenerated = generatedSources(
+            base: directory, directory: "target/generated-test-sources", defaultLeaf: "test-annotations")
         let compiler = model.plugins.first { $0.artifactId == "maven-compiler-plugin" }
         let processors = annotationProcessors(in: compiler?.configuration)
         let level = languageLevel(properties: model.properties, compiler: compiler?.configuration)
@@ -501,6 +506,7 @@ enum MavenModelBuilder {
             outputDirectory: output,
             testOutputDirectory: testOutput,
             generatedSourceDirectories: generated,
+            testGeneratedSourceDirectories: testGenerated,
             annotationProcessors: processors,
             languageLevel: level,
             modules: model.modules,
@@ -561,15 +567,15 @@ enum MavenModelBuilder {
         return (main, test)
     }
 
-    private static func generatedSources(base: URL) -> [URL] {
-        let root = base.appendingPathComponent("target/generated-sources", isDirectory: true)
-        var result = [root.appendingPathComponent("annotations", isDirectory: true)]
+    private static func generatedSources(base: URL, directory: String, defaultLeaf: String) -> [URL] {
+        let root = base.appendingPathComponent(directory, isDirectory: true)
+        var result = [root.appendingPathComponent(defaultLeaf, isDirectory: true)]
         if let children = try? FileManager.default.contentsOfDirectory(
             at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
         ) {
             for child in children {
                 guard (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
-                if child.lastPathComponent != "annotations" { result.append(child) }
+                if child.lastPathComponent != defaultLeaf { result.append(child) }
             }
         }
         return result

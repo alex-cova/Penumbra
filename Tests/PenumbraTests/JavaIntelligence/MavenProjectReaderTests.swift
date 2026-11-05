@@ -380,6 +380,30 @@ final class MavenProjectReaderTests: XCTestCase {
         XCTAssertEqual(testTask.resultsDir?.lastPathComponent, "surefire-reports")
     }
 
+    /// F-17: annotation output is a test-compile root too. The test source set must see
+    /// both the main generated roots and `target/generated-test-sources`, not `[]`.
+    func testTestSourceSetSeesMainAndTestGeneratedSources() async throws {
+        try fixture.install(group: "com.example", artifact: "lib", version: "1")
+        try fixture.writeProject("pom.xml", MavenFixture.pom(group: "com.example", artifact: "app", version: "1", body: """
+        <dependencies>\(dependencyElement("lib", "1"))</dependencies>
+        """))
+        let genMain = fixture.project.appendingPathComponent("target/generated-sources/annotations", isDirectory: true)
+        let genTest = fixture.project.appendingPathComponent(
+            "target/generated-test-sources/test-annotations", isDirectory: true)
+        for directory in [genMain, genTest] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let model = try await fixture.read()
+        let subproject = try XCTUnwrap(model.javaProjectModel.subprojects.first { $0.path == ":" })
+        let main = try XCTUnwrap(subproject.sourceSets.first { $0.name == "main" })
+        let test = try XCTUnwrap(subproject.sourceSets.first { $0.name == "test" })
+        let mainDirs = Set(main.generatedSourceDirs.map(\.standardizedFileURL.path))
+        let testDirs = Set(test.generatedSourceDirs.map(\.standardizedFileURL.path))
+        XCTAssertTrue(mainDirs.contains(genMain.standardizedFileURL.path))
+        XCTAssertTrue(testDirs.contains(genMain.standardizedFileURL.path), "test compiles against main generated sources")
+        XCTAssertTrue(testDirs.contains(genTest.standardizedFileURL.path), "test annotation output is a test root")
+    }
+
     func testMissingParentIsListedForDownload() async throws {
         try fixture.writeProject("pom.xml", """
         <project>

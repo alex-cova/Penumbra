@@ -66,7 +66,8 @@ extension JavaExpressionTarget {
             return .argument(callText: invocation.text, argumentIndex: position, callTarget: target(of: invocation))
         case "variable_declarator":
             guard parent.child(byFieldName: "value")?.startByte == node.startByte,
-                  let declaration = parent.parent, let typeNode = declaration.child(byFieldName: "type"), typeNode.text != "var" else { return nil }
+                  let declaration = parent.parent, let typeNode = declaration.child(byFieldName: "type"), typeNode.text != "var",
+                  typeNode.text != "val" || !JavaLombokMembers.importsLombok(node) else { return nil }
             return .declaredType(JavaTypeNodeConverter.convert(typeNode))
         case "assignment_expression":
             guard parent.child(byFieldName: "right")?.startByte == node.startByte, let left = parent.child(byFieldName: "left") else { return nil }
