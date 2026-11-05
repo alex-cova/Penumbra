@@ -106,6 +106,24 @@ final class IDEStructureRefreshTests: XCTestCase {
         XCTAssertLessThanOrEqual(workspace.structureRefreshesStarted - before, 1, "more than one rebuild for one pause")
     }
 
+    /// F-16: a language with no dedicated provider (Python — pylsp is down in tests, so the
+    /// registry yields nil) falls back to the workspace symbol index, reading through the shared
+    /// parser when the index has not landed yet. Either way the tab shows an outline.
+    func testALanguageWithoutAProviderFallsBackToTheIndex() async throws {
+        XCTAssertNil(workspace.languages.structure(for: "python"), "pylsp must be down in tests")
+        let url = directory.appendingPathComponent("tools.py")
+        try "def greet(name):\n    return name\n".write(to: url, atomically: true, encoding: .utf8)
+        await workspace.openDocument(from: url)
+        workspace.showSidebarTab(.structure)
+        await eventually("no fallback outline for Python", seconds: 10) { workspace.structureStore.root != nil }
+        // The generic declaration table also outlines the module root, so `greet` nests under it.
+        func titles(_ node: StructureNode) -> [String] {
+            [node.title] + node.children.flatMap(titles)
+        }
+        let shown = workspace.structureStore.root.map(titles) ?? []
+        XCTAssertTrue(shown.contains("greet"), "outline shows \(shown)")
+    }
+
     func testAnEditRebuildsTheTreeAfterThePause() async throws {
         let textView = try await openJavaFile()
         workspace.showSidebarTab(.structure)

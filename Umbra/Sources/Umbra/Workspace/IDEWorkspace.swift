@@ -5065,7 +5065,10 @@ public final class IDEWorkspace {
     /// The type a breadcrumb symbol names (or the type enclosing it) with all its members, the symbol
     /// checked. A language without a structure provider has no member outline here and returns `nil`.
     private func structureBreadcrumbMenu(for range: EditorIntelligence.TextRange) async -> NSMenu? {
-        guard let provider = languages.structure(for: statusLanguage) else { return nil }
+        let provider: any StructureProviding = languages.structure(for: statusLanguage)
+            ?? SymbolStructureProvider(
+                index: intelligenceServices.symbolIndex, parser: intelligenceServices.workbenchParser
+            )
         let text = host(for: workbench.activePaneID).textView.text
         guard let roots = await provider.allStructure(forSource: text, document: adapter.currentDocument) else { return nil }
         let utf16Offset = min(max(range.start.utf16Offset, 0), text.utf16.count)
@@ -5122,12 +5125,15 @@ public final class IDEWorkspace {
             documentSettle.cancel("structure", for: textView)
             return
         }
-        guard let provider = languages.structure(for: statusLanguage) else {
-            structureStore.show(message: "No outline for this file")
-            structureBuiltFor = (ObjectIdentifier(textView), textView.contentGeneration)
-            documentSettle.cancel("structure", for: textView)
-            return
-        }
+        // A language with no dedicated provider falls back to the workspace symbol index (F-16):
+        // the same symbols completion reads, so the tab shows an outline with no new parse. When
+        // the index has not landed yet the provider reads through the shared workbench parser the
+        // indexer uses, so the snapshot is still parsed once. "No outline" now means the file
+        // holds no declarations, not that the language is unsupported.
+        let provider: any StructureProviding = languages.structure(for: statusLanguage)
+            ?? SymbolStructureProvider(
+                index: intelligenceServices.symbolIndex, parser: intelligenceServices.workbenchParser
+            )
         // A provider that asks a language server needs the document, not just its text (F26).
         let document = adapter.currentDocument
         documentSettle.schedule(textView: textView, id: "structure", phase: .visible, after: delay) { [weak self] textView, snapshot in

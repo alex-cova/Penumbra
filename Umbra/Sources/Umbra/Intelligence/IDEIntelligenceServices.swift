@@ -6,6 +6,9 @@ import Penumbra
 @MainActor
 final class IDEIntelligenceServices {
     let symbolIndex = SymbolIndex()
+    /// The one tree-sitter parser per language, shared by the indexer and the structure fallback
+    /// (F-16): whoever parses a snapshot first warms the per-snapshot cache for the other.
+    let workbenchParser = IDEWorkbenchLanguageParser()
     let indexingService: IndexingService
     let completionEngine: CompletionEngine
     let hoverEngine: HoverEngine
@@ -90,8 +93,7 @@ final class IDEIntelligenceServices {
         let xcode = IDEXcodeProjectSystem(status: projectStatus)
         self.xcode = xcode
         projectSystems = IDEProjectSystems([gradle, maven, npm, swiftPM, xcode])
-        let parser = IDEWorkbenchLanguageParser()
-        indexingService = IndexingService(parser: parser, index: symbolIndex)
+        indexingService = IndexingService(parser: workbenchParser, index: symbolIndex)
         let sourceKit = LSPLanguageService(
             configuration: IDESourceKitServer.definition().configuration, connections: sourceKitConnection
         )
