@@ -1,4 +1,5 @@
 import Foundation
+import os
 // swiftlint:disable file_length type_body_length
 @preconcurrency import AppKit
 import CoreText
@@ -34,7 +35,19 @@ public struct DocumentTextExport: Sendable {
         self.fallback = fallback
     }
 
+    /// How many times a document has been turned into a string through an export since the process
+    /// started (`@_spi(Benchmarks) import Penumbra`). The copy runs wherever the caller runs it,
+    /// usually off the main actor, so it never shows in a main-thread count; a host that exports
+    /// on every caret move shows here.
+    @_spi(Benchmarks)
+    public static var materializedExportCount: Int {
+        exportMaterializations.withLock { $0 }
+    }
+
+    private static let exportMaterializations = OSAllocatedUnfairLock(initialState: 0)
+
     public func materializeUTF16Text() -> String {
+        Self.exportMaterializations.withLock { $0 += 1 }
         if let snapshot {
             return snapshot.substring(utf16Offset: 0, length: snapshot.utf16Length)
         }
@@ -187,6 +200,13 @@ public struct DocumentTextExport: Sendable {
     /// keystroke reads the buffer through a ranged snapshot.
     var pieceTreeMaterializeCount: Int {
         textInputView.stringView.materializeCount
+    }
+
+    /// ``pieceTreeMaterializeCount`` for a host's benchmarks and tests (`@_spi(Benchmarks) import
+    /// Penumbra`): how many whole-buffer string copies the main actor has made of this document.
+    @_spi(Benchmarks)
+    public var pieceTreeMaterializeCountForBenchmarks: Int {
+        pieceTreeMaterializeCount
     }
 
     /// Sendable document view for ``FindSearchEngine``. File-backed buffers return a piece-tree

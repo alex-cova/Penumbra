@@ -93,6 +93,7 @@ public final class SyntaxParser {
     }
 
     public func parse(_ source: String) -> SyntaxTree? {
+        SyntaxParseStatistics.noteFullParse()
         let bytes = Array(source.utf8)
         guard let tsTree = source.withCString({ cString in
             ts_parser_parse_string(parser, nil, cString, UInt32(bytes.count))
@@ -104,6 +105,7 @@ public final class SyntaxParser {
 
     /// Re-parses `source` incrementally after `oldTree` has been edited with ``SyntaxTree/apply(_:)``.
     package func parseIncremental(oldTree: SyntaxTree, source: String) -> SyntaxTree? {
+        SyntaxParseStatistics.noteIncrementalParse()
         let bytes = Array(source.utf8)
         guard let tsTree = source.withCString({ cString in
             ts_parser_parse_string(parser, oldTree.treeForParsing, cString, UInt32(bytes.count))

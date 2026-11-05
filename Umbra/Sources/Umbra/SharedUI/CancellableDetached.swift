@@ -1,5 +1,6 @@
 import Foundation
 import Penumbra
+import os
 
 /// Runs `operation` on a detached task and returns its result, passing the caller's cancellation on.
 ///
@@ -16,11 +17,56 @@ func runDetached<T: Sendable>(
     priority: TaskPriority? = nil,
     _ operation: @escaping @Sendable () async -> T
 ) async -> T {
+    DetachedWorkStatistics.begin()
+    defer { DetachedWorkStatistics.end() }
     let task = Task.detached(priority: priority, operation: operation)
     return await withTaskCancellationHandler {
         await task.value
     } onCancel: {
+        DetachedWorkStatistics.noteCancelled()
         task.cancel()
+    }
+}
+
+/// What ``runDetached(priority:_:)`` has done since the process started, for tests that hold the
+/// window's background work to a bound: how much was started, how much was superseded, and the
+/// most that was ever waiting or running at once.
+enum DetachedWorkStatistics {
+    struct Counts: Equatable {
+        var started = 0
+        var cancelled = 0
+        var inFlight = 0
+        var peakInFlight = 0
+
+        static func - (lhs: Counts, rhs: Counts) -> Counts {
+            Counts(started: lhs.started - rhs.started, cancelled: lhs.cancelled - rhs.cancelled,
+                   inFlight: lhs.inFlight, peakInFlight: lhs.peakInFlight)
+        }
+    }
+
+    private static let state = OSAllocatedUnfairLock(initialState: Counts())
+
+    static var counts: Counts { state.withLock { $0 } }
+
+    /// Starts a new peak measurement from what is in flight now.
+    static func resetPeak() {
+        state.withLock { $0.peakInFlight = $0.inFlight }
+    }
+
+    fileprivate static func begin() {
+        state.withLock {
+            $0.started += 1
+            $0.inFlight += 1
+            $0.peakInFlight = max($0.peakInFlight, $0.inFlight)
+        }
+    }
+
+    fileprivate static func end() {
+        state.withLock { $0.inFlight -= 1 }
+    }
+
+    fileprivate static func noteCancelled() {
+        state.withLock { $0.cancelled += 1 }
     }
 }
 
