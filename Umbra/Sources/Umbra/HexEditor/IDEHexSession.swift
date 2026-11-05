@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 import AppKit
 import Foundation
 import HexKit
@@ -533,9 +534,9 @@ final class IDEHexSession {
         findTask = Task { [weak self] in
             let found: (matches: [Range<Int64>], capped: Bool)
             do {
-                found = try await Task.detached {
+                found = try await runDetached {
                     try HexSearch.scan(in: snapshot, pattern: pattern, from: 0, limit: HexSearch.defaultLimit)
-                }.value
+                }
             } catch {
                 return
             }
@@ -644,11 +645,11 @@ final class IDEHexSession {
     func compareWithDisk() async {
         guard let url = fileURL else { return }
         let snapshot = document.snapshot()
-        let differences = try? await Task.detached {
+        let differences = try? await runDetached {
             let disk = try FileByteSource(url: url)
             defer { disk.close() }
-            return try HexDiskCompare.differingRanges(document: snapshot, disk: disk)
-        }.value
+            return try HexDiskCompare.differingRanges(document: snapshot, disk: disk, isCancelled: { Task.isCancelled })
+        }
         diskDifferences = differences ?? []
         showsDiskCompare = true
         onChange?()

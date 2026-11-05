@@ -485,6 +485,8 @@ public final class IDEWorkspace {
     /// The buffer the Structure tree on screen was built from. A caret move inside that same text
     /// reselects a node of the tree it already has, without a parse.
     @ObservationIgnored private var structureBuiltFor: (view: ObjectIdentifier, generation: UInt64)?
+    /// Structure rebuilds started, for the tests that hold typing and caret moves to a number of them.
+    @ObservationIgnored private(set) var structureRefreshesStarted = 0
     /// Connects the workspace bridge, the index and the Java overlay at launch; cancelled by `teardown()`.
     @ObservationIgnored private var bootstrapConnectTask: Task<Void, Never>?
     /// The last configuration Run launched in this project, restored across launches. Run Last
@@ -5134,6 +5136,7 @@ public final class IDEWorkspace {
         // `textView.text` would copy a whole file-backed document on every caret move. Capture the
         // cheap piece-tree snapshot here and build the string off the main actor.
         let export = textView.exportDocumentText()
+        structureRefreshesStarted += 1
         let caret = textView.selectedRange.location
         // A provider that asks a language server needs the document, not just its text (F26).
         let document = adapter.currentDocument
@@ -5170,7 +5173,10 @@ public final class IDEWorkspace {
     func noteStructureCaretMoved(in textView: TextView) {
         guard showsStructureSidebar else { return }
         guard let built = structureBuiltFor, built.view == ObjectIdentifier(textView) else {
-            refreshStructure()
+            // No tree for this editor yet (the first build is still running, or another pane was
+            // shown): ask once typing pauses. Rebuilding on every selection change restarted a
+            // build that a keystroke later cancelled again, which on a large file never finished.
+            noteStructureEdited()
             return
         }
         guard built.generation == textView.contentGeneration, let root = structureStore.root else { return }

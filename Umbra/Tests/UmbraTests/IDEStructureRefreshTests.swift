@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 import Penumbra
 import XCTest
@@ -82,6 +83,27 @@ final class IDEStructureRefreshTests: XCTestCase {
         let selected = workspace.structureStore.selectedID.flatMap { workspace.structureStore.node(withID: $0) }
         XCTAssertEqual(selected?.title.contains("two"), true, "selected \(String(describing: selected?.title))")
         XCTAssertEqual(workspace.structureStore.root?.id, rootBefore?.id)
+    }
+
+    /// With no tree built yet (the first build is still running, say) every caret move used to start
+    /// a rebuild that the next one cancelled; on a large file the tree never arrived. They now wait
+    /// for the pause like an edit does.
+    func testCaretMovesBeforeAnyTreeIsBuiltStartOneRebuildAfterThePause() async throws {
+        let textView = try await openJavaFile()
+        workspace.isSidebarVisible = true
+        workspace.selectedSidebarTab = .structure
+        XCTAssertNil(workspace.structureStore.root)
+        let before = workspace.structureRefreshesStarted
+
+        for step in 0..<60 {
+            textView.selectedRange = NSRange(location: step, length: 0)
+            workspace.noteStructureCaretMoved(in: textView)
+            try await Task.sleep(nanoseconds: 4_000_000)
+        }
+
+        XCTAssertEqual(workspace.structureRefreshesStarted - before, 0, "a caret move started a rebuild before the pause")
+        await eventually("the tree never appeared after the pause", seconds: 8) { workspace.structureStore.root != nil }
+        XCTAssertLessThanOrEqual(workspace.structureRefreshesStarted - before, 1, "more than one rebuild for one pause")
     }
 
     func testAnEditRebuildsTheTreeAfterThePause() async throws {

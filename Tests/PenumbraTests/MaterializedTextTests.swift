@@ -68,6 +68,24 @@ final class MaterializedTextTests: XCTestCase {
         XCTAssertTrue(snapshot.text.hasPrefix("other file line"), "answered with the previous file's text")
     }
 
+    /// The text is built on a background thread from a snapshot while the main thread keeps editing
+    /// the same buffer. The snapshot must be unaffected by those edits (and the thread sanitizer
+    /// must see no race: the repo's rule after touching shared background data).
+    func testMaterializingWhileTheMainThreadKeepsEditing() async throws {
+        let view = makeView(large)
+        for round in 0..<40 {
+            let expected = view.text
+            let reader = Task { @MainActor in await view.materializedText() }
+            await Task.yield()
+            for index in 0..<25 {
+                view.replace(NSRange(location: (round + index) % 500, length: 0), withText: "y")
+            }
+            let materialized = await reader.value
+            let snapshot = try XCTUnwrap(materialized)
+            XCTAssertEqual(snapshot.text, expected, "round \(round): the text did not match the buffer it was taken from")
+        }
+    }
+
     func testASmallBufferAlsoWorks() async throws {
         let view = makeView("small")
 

@@ -1,28 +1,89 @@
 import EditorIntelligence
 import Foundation
+import os
 
 /// Tree-sitter folding provider that emits fold descriptors from syntax nodes.
 final class TreeSitterFoldingProvider: FoldingProviding, @unchecked Sendable {
     let name = "tree-sitter"
     weak var languageMode: TreeSitterInternalLanguageMode?
 
+    /// Everything below the next four properties is touched by one fold scan at a time
+    /// (`scanLock`), on a background thread. The main thread never reads or writes them: an edit
+    /// only appends to ``pendingInvalidations``, which the next scan replays before it rebuilds.
+    /// (They used to be written from both, a data race the thread sanitizer reported: the main
+    /// thread shifted `regions` for a keystroke while a scan was rebuilding them.)
     private var cachedLineCount = -1
     private var regions: [(startRow: Int, endRow: Int, placeholder: String)] = []
     private var needsFullRebuild = true
     private var dirtyRows: ClosedRange<Int>?
+
+    private enum Invalidation {
+        case reset
+        case edit(changedRows: ClosedRange<Int>?, lineCount: Int, previousLineCount: Int, spliceRow: Int)
+    }
+
+    private let pendingInvalidations = OSAllocatedUnfairLock(initialState: [Invalidation]())
+    /// Serializes fold scans and guards the state above. Never taken on the main thread, so a
+    /// keystroke does not wait for a rebuild.
+    private let scanLock = NSLock()
+    /// Past this many unreplayed edits the queue becomes one reset: the scan rebuilds in full anyway.
+    private static let maximumPendingInvalidations = 256
 
     func isPrimary(for languageIdentifier: String?) -> Bool {
         languageIdentifier != nil
     }
 
     func invalidate() {
+        pendingInvalidations.withLock { $0 = [.reset] }
+    }
+
+    func invalidateForEdit(changedRows: ClosedRange<Int>?, lineCount: Int, previousLineCount: Int, spliceRow: Int) {
+        pendingInvalidations.withLock { queue in
+            if queue.count >= Self.maximumPendingInvalidations {
+                queue = [.reset]
+            } else {
+                queue.append(.edit(changedRows: changedRows, lineCount: lineCount,
+                                   previousLineCount: previousLineCount, spliceRow: spliceRow))
+            }
+        }
+    }
+
+    func foldRegions(for document: Document) async -> [FoldingDescriptor] {
+        let lineCount = lineCount(in: document)
+        let current = scan(document: document, lineCount: lineCount)
+        return descriptors(from: current, text: document.text)
+    }
+}
+
+private extension TreeSitterFoldingProvider {
+    /// Replays the edits made since the last scan, rebuilds what they dirtied, and returns the regions.
+    private func scan(document: Document, lineCount: Int) -> [(startRow: Int, endRow: Int, placeholder: String)] {
+        scanLock.lock()
+        defer { scanLock.unlock() }
+        let queued = pendingInvalidations.withLock { queue -> [Invalidation] in
+            defer { queue.removeAll(keepingCapacity: true) }
+            return queue
+        }
+        for invalidation in queued {
+            switch invalidation {
+            case .reset:
+                applyReset()
+            case let .edit(changedRows, lineCount, previousLineCount, spliceRow):
+                applyEdit(changedRows: changedRows, lineCount: lineCount, previousLineCount: previousLineCount, spliceRow: spliceRow)
+            }
+        }
+        rebuildIfNeeded(document: document, lineCount: lineCount)
+        return regions
+    }
+
+    private func applyReset() {
         cachedLineCount = -1
         regions = []
         needsFullRebuild = true
         dirtyRows = nil
     }
 
-    func invalidateForEdit(changedRows: ClosedRange<Int>?, lineCount: Int, previousLineCount: Int, spliceRow: Int) {
+    private func applyEdit(changedRows: ClosedRange<Int>?, lineCount: Int, previousLineCount: Int, spliceRow: Int) {
         if needsFullRebuild {
             return
         }
@@ -37,14 +98,6 @@ final class TreeSitterFoldingProvider: FoldingProviding, @unchecked Sendable {
         }
     }
 
-    func foldRegions(for document: Document) async -> [FoldingDescriptor] {
-        let lineCount = lineCount(in: document)
-        rebuildIfNeeded(document: document, lineCount: lineCount)
-        return descriptors(from: regions, text: document.text)
-    }
-}
-
-private extension TreeSitterFoldingProvider {
     private static func merge(_ lhs: ClosedRange<Int>, _ rhs: ClosedRange<Int>) -> ClosedRange<Int> {
         min(lhs.lowerBound, rhs.lowerBound) ... max(lhs.upperBound, rhs.upperBound)
     }

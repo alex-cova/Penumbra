@@ -135,7 +135,18 @@ from its line the first time it is read after an edit (`LineManager.rowVersion`,
   you need and release.
 - After touching parsing, text storage or anything shared with background work, run TSan:
   `swift build --product PerfHarness --sanitize=thread --build-path .build-tsan`, then
-  `enter-session`.
+  `enter-session`. Also run the tests that share the data: `swift test --sanitize=thread
+  --build-path .build-tsan --filter "MaterializedTextTests|JavaParseMemoTests|TreeSitterFoldingProviderConcurrencyTests|…"`
+  and `swift test --package-path Umbra --sanitize=thread --build-path Umbra/.build-tsan --filter
+  "IDEHostEditCostTests|IDEStructureRefreshTests"` (the host harness drives every consumer of a shared
+  tree or text at once). Plant a deliberate race once to see the build reports (a silent run only
+  means something when the sanitizer is live). The harness holds only timing-independent bounds under
+  TSan (full parses, main-thread copies); a sanitized build is several times slower, so the other
+  counts grow and are printed, not asserted.
+- State a background scan and the main thread both touch is not shared by being `@unchecked
+  Sendable`: the main thread appends to a small locked queue and the scan replays it
+  (`TreeSitterFoldingProvider`), or both take a lock the main thread holds only briefly. Never make a
+  keystroke wait for a rebuild.
 
 ## 8. Swift-level traps in hot loops
 

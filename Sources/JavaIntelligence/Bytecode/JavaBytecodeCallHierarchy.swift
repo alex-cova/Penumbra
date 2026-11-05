@@ -55,18 +55,18 @@ public final class JavaBytecodeCallHierarchyProvider: CallHierarchyProviding, @u
     public func callers(of item: HierarchyItem, file: URL?, scope: HierarchyScope) async -> [HierarchyItem] {
         guard let node = item.payload as? Node else { return await fallback.callers(of: item, file: file, scope: scope) }
         let hierarchy = hierarchy(for: node.container)
-        let found = await Task.detached(priority: .userInitiated) {
+        let found = await runDetached(priority: .userInitiated) {
             JavaBytecodeCallerSearch.callers(of: node.target, in: node.container, index: hierarchy)
-        }.value
+        }
         return found.map { self.item(for: Node(target: $0, container: node.container), path: item.id) }
     }
 
     public func callees(of item: HierarchyItem, file: URL?) async -> [HierarchyItem] {
         guard let node = item.payload as? Node else { return await fallback.callees(of: item, file: file) }
         guard node.target.kind == .method else { return [] }
-        let found = await Task.detached(priority: .userInitiated) {
+        let found = await runDetached(priority: .userInitiated) {
             JavaBytecodeCallerSearch.callees(of: node.target, in: node.container)
-        }.value
+        }
         return found.map { self.item(for: Node(target: $0, container: node.container), path: item.id) }
     }
 

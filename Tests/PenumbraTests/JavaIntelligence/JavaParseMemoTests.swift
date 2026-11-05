@@ -45,6 +45,55 @@ final class JavaParseMemoTests: XCTestCase {
         XCTAssertTrue(trees.allSatisfy { $0 === first })
     }
 
+    /// Several features read one shared tree at the same moment, from different threads: the walks
+    /// that make a tree's per-tree caches (declarations, scopes) as well as plain traversals. They
+    /// must agree, and the thread sanitizer must see no race.
+    func testManyThreadsReadingOneSharedTreeAtOnce() async throws {
+        let source = (0..<1_500).map { "class C\($0) { int f(int a) { int b = a + \($0); return b; } String s = \"x\"; }" }
+            .joined(separator: "\n")
+        let memo = JavaParseMemo()
+        let tree = try XCTUnwrap(memo.tree(for: source))
+
+        let counts = await withTaskGroup(of: Int.self) { group in
+            for _ in 0..<8 {
+                group.addTask {
+                    var visited = 0
+                    func walk(_ node: LanguageSyntax.SyntaxNode) {
+                        visited += 1
+                        _ = node.type
+                        for child in node.namedChildren { walk(child) }
+                    }
+                    walk(tree.rootNode)
+                    return visited
+                }
+            }
+            var all: [Int] = []
+            for await count in group { all.append(count) }
+            return all
+        }
+
+        XCTAssertEqual(Set(counts).count, 1, "threads saw different trees: \(counts)")
+        XCTAssertGreaterThan(counts.first ?? 0, 1_000)
+    }
+
+    func testConcurrentSemanticPassesOverOneSharedTreeAgree() async throws {
+        let source = (0..<400).map {
+            "class C\($0) { int f(int a) { int b = a + \($0); return b; } int g() { return f(1) + f(2); } }"
+        }.joined(separator: "\n")
+
+        let results = await withTaskGroup(of: Int?.self) { group in
+            for _ in 0..<6 {
+                group.addTask { await JavaSemanticTokenProvider().tokens(for: source)?.count }
+            }
+            var all: [Int?] = []
+            for await count in group { all.append(count) }
+            return all
+        }
+
+        XCTAssertEqual(Set(results.map { $0 ?? -1 }).count, 1, "passes over one tree disagreed: \(results)")
+        XCTAssertGreaterThan(results.first.flatMap { $0 } ?? 0, 0)
+    }
+
     func testStubsAreKeptPerPathAlongsideTheTree() throws {
         let memo = JavaParseMemo()
         let url = URL(fileURLWithPath: "/proj/A.java")

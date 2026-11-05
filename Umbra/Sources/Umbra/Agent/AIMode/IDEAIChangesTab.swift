@@ -1,3 +1,4 @@
+import func EditorIntelligence.runDetached
 import SwiftUI
 
 /// The diffs the Changes tab shows, computed off the main actor and kept per path. One per window.
@@ -31,14 +32,14 @@ final class IDEAIChangesModel {
         }
         let jobs = files.filter { !$0.isReverted }.prefix(Self.maximumFiles).map { (path: $0.path, original: $0.original) }
         let maximumBytes = Self.maximumBytes
-        let computed = await Task.detached(priority: .userInitiated) {
+        let computed = await runDetached(priority: .userInitiated) {
             var out: [String: Result] = [:]
             for job in jobs {
                 if Task.isCancelled { return out }
                 out[job.path] = Self.result(for: job.path, original: job.original, root: root, unsaved: unsaved, maximumBytes: maximumBytes)
             }
             return out
-        }.value
+        }
         guard !Task.isCancelled else { return }
         results = computed
     }

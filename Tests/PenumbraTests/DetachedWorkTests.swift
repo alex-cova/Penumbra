@@ -1,4 +1,5 @@
 import EditorIntelligence
+import HexKit
 import XCTest
 @testable import Penumbra
 
@@ -90,6 +91,36 @@ final class DetachedWorkTests: XCTestCase {
         XCTAssertLessThan(source.reads - readsAtCancel, 100, "the scan kept reading after it was cancelled")
     }
 
+    /// The hex editor's search has the same check (`Task.checkCancellation()` per chunk) and the
+    /// same caller shape; a search of a multi-gigabyte file that the user has replaced must stop.
+    func testASupersededHexSearchStopsReading() async throws {
+        let source = EndlessByteSource()
+        let pattern = try XCTUnwrap(HexPattern.hex("DEADBEEF"))
+        let scan = Task {
+            try await runDetached(priority: .userInitiated) {
+                try HexSearch.scan(in: source, pattern: pattern, from: 0, limit: HexSearch.defaultLimit)
+            }
+        }
+        try await waitUntil { source.reads >= 5 }
+        let readsAtCancel = source.reads
+
+        scan.cancel()
+
+        let finished = expectation(description: "the search returned")
+        Task {
+            _ = try? await scan.value
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 5)
+        XCTAssertLessThan(source.reads - readsAtCancel, 100, "the search kept reading after it was cancelled")
+        do {
+            _ = try await scan.value
+            XCTFail("a cancelled search returned a result")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+    }
+
     private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
@@ -119,5 +150,22 @@ private final class EndlessSource: FindTextSource, @unchecked Sendable {
         lock.withLock { count += 1 }
         Thread.sleep(forTimeInterval: 0.002)
         return String(repeating: "a", count: max(0, min(length, utf16Length - utf16Offset)))
+    }
+}
+
+/// Four billion bytes of zeros, read at about 500 chunks a second.
+private final class EndlessByteSource: HexByteSource, @unchecked Sendable {
+    let count: Int64 = 4_000_000_000
+    private let lock = NSLock()
+    private var counted = 0
+
+    var reads: Int { lock.withLock { counted } }
+
+    func read(_ range: Range<Int64>, into buffer: UnsafeMutableRawBufferPointer) throws -> Int {
+        lock.withLock { counted += 1 }
+        Thread.sleep(forTimeInterval: 0.002)
+        let length = min(buffer.count, Int(range.count))
+        memset(buffer.baseAddress, 0, length)
+        return length
     }
 }
