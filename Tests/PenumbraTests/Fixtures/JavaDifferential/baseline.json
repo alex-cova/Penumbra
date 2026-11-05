@@ -1,0 +1,39 @@
+{
+  "filesPerProject" : 6,
+  "jdkFeature" : 25,
+  "positionsPerFile" : 12,
+  "prefixLength" : 2,
+  "projects" : [
+    {
+      "attributeFailures" : 0,
+      "commit" : "828a97be0f8d58108b140b77df8dc76b657f4a87",
+      "completionHit" : 28,
+      "completionScored" : 66,
+      "definitionAnswered" : 23,
+      "definitionMatched" : 18,
+      "definitionScored" : 43,
+      "files" : 6,
+      "hoverHit" : 45,
+      "hoverScored" : 66,
+      "name" : "gson",
+      "positions" : 68,
+      "tag" : "gson-parent-2.11.0"
+    },
+    {
+      "attributeFailures" : 0,
+      "commit" : "a6f49caedcb398efe14c06c4e9abf6e672c412f5",
+      "completionHit" : 39,
+      "completionScored" : 69,
+      "definitionAnswered" : 34,
+      "definitionMatched" : 29,
+      "definitionScored" : 51,
+      "files" : 6,
+      "hoverHit" : 44,
+      "hoverScored" : 69,
+      "name" : "jackson-core",
+      "positions" : 72,
+      "tag" : "jackson-core-2.17.2"
+    }
+  ],
+  "topK" : 8
+}

@@ -348,6 +348,40 @@ final class GlyphAtlasTests: XCTestCase {
         XCTAssertEqual(atlas.missCount, missesBefore)
     }
 
+    /// F-12: `warm` rasterizes the exact missed keys off-main, uploads them on the main actor,
+    /// and never dispatches a key twice (or one that is already resident).
+    @MainActor
+    func testWarmRastersOffMainAndUploadsOnMain() async throws {
+        let atlas = try makeAtlas()
+        let font = makeMenlo(pointSize: 14)
+        let requests = try ["A", "B", "C"].map { scalar -> GlyphWarmRequest in
+            let glyph = try XCTUnwrap(
+                GlyphRasterizer.glyph(for: scalar, font: font),
+                "Menlo must provide glyph \(scalar)"
+            )
+            return GlyphWarmRequest(
+                font: font,
+                glyph: glyph,
+                scale: 2,
+                runMatrix: .identity,
+                subpixel: 0,
+                isColor: false,
+                key: GlyphKey.make(font: font, glyph: glyph, scale: 2, isColor: false)
+            )
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            XCTAssertEqual(atlas.warm(requests) { continuation.resume() }, 3)
+            // Still warming: the overlap dispatches nothing and runs no completion.
+            XCTAssertEqual(atlas.warm(requests), 0)
+        }
+        for request in requests {
+            XCTAssertTrue(atlas.hasEntry(request.key))
+            XCTAssertFalse(atlas.isWarming(request.key))
+        }
+        // Resident now: dispatches nothing.
+        XCTAssertEqual(atlas.warm(requests), 0)
+    }
+
     @MainActor
     func testPrewarmBackgroundUploadsOnMain() async throws {
         let atlas = try makeAtlas()

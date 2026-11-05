@@ -488,13 +488,22 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                 previousColors: spec.isSyntaxHighlightPending ? fragment.colorSamples : []
             )
             glyphExtractCount += 1
-            let result = GlyphRunExtractor.extract(request, atlas: atlas, budget: &rasterBudget)
+            var fragmentDeferred: [GlyphWarmRequest] = []
+            let result = GlyphRunExtractor.extract(
+                request, atlas: atlas, budget: &rasterBudget, deferMisses: true, deferred: &fragmentDeferred
+            )
             fragment.glyphs = result.instances
             fragment.glyphsOrigin = spec.frame.origin
-            if result.skips.contains(where: { $0.reason == .rasterCap }) {
+            // F-12: misses extract left unrasterized go to the background queue; the upload
+            // completion re-drives layout, and the retry extract picks them up as hits.
+            if !result.deferred.isEmpty {
+                atlas.warm(result.deferred) { [weak self] in self?.onAtlasWarmed?() }
+            }
+            if result.skips.contains(where: { $0.reason == .rasterCap }) || result.pendingCount > 0 {
                 rasterCapSkipCount += 1
-                // Budget ran out mid-fragment; leave the cache key unset so the next layout pass
-                // re-extracts with a fresh budget and fills in the rest.
+                // Budget ran out mid-fragment, or emit glyphs are still warming in the
+                // background; leave the cache key unset so the next layout pass re-extracts
+                // with a fresh budget and fills in the rest.
                 fragment.cacheKey = nil
                 pendingRasterRetry = true
             } else {

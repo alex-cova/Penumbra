@@ -1,7 +1,18 @@
 package com.umbra.analysis;
 
+import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.LineMap;
+import com.sun.source.tree.Tree;
 import com.sun.source.util.JavacTask;
+import com.sun.source.util.SourcePositions;
+import com.sun.source.util.TreePath;
+import com.sun.source.util.TreeScanner;
+import com.sun.source.util.Trees;
 
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.QualifiedNameable;
+import javax.lang.model.type.TypeKind;
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
 import javax.tools.FileObject;
@@ -52,9 +63,25 @@ import java.util.concurrent.Executors;
  *     "severity":"error", "start":123, "end":128, "line":4, "column":11,
  *     "file":"/…/Foo.java", "message":"cannot find symbol…"}]}}
  *
- * {"id":3,"method":"cancel","params":{"id":2}} → {"id":3,"result":{"ok":true}}
- * {"id":4,"method":"shutdown","params":{}}     → {"id":4,"result":{"ok":true}} (then exits)
+ * {"id":3,"method":"attribute","params":{
+ *   "moduleId":"app/main", "file":"/…/Foo.java", "text":"…", "positions":[120,188]}}
+ * → {"id":3,"result":{"symbols":[{
+ *     "position":120, "kind":"method", "name":"sort",
+ *     "qualified":"java.util.Collections.sort",
+ *     "declarationFile":"/…/Collections.java",
+ *     "declarationStartLine":240, "declarationEndLine":268}]}}
+ *
+ * {"id":4,"method":"cancel","params":{"id":2}} → {"id":4,"result":{"ok":true}}
+ * {"id":5,"method":"shutdown","params":{}}     → {"id":5,"result":{"ok":true}} (then exits)
  * </pre>
+ *
+ * <p>{@code attribute} is the symbol oracle. It attributes {@code file} and resolves each
+ * UTF-16 offset with {@link Trees#getElement}: the smallest tree that covers the offset.
+ * {@code kind} is {@link ElementKind} in lower case, {@code name} is the simple name a
+ * completion list would show (the enclosing type's name for a constructor), and the
+ * declaration fields are present only when that symbol was compiled from source. A position
+ * with no resolvable symbol is absent from {@code symbols}. Offsets are the same UTF-16
+ * code units as {@code check}.
  *
  * <p>{@code key} is {@link Diagnostic#getCode} (e.g. {@code compiler.err.cant.resolve}),
  * {@code start}/{@code end} are UTF-16 offsets into the buffer text the diagnostic is about
@@ -181,6 +208,7 @@ public final class JavaAnalysisServer {
             switch (method) {
                 case "configure" -> handleConfigure(id, params);
                 case "check" -> handleCheck(id, params);
+                case "attribute" -> handleAttribute(id, params);
                 case "cancel" -> {
                     cancelled.add(toLong(params.get("id"), -1));
                     respond(id, Map.of("ok", true), null);
@@ -275,6 +303,163 @@ public final class JavaAnalysisServer {
 
     private List<Object> check(Module module, MemorySource main, List<MemorySource> overlays)
             throws Exception {
+        List<JavaFileObject> units = new ArrayList<>();
+        units.add(main);
+        units.addAll(overlays);
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        // The full pipeline, like a real build: positions and processor behaviour match CLI
+        // javac. Class files go nowhere (see DiscardingOutputs).
+        task(module, units, diagnostics).call();
+
+        List<Object> encoded = new ArrayList<>();
+        for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
+            encoded.add(encode(diagnostic));
+        }
+        return encoded;
+    }
+
+    // MARK: - attribute
+
+    private void handleAttribute(long id, Map<String, Object> params) {
+        String moduleId = string(params.get("moduleId"), "");
+        String file = string(params.get("file"), "");
+        String text = string(params.get("text"), null);
+        if (moduleId.isEmpty() || file.isEmpty() || text == null) {
+            respond(id, null, "attribute needs moduleId, file and text");
+            return;
+        }
+        Module module = modules.get(moduleId);
+        if (module == null) {
+            respond(id, null, "unknown moduleId (configure first): " + moduleId);
+            return;
+        }
+        List<Long> positions = toLongs(params.get("positions"));
+        if (positions.size() > 200) {
+            positions = positions.subList(0, 200);
+        }
+        MemorySource main = new MemorySource(Path.of(file), text);
+        List<Long> queried = positions;
+        checks.submit(() -> {
+            if (cancelled.remove(id)) {
+                respond(id, null, "cancelled");
+                return;
+            }
+            try {
+                respond(id, Map.of("symbols", attribute(module, main, queried)), null);
+            } catch (IllegalArgumentException badOptions) {
+                respond(id, null, badOptions.getMessage());
+            } catch (Exception failure) {
+                respond(id, null, "attribute failed: " + failure);
+            }
+        });
+    }
+
+    /**
+     * The symbol at each offset, after attribution. One position that the compiler cannot
+     * attribute is omitted; it does not fail the file.
+     */
+    private List<Object> attribute(Module module, MemorySource main, List<Long> positions) throws Exception {
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        JavacTask javac = task(module, List.<JavaFileObject>of(main), diagnostics);
+        List<CompilationUnitTree> parsed = new ArrayList<>();
+        for (CompilationUnitTree unit : javac.parse()) parsed.add(unit);
+        javac.analyze();
+        if (parsed.isEmpty()) return List.of();
+        CompilationUnitTree unit = parsed.get(0);
+        Trees trees = Trees.instance(javac);
+        SourcePositions sourcePositions = trees.getSourcePositions();
+
+        List<Tree> leaves = new ArrayList<>();
+        new TreeScanner<Void, Void>() {
+            @Override
+            public Void scan(Tree tree, Void unused) {
+                if (tree == null) return null;
+                long start = sourcePositions.getStartPosition(unit, tree);
+                long end = sourcePositions.getEndPosition(unit, tree);
+                if (start != Diagnostic.NOPOS && end != Diagnostic.NOPOS && start < end) {
+                    leaves.add(tree);
+                }
+                return super.scan(tree, unused);
+            }
+        }.scan(unit, null);
+
+        List<Object> symbols = new ArrayList<>();
+        for (long position : positions) {
+            Tree best = null;
+            long bestSpan = Long.MAX_VALUE;
+            for (Tree tree : leaves) {
+                long start = sourcePositions.getStartPosition(unit, tree);
+                long end = sourcePositions.getEndPosition(unit, tree);
+                long span = end - start;
+                // A later tree of the same span is nested inside the earlier one.
+                if (start <= position && position < end && span <= bestSpan) {
+                    best = tree;
+                    bestSpan = span;
+                }
+            }
+            if (best == null) continue;
+            try {
+                Map<String, Object> encoded = encodeSymbol(trees, sourcePositions, unit, best, position);
+                if (encoded != null) symbols.add(encoded);
+            } catch (RuntimeException unresolved) {
+                // One offset the compiler cannot attribute.
+            }
+        }
+        return symbols;
+    }
+
+    private static Map<String, Object> encodeSymbol(
+            Trees trees, SourcePositions sourcePositions, CompilationUnitTree unit, Tree leaf, long position) {
+        TreePath path = TreePath.getPath(unit, leaf);
+        if (path == null) return null;
+        Element element = trees.getElement(path);
+        if (element == null || element.asType().getKind() == TypeKind.ERROR) return null;
+        String name = element.getSimpleName().toString();
+        if (element.getKind() == ElementKind.CONSTRUCTOR) {
+            Element owner = element.getEnclosingElement();
+            name = owner == null ? "" : owner.getSimpleName().toString();
+        }
+        if (name.isEmpty() || "<init>".equals(name)) return null;
+
+        Map<String, Object> encoded = new LinkedHashMap<>();
+        encoded.put("position", position);
+        encoded.put("kind", element.getKind().name().toLowerCase(Locale.ROOT));
+        encoded.put("name", name);
+        encoded.put("qualified", qualifiedName(element));
+
+        TreePath declaration = trees.getPath(element);
+        if (declaration == null) return encoded;
+        CompilationUnitTree declarationUnit = declaration.getCompilationUnit();
+        long start = sourcePositions.getStartPosition(declarationUnit, declaration.getLeaf());
+        long end = sourcePositions.getEndPosition(declarationUnit, declaration.getLeaf());
+        if (start == Diagnostic.NOPOS || end == Diagnostic.NOPOS || end <= start) return encoded;
+        URI uri = declarationUnit.getSourceFile().toUri();
+        if (!"file".equals(uri.getScheme())) return encoded;
+        LineMap lines = declarationUnit.getLineMap();
+        encoded.put("declarationFile", Path.of(uri).toString());
+        encoded.put("declarationStartLine", lines.getLineNumber(start));
+        encoded.put("declarationEndLine", lines.getLineNumber(end - 1));
+        return encoded;
+    }
+
+    private static String qualifiedName(Element element) {
+        if (element instanceof QualifiedNameable named) {
+            String qualified = named.getQualifiedName().toString();
+            if (!qualified.isEmpty()) return qualified;
+        }
+        String simple = element.getSimpleName().toString();
+        Element owner = element.getEnclosingElement();
+        if (owner instanceof QualifiedNameable named) {
+            String ownerName = named.getQualifiedName().toString();
+            if (!ownerName.isEmpty()) return ownerName + "." + simple;
+        }
+        return simple;
+    }
+
+    /** The file manager cached for the module, and a task over {@code units} that emits nothing. */
+    private JavacTask task(
+            Module module, List<JavaFileObject> units, DiagnosticCollector<JavaFileObject> diagnostics)
+            throws Exception {
         StandardJavaFileManager files;
         synchronized (module) {
             if (module.files == null) {
@@ -306,23 +491,8 @@ public final class JavaAnalysisServer {
             options.add("-proc:none");
         }
         options.addAll(module.options);
-
-        List<JavaFileObject> units = new ArrayList<>();
-        units.add(main);
-        units.addAll(overlays);
-
-        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        // The full pipeline, like a real build: positions and processor behaviour match CLI
-        // javac. Class files go nowhere (see DiscardingOutputs).
-        JavacTask task = (JavacTask) compiler.getTask(
+        return (JavacTask) compiler.getTask(
                 null, new DiscardingOutputs(files), diagnostics, options, null, units);
-        task.call();
-
-        List<Object> encoded = new ArrayList<>();
-        for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
-            encoded.add(encode(diagnostic));
-        }
-        return encoded;
     }
 
     private static Map<String, Object> encode(Diagnostic<? extends JavaFileObject> diagnostic) {
@@ -410,6 +580,16 @@ public final class JavaAnalysisServer {
             }
         }
         return paths;
+    }
+
+    private static List<Long> toLongs(Object value) {
+        List<Long> numbers = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Number number) numbers.add(number.longValue());
+            }
+        }
+        return numbers;
     }
 
     private static List<String> toStrings(Object value) {

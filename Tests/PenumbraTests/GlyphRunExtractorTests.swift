@@ -437,10 +437,18 @@ final class GlyphRunExtractorTests: XCTestCase {
             fallbackColor: .white,
             appearance: nil
         )
-        let result = GlyphRunExtractor.extract(request, atlas: atlas, budget: &budget)
+        var deferred: [GlyphWarmRequest] = []
+        let result = GlyphRunExtractor.extract(
+            request, atlas: atlas, budget: &budget, deferMisses: true, deferred: &deferred
+        )
         XCTAssertFalse(result.glyphs.isEmpty)
-        XCTAssertGreaterThan(result.warmedGlyphCount, 0)
-        XCTAssertEqual(budget.remaining, 0)
+        // F-12: warm-band (prefetch) misses never raster on the calling thread: they defer to
+        // the background queue instead of spending this frame's budget.
+        XCTAssertEqual(result.warmedGlyphCount, 0)
+        XCTAssertFalse(result.deferred.isEmpty)
+        XCTAssertEqual(result.deferred.count, ctGlyphCount(line) - result.glyphs.count)
+        // Emit misses still take the budget first: ABC rasterized synchronously here.
+        XCTAssertEqual(budget.remaining, 8 - result.glyphs.count)
         for glyph in result.glyphs {
             let quad = CGRect(
                 x: CGFloat(glyph.instance.origin.x),
@@ -451,6 +459,71 @@ final class GlyphRunExtractorTests: XCTestCase {
             XCTAssertTrue(quad.intersects(emitRect), "emitted quad must intersect emitRect")
         }
         XCTAssertLessThan(result.glyphs.count, ctGlyphCount(line))
+
+        // Draining the deferred requests with the same rasterize+upload `warm` uses, then
+        // re-extracting, warms the band with zero further main-thread raster.
+        drain(result.deferred, atlas: atlas)
+        var refill = GlyphRasterBudget(limit: 8)
+        var redeferred: [GlyphWarmRequest] = []
+        let reheated = GlyphRunExtractor.extract(
+            request, atlas: atlas, budget: &refill, deferMisses: true, deferred: &redeferred
+        )
+        XCTAssertTrue(reheated.deferred.isEmpty)
+        XCTAssertGreaterThan(reheated.warmedGlyphCount, 0)
+        XCTAssertEqual(refill.remaining, 8)
+    }
+
+    /// F-12: over-budget emit misses defer to the background instead of all re-rasterizing on
+    /// main in later passes. Total synchronous raster to warm N cold glyphs drops from N to
+    /// one budget, and the reheat pass spends nothing.
+    func testOverBudgetEmitMissesDeferInsteadOfRerasteringOnMain() throws {
+        let atlas = try makeAtlas()
+        let font = makeMenlo(pointSize: 16)
+        let string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        let line = makeLine(string, font: font)
+        let metrics = lineMetrics(line)
+        let frame = CGRect(x: 0, y: 0, width: metrics.base.width, height: metrics.scaled.height)
+        var budget = GlyphRasterBudget(limit: 2)
+        let request = GlyphExtractRequest(
+            line: line,
+            fragmentFrame: frame,
+            descent: metrics.descent,
+            baseSize: metrics.base,
+            scaledSize: metrics.scaled,
+            unfocusedAlpha: 1,
+            focusedRanges: [],
+            scale: 2,
+            emitRect: CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000),
+            atlasWarmRect: .null,
+            fallbackFont: font,
+            fallbackColor: .white,
+            appearance: nil
+        )
+        var deferred: [GlyphWarmRequest] = []
+        let result = GlyphRunExtractor.extract(
+            request, atlas: atlas, budget: &budget, deferMisses: true, deferred: &deferred
+        )
+        XCTAssertEqual(budget.remaining, 0)
+        // No run is capped or dropped: over-budget misses leave holes (pending) instead of
+        // forcing the whole run through a fallback raster on the calling thread.
+        XCTAssertTrue(result.skips.isEmpty)
+        XCTAssertEqual(result.glyphs.count, 2)
+        XCTAssertEqual(result.pendingCount, ctGlyphCount(line) - result.glyphs.count)
+        XCTAssertFalse(result.deferred.isEmpty)
+        // Only the budget-many glyphs rasterized synchronously; every other miss deferred.
+        XCTAssertEqual(result.deferred.count, ctGlyphCount(line) - atlas.missCount)
+
+        drain(result.deferred, atlas: atlas)
+        var refill = GlyphRasterBudget(limit: 2)
+        var redeferred: [GlyphWarmRequest] = []
+        let reheated = GlyphRunExtractor.extract(
+            request, atlas: atlas, budget: &refill, deferMisses: true, deferred: &redeferred
+        )
+        XCTAssertTrue(reheated.deferred.isEmpty)
+        XCTAssertTrue(reheated.skips.isEmpty)
+        XCTAssertEqual(reheated.pendingCount, 0)
+        XCTAssertEqual(reheated.glyphs.count, ctGlyphCount(line))
+        XCTAssertEqual(refill.remaining, 2)
     }
 }
 
@@ -523,6 +596,24 @@ private extension GlyphRunExtractorTests {
             return 0
         }
         return runs.reduce(0) { $0 + CTRunGetGlyphCount($1) }
+    }
+
+    /// Synchronously rasterize and upload deferred requests: the same work `GlyphAtlas.warm`
+    /// performs on its background queue, inlined so the test needs no thread hop.
+    func drain(_ deferred: [GlyphWarmRequest], atlas: GlyphAtlas) {
+        for request in deferred {
+            guard case .bitmap(let bitmap) = GlyphRasterizer.rasterize(
+                font: request.font,
+                glyph: request.glyph,
+                scale: request.scale,
+                runMatrix: request.runMatrix,
+                subpixel: request.subpixel,
+                isColor: request.isColor
+            ) else {
+                continue
+            }
+            atlas.upload(bitmap)
+        }
     }
 
     func extract(

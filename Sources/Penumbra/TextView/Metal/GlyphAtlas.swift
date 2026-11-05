@@ -60,6 +60,9 @@ final class GlyphAtlas {
     private var coveragePages: [AtlasPage] = []
     private var colorPages: [AtlasPage] = []
     private var cache: [GlyphKey: CacheEntry] = [:]
+    /// Keys queued for (or undergoing) background raster in `warm`. Extract consults this so a
+    /// retry pass that lands before the upload leaves a hole instead of rasterizing on main.
+    private var warmingKeys: Set<GlyphKey> = []
     /// Font-space glyph bounds for extraction. Not main-actor state, so the (non-isolated) per-run
     /// extraction code can use it without executor checks.
     nonisolated let glyphBoundsCache = GlyphBoundsCache()
@@ -194,6 +197,11 @@ final class GlyphAtlas {
     /// Slot or oversize — used so extract can skip the raster budget on a resident key.
     func hasEntry(_ key: GlyphKey) -> Bool {
         cache[key] != nil
+    }
+
+    /// `true` when `key` is queued for (or undergoing) background raster in `warm`.
+    func isWarming(_ key: GlyphKey) -> Bool {
+        warmingKeys.contains(key)
     }
 
     func cached(_ key: GlyphKey) -> GlyphAtlasSlot? {
@@ -349,6 +357,69 @@ final class GlyphAtlas {
         for page in colorPages where page !== keepColor {
             evict(page)
         }
+    }
+
+    /// Rasterize exactly `requests` off the calling thread and upload the bitmaps on the main
+    /// actor — the per-glyph equivalent of `prewarm` for the keys an extract missed. Keys that
+    /// already have an entry (or are already warming) are skipped, so overlapping extracts
+    /// never rasterize the same glyph twice. `completion` runs on the main actor when at least
+    /// one bitmap uploaded; keys that failed to rasterize stay uncached (and unwarming), so the
+    /// next pass falls back to the synchronous path, exactly as before this mechanism existed.
+    /// Returns the number of keys dispatched (0 when everything was already resident/warming).
+    @discardableResult
+    func warm(
+        _ requests: [GlyphWarmRequest],
+        completion: (@MainActor @Sendable () -> Void)? = nil
+    ) -> Int {
+        var fresh: [GlyphWarmRequest] = []
+        for request in requests where !hasEntry(request.key) && warmingKeys.insert(request.key).inserted {
+            fresh.append(request)
+        }
+        guard !fresh.isEmpty else {
+            return 0
+        }
+        let maxExtent = configuration.maxGlyphExtent
+        // `GlyphKey` (unlike the request, which carries a `CTFont`) is fully `Sendable`, so
+        // the finish closure only crosses threads with keys and bitmaps.
+        let keys = fresh.map(\.key)
+        let finish: @MainActor @Sendable ([GlyphBitmap]) -> Void = { [weak self] bitmaps in
+            guard let self else {
+                return
+            }
+            for key in keys {
+                warmingKeys.remove(key)
+            }
+            var uploaded = 0
+            for bitmap in bitmaps {
+                if case .hit = self.upload(bitmap) {
+                    uploaded += 1
+                }
+            }
+            if uploaded > 0 {
+                completion?()
+            }
+        }
+        Self.prewarmQueue.async {
+            var bitmaps: [GlyphBitmap] = []
+            bitmaps.reserveCapacity(fresh.count)
+            for request in fresh {
+                if case .bitmap(let bitmap) = GlyphRasterizer.rasterize(
+                    font: request.font,
+                    glyph: request.glyph,
+                    scale: request.scale,
+                    runMatrix: request.runMatrix,
+                    subpixel: request.subpixel,
+                    isColor: request.isColor,
+                    maxExtent: maxExtent
+                ) {
+                    bitmaps.append(bitmap)
+                }
+            }
+            Task { @MainActor in
+                finish(bitmaps)
+            }
+        }
+        return fresh.count
     }
 
     /// Builds printable Latin-1 CPU bitmaps (optionally off-main) and uploads on the main actor.

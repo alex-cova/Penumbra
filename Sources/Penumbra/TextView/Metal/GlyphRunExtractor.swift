@@ -51,12 +51,33 @@ struct ExtractedGlyph {
     var undimmedColor: SIMD4<Float>
 }
 
+/// A glyph the extractor chose not to rasterize on the calling (main) thread: the renderer
+/// rasterizes these on a background queue and uploads them on the main actor, and the retry
+/// extract picks them up as cache hits. `font` crosses threads on the same basis as
+/// `FontSnapshot` (`CTFont` is immutable and safe for concurrent reads).
+struct GlyphWarmRequest: @unchecked Sendable {
+    var font: CTFont
+    var glyph: CGGlyph
+    var scale: CGFloat
+    var runMatrix: CGAffineTransform
+    var subpixel: UInt8
+    var isColor: Bool
+    var key: GlyphKey
+}
+
 struct GlyphExtractResult {
     var glyphs: [ExtractedGlyph]
     var baselineY: CGFloat
     var emitRect: CGRect
     var skips: [GlyphRunSkip]
     var warmedGlyphCount: Int
+    /// Misses intentionally left unrasterized: warm-band (prefetch) misses, which must never
+    /// spend the frame's raster budget, and over-budget emit misses. The renderer drains these
+    /// through `GlyphAtlas.warm` instead of re-rasterizing them on main in later passes.
+    var deferred: [GlyphWarmRequest] = []
+    /// Emit glyphs left as holes because their raster is already warming in the background.
+    /// Unlike `skips`, these unset the fragment's cache key so the retry pass fills them in.
+    var pendingCount: Int = 0
 
     var instances: [GlyphInstance] {
         glyphs.map(\.instance)
@@ -162,11 +183,28 @@ enum GlyphRunExtractor {
         return extract(request, atlas: atlas, budget: &budget)
     }
 
+    /// Legacy entry point for owners with no background drain (decoration text): misses
+    /// rasterize synchronously on the calling thread, exactly as before the F-12 deferral.
     @MainActor
     static func extract(
         _ request: GlyphExtractRequest,
         atlas: GlyphAtlas,
         budget: inout GlyphRasterBudget
+    ) -> GlyphExtractResult {
+        var deferred: [GlyphWarmRequest] = []
+        return extract(request, atlas: atlas, budget: &budget, deferMisses: false, deferred: &deferred)
+    }
+
+    /// Renderer entry point: `deferMisses` moves warm-band and over-budget emit misses into
+    /// `deferred` for background raster instead of spending main-thread budget on them. The
+    /// caller drains them through `GlyphAtlas.warm`; the retry extract picks them up as hits.
+    @MainActor
+    static func extract(
+        _ request: GlyphExtractRequest,
+        atlas: GlyphAtlas,
+        budget: inout GlyphRasterBudget,
+        deferMisses: Bool,
+        deferred: inout [GlyphWarmRequest]
     ) -> GlyphExtractResult {
         let baselineY = baselineY(
             baseSize: request.baseSize,
@@ -206,11 +244,21 @@ enum GlyphRunExtractor {
             let runInstanceStart = result.glyphs.count
             var capped: GlyphRunSkipReason?
             for pending in preparedRun.glyphs where pending.band == .emit {
-                switch resolve(pending, preparedRun: preparedRun, request: request, atlas: atlas, budget: &budget) {
+                switch resolve(
+                    pending,
+                    preparedRun: preparedRun,
+                    request: request,
+                    atlas: atlas,
+                    budget: &budget,
+                    deferMisses: deferMisses,
+                    deferred: &deferred
+                ) {
                 case .instance(let extracted):
                     result.glyphs.append(extracted)
                 case .warmed, .skipped:
                     break
+                case .pending:
+                    result.pendingCount += 1
                 case .needsRasterCap:
                     capped = .rasterCap
                 case .failed:
@@ -241,12 +289,15 @@ enum GlyphRunExtractor {
                     preparedRun: preparedRun,
                     request: request,
                     atlas: atlas,
-                    budget: &budget
+                    budget: &budget,
+                    deferMisses: deferMisses,
+                    deferred: &deferred
                 ) {
                     result.warmedGlyphCount += 1
                 }
             }
         }
+        result.deferred = deferred
         return result
     }
 }
@@ -328,6 +379,10 @@ private extension GlyphRunExtractor {
         case instance(ExtractedGlyph)
         case warmed
         case skipped
+        /// The glyph is queued for background raster: leave a hole for it without poisoning
+        /// the run into a whole-run fallback raster on the calling thread. The retry pass
+        /// after the upload fills it in.
+        case pending
         case needsRasterCap
         case failed
     }
@@ -483,7 +538,9 @@ private extension GlyphRunExtractor {
         preparedRun: PreparedRun,
         request: GlyphExtractRequest,
         atlas: GlyphAtlas,
-        budget: inout GlyphRasterBudget
+        budget: inout GlyphRasterBudget,
+        deferMisses: Bool,
+        deferred: inout [GlyphWarmRequest]
     ) -> ResolveResult {
         let subpixel = GlyphKey.subpixelBucket(
             forX: request.fragmentFrame.minX + pending.position.x,
@@ -493,8 +550,43 @@ private extension GlyphRunExtractor {
         key.glyph = UInt16(pending.glyph)
         key.subpixel = subpixel
         if !atlas.hasEntry(key) {
-            guard budget.consume() else {
-                return pending.band == .emit ? .needsRasterCap : .skipped
+            // Deferring owner (the renderer): prefetch misses and over-budget emit misses go
+            // to the background queue. Emit holes unset the fragment's cache key (via
+            // `pendingCount`) so the retry pass fills them in once they upload.
+            if deferMisses {
+                if pending.band == .warm {
+                    deferred.append(GlyphWarmRequest(
+                        font: preparedRun.font,
+                        glyph: pending.glyph,
+                        scale: request.scale,
+                        runMatrix: preparedRun.runMatrix,
+                        subpixel: subpixel,
+                        isColor: preparedRun.isColor,
+                        key: key
+                    ))
+                    return .skipped
+                }
+                // Already queued for background raster: leave a hole without spending budget,
+                // queueing twice, or forcing the run through a whole-run fallback on main.
+                if atlas.isWarming(key) {
+                    return .pending
+                }
+                guard budget.consume() else {
+                    deferred.append(GlyphWarmRequest(
+                        font: preparedRun.font,
+                        glyph: pending.glyph,
+                        scale: request.scale,
+                        runMatrix: preparedRun.runMatrix,
+                        subpixel: subpixel,
+                        isColor: preparedRun.isColor,
+                        key: key
+                    ))
+                    return .pending
+                }
+            } else {
+                guard budget.consume() else {
+                    return pending.band == .emit ? .needsRasterCap : .skipped
+                }
             }
         }
         let slot: GlyphAtlasSlot

@@ -36,7 +36,8 @@ Pass count: **419/419** (`Tests/PenumbraTests/Fixtures/JavaCompletionCorpus`, ra
 
 ## Not yet measured
 
-- Type agreement against `TypeMirror` (needs the `attribute` oracle request and the Phase 4 engine).
+- Symbol identity on pinned external projects (definition, hover, completion top-8): `docs/JAVA_DIFFERENTIAL.md`.
+- Type agreement against `TypeMirror` (`attribute` names the symbol; it does not compare types).
 - Refactoring compile rate (needs the refactoring corpus, Phase 8).
 - Latency gates (need Release PerfHarness runs: native errors for the visible region, warm `javac`
   errors, body re-attribution, completion p95).

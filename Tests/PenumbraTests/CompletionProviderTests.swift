@@ -36,6 +36,29 @@ final class CompletionProviderTests: XCTestCase {
         XCTAssertTrue(items.contains { $0.label == "func" })
     }
 
+    /// F-14: snippet triggers take the same matcher-compatible path as symbols and words,
+    /// so camel-hump queries reach multi-word snippet prefixes.
+    func testSnippetProviderReturnsCamelHumpMatches() async {
+        let provider = SnippetCompletionProvider(snippets: [
+            Snippet(prefix: "getName", body: "getName"),
+            Snippet(prefix: "setName", body: "setName"),
+        ])
+        let items = await provider.provide(context: makeContext(prefix: "gN", documentID: DocumentID()))
+        let labels = items.map(\.label)
+        XCTAssertTrue(labels.contains("getName"), "camel-hump recall: \(labels)")
+        XCTAssertFalse(labels.contains("setName"))
+    }
+
+    /// F-14: later-word-start queries reach snippet prefixes too (`Name` in `getName`).
+    func testSnippetProviderReturnsWordStartMatches() async {
+        let provider = SnippetCompletionProvider(snippets: [
+            Snippet(prefix: "getName", body: "getName"),
+            Snippet(prefix: "setName", body: "setName"),
+        ])
+        let items = await provider.provide(context: makeContext(prefix: "Name", documentID: DocumentID()))
+        XCTAssertTrue(items.map(\.label).contains("getName"))
+    }
+
     /// F-03: the generic providers must serve what the ranker can match. A literal-prefix
     /// pre-filter can never reach camel-hump candidates.
     func testSymbolProviderReturnsCamelHumpMatches() async {

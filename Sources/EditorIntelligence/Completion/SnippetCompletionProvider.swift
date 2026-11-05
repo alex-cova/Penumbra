@@ -17,10 +17,13 @@ public actor SnippetCompletionProvider: CompletionProvider {
         if let language = context.document.languageIdentifier, excludedLanguageIdentifiers.contains(language) {
             return []
         }
-        let prefix = context.prefix.lowercased()
+        let prefix = context.prefix
         return snippets.compactMap { snippet in
-            let snippetPrefix = snippet.prefix.lowercased()
-            if prefix.isEmpty || snippetPrefix.hasPrefix(prefix) {
+            // Matcher-consistent candidate generation (F-14): the ranker drops
+            // anything `CompletionMatcher` rejects, so the provider must not
+            // pre-filter to a literal prefix the matcher could have reached
+            // through a camel-hump or later-word-start tier.
+            if prefix.isEmpty || CompletionMatcher.matches(prefix, snippet.prefix) {
                 return CompletionItem(
                     label: snippet.prefix,
                     insertText: snippet.body,

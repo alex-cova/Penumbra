@@ -32,10 +32,12 @@ public actor JavaAnalysisServerClient {
     private var consecutiveFailures = 0
     private var isShutdown = false
 
-    /// JSON-decoded `result` of one response: either `{"ok":true}` or `{"diagnostics":[…]}`.
+    /// JSON-decoded `result` of one response: `{"ok":true}`, `{"diagnostics":[…]}` or
+    /// `{"symbols":[…]}`.
     private struct ServerResult: Sendable {
         var ok = false
         var diagnostics: [JavaAnalysisServerDiagnostic] = []
+        var symbols: [JavaAnalysisSymbol] = []
     }
 
     public init(configuration: JavaAnalysisServerConfiguration, idleTimeout: Duration = .seconds(600)) {
@@ -99,6 +101,18 @@ public actor JavaAnalysisServerClient {
     /// `beginCheck` plus `result(for:)`.
     public func check(moduleId: String, file: URL, text: String, overlays: [JavaAnalysisServerOverlay] = []) async throws -> [JavaAnalysisServerDiagnostic] {
         try await result(for: try await beginCheck(moduleId: moduleId, file: file, text: text, overlays: overlays))
+    }
+
+    /// The symbols `javac` resolves at `positions` (UTF-16 offsets into `text`). A position with
+    /// no symbol is absent. Runs the same warm server as `check`.
+    public func attribute(moduleId: String, file: URL, text: String, positions: [Int]) async throws -> [JavaAnalysisSymbol] {
+        let params: [String: Any] = [
+            "moduleId": moduleId,
+            "file": file.path,
+            "text": text,
+            "positions": positions,
+        ]
+        return try await send(method: "attribute", params: params).symbols
     }
 
     /// Shuts the server down now (a drained `shutdown`: in-flight checks answer first). A later
@@ -298,7 +312,27 @@ public actor JavaAnalysisServerClient {
             decoded.diagnostics = items.compactMap(Self.decodeDiagnostic)
             decoded.ok = true
         }
+        if let items = result["symbols"] as? [[String: Any]] {
+            decoded.symbols = items.compactMap(Self.decodeSymbol)
+            decoded.ok = true
+        }
         return .success(decoded)
+    }
+
+    private static func decodeSymbol(_ object: [String: Any]) -> JavaAnalysisSymbol? {
+        guard let position = (object["position"] as? NSNumber)?.intValue,
+              let kind = object["kind"] as? String,
+              let name = object["name"] as? String,
+              let qualified = object["qualified"] as? String else { return nil }
+        return JavaAnalysisSymbol(
+            position: position,
+            kind: kind,
+            name: name,
+            qualified: qualified,
+            declarationFile: object["declarationFile"] as? String,
+            declarationStartLine: (object["declarationStartLine"] as? NSNumber)?.intValue,
+            declarationEndLine: (object["declarationEndLine"] as? NSNumber)?.intValue
+        )
     }
 
     private static func decodeDiagnostic(_ object: [String: Any]) -> JavaAnalysisServerDiagnostic? {

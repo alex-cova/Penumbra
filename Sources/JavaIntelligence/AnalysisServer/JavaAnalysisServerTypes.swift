@@ -103,6 +103,40 @@ public struct JavaAnalysisServerDiagnostic: Sendable, Equatable {
     }
 }
 
+/// The symbol `javac` resolved at one UTF-16 offset (`attribute`).
+///
+/// `name` is the simple name a completion list shows (the enclosing type, for a constructor).
+/// `declarationFile` and the line range are set only when the declaration was compiled from
+/// source; a JDK or jar symbol leaves them `nil`. Lines are 1-based and cover the whole
+/// declaration, including its annotations and body.
+public struct JavaAnalysisSymbol: Sendable, Equatable {
+    public let position: Int
+    public let kind: String
+    public let name: String
+    public let qualified: String
+    public let declarationFile: String?
+    public let declarationStartLine: Int?
+    public let declarationEndLine: Int?
+
+    public init(
+        position: Int, kind: String, name: String, qualified: String,
+        declarationFile: String?, declarationStartLine: Int?, declarationEndLine: Int?
+    ) {
+        self.position = position
+        self.kind = kind
+        self.name = name
+        self.qualified = qualified
+        self.declarationFile = declarationFile
+        self.declarationStartLine = declarationStartLine
+        self.declarationEndLine = declarationEndLine
+    }
+
+    /// A declaration compiled from source, so a definition can be compared by file and line.
+    public var hasSourceDeclaration: Bool {
+        declarationFile != nil && declarationStartLine != nil && declarationEndLine != nil
+    }
+}
+
 /// An unsaved buffer that shadows the file on disk for one `check`.
 public struct JavaAnalysisServerOverlay: Sendable {
     public let file: URL
