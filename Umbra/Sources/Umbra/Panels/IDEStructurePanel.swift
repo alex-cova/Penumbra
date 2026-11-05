@@ -17,6 +17,8 @@ struct IDEStructurePanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.panel)
+        // Edits and caret moves do nothing while this tab is hidden; the tree is built when it appears.
+        .onAppear { workspace.refreshStructure() }
     }
 
     private func tree(_ store: IDEStructureStore, root: StructureNode) -> some View {

@@ -1521,19 +1521,16 @@ public final class EditorIntelligenceController {
             return nil
         }
         let text = textView.text
-        let ns = text as NSString
+        let length = textView.documentLength
+        // Line and column come from the line index, as in `buildLiveDocument`. Counting line breaks
+        // in a copy of the text before the caret made every call O(document) per position.
         func position(_ offset: Int) -> TextPosition {
-            let utf16 = min(max(0, offset), ns.length)
-            let before = ns.substring(to: utf16)
-            let line = before.utf16.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
-            let lineStart = (before as NSString).range(of: "\n", options: .backwards)
-            let column = lineStart.location == NSNotFound ? utf16 : utf16 - (lineStart.location + 1)
-            return TextPosition(line: line, column: column, utf16Offset: utf16)
+            livePosition(at: min(max(0, offset), length), in: textView)
         }
         func range(_ selected: NSRange) -> EditorIntelligence.TextRange {
             EditorIntelligence.TextRange(start: position(selected.location), end: position(selected.location + selected.length))
         }
-        let selected = overrideOffset.map { [NSRange(location: min(max(0, $0), ns.length), length: 0)] } ?? textView.selectedRanges
+        let selected = overrideOffset.map { [NSRange(location: min(max(0, $0), length), length: 0)] } ?? textView.selectedRanges
         let caret = position(overrideOffset ?? textView.selectedRange.location)
         return Document(
             id: base.id,

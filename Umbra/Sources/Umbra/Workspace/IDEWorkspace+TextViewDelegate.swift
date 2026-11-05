@@ -6,7 +6,7 @@ import SwiftUI
 extension IDEWorkspace: TextViewDelegate {
     public func textViewDidChangeSelection(_ textView: TextView) {
         updateStatus(from: textView)
-        refreshStructure()
+        noteStructureCaretMoved(in: textView)
     }
 
     public func textView(_ textView: TextView, didChangeContent change: TextContentChange) {
@@ -26,7 +26,7 @@ extension IDEWorkspace: TextViewDelegate {
         scheduleNameIndexOverlay(for: textView)
         noteCoverageEdit(in: textView)
         refreshJavaRunAvailability(from: textView)
-        refreshStructure()
+        noteStructureEdited()
         recordRecentlyEdited()
         // The tab dot and window chrome do not change on the second character. Rebuilding every
         // tab row here re-renders the SwiftUI shell, which lays the editor out again.
@@ -64,16 +64,19 @@ extension IDEWorkspace: TextViewDelegate {
             guard textView.languageIdentifier == "java",
                   textView.documentIdentifier == documentID,
                   textView.documentURL == url else { return }
-            let text = textView.text
+            let caret = textView.selectedRange.location
+            guard let snapshot = await textView.snapshotText() else { return }
+            let text = snapshot.text
             let edits: [TextEdit]
             if pasting, let paste {
                 edits = await self.javaSupport.importEdits(forPastedText: paste, in: text, file: url, policy: policy)
             } else {
                 edits = await self.javaSupport.importEdits(
-                    in: text, caretUTF16: textView.selectedRange.location, file: url, policy: policy
+                    in: text, caretUTF16: caret, file: url, policy: policy
                 )
             }
-            guard !Task.isCancelled, textView.text == text, textView.documentURL == url, !edits.isEmpty else { return }
+            guard !Task.isCancelled, textView.contentGeneration == snapshot.generation,
+                  textView.documentURL == url, !edits.isEmpty else { return }
             self.javaAutoImportApplying = true
             TextEditApplicator.apply(edits, in: textView)
             self.javaAutoImportApplying = false

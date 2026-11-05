@@ -480,6 +480,11 @@ public final class IDEWorkspace {
     /// The language the Type and Call Hierarchy tabs were last asked for (their items belong to it).
     @ObservationIgnored let javaRunAvailability = Debouncer()
     @ObservationIgnored private var structureRefreshTask: Task<Void, Never>?
+    /// Edits rebuild the Structure tree once typing pauses, not per keystroke.
+    @ObservationIgnored private let structureEditDebounce = Debouncer()
+    /// The buffer the Structure tree on screen was built from. A caret move inside that same text
+    /// reselects a node of the tree it already has, without a parse.
+    @ObservationIgnored private var structureBuiltFor: (view: ObjectIdentifier, generation: UInt64)?
     /// Connects the workspace bridge, the index and the Java overlay at launch; cancelled by `teardown()`.
     @ObservationIgnored private var bootstrapConnectTask: Task<Void, Never>?
     /// The last configuration Run launched in this project, restored across launches. Run Last
@@ -1101,6 +1106,7 @@ public final class IDEWorkspace {
         javaAutoImport.cancel()
         structureRefreshTask?.cancel()
         structureRefreshTask = nil
+        structureEditDebounce.cancel()
         // The loops that follow the shared workspace end with the window, not with the process.
         bootstrapConnectTask?.cancel()
         bootstrapConnectTask = nil
@@ -5111,35 +5117,64 @@ public final class IDEWorkspace {
         jumpToSymbol(NSRange(location: node.nameRange.lowerBound, length: node.nameRange.count))
     }
 
+    /// Rebuilds the Structure tree from the active editor. Only does anything while the Structure tab
+    /// is showing: the tree has no other reader, and a parse per edit or caret move for a hidden
+    /// panel is pure cost. Showing the tab (`onShow`, the panel's `onAppear`) calls this again.
     func refreshStructure() {
         structureRefreshTask?.cancel()
+        guard showsStructureSidebar else { return }
+        let textView = host(for: workbench.activePaneID).textView
+        let generation = textView.contentGeneration
+        let builtFor = (view: ObjectIdentifier(textView), generation: generation)
         guard let provider = languages.structure(for: statusLanguage) else {
-            if showsStructureSidebar {
-                structureStore.show(message: "No outline for this file")
-            }
+            structureStore.show(message: "No outline for this file")
+            structureBuiltFor = builtFor
             return
         }
-        let textView = host(for: workbench.activePaneID).textView
         // `textView.text` would copy a whole file-backed document on every caret move. Capture the
         // cheap piece-tree snapshot here and build the string off the main actor.
         let export = textView.exportDocumentText()
-        let generation = textView.contentGeneration
         let caret = textView.selectedRange.location
         // A provider that asks a language server needs the document, not just its text (F26).
         let document = adapter.currentDocument
         structureRefreshTask = Task { @MainActor [weak self, weak textView] in
             guard let self, !Task.isCancelled else { return }
-            let root = await Task.detached(priority: .userInitiated) {
-                await provider.structure(forSource: export.materializeUTF16Text(), document: document, atUTF16Offset: caret)
-            }.value
+            // A request superseded while it waited for a thread stops before it copies the text.
+            let root = await runDetached(priority: .userInitiated) { () -> StructureNode? in
+                guard !Task.isCancelled else { return nil }
+                return await provider.structure(forSource: export.materializeUTF16Text(), document: document, atUTF16Offset: caret)
+            }
             // A newer edit or caret move has its own refresh in flight; drop this result.
             guard !Task.isCancelled, textView?.contentGeneration == generation else { return }
+            self.structureBuiltFor = builtFor
             guard let root else {
                 self.structureStore.show(message: "No type at the caret")
                 return
             }
             self.structureStore.show(root: root, selectedID: root.deepestNode(containing: caret).id)
         }
+    }
+
+    /// An edit: rebuild the tree once typing pauses, if anyone is looking at it.
+    func noteStructureEdited() {
+        guard showsStructureSidebar else { return }
+        let delay = preferences.autoreparseDelayMilliseconds
+        structureEditDebounce.schedule(after: .milliseconds(delay)) { [weak self] in
+            self?.refreshStructure()
+        }
+    }
+
+    /// A caret move. The tree of the text the caret is in already says which node holds it, so the
+    /// selection follows without a parse. A tree for other text (another pane, a file switched
+    /// to) is rebuilt; one for older text of this buffer is left to the edit's pending rebuild.
+    func noteStructureCaretMoved(in textView: TextView) {
+        guard showsStructureSidebar else { return }
+        guard let built = structureBuiltFor, built.view == ObjectIdentifier(textView) else {
+            refreshStructure()
+            return
+        }
+        guard built.generation == textView.contentGeneration, let root = structureStore.root else { return }
+        structureStore.select(root.deepestNode(containing: textView.selectedRange.location).id)
     }
 
     private func applySymbolBreadcrumbs(_ segments: [BreadcrumbSegment]) {

@@ -42,9 +42,10 @@ final class IDEEditorOverlayController {
             guard let textView else { return }
             let generation = textView.contentGeneration
             let export = textView.exportDocumentText()
-            let highlights = await Task.detached(priority: .utility) {
-                await provider.semanticHighlights(forSource: export.materializeUTF16Text())
-            }.value
+            let highlights = await runDetached(priority: .utility) { () -> [SemanticHighlight]? in
+                guard !Task.isCancelled else { return nil }
+                return await provider.semanticHighlights(forSource: export.materializeUTF16Text())
+            }
             guard !Task.isCancelled, let highlights, textView.contentGeneration == generation else { return }
             textView.setSemanticHighlights(highlights.map {
                 SyntaxHighlightRange(range: NSRange(location: $0.range.lowerBound, length: $0.range.count), highlightName: $0.highlightName)
@@ -118,7 +119,10 @@ final class IDEEditorOverlayController {
         guard let url = textView.documentURL else { return }
         nameIndexOverlays.schedule(ObjectIdentifier(textView), after: delay) { [weak textView] in
             guard let textView, textView.documentURL == url else { return }
-            await apply(url, textView.text)
+            guard let snapshot = await textView.snapshotText() else { return }
+            // Typing resumed while the text was being built: its own overlay is pending.
+            guard textView.contentGeneration == snapshot.generation else { return }
+            await apply(url, snapshot.text)
         }
     }
 }
