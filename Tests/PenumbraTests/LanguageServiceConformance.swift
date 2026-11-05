@@ -127,6 +127,7 @@ enum LanguageServiceConformance {
             service.filesDidChange([])
             service.documentsDidSave([])
         }
+        _ = await service.bufferDidSettle(BufferSettleRequest(text: "", url: nil, caretUTF16: 0, suppressEdits: true))
         XCTAssertTrue(box.hooksRanOnMain, "\(service.name) hooks ran off the main actor", file: file, line: line)
     }
 }

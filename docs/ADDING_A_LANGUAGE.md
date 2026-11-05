@@ -126,7 +126,7 @@ Add it to the `LanguageServiceRegistry(services:)` list in `Umbra/Sources/Umbra/
 
 An actor test per provider, plus a "returns nothing for a foreign language" test. Add the mapping to `PerfHarness` if the language has an indexer.
 
-- The window's folder and the files that changed on disk reach a service through two synchronous `@MainActor` hooks, `projectDidChange(root:)` and `filesDidChange(_:)` (defaults do nothing). They are synchronous on purpose: the host reads the result straight after (the next service's decision, the status bar), so a service with slow work starts a task and returns. Umbra's project systems have already seen the folder when the hook runs, so a service can read what they decided.
+- The window's folder and the files that changed on disk reach a service through two synchronous `@MainActor` hooks, `projectDidChange(root:)` and `filesDidChange(_:)` (defaults do nothing). They are synchronous on purpose: the host reads the result straight after (the next service's decision, the status bar), so a service with slow work starts a task and returns. Umbra's project systems have already seen the folder when the hook runs, so a service can read what they decided. After typing pauses, `bufferDidSettle(_:)` gets the buffer text (default does nothing) and may return edits; Java uses it for the name-index overlay and auto-import. The host calls it from `IDELanguageSettle`, not from the text view delegate.
 
 ---
 

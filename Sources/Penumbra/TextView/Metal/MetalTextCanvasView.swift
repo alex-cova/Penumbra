@@ -9,18 +9,20 @@ import QuartzCore
 protocol MetalCanvasGlyphEncoding: AnyObject {
     /// Called inside `MetalTextCanvasView.draw(_:)` with a live encoder whose color attachment is
     /// already cleared to the opaque editor background. Must not call `endEncoding` / `present` / `commit`.
+    /// Returns false when the instance buffers could not be rebuilt because every slot is still
+    /// in flight. The caller keeps the display dirty and does not treat this pass as committed.
     func encode(
         into encoder: MTLRenderCommandEncoder,
         commandBuffer: MTLCommandBuffer,
         drawableSize: CGSize
-    )
+    ) -> Bool
     /// Like `encode`, but forces an instance-buffer rebuild first — for offscreen capture, which
     /// may run after an on-screen `draw` already consumed the dirty flag.
     func encodeForCapture(
         into encoder: MTLRenderCommandEncoder,
         commandBuffer: MTLCommandBuffer,
         drawableSize: CGSize
-    )
+    ) -> Bool
     /// The canvas left its window (cached / hidden host): release grown instance buffers.
     func hostDidLeaveWindow()
     /// Returns whether every instance-buffer slot this frame will write is free. Checked before
@@ -198,11 +200,10 @@ final class MetalTextCanvasView: EditorView {
 
     /// Synchronous encode + present. Used when deferred present is off and for readback capture.
     ///
-    /// When every instance-buffer slot is still owned by an in-flight GPU frame, the sync path
-    /// drops this frame instead of blocking the main thread in the slot wait: the display stays
-    /// dirty and the vsync tick presents once a slot frees. Capture callers pass
-    /// `allowDeferral: false` — they need this frame's pixels now, not the next vsync's.
-    func presentIfDirtyNow(allowDeferral: Bool = true) {
+    /// When every instance-buffer slot is still owned by an in-flight GPU frame, this drops the
+    /// frame instead of blocking the main thread. The display stays dirty and a later tick
+    /// presents once a slot frees. Capture takes the same path: it never waits on a slot.
+    func presentIfDirtyNow() {
         guard window != nil, !isHidden, isDisplayDirty else {
             return
         }
@@ -219,7 +220,7 @@ final class MetalTextCanvasView: EditorView {
             onRenderingFailure?()
             return
         }
-        if allowDeferral, !(glyphEncoder?.canAcquireWriteSlots() ?? true) {
+        if !(glyphEncoder?.canAcquireWriteSlots() ?? true) {
             PenumbraSignposts.event("MetalCanvas.deferredOnBusySlots")
             if usesDeferredPresent {
                 armDisplayLink()
@@ -385,7 +386,7 @@ final class MetalTextCanvasView: EditorView {
     /// dependable way to observe the frame users were shown.
     func capturePresentedLayer() -> NSBitmapImageRep? {
         displayIfNeeded()
-        presentIfDirtyNow(allowDeferral: false)
+        presentIfDirtyNow()
         return lastPresentedImage
     }
 
@@ -426,12 +427,13 @@ final class MetalTextCanvasView: EditorView {
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
             return nil
         }
-        glyphEncoder?.encodeForCapture(
+        let applied = glyphEncoder?.encodeForCapture(
             into: encoder,
             commandBuffer: commandBuffer,
             drawableSize: CGSize(width: width, height: height)
-        )
+        ) ?? false
         encoder.endEncoding()
+        guard applied else { return nil }
         guard let blit = commandBuffer.makeBlitCommandEncoder() else {
             return nil
         }
@@ -545,12 +547,19 @@ private extension MetalTextCanvasView {
         descriptor.colorAttachments[0].storeAction = .store
         descriptor.colorAttachments[0].clearColor = opaqueClearColor
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) {
-            glyphEncoder?.encode(
+            let applied = glyphEncoder?.encode(
                 into: encoder,
                 commandBuffer: commandBuffer,
                 drawableSize: metalLayer.drawableSize
-            )
+            ) ?? true
             encoder.endEncoding()
+            if !applied {
+                // The drawable has to go back to the pool. Nothing was written into an in-flight
+                // slot, and the caller leaves the display dirty so the rebuild runs again.
+                commandBuffer.present(drawable)
+                commandBuffer.commit()
+                return false
+            }
         } else {
             // Still present so CAMetalLayer's drawable pool is released, then fall back.
             context.markUnavailable(reason: "Failed to create Metal render command encoder")

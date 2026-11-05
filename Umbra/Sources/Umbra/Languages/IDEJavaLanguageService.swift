@@ -47,4 +47,24 @@ struct IDEJavaLanguageService: LanguageService {
         let documents = support?.openJavaDocuments?() ?? []
         support?.compileNow(documents, force: true)
     }
+
+    /// The pause after an edit: the name and role indexes see the unsaved buffer, and one
+    /// unambiguous import is proposed when the policy asks for it.
+    @MainActor func bufferDidSettle(_ request: BufferSettleRequest) async -> [TextEdit] {
+        guard let support else { return [] }
+        if let url = request.url {
+            await support.nameIndex.setOverlay(url, text: request.text)
+            await support.roleIndex.setOverlay(url, text: request.text)
+        }
+        guard !request.suppressEdits else { return [] }
+        let policy = support.importPolicy
+        let pasting = request.pastedText != nil && policy.insertImportsOnPaste == .always
+        guard policy.addUnambiguousImportsOnTheFly || pasting else { return [] }
+        if pasting, let paste = request.pastedText {
+            return await support.importEdits(forPastedText: paste, in: request.text, file: request.url, policy: policy)
+        }
+        return await support.importEdits(
+            in: request.text, caretUTF16: request.caretUTF16, file: request.url, policy: policy
+        )
+    }
 }

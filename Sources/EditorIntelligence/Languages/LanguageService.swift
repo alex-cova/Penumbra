@@ -149,9 +149,36 @@ public protocol LanguageService: Sendable {
     /// The host calls this after a save. A semantic service refreshes pushed diagnostics here.
     @MainActor func documentsDidSave(_ urls: [URL])
 
+    /// One of ``languageIdentifiers`` has been still for the host's settle delay. Bring open-buffer
+    /// state up to date and return edits to apply, or none. The default does nothing. Not a new
+    /// feature protocol: a second language implements this the way it implements ``documentsDidSave(_:)``.
+    @MainActor func bufferDidSettle(_ request: BufferSettleRequest) async -> [TextEdit]
+
     /// Called when the window closes: drop everything taken from the environment. The default does
     /// nothing.
     func stop() async
+}
+
+/// The buffer a ``LanguageService/bufferDidSettle(_:)`` sees: the text captured when typing paused,
+/// and whether the host wants edits back. `pastedText` is set when the edit that paused was a paste.
+public struct BufferSettleRequest: Sendable, Equatable {
+    public var text: String
+    public var url: URL?
+    public var caretUTF16: Int
+    public var pastedText: String?
+    /// The edit being settled was itself produced by a previous settle. Overlays still update;
+    /// edits are not proposed again.
+    public var suppressEdits: Bool
+
+    public init(
+        text: String, url: URL?, caretUTF16: Int, pastedText: String? = nil, suppressEdits: Bool = false
+    ) {
+        self.text = text
+        self.url = url
+        self.caretUTF16 = caretUTF16
+        self.pastedText = pastedText
+        self.suppressEdits = suppressEdits
+    }
 }
 
 /// How complete a service's answers are. A syntactic service is always available. A semantic one
@@ -206,6 +233,8 @@ public extension LanguageService {
     /// The host calls this after a save, on the main actor. A semantic service refreshes pushed
     /// diagnostics here. The default does nothing.
     @MainActor func documentsDidSave(_ urls: [URL]) {}
+
+    @MainActor func bufferDidSettle(_ request: BufferSettleRequest) async -> [TextEdit] { [] }
 
     func stop() async {}
 }

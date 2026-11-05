@@ -134,9 +134,9 @@ final class MetalTextCanvasViewTests: XCTestCase {
         XCTAssertFalse(textView.metalDebugGlyphColors(atLocation: 0).isEmpty, "display link should present after pumping the run loop")
     }
 
-    /// F-12: when every instance-buffer slot is in flight, the synchronous present path drops
-    /// the frame instead of blocking the main thread in the slot wait. The display stays dirty
-    /// and presents once slots free — no slot waits recorded.
+    /// F-13: when every instance-buffer slot is in flight, the synchronous present path drops
+    /// the frame instead of blocking the main thread in the slot wait. Capture uses the same
+    /// call. The display stays dirty and presents once slots free — no slot waits recorded.
     func testSyncPresentDropsFrameWhenWriteSlotsAreBusy() throws {
         guard MetalContext.isAvailable else {
             throw XCTSkip("Metal is not available")
@@ -285,16 +285,18 @@ private final class StubGlyphEncoder: MetalCanvasGlyphEncoding {
         into encoder: MTLRenderCommandEncoder,
         commandBuffer: MTLCommandBuffer,
         drawableSize: CGSize
-    ) {
+    ) -> Bool {
         encodeCalls += 1
+        return true
     }
 
     func encodeForCapture(
         into encoder: MTLRenderCommandEncoder,
         commandBuffer: MTLCommandBuffer,
         drawableSize: CGSize
-    ) {
+    ) -> Bool {
         encodeCalls += 1
+        return true
     }
 
     func hostDidLeaveWindow() {}

@@ -8,9 +8,11 @@ import Metal
 /// default path instead of arguing from the code.
 @_spi(Benchmarks)
 public enum MetalWaitSite: String, CaseIterable, Sendable {
-    /// `PageBucket.advanceForWrite`: all three glyph-instance slots are in flight.
+    /// Retired. Glyph instance slots used to block the main thread in `PageBucket.advanceForWrite`.
+    /// A busy frame is now dropped (`canAcquireWriteSlots`), so this site stays at zero.
     case glyphSlot = "glyph_slot"
-    /// `DecorationBuffer.advanceForWrite`: all three decoration slots are in flight.
+    /// Retired. Decoration slots used to block the main thread in `DecorationBuffer.advanceForWrite`.
+    /// A busy frame is now dropped, so this site stays at zero.
     case decorationSlot = "decoration_slot"
     /// `encodePass` waits for the command buffer to be scheduled (deferred present off).
     case presentScheduled = "present_scheduled"

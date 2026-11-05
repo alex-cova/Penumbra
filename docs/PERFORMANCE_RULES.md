@@ -118,12 +118,13 @@ from its line the first time it is read after an edit (`LineManager.rowVersion`,
   loop.
 - Check `MetalPerformanceStats.glyphExtractCount` / `.decorationBuildCount` in tests when
   touching the renderer (`TextViewMetalSmokeTests.testReturnMovesLinesBelowWithoutReextractingThem`).
-- The main thread never blocks on the GPU on the default path. Every blocking wait (instance-slot
-  `NSCondition`, `waitUntilScheduled`/`waitUntilCompleted`) goes through `MetalWaitStats`;
-  `TextViewMetalSmokeTests.testDefaultPathNeverBlocksOnTheGPUWhileScrollingAndTyping` asserts the
-  table stays empty, and `PerfHarness metal-waits` prints it per phase. A new GPU wait needs a site
-  there. Glyph uploads are `MTLTexture.replace` into a shared (unified memory) or managed atlas,
-  never a staging buffer plus a blit plus a wait.
+- The main thread never blocks on the GPU on the default path. Every blocking wait
+  (`waitUntilScheduled`/`waitUntilCompleted`) goes through `MetalWaitStats`. Instance-slot waits
+  do not exist: a frame whose slots are still in flight is dropped and retried
+  (`canAcquireWriteSlots`), including capture. `TextViewMetalSmokeTests.testDefaultPathNeverBlocksOnTheGPUWhileScrollingAndTyping`
+  asserts the table stays empty, and `PerfHarness metal-waits` prints it per phase. A new GPU wait
+  needs a site there. Glyph uploads are `MTLTexture.replace` into a shared (unified memory) or
+  managed atlas, never a staging buffer plus a blit plus a wait.
 
 ## 7. Threading
 

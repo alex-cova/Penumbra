@@ -134,6 +134,8 @@ final class IDEJavaSupport {
     /// Identifier index (`refs.idx`) of the project's source roots; the candidate source for
     /// semantic Find Usages and rename.
     let nameIndex = JavaNameIndex()
+    /// The import policy last handed to the Java providers. ``bufferDidSettle`` reads it.
+    var importPolicy = JavaImportPolicy()
     /// Role overlay for the same roots: which identifiers each file uses in which syntactic
     /// role, so Find Usages only parses files that can bind the target.
     let roleIndex = JavaRoleIndex()
@@ -343,6 +345,7 @@ final class IDEJavaSupport {
         importPolicy: JavaImportPolicy,
         postfix: JavaPostfixConfiguration
     ) {
+        self.importPolicy = importPolicy
         let configuration = InspectionConfiguration(profile: inspectionProfile, projectRoot: projectRoot, testRoots: testRoots)
         let previous = appliedInspectionConfiguration
         appliedInspectionConfiguration = configuration

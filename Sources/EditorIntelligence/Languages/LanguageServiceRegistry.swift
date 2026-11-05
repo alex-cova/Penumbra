@@ -127,6 +127,19 @@ public struct LanguageServiceRegistry: Sendable {
         }
     }
 
+    /// Asks the services that claim `language` what to do now that its buffer has settled.
+    /// Edits come back in registration order, highest tier first. A language with no such work
+    /// returns none.
+    @MainActor
+    public func bufferDidSettle(_ request: BufferSettleRequest, language identifier: String?) async -> [TextEdit] {
+        var edits: [TextEdit] = []
+        for service in services(for: identifier) {
+            guard !Task.isCancelled else { return [] }
+            edits.append(contentsOf: await service.bufferDidSettle(request))
+        }
+        return edits
+    }
+
     /// Stops every service, in reverse registration order.
     public func stop() async {
         for service in services.reversed() {

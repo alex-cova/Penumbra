@@ -3,24 +3,28 @@ import Foundation
 import Penumbra
 
 /// What the window paints over an editor after the text has settled: semantic colours, the gutter's
-/// line markers, and the name index's view of an open Java buffer. Each is computed off the main
-/// actor after a pause, a newer request replaces the pending one, and a result for text that has
+/// line markers, and the name index's view of an open Java buffer. They register on
+/// ``settle`` and share its one pause and one copy of the text. A result for text that has
 /// changed since is dropped, so none of it blocks typing or paints stale offsets.
 ///
 /// It is given the providers and the user's choices on every call and reaches nothing else of the
 /// window; what a marker click does is the caller's.
 @MainActor
 final class IDEEditorOverlayController {
-    private let semanticHighlights = KeyedDebouncer<ObjectIdentifier>()
-    private let markerRefreshes = KeyedDebouncer<ObjectIdentifier>()
-    private let nameIndexOverlays = KeyedDebouncer<ObjectIdentifier>()
+    private static let semanticID = "semantic"
+    private static let markerID = "markers"
+    private static let nameIndexID = "nameIndex"
+
+    let settle: DocumentSettleCoordinator
     /// The markers last painted for an editor and the text generation they were computed for.
     private var shownMarkers: [ObjectIdentifier: (generation: UInt64, markers: [LineMarker])] = [:]
 
+    init(settle: DocumentSettleCoordinator = DocumentSettleCoordinator()) {
+        self.settle = settle
+    }
+
     func cancelAll() {
-        semanticHighlights.cancelAll()
-        markerRefreshes.cancelAll()
-        nameIndexOverlays.cancelAll()
+        settle.cancelAll()
         shownMarkers.removeAll()
     }
 
@@ -32,14 +36,12 @@ final class IDEEditorOverlayController {
     func scheduleSemanticHighlighting(
         for textView: TextView, provider: (any SemanticTokenProviding)?, delay: Duration
     ) {
-        let key = ObjectIdentifier(textView)
         guard let provider else {
-            semanticHighlights.cancel(key)
+            settle.cancel(Self.semanticID, for: textView)
             textView.setSemanticHighlights([])
             return
         }
-        semanticHighlights.schedule(key, after: delay) { [weak textView] in
-            guard let textView, let snapshot = await textView.snapshotText() else { return }
+        settle.schedule(textView: textView, id: Self.semanticID, phase: .visible, after: delay) { textView, snapshot in
             let highlights = await runDetached(priority: .utility) { () -> [SemanticHighlight]? in
                 guard !Task.isCancelled else { return nil }
                 return await provider.semanticHighlights(forSource: snapshot.text)
@@ -72,16 +74,14 @@ final class IDEEditorOverlayController {
         textView.reservedLineMarkerSlots = Self.reservedLineMarkerSlots(
             languageIdentifier: languageIdentifier, hasMarkerProvider: provider != nil)
         guard let provider, !kinds.isEmpty else {
-            markerRefreshes.cancel(key)
+            settle.cancel(Self.markerID, for: textView)
             shownMarkers[key] = nil
             textView.setLineMarkers([])
             textView.lineMarkerHandler = nil
             return
         }
-        markerRefreshes.schedule(key, after: delay) { [weak self, weak textView] in
-            guard let textView else { return }
-            let url = textView.documentURL
-            guard let snapshot = await textView.snapshotText() else { return }
+        let url = textView.documentURL
+        settle.schedule(textView: textView, id: Self.markerID, phase: .visible, after: delay) { [weak self] textView, snapshot in
             let markers = await runDetached(priority: .utility) { () -> [LineMarker]? in
                 guard !Task.isCancelled else { return nil }
                 return await provider.lineMarkers(source: snapshot.text, fileURL: url, kinds: kinds)
@@ -108,17 +108,18 @@ final class IDEEditorOverlayController {
 
     // MARK: Name index
 
-    /// Keeps the name index's view of an open file in step with its buffer once typing pauses, so
-    /// Find Usages sees unsaved edits. `apply` receives the file and its current text.
+    /// Keeps an open file's index overlay in step with its buffer once typing pauses. The window's
+    /// Java path does this through ``LanguageService/bufferDidSettle(_:)``; this remains for a host
+    /// that applies the text itself. `apply` receives the file and its current text.
     func scheduleNameIndexOverlay(
         for textView: TextView, delay: Duration, apply: @escaping (URL, String) async -> Void
     ) {
-        guard let url = textView.documentURL else { return }
-        nameIndexOverlays.schedule(ObjectIdentifier(textView), after: delay) { [weak textView] in
-            guard let textView, textView.documentURL == url else { return }
-            guard let snapshot = await textView.snapshotText() else { return }
-            // Typing resumed while the text was being built: its own overlay is pending.
-            guard textView.contentGeneration == snapshot.generation else { return }
+        guard let url = textView.documentURL else {
+            settle.cancel(Self.nameIndexID, for: textView)
+            return
+        }
+        settle.schedule(textView: textView, id: Self.nameIndexID, phase: .language, after: delay) { textView, snapshot in
+            guard textView.documentURL == url, textView.contentGeneration == snapshot.generation else { return }
             await apply(url, snapshot.text)
         }
     }

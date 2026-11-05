@@ -79,7 +79,9 @@ public actor JavaStructureProvider {
 
     private func roots(of text: String) -> [JavaStructureNode]? {
         if cachedText == text { return cachedRoots }
-        guard let tree = JavaSyntaxParser().parse(text) else { return nil }
+        // The same text the settle just parsed for colours and markers. A second parser here
+        // was a full parse of the buffer on every pause the Structure tab was showing.
+        guard let tree = JavaParseMemo.shared.tree(for: text) else { return nil }
         var roots: [JavaStructureNode] = []
         for node in tree.rootNode.namedChildren where Self.typeDeclarations.contains(node.type) {
             if let built = buildTypeNode(node) {

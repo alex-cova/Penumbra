@@ -19,7 +19,7 @@ extension IDEWorkspace {
 
     /// Puts a `play.fill` button in the gutter on the first line of every request in an `.http`
     /// file. Clicking one sends that request, wherever the caret is.
-    func refreshHTTPGutter(from textView: TextView, fileURL: URL?) {
+    func refreshHTTPGutter(from textView: TextView, fileURL: URL?, text: String) {
         let stamp = HTTPGutterStamp(
             view: ObjectIdentifier(textView),
             documentID: workbench.activePane.selectedDocument?.id,
@@ -27,7 +27,6 @@ extension IDEWorkspace {
         )
         guard stamp != httpGutterStamp else { return }
         httpGutterStamp = stamp
-        let text = textView.text
         let locations = HTTPRequestParser.requestLocations(in: text)
         httpFileCanSend = !locations.isEmpty
         httpSupport.prefetchSchemas(in: text, fileURL: fileURL)
@@ -64,9 +63,9 @@ extension IDEWorkspace {
     }
 
     func refreshJavaRunAvailability(from textView: TextView) {
-        javaRunAvailability.schedule(after: .milliseconds(300)) { [weak self, weak textView] in
-            guard let self, let textView else { return }
-            await self.refreshJavaRunAvailabilityNow(from: textView)
+        documentSettle.schedule(textView: textView, id: "runAvailability", phase: .language, after: settleDelay) { [weak self] textView, snapshot in
+            guard let self else { return }
+            await self.refreshJavaRunAvailabilityNow(from: textView, snapshot: snapshot)
         }
     }
 
@@ -75,22 +74,26 @@ extension IDEWorkspace {
     /// tests); on a piece-tree buffer that is a whole-document copy, so it is built once, off the
     /// main actor, for both the button and the gutter. A buffer edited again meanwhile is left to
     /// the refresh that edit scheduled.
-    func refreshJavaRunAvailabilityNow(from textView: TextView) async {
+    func refreshJavaRunAvailabilityNow(
+        from textView: TextView, snapshot: DocumentSettleCoordinator.Snapshot? = nil
+    ) async {
         let document = workbench.activePane.selectedDocument
         let documentID = document?.id
         let isJava = document?.languageIdentifier == "java"
         let fileURL = document?.url
+        if let snapshot, (textView.contentGeneration != snapshot.generation
+            || workbench.activePane.selectedDocument?.id != documentID) { return }
         let readsText = document.map { databaseSupport.consoles[$0.id] == nil && $0.languageIdentifier != "http" } ?? true
-        var content: String?
-        if readsText, activeRunProvider != nil {
-            guard let snapshot = await textView.snapshotText(),
-                  textView.contentGeneration == snapshot.generation,
+        var content = snapshot?.text
+        if readsText, activeRunProvider != nil, content == nil {
+            guard let taken = await textView.snapshotText(),
+                  textView.contentGeneration == taken.generation,
                   workbench.activePane.selectedDocument?.id == documentID else { return }
-            content = snapshot.text
+            content = taken.text
         }
         if let provider = activeRunProvider {
             runFileCanRun = provider.canRun(IDERunDocument(
-                url: fileURL, languageIdentifier: document?.languageIdentifier, text: content ?? textView.text
+                url: fileURL, languageIdentifier: document?.languageIdentifier, text: content ?? ""
             ))
         } else {
             runFileCanRun = false
@@ -104,7 +107,9 @@ extension IDEWorkspace {
             refreshDatabaseGutter(from: textView)
         } else if document?.languageIdentifier == "http" {
             databaseGutterStamp = nil
-            refreshHTTPGutter(from: textView, fileURL: fileURL)
+            if let content {
+                refreshHTTPGutter(from: textView, fileURL: fileURL, text: content)
+            }
         } else {
             httpGutterStamp = nil
             databaseGutterStamp = nil

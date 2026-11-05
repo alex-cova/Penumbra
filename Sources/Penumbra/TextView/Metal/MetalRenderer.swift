@@ -68,22 +68,13 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             buffers[cursor]
         }
 
-        func advanceForWrite() {
-            if !tryAdvanceForWrite() {
-                slotCondition.lock()
-                defer { slotCondition.unlock() }
-                while true {
-                    for offset in 1...buffers.count {
-                        let candidate = (cursor + offset) % buffers.count
-                        if inFlightCounts[candidate] == 0 {
-                            cursor = candidate
-                            return
-                        }
-                    }
-                    PenumbraSignposts.event("MetalRenderer.slotWait")
-                    MetalWaitStats.measure(.glyphSlot) { slotCondition.wait() }
-                }
-            }
+        /// Moves to a free slot. Returns false when every slot is still in flight: the caller
+        /// skips the write and presents again later. There is no blocking wait — it used to
+        /// sleep the main thread on `slotCondition` whenever a caller had not checked
+        /// ``canAcquireWriteSlot()`` first.
+        @discardableResult
+        func advanceForWrite() -> Bool {
+            tryAdvanceForWrite()
         }
 
         func canAcquireWriteSlot() -> Bool {
@@ -146,11 +137,15 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             buffers[cursor]
         }
 
-        func write<T>(_ items: [T]) {
-            advanceForWrite()
+        /// Writes `items` into a free slot. Returns false without touching the buffers when
+        /// every slot is still in flight, so a GPU frame can never be overwritten and the
+        /// caller can retry.
+        @discardableResult
+        func write<T>(_ items: [T]) -> Bool {
+            guard advanceForWrite() else { return false }
             count = items.count
             guard !items.isEmpty else {
-                return
+                return true
             }
             let needed = items.count * stride
             if capacities[cursor] < needed {
@@ -165,13 +160,14 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             }
             guard let buffer = buffers[cursor] else {
                 count = 0
-                return
+                return true
             }
             items.withUnsafeBytes { raw in
                 if let base = raw.baseAddress {
                     buffer.contents().copyMemory(from: base, byteCount: needed)
                 }
             }
+            return true
         }
 
         func compact() {
@@ -196,22 +192,11 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             }
         }
 
-        private func advanceForWrite() {
-            if !tryAdvanceForWrite() {
-                slotCondition.lock()
-                defer { slotCondition.unlock() }
-                while true {
-                    for offset in 1...buffers.count {
-                        let candidate = (cursor + offset) % buffers.count
-                        if inFlightCounts[candidate] == 0 {
-                            cursor = candidate
-                            return
-                        }
-                    }
-                    PenumbraSignposts.event("MetalRenderer.slotWait")
-                    MetalWaitStats.measure(.decorationSlot) { slotCondition.wait() }
-                }
-            }
+        /// Moves to a free slot. Returns false when every slot is still in flight. Same rule
+        /// as ``PageBucket/advanceForWrite()``: the main thread never waits here.
+        @discardableResult
+        private func advanceForWrite() -> Bool {
+            tryAdvanceForWrite()
         }
 
         func canAcquireWriteSlot() -> Bool {
@@ -815,23 +800,30 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
 
     // MARK: - MetalCanvasGlyphEncoding
 
+    @discardableResult
     func encode(
         into encoder: MTLRenderCommandEncoder,
         commandBuffer: MTLCommandBuffer,
         drawableSize: CGSize
-    ) {
+    ) -> Bool {
         let start = DispatchTime.now().uptimeNanoseconds
         var didDraw = false
+        // A rebuild that cannot take a free slot leaves the previous buffers in place and
+        // reports false. The canvas keeps the display dirty and tries again; it does not wait.
+        var appliedRebuild = true
         PenumbraSignposts.interval("MetalRenderer.draw") {
             if needsGlyphBufferRebuild || needsDecorationBufferRebuild {
                 let rebuildStart = DispatchTime.now().uptimeNanoseconds
-                rebuildInstanceBuffers(
+                appliedRebuild = rebuildInstanceBuffers(
                     rebuildGlyphs: needsGlyphBufferRebuild,
                     rebuildSolids: needsDecorationBufferRebuild
                 )
                 lastInstanceRebuildNanos = Int(DispatchTime.now().uptimeNanoseconds &- rebuildStart)
             }
-            guard canvasFrame.width > 0, canvasFrame.height > 0 else {
+            // Drawing marks the current slot in flight. Skip it when the rebuild could not
+            // take a free slot: the buffers still belong to a frame on the GPU, and marking
+            // them again on a command buffer the caller may discard would leak the slot.
+            guard appliedRebuild, canvasFrame.width > 0, canvasFrame.height > 0 else {
                 return
             }
             var uniforms = MetalProjection.uniforms(canvasFrame: canvasFrame, scale: scale)
@@ -855,7 +847,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             didDraw = true
         }
         recordDrawNanos(DispatchTime.now().uptimeNanoseconds &- start)
-        if didDraw {
+        if didDraw, appliedRebuild {
             needsGlyphBufferRebuild = false
             needsDecorationBufferRebuild = false
             dirtyFragmentIDs.removeAll(keepingCapacity: true)
@@ -863,16 +855,18 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             needsFullGlyphRebuild = false
             rasterBudget = GlyphRasterBudget()
         }
+        return appliedRebuild
     }
 
+    @discardableResult
     func encodeForCapture(
         into encoder: MTLRenderCommandEncoder,
         commandBuffer: MTLCommandBuffer,
         drawableSize: CGSize
-    ) {
+    ) -> Bool {
         needsGlyphBufferRebuild = true
         needsDecorationBufferRebuild = true
-        encode(into: encoder, commandBuffer: commandBuffer, drawableSize: drawableSize)
+        return encode(into: encoder, commandBuffer: commandBuffer, drawableSize: drawableSize)
     }
 
     /// `true` (once) when the last extract capped and needs another layout pass to finish.
@@ -965,13 +959,15 @@ private extension MetalRenderer {
         dirtyPageIDs.formUnion(overlayPageContributions.keys)
     }
 
-    private func rebuildDirtyGlyphPages() {
+    private func rebuildDirtyGlyphPages() -> Bool {
         dirtyGlyphRebuildCount += 1
         for pageID in dirtyPageIDs {
             let textInstances = sortedPageInstances(textPageContributions[pageID])
             let overlayInstances = sortedPageInstances(overlayPageContributions[pageID])
-            writeGlyphPage(pageID, instances: textInstances, buckets: &textPageBuckets, order: &textPageOrder)
-            writeGlyphPage(pageID, instances: overlayInstances, buckets: &overlayPageBuckets, order: &overlayPageOrder)
+            guard writeGlyphPage(pageID, instances: textInstances, buckets: &textPageBuckets, order: &textPageOrder),
+                  writeGlyphPage(pageID, instances: overlayInstances, buckets: &overlayPageBuckets, order: &overlayPageOrder) else {
+                return false
+            }
         }
         textPageOrder = textPageContributions.keys.sorted()
         overlayPageOrder = overlayPageContributions.keys.sorted()
@@ -980,6 +976,7 @@ private extension MetalRenderer {
         } + overlayPageContributions.values.reduce(0) { pageTotal, contributions in
             pageTotal + contributions.values.reduce(0) { $0 + $1.count }
         }
+        return true
     }
 
     private func sortedPageInstances(
@@ -995,10 +992,10 @@ private extension MetalRenderer {
         instances: [GlyphInstance],
         buckets: inout [UInt32: PageBucket],
         order: inout [UInt32]
-    ) {
+    ) -> Bool {
         guard let texture = atlas.pageTexture(id: pageID) else {
             buckets.removeValue(forKey: pageID)
-            return
+            return true
         }
         let bucket: PageBucket
         if let existing = buckets[pageID] {
@@ -1007,9 +1004,9 @@ private extension MetalRenderer {
             buckets[pageID] = created
             bucket = created
         } else {
-            return
+            return true
         }
-        bucket.advanceForWrite()
+        guard bucket.advanceForWrite() else { return false }
         bucket.current.write(instances)
         _ = texture
         if instances.isEmpty {
@@ -1018,6 +1015,7 @@ private extension MetalRenderer {
             order.append(pageID)
             order.sort()
         }
+        return true
     }
 
     static func makePipeline(
@@ -1046,16 +1044,19 @@ private extension MetalRenderer {
         return try? device.makeRenderPipelineState(descriptor: descriptor)
     }
 
-    private func rebuildInstanceBuffers(rebuildGlyphs: Bool, rebuildSolids: Bool) {
+    private func rebuildInstanceBuffers(rebuildGlyphs: Bool, rebuildSolids: Bool) -> Bool {
+        // Every slot this rebuild will write has to be free before the first write. A failure
+        // here writes nothing, so a retry is not a mix of old and new pages.
+        guard canAcquireWriteSlots() else { return false }
         // The dirty-page path covers glyphs whenever the contribution map is exact; solids are
         // an independent write, so a decoration rebuild no longer forces a full glyph regroup.
         if rebuildGlyphs, !needsFullGlyphRebuild, !dirtyPageIDs.isEmpty {
             PenumbraSignposts.event("MetalRenderer.dirtyPageRebuild")
-            rebuildDirtyGlyphPages()
+            guard rebuildDirtyGlyphPages() else { return false }
             if rebuildSolids {
-                writeSolidBuffers()
+                guard writeSolidBuffers() else { return false }
             }
-            return
+            return true
         }
         if rebuildGlyphs || rebuildSolids {
             PenumbraSignposts.event("MetalRenderer.fullGlyphRebuild")
@@ -1088,21 +1089,27 @@ private extension MetalRenderer {
         }
         if rebuildGlyphs {
             glyphBufferRebuildCount += 1
-            rebuildGlyphBuckets(from: textByPage, buckets: &textPageBuckets, order: &textPageOrder)
-            rebuildGlyphBuckets(from: overlayByPage, buckets: &overlayPageBuckets, order: &overlayPageOrder)
+            guard rebuildGlyphBuckets(from: textByPage, buckets: &textPageBuckets, order: &textPageOrder),
+                  rebuildGlyphBuckets(from: overlayByPage, buckets: &overlayPageBuckets, order: &overlayPageOrder) else {
+                return false
+            }
             let glyphCount = textByPage.values.reduce(0) { $0 + $1.count }
                 + overlayByPage.values.reduce(0) { $0 + $1.count }
             lastInstanceCounts.glyphs = glyphCount
         }
         if rebuildSolids {
-            writeSolidBuffers(from: underlaySolids, overlay: overlaySolids, lines: underlayLines)
+            guard writeSolidBuffers(from: underlaySolids, overlay: overlaySolids, lines: underlayLines) else {
+                return false
+            }
         }
         PenumbraSignposts.event("MetalRenderer.instanceCount")
+        return true
     }
 
     /// Solids regrouped from current fragment decorations, in the same fragment order as the
     /// full rebuild so draw order is identical on either path.
-    private func writeSolidBuffers() {
+    @discardableResult
+    private func writeSolidBuffers() -> Bool {
         var underlaySolids = canvasUnderlaySolids
         var overlaySolids: [SolidInstance] = []
         var underlayLines: [DecorationVertex] = []
@@ -1111,15 +1118,19 @@ private extension MetalRenderer {
             overlaySolids.append(contentsOf: fragment.decorations.overlaySolids)
             underlayLines.append(contentsOf: fragment.decorations.underlayTriangles)
         }
-        writeSolidBuffers(from: underlaySolids, overlay: overlaySolids, lines: underlayLines)
+        return writeSolidBuffers(from: underlaySolids, overlay: overlaySolids, lines: underlayLines)
     }
 
-    private func writeSolidBuffers(from underlaySolids: [SolidInstance], overlay: [SolidInstance], lines: [DecorationVertex]) {
+    @discardableResult
+    private func writeSolidBuffers(from underlaySolids: [SolidInstance], overlay: [SolidInstance], lines: [DecorationVertex]) -> Bool {
         solidBufferRebuildCount += 1
-        underlaySolidBuffer.write(underlaySolids)
-        overlaySolidBuffer.write(overlay)
-        underlayLineBuffer.write(lines)
+        guard underlaySolidBuffer.write(underlaySolids),
+              overlaySolidBuffer.write(overlay),
+              underlayLineBuffer.write(lines) else {
+            return false
+        }
         lastInstanceCounts.solids = underlaySolids.count + overlay.count
+        return true
     }
 
     private static func fragmentOrder(lhs: (key: LineFragmentID, value: GPUFragment), rhs: (key: LineFragmentID, value: GPUFragment)) -> Bool {
@@ -1152,7 +1163,7 @@ private extension MetalRenderer {
         from instancesByPage: [UInt32: [GlyphInstance]],
         buckets: inout [UInt32: PageBucket],
         order: inout [UInt32]
-    ) {
+    ) -> Bool {
         for pageID in Array(buckets.keys) {
             guard let bucket = buckets[pageID] else {
                 continue
@@ -1160,7 +1171,7 @@ private extension MetalRenderer {
             if atlas.pageTexture(id: pageID) == nil {
                 buckets.removeValue(forKey: pageID)
             } else if instancesByPage[pageID] == nil {
-                bucket.advanceForWrite()
+                guard bucket.advanceForWrite() else { return false }
                 bucket.current.write([])
             }
         }
@@ -1178,10 +1189,11 @@ private extension MetalRenderer {
             } else {
                 continue
             }
-            bucket.advanceForWrite()
+            guard bucket.advanceForWrite() else { return false }
             bucket.current.write(instances)
             order.append(pageID)
         }
+        return true
     }
 
     private func pixelAligned(_ instance: GlyphInstance) -> GlyphInstance {

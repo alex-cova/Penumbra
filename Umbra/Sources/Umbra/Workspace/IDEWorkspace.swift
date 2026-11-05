@@ -77,12 +77,9 @@ public final class IDEWorkspace {
     /// Ranged edits an editor reported since its last `textViewDidChange`, kept only while another
     /// pane shows the same document so they can be replayed there.
     @ObservationIgnored var pendingMirrorChanges: [ObjectIdentifier: [TextContentChange]] = [:]
-    /// Idle unambiguous-import insertion. A keystroke only cancels this; the buffer is read after the pause.
-    @ObservationIgnored let javaAutoImport = Debouncer()
-    /// Set while the import edit itself is applied, so that edit does not schedule another pass.
-    @ObservationIgnored var javaAutoImportApplying = false
-    /// The pasted text of the edit that is about to be reported, when it matches the pasteboard.
-    @ObservationIgnored var javaAutoImportPaste: String?
+    /// Paste tracking and the per-language settle (`LanguageService.bufferDidSettle`). Not the
+    /// text view delegate: a language owns what a pause does.
+    @ObservationIgnored let languageSettle = IDELanguageSettle()
     @ObservationIgnored var hasPresentedMetalFailure = false
     /// The recent lists are shared by every window (`IDEAppState`), so what one window opens shows
     /// in all of them.
@@ -291,6 +288,9 @@ public final class IDEWorkspace {
 
 
     public init() {
+        let settle = DocumentSettleCoordinator()
+        documentSettle = settle
+        overlays = IDEEditorOverlayController(settle: settle)
         reference.workspace = self
         if Self.isSessionPersistenceEnabled { localHistory.enable(baseDirectory: IDELocalHistoryRecorder.defaultDirectory()) }
         agent.attach(host: self)
@@ -473,15 +473,10 @@ public final class IDEWorkspace {
     var javaFileCanTest = false
     var runFileURL: URL?
     var activeJavaTestClass: JavaTestClass?
+    /// One pause, one copy of the text, for everything the window does because typing stopped.
+    @ObservationIgnored let documentSettle: DocumentSettleCoordinator
     /// Semantic colours, gutter markers and the name-index overlay painted over the editors.
-    @ObservationIgnored private let overlays = IDEEditorOverlayController()
-    /// The Java markers shown in each text view, with the buffer generation they were computed
-    /// for; a click maps the engine marker's `id` back to its index here.
-    /// The language the Type and Call Hierarchy tabs were last asked for (their items belong to it).
-    @ObservationIgnored let javaRunAvailability = Debouncer()
-    @ObservationIgnored private var structureRefreshTask: Task<Void, Never>?
-    /// Edits rebuild the Structure tree once typing pauses, not per keystroke.
-    @ObservationIgnored private let structureEditDebounce = Debouncer()
+    @ObservationIgnored private let overlays: IDEEditorOverlayController
     /// The buffer the Structure tree on screen was built from. A caret move inside that same text
     /// reselects a node of the tree it already has, without a parse.
     @ObservationIgnored private var structureBuiltFor: (view: ObjectIdentifier, generation: UInt64)?
@@ -1104,11 +1099,6 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.teardown()
         languageServerHost.stop()
         overlays.cancelAll()
-        javaRunAvailability.cancel()
-        javaAutoImport.cancel()
-        structureRefreshTask?.cancel()
-        structureRefreshTask = nil
-        structureEditDebounce.cancel()
         // The loops that follow the shared workspace end with the window, not with the process.
         bootstrapConnectTask?.cancel()
         bootstrapConnectTask = nil
@@ -1278,7 +1268,7 @@ public final class IDEWorkspace {
             isJSONDiagramVisible = host.isJSONDiagramVisible
             isCSVTableVisible = host.isCSVTableVisible
         }
-        scheduleSemanticHighlighting(host: host, languageIdentifier: identifier, delay: 0)
+        scheduleSemanticHighlighting(host: host, languageIdentifier: identifier, delay: .zero)
         Task { await workspaceBridge.syncPane(pane) }
     }
 
@@ -4245,34 +4235,41 @@ public final class IDEWorkspace {
 
     func semanticHighlightingPreferenceChanged() {
         for pane in workbench.panes {
-            scheduleSemanticHighlighting(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.intelligenceLanguageIdentifier, delay: 0)
+            scheduleSemanticHighlighting(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.intelligenceLanguageIdentifier, delay: .zero)
         }
     }
 
     /// Recolours a pane's file once typing pauses, for a language with a semantic token provider.
     /// `delay` debounces typing; opening a file or switching to one passes 0 so the semantic colours
     /// land with the first frames instead of repainting the tree-sitter ones later.
-    private func scheduleSemanticHighlighting(host: IDEEditorPaneHost, languageIdentifier: String?, delay: UInt64 = 250_000_000) {
+    private func scheduleSemanticHighlighting(host: IDEEditorPaneHost, languageIdentifier: String?, delay: Duration? = nil) {
         let provider = preferences.semanticHighlighting ? languages.semanticTokens(for: languageIdentifier) : nil
-        overlays.scheduleSemanticHighlighting(for: host.textView, provider: provider, delay: .nanoseconds(delay))
+        overlays.scheduleSemanticHighlighting(
+            for: host.textView, provider: provider, delay: delay ?? settleDelay)
     }
 
     /// Recomputes every pane's markers: after a preference change, or when the index changed so
     /// other files' subtypes and overrides may have too.
     func javaGutterIconsPreferenceChanged() {
         for pane in workbench.panes {
-            scheduleLineMarkers(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.intelligenceLanguageIdentifier, delay: 0)
+            scheduleLineMarkers(host: host(for: pane.id), languageIdentifier: pane.selectedDocument?.intelligenceLanguageIdentifier, delay: .zero)
         }
     }
 
     /// Refreshes a pane's gutter icons once typing pauses, for a language with a line marker provider.
-    private func scheduleLineMarkers(host: IDEEditorPaneHost, languageIdentifier: String?, delay: UInt64 = 400_000_000) {
+    /// How long typing must stay quiet before the window's settle work runs. One delay for every
+    /// consumer; opening a file and changing a preference pass `.zero` instead.
+    var settleDelay: Duration {
+        .milliseconds(preferences.autoreparseDelayMilliseconds)
+    }
+
+    private func scheduleLineMarkers(host: IDEEditorPaneHost, languageIdentifier: String?, delay: Duration? = nil) {
         overlays.scheduleLineMarkers(
             for: host.textView,
             provider: languages.lineMarkers(for: languageIdentifier),
             kinds: preferences.enabledJavaGutterIcons,
             languageIdentifier: languageIdentifier,
-            delay: .nanoseconds(delay)
+            delay: delay ?? settleDelay
         ) { [weak self, weak host] marker in
             guard let self, let host else { return }
             self.lineMarkerClicked(marker, host: host)
@@ -4303,19 +4300,6 @@ public final class IDEWorkspace {
             }
         case .recursiveCall:
             break
-        }
-    }
-
-    /// Keeps the name index's view of an open Java file in step with its buffer, so Find Usages
-    /// sees unsaved edits. Debounced; the overlay is dropped when the file's last tab closes.
-    /// The role index overlays alongside, parsed from the same buffer text.
-    func scheduleNameIndexOverlay(for textView: TextView, delay: UInt64 = 300_000_000) {
-        guard textView.documentURL?.pathExtension == "java" else { return }
-        let index = javaSupport.nameIndex
-        let roles = javaSupport.roleIndex
-        overlays.scheduleNameIndexOverlay(for: textView, delay: .nanoseconds(delay)) { url, text in
-            await index.setOverlay(url, text: text)
-            await roles.setOverlay(url, text: text)
         }
     }
 
@@ -5121,49 +5105,46 @@ public final class IDEWorkspace {
 
     /// Rebuilds the Structure tree from the active editor. Only does anything while the Structure tab
     /// is showing: the tree has no other reader, and a parse per edit or caret move for a hidden
-    /// panel is pure cost. Showing the tab (`onShow`, the panel's `onAppear`) calls this again.
+    /// panel is pure cost. Showing the tab (`onShow`, the panel's `onAppear`) calls this again,
+    /// immediately; an edit waits for the settle.
     func refreshStructure() {
-        structureRefreshTask?.cancel()
-        guard showsStructureSidebar else { return }
+        scheduleStructureRebuild(after: .zero)
+    }
+
+    /// An edit: rebuild the tree once typing pauses, if anyone is looking at it.
+    func noteStructureEdited() {
+        scheduleStructureRebuild(after: settleDelay)
+    }
+
+    private func scheduleStructureRebuild(after delay: Duration) {
         let textView = host(for: workbench.activePaneID).textView
-        let generation = textView.contentGeneration
-        let builtFor = (view: ObjectIdentifier(textView), generation: generation)
-        guard let provider = languages.structure(for: statusLanguage) else {
-            structureStore.show(message: "No outline for this file")
-            structureBuiltFor = builtFor
+        guard showsStructureSidebar else {
+            documentSettle.cancel("structure", for: textView)
             return
         }
-        // `textView.text` would copy a whole file-backed document on every caret move. Capture the
-        // cheap piece-tree snapshot here and build the string off the main actor.
-        let export = textView.exportDocumentText()
-        structureRefreshesStarted += 1
-        let caret = textView.selectedRange.location
+        guard let provider = languages.structure(for: statusLanguage) else {
+            structureStore.show(message: "No outline for this file")
+            structureBuiltFor = (ObjectIdentifier(textView), textView.contentGeneration)
+            documentSettle.cancel("structure", for: textView)
+            return
+        }
         // A provider that asks a language server needs the document, not just its text (F26).
         let document = adapter.currentDocument
-        structureRefreshTask = Task { @MainActor [weak self, weak textView] in
-            guard let self, !Task.isCancelled else { return }
-            // A request superseded while it waited for a thread stops before it copies the text.
+        documentSettle.schedule(textView: textView, id: "structure", phase: .visible, after: delay) { [weak self] textView, snapshot in
+            guard let self, self.showsStructureSidebar else { return }
+            self.structureRefreshesStarted += 1
+            let caret = snapshot.caretUTF16
             let root = await runDetached(priority: .userInitiated) { () -> StructureNode? in
                 guard !Task.isCancelled else { return nil }
-                return await provider.structure(forSource: export.materializeUTF16Text(), document: document, atUTF16Offset: caret)
+                return await provider.structure(forSource: snapshot.text, document: document, atUTF16Offset: caret)
             }
-            // A newer edit or caret move has its own refresh in flight; drop this result.
-            guard !Task.isCancelled, textView?.contentGeneration == generation else { return }
-            self.structureBuiltFor = builtFor
+            guard !Task.isCancelled, textView.contentGeneration == snapshot.generation else { return }
+            self.structureBuiltFor = (ObjectIdentifier(textView), snapshot.generation)
             guard let root else {
                 self.structureStore.show(message: "No type at the caret")
                 return
             }
             self.structureStore.show(root: root, selectedID: root.deepestNode(containing: caret).id)
-        }
-    }
-
-    /// An edit: rebuild the tree once typing pauses, if anyone is looking at it.
-    func noteStructureEdited() {
-        guard showsStructureSidebar else { return }
-        let delay = preferences.autoreparseDelayMilliseconds
-        structureEditDebounce.schedule(after: .milliseconds(delay)) { [weak self] in
-            self?.refreshStructure()
         }
     }
 
@@ -5914,9 +5895,11 @@ public final class IDEWorkspace {
         host.markdownPreviewController.refresh()
         host.refreshJSONDiagram()
         host.refreshCSVTable()
-        scheduleSemanticHighlighting(host: host, languageIdentifier: document.intelligenceLanguageIdentifier, delay: 0)
-        scheduleLineMarkers(host: host, languageIdentifier: document.intelligenceLanguageIdentifier, delay: 0)
-        scheduleNameIndexOverlay(for: host.textView, delay: 0)
+        scheduleSemanticHighlighting(host: host, languageIdentifier: document.intelligenceLanguageIdentifier, delay: .zero)
+        scheduleLineMarkers(host: host, languageIdentifier: document.intelligenceLanguageIdentifier, delay: .zero)
+        languageSettle.schedule(
+            for: host.textView, delay: .zero, settle: documentSettle, languages: languages, proposesEdits: false
+        )
         // `setState` cleared the blame column and the change spans; bring both back.
         blame.refresh(textView: host.textView, url: document.url, git: gitStatus, force: true)
         applyProfileLineHints(to: host.textView, url: document.url)
