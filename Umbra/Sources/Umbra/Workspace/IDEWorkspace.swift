@@ -1154,10 +1154,13 @@ public final class IDEWorkspace {
         terminalHosts.removeAll()
     }
 
-    /// Stops what the current project has running: the debug session and any Gradle task. Used when
+    /// Stops what the current project has running: both debug sessions and any Gradle task. Used when
     /// the project goes away, whether the window closes, the folder closes or another replaces it.
+    /// The DAP session needs the explicit stop: nothing else on the close path retires it, and its
+    /// adapter process and event pumps would otherwise outlive the window.
     private func stopProjectActivity() {
         debugSession.stop()
+        if dapDebugSession.isActive { dapDebugSession.stop() }
         for system in projectSystems.systems { system.cancelTasks() }
     }
 

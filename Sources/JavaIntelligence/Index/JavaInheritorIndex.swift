@@ -56,6 +56,9 @@ struct JavaInheritorTable: Sendable {
         (bySupertypeName[simpleName] ?? []).map { subtypes[Int($0)] }
     }
 
+    /// Every written-supertype simple name in the table: the seed pool for the library bridge.
+    var supertypeSimpleNames: Dictionary<String, [Int32]>.Keys { bySupertypeName.keys }
+
     /// The last segment of a supertype's name: `Map.Entry` and `java.util.Map.Entry` are `Entry`.
     static func key(of reference: JavaTypeRef) -> String? {
         let name: String
@@ -74,6 +77,15 @@ extension JavaIndex {
     /// project classes, sorted by name. See ``JavaInheritors``.
     public func projectSubtypes(of qualifiedName: String) async -> [JavaClassStub] {
         await JavaInheritors.subtypes(of: qualifiedName, index: self)
+    }
+
+    /// Every supertype simple name any project class (or open buffer) writes. The seed pool for
+    /// the library bridge in ``JavaInheritors``: a name written by project code that resolves to a
+    /// library type below the query target pulls the walk through the library layer.
+    func writtenSupertypeSimpleNames() async -> Set<String> {
+        var names = Set(await baseInheritorTable().supertypeSimpleNames)
+        names.formUnion(overlayInheritorTable().supertypeSimpleNames)
+        return names
     }
 
     /// Project classes (open buffers first, then project shards) whose written supertypes include a
@@ -103,12 +115,25 @@ extension JavaIndex {
 enum JavaInheritors {
     /// Every project class that extends or implements `qualifiedName`, directly or through other
     /// project classes, sorted by qualified name. A class is kept only when its supertypes, resolved
-    /// against its own file, name the type; a library class in between ends the walk, because the
-    /// table covers project sources only.
+    /// against its own file, name the type. A library class in between no longer ends the walk:
+    /// written supertypes that resolve to library types below the target seed the queue (the
+    /// library bridge), and the same verify step admits exactly the project classes under them.
     static func subtypes(of qualifiedName: String, index: JavaIndex) async -> [JavaClassStub] {
         var result: [JavaClassStub] = []
         var visited: Set<String> = [qualifiedName]
         var queue = [qualifiedName]
+        // Seeds are library names, never results: only project candidates from
+        // `projectSubtypeCandidates` are appended, so seeds stay out of `visited` and a seed the
+        // walk also reaches verifies and reports normally.
+        for simpleName in await index.writtenSupertypeSimpleNames() {
+            for stub in await index.classes(simpleName: simpleName) {
+                if case .source = stub.origin { continue }
+                guard !visited.contains(stub.qualifiedName),
+                      await reaches(target: qualifiedName, from: stub.qualifiedName, index: index)
+                else { continue }
+                queue.append(stub.qualifiedName)
+            }
+        }
         while let target = queue.popLast() {
             let simpleName = String(target.split(separator: ".").last ?? Substring(target))
             for stub in await index.projectSubtypeCandidates(supertypeSimpleName: simpleName) {
@@ -120,6 +145,21 @@ enum JavaInheritors {
             }
         }
         return result.sorted { $0.qualifiedName < $1.qualifiedName }
+    }
+
+    /// Whether `start` resolves to `target` going up through supertypes (any origin), cycle-safe.
+    /// Used to find the library seeds below a query: the seed check itself is bounded by hierarchy
+    /// depth, not by project size.
+    private static func reaches(target: String, from start: String, index: JavaIndex) async -> Bool {
+        var seen = Set([start])
+        var stack = [start]
+        while let current = stack.popLast() {
+            for parent in await JavaMemberLookup.directSupertypeNames(of: current, index: index) {
+                if parent == target { return true }
+                if seen.insert(parent).inserted { stack.append(parent) }
+            }
+        }
+        return false
     }
 
     /// The classes that name `qualifiedName` as a direct supertype.

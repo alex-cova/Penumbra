@@ -8,15 +8,23 @@ final class JavaInheritorsTests: XCTestCase {
     }
 
     private func stub(
-        _ qualifiedName: String, kind: JavaTypeKind = .classKind, superclass: String? = nil, interfaces: [String] = []
+        _ qualifiedName: String, kind: JavaTypeKind = .classKind, superclass: String? = nil, interfaces: [String] = [],
+        origin: JavaStubOrigin = .jdkModule("test")
     ) -> JavaClassStub {
         let simple = String(qualifiedName.split(separator: ".").last!)
         let package = qualifiedName.split(separator: ".").dropLast().joined(separator: ".")
         return JavaClassStub(
             binaryName: qualifiedName, qualifiedName: qualifiedName, simpleName: simple, packageName: package,
             kind: kind, modifiers: [.publicFlag], superclass: superclass.map(ref), interfaces: interfaces.map(ref),
-            origin: .jdkModule("test")
+            origin: origin
         )
+    }
+
+    private func sourceStub(
+        _ qualifiedName: String, kind: JavaTypeKind = .classKind, superclass: String? = nil, interfaces: [String] = []
+    ) -> JavaClassStub {
+        stub(qualifiedName, kind: kind, superclass: superclass, interfaces: interfaces,
+             origin: .source(URL(fileURLWithPath: "/test/\(qualifiedName).java"), nameRange: 0..<1))
     }
 
     private func reader(_ stubs: [JavaClassStub]) throws -> JavaIndexShardReader {
@@ -68,6 +76,52 @@ final class JavaInheritorsTests: XCTestCase {
         )
         let subtypes = await JavaInheritors.subtypes(of: "a.Repo", index: index)
         XCTAssertEqual(names(subtypes), ["a.Impl"])
+    }
+
+    /// F-08: a project class that reaches the target through a library supertype (`Through`
+    /// extends `lib.Base`, which implements `a.Repo`) is found via the library bridge. The
+    /// project class that merely shares the library supertype's simple name (`x.Base`) is not.
+    func testSubtypesThroughALibraryIntermediate() async throws {
+        let index = try await makeIndex(
+            project: [
+                sourceStub("a.Repo", kind: .interfaceKind),
+                sourceStub("a.Impl", interfaces: ["a.Repo"]),
+                sourceStub("p.Through", superclass: "lib.Base"),
+                sourceStub("x.Base"),
+            ],
+            jar: [stub("lib.Base", interfaces: ["a.Repo"])]
+        )
+        let subtypes = await JavaInheritors.subtypes(of: "a.Repo", index: index)
+        XCTAssertEqual(names(subtypes), ["a.Impl", "p.Through"])
+    }
+
+    /// F-08: the bridge follows chains of library supertypes, not just one hop.
+    func testSubtypesThroughTwoLibraryIntermediates() async throws {
+        let index = try await makeIndex(
+            project: [
+                sourceStub("a.Repo", kind: .interfaceKind),
+                sourceStub("p.Deep", superclass: "lib.Mid"),
+            ],
+            jar: [
+                stub("lib.Mid", superclass: "lib.Bottom"),
+                stub("lib.Bottom", interfaces: ["a.Repo"]),
+            ]
+        )
+        let subtypes = await JavaInheritors.subtypes(of: "a.Repo", index: index)
+        XCTAssertEqual(names(subtypes), ["p.Deep"])
+    }
+
+    /// F-08: a library subtree that never reaches the target seeds nothing.
+    func testUnrelatedLibrarySubtreeIsNotSeeded() async throws {
+        let index = try await makeIndex(
+            project: [
+                sourceStub("a.Repo", kind: .interfaceKind),
+                sourceStub("q.UsesOther", superclass: "lib.Other"),
+            ],
+            jar: [stub("lib.Other")]
+        )
+        let subtypes = await JavaInheritors.subtypes(of: "a.Repo", index: index)
+        XCTAssertTrue(subtypes.isEmpty)
     }
 
     func testOpenBufferReplacesTheSavedClassAndAddsNewOnes() async throws {

@@ -171,6 +171,18 @@ final class IDECloseFolderTests: XCTestCase {
         XCTAssertFalse(workspace.showsDebugTab)
     }
 
+    /// F-20: closing the window stops an active DAP session too, not just the Java one —
+    /// otherwise the adapter process and its event pumps outlive the window. (Closing the
+    /// folder already retires it through `dismissProjectBottomTabs`; only teardown missed it.)
+    func testTeardownStopsAnActiveDAPSession() {
+        workspace.dapDebugSession.state = .running
+        XCTAssertTrue(workspace.dapDebugSession.isActive)
+
+        workspace.teardown()
+
+        XCTAssertEqual(workspace.dapDebugSession.state, .terminated)
+    }
+
     func testCloseFolderWithUnsavedChangesCancelKeepsTheFolderAndTheTerminal() async {
         workspace.newFile()
         workspace.workbench.activePane.selectedDocument?.isDirty = true

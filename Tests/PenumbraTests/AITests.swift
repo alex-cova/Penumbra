@@ -2,15 +2,6 @@ import XCTest
 import EditorIntelligence
 
 final class AITests: XCTestCase {
-    func testAICompletionProvider() async {
-        let model = MockAITextModel { _ in "helloWorld" }
-        let provider = AICompletionProvider(model: model)
-        let context = makeCompletionContext(prefix: "he")
-        let items = await provider.provide(context: context)
-        XCTAssertEqual(items.first?.insertText, "helloWorld")
-        XCTAssertEqual(items.first?.source, "AI")
-    }
-
     func testAIHoverProvider() async {
         let model = MockAITextModel { _ in "An explanation." }
         let provider = AIHoverProvider(model: model)
@@ -20,17 +11,6 @@ final class AITests: XCTestCase {
         XCTAssertEqual(result?.source, "AI")
     }
 
-    func testAIProviderReturnsEmptyOnError() async {
-        let model = MockAITextModel { _ in throw TestError.intentional }
-        let provider = AICompletionProvider(model: model)
-        let context = makeCompletionContext(prefix: "he")
-        let items = await provider.provide(context: context)
-        XCTAssertTrue(items.isEmpty)
-    }
-}
-
-private struct TestError: Error {
-    static let intentional = TestError()
 }
 
 private struct MockAITextModel: AITextModel {

@@ -17,7 +17,8 @@ struct DAPDebugEvaluation: Identifiable, Equatable, Sendable {
 @MainActor
 @Observable
 final class DAPDebugSession: IDEDebugSession {
-    private(set) var state: IDEDebugSessionState = .idle
+    /// Settable so tests can simulate an active session without spawning an adapter process.
+    var state: IDEDebugSessionState = .idle
     private(set) var threads: [IDEDebugThread] = []
     private(set) var frames: [IDEDebugFrame] = []
     private(set) var variables: [IDEDebugVariable] = []
