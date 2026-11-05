@@ -173,3 +173,63 @@ struct IDEWorkspaceEditApplier {
         return (text, updated)
     }
 }
+
+extension IDEWorkspace: IDEWorkspaceEditHost {
+    var editProjectRoot: URL? { project.rootURL }
+
+    func editTarget(for url: URL) async -> IDEWorkspaceEditTarget {
+        guard let (pane, document) = paneAndDocument(matching: url) else { return .closed }
+        guard document.contentKind == .text else { return .unavailable("The file is open in a viewer, not a text editor.") }
+        func liveHost() -> IDEEditorPaneHost? {
+            for candidate in workbench.panes {
+                if let host = hostCache.peek(candidate.id), host.loadedDocumentID == document.id { return host }
+            }
+            return nil
+        }
+        if let host = liveHost() { return .live(host.textView) }
+        // Open in a background tab: bring it forward so the edit lands in its buffer and undo stack.
+        pane.selectDocument(document.id)
+        showDocument(in: pane, host: host(for: pane.id))
+        for _ in 0..<40 {
+            if let host = liveHost() { return .live(host.textView) }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return .unavailable("The open tab couldn't be loaded; save or close it and try again.")
+    }
+
+    func renameFile(from url: URL, to newURL: URL) throws {
+        guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
+        let result = try operations.rename(url, to: newURL.lastPathComponent)
+        finishFileRename(from: url, to: result)
+    }
+
+    func moveFile(from url: URL, to newURL: URL) throws {
+        guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
+        let result = try operations.move(url, to: newURL)
+        finishFileRename(from: url, to: result)
+    }
+
+    func createFile(at url: URL, contents: String) throws {
+        guard fileOperations != nil else { throw IDEWorkspaceEditApplier.Failure.noProject }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(contents.utf8).write(to: url, options: .atomic)
+        // Like any new file: the Explorer lists it and git status picks it up.
+        Task {
+            await project.refresh(directories: [url.deletingLastPathComponent().path])
+            gitStatus.refresh()
+        }
+    }
+
+    func deleteFile(at url: URL) throws {
+        guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
+        let affected = openDocuments(at: url)
+        for (pane, document) in affected { closeDocument(document.id, in: pane) }
+        if project.selectedPath == url.path { project.selectedPath = nil }
+        project.removeExpanded(under: url.path)
+        try operations.trash(url)
+        Task {
+            await project.refresh(directories: [url.deletingLastPathComponent().path])
+            gitStatus.refresh()
+        }
+    }
+}

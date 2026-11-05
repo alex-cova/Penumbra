@@ -9,81 +9,6 @@ import SwiftUI
 import PenumbraLanguages
 import PenumbraMarkdownLanguage
 
-struct IDETabRow: Identifiable, Equatable {
-    let id: UUID
-    let title: String
-    let isDirty: Bool
-    let isSelected: Bool
-    /// An SF Symbol for tabs that are not files (diagrams); files get an icon from their name.
-    var symbolName: String?
-}
-
-struct IDETerminalTab: Identifiable, Equatable {
-    let id: UUID
-    var title: String
-    var workingDirectory: URL
-    var restartRequestID: UInt64 = 0
-    /// Bumped to wipe the screen and scrollback of this tab's terminal.
-    var clearRequestID: UInt64 = 0
-    /// Set when this tab only displays an agent command. It never starts a login shell, and it is
-    /// left out of the saved session: the text lives in the view until the window closes.
-    var agentCommandID: UUID?
-    /// Bumped when more output is waiting for this tab's view.
-    var agentFeedGeneration: UInt64 = 0
-
-    static func defaultTitle(for directory: URL) -> String {
-        let base = directory.lastPathComponent
-        return base.isEmpty ? "Terminal" : base
-    }
-
-    /// A tab title short enough for the terminal strip.
-    static func commandTitle(for command: String) -> String {
-        let flat = command.replacing("\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        let limit = 48
-        guard flat.count > limit else { return flat.isEmpty ? "Command" : flat }
-        return String(flat.prefix(limit - 1)) + "…"
-    }
-}
-
-extension IDETerminalTab: Codable {
-    enum CodingKeys: String, CodingKey {
-        case id, title, workingDirectory
-    }
-}
-
-/// One segment in the status bar breadcrumb. A folder lists its contents and a file its
-/// siblings, to switch files; a package lists the classes and subpackages inside it; a symbol
-/// lists the enclosing type's members (Java) or jumps in-file.
-struct IDEBreadcrumbItem: Equatable, Identifiable {
-    enum Target: Equatable {
-        case folder(URL)
-        case file(URL)
-        /// A Java or Kotlin package directory. The title may be a dotted name covering several folders.
-        case package(URL)
-        case symbol(EditorIntelligence.TextRange)
-    }
-
-    let id: String
-    let title: String
-    let target: Target
-}
-
-/// Folder path, filename and enclosing symbols for the active document. Empty when nothing is open.
-struct IDEHeaderContext: Equatable {
-    var documentID: UUID?
-    var pathItems: [IDEBreadcrumbItem] = []
-    var symbolItems: [IDEBreadcrumbItem] = []
-    var isDirty = false
-
-    var items: [IDEBreadcrumbItem] { pathItems + symbolItems }
-}
-
-/// Holds the workspace for the Java navigation provider without capturing `IDEWorkspace` in a
-/// `@Sendable` closure. The provider calls it off the main actor and hops back here.
-private final class NavigationBufferBridge: @unchecked Sendable {
-    nonisolated(unsafe) weak var workspace: IDEWorkspace?
-}
-
 @MainActor
 @Observable
 public final class IDEWorkspace {
@@ -148,16 +73,16 @@ public final class IDEWorkspace {
     @ObservationIgnored
     private weak var paletteOverlayContainer: NSView?
     @ObservationIgnored
-    private var hostedPaneIDs: Set<UUID> = []
+    var hostedPaneIDs: Set<UUID> = []
     /// Ranged edits an editor reported since its last `textViewDidChange`, kept only while another
     /// pane shows the same document so they can be replayed there.
-    @ObservationIgnored private var pendingMirrorChanges: [ObjectIdentifier: [TextContentChange]] = [:]
+    @ObservationIgnored var pendingMirrorChanges: [ObjectIdentifier: [TextContentChange]] = [:]
     /// Idle unambiguous-import insertion. A keystroke only cancels this; the buffer is read after the pause.
-    @ObservationIgnored private let javaAutoImport = Debouncer()
+    @ObservationIgnored let javaAutoImport = Debouncer()
     /// Set while the import edit itself is applied, so that edit does not schedule another pass.
-    @ObservationIgnored private var javaAutoImportApplying = false
+    @ObservationIgnored var javaAutoImportApplying = false
     /// The pasted text of the edit that is about to be reported, when it matches the pasteboard.
-    @ObservationIgnored private var javaAutoImportPaste: String?
+    @ObservationIgnored var javaAutoImportPaste: String?
     @ObservationIgnored var hasPresentedMetalFailure = false
     /// The recent lists are shared by every window (`IDEAppState`), so what one window opens shows
     /// in all of them.
@@ -1509,7 +1434,7 @@ public final class IDEWorkspace {
 
     /// Moves the active document to the front of the recently edited list. Runs per keystroke,
     /// so it returns early when the file already leads the list.
-    private func recordRecentlyEdited() {
+    func recordRecentlyEdited() {
         guard let url = workbench.activePane.selectedDocument?.url, recentlyEditedFiles.first != url else { return }
         recentlyEditedFiles.removeAll { $0 == url }
         recentlyEditedFiles.insert(url, at: 0)
@@ -4373,7 +4298,7 @@ public final class IDEWorkspace {
     /// Keeps the name index's view of an open Java file in step with its buffer, so Find Usages
     /// sees unsaved edits. Debounced; the overlay is dropped when the file's last tab closes.
     /// The role index overlays alongside, parsed from the same buffer text.
-    private func scheduleNameIndexOverlay(for textView: TextView, delay: UInt64 = 300_000_000) {
+    func scheduleNameIndexOverlay(for textView: TextView, delay: UInt64 = 300_000_000) {
         guard textView.documentURL?.pathExtension == "java" else { return }
         let index = javaSupport.nameIndex
         let roles = javaSupport.roleIndex
@@ -4383,7 +4308,7 @@ public final class IDEWorkspace {
         }
     }
 
-    private func scheduleSemanticHighlighting(forEditedTextView textView: TextView) {
+    func scheduleSemanticHighlighting(forEditedTextView textView: TextView) {
         for pane in workbench.panes {
             let paneHost = host(for: pane.id)
             if paneHost.textView === textView {
@@ -4399,7 +4324,7 @@ public final class IDEWorkspace {
         problems.setStaleSources(report.staleSources, for: url)
     }
 
-    private func closeDocument(_ documentID: UUID, in pane: EditorPane) {
+    func closeDocument(_ documentID: UUID, in pane: EditorPane) {
         closeDiffSession(documentID, in: pane)
         closeDiagramSession(documentID, in: pane)
         closeProfileSession(documentID, in: pane)
@@ -5073,7 +4998,7 @@ public final class IDEWorkspace {
     }
 
     /// Publishes the dirty dot the first time a document changes, and does nothing after that.
-    private func noteActiveDocumentEdited() {
+    func noteActiveDocumentEdited() {
         guard let document = workbench.activePane.selectedDocument,
               var rows = tabsByPane[workbench.activePaneID],
               let index = rows.firstIndex(where: { $0.id == document.id }) else {
@@ -5228,7 +5153,7 @@ public final class IDEWorkspace {
 
     // MARK: - Explorer file operations
 
-    private var fileOperations: IDEFileOperations? {
+    var fileOperations: IDEFileOperations? {
         project.rootURL.map(IDEFileOperations.init(rootURL:))
     }
 
@@ -5323,7 +5248,7 @@ public final class IDEWorkspace {
     }
 
     /// Bookkeeping after a file moved on disk: open tabs, the tree's expansion state, recents.
-    private func finishFileRename(from url: URL, to result: URL) {
+    func finishFileRename(from url: URL, to result: URL) {
         retargetOpenDocuments(from: url, to: result)
         project.didMove(from: url.path, to: result.path)
         recentFiles = recentFiles.map { retargeted($0, from: url, to: result) }
@@ -5387,7 +5312,7 @@ public final class IDEWorkspace {
         }
     }
 
-    private func openDocuments(at url: URL) -> [(pane: EditorPane, document: WorkbenchDocument)] {
+    func openDocuments(at url: URL) -> [(pane: EditorPane, document: WorkbenchDocument)] {
         let path = url.standardizedFileURL.path
         return workbench.panes.flatMap { pane in
             pane.documents.compactMap { document -> (EditorPane, WorkbenchDocument)? in
@@ -5533,7 +5458,7 @@ public final class IDEWorkspace {
         }
     }
 
-    private func updateStatus(from textView: TextView) {
+    func updateStatus(from textView: TextView) {
         if let document = workbench.activePane.selectedDocument, document.contentKind != .text {
             statusLine = 1
             statusColumn = 1
@@ -5594,7 +5519,7 @@ public final class IDEWorkspace {
     /// Keeps the other panes showing this document in step with an edit made in `textView`:
     /// replays the ranged edits there, or reloads them from this pane when the edit had no single
     /// range (replace all, undo of a batch) or a pane no longer matches.
-    private func mirrorEdits(from textView: TextView) {
+    func mirrorEdits(from textView: TextView) {
         let changes = pendingMirrorChanges.removeValue(forKey: ObjectIdentifier(textView)) ?? []
         guard hostedPaneIDs.count > 1 else { return }
         let hosts = workbench.panes.compactMap { pane in hostCache.peek(pane.id).map { (pane: pane, host: $0) } }
@@ -5983,154 +5908,6 @@ public final class IDEWorkspace {
         )
     }
 
-}
-
-extension IDEWorkspace: IDEWorkspaceEditHost {
-    var editProjectRoot: URL? { project.rootURL }
-
-    func editTarget(for url: URL) async -> IDEWorkspaceEditTarget {
-        guard let (pane, document) = paneAndDocument(matching: url) else { return .closed }
-        guard document.contentKind == .text else { return .unavailable("The file is open in a viewer, not a text editor.") }
-        func liveHost() -> IDEEditorPaneHost? {
-            for candidate in workbench.panes {
-                if let host = hostCache.peek(candidate.id), host.loadedDocumentID == document.id { return host }
-            }
-            return nil
-        }
-        if let host = liveHost() { return .live(host.textView) }
-        // Open in a background tab: bring it forward so the edit lands in its buffer and undo stack.
-        pane.selectDocument(document.id)
-        showDocument(in: pane, host: host(for: pane.id))
-        for _ in 0..<40 {
-            if let host = liveHost() { return .live(host.textView) }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        return .unavailable("The open tab couldn't be loaded; save or close it and try again.")
-    }
-
-    func renameFile(from url: URL, to newURL: URL) throws {
-        guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
-        let result = try operations.rename(url, to: newURL.lastPathComponent)
-        finishFileRename(from: url, to: result)
-    }
-
-    func moveFile(from url: URL, to newURL: URL) throws {
-        guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
-        let result = try operations.move(url, to: newURL)
-        finishFileRename(from: url, to: result)
-    }
-
-    func createFile(at url: URL, contents: String) throws {
-        guard fileOperations != nil else { throw IDEWorkspaceEditApplier.Failure.noProject }
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(contents.utf8).write(to: url, options: .atomic)
-        // Like any new file: the Explorer lists it and git status picks it up.
-        Task {
-            await project.refresh(directories: [url.deletingLastPathComponent().path])
-            gitStatus.refresh()
-        }
-    }
-
-    func deleteFile(at url: URL) throws {
-        guard let operations = fileOperations else { throw IDEWorkspaceEditApplier.Failure.noProject }
-        let affected = openDocuments(at: url)
-        for (pane, document) in affected { closeDocument(document.id, in: pane) }
-        if project.selectedPath == url.path { project.selectedPath = nil }
-        project.removeExpanded(under: url.path)
-        try operations.trash(url)
-        Task {
-            await project.refresh(directories: [url.deletingLastPathComponent().path])
-            gitStatus.refresh()
-        }
-    }
-}
-
-extension IDEWorkspace: TextViewDelegate {
-    public func textViewDidChangeSelection(_ textView: TextView) {
-        updateStatus(from: textView)
-        refreshStructure()
-    }
-
-    public func textView(_ textView: TextView, didChangeContent change: TextContentChange) {
-        noteJavaAutoImportPaste(change)
-        guard hostedPaneIDs.count > 1 else { return }
-        pendingMirrorChanges[ObjectIdentifier(textView), default: []].append(change)
-    }
-
-    public func textViewDidChange(_ textView: TextView) {
-        scheduleJavaAutoImport(for: textView)
-        mirrorEdits(from: textView)
-        if let pane = workbench.panes.first(where: { hostCache.peek($0.id)?.textView === textView }) {
-            hostCache.peek(pane.id)?.noteJSONDiagramEdited()
-            hostCache.peek(pane.id)?.noteCSVTableEdited()
-        }
-        scheduleSemanticHighlighting(forEditedTextView: textView)
-        scheduleNameIndexOverlay(for: textView)
-        noteCoverageEdit(in: textView)
-        refreshJavaRunAvailability(from: textView)
-        refreshStructure()
-        recordRecentlyEdited()
-        // The tab dot and window chrome do not change on the second character. Rebuilding every
-        // tab row here re-renders the SwiftUI shell, which lays the editor out again.
-        noteActiveDocumentEdited()
-        autosave.noteEdit()
-        changeMarkers.refresh(textView: textView, url: textView.documentURL, git: gitStatus)
-    }
-
-    /// A multi-character replacement that equals the pasteboard is a paste. One character never
-    /// reads the pasteboard. The planner runs later, from ``textViewDidChange(_:)``.
-    private func noteJavaAutoImportPaste(_ change: TextContentChange) {
-        guard change.replacementText.utf16.count > 1,
-              change.replacementText == NSPasteboard.general.string(forType: .string) else { return }
-        javaAutoImportPaste = change.replacementText
-    }
-
-    /// After a pause, import the one class that resolves a name in this Java buffer. The keystroke
-    /// itself only cancels the previous pause. Parsing and `textView.text` happen once it has elapsed.
-    private func scheduleJavaAutoImport(for textView: TextView) {
-        if javaAutoImportApplying {
-            javaAutoImportPaste = nil
-            return
-        }
-        let paste = javaAutoImportPaste
-        javaAutoImportPaste = nil
-        guard textView.languageIdentifier == "java" else { return }
-        let policy = preferences.javaImportPolicy
-        let pasting = paste != nil && policy.insertImportsOnPaste == .always
-        guard policy.addUnambiguousImportsOnTheFly || pasting else { return }
-        let delay = preferences.autoreparseDelayMilliseconds
-        let documentID = textView.documentIdentifier
-        let url = textView.documentURL
-        javaAutoImport.schedule(after: .milliseconds(delay)) { [weak self, weak textView] in
-            guard let self, let textView else { return }
-            guard textView.languageIdentifier == "java",
-                  textView.documentIdentifier == documentID,
-                  textView.documentURL == url else { return }
-            let text = textView.text
-            let edits: [TextEdit]
-            if pasting, let paste {
-                edits = await self.javaSupport.importEdits(forPastedText: paste, in: text, file: url, policy: policy)
-            } else {
-                edits = await self.javaSupport.importEdits(
-                    in: text, caretUTF16: textView.selectedRange.location, file: url, policy: policy
-                )
-            }
-            guard !Task.isCancelled, textView.text == text, textView.documentURL == url, !edits.isEmpty else { return }
-            self.javaAutoImportApplying = true
-            TextEditApplicator.apply(edits, in: textView)
-            self.javaAutoImportApplying = false
-        }
-    }
-
-    public func textView(
-        _ textView: TextView,
-        didChangeDistractionFreeChromeVisibility isVisible: Bool,
-        transitionDuration: TimeInterval
-    ) {
-        withAnimation(isVisible ? .spring(duration: transitionDuration, bounce: 0.1) : .easeOut(duration: transitionDuration)) {
-            chromeOpacity = isVisible ? 1 : 0
-        }
-    }
 }
 
 /// Why a file could not be read in an encoding the user picked.
