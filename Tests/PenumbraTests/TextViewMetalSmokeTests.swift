@@ -106,6 +106,49 @@ final class TextViewMetalSmokeTests: XCTestCase {
         return textView
     }
 
+    /// F-13: a line-structure change (Return) rewrites dirty glyph pages instead of regrouping
+    /// and rewriting every fragment. The full-rebuild counter stays flat while the dirty
+    /// counter moves; plain typing takes the same dirty path even when decorations rebuild.
+    func testReturnUsesDirtyPageRebuildInsteadOfFullRegroup() throws {
+        try skipUnlessMetalActivatable()
+        let source = (0 ..< 40).map { "let value\($0) = \($0);" }.joined(separator: "\n")
+        let textView = makeHighlightedMetalTextView(text: source)
+        XCTAssertTrue(textView.isMetalRenderingActive)
+        pumpMainRunLoop(for: 0.2)
+        let settled = try XCTUnwrap(textView.metalPerformanceStats)
+        let fullBefore = settled.glyphBufferRebuildCount
+        let dirtyBefore = settled.dirtyGlyphRebuildCount
+
+        let nsSource = source as NSString
+        let endOfLine3 = nsSource.range(of: "let value3 = 3;").upperBound
+        textView.selectedRange = NSRange(location: endOfLine3, length: 0)
+        textView.insertText("\n")
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.2)
+        let afterReturn = try XCTUnwrap(textView.metalPerformanceStats)
+        XCTAssertEqual(
+            afterReturn.glyphBufferRebuildCount, fullBefore,
+            "Return must not take the full glyph regroup"
+        )
+        XCTAssertGreaterThan(
+            afterReturn.dirtyGlyphRebuildCount, dirtyBefore,
+            "Return rewrites dirty glyph pages"
+        )
+
+        textView.insertText("x")
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.2)
+        let afterType = try XCTUnwrap(textView.metalPerformanceStats)
+        XCTAssertEqual(
+            afterType.glyphBufferRebuildCount, fullBefore,
+            "typing with decoration changes must not take the full glyph regroup"
+        )
+        XCTAssertGreaterThan(
+            afterType.dirtyGlyphRebuildCount, afterReturn.dirtyGlyphRebuildCount,
+            "typing rewrites dirty glyph pages"
+        )
+    }
+
     /// Lines in the layout padding band are extracted against the old cull rect, so they have no
     /// glyphs until a pass re-upserts them. Scrolling must do that, not skip them as "unchanged".
     func testScrollingInSmallStepsPaintsEveryVisibleLine() throws {

@@ -53,6 +53,31 @@ final class IDEProjectModelRefreshOrderTests: XCTestCase {
         try Data().write(to: root.appendingPathComponent(name))
     }
 
+    /// F-10: past the sync budget, `setRoot` paints the top level immediately and the detached
+    /// fill completes the tree through the standard refresh protocol — no hook involved.
+    func testSetRootPastBudgetPaintsShallowThenFillsDetached() async throws {
+        let nested = root.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try touch("top.txt")
+        try Data().write(to: nested.appendingPathComponent("deep.txt"))
+        let previous = IDEProjectModel.maxSyncBuildDirectories
+        IDEProjectModel.maxSyncBuildDirectories = 0
+        defer { IDEProjectModel.maxSyncBuildDirectories = previous }
+        let model = IDEProjectModel()
+        model.setRoot(root)
+        // First paint is synchronous: the top level is there, the nested file is not yet loaded.
+        XCTAssertEqual(names(model), ["nested", "top.txt"])
+        let deepPath = nested.appendingPathComponent("deep.txt").path
+        XCTAssertNil(model.node(at: deepPath), "deep content arrives with the detached fill")
+        var found: IDEFileNode?
+        for _ in 0 ..< 200 {
+            found = model.node(at: deepPath)
+            if found != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(found, "the detached fill completed the tree")
+    }
+
     func testASlowOlderListingDoesNotPutBackAFileThatWasDeleted() async throws {
         try touch("a.txt")
         try touch("b.txt")

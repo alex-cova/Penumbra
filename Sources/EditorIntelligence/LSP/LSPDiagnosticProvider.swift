@@ -12,7 +12,8 @@ public actor LSPDiagnosticProvider: DiagnosticProvider {
     public func diagnostics(for document: Document) async -> [Diagnostic] {
         do {
             let lspDiagnostics = try await client.requestDiagnostics(for: document)
-            return lspDiagnostics.map { diagnostic(from: $0, source: name) }
+            let text = document.text
+            return lspDiagnostics.map { diagnostic(from: $0, in: text, source: name) }
         } catch {
             return []
         }

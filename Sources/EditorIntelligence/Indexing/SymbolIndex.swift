@@ -46,6 +46,43 @@ public actor SymbolIndex {
         }
     }
 
+    /// Find symbols the ranker could accept for `query`: prefix, camel-hump (`gN` → `getName`)
+    /// and later-word-start (`Name` → `getName`) matches, which a literal-prefix walk cannot serve.
+    ///
+    /// The trie cannot serve word-start queries, so this filters the whole index with the same
+    /// cheap `couldMatch` gate the ranker's exact match refines. Results come out tier-ordered
+    /// (then by name, for determinism), so `limit` keeps what the ranker would prefer instead of
+    /// whichever the dictionary happened to visit first. Providers call this on the debounced
+    /// completion path, never per keystroke.
+    public func search(
+        matching query: String,
+        limit: Int? = nil,
+        where include: @Sendable (Symbol) -> Bool = { _ in true }
+    ) -> [Symbol] {
+        EditorPerformanceTrace.shared.measure(.indexQuery) {
+            if query.isEmpty {
+                return trie.search(prefix: "", limit: limit, where: include)
+            }
+            var matched: [(tier: CompletionMatcher.Tier, name: String, symbol: Symbol)] = []
+            for documentSymbols in symbolsByDocument.values {
+                for symbol in documentSymbols where include(symbol) {
+                    guard CompletionMatcher.couldMatch(query, symbol.name) else { continue }
+                    guard let tier = CompletionMatcher.tier(query, in: symbol.name) else { continue }
+                    matched.append((tier, symbol.name, symbol))
+                }
+            }
+            matched.sort {
+                if $0.tier != $1.tier { return $0.tier > $1.tier }
+                if $0.name != $1.name { return $0.name < $1.name }
+                return $0.symbol.id.uuidString < $1.symbol.id.uuidString
+            }
+            if let limit, matched.count > limit {
+                matched.removeLast(matched.count - limit)
+            }
+            return matched.map(\.symbol)
+        }
+    }
+
     /// Find symbols whose name matches the query exactly.
     public func search(exact: String) -> [Symbol] {
         EditorPerformanceTrace.shared.measure(.indexQuery) {

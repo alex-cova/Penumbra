@@ -300,6 +300,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         var decorationBuildCount = 0
         var glyphBufferRebuildCount = 0
         var solidBufferRebuildCount = 0
+        var dirtyGlyphRebuildCount = 0
         var glyphExtractCount = 0
         var atlasCoverageNonZeroTexels = 0
         var atlasCoverageTexelCount = 0
@@ -314,6 +315,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     private var decorationBuildCount = 0
     private var glyphBufferRebuildCount = 0
     private var solidBufferRebuildCount = 0
+    private var dirtyGlyphRebuildCount = 0
     private var glyphExtractCount = 0
     private(set) var paintGeneration: UInt64 = 0
 
@@ -334,6 +336,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             decorationBuildCount: decorationBuildCount,
             glyphBufferRebuildCount: glyphBufferRebuildCount,
             solidBufferRebuildCount: solidBufferRebuildCount,
+            dirtyGlyphRebuildCount: dirtyGlyphRebuildCount,
             glyphExtractCount: glyphExtractCount
         )
     }
@@ -626,7 +629,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         let rebuildGlyphs = needsGlyphBufferRebuild
         let rebuildSolids = needsDecorationBufferRebuild
         var bucketsToCheck: [PageBucket] = []
-        if rebuildGlyphs, !needsFullGlyphRebuild, !dirtyPageIDs.isEmpty, !rebuildSolids {
+        if rebuildGlyphs, !needsFullGlyphRebuild, !dirtyPageIDs.isEmpty {
             for pageID in dirtyPageIDs {
                 if let bucket = textPageBuckets[pageID] {
                     bucketsToCheck.append(bucket)
@@ -701,7 +704,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                 fragments[id]?.cacheKey = nil
                 fragments[id]?.alignedGlyphs = nil
             }
-        needsFullGlyphRebuild = true
+            markAllContributionPagesDirty()
             needsGlyphBufferRebuild = true
             needsDecorationBufferRebuild = true
             dirtyFragmentIDs.formUnion(fragments.keys)
@@ -720,7 +723,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
                 fragments[id]?.cacheKey = nil
                 fragments[id]?.decorationKey = nil
             }
-            needsFullGlyphRebuild = true
+            markAllContributionPagesDirty()
             needsGlyphBufferRebuild = true
             needsDecorationBufferRebuild = true
         }
@@ -788,7 +791,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     }
 
     func invalidateForLineStructureChange() {
-        needsFullGlyphRebuild = true
+        markAllContributionPagesDirty()
         needsGlyphBufferRebuild = true
         needsDecorationBufferRebuild = true
         dirtyFragmentIDs.formUnion(fragments.keys)
@@ -906,7 +909,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         for id in fragments.keys {
             fragments[id]?.cacheKey = nil
         }
-        needsFullGlyphRebuild = true
+        markAllContributionPagesDirty()
         needsGlyphBufferRebuild = true
         needsDecorationBufferRebuild = true
         canvasView?.setNeedsDisplay()
@@ -952,7 +955,18 @@ private extension MetalRenderer {
         }
     }
 
+    /// Marks every page the contribution map covers dirty. Used when fragment state was reset
+    /// in place (scale/colorspace/font/structure): the following layout pass re-upserts visible
+    /// fragments and refreshes their contributions, and the dirty pages rewrite without the
+    /// full sort + regroup. Only compaction keeps the full flag — it rewrites bucket storage
+    /// the contribution map does not model.
+    private func markAllContributionPagesDirty() {
+        dirtyPageIDs.formUnion(textPageContributions.keys)
+        dirtyPageIDs.formUnion(overlayPageContributions.keys)
+    }
+
     private func rebuildDirtyGlyphPages() {
+        dirtyGlyphRebuildCount += 1
         for pageID in dirtyPageIDs {
             let textInstances = sortedPageInstances(textPageContributions[pageID])
             let overlayInstances = sortedPageInstances(overlayPageContributions[pageID])
@@ -1033,9 +1047,14 @@ private extension MetalRenderer {
     }
 
     private func rebuildInstanceBuffers(rebuildGlyphs: Bool, rebuildSolids: Bool) {
-        if rebuildGlyphs, !needsFullGlyphRebuild, !dirtyPageIDs.isEmpty, !rebuildSolids {
+        // The dirty-page path covers glyphs whenever the contribution map is exact; solids are
+        // an independent write, so a decoration rebuild no longer forces a full glyph regroup.
+        if rebuildGlyphs, !needsFullGlyphRebuild, !dirtyPageIDs.isEmpty {
             PenumbraSignposts.event("MetalRenderer.dirtyPageRebuild")
             rebuildDirtyGlyphPages()
+            if rebuildSolids {
+                writeSolidBuffers()
+            }
             return
         }
         if rebuildGlyphs || rebuildSolids {
@@ -1046,15 +1065,7 @@ private extension MetalRenderer {
         var underlaySolids = canvasUnderlaySolids
         var overlaySolids: [SolidInstance] = []
         var underlayLines: [DecorationVertex] = []
-        let orderedFragments = fragments.sorted {
-            if $0.value.frame.minY != $1.value.frame.minY {
-                return $0.value.frame.minY < $1.value.frame.minY
-            }
-            if $0.value.frame.minX != $1.value.frame.minX {
-                return $0.value.frame.minX < $1.value.frame.minX
-            }
-            return $0.key.id < $1.key.id
-        }.map(\.value)
+        let orderedFragments = fragments.sorted(by: MetalRenderer.fragmentOrder).map(\.value)
         for fragment in orderedFragments {
             if rebuildGlyphs {
                 for instance in (fragment.alignedGlyphs ?? fragment.glyphs) where instance.atlasPage != 0 {
@@ -1084,13 +1095,41 @@ private extension MetalRenderer {
             lastInstanceCounts.glyphs = glyphCount
         }
         if rebuildSolids {
-            solidBufferRebuildCount += 1
-            underlaySolidBuffer.write(underlaySolids)
-            overlaySolidBuffer.write(overlaySolids)
-            underlayLineBuffer.write(underlayLines)
-            lastInstanceCounts.solids = underlaySolids.count + overlaySolids.count
+            writeSolidBuffers(from: underlaySolids, overlay: overlaySolids, lines: underlayLines)
         }
         PenumbraSignposts.event("MetalRenderer.instanceCount")
+    }
+
+    /// Solids regrouped from current fragment decorations, in the same fragment order as the
+    /// full rebuild so draw order is identical on either path.
+    private func writeSolidBuffers() {
+        var underlaySolids = canvasUnderlaySolids
+        var overlaySolids: [SolidInstance] = []
+        var underlayLines: [DecorationVertex] = []
+        for fragment in fragments.sorted(by: MetalRenderer.fragmentOrder).map(\.value) {
+            underlaySolids.append(contentsOf: fragment.decorations.underlaySolids)
+            overlaySolids.append(contentsOf: fragment.decorations.overlaySolids)
+            underlayLines.append(contentsOf: fragment.decorations.underlayTriangles)
+        }
+        writeSolidBuffers(from: underlaySolids, overlay: overlaySolids, lines: underlayLines)
+    }
+
+    private func writeSolidBuffers(from underlaySolids: [SolidInstance], overlay: [SolidInstance], lines: [DecorationVertex]) {
+        solidBufferRebuildCount += 1
+        underlaySolidBuffer.write(underlaySolids)
+        overlaySolidBuffer.write(overlay)
+        underlayLineBuffer.write(lines)
+        lastInstanceCounts.solids = underlaySolids.count + overlay.count
+    }
+
+    private static func fragmentOrder(lhs: (key: LineFragmentID, value: GPUFragment), rhs: (key: LineFragmentID, value: GPUFragment)) -> Bool {
+        if lhs.value.frame.minY != rhs.value.frame.minY {
+            return lhs.value.frame.minY < rhs.value.frame.minY
+        }
+        if lhs.value.frame.minX != rhs.value.frame.minX {
+            return lhs.value.frame.minX < rhs.value.frame.minX
+        }
+        return lhs.key.id < rhs.key.id
     }
 
     private func recordDrawNanos(_ nanos: UInt64) {

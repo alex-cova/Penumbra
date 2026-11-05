@@ -197,7 +197,12 @@ final class MetalTextCanvasView: EditorView {
     }
 
     /// Synchronous encode + present. Used when deferred present is off and for readback capture.
-    func presentIfDirtyNow() {
+    ///
+    /// When every instance-buffer slot is still owned by an in-flight GPU frame, the sync path
+    /// drops this frame instead of blocking the main thread in the slot wait: the display stays
+    /// dirty and the vsync tick presents once a slot frees. Capture callers pass
+    /// `allowDeferral: false` — they need this frame's pixels now, not the next vsync's.
+    func presentIfDirtyNow(allowDeferral: Bool = true) {
         guard window != nil, !isHidden, isDisplayDirty else {
             return
         }
@@ -212,6 +217,15 @@ final class MetalTextCanvasView: EditorView {
         }
         guard MetalContext.shared.isAvailable else {
             onRenderingFailure?()
+            return
+        }
+        if allowDeferral, !(glyphEncoder?.canAcquireWriteSlots() ?? true) {
+            PenumbraSignposts.event("MetalCanvas.deferredOnBusySlots")
+            if usesDeferredPresent {
+                armDisplayLink()
+            } else {
+                schedulePresentRetry()
+            }
             return
         }
         let waitForReadback = MetalContext.shared.allowsDrawableCapture
@@ -371,7 +385,7 @@ final class MetalTextCanvasView: EditorView {
     /// dependable way to observe the frame users were shown.
     func capturePresentedLayer() -> NSBitmapImageRep? {
         displayIfNeeded()
-        presentIfDirtyNow()
+        presentIfDirtyNow(allowDeferral: false)
         return lastPresentedImage
     }
 

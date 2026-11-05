@@ -14,13 +14,22 @@ on:
       baseline:
         description: 'Commit to compare against (default: the commit one day before HEAD on main)'
         required: false
+  pull_request:
+    paths:
+      - 'Umbra/**'
+      - 'Sources/Penumbra/**'
+      - 'Sources/EditorIntelligence/**'
+      - 'Sources/JavaIntelligence/**'
+      - 'Package.swift'
+      - '.github/workflows/perf-gate.yml'
 
 concurrency:
-  group: perf-gate
-  cancel-in-progress: false
+  group: perf-gate-${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || 'nightly' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   perf-gate:
+    if: github.event_name != 'pull_request'
     runs-on: xcode-27
     timeout-minutes: 120
     env:
@@ -71,3 +80,49 @@ jobs:
             ${{ runner.temp }}/head.json
             ${{ runner.temp }}/parent.json
           retention-days: 90
+
+  # Per-PR cheap signal: one repeat of the enter-session + keystroke scenarios, HEAD vs the PR
+  # base measured back to back in the same session. The nightly 3x3x2 matrix stays the authority;
+  # this only catches clear regressions early, on the same budgets file.
+  perf-gate-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build and measure HEAD (cheap subset)
+        run: |
+          set -euo pipefail
+          caffeinate -u -d -i -s Scripts/perf-gate.py run \
+            --out "${RUNNER_TEMP}/head.json" --repeats 1 \
+            --scenario enter-session-20k --scenario keystroke-budget \
+            --build-path "${RUNNER_TEMP}/build-head"
+
+      - name: Build and measure the PR base
+        run: |
+          set -euo pipefail
+          git worktree add "${RUNNER_TEMP}/baseline-src" "${{ github.event.pull_request.base.sha }}"
+          # The gate script is the HEAD version, so both sides are parsed identically.
+          caffeinate -u -d -i -s Scripts/perf-gate.py run --source "${RUNNER_TEMP}/baseline-src" \
+            --out "${RUNNER_TEMP}/parent.json" --repeats 1 \
+            --scenario enter-session-20k --scenario keystroke-budget \
+            --build-path "${RUNNER_TEMP}/build-parent"
+
+      - name: Gate
+        run: |
+          Scripts/perf-gate.py check "${RUNNER_TEMP}/head.json" --parent "${RUNNER_TEMP}/parent.json"
+
+      - name: Keep the numbers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-pr-${{ github.event.pull_request.number }}
+          path: |
+            ${{ runner.temp }}/head.json
+            ${{ runner.temp }}/parent.json
+          retention-days: 30

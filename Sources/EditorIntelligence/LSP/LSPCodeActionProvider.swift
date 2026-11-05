@@ -20,12 +20,13 @@ public actor LSPCodeActionProvider: CodeActionProviding {
                 at: position,
                 diagnostics: lspDiagnostics
             )
+            let text = document.text
             return actions.map { action in
                 CodeAction(
                     title: action.title,
                     kind: action.kind,
                     edits: action.edits.map { edit in
-                        TextEdit(range: textRange(from: edit.range), replacement: edit.newText)
+                        TextEdit(range: textRange(from: edit.range, in: text), replacement: edit.newText)
                     },
                     isPreferred: action.isPreferred
                 )

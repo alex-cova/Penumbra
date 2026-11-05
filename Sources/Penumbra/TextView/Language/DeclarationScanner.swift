@@ -63,14 +63,15 @@ enum DeclarationScanner {
         root: TreeSitterNode,
         configuration: LanguageConfiguration,
         text: NSString?,
-        rowWindow: ClosedRange<Int>? = nil
+        rowWindow: ClosedRange<Int>? = nil,
+        pruneErrorSubtrees: Bool = false
     ) -> [ScannedDeclaration] {
         guard !configuration.declarations.isEmpty else {
             return []
         }
         var result: [ScannedDeclaration] = []
         var rules: [UInt16: DeclarationRule?] = [:]
-        walk(node: root, configuration: configuration, text: text, rowWindow: rowWindow, depth: 0, rules: &rules, into: &result)
+        walk(node: root, configuration: configuration, text: text, rowWindow: rowWindow, pruneErrorSubtrees: pruneErrorSubtrees, depth: 0, rules: &rules, into: &result)
         return result
     }
 
@@ -79,10 +80,16 @@ enum DeclarationScanner {
         configuration: LanguageConfiguration,
         text: NSString?,
         rowWindow: ClosedRange<Int>?,
+        pruneErrorSubtrees: Bool,
         depth: Int,
         rules: inout [UInt16: DeclarationRule?],
         into result: inout [ScannedDeclaration]
     ) {
+        // Error-recovery subtrees are not real declarations. Pruned only for index extraction;
+        // overlays keep the default so broken code still folds/outlines where it can.
+        if pruneErrorSubtrees, node.isError || node.isMissing {
+            return
+        }
         let startRow = Int(node.startPoint.row)
         let endRow = Int(node.endPoint.row)
         if let rowWindow, endRow < rowWindow.lowerBound || startRow > rowWindow.upperBound {
@@ -135,6 +142,7 @@ enum DeclarationScanner {
                     configuration: configuration,
                     text: text,
                     rowWindow: rowWindow,
+                    pruneErrorSubtrees: pruneErrorSubtrees,
                     depth: childDepth,
                     rules: &rules,
                     into: &result

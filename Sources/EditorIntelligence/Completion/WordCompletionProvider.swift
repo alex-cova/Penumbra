@@ -14,7 +14,7 @@ public actor WordCompletionProvider: CompletionProvider {
 
     public func provide(context: CompletionContext) async -> [CompletionItem] {
         let prefix = context.prefix
-        let symbols = await index.search(prefix: prefix, limit: Self.maxCandidates) { $0.kind == .word }
+        let symbols = await index.search(matching: prefix, limit: Self.maxCandidates) { $0.kind == .word }
         return symbols
             .map { word in
                 CompletionItem(

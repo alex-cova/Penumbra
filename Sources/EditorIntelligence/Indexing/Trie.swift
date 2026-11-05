@@ -99,7 +99,11 @@ final class Trie<Value: Hashable> {
                     result.append(value)
                     if let limit, result.count >= limit { return result }
                 }
-                next.append(contentsOf: current.children.values)
+                // Sorted sibling order: `children.values` iterates a `Dictionary`, so which
+                // keys fill a `limit` would otherwise vary run to run.
+                for key in current.children.keys.sorted() {
+                    next.append(current.children[key]!)
+                }
             }
             level = next
             next.removeAll(keepingCapacity: true)

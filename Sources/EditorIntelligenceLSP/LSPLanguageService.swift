@@ -238,7 +238,8 @@ private struct LSPReadyDiagnostics: DiagnosticProvider {
     func diagnostics(for document: Document) async -> [Diagnostic] {
         guard languages.contains(document.languageIdentifier ?? ""), let client = connections.current else { return [] }
         let items = (try? await client.requestDiagnostics(for: document)) ?? []
-        let mapped = items.map { diagnostic(from: $0, source: source.rawValue) }
+        let text = document.text
+        let mapped = items.map { diagnostic(from: $0, in: text, source: source.rawValue) }
         if let url = document.url {
             publish.send(DiagnosticPublication(
                 source: source, url: url, documentVersion: document.version, diagnostics: mapped

@@ -108,9 +108,10 @@ public actor LSPFormattingProvider: FormattingProviding {
     public func format(document: Document, in range: TextRange?) async -> [TextEdit] {
         do {
             let edits = try await client.requestFormatting(for: document, in: range)
+            let text = document.text
             return edits.map { edit in
                 TextEdit(
-                    range: textRange(from: edit.range),
+                    range: textRange(from: edit.range, in: text),
                     replacement: edit.newText
                 )
             }

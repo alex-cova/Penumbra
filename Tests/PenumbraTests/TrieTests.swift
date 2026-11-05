@@ -27,6 +27,18 @@ final class TrieTests: XCTestCase {
         XCTAssertTrue(trie.search(prefix: "h").isEmpty)
     }
 
+    /// Sibling traversal follows sorted keys, so which keys fill a `limit` does not depend on
+    /// insertion order (plain `Dictionary` iteration would vary run to run).
+    func testPrefixSearchOrderIsIndependentOfInsertionOrder() {
+        let names = ["apex", "apple", "application", "apt", "arc", "axe"]
+        let forward = Trie<String>()
+        for name in names { forward.insert(name, value: name) }
+        let backward = Trie<String>()
+        for name in names.reversed() { backward.insert(name, value: name) }
+        XCTAssertEqual(forward.search(prefix: "ap"), backward.search(prefix: "ap"))
+        XCTAssertEqual(backward.search(prefix: "ap", limit: 2), ["apt", "apex"])
+    }
+
     /// A recursive walk overflowed the 544 KB stack of a cooperative-pool thread on a ~1,150-character key.
     func testPrefixSearchOnVeryLongKeyDoesNotOverflowSmallStack() {
         let trie = Trie<String>()

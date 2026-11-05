@@ -1,7 +1,8 @@
 import AppKit
 import EditorIntelligence
+import Metal
 import XCTest
-@testable import Penumbra
+@_spi(Benchmarks) @testable import Penumbra
 
 @MainActor
 final class MetalTextCanvasViewTests: XCTestCase {
@@ -133,6 +134,49 @@ final class MetalTextCanvasViewTests: XCTestCase {
         XCTAssertFalse(textView.metalDebugGlyphColors(atLocation: 0).isEmpty, "display link should present after pumping the run loop")
     }
 
+    /// F-12: when every instance-buffer slot is in flight, the synchronous present path drops
+    /// the frame instead of blocking the main thread in the slot wait. The display stays dirty
+    /// and presents once slots free — no slot waits recorded.
+    func testSyncPresentDropsFrameWhenWriteSlotsAreBusy() throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+        let defaults = UserDefaults.standard.object(forKey: MetalActivation.defaultsKey) as? Bool
+        guard MetalActivation.resolved(property: true, deviceAvailable: true, defaults: defaults) else {
+            throw XCTSkip("Metal is disabled via UserDefaults kill switch")
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let canvas = MetalTextCanvasView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        window.contentView = canvas
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        canvas.isHidden = false
+        let encoder = StubGlyphEncoder(slotsAvailable: false)
+        canvas.glyphEncoder = encoder
+        MetalWaitStats.reset()
+        canvas.setNeedsDisplay()
+        let started = ContinuousClock.now
+        canvas.presentIfDirtyNow()
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(5), "a busy GPU must not stall the main thread")
+        XCTAssertEqual(encoder.encodeCalls, 0, "no encode while slots are busy")
+        XCTAssertTrue(
+            MetalWaitStats.snapshot().isEmpty,
+            "dropping the frame must not record a GPU wait: \(MetalWaitStats.snapshot())"
+        )
+        encoder.slotsAvailable = true
+        canvas.presentIfDirtyNow()
+        XCTAssertEqual(encoder.encodeCalls, 1, "the next sync present encodes once slots free")
+        XCTAssertTrue(
+            MetalWaitStats.snapshot().isEmpty,
+            "the recovered present must not block either: \(MetalWaitStats.snapshot())"
+        )
+    }
+
     func testDisablingMetalHidesCanvasAndKeepsFragmentViews() throws {
         guard MetalContext.isAvailable else {
             throw XCTSkip("Metal is not available")
@@ -224,4 +268,42 @@ private extension MetalTextCanvasViewTests {
         XCTAssertLessThan(canvasIndex, linesIndex, "Metal canvas must sit behind fragment views")
     }
 
+}
+
+/// Records `encode` calls and reports a controllable slot state, so the sync-present path can
+/// be tested without stalling a real GPU.
+private final class StubGlyphEncoder: MetalCanvasGlyphEncoding {
+    var slotsAvailable: Bool
+    var encodeCalls = 0
+    var paintGeneration: UInt64 = 0
+
+    init(slotsAvailable: Bool) {
+        self.slotsAvailable = slotsAvailable
+    }
+
+    func encode(
+        into encoder: MTLRenderCommandEncoder,
+        commandBuffer: MTLCommandBuffer,
+        drawableSize: CGSize
+    ) {
+        encodeCalls += 1
+    }
+
+    func encodeForCapture(
+        into encoder: MTLRenderCommandEncoder,
+        commandBuffer: MTLCommandBuffer,
+        drawableSize: CGSize
+    ) {
+        encodeCalls += 1
+    }
+
+    func hostDidLeaveWindow() {}
+
+    func canAcquireWriteSlots() -> Bool {
+        slotsAvailable
+    }
+
+    func notePaintCommitted() {
+        paintGeneration &+= 1
+    }
 }

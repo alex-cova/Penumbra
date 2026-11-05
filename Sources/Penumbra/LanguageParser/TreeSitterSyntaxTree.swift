@@ -14,14 +14,15 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
         text: String,
         languageConfiguration: LanguageConfiguration? = nil
     ) {
-        self.symbols = Self.extractSymbols(
+        let extracted = Self.extractSymbolsAndImports(
             tree: tree,
             documentID: documentID,
             text: text,
             languageConfiguration: languageConfiguration
         )
+        self.symbols = extracted.symbols
         self.words = Self.extractWords(from: text)
-        self.imports = Self.extractImports(tree: tree, text: text)
+        self.imports = extracted.imports
     }
 
     // MARK: - Symbol extraction
@@ -32,17 +33,38 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
         text: String,
         languageConfiguration: LanguageConfiguration?
     ) -> [EditorIntelligence.Symbol] {
-        guard let root = tree?.rootNode else { return [] }
-        var symbols: [EditorIntelligence.Symbol] = []
+        extractSymbolsAndImports(
+            tree: tree,
+            documentID: documentID,
+            text: text,
+            languageConfiguration: languageConfiguration
+        ).symbols
+    }
+
+    /// Symbols and imports in a single tree traversal. The index parse used to walk the whole
+    /// tree twice (once for identifiers, once for imports); one pass halves that work.
+    static func extractSymbolsAndImports(
+        tree: TreeSitterTree?,
+        documentID: EditorIntelligence.DocumentID,
+        text: String,
+        languageConfiguration: LanguageConfiguration?
+    ) -> (symbols: [EditorIntelligence.Symbol], imports: [String]) {
+        guard let root = tree?.rootNode else { return ([], []) }
         // Bare identifier / reference symbols (go-to-definition, find-references, completion) and,
         // when no language configuration is available, the legacy hardcoded declaration cases.
+        // Error-recovery subtrees are pruned: identifiers inside an ERROR/MISSING region are the
+        // parser guessing, and indexing them pollutes completion and duplicate-symbol diagnostics.
+        var symbols: [EditorIntelligence.Symbol]? = []
+        var imports: [String]? = []
         walk(
             node: root,
-            into: &symbols,
+            symbols: &symbols,
+            imports: &imports,
             documentID: documentID,
             text: text,
             emitLegacyDeclarations: languageConfiguration == nil
         )
+        var result = symbols ?? []
         // Rich declaration symbols carrying a `containerRange` (breadcrumbs, outline).
         if let languageConfiguration {
             appendDeclarationSymbols(
@@ -50,44 +72,62 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
                 configuration: languageConfiguration,
                 documentID: documentID,
                 text: text,
-                into: &symbols
+                into: &result
             )
         }
-        return symbols
+        return (result, imports ?? [])
     }
 
+    /// One traversal collecting bare-identifier symbols (when `symbols` is non-nil) and imported
+    /// module names (when `imports` is non-nil). Collectors stay optional so an imports-only or
+    /// symbols-only pass never builds the discarded array.
     private static func walk(
         node: TreeSitterNode,
-        into symbols: inout [EditorIntelligence.Symbol],
+        symbols: inout [EditorIntelligence.Symbol]?,
+        imports: inout [String]?,
         documentID: EditorIntelligence.DocumentID,
         text: String,
         emitLegacyDeclarations: Bool
     ) {
+        // Prune error recovery before emitting or descending: nothing under an ERROR/MISSING node
+        // is trustworthy enough to index.
+        guard !node.isError, !node.isMissing else { return }
         if let type = node.type {
             switch type {
-            case "identifier":
+            case "identifier" where symbols != nil:
                 let name = textForNode(node, in: text)
                 let range = makeRange(node)
-                symbols.append(EditorIntelligence.Symbol(name: name, kind: .variable, documentID: documentID, range: range))
-            case "property_identifier":
+                symbols?.append(EditorIntelligence.Symbol(name: name, kind: .variable, documentID: documentID, range: range))
+            case "property_identifier" where symbols != nil:
                 let name = textForNode(node, in: text)
                 let range = makeRange(node)
-                symbols.append(EditorIntelligence.Symbol(name: name, kind: .property, documentID: documentID, range: range))
-            case "type_identifier":
+                symbols?.append(EditorIntelligence.Symbol(name: name, kind: .property, documentID: documentID, range: range))
+            case "type_identifier" where symbols != nil:
                 let name = textForNode(node, in: text)
                 let range = makeRange(node)
-                symbols.append(EditorIntelligence.Symbol(name: name, kind: .type, documentID: documentID, range: range))
+                symbols?.append(EditorIntelligence.Symbol(name: name, kind: .type, documentID: documentID, range: range))
             case "function_declaration", "method_definition":
-                if emitLegacyDeclarations, let nameNode = findChildIdentifier(in: node) {
+                if emitLegacyDeclarations, symbols != nil, let nameNode = findChildIdentifier(in: node) {
                     let name = textForNode(nameNode, in: text)
                     let range = makeRange(nameNode)
-                    symbols.append(EditorIntelligence.Symbol(name: name, kind: .function, documentID: documentID, range: range))
+                    symbols?.append(EditorIntelligence.Symbol(name: name, kind: .function, documentID: documentID, range: range))
                 }
             case "class_declaration":
-                if emitLegacyDeclarations, let nameNode = findChildIdentifier(in: node) {
+                if emitLegacyDeclarations, symbols != nil, let nameNode = findChildIdentifier(in: node) {
                     let name = textForNode(nameNode, in: text)
                     let range = makeRange(nameNode)
-                    symbols.append(EditorIntelligence.Symbol(name: name, kind: .type, documentID: documentID, range: range))
+                    symbols?.append(EditorIntelligence.Symbol(name: name, kind: .type, documentID: documentID, range: range))
+                }
+            case "import_statement" where imports != nil:
+                for index in 0 ..< node.childCount {
+                    guard let child = node.child(at: index),
+                          !child.isError, !child.isMissing,
+                          let childType = child.type, childType == "string" else { continue }
+                    var source = textForNode(child, in: text)
+                    if source.count >= 2 {
+                        source = String(source.dropFirst().dropLast())
+                    }
+                    imports?.append(source)
                 }
             default:
                 break
@@ -97,7 +137,8 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
             if let child = node.child(at: index) {
                 walk(
                     node: child,
-                    into: &symbols,
+                    symbols: &symbols,
+                    imports: &imports,
                     documentID: documentID,
                     text: text,
                     emitLegacyDeclarations: emitLegacyDeclarations
@@ -116,7 +157,8 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
         let declarations = DeclarationScanner.scan(
             root: root,
             configuration: configuration,
-            text: text as NSString
+            text: text as NSString,
+            pruneErrorSubtrees: true
         )
         for declaration in declarations {
             let containerRange = makeRange(declaration.container)
@@ -198,27 +240,17 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
 
     static func extractImports(tree: TreeSitterTree?, text: String) -> [String] {
         guard let root = tree?.rootNode else { return [] }
-        var imports: [String] = []
-        walkImports(node: root, into: &imports, text: text)
-        return imports
-    }
-
-    private static func walkImports(node: TreeSitterNode, into imports: inout [String], text: String) {
-        if let type = node.type, type == "import_statement" {
-            for index in 0 ..< node.childCount {
-                if let child = node.child(at: index), let childType = child.type, childType == "string" {
-                    var source = textForNode(child, in: text)
-                    if source.count >= 2 {
-                        source = String(source.dropFirst().dropLast())
-                    }
-                    imports.append(source)
-                }
-            }
-        }
-        for index in 0 ..< node.childCount {
-            if let child = node.child(at: index) {
-                walkImports(node: child, into: &imports, text: text)
-            }
-        }
+        var symbols: [EditorIntelligence.Symbol]? = nil
+        var imports: [String]? = []
+        // DocumentID is unused on the imports-only path; the value never escapes.
+        walk(
+            node: root,
+            symbols: &symbols,
+            imports: &imports,
+            documentID: EditorIntelligence.DocumentID(),
+            text: text,
+            emitLegacyDeclarations: false
+        )
+        return imports ?? []
     }
 }

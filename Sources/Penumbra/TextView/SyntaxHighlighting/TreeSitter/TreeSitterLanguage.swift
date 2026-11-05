@@ -1,5 +1,8 @@
 import Foundation
+import os
 import TreeSitter
+
+private let treeSitterQueryLog = Logger(subsystem: "Penumbra", category: "TreeSitterQuery")
 
 /// Language to use for syntax highlighting with Tree-sitter.
 ///
@@ -113,13 +116,17 @@ extension TreeSitterLanguage {
     public final class Query {
         let string: String?
 
-        /// Creates a query with the contents of a provided file.
+        /// Creates a query with the contents of a provided file, or `nil` when the file
+        /// cannot be read. Callers degrade to no query for that slot — never a crash.
         ///
         /// The file at the specified URL is read synchronously when the initializer is called.
         /// - Parameters:
         ///   - fileURL: URL of file to load contents from.
         public init?(contentsOf fileURL: URL) {
-            string = try? String(contentsOf: fileURL, encoding: .utf8)
+            guard let string = try? String(contentsOf: fileURL, encoding: .utf8) else {
+                return nil
+            }
+            self.string = string
         }
 
         /// Creates a query with the specified string.
@@ -147,14 +154,14 @@ private extension TreeSitterInternalLanguage {
         predictsATXHeadings = language.predictsATXHeadings
     }
 
+    /// An invalid query disables highlighting for that slot — never a crash, never silent.
+    /// The failure is logged in all builds so a broken bundled query is diagnosable from Console.
     private static func makeInternalQuery(from query: TreeSitterLanguage.Query?, with language: TreeSitterLanguagePointer) -> TreeSitterQuery? {
         if let string = query?.string {
             do {
                 return try TreeSitterQuery(source: string, language: language)
             } catch {
-                #if DEBUG
-                print("Invalid TreeSitterLanguage.Query. Error: \(error).")
-                #endif
+                treeSitterQueryLog.error("Invalid TreeSitterLanguage.Query (\(error, privacy: .public)). Highlighting for that slot is disabled.")
                 return nil
             }
         } else {

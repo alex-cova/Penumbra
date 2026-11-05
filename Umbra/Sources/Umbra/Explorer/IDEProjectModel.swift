@@ -97,6 +97,12 @@ final class IDEProjectModel {
         return !name.hasPrefix(".") || visibleHiddenNames.contains(name)
     }
 
+    /// Directories walked synchronously by `setRoot` before first paint. Small projects build
+    /// fully on the spot (no behavior change); past this the rest completes detached, so opening
+    /// a big repo no longer blocks the main actor on a whole-tree walk. Tests lower it to force
+    /// the detached fill.
+    nonisolated(unsafe) static var maxSyncBuildDirectories = 200
+
     func setRoot(_ url: URL?) {
         rootURL = url
         generation += 1
@@ -104,8 +110,22 @@ final class IDEProjectModel {
         appliedRebuildSequence = 0
         isRootMissing = false
         if let url {
-            rootNode = Self.buildNode(at: url, isDirectory: true)
+            // The root level always paints synchronously (one directory read); deeper levels
+            // continue while the sync budget lasts, then the detached fill completes them
+            // through the standard refresh protocol (sequence guards + retry included).
+            var remaining = Self.maxSyncBuildDirectories
+            var truncated = false
+            rootNode = Self.buildNode(
+                at: url,
+                isDirectory: true,
+                remaining: &remaining,
+                truncated: &truncated,
+                isRootLevel: true
+            )
             expandedPaths.insert(url.path)
+            if truncated {
+                Task { await refresh(directories: Set(allDirectoryPaths())) }
+            }
         } else {
             rootNode = nil
             expandedPaths = []
@@ -468,14 +488,51 @@ final class IDEProjectModel {
     }
 
     nonisolated private static func buildNode(at url: URL, isDirectory: Bool, isExcluded: Bool = false) -> IDEFileNode? {
+        var remaining = Int.max
+        var truncated = false
+        return buildNode(
+            at: url,
+            isDirectory: isDirectory,
+            isExcluded: isExcluded,
+            remaining: &remaining,
+            truncated: &truncated,
+            isRootLevel: true
+        )
+    }
+
+    /// Recursive build where each listed directory spends one unit of `remaining`. The root
+    /// level is always listed; deeper levels stop descending once the budget is out, keeping
+    /// `children: []` so the tree stays spliceable, and set `truncated` for the detached fill.
+    /// `children: []` also marks unreadable folders, exactly as before.
+    nonisolated private static func buildNode(
+        at url: URL,
+        isDirectory: Bool,
+        isExcluded: Bool = false,
+        remaining: inout Int,
+        truncated: inout Bool,
+        isRootLevel: Bool = false
+    ) -> IDEFileNode? {
         guard isDirectory else {
             return IDEFileNode(url: url, isDirectory: false)
+        }
+        if !isRootLevel {
+            guard remaining > 0 else {
+                truncated = true
+                return IDEFileNode(url: url, isDirectory: true, children: [], isExcluded: isExcluded)
+            }
+            remaining -= 1
         }
         guard let entries = visibleEntries(of: url, includingExcluded: true) else {
             return IDEFileNode(url: url, isDirectory: true, children: [], isExcluded: isExcluded)
         }
         let children = entries.compactMap { entry in
-            buildNode(at: entry.url, isDirectory: entry.isDirectory, isExcluded: entry.isExcluded)
+            buildNode(
+                at: entry.url,
+                isDirectory: entry.isDirectory,
+                isExcluded: entry.isExcluded,
+                remaining: &remaining,
+                truncated: &truncated
+            )
         }
         return IDEFileNode(url: url, isDirectory: true, children: children, isExcluded: isExcluded)
     }

@@ -40,6 +40,19 @@ final class TreeSitterNode {
     var byteRange: ByteRange {
         ByteRange(from: startByte, to: endByte)
     }
+    /// Whether this node is an `ERROR` node (as opposed to merely containing one). Subtrees
+    /// rooted here are the parser's error recovery, not real syntax: index extraction prunes them.
+    var isError: Bool {
+        ts_node_is_error(rawValue)
+    }
+    /// Whether this node is a missing (zero-width, inserted-by-recovery) token. Never real text.
+    var isMissing: Bool {
+        ts_node_is_missing(rawValue)
+    }
+    /// Whether this subtree contains a syntax error or a missing node.
+    var hasError: Bool {
+        ts_node_has_error(rawValue)
+    }
     var parent: TreeSitterNode? {
         getRelationship(using: ts_node_parent)
     }

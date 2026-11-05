@@ -18,6 +18,8 @@ public struct MetalPerformanceStats: Sendable {
     public let decorationBuildCount: Int
     public let glyphBufferRebuildCount: Int
     public let solidBufferRebuildCount: Int
+    /// Dirty-page glyph rebuilds (incremental), as opposed to `glyphBufferRebuildCount` (full).
+    public let dirtyGlyphRebuildCount: Int
     /// Fragments whose glyphs were extracted from their `CTLine` (not reused or translated).
     public let glyphExtractCount: Int
 }
@@ -1513,6 +1515,7 @@ public struct DocumentTextExport: Sendable {
             decorationBuildCount: stats.decorationBuildCount,
             glyphBufferRebuildCount: stats.glyphBufferRebuildCount,
             solidBufferRebuildCount: stats.solidBufferRebuildCount,
+            dirtyGlyphRebuildCount: stats.dirtyGlyphRebuildCount,
             glyphExtractCount: stats.glyphExtractCount
         )
     }

@@ -10,7 +10,7 @@ public extension TreeSitterLanguage {
         let highlightsQuery = QueryResources.combinedQuery(fromFilesAt: [
             QueryResources.url(named: "highlights", in: "JavaScript"),
             QueryResources.url(named: "highlights-jsx", in: "JavaScript")
-        ])
+        ].compactMap { $0 })
         let injectionsQuery = QueryResources.query(named: "injections", in: "JavaScript")
         return TreeSitterLanguage(
             tree_sitter_javascript(),
@@ -89,7 +89,7 @@ public extension TreeSitterLanguage {
             QueryResources.url(named: "highlights", in: "JavaScript"),
             QueryResources.url(named: "highlights-jsx", in: "JavaScript"),
             QueryResources.url(named: "highlights", in: "TypeScript")
-        ])
+        ].compactMap { $0 })
         return TreeSitterLanguage(
             tree_sitter_tsx(),
             highlightsQuery: highlightsQuery,
@@ -102,7 +102,7 @@ public extension TreeSitterLanguage {
         QueryResources.combinedQuery(fromFilesAt: [
             QueryResources.url(named: "highlights", in: "JavaScript"),
             QueryResources.url(named: "highlights", in: "TypeScript")
-        ])
+        ].compactMap { $0 })
     }
 
     /// Prepared language for a ``LanguageIdentifier`` string (`"javascript"`, `"python"`, …), from

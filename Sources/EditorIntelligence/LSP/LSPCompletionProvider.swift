@@ -15,7 +15,8 @@ public actor LSPCompletionProvider: CompletionProvider {
                 for: context.document,
                 at: context.cursor.position
             )
-            return lspItems.map { completionItem(from: $0, source: name, range: context.range) }
+            let text = context.document.text
+            return lspItems.map { completionItem(from: $0, source: name, range: context.range, in: text) }
         } catch {
             return []
         }

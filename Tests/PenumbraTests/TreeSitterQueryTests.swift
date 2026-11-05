@@ -14,4 +14,21 @@ final class TreeSitterQueryTests: XCTestCase {
         XCTAssertGreaterThan(source.utf8.count, source.count)
         XCTAssertNoThrow(try TreeSitterQuery(source: source, language: language))
     }
+
+    /// F-18: an invalid query disables highlighting for that slot — never a crash, never silent.
+    /// `prepare()` must complete and the compiled query must come out `nil`.
+    func testInvalidQueryDegradesInsteadOfCrashing() {
+        let language = TreeSitterLanguage(
+            tree_sitter_json(),
+            highlightsQuery: TreeSitterLanguage.Query(string: "(((this is not a query [[[")
+        )
+        language.prepare()
+        XCTAssertNil(language.internalLanguage.highlightsQuery)
+    }
+
+    /// F-18: a query file that cannot be read produces `nil`, not a trap.
+    func testUnreadableQueryFileReturnsNil() {
+        let missing = URL(fileURLWithPath: "/nonexistent/highlights.scm")
+        XCTAssertNil(TreeSitterLanguage.Query(contentsOf: missing))
+    }
 }

@@ -111,6 +111,54 @@ final class NavigationTests: XCTestCase {
         XCTAssertEqual(results.count, 2)
     }
 
+    /// F-14: a stalled higher-priority provider must not hold go-to-definition past the grace period.
+    func testNavigateReturnsFastAnswerPastStalledProvider() async {
+        let slow = MockNavigationProvider(
+            name: "Slow",
+            result: .single(makeLocation(name: "slow")),
+            delay: .seconds(30)
+        )
+        let fast = MockNavigationProvider(name: "Fast", result: .single(makeLocation(name: "fast")))
+        let engine = NavigationEngine(providers: [slow, fast], priorityGrace: .milliseconds(50))
+        let started = ContinuousClock.now
+        let result = await engine.navigate(context: makeNavigationContext(documentID: DocumentID(), text: "foo", offset: 0))
+        guard case .single(let location) = result else {
+            return XCTFail("Expected single result")
+        }
+        XCTAssertEqual(location.displayName, "fast")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(5))
+    }
+
+    /// F-14: a provider that ignores cancellation still must not hold the answer.
+    func testNavigateIgnoresUncooperativeProvider() async {
+        let stuck = UncooperativeNavigationProvider(seconds: 3)
+        let fast = MockNavigationProvider(name: "Fast", result: .single(makeLocation(name: "fast")))
+        let engine = NavigationEngine(providers: [stuck, fast], priorityGrace: .milliseconds(50))
+        let started = ContinuousClock.now
+        let result = await engine.navigate(context: makeNavigationContext(documentID: DocumentID(), text: "foo", offset: 0))
+        guard case .single(let location) = result else {
+            return XCTFail("Expected single result")
+        }
+        XCTAssertEqual(location.displayName, "fast")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(1))
+    }
+
+    /// F-14: collect is bounded by the grace period too — a stalled provider yields a partial
+    /// result, not a hang.
+    func testCollectBoundsWaitOnStalledProvider() async {
+        let slow = MockNavigationProvider(
+            name: "Slow",
+            result: .single(makeLocation(name: "slow")),
+            delay: .seconds(30)
+        )
+        let fast = MockNavigationProvider(name: "Fast", result: .single(makeLocation(name: "fast")))
+        let engine = NavigationEngine(providers: [slow, fast], priorityGrace: .milliseconds(50))
+        let started = ContinuousClock.now
+        let results = await engine.collect(context: makeNavigationContext(documentID: DocumentID(), text: "foo", offset: 0))
+        XCTAssertEqual(results.count, 1)
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(5))
+    }
+
     func testSymbolIndexPrefixAndExactSearch() async {
         let index = SymbolIndex()
         let documentID = DocumentID()
@@ -130,11 +178,13 @@ private actor MockNavigationProvider: NavigationProvider {
     let name: String
     let result: NavigationResult?
     private let primary: Bool
+    private let delay: Duration?
 
-    init(name: String, result: NavigationResult?, isPrimary: Bool = false) {
+    init(name: String, result: NavigationResult?, isPrimary: Bool = false, delay: Duration? = nil) {
         self.name = name
         self.result = result
         self.primary = isPrimary
+        self.delay = delay
     }
 
     nonisolated func isPrimary(for context: NavigationContext) -> Bool {
@@ -142,7 +192,31 @@ private actor MockNavigationProvider: NavigationProvider {
     }
 
     func provide(context: NavigationContext) async -> NavigationResult? {
-        result
+        if let delay {
+            try? await Task.sleep(for: delay)
+        }
+        return result
+    }
+}
+
+/// Waits on a dispatch timer, so cancelling its task does not end the wait.
+private struct UncooperativeNavigationProvider: NavigationProvider {
+    let seconds: Double
+    let name = "Uncooperative"
+
+    func provide(context: NavigationContext) async -> NavigationResult? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { continuation.resume() }
+        }
+        return .single(Location(
+            documentID: DocumentID(),
+            url: nil,
+            range: EditorIntelligence.TextRange(
+                start: TextPosition(line: 0, column: 0, utf16Offset: 0),
+                end: TextPosition(line: 0, column: 0, utf16Offset: 0)
+            ),
+            displayName: "stuck"
+        ))
     }
 }
 
