@@ -13,7 +13,7 @@ extension IDEWorkspace {
     /// buffer on every caret move or keystroke would put document size on the typing path.
     func refreshHTTPSendAvailability(from textView: TextView) {
         if workbench.activePane.selectedDocument?.languageIdentifier != "http" {
-            httpFileCanSend = false
+            runEligibility.httpFileCanSend = false
         }
     }
 
@@ -28,7 +28,7 @@ extension IDEWorkspace {
         guard stamp != httpGutterStamp else { return }
         httpGutterStamp = stamp
         let locations = HTTPRequestParser.requestLocations(in: text)
-        httpFileCanSend = !locations.isEmpty
+        runEligibility.httpFileCanSend = !locations.isEmpty
         httpSupport.prefetchSchemas(in: text, fileURL: fileURL)
         textView.reservedLineMarkerSlots = IDEEditorOverlayController.reservedLineMarkerSlots(languageIdentifier: "http", hasMarkerProvider: false)
         textView.setGutterDecorations(locations.map {
@@ -92,13 +92,13 @@ extension IDEWorkspace {
             content = taken.text
         }
         if let provider = activeRunProvider {
-            runFileCanRun = provider.canRun(IDERunDocument(
+            runEligibility.runFileCanRun = provider.canRun(IDERunDocument(
                 url: fileURL, languageIdentifier: document?.languageIdentifier, text: content ?? ""
             ))
         } else {
-            runFileCanRun = false
+            runEligibility.runFileCanRun = false
         }
-        runFileURL = fileURL
+        runEligibility.runFileURL = fileURL
         // One owner per editor for the gutter icons: query consoles get execute buttons, HTTP
         // files get send buttons, everything else goes through the Java path, which also clears
         // the gutter for non-Java files.
@@ -133,8 +133,8 @@ extension IDEWorkspace {
         guard !Task.isCancelled else { return }
         let wantsBreakpoints = isJava || language == "swift" || language == "javascript" || language == "typescript"
         guard wantsBreakpoints, let fileURL else {
-            javaFileCanTest = false
-            activeJavaTestClass = nil
+            runEligibility.javaFileCanTest = false
+            runEligibility.activeJavaTestClass = nil
             guard let fileURL, !locations.isEmpty else {
                 textView.setGutterDecorations([])
                 textView.gutterDecorationHandler = nil
@@ -147,18 +147,18 @@ extension IDEWorkspace {
             return
         }
         guard isJava else {
-            javaFileCanTest = false
-            activeJavaTestClass = nil
+            runEligibility.javaFileCanTest = false
+            runEligibility.activeJavaTestClass = nil
             applyJavaGutter(JavaGutterContent(fileURL: fileURL, locations: locations), to: textView)
             return
         }
         if await javaSupport.isTestSource(file: fileURL) {
             let testClass = await javaSupport.tests(for: fileURL)
-            activeJavaTestClass = testClass
-            javaFileCanTest = !(testClass?.methods.isEmpty ?? true)
+            runEligibility.activeJavaTestClass = testClass
+            runEligibility.javaFileCanTest = !(testClass?.methods.isEmpty ?? true)
         } else {
-            javaFileCanTest = false
-            activeJavaTestClass = nil
+            runEligibility.javaFileCanTest = false
+            runEligibility.activeJavaTestClass = nil
         }
         applyJavaGutter(JavaGutterContent(fileURL: fileURL, locations: locations), to: textView)
     }

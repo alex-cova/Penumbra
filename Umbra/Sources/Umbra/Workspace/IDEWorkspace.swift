@@ -17,48 +17,23 @@ public final class IDEWorkspace {
     let workbench = EditorWorkbench()
     let workspaceBridge = PenumbraWorkbenchWorkspaceBridge()
     let hostCache = EditorHostCache<UUID, IDEEditorPaneHost>(maxEntries: 16)
-    /// Each diff tab's session, by its document's id (see `IDEWorkspace+Diff.swift`).
-    @ObservationIgnored
-    var diffSessions: [UUID: IDEDiffSession] = [:]
-    /// Three-way merge tabs (a diff-kind document whose viewer is `IDEMergeViewerView`), by document.
-    var mergeSessions: [UUID: IDEMergeSession] = [:]
-    /// Each hex tab's session, by its document's id (see `IDEWorkspace+Hex.swift`).
-    @ObservationIgnored
-    var hexSessions: [UUID: IDEHexSession] = [:]
+    /// Each diff and three-way merge tab's session, by its document's id (F-11).
+    let diffSessionStore = IDEDiffSessionStore()
+    let hexSessionStore = IDEHexSessionStore()
     /// Temporary `Inject language…` highlights, cleared when the document closes. Owned by
     /// `IDEIntelligenceServices` (which also feeds the ⌥↩ provider); providers are cached per
     /// document here so mode reconstructions keep feeding the same instance.
     var manualInjectionStore: IDEManualInjectionStore { intelligenceServices.manualInjectionStore }
-    @ObservationIgnored
-    var manualInjectionProviders: [UUID: IDEManualInjectionProvider] = [:]
+    /// This window's large-file session: sniffed paths, lifted tiers, notice-once keys (F11).
+    let largeFileState = IDELargeFileState()
 
     /// Per-document temporary-injection provider, stable across mode reconstructions.
     func manualInjectionProvider(for document: WorkbenchDocument) -> IDEManualInjectionProvider {
-        if let provider = manualInjectionProviders[document.id] {
-            return provider
-        }
-        let provider = IDEManualInjectionProvider(
-            store: manualInjectionStore,
-            key: IDEManualInjectionStore.key(url: document.url, displayName: document.displayName))
-        manualInjectionProviders[document.id] = provider
-        return provider
+        manualInjectionStore.provider(forDocumentID: document.id, url: document.url, displayName: document.displayName)
     }
-    /// Paths opened as hex because the first 8 KB did not look like text. Consumed when the session starts.
-    @ObservationIgnored
-    var hexSniffedPaths: Set<String> = []
-    /// Files the user chose to open with full service although they are over the large-file size
-    /// (Enable Anyway, `IDEWorkspace+LargeFiles.swift`). For this window's session only.
-    @ObservationIgnored
-    var liftedLargeFilePaths: Set<String> = []
-    /// The size tiers files open under. Tests lower them; the app always uses the standard ones.
-    @ObservationIgnored
-    var largeFileBasePolicy: LargeFilePolicy = .standard
-    /// Oversized-source-file notices already posted, so a re-walk does not repeat one.
-    @ObservationIgnored
-    var postedOversizedNotices: Set<String> = []
-    var diagramSessions: [UUID: IDEDiagramSession] = [:]
-    /// One per open Flight Recorder profile tab, by document id.
-    var profileSessions: [UUID: IDEProfilerSession] = [:]
+    /// Each diagram, Flight Recorder profile and hex tab's session, by document id (F-11).
+    let diagramSessionStore = IDEDiagramSessionStore()
+    let profileSessionStore = IDEProfilerSessionStore()
     /// Line costs of the profile being looked at, shown in the Java editors beside the code.
     let profileHints = IDEProfileLineHints()
     /// The profile tab that feeds ``profileHints``.
@@ -466,13 +441,13 @@ public final class IDEWorkspace {
     var statusLanguage = ""
     /// The active text document's file encoding, shown (and changed) from the status bar.
     var statusEncoding = TextFileEncoding.utf8
-    /// True when the active editor is a Java file with `public static void main` (either modifier
-    /// order) and there is something to launch: the file itself, or a Gradle `run` task.
-    var runFileCanRun = false
-    /// True when the active editor is a Java test source file with discovered tests.
-    var javaFileCanTest = false
-    var runFileURL: URL?
-    var activeJavaTestClass: JavaTestClass?
+    /// What Run, Test and HTTP Send apply to, as of the last availability refresh (F-11).
+    /// Views and providers read the store; `IDEJavaRunHost` is satisfied by the forwards below.
+    let runEligibility = IDERunEligibility()
+    /// `IDEJavaRunHost`: the run provider holds the window weakly and reads through here.
+    var runFileURL: URL? { runEligibility.runFileURL }
+    /// `IDEJavaRunHost`: the test class of the active file, kept by the gutter refresh.
+    var activeJavaTestClass: JavaTestClass? { runEligibility.activeJavaTestClass }
     /// One pause, one copy of the text, for everything the window does because typing stopped.
     @ObservationIgnored let documentSettle: DocumentSettleCoordinator
     /// Semantic colours, gutter markers and the name-index overlay painted over the editors.
@@ -532,8 +507,6 @@ public final class IDEWorkspace {
     var bookmarks: [IDEBookmark] = []
     var bookmarkLists: [IDEBookmarkList] = []
     var defaultBookmarkListID: UUID?
-    /// True when the active editor is an HTTP request file with a parsable request at the caret.
-    var httpFileCanSend = false
     /// What the HTTP gutter's send buttons were last built for, so a caret move alone doesn't re-parse.
     struct HTTPGutterStamp: Equatable {
         let view: ObjectIdentifier
@@ -1120,19 +1093,13 @@ public final class IDEWorkspace {
         window = nil
     }
 
-    private struct WeakTerminalHost {
-        weak var host: IDETerminalHostView?
-    }
-
-    /// The terminal views SwiftUI created for this window's tabs, weakly. A running shell keeps its
-    /// view alive, so closing the window has to end the shell itself rather than wait for SwiftUI to
-    /// dismantle the view.
-    @ObservationIgnored
-    private var terminalHosts: [WeakTerminalHost] = []
+    /// This window's terminal hosts, weakly held (F-11). Focus wiring stays here; the list itself
+    /// lives in the registry.
+    private let terminalHostRegistry = IDETerminalHostRegistry()
 
     /// The terminal shown now, if any.
     func activeTerminalHost() -> IDETerminalHostView? {
-        terminalHosts.compactMap(\.host).first { $0.isShownActive }
+        terminalHostRegistry.activeHost()
     }
 
     func registerTerminalHost(_ host: IDETerminalHostView, tabID: UUID) {
@@ -1141,15 +1108,11 @@ public final class IDEWorkspace {
             // A click into another pane makes its shell the selected tab.
             self?.bottomPanel.focus(tabID)
         }
-        terminalHosts.removeAll { $0.host == nil }
-        terminalHosts.append(WeakTerminalHost(host: host))
+        terminalHostRegistry.register(host)
     }
 
     private func terminateTerminals() {
-        for entry in terminalHosts {
-            entry.host?.terminateProcess()
-        }
-        terminalHosts.removeAll()
+        terminalHostRegistry.terminateAll()
     }
 
     /// Stops what the current project has running: both debug sessions and any Gradle task. Used when
@@ -1888,7 +1851,7 @@ public final class IDEWorkspace {
     }
 
     public func sendActiveHTTPRequest() {
-        guard httpFileCanSend else { return }
+        guard runEligibility.httpFileCanSend else { return }
         let host = host(for: workbench.activePaneID)
         let textView = host.textView
         let fileURL = workbench.activePane.selectedDocument?.url
@@ -2409,7 +2372,7 @@ public final class IDEWorkspace {
                 let discarded = forced.contains(url.standardizedFileURL.path)
                 if document.contentKind == .binary {
                     guard !document.isDirty || discarded else { continue }
-                    if let session = hexSessions[document.id], (try? session.refreshCleanKeepingViewport()) != nil {
+                    if let session = hexSessionStore.session(for: document.id), (try? session.refreshCleanKeepingViewport()) != nil {
                         session.publish(to: document)
                     } else {
                         await reloadHexFromDisk(document)
@@ -3756,7 +3719,7 @@ public final class IDEWorkspace {
         case .image:
             return WorkbenchDocument.loadImage(from: url)
         case .hex(let sniffed):
-            if sniffed { hexSniffedPaths.insert(url.path) }
+            if sniffed { largeFileState.markSniffed(url.path) }
             return WorkbenchDocument.loadBinary(from: url)
         case .text:
             do {
@@ -3784,7 +3747,7 @@ public final class IDEWorkspace {
                        let latin1 = TextFileEncoding.named("latin1") {
                         return try await loadTextDocument(from: url, encoding: latin1, preferring: nil)
                     }
-                    hexSniffedPaths.insert(url.path)
+                    largeFileState.markSniffed(url.path)
                 }
                 // A known text type that cannot be decoded opens as hex. No sniff banner: the
                 // name already said text, and the bytes are what failed.
@@ -4337,7 +4300,7 @@ public final class IDEWorkspace {
                 manualInjectionStore.clear(forKey: IDEManualInjectionStore.key(
                     url: closingDocument.url, displayName: closingDocument.displayName))
             }
-            manualInjectionProviders.removeValue(forKey: documentID)
+            manualInjectionStore.removeDocument(documentID)
         }
         if let closingURL, paneAndDocument(matching: closingURL) == nil {
             problems.clearEditorDiagnostics(for: closingURL)
@@ -4948,7 +4911,7 @@ public final class IDEWorkspace {
                     isDirty: document.isDirty,
                     isSelected: document.id == pane.selectedDocumentID,
                     symbolName: document.contentKind == .diagram
-                        ? diagramSessions[document.id]?.request.symbolName
+                        ? diagramSessionStore.session(for: document.id)?.request.symbolName
                         : (document.contentKind == .profile ? "flame" : nil)
                 )
             }
@@ -5502,8 +5465,8 @@ public final class IDEWorkspace {
             case .text: break
             }
             statusSelectionLength = 0
-            runFileCanRun = false
-            runFileURL = nil
+            runEligibility.runFileCanRun = false
+            runEligibility.runFileURL = nil
             return
         }
         let range = textView.selectedRange
@@ -5722,11 +5685,11 @@ public final class IDEWorkspace {
         in pane: EditorPane,
         host: IDEEditorPaneHost
     ) {
-        if let merge = mergeSessions[document.id] {
+        if let merge = diffSessionStore.mergeSession(for: document.id) {
             showMergeDocument(merge, document: document, in: pane, host: host)
             return
         }
-        guard let session = diffSessions[document.id] else { return }
+        guard let session = diffSessionStore.session(for: document.id) else { return }
         changeMarkers.hide(on: host.textView)
         if let previousID = host.loadedDocumentID,
            previousID != document.id,
@@ -5783,7 +5746,7 @@ public final class IDEWorkspace {
         in pane: EditorPane,
         host: IDEEditorPaneHost
     ) {
-        guard let session = diagramSessions[document.id] else { return }
+        guard let session = diagramSessionStore.session(for: document.id) else { return }
         changeMarkers.hide(on: host.textView)
         if let previousID = host.loadedDocumentID,
            previousID != document.id,

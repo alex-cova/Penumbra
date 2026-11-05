@@ -31,13 +31,13 @@ extension IDEWorkspace {
     func openProfile(recordings: [URL], title: String, runID: String?, project: URL?) {
         guard let first = recordings.first else { return }
         // A run that was watched live reads its recording in the tab it already has.
-        if let runID, let live = profileSessions.first(where: { $0.value.runID == runID && $0.value.phase == .live }) {
-            live.value.finishLive(recordings: recordings)
+        if let runID, let live = profileSessionStore.liveSession(runID: runID) {
+            live.session.finishLive(recordings: recordings)
             for pane in workbench.panes {
-                guard let document = pane.documents.first(where: { $0.id == live.key }) else { continue }
+                guard let document = pane.documents.first(where: { $0.id == live.documentID }) else { continue }
                 // The tab is the recording's from here on: restored with the session, found by its file.
                 document.url = first
-                selectTab(live.key, in: pane.id)
+                selectTab(live.documentID, in: pane.id)
             }
             return
         }
@@ -53,7 +53,7 @@ extension IDEWorkspace {
         let document = WorkbenchDocument(displayName: title)
         document.contentKind = .profile
         document.url = first
-        profileSessions[document.id] = makeProfileSession(recordings: recordings, title: title, runID: runID)
+        profileSessionStore.register(makeProfileSession(recordings: recordings, title: title, runID: runID), for: document.id)
         presentDiagramDocument(document)
     }
 
@@ -81,7 +81,7 @@ extension IDEWorkspace {
             if module.hasPrefix("lib") || module == "dyld" || module.isEmpty { return .jdk }
             return .library
         }
-        profileSessions[document.id] = session
+        profileSessionStore.register(session, for: document.id)
         presentDiagramDocument(document)
     }
 
@@ -105,16 +105,16 @@ extension IDEWorkspace {
         document.contentKind = .profile
         // Live before the tab shows: showing a session that is still idle reads its recording.
         session.beginLive(monitor: monitor)
-        profileSessions[document.id] = session
+        profileSessionStore.register(session, for: document.id)
         presentDiagramDocument(document)
     }
 
     func hasLiveProfile(runID: String) -> Bool {
-        profileSessions.values.contains { $0.runID == runID && $0.phase == .live }
+        profileSessionStore.hasLiveProfile(runID: runID)
     }
 
     func endLiveProfile(runID: String, failure: String) {
-        for session in profileSessions.values where session.runID == runID { session.failLive(failure) }
+        profileSessionStore.failLive(runID: runID, failure: failure)
     }
 
     /// File ▸ Open Profiler Recording…
@@ -199,17 +199,17 @@ extension IDEWorkspace {
 
     /// Reopen as Hex for a profile tab: the same tab shows the file's bytes.
     func reopenProfileAsHex(sessionID: UUID) {
+        guard let documentID = profileSessionStore.documentID(forSessionID: sessionID) else { return }
         for pane in workbench.panes {
-            for document in pane.documents where profileSessions[document.id]?.id == sessionID {
-                closeProfileSession(document.id, in: pane)
-                Task { await reopenAsHex(document) }
-                return
-            }
+            guard let document = pane.documents.first(where: { $0.id == documentID }) else { continue }
+            closeProfileSession(document.id, in: pane)
+            Task { await reopenAsHex(document) }
+            return
         }
     }
 
     func closeProfileSession(_ documentID: UUID, in pane: EditorPane) {
-        guard let session = profileSessions.removeValue(forKey: documentID) else { return }
+        guard let session = profileSessionStore.removeSession(for: documentID) else { return }
         if profileHintsSession === session {
             profileHintsSession = nil
             refreshProfileHints()
@@ -219,13 +219,12 @@ extension IDEWorkspace {
     }
 
     func closeAllProfileSessions() {
-        for session in profileSessions.values { session.cancel() }
-        profileSessions.removeAll()
+        profileSessionStore.closeAll()
     }
 
     /// Puts a profile tab's viewer over the pane's editor, keeping the text document it replaces.
     func showProfileDocument(_ document: WorkbenchDocument, in pane: EditorPane, host: IDEEditorPaneHost) {
-        var session = profileSessions[document.id]
+        var session = profileSessionStore.session(for: document.id)
         if session == nil {
             // A tab restored with the session: its file is the recording, or the tab goes.
             guard let url = document.url, FileManager.default.fileExists(atPath: url.path) else {
@@ -236,7 +235,7 @@ extension IDEWorkspace {
             let made = makeProfileSession(
                 recordings: Self.recordings(sharingFolderWith: url), title: document.displayName, runID: nil
             )
-            profileSessions[document.id] = made
+            profileSessionStore.register(made, for: document.id)
             session = made
         }
         guard let session else { return }
@@ -273,7 +272,7 @@ extension IDEWorkspace {
     /// A tab's query changed or its recording arrived: it is the profile the hints follow.
     func profileSessionQueryChanged(_ session: IDEProfilerSession) {
         // A baseline being read for a comparison is in no tab, and must not drive the editor.
-        guard session.phase == .ready, profileSessions.values.contains(where: { $0 === session }) else { return }
+        guard session.phase == .ready, profileSessionStore.contains(session) else { return }
         profileHintsSession = session
         refreshProfileHints()
     }
@@ -358,7 +357,7 @@ extension IDEWorkspace {
     func profileBaselineCandidates(excluding session: IDEProfilerSession) -> [IDEProfilerSession.BaselineCandidate] {
         var result: [IDEProfilerSession.BaselineCandidate] = []
         var seen = Set(session.recordings.map(\.standardizedFileURL))
-        for other in profileSessions.values where other.id != session.id && other.profile != nil {
+        for other in profileSessionStore.allSessions where other.id != session.id && other.profile != nil {
             result.append(IDEProfilerSession.BaselineCandidate(
                 id: "tab-\(other.id)", title: other.title, subtitle: "open", recordings: other.recordings, profile: other.profile
             ))

@@ -108,15 +108,15 @@ extension IDEWorkspace {
     // MARK: - Run and Debug actions
 
     var runHelp: String {
-        activeRunProvider?.runHelp(fileURL: runFileURL) ?? javaRun.runHelp(fileURL: runFileURL)
+        activeRunProvider?.runHelp(fileURL: runEligibility.runFileURL) ?? javaRun.runHelp(fileURL: runEligibility.runFileURL)
     }
 
     var debugHelp: String {
-        (activeRunProvider ?? javaRun).debugHelp(fileURL: runFileURL, canRun: runFileCanRun)
+        (activeRunProvider ?? javaRun).debugHelp(fileURL: runEligibility.runFileURL, canRun: runEligibility.runFileCanRun)
     }
 
     var runFileCanDebug: Bool {
-        runFileCanRun && (activeRunProvider ?? javaRun).canDebug(fileURL: runFileURL)
+        runEligibility.runFileCanRun && (activeRunProvider ?? javaRun).canDebug(fileURL: runEligibility.runFileURL)
     }
 
     var isRunActive: Bool {
@@ -142,7 +142,7 @@ extension IDEWorkspace {
 
     /// The play and bug buttons: what the active file's run provider starts by default.
     private func startActiveFile(mode: IDERunMode) {
-        guard runFileCanRun, let provider = activeRunProvider, let document = activeRunDocument() else { return }
+        guard runEligibility.runFileCanRun, let provider = activeRunProvider, let document = activeRunDocument() else { return }
         provider.run(document, mode: mode)
     }
 
@@ -179,7 +179,7 @@ extension IDEWorkspace {
     }
 
     var canEditRunConfiguration: Bool {
-        project.rootURL != nil || runFileCanRun || lastRunConfiguration != nil
+        project.rootURL != nil || runEligibility.runFileCanRun || lastRunConfiguration != nil
     }
 
     func dismissRunConfigurationSheet() {

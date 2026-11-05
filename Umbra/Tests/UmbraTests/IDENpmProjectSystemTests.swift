@@ -684,7 +684,7 @@ final class IDENpmProjectSystemTests: XCTestCase {
 
         workspace.openDiagram(IDENpmProjectSystem.dependenciesDiagramRequest())
         let npmDocument = try XCTUnwrap(workspace.workbench.allDocuments().first { $0.contentKind == .diagram })
-        let npmSession = try XCTUnwrap(workspace.diagramSessions[npmDocument.id])
+        let npmSession = try XCTUnwrap(workspace.diagramSessionStore.session(for: npmDocument.id))
         let npmLoaded = await waitUntil { npmSession.loadedAt != nil }
         XCTAssertTrue(npmLoaded)
         XCTAssertTrue(npmSession.document.nodes.contains { $0.key == "npm:demo" && $0.subtitle == "package" })
@@ -699,7 +699,7 @@ final class IDENpmProjectSystemTests: XCTestCase {
         let typescriptDocument = try XCTUnwrap(
             workspace.workbench.allDocuments().first { $0.displayName == "Classes: Greeter.ts" }
         )
-        let typescriptSession = try XCTUnwrap(workspace.diagramSessions[typescriptDocument.id])
+        let typescriptSession = try XCTUnwrap(workspace.diagramSessionStore.session(for: typescriptDocument.id))
         let typescriptLoaded = await waitUntil { typescriptSession.loadedAt != nil }
         XCTAssertTrue(typescriptLoaded)
         XCTAssertTrue(typescriptSession.document.nodes.contains { $0.title == "Greeter" && $0.kind == .classType })

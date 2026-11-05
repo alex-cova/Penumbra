@@ -68,7 +68,7 @@ struct IDEJavaModule: IDELanguageModule {
         // Run, Debug and Stop belong to the window (`IDEWorkspace.toolbarItems`): they follow the
         // active file's run provider. The picker and the test flask stay Java's.
         var items = [IDEToolbarItem(id: "java.runConfigurations", order: Order.runConfigurations, content: .custom(AnyView(IDERunConfigurationMenu())))]
-        if workspace.javaFileCanTest {
+        if workspace.runEligibility.javaFileCanTest {
             items.append(.button(
                 id: "java.runTests", order: Order.tests, systemImage: "flask", help: "Run Tests",
                 action: { [weak workspace] in workspace?.runActiveJavaTests() }

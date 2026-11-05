@@ -18,7 +18,7 @@ final class LargeFileModeUmbraTests: XCTestCase {
         workspace = IDEWorkspace()
         workspace.bootstrap()
         // 1 MB instead of 50: the same code path, without a 53 MB file taking a minute to analyse.
-        workspace.largeFileBasePolicy = LargeFilePolicy(degradeBytes: 1_048_576, readOnlyBytes: 500 * 1_048_576)
+        workspace.largeFileState.basePolicy = LargeFilePolicy(degradeBytes: 1_048_576, readOnlyBytes: 500 * 1_048_576)
     }
 
     override func tearDown() async throws {
@@ -70,7 +70,7 @@ final class LargeFileModeUmbraTests: XCTestCase {
         await eventually("Enable Anyway never reloaded") { document.largeFileNotice == nil && host.textView.largeFileTier == .normal }
         XCTAssertNotNil(document.language)
         XCTAssertEqual(host.textView.languageIdentifier, "swift")
-        XCTAssertTrue(workspace.liftedLargeFilePaths.contains(document.url!.standardizedFileURL.path))
+        XCTAssertTrue(workspace.largeFileState.isLifted(document.url!.standardizedFileURL.path))
     }
 
     func testATabWithUnsavedEditsCannotEnableAnywayBecauseTheReloadWouldDropThem() async throws {
@@ -84,7 +84,7 @@ final class LargeFileModeUmbraTests: XCTestCase {
         workspace.enableLargeFileFeatures(for: document)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertNotNil(document.largeFileNotice)
-        XCTAssertTrue(workspace.liftedLargeFilePaths.isEmpty)
+        XCTAssertFalse(workspace.largeFileState.isLifted(url.standardizedFileURL.path))
         document.isDirty = false
     }
 

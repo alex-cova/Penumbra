@@ -64,7 +64,7 @@ final class IDEDiagramTabTests: XCTestCase {
         XCTAssertEqual(diagramDocuments(workspace).count, 1)
         let document = try XCTUnwrap(diagramDocuments(workspace).first)
         XCTAssertEqual(document.displayName, "Classes: Project")
-        let session = try XCTUnwrap(workspace.diagramSessions[document.id])
+        let session = try XCTUnwrap(workspace.diagramSessionStore.session(for: document.id))
         try await waitUntil { session.loadedAt != nil }
 
         workspace.openDiagram(.classes(.project))
@@ -72,7 +72,7 @@ final class IDEDiagramTabTests: XCTestCase {
 
         workspace.closeTab(document.id)
         XCTAssertTrue(diagramDocuments(workspace).isEmpty)
-        XCTAssertTrue(workspace.diagramSessions.isEmpty)
+        XCTAssertTrue(workspace.diagramSessionStore.isEmpty)
     }
 
     func testDifferentRequestsOpenDifferentTabs() {
@@ -84,7 +84,7 @@ final class IDEDiagramTabTests: XCTestCase {
         workspace.openDiagram(.gradleModules)
         XCTAssertEqual(diagramDocuments(workspace).count, 3)
         XCTAssertEqual(
-            Set(diagramDocuments(workspace).compactMap { workspace.diagramSessions[$0.id]?.request.id }).count, 3
+            Set(diagramDocuments(workspace).compactMap { workspace.diagramSessionStore.session(for: $0.id)?.request.id }).count, 3
         )
     }
 
@@ -113,7 +113,7 @@ final class IDEDiagramTabTests: XCTestCase {
         defer { workspace.teardown() }
         workspace.openDiagram(.gradleLibraries(projectPath: ":", configuration: "runtimeClasspath"))
         let document = try XCTUnwrap(diagramDocuments(workspace).first)
-        let session = try XCTUnwrap(workspace.diagramSessions[document.id])
+        let session = try XCTUnwrap(workspace.diagramSessionStore.session(for: document.id))
         try await waitUntil {
             if case .failed = session.state { return true }
             return false
@@ -132,7 +132,7 @@ final class IDEDiagramTabTests: XCTestCase {
             weakWorkspace = workspace
             workspace.openDiagram(.classes(.project))
             let document = try XCTUnwrap(diagramDocuments(workspace).first)
-            weakSession = workspace.diagramSessions[document.id]
+            weakSession = workspace.diagramSessionStore.session(for: document.id)
             try await waitUntil { weakSession?.loadedAt != nil }
             workspace.teardown()
         }

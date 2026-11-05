@@ -341,14 +341,14 @@ final class IDEProfileRoutingTests: XCTestCase {
         XCTAssertEqual(profileDocuments(workspace).count, 1)
         let document = try XCTUnwrap(profileDocuments(workspace).first)
         XCTAssertEqual(document.displayName, "run.jfr")
-        XCTAssertNotNil(workspace.profileSessions[document.id])
+        XCTAssertNotNil(workspace.profileSessionStore.session(for: document.id))
 
         await workspace.openDocument(from: url)
         XCTAssertEqual(profileDocuments(workspace).count, 1, "the same recording reuses its tab")
 
         workspace.closeTab(document.id)
         XCTAssertTrue(profileDocuments(workspace).isEmpty)
-        XCTAssertTrue(workspace.profileSessions.isEmpty, "closing frees the session")
+        XCTAssertTrue(workspace.profileSessionStore.isEmpty, "closing frees the session")
     }
 
     func testARenamedRecordingIsFoundByItsMagicAndATextFileNamedJFRStaysText() async throws {
@@ -390,7 +390,7 @@ final class IDEProfileRoutingTests: XCTestCase {
         let pane = workspace.workbench.activePane
         workspace.showDocument(in: pane, host: workspace.host(for: pane.id))
         try await waitUntil { self.profileDocuments(workspace).isEmpty }
-        XCTAssertTrue(workspace.profileSessions.isEmpty)
+        XCTAssertTrue(workspace.profileSessionStore.isEmpty)
     }
 
     func testRunRecordingsShareTheirFolder() throws {

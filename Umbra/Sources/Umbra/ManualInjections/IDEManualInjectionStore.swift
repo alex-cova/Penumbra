@@ -40,9 +40,26 @@ final class IDEManualInjectionStore: @unchecked Sendable {
     func clear(forKey key: String) {
         _ = lock.withLock { injectionsByKey.removeValue(forKey: key) }
     }
+
+    /// Per-document providers, stable across mode reconstructions. The workspace asks for the
+    /// provider instead of building one, and drops it when the document closes (F11).
+    private var providersByDocument: [UUID: IDEManualInjectionProvider] = [:]
+
+    func provider(forDocumentID documentID: UUID, url: URL?, displayName: String) -> IDEManualInjectionProvider {
+        lock.withLock {
+            if let provider = providersByDocument[documentID] { return provider }
+            let provider = IDEManualInjectionProvider(store: self, key: Self.key(url: url, displayName: displayName))
+            providersByDocument[documentID] = provider
+            return provider
+        }
+    }
+
+    func removeDocument(_ documentID: UUID) {
+        _ = lock.withLock { providersByDocument.removeValue(forKey: documentID) }
+    }
 }
 
-/// Per-document ``ManualInjectionProviding`` over the shared store. Cached on the workspace (one
+/// Per-document ``ManualInjectionProviding`` over the shared store. Cached in the store (one
 /// per open document) so mode reconstructions (`setLanguage`, inferred syntax) keep feeding the
 /// same instance, and dropped when the document closes.
 final class IDEManualInjectionProvider: ManualInjectionProviding {

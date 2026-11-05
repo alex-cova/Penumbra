@@ -58,14 +58,14 @@ enum IDEHexRouting {
 extension IDEWorkspace {
     func activeHexSession() -> IDEHexSession? {
         guard let document = workbench.activePane.selectedDocument, document.contentKind == .binary else { return nil }
-        return hexSessions[document.id]
+        return hexSessionStore.session(for: document.id)
     }
 
     /// Lines for close and quit prompts. A dirty hex tab names the file and how many bytes changed.
     func unsavedChangeLines() -> [String] {
         workbench.allDocuments().filter(\.isDirty).map { document in
             if document.contentKind == .binary {
-                let count = hexSessions[document.id]?.changedByteCount ?? 0
+                let count = hexSessionStore.session(for: document.id)?.changedByteCount ?? 0
                 return "\(document.displayName): \(count) changed bytes"
             }
             return "\(document.displayName): unsaved changes"
@@ -115,7 +115,7 @@ extension IDEWorkspace {
     /// Writes a hex tab's bytes. A save that may not ask (Save All, the agent) reports `.conflict`
     /// for a file that changed on disk instead of showing the overwrite alert.
     func saveHex(_ document: WorkbenchDocument, interactive: Bool, overwriteChanged: Bool = false) async -> IDESaveOutcome {
-        guard let session = hexSessions[document.id], let url = document.url else { return .clean }
+        guard let session = hexSessionStore.session(for: document.id), let url = document.url else { return .clean }
         do {
             try await session.save(to: url, overwriteChanged: overwriteChanged)
             session.publish(to: document)
@@ -198,7 +198,7 @@ extension IDEWorkspace {
         let changed = Set(paths)
         for document in workbench.allDocuments() where document.contentKind == .binary {
             guard let path = document.url?.path, changed.contains(path),
-                  let session = hexSessions[document.id] else { continue }
+                  let session = hexSessionStore.session(for: document.id) else { continue }
             if session.isModified {
                 session.externalChange = true
             } else if (try? session.refreshCleanKeepingViewport()) != nil {
@@ -241,7 +241,7 @@ extension IDEWorkspace {
 
     func reopenAsText(_ document: WorkbenchDocument) async {
         if document.contentKind == .text { return }
-        if let session = hexSessions[document.id], session.isModified {
+        if let session = hexSessionStore.session(for: document.id), session.isModified {
             let bytes = session.document.bytes(in: 0..<session.document.count)
             let decoded = decodeHexBytes(bytes, encoding: document.encoding)
             closeHexSession(document.id)
@@ -272,7 +272,7 @@ extension IDEWorkspace {
     /// decompiler reads the file), so a modified tab asks first.
     func reopenAsDecompiled(_ document: WorkbenchDocument) async {
         guard document.contentKind == .binary, let url = document.url else { return }
-        if let session = hexSessions[document.id], session.isModified {
+        if let session = hexSessionStore.session(for: document.id), session.isModified {
             var alert = IDEAlert.confirm(
                 "Discard the byte edits?",
                 detail: "Decompiling reads the class file on disk, not the edited bytes.",
@@ -293,7 +293,7 @@ extension IDEWorkspace {
     }
 
     func closeHexSession(_ documentID: UUID) {
-        guard let session = hexSessions.removeValue(forKey: documentID) else { return }
+        guard let session = hexSessionStore.removeSession(for: documentID) else { return }
         for pane in workbench.panes {
             hostCache.peek(pane.id)?.hexViewer.detach(session)
         }
@@ -301,8 +301,7 @@ extension IDEWorkspace {
     }
 
     func closeAllHexSessions() {
-        for session in hexSessions.values { session.close() }
-        hexSessions.removeAll()
+        hexSessionStore.closeAll()
     }
 
     func syncHexPaletteCommands() {
@@ -312,12 +311,12 @@ extension IDEWorkspace {
     }
 
     func ensureHexSession(for document: WorkbenchDocument) -> IDEHexSession? {
-        if let existing = hexSessions[document.id] { return existing }
+        if let existing = hexSessionStore.session(for: document.id) { return existing }
         guard let url = document.url else { return nil }
         guard let source = try? FileByteSource(url: url) else { return nil }
         let identity = try? HexFileIdentity.capture(url: url)
         let hex = HexDocument(source: source, identity: identity)
-        let sniffed = hexSniffedPaths.remove(url.path) != nil
+        let sniffed = largeFileState.consumeSniffed(url.path)
         return install(hex, for: document, sniffed: sniffed)
     }
 
@@ -358,7 +357,7 @@ extension IDEWorkspace {
             bookmarks: document.hexBookmarks
         )
         wire(session, to: document)
-        hexSessions[document.id] = session
+        hexSessionStore.register(session, for: document.id)
         session.publish(to: document)
         return session
     }

@@ -47,7 +47,7 @@ extension IDEWorkspace {
 
     /// Moves the caret to the next (or previous) line the run did not fully execute in the active file.
     func goToUncoveredLine(forward: Bool) {
-        guard let url = runFileURL, coverage.hasLiveCoverage(forFile: url),
+        guard let url = runEligibility.runFileURL, coverage.hasLiveCoverage(forFile: url),
               let file = coverage.snapshot?.report.sourceFile(at: url) else {
             NSSound.beep()
             return

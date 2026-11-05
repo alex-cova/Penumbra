@@ -49,6 +49,24 @@ final class TimedUndoManagerTests: XCTestCase {
         XCTAssertTrue(textView.text.contains("x"))
     }
 
+    func testLoweringTheGroupCapAfterEditsEvictsOldestGroups() {
+        let textView = makeTextView()
+        let undo = textView.undoManager as! TimedUndoManager
+
+        insertIsolated(textView, "a")
+        insertIsolated(textView, "b")
+        insertIsolated(textView, "c")
+        insertIsolated(textView, "d")
+        insertIsolated(textView, "e")
+        XCTAssertEqual(textView.text, "abcde")
+
+        undo.maxUndoGroups = 2
+        undo.undo()
+        undo.undo()
+        XCTAssertEqual(textView.text, "abc")
+        XCTAssertFalse(undo.canUndo, "lowering the cap must discard the oldest groups, not just the ledger")
+    }
+
     func testRemoveAllActionsClearsTheUndoStack() {
         let textView = makeTextView()
         insertIsolated(textView, "hello")

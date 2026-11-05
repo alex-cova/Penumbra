@@ -40,7 +40,7 @@ final class IDEDiffTabTests: XCTestCase {
         XCTAssertEqual(diffDocuments(workspace).count, 1)
         let document = try XCTUnwrap(diffDocuments(workspace).first)
         XCTAssertEqual(document.displayName, "a.txt (Test)")
-        let session = try XCTUnwrap(workspace.diffSessions[document.id])
+        let session = try XCTUnwrap(workspace.diffSessionStore.session(for: document.id))
         await waitForCondition(timeout: 2) { session.chunks.count == 2 }
         XCTAssertEqual(session.chunks.map(\.kind), [.modified, .inserted])
 
@@ -49,7 +49,7 @@ final class IDEDiffTabTests: XCTestCase {
 
         workspace.closeTab(document.id)
         XCTAssertTrue(diffDocuments(workspace).isEmpty)
-        XCTAssertTrue(workspace.diffSessions.isEmpty)
+        XCTAssertTrue(workspace.diffSessionStore.isEmpty)
     }
 
     func testDiffTabsAreNotRestored() {
@@ -171,7 +171,7 @@ final class IDEDiffTabTests: XCTestCase {
             weakWorkspace = workspace
             workspace.openDiff(request("a", "b"))
             let document = try XCTUnwrap(diffDocuments(workspace).first)
-            weakSession = workspace.diffSessions[document.id]
+            weakSession = workspace.diffSessionStore.session(for: document.id)
             await waitForCondition(timeout: 2) { weakSession?.chunks.count == 1 }
             workspace.teardown()
         }

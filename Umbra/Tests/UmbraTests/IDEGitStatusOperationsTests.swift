@@ -313,7 +313,7 @@ final class IDEGitStatusOperationsTests: XCTestCase {
         XCTAssertEqual(documents.count, 1, "the same file reuses its tab")
         let document = try XCTUnwrap(documents.first)
         XCTAssertEqual(document.displayName, "a.txt (Merge)")
-        let session = try XCTUnwrap(workspace.mergeSessions[document.id])
+        let session = try XCTUnwrap(workspace.diffSessionStore.mergeSession(for: document.id))
         try await waitUntil("the session") { session.state == .ready }
         XCTAssertEqual(session.request.leftTitle, "Yours (main)")
         XCTAssertEqual(session.request.rightTitle, "Theirs (feature)")
@@ -321,7 +321,7 @@ final class IDEGitStatusOperationsTests: XCTestCase {
 
         session.currentResultText = { "one\nboth\nthree\n" }
         session.apply()
-        try await waitUntil("the tab to close") { workspace.mergeSessions.isEmpty }
+        try await waitUntil("the tab to close") { workspace.diffSessionStore.isEmpty }
 
         XCTAssertEqual(try read("a.txt"), "one\nboth\nthree\n")
         try await waitUntil("the file to be resolved") { workspace.gitStatus.conflictedChanges.isEmpty }

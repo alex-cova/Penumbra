@@ -223,7 +223,7 @@ final class IDEInstrumentedRunWorkspaceTests: XCTestCase {
         let session = try XCTUnwrap(workspace.startRunSession(configuration))
         // The profiler tab opens when the program starts, with live charts; the same tab then reads
         // the recording.
-        let watching = await waitUntil { self.workspace.profileSessions.values.contains { $0.live != nil } }
+        let watching = await waitUntil { self.workspace.profileSessionStore.allSessions.contains { $0.live != nil } }
         XCTAssertTrue(watching, session.log.plainText)
         let ended = await waitUntil { !session.isActive }
         XCTAssertTrue(ended, session.log.plainText)
@@ -237,7 +237,7 @@ final class IDEInstrumentedRunWorkspaceTests: XCTestCase {
         let document = try XCTUnwrap(workspace.workbench.allDocuments().first { $0.contentKind == .profile })
         XCTAssertEqual(document.displayName, "Profile: Spin")
         XCTAssertTrue(document.url?.path.contains("/Profiles/") == true)
-        let profiler = try XCTUnwrap(workspace.profileSessions[document.id])
+        let profiler = try XCTUnwrap(workspace.profileSessionStore.session(for: document.id))
         let showing = workspace.host(for: workspace.workbench.activePaneID).profileViewer
         XCTAssertTrue(showing.session === profiler, "the viewer is over the editor")
         let ready = await waitUntil { profiler.phase == .ready }

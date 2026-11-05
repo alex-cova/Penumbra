@@ -7,7 +7,7 @@ import Penumbra
 /// Anyway, which reloads the file with full service for the rest of the session.
 extension IDEWorkspace {
     func largeFilePolicy(for url: URL) -> LargeFilePolicy {
-        liftedLargeFilePaths.contains(url.standardizedFileURL.path) ? .disabled : largeFileBasePolicy
+        largeFileState.policy(for: url)
     }
 
     /// Enable Anyway: reload `document` under `.disabled`. Unsaved edits would be dropped by the
@@ -15,7 +15,7 @@ extension IDEWorkspace {
     func enableLargeFileFeatures(for document: WorkbenchDocument) {
         guard document.largeFileNotice != nil, !document.isDirty, let url = document.url else { return }
         let path = url.standardizedFileURL.path
-        liftedLargeFilePaths.insert(path)
+        largeFileState.lift(path)
         Task {
             do {
                 try await reloadDocumentFromDisk(document)
@@ -23,7 +23,7 @@ extension IDEWorkspace {
                 // The index and the language services only learn of a document through the bridge.
                 await workspaceBridge.syncWorkbench(workbench)
             } catch {
-                liftedLargeFilePaths.remove(path)
+                largeFileState.unlift(path)
                 presentError(error)
             }
         }
@@ -32,7 +32,7 @@ extension IDEWorkspace {
     /// Source files an index walk left out for being over its size limit: one notice per set.
     func noteOversizedSourceFiles(_ urls: [URL], language: String) {
         let key = language + ":" + urls.map(\.path).sorted().joined(separator: "\n")
-        guard postedOversizedNotices.insert(key).inserted else { return }
+        guard largeFileState.noticeOnce(key: key) else { return }
         let limit = ByteCountFormatter.string(fromByteCount: 1_048_576, countStyle: .file)
         let names = urls.map(\.lastPathComponent).sorted().prefix(3).joined(separator: ", ")
         let more = urls.count > 3 ? " and \(urls.count - 3) more" : ""

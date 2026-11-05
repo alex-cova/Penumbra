@@ -20,7 +20,7 @@ struct IDEHTTPModule: IDELanguageModule {
     }
 
     func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] {
-        guard workspace.statusLanguage == "http", workspace.httpFileCanSend else { return [] }
+        guard workspace.statusLanguage == "http", workspace.runEligibility.httpFileCanSend else { return [] }
         return [.button(
             id: "http.send", order: IDEToolbarItem.Order.send, systemImage: "paperplane.fill", help: "Send HTTP Request",
             tint: IDEAppearance.ColorToken.accent, action: { [weak workspace] in workspace?.sendActiveHTTPRequest() }
@@ -83,7 +83,7 @@ private struct IDEHTTPCommands: View {
     var body: some View {
         Button("Send Request", systemImage: "paperplane.fill", action: { workspace?.sendActiveHTTPRequest() })
             .menuShortcut(.sendHTTPRequest, in: preset)
-            .disabled(!(workspace?.httpFileCanSend ?? false))
+            .disabled(!(workspace?.runEligibility.httpFileCanSend ?? false))
         Button("Show Response", action: { workspace?.showHTTPResponse() })
             .disabled(workspace?.httpSupport.responseLog.lines.isEmpty ?? true)
         Button("Refresh GraphQL Schema", action: { workspace?.refreshGraphQLSchema() })

@@ -222,7 +222,7 @@ final class IDERunWorkspaceTests: XCTestCase {
         try "plugins { id 'java' }\n".write(to: project.appendingPathComponent("build.gradle"), atomically: true, encoding: .utf8)
         workspace.projectSystems.projectDidChange(root: project)
         XCTAssertTrue(workspace.gradle.isActive)
-        XCTAssertNil(workspace.activeJavaTestClass)
+        XCTAssertNil(workspace.runEligibility.activeJavaTestClass)
 
         workspace.runActiveJavaTests()
 
@@ -255,7 +255,7 @@ final class IDERunWorkspaceTests: XCTestCase {
             className: "app.FooTest", methodName: "testAdds", displayName: "testAdds()", sourceFile: file,
             line: 7, column: 9, framework: .junit5
         )
-        workspace.activeJavaTestClass = JavaTestClass(
+        workspace.runEligibility.activeJavaTestClass = JavaTestClass(
             qualifiedName: "app.FooTest", sourceFile: file, methods: [method],
             gradleProjectPath: ":app", gradleTaskPath: ":app:test"
         )

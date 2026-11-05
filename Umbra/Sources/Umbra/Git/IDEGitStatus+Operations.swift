@@ -182,7 +182,7 @@ extension IDEWorkspace {
         guard gitStatus.isRepository, let relative = gitStatus.repositoryRelativePath(for: path) else { return }
         for pane in workbench.panes {
             for document in pane.documents where document.contentKind == .diff {
-                if mergeSessions[document.id]?.request.path == path {
+                if diffSessionStore.mergeSession(for: document.id)?.request.path == path {
                     selectTab(document.id, in: pane.id)
                     return
                 }
@@ -212,7 +212,7 @@ extension IDEWorkspace {
             guard let self, let document else { return }
             self.closeMergeTab(documentID: document.id)
         }
-        mergeSessions[document.id] = session
+        diffSessionStore.register(session, for: document.id)
         presentDiffDocument(document)
     }
 

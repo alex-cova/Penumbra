@@ -217,7 +217,7 @@ extension IDEWorkspace {
     /// except Stop, which stays while a run is going.
     private func runToolbarItems() -> [IDEToolbarItem] {
         typealias Order = IDEToolbarItem.Order
-        let canRun = runFileCanRun
+        let canRun = runEligibility.runFileCanRun
         let running = isRunActive
         guard canRun || running else { return [] }
         var items: [IDEToolbarItem] = []

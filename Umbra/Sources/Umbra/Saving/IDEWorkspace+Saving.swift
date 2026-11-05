@@ -96,7 +96,7 @@ extension IDEWorkspace {
     func saveDocument(_ document: WorkbenchDocument, reason: IDESaveReason) async -> IDESaveOutcome {
         switch document.contentKind {
         case .diff:
-            guard reason.isUserSave, let session = diffSessions[document.id], session.isRightDirty else { return .clean }
+            guard reason.isUserSave, let session = diffSessionStore.session(for: document.id), session.isRightDirty else { return .clean }
             session.save()
             return .saved
         case .binary:

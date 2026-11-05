@@ -74,8 +74,8 @@ final class IDEModuleContributionTests: XCTestCase {
         let workspace = IDEWorkspace()
         defer { workspace.teardown() }
         workspace.statusLanguage = "java"
-        workspace.runFileCanRun = true
-        workspace.javaFileCanTest = true
+        workspace.runEligibility.runFileCanRun = true
+        workspace.runEligibility.javaFileCanTest = true
         let items = workspace.toolbarItems()
         XCTAssertEqual(ids(items), ["java.runConfigurations", "java.run", "java.debug", "java.stop", "java.runTests"])
         XCTAssertEqual(button("java.run", in: items)?.help, "Run Java file")
@@ -102,7 +102,7 @@ final class IDEModuleContributionTests: XCTestCase {
         defer { workspace.teardown() }
         workspace.statusLanguage = "http"
         XCTAssertNil(button("http.send", in: workspace.toolbarItems()))
-        workspace.httpFileCanSend = true
+        workspace.runEligibility.httpFileCanSend = true
         XCTAssertEqual(button("http.send", in: workspace.toolbarItems())?.help, "Send HTTP Request")
         workspace.statusLanguage = "java"
         XCTAssertNil(button("http.send", in: workspace.toolbarItems()))
@@ -113,7 +113,7 @@ final class IDEModuleContributionTests: XCTestCase {
         defer { workspace.teardown() }
         workspace.statusLanguage = "markdown"
         workspace.isMarkdownPreviewVisible = true
-        workspace.runFileCanRun = true
+        workspace.runEligibility.runFileCanRun = true
         let orders = workspace.toolbarItems().map(\.order)
         XCTAssertEqual(orders, orders.sorted())
     }

@@ -12,7 +12,7 @@ extension IDEWorkspace {
     func openDiff(_ request: IDEDiffRequest, siblings: [IDEDiffRequest] = []) {
         for pane in workbench.panes {
             for document in pane.documents where document.contentKind == .diff {
-                if diffSessions[document.id]?.request.id == request.id {
+                if diffSessionStore.session(for: document.id)?.request.id == request.id {
                     selectTab(document.id, in: pane.id)
                     return
                 }
@@ -20,7 +20,7 @@ extension IDEWorkspace {
         }
         let document = WorkbenchDocument(displayName: request.title)
         document.contentKind = .diff
-        diffSessions[document.id] = makeDiffSession(request, siblings: siblings, documentID: document.id)
+        diffSessionStore.register(makeDiffSession(request, siblings: siblings, documentID: document.id), for: document.id)
         presentDiffDocument(document)
     }
 
@@ -202,31 +202,28 @@ extension IDEWorkspace {
     /// After git or the disk changed (a save, a stage, a pull), every diff tab reloads; one whose
     /// texts did not change keeps its scroll position and caret.
     func reloadDiffSessions() {
-        for session in diffSessions.values where !session.isRightDirty {
-            session.reload()
-        }
+        diffSessionStore.reloadAll()
     }
 
     func closeDiffSession(_ documentID: UUID, in pane: EditorPane) {
-        if let merge = mergeSessions.removeValue(forKey: documentID) {
+        if let merge = diffSessionStore.removeMerge(for: documentID) {
             hostCache.peek(pane.id)?.diffViewer.mergeViewer.detach(merge)
             merge.cancel()
             return
         }
-        guard let session = diffSessions.removeValue(forKey: documentID) else { return }
+        guard let session = diffSessionStore.removeSession(for: documentID) else { return }
         hostCache.peek(pane.id)?.diffViewer.detach(session)
         session.save()
         session.cancel()
     }
 
     func closeAllDiffSessions() {
-        for merge in mergeSessions.values { merge.cancel() }
-        mergeSessions.removeAll()
-        for session in diffSessions.values {
+        let removed = diffSessionStore.removeAll()
+        for merge in removed.merges { merge.cancel() }
+        for session in removed.diffs {
             session.save()
             session.cancel()
         }
-        diffSessions.removeAll()
     }
 
     /// Jump to Source: the file at a 0-based line.

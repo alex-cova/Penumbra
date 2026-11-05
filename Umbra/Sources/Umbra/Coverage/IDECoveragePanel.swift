@@ -25,11 +25,11 @@ struct IDECoveragePanel: View {
             IDEIconButton(systemImage: "arrow.up.circle", help: "Previous Uncovered Line") {
                 workspace.goToUncoveredLine(forward: false)
             }
-            .disabled(!controller.hasLiveCoverage(forFile: workspace.runFileURL))
+            .disabled(!controller.hasLiveCoverage(forFile: workspace.runEligibility.runFileURL))
             IDEIconButton(systemImage: "arrow.down.circle", help: "Next Uncovered Line") {
                 workspace.goToUncoveredLine(forward: true)
             }
-            .disabled(!controller.hasLiveCoverage(forFile: workspace.runFileURL))
+            .disabled(!controller.hasLiveCoverage(forFile: workspace.runEligibility.runFileURL))
             Divider().frame(height: 14)
             Menu {
                 Button("Show All Classes") { controller.maximumPercent = nil }

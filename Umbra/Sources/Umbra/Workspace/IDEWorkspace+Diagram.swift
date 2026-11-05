@@ -12,7 +12,7 @@ extension IDEWorkspace {
     func openDiagram(_ request: IDEDiagramRequest, minimumNeighbourDepth: Int = 0) {
         for pane in workbench.panes {
             for document in pane.documents where document.contentKind == .diagram {
-                if diagramSessions[document.id]?.request.id == request.id {
+                if diagramSessionStore.session(for: document.id)?.request.id == request.id {
                     selectTab(document.id, in: pane.id)
                     return
                 }
@@ -20,7 +20,7 @@ extension IDEWorkspace {
         }
         let document = WorkbenchDocument(displayName: request.title)
         document.contentKind = .diagram
-        diagramSessions[document.id] = makeDiagramSession(request, minimumNeighbourDepth: minimumNeighbourDepth)
+        diagramSessionStore.register(makeDiagramSession(request, minimumNeighbourDepth: minimumNeighbourDepth), for: document.id)
         presentDiagramDocument(document)
     }
 
@@ -238,22 +238,17 @@ extension IDEWorkspace {
     }
 
     func closeDiagramSession(_ documentID: UUID, in pane: EditorPane) {
-        guard let session = diagramSessions.removeValue(forKey: documentID) else { return }
+        guard let session = diagramSessionStore.removeSession(for: documentID) else { return }
         hostCache.peek(pane.id)?.diagramViewer.detach(session)
         session.cancel()
     }
 
     func closeAllDiagramSessions() {
-        for session in diagramSessions.values { session.cancel() }
-        diagramSessions.removeAll()
+        diagramSessionStore.closeAll()
     }
 
     /// After the project's sources were re-indexed or Gradle re-synced, open diagrams of that kind redraw.
     func reloadDiagramSessions(classes: Bool) {
-        for session in diagramSessions.values where classes
-            ? session.request.isClassDiagram
-            : (session.request.id == IDEDiagramRequest.gradleModules.id || session.request.id == IDEDiagramRequest.mavenModules.id) {
-            session.reload()
-        }
+        diagramSessionStore.reload(classes: classes)
     }
 }
