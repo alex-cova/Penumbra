@@ -6,7 +6,20 @@ import XCTest
 /// Extracted from the identical `waitUntil` helpers duplicated across the completion, git-status,
 /// debug-session, and agent-runner suites.
 extension XCTestCase {
-    /// Polls `condition` until it holds or `timeout` passes. File/line default to the call site.
+    /// The shortest time a poll gives up after, whatever a caller asks for.
+    ///
+    /// A test that creates a workspace and then waits on something asynchronous (a diff, a load)
+    /// does not time anything: its callers wrote 2 and 3 seconds as "long enough". Measured here,
+    /// the main thread is busy for about 0.25 s after a workspace is made (nine deferred layout
+    /// flushes of window-less editor views), and on an idle machine about one workspace in thirty
+    /// leaves it blocked for 3 to 6 seconds (the cause is not understood; a failure that XCTest
+    /// symbolicates, in a Debug build, adds seconds of its own). A condition that holds ends the
+    /// wait at once, so a generous ceiling costs a passing run nothing and only makes a real failure
+    /// take longer to report.
+    static let minimumPollTimeout: TimeInterval = 15
+
+    /// Polls `condition` until it holds or `timeout` passes (never less than ``minimumPollTimeout``).
+    /// File/line default to the call site.
     ///
     /// Main-actor bound because callers poll main-actor state (view flags, controllers).
     @MainActor
@@ -17,6 +30,7 @@ extension XCTestCase {
         line: UInt = #line,
         _ condition: () async -> Bool
     ) async {
+        let timeout = max(timeout, Self.minimumPollTimeout)
         let deadline = Date().addingTimeInterval(timeout)
         while await !condition() {
             if Date() > deadline {

@@ -175,7 +175,9 @@ final class IDEDiffTabTests: XCTestCase {
             await waitForCondition(timeout: 2) { weakSession?.chunks.count == 1 }
             workspace.teardown()
         }
-        for _ in 0 ..< 50 where weakWorkspace != nil || weakSession != nil {
+        // Five seconds, ending as soon as both are gone: a workspace that has just been torn down
+        // can still have a main-thread stall ahead of it (see `minimumPollTimeout`).
+        for _ in 0 ..< 250 where weakWorkspace != nil || weakSession != nil {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         XCTAssertNil(weakSession, "the diff session outlived its workspace")
