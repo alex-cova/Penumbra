@@ -14,12 +14,14 @@ the file and resolves the symbol at its last character (`Trees.getElement`).
 - Wrong-symbol rate: of the positions Umbra answers, the share that land outside that declaration.
 - Completion top-8: the symbol's name is among the 8 highest-ranked candidates when the prefix is its first 2 characters.
 - Hover: an explicit hover contains the symbol's name.
+- Usages recall: of the sampled public method declarations with at least one oracle use, the share whose reference set (file and line, declarations dropped) matches the oracle's `usages` exactly.
+- Wrong-usages: of the declarations the provider answers, the share whose set differs.
 
 The same shape applies later to TypeScript (`tsserver`) and Swift (`sourcekit-lsp`).
 
-| project | commit | definition recall | wrong-symbol | completion top-8 | hover |
-|---|---|---|---|---|---|
-| gson | `828a97be0f8d58108b140b77df8dc76b657f4a87` | 41.8% (18/43) | 21.7% (5/23) | 42.4% (28/66) | 68.1% (45/66) |
-| jackson-core | `a6f49caedcb398efe14c06c4e9abf6e672c412f5` | 56.8% (29/51) | 14.7% (5/34) | 56.5% (39/69) | 63.7% (44/69) |
+| project | commit | definition recall | wrong-symbol | completion top-8 | hover | usages recall | wrong-usages |
+|---|---|---|---|---|---|---|---|
+| gson | `828a97be0f8d58108b140b77df8dc76b657f4a87` | 41.8% (18/43) | 21.7% (5/23) | 42.4% (28/66) | 68.1% (45/66) | 100.0% (2/2) | 0.0% (0/2) |
+| jackson-core | `a6f49caedcb398efe14c06c4e9abf6e672c412f5` | 56.8% (29/51) | 14.7% (5/34) | 56.5% (39/69) | 63.7% (44/69) | 100.0% (2/2) | 0.0% (0/2) |
 
-Sample: 6 files per project, 12 identifiers per file, stride-picked so one package cannot fill the run.
+Sample: 6 files per project, 12 identifiers per file, stride-picked so one package cannot fill the run; 2 public method declarations per project for usages (each oracle call compiles the whole module, so this stays small).

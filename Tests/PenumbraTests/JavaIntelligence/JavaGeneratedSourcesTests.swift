@@ -1,4 +1,5 @@
 import XCTest
+import EditorIntelligence
 @testable import JavaIntelligence
 
 /// F23: annotation-processor output is rewritten in place, below a directory whose own mtime does
@@ -107,6 +108,72 @@ final class JavaGeneratedSourcesTests: XCTestCase {
         events = await run()
         XCTAssertTrue(events.contains(.rootFinished(id: generated.id, classCount: 2)), "the rewrite is picked up: \(events)")
         XCTAssertEqual(Set(try JavaIndexShardReader(url: shard).allQualifiedNames), ["p.Foo_Impl", "p.Extra"])
+    }
+
+    // MARK: - The generated track, end to end (F-17)
+
+    /// A MapStruct-style generated type is invisible until its generated root is indexed, then
+    /// completes and resolves. This is the "works after a build" track, separate from Lombok
+    /// synthesis (which needs no build output): without the generated shard there is nothing
+    /// to offer, with it the type behaves like handwritten code.
+    func testAGeneratedTypeCompletesAndResolvesOnceItsRootIsIndexed() async throws {
+        try write("src/p/User.java", "package p; public class User { public String name; }")
+        try write("src/p/UserDto.java", "package p; public class UserDto { public String name; }")
+        try write("src/p/UserMapper.java", "package p; public interface UserMapper { UserDto toDto(User u); }")
+        try write(
+            "gen/p/UserMapperImpl.java",
+            "package p; public class UserMapperImpl implements UserMapper { public UserDto toDto(User u) { return null; } }"
+        )
+        let use = try write("src/p/Use.java", "package p; class Use {}")
+        let src = SourceRoot(directory: root.appendingPathComponent("src"))
+        let gen = SourceRoot(directory: root.appendingPathComponent("gen"), isGenerated: true)
+        let cache = root.appendingPathComponent("cache")
+        let scheduler = JavaIndexScheduler(paths: JavaIndexPaths(root: cache))
+        let srcShard = root.appendingPathComponent("src.idx")
+        let genShard = root.appendingPathComponent("gen.idx")
+
+        func index(roots: [(root: SourceRoot, shardURL: URL)]) async throws -> JavaIndex {
+            for await _ in await scheduler.index(roots) {}
+            let index = JavaIndex()
+            var sources: [JavaIndex.Source] = []
+            for (_, shard) in roots {
+                sources.append(.init(precedence: 1, reader: try JavaIndexShardReader(url: shard), shardPath: shard.path))
+            }
+            await index.setSources(sources)
+            return index
+        }
+
+        func offersImpl(_ index: JavaIndex) async -> Bool {
+            let provider = JavaCompletionProvider(index: index)
+            let source = "package p; class Use { void m() { UserMapperI\u{20AC} } }"
+            let text = source.replacingOccurrences(of: "\u{20AC}", with: "")
+            let offset = (text as NSString).length - " } }".utf16.count
+            let position = TextPosition(line: 0, column: offset, utf16Offset: offset)
+            let document = Document(
+                id: DocumentID(), url: use, displayName: "Use.java",
+                contentSnapshot: TextSnapshot(version: 0, text: text),
+                selection: Selection(range: TextRange(start: position, end: position)), cursor: Cursor(position: position),
+                viewport: Viewport(x: 0, y: 0, width: 100, height: 100), languageIdentifier: "java"
+            )
+            let items = await provider.provide(context: makeCompletionContext(document: document, trigger: .manual))
+            return items.map(\.label).contains("UserMapperImpl")
+        }
+
+        let withoutGenerated = try await index(roots: [(src, srcShard)])
+        let missing = await withoutGenerated.classStub(qualifiedName: "p.UserMapperImpl")
+        XCTAssertNil(missing, "no generated shard, no generated type")
+        let offersWithout = await offersImpl(withoutGenerated)
+        XCTAssertFalse(offersWithout, "nothing to offer before the generated root is indexed")
+
+        let withGenerated = try await index(roots: [(src, srcShard), (gen, genShard)])
+        let found = await withGenerated.classStub(qualifiedName: "p.UserMapperImpl")
+        let stub = try XCTUnwrap(found, "the generated type resolves once its root is indexed")
+        guard case .source(let url, _) = stub.origin else {
+            return XCTFail("generated stub should have a source origin, got \(stub.origin)")
+        }
+        XCTAssertTrue(url.path.hasSuffix("gen/p/UserMapperImpl.java"), url.path)
+        let offersWith = await offersImpl(withGenerated)
+        XCTAssertTrue(offersWith, "the generated type completes")
     }
 
     // MARK: - Which watcher paths concern generated sources

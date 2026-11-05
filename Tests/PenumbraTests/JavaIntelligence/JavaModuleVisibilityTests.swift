@@ -257,6 +257,120 @@ final class JavaModuleVisibilityTests: XCTestCase {
         XCTAssertTrue(second, "like IntelliJ's second basic completion, it looks past the classpath and module rules")
     }
 
+    /// F-17 (JPMS): a modular jar's non-exported packages fail open. Umbra offers
+    /// `com.lib.impl.Internal` from the jar shard even though `javac` rejects the import
+    /// (`package com.lib.impl is not visible`). Restrictions only ever key project-source
+    /// shards, so jar (and JDK) entries are unrestricted by construction.
+    func testAModularJarsNonExportedPackageIsOfferedWhileJavacRejectsIt() async throws {
+        let jarURL = root.appendingPathComponent("lib.jar")
+        let bDir = root.appendingPathComponent("b/src/main/java")
+        _ = try write("b/src/main/java/module-info.java", "module com.b { requires com.lib; }")
+        _ = try write("b/src/main/java/com/b/Use.java", "package com.b; class Use {}")
+        // The oracle half first: build a real modular jar and prove javac rejects the import.
+        // This also creates the jar file the model below puts on the compile classpath.
+        try await assertJavacRejectsInternalImport(jarURL: jarURL)
+
+        let paths = JavaIndexPaths(root: root.appendingPathComponent("indexroot"))
+        // The shard lives where the IDE writes jar indexes; the scope check keys on it.
+        let shard = paths.jarShard(jarURL)
+        try FileManager.default.createDirectory(at: shard.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let apiURL = URL(fileURLWithPath: "/fake/lib/com/lib/api/Api.java")
+        let internalURL = URL(fileURLWithPath: "/fake/lib/com/lib/impl/Internal.java")
+        try JavaIndexShardWriter().write([
+            JavaClassStub(
+                binaryName: "com.lib.api.Api", qualifiedName: "com.lib.api.Api", simpleName: "Api",
+                packageName: "com.lib.api", kind: .classKind, modifiers: [.publicFlag], methods: [],
+                origin: .source(apiURL, nameRange: 0 ..< 1)
+            ),
+            JavaClassStub(
+                binaryName: "com.lib.impl.Internal", qualifiedName: "com.lib.impl.Internal", simpleName: "Internal",
+                packageName: "com.lib.impl", kind: .classKind, modifiers: [.publicFlag], methods: [],
+                origin: .source(internalURL, nameRange: 0 ..< 1)
+            ),
+        ], stamp: JavaStamp(size: 1, modificationDate: 0), to: shard)
+        let index = JavaIndex()
+        // A jar shard: precedence 2 keyed by its shard path, exactly as the IDE publishes one.
+        await index.setSources([.init(precedence: 2, reader: try JavaIndexShardReader(url: shard), shardPath: shard.path)])
+
+        let use = root.appendingPathComponent("b/src/main/java/com/b/Use.java")
+        let model = JavaGradleProjectModel(formatVersion: 2, gradleVersion: "9.0", subprojects: [
+            .init(path: ":b", directory: root.appendingPathComponent("b"), sourceSets: [
+                .init(name: "main", sourceDirs: [bDir], compileClasspathJars: [jarURL]),
+            ]),
+        ])
+        let provider = JavaCompletionProvider(index: index)
+        await provider.setSourceSetClasspath(model, indexPaths: paths)
+        let project = Project(index: index, provider: provider, use: use)
+        let offered = await offers("Internal", "com.lib.impl", in: project)
+        XCTAssertTrue(offered, "jar entries are unrestricted: Umbra offers what javac rejects")
+    }
+
+    /// Compiles a real `module com.lib { exports com.lib.api; }` jar and asserts `javac`
+    /// rejects an app module importing its non-exported package. Skipped without a JDK.
+    private func assertJavacRejectsInternalImport(jarURL: URL) async throws {
+        guard let found = TestJDK.discovered,
+              let jdk = ReleaseFileParser.parse(found.home),
+              let javac = jdk.javac
+        else {
+            throw XCTSkip("needs a JDK with javac")
+        }
+        let libDir = root.appendingPathComponent("reallib")
+        for (path, text) in [
+            ("module-info.java", "module com.lib { exports com.lib.api; }"),
+            ("com/lib/api/Api.java", "package com.lib.api; public class Api {}"),
+            ("com/lib/impl/Internal.java", "package com.lib.impl; public class Internal {}"),
+        ] as [(String, String)] {
+            let url = libDir.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        let libClasses = root.appendingPathComponent("lib-classes")
+        try await runCompiler(javac, ["-d", libClasses.path] + javaFiles(under: libDir).map(\.path))
+        let jar = javac.deletingLastPathComponent().appendingPathComponent("jar")
+        try await runCompiler(jar, ["--create", "--file", jarURL.path, "-C", libClasses.path, "."])
+        _ = try write("b/src/main/java/com/b/Use.java", "package com.b; import com.lib.impl.Internal; class Use { Internal i; }")
+        do {
+            try await runCompiler(
+                javac,
+                ["--module-path", jarURL.path, "-d", root.appendingPathComponent("app-classes").path,
+                 root.appendingPathComponent("b/src/main/java/module-info.java").path,
+                 root.appendingPathComponent("b/src/main/java/com/b/Use.java").path]
+            )
+            XCTFail("javac accepted an import from a non-exported package")
+        } catch let error as CompilerError {
+            XCTAssertTrue(
+                error.output.contains("is not visible") || error.output.contains("does not export"),
+                "expected a module-visibility error, got:\n\(error.output)"
+            )
+        }
+    }
+
+    private struct CompilerError: Error {
+        let output: String
+    }
+
+    @discardableResult
+    private func runCompiler(_ javac: URL, _ arguments: [String]) async throws -> String {
+        let process = Process()
+        process.executableURL = javac
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0 else {
+            throw CompilerError(output: output)
+        }
+        return output
+    }
+
+    private func javaFiles(under root: URL) -> [URL] {
+        (try? FileManager.default.subpathsOfDirectory(atPath: root.path))?.filter { $0.hasSuffix(".java") }
+            .map { root.appendingPathComponent($0) } ?? []
+    }
+
     func testAnEditToModuleInfoIsPickedUp() async throws {
         let project = try await makeProject(
             aModuleInfo: "module com.a { exports com.a.api; }", bModuleInfo: "module com.b { requires com.a; }",

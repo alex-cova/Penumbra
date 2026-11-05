@@ -17,7 +17,10 @@
       "hoverScored" : 66,
       "name" : "gson",
       "positions" : 68,
-      "tag" : "gson-parent-2.11.0"
+      "tag" : "gson-parent-2.11.0",
+      "usagesAnswered" : 2,
+      "usagesMatched" : 2,
+      "usagesScored" : 2
     },
     {
       "attributeFailures" : 0,
@@ -32,8 +35,12 @@
       "hoverScored" : 69,
       "name" : "jackson-core",
       "positions" : 72,
-      "tag" : "jackson-core-2.17.2"
+      "tag" : "jackson-core-2.17.2",
+      "usagesAnswered" : 2,
+      "usagesMatched" : 2,
+      "usagesScored" : 2
     }
   ],
-  "topK" : 8
+  "topK" : 8,
+  "usagesPerProject" : 2
 }

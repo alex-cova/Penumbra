@@ -11,11 +11,20 @@ import com.sun.source.util.Trees;
 
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.QualifiedNameable;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.TypeVariable;
+import javax.lang.model.type.WildcardType;
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
 import javax.tools.FileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.ToolProvider;
 import javax.tools.ForwardingJavaFileManager;
 import javax.tools.JavaCompiler;
 import javax.tools.JavaFileManager;
@@ -25,13 +34,19 @@ import javax.tools.StandardJavaFileManager;
 import javax.tools.StandardLocation;
 import javax.tools.ToolProvider;
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystemNotFoundException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -73,6 +88,11 @@ import java.util.concurrent.Executors;
  *
  * {"id":4,"method":"cancel","params":{"id":2}} → {"id":4,"result":{"ok":true}}
  * {"id":5,"method":"shutdown","params":{}}     → {"id":5,"result":{"ok":true}} (then exits)
+ *
+ * {"id":6,"method":"usages","params":{
+ *   "moduleId":"app/main", "file":"/…/Foo.java", "text":"…", "position":120}}
+ * → {"id":6,"result":{"usages":[{
+ *     "file":"/…/Bar.java", "offset":77, "length":5, "line":4, "column":11}]}}
  * </pre>
  *
  * <p>{@code attribute} is the symbol oracle. It attributes {@code file} and resolves each
@@ -82,6 +102,18 @@ import java.util.concurrent.Executors;
  * declaration fields are present only when that symbol was compiled from source. A position
  * with no resolvable symbol is absent from {@code symbols}. Offsets are the same UTF-16
  * code units as {@code check}.
+ *
+ * <p>{@code usages} is the reference oracle. It resolves the element at {@code position}
+ * and returns every tree across the module's sourcepath whose element is the same one
+ * (same kind, qualified name and erased signature, so overloads stay distinct), as
+ * {@code file} plus UTF-16 {@code offset}/{@code length} and 1-based {@code line} with a
+ * 0-based {@code column}. Overlapping trees (an invocation and its selector) collapse to
+ * one entry per offset, keeping the tightest span. The declaration itself is included;
+ * the caller decides whether declarations count.
+ *
+ * <p>The module compiles from disk, so {@code module-info.java} assigns every unit to its
+ * module; {@code text} must match the file on disk and only locates the caret. A mismatch
+ * is an error, not a silent wrong answer.
  *
  * <p>{@code key} is {@link Diagnostic#getCode} (e.g. {@code compiler.err.cant.resolve}),
  * {@code start}/{@code end} are UTF-16 offsets into the buffer text the diagnostic is about
@@ -209,6 +241,7 @@ public final class JavaAnalysisServer {
                 case "configure" -> handleConfigure(id, params);
                 case "check" -> handleCheck(id, params);
                 case "attribute" -> handleAttribute(id, params);
+                case "usages" -> handleUsages(id, params);
                 case "cancel" -> {
                     cancelled.add(toLong(params.get("id"), -1));
                     respond(id, Map.of("ok", true), null);
@@ -369,6 +402,24 @@ public final class JavaAnalysisServer {
         Trees trees = Trees.instance(javac);
         SourcePositions sourcePositions = trees.getSourcePositions();
 
+        List<Tree> leaves = leavesOf(unit, sourcePositions);
+
+        List<Object> symbols = new ArrayList<>();
+        for (long position : positions) {
+            Tree best = leafAt(leaves, sourcePositions, unit, position);
+            if (best == null) continue;
+            try {
+                Map<String, Object> encoded = encodeSymbol(trees, sourcePositions, unit, best, position);
+                if (encoded != null) symbols.add(encoded);
+            } catch (RuntimeException unresolved) {
+                // One offset the compiler cannot attribute.
+            }
+        }
+        return symbols;
+    }
+
+    /** Every positioned tree in {@code unit}, in pre-order (outer trees before their parts). */
+    private static List<Tree> leavesOf(CompilationUnitTree unit, SourcePositions sourcePositions) {
         List<Tree> leaves = new ArrayList<>();
         new TreeScanner<Void, Void>() {
             @Override
@@ -382,30 +433,24 @@ public final class JavaAnalysisServer {
                 return super.scan(tree, unused);
             }
         }.scan(unit, null);
+        return leaves;
+    }
 
-        List<Object> symbols = new ArrayList<>();
-        for (long position : positions) {
-            Tree best = null;
-            long bestSpan = Long.MAX_VALUE;
-            for (Tree tree : leaves) {
-                long start = sourcePositions.getStartPosition(unit, tree);
-                long end = sourcePositions.getEndPosition(unit, tree);
-                long span = end - start;
-                // A later tree of the same span is nested inside the earlier one.
-                if (start <= position && position < end && span <= bestSpan) {
-                    best = tree;
-                    bestSpan = span;
-                }
-            }
-            if (best == null) continue;
-            try {
-                Map<String, Object> encoded = encodeSymbol(trees, sourcePositions, unit, best, position);
-                if (encoded != null) symbols.add(encoded);
-            } catch (RuntimeException unresolved) {
-                // One offset the compiler cannot attribute.
+    /** The smallest positioned tree covering {@code position}, or null. */
+    private static Tree leafAt(List<Tree> leaves, SourcePositions sourcePositions, CompilationUnitTree unit, long position) {
+        Tree best = null;
+        long bestSpan = Long.MAX_VALUE;
+        for (Tree tree : leaves) {
+            long start = sourcePositions.getStartPosition(unit, tree);
+            long end = sourcePositions.getEndPosition(unit, tree);
+            long span = end - start;
+            // A later tree of the same span is nested inside the earlier one.
+            if (start <= position && position < end && span <= bestSpan) {
+                best = tree;
+                bestSpan = span;
             }
         }
-        return symbols;
+        return best;
     }
 
     private static Map<String, Object> encodeSymbol(
@@ -454,6 +499,192 @@ public final class JavaAnalysisServer {
             if (!ownerName.isEmpty()) return ownerName + "." + simple;
         }
         return simple;
+    }
+
+    // MARK: - usages
+
+    private void handleUsages(long id, Map<String, Object> params) {
+        String moduleId = string(params.get("moduleId"), "");
+        String file = string(params.get("file"), "");
+        String text = string(params.get("text"), null);
+        Object rawPosition = params.get("position");
+        if (moduleId.isEmpty() || file.isEmpty() || text == null || !(rawPosition instanceof Number)) {
+            respond(id, null, "usages needs moduleId, file, text and position");
+            return;
+        }
+        long position = ((Number) rawPosition).longValue();
+        Module module = modules.get(moduleId);
+        if (module == null) {
+            respond(id, null, "unknown moduleId (configure first): " + moduleId);
+            return;
+        }
+        MemorySource main = new MemorySource(Path.of(file), text);
+        checks.submit(() -> {
+            if (cancelled.remove(id)) {
+                respond(id, null, "cancelled");
+                return;
+            }
+            try {
+                respond(id, Map.of("usages", usages(module, main, position)), null);
+            } catch (IllegalArgumentException badOptions) {
+                respond(id, null, badOptions.getMessage());
+            } catch (Exception failure) {
+                StringWriter stack = new StringWriter();
+                failure.printStackTrace(new PrintWriter(stack));
+                respond(id, null, "usages failed: " + failure + "\n" + stack);
+            }
+        });
+    }
+
+    /**
+     * Every use of the element at {@code position}: the reference oracle. The module compiles
+     * from disk, so {@code module-info.java} assigns every unit to its module; {@code main}
+     * must match the file on disk (checked below) and only locates the caret. Every other
+     * {@code .java} file under the module's sourcepath joins the same task, so cross-file
+     * references resolve.
+     */
+    private List<Object> usages(Module module, MemorySource main, long position) throws Exception {
+        Path mainPath;
+        try {
+            mainPath = Path.of(main.toUri());
+        } catch (IllegalArgumentException | FileSystemNotFoundException notFile) {
+            throw new IllegalArgumentException("usages needs a file: URL, got " + main.toUri());
+        }
+        String onDisk;
+        try {
+            onDisk = Files.readString(mainPath, StandardCharsets.UTF_8);
+        } catch (IOException missing) {
+            throw new IllegalArgumentException("usages compiles the saved file, which is missing: " + mainPath);
+        }
+        List<File> files = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        seen.add(mainPath.toAbsolutePath().normalize().toString());
+        files.add(mainPath.toFile());
+        for (Path root : module.sourcepath) {
+            if (files.size() >= 200) break;
+            try (var stream = Files.walk(root)) {
+                for (var it = stream.filter(p -> p.toString().endsWith(".java")).iterator(); it.hasNext();) {
+                    if (files.size() >= 200) break;
+                    Path path = it.next().toAbsolutePath().normalize();
+                    if (seen.add(path.toString())) {
+                        files.add(path.toFile());
+                    }
+                }
+            } catch (IOException missing) {
+                // A sourcepath entry that is not a readable directory contributes nothing.
+            }
+        }
+        String text = main.getCharContent(true).toString();
+        if (!text.equals(onDisk)) {
+            throw new IllegalArgumentException("usages compiles the saved file; the text differs from disk: " + mainPath);
+        }
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        StandardJavaFileManager disk = ToolProvider.getSystemJavaCompiler()
+            .getStandardFileManager(diagnostics, null, StandardCharsets.UTF_8);
+        List<JavaFileObject> units = new ArrayList<>();
+        disk.getJavaFileObjectsFromFiles(files).forEach(units::add);
+        JavacTask javac = task(module, units, diagnostics);
+        List<CompilationUnitTree> parsed = new ArrayList<>();
+        for (CompilationUnitTree unit : javac.parse()) parsed.add(unit);
+        javac.analyze();
+        disk.close();
+        if (parsed.isEmpty()) return List.of();
+        Trees trees = Trees.instance(javac);
+        SourcePositions sourcePositions = trees.getSourcePositions();
+
+        URI mainURI = mainPath.toUri();
+        CompilationUnitTree mainUnit = null;
+        for (CompilationUnitTree unit : parsed) {
+            if (unit.getSourceFile().toUri().equals(mainURI)) {
+                mainUnit = unit;
+                break;
+            }
+        }
+        if (mainUnit == null) return List.of();
+        Tree leaf = leafAt(leavesOf(mainUnit, sourcePositions), sourcePositions, mainUnit, position);
+        if (leaf == null) return List.of();
+        TreePath path = TreePath.getPath(mainUnit, leaf);
+        if (path == null) return List.of();
+        Element target;
+        try {
+            target = trees.getElement(path);
+        } catch (RuntimeException unresolved) {
+            return List.of();
+        }
+        if (target == null) return List.of();
+        String wanted = elementKey(target);
+
+        // One entry per (file, offset); a later, tighter tree overwrites the outer one, so an
+        // invocation and its selector collapse to the selector's span.
+        Map<String, Map<String, Object>> bySite = new LinkedHashMap<>();
+        for (CompilationUnitTree unit : parsed) {
+            String file = unit.getSourceFile().toUri().toString();
+            if (!file.startsWith("file:")) continue;
+            LineMap lines = unit.getLineMap();
+            for (Tree candidate : leavesOf(unit, sourcePositions)) {
+                TreePath candidatePath = TreePath.getPath(unit, candidate);
+                if (candidatePath == null) continue;
+                Element element;
+                try {
+                    element = trees.getElement(candidatePath);
+                } catch (RuntimeException unresolved) {
+                    continue;
+                }
+                if (element == null || !wanted.equals(elementKey(element))) continue;
+                long start = sourcePositions.getStartPosition(unit, candidate);
+                long end = sourcePositions.getEndPosition(unit, candidate);
+                if (start == Diagnostic.NOPOS || end == Diagnostic.NOPOS || end <= start) continue;
+                Map<String, Object> encoded = new LinkedHashMap<>();
+                encoded.put("file", Path.of(URI.create(file)).toString());
+                encoded.put("offset", start);
+                encoded.put("length", end - start);
+                encoded.put("line", lines.getLineNumber(start));
+                encoded.put("column", lines.getColumnNumber(start) - 1);
+                bySite.put(file + "@" + start, encoded);
+                if (bySite.size() >= 2000) return new ArrayList<>(bySite.values());
+            }
+        }
+        return new ArrayList<>(bySite.values());
+    }
+
+    /**
+     * Element identity for reference matching: kind, qualified name and erased signature, so
+     * overloads and overrides stay distinct while separate compilations of the same element
+     * still match. Only public {@code javax.lang.model} APIs are used.
+     */
+    private static String elementKey(Element element) {
+        StringBuilder key = new StringBuilder(element.getKind().name());
+        key.append(':').append(qualifiedName(element));
+        if (element instanceof ExecutableElement executable) {
+            key.append('(');
+            boolean first = true;
+            for (VariableElement parameter : executable.getParameters()) {
+                if (!first) key.append(',');
+                first = false;
+                key.append(erasedName(parameter.asType()));
+            }
+            key.append(')');
+        }
+        return key.toString();
+    }
+
+    private static String erasedName(TypeMirror type) {
+        return switch (type.getKind()) {
+            case DECLARED -> {
+                Element element = ((DeclaredType) type).asElement();
+                if (element instanceof QualifiedNameable named && !named.getQualifiedName().isEmpty()) {
+                    yield named.getQualifiedName().toString();
+                }
+                yield element.getSimpleName().toString();
+            }
+            case ARRAY -> erasedName(((ArrayType) type).getComponentType()) + "[]";
+            case TYPEVAR -> erasedName(((TypeVariable) type).getUpperBound());
+            case WILDCARD -> {
+                TypeMirror bound = ((WildcardType) type).getExtendsBound();
+                yield bound != null ? "? extends " + erasedName(bound) : "?";
+            }
+            default -> type.toString();
+        };
     }
 
     /** The file manager cached for the module, and a task over {@code units} that emits nothing. */

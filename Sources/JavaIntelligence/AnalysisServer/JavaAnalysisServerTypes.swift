@@ -103,6 +103,26 @@ public struct JavaAnalysisServerDiagnostic: Sendable, Equatable {
     }
 }
 
+/// One use of the element at the requested offset, across the module's sourcepath
+/// (`usages`): the reference oracle for Find Usages. `offset` and `length` are UTF-16 code
+/// units in `file`; `line` is 1-based and `column` 0-based. The declaration itself is
+/// included; the caller decides whether declarations count.
+public struct JavaAnalysisUsage: Sendable, Equatable {
+    public var file: String
+    public var offset: Int
+    public var length: Int
+    public var line: Int
+    public var column: Int
+
+    public init(file: String, offset: Int, length: Int, line: Int, column: Int) {
+        self.file = file
+        self.offset = offset
+        self.length = length
+        self.line = line
+        self.column = column
+    }
+}
+
 /// The symbol `javac` resolved at one UTF-16 offset (`attribute`).
 ///
 /// `name` is the simple name a completion list shows (the enclosing type, for a constructor).

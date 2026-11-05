@@ -18,6 +18,7 @@ enum JavaDifferentialHarness {
     static let prefixLength = 2
     static let defaultFilesPerProject = 6
     static let defaultPositionsPerFile = 12
+    static let defaultUsagesPerProject = 2
 
     struct PinnedProject {
         var name: String
@@ -77,14 +78,19 @@ enum JavaDifferentialHarness {
         var completionHit: Int
         var hoverScored: Int
         var hoverHit: Int
+        var usagesScored: Int = 0
+        var usagesMatched: Int = 0
+        var usagesAnswered: Int = 0
 
         var wrongSymbols: Int { definitionAnswered - definitionMatched }
+        var wrongUsages: Int { usagesAnswered - usagesMatched }
     }
 
     struct Report: Codable, Equatable {
         var jdkFeature: Int
         var filesPerProject: Int
         var positionsPerFile: Int
+        var usagesPerProject: Int = 0
         var topK: Int
         var prefixLength: Int
         var projects: [ProjectScore]
@@ -127,6 +133,7 @@ enum JavaDifferentialHarness {
         func differences(from baseline: Report) -> [String] {
             var lines: [String] = []
             if filesPerProject != baseline.filesPerProject || positionsPerFile != baseline.positionsPerFile
+                || usagesPerProject != baseline.usagesPerProject
                 || topK != baseline.topK || prefixLength != baseline.prefixLength {
                 lines.append("sample shape changed: re-run with UPDATE_JAVA_DIFFERENTIAL=1")
             }
@@ -142,14 +149,17 @@ enum JavaDifferentialHarness {
                     || project.definitionScored != previous.definitionScored
                     || project.completionScored != previous.completionScored
                     || project.hoverScored != previous.hoverScored
+                    || project.usagesScored != previous.usagesScored
                 if sampleChanged {
-                    lines.append("\(project.name) scored a different sample (definition \(project.definitionScored) vs \(previous.definitionScored), completion \(project.completionScored) vs \(previous.completionScored)): re-run with UPDATE_JAVA_DIFFERENTIAL=1")
+                    lines.append("\(project.name) scored a different sample (definition \(project.definitionScored) vs \(previous.definitionScored), completion \(project.completionScored) vs \(previous.completionScored), usages \(project.usagesScored) vs \(previous.usagesScored)): re-run with UPDATE_JAVA_DIFFERENTIAL=1")
                     continue
                 }
                 lines += compare(project.name, "definition recall", project.definitionMatched, previous.definitionMatched, higherIsBetter: true)
                 lines += compare(project.name, "wrong-symbol", project.wrongSymbols, previous.wrongSymbols, higherIsBetter: false)
                 lines += compare(project.name, "completion top-\(topK)", project.completionHit, previous.completionHit, higherIsBetter: true)
                 lines += compare(project.name, "hover", project.hoverHit, previous.hoverHit, higherIsBetter: true)
+                lines += compare(project.name, "usages recall", project.usagesMatched, previous.usagesMatched, higherIsBetter: true)
+                lines += compare(project.name, "wrong-usages", project.wrongUsages, previous.wrongUsages, higherIsBetter: false)
             }
             let missing = baseline.projects.map(\.name).filter { name in !projects.contains { $0.name == name } }
             for name in missing {
@@ -160,7 +170,7 @@ enum JavaDifferentialHarness {
 
         var summary: String {
             projects.map { project in
-                "\(project.name) \(project.commit.prefix(12)) definition \(format(project.definitionMatched, project.definitionScored)) wrong-symbol \(format(project.wrongSymbols, project.definitionAnswered)) completion \(format(project.completionHit, project.completionScored)) hover \(format(project.hoverHit, project.hoverScored))"
+                "\(project.name) \(project.commit.prefix(12)) definition \(format(project.definitionMatched, project.definitionScored)) wrong-symbol \(format(project.wrongSymbols, project.definitionAnswered)) completion \(format(project.completionHit, project.completionScored)) hover \(format(project.hoverHit, project.hoverScored)) usages \(format(project.usagesMatched, project.usagesScored)) wrong-usages \(format(project.wrongUsages, project.usagesAnswered))"
             }.joined(separator: "\n")
         }
 
@@ -182,17 +192,19 @@ enum JavaDifferentialHarness {
                 "- Wrong-symbol rate: of the positions Umbra answers, the share that land outside that declaration.",
                 "- Completion top-\(topK): the symbol's name is among the \(topK) highest-ranked candidates when the prefix is its first \(prefixLength) characters.",
                 "- Hover: an explicit hover contains the symbol's name.",
+                "- Usages recall: of the sampled public method declarations with at least one oracle use, the share whose reference set (file and line, declarations dropped) matches the oracle's `usages` exactly.",
+                "- Wrong-usages: of the declarations the provider answers, the share whose set differs.",
                 "",
                 "The same shape applies later to TypeScript (`tsserver`) and Swift (`sourcekit-lsp`).",
                 "",
-                "| project | commit | definition recall | wrong-symbol | completion top-\(topK) | hover |",
-                "|---|---|---|---|---|---|",
+                "| project | commit | definition recall | wrong-symbol | completion top-\(topK) | hover | usages recall | wrong-usages |",
+                "|---|---|---|---|---|---|---|---|",
             ]
             for project in projects {
-                lines.append("| \(project.name) | `\(project.commit)` | \(format(project.definitionMatched, project.definitionScored)) | \(format(project.wrongSymbols, project.definitionAnswered)) | \(format(project.completionHit, project.completionScored)) | \(format(project.hoverHit, project.hoverScored)) |")
+                lines.append("| \(project.name) | `\(project.commit)` | \(format(project.definitionMatched, project.definitionScored)) | \(format(project.wrongSymbols, project.definitionAnswered)) | \(format(project.completionHit, project.completionScored)) | \(format(project.hoverHit, project.hoverScored)) | \(format(project.usagesMatched, project.usagesScored)) | \(format(project.wrongUsages, project.usagesAnswered)) |")
             }
             lines.append("")
-            lines.append("Sample: \(filesPerProject) files per project, \(positionsPerFile) identifiers per file, stride-picked so one package cannot fill the run.")
+            lines.append("Sample: \(filesPerProject) files per project, \(positionsPerFile) identifiers per file, stride-picked so one package cannot fill the run; \(usagesPerProject) public method declarations per project for usages (each oracle call compiles the whole module, so this stays small).")
             lines.append("")
             return lines.joined(separator: "\n")
         }
@@ -228,6 +240,7 @@ enum JavaDifferentialHarness {
     static func scorePinned(environment: ParityTestSupport.Environment, client: JavaAnalysisServerClient) async throws -> Report {
         let filesPerProject = intEnv("JAVA_DIFFERENTIAL_FILES", default: defaultFilesPerProject)
         let positionsPerFile = intEnv("JAVA_DIFFERENTIAL_POSITIONS", default: defaultPositionsPerFile)
+        let usagesPerProject = intEnv("JAVA_DIFFERENTIAL_USAGES", default: defaultUsagesPerProject)
         let jdkShard = try writeJDKShard(installation: environment.jdk)
         var projects: [ProjectScore] = []
         for pinned in pinnedProjects {
@@ -235,22 +248,117 @@ enum JavaDifferentialHarness {
             let sourceRoot = checkout.sourceRoot.resolvingSymlinksInPath()
             try await client.configure(JavaAnalysisServerModule(moduleId: pinned.name, sourcepath: [sourceRoot]))
             let world = try await makeWorld(sourceRoot: sourceRoot, jdkShard: jdkShard, installation: environment.jdk)
-            let score = await score(
+            var score = await score(
                 name: pinned.name, tag: pinned.tag, commit: checkout.commit,
                 sourceRoot: sourceRoot, moduleId: pinned.name, client: client, world: world,
                 filesPerProject: filesPerProject, positionsPerFile: positionsPerFile
             )
+            if usagesPerProject > 0 {
+                let files = javaFiles(under: sourceRoot, limit: filesPerProject)
+                let usage = await scoreUsages(
+                    name: pinned.name, sourceRoot: sourceRoot, moduleId: pinned.name,
+                    client: client, world: world, files: files, limit: usagesPerProject
+                )
+                score.usagesScored = usage.scored
+                score.usagesMatched = usage.matched
+                score.usagesAnswered = usage.answered
+            }
             projects.append(score)
-            print("differential \(score.name) \(format(score.definitionMatched, score.definitionScored)) definition, \(format(score.completionHit, score.completionScored)) completion")
+            print("differential \(score.name) \(format(score.definitionMatched, score.definitionScored)) definition, \(format(score.completionHit, score.completionScored)) completion, \(format(score.usagesMatched, score.usagesScored)) usages")
         }
         return Report(
             jdkFeature: environment.jdk.featureVersion,
             filesPerProject: filesPerProject,
             positionsPerFile: positionsPerFile,
+            usagesPerProject: usagesPerProject,
             topK: topK,
             prefixLength: prefixLength,
             projects: projects
         )
+    }
+
+    /// Find-Usages recall on up to `limit` public method declarations sampled across `files`:
+    /// the oracle's `(file, line)` site set against the provider's, declarations dropped on both
+    /// sides. Each oracle call compiles the whole module, so the sample stays small.
+    static func scoreUsages(
+        name: String, sourceRoot: URL, moduleId: String, client: JavaAnalysisServerClient,
+        world: World, files: [URL], limit: Int
+    ) async -> (scored: Int, matched: Int, answered: Int) {
+        let cacheRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("differential-usages-\(UUID().uuidString)", isDirectory: true)
+        let nameIndex = JavaNameIndex(paths: JavaIndexPaths(root: cacheRoot))
+        for await _ in await nameIndex.build(roots: [sourceRoot]) {}
+        let provider = JavaFindUsagesProvider(
+            index: world.index, indexPaths: JavaIndexPaths(root: cacheRoot), nameIndex: nameIndex)
+        await provider.setProjectRoots([sourceRoot])
+        var declarations: [(file: URL, text: String, utf16Offset: Int)] = []
+        for file in files {
+            guard declarations.count < limit * 3,
+                  let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            for site in methodDeclarations(in: text, limit: limit * 3 - declarations.count) {
+                declarations.append((file, text, site.utf16Offset))
+            }
+        }
+        var scored = 0, matched = 0, answered = 0, calls = 0
+        for declaration in declarations {
+            guard scored < limit, calls < limit * 3 else { break }
+            let resolved = declaration.file.resolvingSymlinksInPath()
+            let usages: [JavaAnalysisUsage]
+            do {
+                usages = try await client.usages(
+                    moduleId: moduleId, file: resolved, text: declaration.text, position: declaration.utf16Offset)
+            } catch {
+                print("differential \(name) \(resolved.lastPathComponent) usages failed: \(error)")
+                continue
+            }
+            guard !usages.isEmpty else { continue }
+            calls += 1
+            let expected = Set(usages.compactMap { usage -> String? in
+                let fileName = URL(fileURLWithPath: usage.file).lastPathComponent
+                if fileName == resolved.lastPathComponent,
+                   usage.offset <= declaration.utf16Offset, declaration.utf16Offset < usage.offset + usage.length {
+                    return nil
+                }
+                return "\(fileName):\(usage.line)"
+            })
+            let found = await provider.findUsages(
+                source: declaration.text, url: resolved, utf16Offset: declaration.utf16Offset)
+            let provided = Set(found.map { "\($0.url.lastPathComponent):\($0.line + 1)" })
+            // Recall needs something to find: an unused declaration scores nothing.
+            guard !expected.isEmpty else { continue }
+            scored += 1
+            if !provided.isEmpty { answered += 1 }
+            if provided == expected {
+                matched += 1
+            } else {
+                print("differential \(name) usages differ at \(resolved.lastPathComponent):\(declaration.utf16Offset): provider \(provided.sorted()) oracle \(expected.sorted())")
+            }
+        }
+        return (scored, matched, answered)
+    }
+
+    /// Public method declarations in file order: name and its UTF-16 offset.
+    static func methodDeclarations(in text: String, limit: Int) -> [(name: String, utf16Offset: Int)] {
+        guard let tree = JavaSyntaxParser().parse(text) else { return [] }
+        var out: [(String, Int)] = []
+        func utf16Offset(of byteOffset: Int) -> Int? {
+            guard let index = text.utf8.index(text.utf8.startIndex, offsetBy: byteOffset, limitedBy: text.utf8.endIndex),
+                  let mapped = index.samePosition(in: text.utf16) else { return nil }
+            return text.utf16.distance(from: text.utf16.startIndex, to: mapped)
+        }
+        func visit(_ node: SyntaxNode) {
+            guard out.count < limit else { return }
+            if node.type == "method_declaration",
+               let modifiers = node.namedChildren.first(where: { $0.type == "modifiers" }),
+               modifiers.text.contains("public"),
+               let name = node.child(byFieldName: "name"),
+               let offset = utf16Offset(of: name.byteRange.lowerBound) {
+                out.append((name.text, offset))
+            }
+            for child in node.namedChildren { visit(child) }
+        }
+        visit(tree.rootNode)
+        return out
     }
 
     /// One project directory. `commit` is recorded as-is (a fixture passes a label).

@@ -38,6 +38,7 @@ public actor JavaAnalysisServerClient {
         var ok = false
         var diagnostics: [JavaAnalysisServerDiagnostic] = []
         var symbols: [JavaAnalysisSymbol] = []
+        var usages: [JavaAnalysisUsage] = []
     }
 
     public init(configuration: JavaAnalysisServerConfiguration, idleTimeout: Duration = .seconds(600)) {
@@ -105,6 +106,16 @@ public actor JavaAnalysisServerClient {
 
     /// The symbols `javac` resolves at `positions` (UTF-16 offsets into `text`). A position with
     /// no symbol is absent. Runs the same warm server as `check`.
+    /// Every use of the element at `position` in `file`, across the module's sourcepath:
+    /// the Find Usages oracle. The returned `file` values are absolute paths; compare
+    /// `(file, offset)` against provider locations, dropping the declaration spans first.
+    /// The module compiles from disk (`text` must match it and only locates the caret), so
+    /// `module-info.java` applies.
+    public func usages(moduleId: String, file: URL, text: String, position: Int) async throws -> [JavaAnalysisUsage] {
+        let params: [String: Any] = ["moduleId": moduleId, "file": file.path, "text": text, "position": position]
+        return try await send(method: "usages", params: params).usages
+    }
+
     public func attribute(moduleId: String, file: URL, text: String, positions: [Int]) async throws -> [JavaAnalysisSymbol] {
         let params: [String: Any] = [
             "moduleId": moduleId,
@@ -316,7 +327,20 @@ public actor JavaAnalysisServerClient {
             decoded.symbols = items.compactMap(Self.decodeSymbol)
             decoded.ok = true
         }
+        if let items = result["usages"] as? [[String: Any]] {
+            decoded.usages = items.compactMap(Self.decodeUsage)
+            decoded.ok = true
+        }
         return .success(decoded)
+    }
+
+    private static func decodeUsage(_ object: [String: Any]) -> JavaAnalysisUsage? {
+        guard let file = object["file"] as? String,
+              let offset = (object["offset"] as? NSNumber)?.intValue,
+              let length = (object["length"] as? NSNumber)?.intValue,
+              let line = (object["line"] as? NSNumber)?.intValue,
+              let column = (object["column"] as? NSNumber)?.intValue else { return nil }
+        return JavaAnalysisUsage(file: file, offset: offset, length: length, line: line, column: column)
     }
 
     private static func decodeSymbol(_ object: [String: Any]) -> JavaAnalysisSymbol? {
