@@ -54,7 +54,9 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     }
 
     /// Triple-buffered per-atlas-page glyph instances.
-    private final class PageBucket: @unchecked Sendable {
+    /// Internal (not private) so `InstanceSlotTests` can pin the no-block contract: a frame
+    /// whose slots are all still in flight is dropped, never waited on.
+    final class PageBucket: @unchecked Sendable {
         var buffers: [GlyphInstanceBuffer]
         var cursor = 0
         private let slotCondition = NSCondition()
@@ -118,7 +120,8 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     }
 
     /// Triple-buffered raw struct array (`SolidInstance` or `DecorationVertex`).
-    private final class DecorationBuffer: @unchecked Sendable {
+    /// Internal (not private) for the same `InstanceSlotTests` no-block contract as `PageBucket`.
+    final class DecorationBuffer: @unchecked Sendable {
         private let device: MTLDevice
         private let stride: Int
         private var buffers: [MTLBuffer?] = [nil, nil, nil]
