@@ -4372,11 +4372,14 @@ public final class IDEWorkspace {
 
     /// Keeps the name index's view of an open Java file in step with its buffer, so Find Usages
     /// sees unsaved edits. Debounced; the overlay is dropped when the file's last tab closes.
+    /// The role index overlays alongside, parsed from the same buffer text.
     private func scheduleNameIndexOverlay(for textView: TextView, delay: UInt64 = 300_000_000) {
         guard textView.documentURL?.pathExtension == "java" else { return }
         let index = javaSupport.nameIndex
+        let roles = javaSupport.roleIndex
         overlays.scheduleNameIndexOverlay(for: textView, delay: .nanoseconds(delay)) { url, text in
             await index.setOverlay(url, text: text)
+            await roles.setOverlay(url, text: text)
         }
     }
 
@@ -4423,7 +4426,11 @@ public final class IDEWorkspace {
             problems.setInspectionDiagnostics([], for: closingURL)
             if closingURL.pathExtension == "java" {
                 let index = javaSupport.nameIndex
-                Task { await index.removeOverlay(closingURL) }
+                let roles = javaSupport.roleIndex
+                Task {
+                    await index.removeOverlay(closingURL)
+                    await roles.removeOverlay(closingURL)
+                }
             }
         }
         if pane.documents.isEmpty {

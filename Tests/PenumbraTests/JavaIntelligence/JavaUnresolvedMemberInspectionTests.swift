@@ -228,6 +228,37 @@ final class JavaUnresolvedMemberInspectionTests: XCTestCase {
         XCTAssertEqual(found.count, 0)
     }
 
+    /// F-04: `case RE:` over a closed enum is a `cant.resolve.location` the oracle reports
+    /// and the member rule used to miss; the parity corpus ratchets the recall gain.
+    func testUnknownEnumSwitchLabel() async throws {
+        let enumLib = "package java.lang; public class Enum<E> { public int ordinal() { return 0; } }"
+        let source = "enum E { A, B; static void m(E e) { switch (e) { case A: break; case Z: break; } } }"
+        let found = try await findings(source, libraries: [objectLib, enumLib])
+        XCTAssertEqual(found.count, 1)
+        guard found.count == 1 else { return }
+        XCTAssertTrue(range(of: "Z", in: source, finding: found[0]), "the finding names the bad label")
+    }
+
+    func testKnownEnumSwitchLabelsStaySilent() async throws {
+        let enumLib = "package java.lang; public class Enum<E> { public int ordinal() { return 0; } }"
+        let source = "enum E { A, B; static void m(E e) { switch (e) { case A: break; case B: break; default: break; } } }"
+        let found = try await findings(source, libraries: [objectLib, enumLib])
+        XCTAssertEqual(found.count, 0)
+    }
+
+    func testEnumSwitchLabelPrefixGuardWhileTyping() async throws {
+        let enumLib = "package java.lang; public class Enum<E> { public int ordinal() { return 0; } }"
+        let source = "enum E { RED, GREEN; static void m(E e) { switch (e) { case R: break; } } }"
+        let found = try await findings(source, libraries: [objectLib, enumLib])
+        XCTAssertEqual(found.count, 0)
+    }
+
+    func testNonEnumSwitchLabelsStaySilent() async throws {
+        let source = "class T { void m(int i, String s) { switch (i) { case 1: break; } switch (s) { case Q: break; default: break; } } }"
+        let found = try await findings(source, libraries: [objectLib, stringLib])
+        XCTAssertEqual(found.count, 0)
+    }
+
     func testFieldPrefixGuardWhileTyping() async throws {
         let lib = "class P { int size() { return 0; } }"
         let source = "class T { void foo(int x) { } void f(P p) { foo(p.si); } }"

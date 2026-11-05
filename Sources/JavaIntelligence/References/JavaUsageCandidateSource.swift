@@ -6,6 +6,18 @@ import Foundation
 public protocol JavaUsageCandidateSource: Sendable {
     /// Files under `roots` (directories, or single files) whose text contains `identifier`.
     func candidateFiles(containing identifier: String, in roots: [URL]) async -> [URL]
+
+    /// Files under `roots` that use `identifier` in one of `roles`. Sources without role data
+    /// keep every name match.
+    func candidateFiles(containing identifier: String, roles: JavaIdentifierRoles, in roots: [URL]) async -> [URL]
+}
+
+extension JavaUsageCandidateSource {
+    public func candidateFiles(
+        containing identifier: String, roles: JavaIdentifierRoles, in roots: [URL]
+    ) async -> [URL] {
+        await candidateFiles(containing: identifier, in: roots)
+    }
 }
 
 /// Walks the roots and reads every `.java` file, keeping those containing the identifier as a

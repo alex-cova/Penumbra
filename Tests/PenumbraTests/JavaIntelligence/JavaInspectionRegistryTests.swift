@@ -46,6 +46,14 @@ final class JavaInspectionRegistryTests: XCTestCase {
         XCTAssertEqual(JavaInspectionRule.enabledByDefault, Set(JavaInspectionRule.allCases).subtracting(off))
     }
 
+    func testParityMeasuredRulesRunByDefault() {
+        // F-04: the parity scorecard measures `unresolved-member` and `unresolved-type`;
+        // `javac` owns every other `javac` key in the product, so these two must be in
+        // the shipped defaults or the scorecard stops describing the editor.
+        XCTAssertTrue(JavaInspectionRule.unresolvedMember.isEnabledByDefault)
+        XCTAssertTrue(JavaInspectionRule.unresolvedType.isEnabledByDefault)
+    }
+
     func testPositionIndexMatchesTheSlowConversion() throws {
         let source = "class A {\n    String s = \"héllo 😀 wörld\";\r\n    int x;\n}\n"
         let tree = try XCTUnwrap(JavaSyntaxParser().parse(source))

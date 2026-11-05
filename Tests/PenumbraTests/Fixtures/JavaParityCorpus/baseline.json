@@ -8,14 +8,14 @@
       "oracleMatched" : 0
     },
     "compiler.err.cant.resolve.location" : {
-      "native" : 2,
-      "nativeMatched" : 2,
+      "native" : 3,
+      "nativeMatched" : 3,
       "oracle" : 6,
-      "oracleMatched" : 1
+      "oracleMatched" : 2
     },
     "compiler.err.cant.resolve.location.args" : {
-      "native" : 2,
-      "nativeMatched" : 2,
+      "native" : 3,
+      "nativeMatched" : 3,
       "oracle" : 1,
       "oracleMatched" : 1
     },

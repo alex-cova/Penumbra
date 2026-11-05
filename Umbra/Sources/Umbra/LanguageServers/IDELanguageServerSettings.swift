@@ -9,6 +9,10 @@ extension IDEPreferencesDomain {
         id: "typescript", title: "TypeScript", symbol: "curlybraces",
         searchTerms: ["typescript-language-server", "node", "javascript", "tsserver", "lsp"]
     )
+    static let python = IDEPreferencesDomain(
+        id: "python", title: "Python", symbol: "chevron.left.forward.slash.chevron.right",
+        searchTerms: ["pylsp", "python-lsp-server", "python", "venv", "lsp"]
+    )
 }
 
 extension IDESwiftModule {
@@ -53,6 +57,21 @@ private struct IDETypeScriptServerSettings: View {
         ) {
             IDESettingsToggle("Use TypeScript Language Server", isOn: $enabled)
             IDEServerPathField(title: "typescript-language-server", path: $path)
+        }
+    }
+}
+
+struct IDEPythonServerSettings: View {
+    @AppStorage(IDELanguageServerHost.enabledDefaultsKey) private var enabled = true
+    @AppStorage(IDEPythonServer.pathKey) private var path = ""
+
+    var body: some View {
+        IDESettingsSection(
+            "Python Language Server",
+            footer: "Completion, navigation and diagnostics through pylsp. Leave the path empty to use the folder's virtualenv (.venv or venv), then PATH. The server starts only after you trust the folder."
+        ) {
+            IDESettingsToggle("Use Python Language Server", isOn: $enabled)
+            IDEServerPathField(title: "pylsp", path: $path)
         }
     }
 }

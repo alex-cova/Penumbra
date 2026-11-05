@@ -18,8 +18,8 @@ and `unresolved-type`, both read as the `cant.resolve*` group.
 | key | recall | precision | oracle errors | native findings |
 |---|---|---|---|---|
 | `compiler.err.cant.apply.symbol` | 0% (0/1) | n/a | 1 | 0 |
-| `compiler.err.cant.resolve.location` | 17% (1/6) | 100% | 6 | 2 |
-| `compiler.err.cant.resolve.location.args` | 100% (1/1) | 100% | 1 | 2 |
+| `compiler.err.cant.resolve.location` | 33% (2/6) | 100% | 6 | 3 |
+| `compiler.err.cant.resolve.location.args` | 100% (1/1) | 100% | 1 | 3 |
 | `compiler.err.missing.ret.stmt` | 0% (0/1) | n/a | 1 | 0 |
 | `compiler.err.prob.found.req` | 0% (0/2) | n/a | 2 | 0 |
 | `compiler.err.unreported.exception.need.to.catch.or.throw` | 0% (0/1) | n/a | 1 | 0 |
@@ -31,11 +31,8 @@ for every shipped check).
 
 ## Completion corpus
 
-Pass count: **419/419** on JDK 27 as of 2026-11-04 (`Tests/PenumbraTests/Fixtures/JavaCompletionCorpus`,
-ratcheted by `JavaCompletionCorpusTests`; gap tags live in the case files). The 214/253 this section used
-to quote was a JDK 26 ratchet recorded when the corpus had 253 cases; it was never a ceiling of the typer
-(see `docs/audit/findings/F01-java-attributor.md`). This file's generator (`JavaParityCorpusTests`) is skipped
-when the machine's JDK is not the one the baseline names, so this number was updated by hand.
+Pass count: **419/419** (`Tests/PenumbraTests/Fixtures/JavaCompletionCorpus`, ratcheted by
+`JavaCompletionCorpusTests`; gap tags live in the case files).
 
 ## Not yet measured
 

@@ -52,4 +52,35 @@ final class IDELanguageServerRelevanceTests: XCTestCase {
         let launch = IDETypeScriptServer.launch(root: root)
         XCTAssertNil(launch, "a global typescript-language-server must not start for a plain folder")
     }
+
+    func testPythonIsRelevantWithManifestOrConfig() {
+        XCTAssertFalse(IDEPythonServer.isRelevantToProject(root: root))
+        try? "[project]\n".write(to: root.appendingPathComponent("pyproject.toml"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(IDEPythonServer.isRelevantToProject(root: root))
+        try? FileManager.default.removeItem(at: root.appendingPathComponent("pyproject.toml"))
+        try? "requests\n".write(to: root.appendingPathComponent("requirements.txt"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(IDEPythonServer.isRelevantToProject(root: root))
+        try? FileManager.default.removeItem(at: root.appendingPathComponent("requirements.txt"))
+        try? "from setuptools import setup\n".write(to: root.appendingPathComponent("setup.py"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(IDEPythonServer.isRelevantToProject(root: root))
+    }
+
+    func testPythonLaunchIgnoresVenvWithoutAProjectMarker() throws {
+        let bin = root.appendingPathComponent(".venv/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let server = bin.appendingPathComponent("pylsp")
+        try "#!/bin/sh\nexit 0\n".write(to: server, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: server.path)
+        XCTAssertNil(IDEPythonServer.launch(root: root), "a virtualenv must not start the server for a plain folder")
+    }
+
+    func testPythonLaunchFindsVenvBinary() throws {
+        try? "[project]\n".write(to: root.appendingPathComponent("pyproject.toml"), atomically: true, encoding: .utf8)
+        let bin = root.appendingPathComponent(".venv/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let server = bin.appendingPathComponent("pylsp")
+        try "#!/bin/sh\nexit 0\n".write(to: server, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: server.path)
+        XCTAssertEqual(IDEPythonServer.launch(root: root), server)
+    }
 }

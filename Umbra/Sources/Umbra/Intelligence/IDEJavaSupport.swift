@@ -134,6 +134,9 @@ final class IDEJavaSupport {
     /// Identifier index (`refs.idx`) of the project's source roots; the candidate source for
     /// semantic Find Usages and rename.
     let nameIndex = JavaNameIndex()
+    /// Role overlay for the same roots: which identifiers each file uses in which syntactic
+    /// role, so Find Usages only parses files that can bind the target.
+    let roleIndex = JavaRoleIndex()
     @ObservationIgnored private var jdkReader: JavaIndexShardReader?
     /// Project and jar shards carry `shardPath` so a Gradle source-set scope can hide the ones that
     /// are not on the file's compile classpath. The JDK shard does not: it is always visible.
@@ -211,7 +214,7 @@ final class IDEJavaSupport {
         // the name index already knows how many files mention each identifier.
         Task { [nameIndex] in await completionProvider.setUsageStatistics(nameIndex) }
         navigationProvider = JavaGoToDefinitionProvider(index: javaIndex, indexPaths: paths)
-        findUsagesProvider = JavaFindUsagesProvider(index: javaIndex, indexPaths: paths, nameIndex: nameIndex)
+        findUsagesProvider = JavaFindUsagesProvider(index: javaIndex, indexPaths: paths, nameIndex: nameIndex, roleIndex: roleIndex)
         codeActionProvider = JavaCodeActionProvider(index: javaIndex)
         let intentionsCache = sharedParseCache
         Task { [codeActionProvider] in
@@ -231,7 +234,7 @@ final class IDEJavaSupport {
         self.codeVisionProvider = codeVisionProvider
         Task { await codeVisionProvider.setOptionsSource { IDEPreferences.currentJavaCodeVisionOptions() } }
         lineMarkerProvider = JavaLineMarkerProvider(index: javaIndex, indexPaths: paths)
-        let renameCandidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, scan: JavaTextScanCandidateSource())
+        let renameCandidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, roleIndex: roleIndex, scan: JavaTextScanCandidateSource())
         renameProvider = JavaRenameProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
         refactoringProvider = JavaRefactoringProvider(index: javaIndex, indexPaths: paths, candidates: renameCandidates)
         gradle.consumer = self
@@ -618,7 +621,9 @@ final class IDEJavaSupport {
     }
 
     /// Builds the identifier index for `roots` beside the stub pass. Replaces the previous set of
-    /// roots; only files whose stamp changed are re-tokenized.
+    /// roots; only files whose stamp changed are re-tokenized. The role index builds on the same
+    /// triggers with the same incremental shape; a missing role shard falls back to the name
+    /// index, so roles can only narrow, never lose candidates.
     private func buildNameIndex(roots: [URL], generation: Int) {
         nameIndexTask?.cancel()
         nameIndexRoots = roots.map(\.standardizedFileURL)
@@ -633,9 +638,12 @@ final class IDEJavaSupport {
             await refactoringProvider.setRoots(renameRoots)
         }
         let token = activity.begin(.javaUsages)
-        nameIndexTask = Task { [nameIndex, activity] in
+        nameIndexTask = Task { [nameIndex, roleIndex, activity] in
             defer { activity.end(token) }
             for await _ in await nameIndex.build(roots: roots) {
+                guard isCurrent(generation) else { return }
+            }
+            for await _ in await roleIndex.build(roots: roots) {
                 guard isCurrent(generation) else { return }
             }
         }
@@ -658,9 +666,12 @@ final class IDEJavaSupport {
         let adding = plan.addedNameRoots
         let removing = plan.removedNameRoots
         let token = activity.begin(.javaUsages)
-        nameIndexTask = Task { [nameIndex, activity] in
+        nameIndexTask = Task { [nameIndex, roleIndex, activity] in
             defer { activity.end(token) }
             for await _ in await nameIndex.updateRoots(adding: adding, removing: removing) {
+                guard isCurrent(generation) else { return }
+            }
+            for await _ in await roleIndex.updateRoots(adding: adding, removing: removing) {
                 guard isCurrent(generation) else { return }
             }
         }
@@ -681,9 +692,10 @@ final class IDEJavaSupport {
         let urls = changed.filter { $0.pathExtension == "java" || $0.pathExtension.isEmpty }
         guard !urls.isEmpty else { return }
         let generation = projectGeneration
-        Task { [nameIndex] in
+        Task { [nameIndex, roleIndex] in
             let affected = await nameIndex.filesChanged(urls)
-            guard isCurrent(generation), !affected.isEmpty else { return }
+            let roleAffected = await roleIndex.filesChanged(urls)
+            guard isCurrent(generation), !(affected.isEmpty && roleAffected.isEmpty) else { return }
             pendingStubRefresh.formUnion(affected)
             refreshStubs(generation: generation)
         }

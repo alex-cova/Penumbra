@@ -10,15 +10,17 @@ public actor JavaFindUsagesProvider: NavigationProvider {
     private let index: JavaIndex
     private let indexPaths: JavaIndexPaths
     private let nameIndex: JavaNameIndex?
+    private let roleIndex: JavaRoleIndex?
     private var roots: [URL] = []
     private var classpathModel: JavaGradleProjectModel?
     private var jdkHome: URL?
     private var openBuffer: (@Sendable (URL) async -> String?)?
 
-    public init(index: JavaIndex, indexPaths: JavaIndexPaths, nameIndex: JavaNameIndex? = nil) {
+    public init(index: JavaIndex, indexPaths: JavaIndexPaths, nameIndex: JavaNameIndex? = nil, roleIndex: JavaRoleIndex? = nil) {
         self.index = index
         self.indexPaths = indexPaths
         self.nameIndex = nameIndex
+        self.roleIndex = roleIndex
     }
 
     /// The project's source roots (or files) searched for usages. Empty means only the file at the caret.
@@ -78,7 +80,7 @@ public actor JavaFindUsagesProvider: NavigationProvider {
         } else {
             let searchRoots = roots.isEmpty ? (url.map { [$0] } ?? []) : roots
             let scan = JavaTextScanCandidateSource(textProvider: openBuffer, extraFiles: url.map { [$0] } ?? [])
-            let candidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, scan: scan)
+            let candidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, roleIndex: roleIndex, scan: scan)
             var targets = [id]
             if let file = url {
                 let scope = environment.queryScope(for: file)

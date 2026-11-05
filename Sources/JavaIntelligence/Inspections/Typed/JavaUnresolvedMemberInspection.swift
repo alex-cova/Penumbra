@@ -13,7 +13,7 @@ import Foundation
 /// mismatches are `javac`'s job: a name that exists never reports.
 enum JavaUnresolvedMemberInspection: JavaTypedInspection {
     static let rule = JavaInspectionRule.unresolvedMember
-    static let nodeTypes: Set<String> = ["method_invocation", "field_access", "method_reference"]
+    static let nodeTypes: Set<String> = ["method_invocation", "field_access", "method_reference", "switch_label"]
     private static let maxResolutions = 300
     private static let objectType = JavaTypeRef.classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
     private static let annotationType = JavaTypeRef.classType(qualifiedName: "java.lang.annotation.Annotation", arguments: [], outer: nil)
@@ -33,10 +33,91 @@ enum JavaUnresolvedMemberInspection: JavaTypedInspection {
                 await checkFieldAccess(node, pass: pass, report: report)
             case "method_reference":
                 await checkMethodReference(node, pass: pass, report: report)
+            case "switch_label":
+                await checkSwitchLabel(node, pass: pass, report: report)
             default:
                 break
             }
         }
+    }
+
+    // MARK: - Switch labels
+
+    /// `case RED:` names an enum constant without a qualifier. When the selector's type is
+    /// a known closed enum, a label naming no constant reports. Qualified labels
+    /// (`Color.RED`) go through field access instead. The typing prefix guard applies here
+    /// too: `case R` while typing `RED` stays silent.
+    private static func checkSwitchLabel(_ node: SyntaxNode, pass: Pass, report: (JavaInspection) -> Void) async {
+        guard let constants = await enumLabelConstants(forSwitchOf: node, pass: pass) else { return }
+        for child in node.namedChildren where child.type == "identifier" {
+            let name = child.text
+            guard !name.isEmpty, !constants.contains(name) else { continue }
+            guard !constants.contains(where: { $0 != name && $0.hasPrefix(name) }) else { continue }
+            report(JavaInspectionSupport.inspection(
+                rule, message: "Cannot resolve symbol '\(name)'", node: child
+            ))
+        }
+    }
+
+    /// The constants of the enum the enclosing switch selects on, or nil when the selector
+    /// is not a known closed enum. One entry per switch, keyed by its byte range.
+    private static func enumLabelConstants(forSwitchOf label: SyntaxNode, pass: Pass) async -> Set<String>? {
+        var current = label.parent
+        while let ancestor = current {
+            if ancestor.type == "switch_statement" || ancestor.type == "switch_expression" { break }
+            current = ancestor.parent
+        }
+        guard let statement = current else { return nil }
+        if let cached = pass.switchEnumConstants[statement.byteRange] { return cached }
+        let constants = await resolveSwitchEnumConstants(statement: statement, pass: pass)
+        pass.switchEnumConstants[statement.byteRange] = constants
+        return constants
+    }
+
+    private static func resolveSwitchEnumConstants(statement: SyntaxNode, pass: Pass) async -> Set<String>? {
+        guard pass.resolutions < maxResolutions else { return nil }
+        pass.resolutions += 1
+        guard let condition = statement.child(byFieldName: "condition") else { return nil }
+        let session = JavaInspectionSupport.session(for: pass.context, at: condition.startByte)
+        let locals = await JavaExpressionTyper.resolvingVarLocals(
+            session.tree.visibleLocals(atByteOffset: condition.startByte),
+            context: session.context, index: session.index
+        )
+        guard let typed = await JavaExpressionTyper.typed(
+            condition, locals: locals, context: session.context, index: session.index
+        ), typed.packageName == nil else { return nil }
+        // The selector's type, resolved or not: an unresolved name can still bind to an
+        // enclosing type (`switch (e)` in `E.m`), which the index cannot see but the
+        // lexical scope can. Innermost first, so shadowing picks the right one.
+        let qualifiedName: String
+        switch typed.type {
+        case .classType(let name, _, _):
+            qualifiedName = name
+        case .unresolved(let simpleName, _):
+            guard let match = session.context.enclosingTypeQualifiedNames.first(where: {
+                $0 == simpleName || $0.split(separator: ".").last == simpleName[...]
+            }) else { return nil }
+            qualifiedName = match
+        default:
+            return nil
+        }
+        // The selector's own file is usually not in the index (an unsaved buffer), and its
+        // stubs come from the same parse as the labels, so they are fresh by construction and
+        // need no hierarchy gate. Indexed stubs can go stale, so those keep the closed-hierarchy
+        // check the member rule uses everywhere else.
+        if let own = pass.context.file.classes.first(where: { $0.qualifiedName == qualifiedName }) {
+            guard own.kind == .enumKind else { return nil }
+            let constants = Set(own.fields.filter { $0.modifiers.contains(.enumConstant) }.map(\.name))
+            return constants.isEmpty ? nil : constants
+        }
+        guard let stub = await session.index.classStub(qualifiedName: qualifiedName),
+              stub.kind == .enumKind,
+              await JavaMemberLookup.closedHierarchy(of: qualifiedName, context: session.context, index: session.index) != nil
+        else { return nil }
+        let indexed = Set(stub.fields.filter { $0.modifiers.contains(.enumConstant) }.map(\.name))
+        return indexed.isEmpty ? nil : indexed
+        let constants = Set(stub.fields.filter { $0.modifiers.contains(.enumConstant) }.map(\.name))
+        return constants.isEmpty ? nil : constants
     }
 
     // MARK: - Qualified accesses
@@ -622,6 +703,7 @@ private final class Pass {
     var memberSets: [String: MemberNames] = [:]
     var openClasses: Set<String> = []
     var implicitScopes: [Range<Int>: ImplicitData] = [:]
+    var switchEnumConstants: [Range<Int>: Set<String>?] = [:]
     var resolutions = 0
 
     init(context: JavaInspectionContext) {

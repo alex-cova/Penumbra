@@ -98,7 +98,9 @@ public enum JavaUsageSearch {
             files = [file]
         } else {
             let scoped = await scopedRoots(for: id, roots: roots, environment: environment)
-            files = await candidates.candidateFiles(containing: id.simpleName, in: scoped)
+            files = await candidates.candidateFiles(
+                containing: id.simpleName, roles: id.candidateRoles, in: scoped
+            )
         }
         if Task.isCancelled { return }
 

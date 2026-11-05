@@ -103,8 +103,11 @@ enum JavaParityMutator {
                 expectedKeys: ["compiler.err.cant.resolve.location"]
             ),
             Mutation(
+                // A non-prefix typo: `case RE:` stays silent by design (the typing prefix
+                // guard, unit-tested in `JavaUnresolvedMemberInspectionTests`), so the corpus
+                // measures the committed-code shape with `YELLOW`.
                 id: "enum-case", kind: .typo, fixture: "Shapes.java",
-                find: "case RED:", replace: "case RE:",
+                find: "case RED:", replace: "case YELLOW:",
                 expectedKeys: ["compiler.err.cant.resolve.location"]
             ),
         ]

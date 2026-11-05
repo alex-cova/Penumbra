@@ -15,6 +15,7 @@ public struct DiagnosticSourceID: RawRepresentable, Hashable, Sendable {
     public static let swiftPM = DiagnosticSourceID(rawValue: "swiftpm")
     public static let sourceKitLSP = DiagnosticSourceID(rawValue: "sourcekit-lsp")
     public static let typeScriptLSP = DiagnosticSourceID(rawValue: "typescript-lsp")
+    public static let pythonLSP = DiagnosticSourceID(rawValue: "python-lsp")
 }
 
 /// A push of diagnostics for one file from one source. An empty `diagnostics` clears that source.

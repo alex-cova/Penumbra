@@ -59,8 +59,12 @@ final class IDEIntelligenceServices {
     /// Semantic-tier connections. The host fills them when a trusted folder's server is running.
     let sourceKitConnection = LSPConnectionBox()
     let typeScriptServerConnection = LSPConnectionBox()
+    let pythonServerConnection = LSPConnectionBox()
     var languageServerConnections: [String: LSPConnectionBox] {
-        [IDESourceKitServer.id: sourceKitConnection, IDETypeScriptServer.id: typeScriptServerConnection]
+        [
+            IDESourceKitServer.id: sourceKitConnection, IDETypeScriptServer.id: typeScriptServerConnection,
+            IDEPythonServer.id: pythonServerConnection,
+        ]
     }
 
     init() {
@@ -94,12 +98,16 @@ final class IDEIntelligenceServices {
         let typeScriptServer = LSPLanguageService(
             configuration: IDETypeScriptServer.definition().configuration, connections: typeScriptServerConnection
         )
+        let pythonServer = LSPLanguageService(
+            configuration: IDEPythonServer.definition().configuration, connections: pythonServerConnection
+        )
         let languages = LanguageServiceRegistry(services: [
             javaSupport.languageService,
             typescriptSupport.languageService,
             swiftSupport.languageService,
             sourceKit,
             typeScriptServer,
+            pythonServer,
             BasicLanguageService(
                 name: "umbra.run", languageIdentifiers: ["java"],
                 providers: LanguageProviders(codeActions: IDERunCodeActionProvider())
