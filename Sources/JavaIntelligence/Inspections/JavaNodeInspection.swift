@@ -248,6 +248,7 @@ enum JavaInspectionRegistry {
     ]
 
     nonisolated(unsafe) static let typedInspections: [any JavaTypedInspection.Type] = [
+        JavaAmbiguousImportInspection.self,
         JavaAccessStaticViaInstanceInspection.self,
         JavaDeprecatedConstructorUsageInspection.self,
         JavaDeprecatedFieldUsageInspection.self,

@@ -1,22 +1,28 @@
 import Foundation
 
 /// The members Lombok adds at compile time, which never appear in the source (F16): accessors from
-/// `@Getter`, `@Setter`, `@Data` and `@Value`, and constructors from `@NoArgsConstructor`,
-/// `@AllArgsConstructor`, `@RequiredArgsConstructor`, `@Data` and `@Value`. They are added to the
-/// class stub the way javac's own synthesized record members are, so completion, hover and type
-/// resolution (`person.getName().length()`) see them.
+/// `@Getter`, `@Setter`, `@Data` and `@Value`, constructors from `@NoArgsConstructor`,
+/// `@AllArgsConstructor`, `@RequiredArgsConstructor`, `@Data` and `@Value`, `withX` copies from
+/// `@With`, and a `builder()` entry point plus a `*Builder` nested class from `@Builder`. They
+/// are added to the class stub the way javac's own synthesized record members are, so
+/// completion, hover and type resolution (`person.getName().length()`,
+/// `Person.builder().name("x").build()`) see them.
 ///
 /// Only the file's own imports decide it is Lombok (`import lombok.*` or `import lombok.Getter`);
-/// `@Accessors(fluent = true, chain = true)` is honoured. Not modelled: `@Builder`, `@With`,
-/// `@SneakyThrows`, `val`, delombok-style `onMethod`, and a field named `$…`.
+/// `@Accessors(fluent = true, chain = true)` is honoured. Class-level `@Builder` only (not on
+/// constructors/methods), default `builder`/`build` names unless `builderMethodName`,
+/// `buildMethodName` or `builderClassName` say otherwise; no `@Singular`, `toBuilder`,
+/// `@SneakyThrows`, `val`, delombok-style `onMethod`, or a field named `$…`.
 enum JavaLombokMembers {
     private static let classAnnotations: Set<String> = [
-        "Getter", "Setter", "Data", "Value", "NoArgsConstructor", "AllArgsConstructor", "RequiredArgsConstructor", "Accessors"
+        "Getter", "Setter", "Data", "Value", "NoArgsConstructor", "AllArgsConstructor", "RequiredArgsConstructor", "Accessors",
+        "Builder", "With"
     ]
 
     private struct Annotation {
         let name: String
         let arguments: String
+        let range: Range<Int>?
     }
 
     private struct FieldInfo {
@@ -28,13 +34,16 @@ enum JavaLombokMembers {
     }
 
     static func synthesize(
-        classNode: SyntaxNode, body: SyntaxNode?, selfType: JavaTypeRef, existing methods: [JavaMethodStub]
-    ) -> [JavaMethodStub] {
+        classNode: SyntaxNode, body: SyntaxNode?, selfType: JavaTypeRef, existing methods: [JavaMethodStub],
+        packageName: String, url: URL
+    ) -> (methods: [JavaMethodStub], nested: [JavaClassStub]) {
         let classLevel = annotations(in: classNode.namedChildren.first { $0.type == "modifiers" })
         let fields = body.map(fieldInfos) ?? []
         guard classLevel.contains(where: { classAnnotations.contains($0.name) })
-                || fields.contains(where: { $0.annotations.contains { $0.name == "Getter" || $0.name == "Setter" } }),
-              importsLombok(classNode) else { return [] }
+                || fields.contains(where: {
+                    $0.annotations.contains { $0.name == "Getter" || $0.name == "Setter" || $0.name == "With" }
+                }),
+              importsLombok(classNode) else { return ([], []) }
 
         func has(_ name: String) -> Annotation? { classLevel.first { $0.name == name } }
         let data = has("Data") != nil
@@ -76,6 +85,24 @@ enum JavaLombokMembers {
             }
         }
 
+        // `@With`: `withField(value)` returns a copy with one field changed. Final fields are
+        // fine (copies don't assign); static fields are skipped like everywhere else here.
+        let classWith = has("With")
+        if classWith != nil || fields.contains(where: { $0.annotations.contains { $0.name == "With" } }) {
+            for field in fields where !field.modifiers.contains(.staticFlag) && !field.name.hasPrefix("$") {
+                let fieldWith = field.annotations.first { $0.name == "With" }
+                guard fieldWith != nil || classWith != nil else { continue }
+                guard let access = accessLevel(of: fieldWith ?? classWith), let flags = access else { continue }
+                let name = "with" + capitalized(setterBase(for: field.name, isBoolean: isBooleanField(field.type)))
+                if !declared.contains(name) {
+                    result.append(JavaMethodStub(
+                        name: name, parameters: [JavaParameterStub(name: field.name, type: field.type)],
+                        returnType: selfType, modifiers: flags
+                    ))
+                }
+            }
+        }
+
         // Constructors. `@Data` and `@Value` leave an explicit constructor alone.
         let hasExplicitConstructor = methods.contains { $0.isConstructor }
         let instanceFields = fields.filter { !$0.modifiers.contains(.staticFlag) && !$0.name.hasPrefix("$") }
@@ -104,7 +131,61 @@ enum JavaLombokMembers {
             && !result.contains(where: { $0.isConstructor && $0.parameters.map(\.type) == candidate.parameters.map(\.type) }) {
             result.append(candidate)
         }
-        return result
+
+        // `@Builder`: a static entry point on the class plus the chained `*Builder`
+        // nested class from `builderParts` below; the caller appends the nested stub.
+        var nested: [JavaClassStub] = []
+        if has("Builder") != nil,
+           let parts = Self.builderParts(classNode: classNode, body: body, selfType: selfType, packageName: packageName, url: url) {
+            if let entry = parts.entryPoint, !declared.contains(entry.name) {
+                result.append(entry)
+            }
+            if let builder = parts.nested {
+                nested.append(builder)
+            }
+        }
+        return (result, nested)
+    }
+
+    /// The `@Builder` static entry point and nested builder class for `selfType`.
+    ///
+    /// The builder class is named `<Simple>Builder` (or `builderClassName`), holds one
+    /// chainable setter per non-static field plus `build()` (or `buildMethodName`), and the
+    /// entry point (`builder` or `builderMethodName`) is static on the enclosing class.
+    /// `nil` when the class is not a plain `C` with a resolvable qualified name.
+    private static func builderParts(
+        classNode: SyntaxNode, body: SyntaxNode?, selfType: JavaTypeRef, packageName: String, url: URL
+    ) -> (entryPoint: JavaMethodStub?, nested: JavaClassStub?)? {
+        guard case .classType(let qualifiedName, _, _) = selfType, !qualifiedName.isEmpty else { return nil }
+        let classLevel = annotations(in: classNode.namedChildren.first { $0.type == "modifiers" })
+        guard let builder = classLevel.first(where: { $0.name == "Builder" }) else { return nil }
+        let access = accessLevel(of: builder).flatMap { $0 } ?? [.publicFlag]
+        let simple = String(qualifiedName.split(separator: ".").last ?? "")
+        let builderSimpleName = stringArgument("builderClassName", in: builder.arguments) ?? (simple + "Builder")
+        let builderQualifiedName = qualifiedName + "." + builderSimpleName
+        let builderType = JavaTypeRef.classType(qualifiedName: builderQualifiedName, arguments: [], outer: nil)
+        let entryPoint = JavaMethodStub(
+            name: stringArgument("builderMethodName", in: builder.arguments) ?? "builder",
+            parameters: [], returnType: builderType, modifiers: access.union([.staticFlag])
+        )
+        let fields = (body.map(fieldInfos) ?? []).filter { !$0.modifiers.contains(.staticFlag) && !$0.name.hasPrefix("$") }
+        var builderMethods = fields.map { field in
+            JavaMethodStub(
+                name: field.name, parameters: [JavaParameterStub(name: field.name, type: field.type)],
+                returnType: builderType, modifiers: access
+            )
+        }
+        builderMethods.append(JavaMethodStub(
+            name: stringArgument("buildMethodName", in: builder.arguments) ?? "build",
+            parameters: [], returnType: selfType, modifiers: access
+        ))
+        let nested = JavaClassStub(
+            binaryName: builderQualifiedName, qualifiedName: builderQualifiedName, simpleName: builderSimpleName,
+            packageName: packageName, outerQualifiedName: qualifiedName, kind: .classKind,
+            modifiers: access.union([.staticFlag]), methods: builderMethods,
+            origin: .source(url, nameRange: builder.range ?? classNode.byteRange)
+        )
+        return (entryPoint, nested)
     }
 
     // MARK: - Names
@@ -154,8 +235,24 @@ enum JavaLombokMembers {
             .filter { $0.type == "marker_annotation" || $0.type == "annotation" }
             .compactMap { node in
                 guard let name = node.child(byFieldName: "name")?.text else { return nil }
-                return Annotation(name: String(name.split(separator: ".").last ?? ""), arguments: node.child(byFieldName: "arguments")?.text ?? "")
+                return Annotation(
+                    name: String(name.split(separator: ".").last ?? ""),
+                    arguments: node.child(byFieldName: "arguments")?.text ?? "",
+                    range: node.byteRange
+                )
             }
+    }
+
+    private static func isBooleanField(_ type: JavaTypeRef) -> Bool {
+        if case .primitive(.boolean) = type { return true } else { return false }
+    }
+
+    /// `key = "value"` inside an annotation argument list, e.g. `builderClassName`.
+    private static func stringArgument(_ key: String, in arguments: String) -> String? {
+        guard let range = arguments.range(of: key + #"\s*=\s*""#, options: .regularExpression) else { return nil }
+        let rest = arguments[range.upperBound...]
+        guard let end = rest.firstIndex(of: "\"") else { return nil }
+        return String(rest[..<end])
     }
 
     private static func fieldInfos(in body: SyntaxNode) -> [FieldInfo] {

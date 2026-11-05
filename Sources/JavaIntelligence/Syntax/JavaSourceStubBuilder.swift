@@ -190,9 +190,15 @@ public enum JavaSourceStubBuilder {
             superclass = .classType(qualifiedName: "java.lang.Record", arguments: [], outer: nil)
         }
         if kind == .classKind {
-            methods.append(contentsOf: JavaLombokMembers.synthesize(
-                classNode: node, body: node.child(byFieldName: "body"), selfType: selfType, existing: methods
-            ))
+            let lombok = JavaLombokMembers.synthesize(
+                classNode: node, body: node.child(byFieldName: "body"), selfType: selfType, existing: methods,
+                packageName: packageName, url: url
+            )
+            methods.append(contentsOf: lombok.methods)
+            for nested in lombok.nested where !innerTypeNames.contains(nested.qualifiedName) {
+                result.append(nested)
+                innerTypeNames.append(nested.qualifiedName)
+            }
         }
         if outerKind(of: node) == .interfaceKind {
             // Member types of an interface are implicitly `public static`.

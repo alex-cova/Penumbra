@@ -4,9 +4,10 @@ import Foundation
 ///
 /// 1. match tier from ``CompletionMatcher`` (exact > prefix > camel-hump > word start);
 /// 2. `preselect`, then provider `priority` (locals over members over inherited members…);
-/// 3. recently accepted items;
+/// 3. expected-type match, then recently accepted items;
 /// 4. kind weight;
-/// 5. shorter label, then alphabetical, so equal items keep a stable order.
+/// 5. the provider's own order (`sortText`, same source only), then shorter label, then
+///    alphabetical, so equal items keep a stable order.
 ///
 /// Items that don't match the prefix at all are dropped.
 public struct DefaultRanker: Ranker {
@@ -17,21 +18,37 @@ public struct DefaultRanker: Ranker {
     }
 
     public func rank(items: [CompletionItem], context: CompletionContext) async -> [RankedCompletionItem] {
-        rankSynchronously(items: items, prefix: context.prefix)
+        rankSynchronously(items: items, prefix: context.prefix, expectedTypeNames: context.expectedTypeNames)
     }
 
     /// Ranking without the async hop, used when re-filtering an open popup on every keystroke.
-    public func rankSynchronously(items: [CompletionItem], prefix: String) -> [RankedCompletionItem] {
+    public func rankSynchronously(
+        items: [CompletionItem], prefix: String, expectedTypeNames: Set<String> = []
+    ) -> [RankedCompletionItem] {
         let recent = recency.snapshot()
         var scored: [(RankedCompletionItem, CompletionMatcher.Match)] = []
         scored.reserveCapacity(items.count)
         for item in items {
             guard let match = CompletionMatcher.match(prefix, in: item.matchText) else { continue }
-            let score = Self.score(item: item, match: match, recentRank: recent[Self.recencyKey(item)])
+            let score = Self.score(
+                item: item, match: match, recentRank: recent[Self.recencyKey(item)],
+                expectedTypeNames: expectedTypeNames
+            )
             scored.append((RankedCompletionItem(item: item, score: score), match))
         }
         scored.sort { lhs, rhs in
             if lhs.0.score != rhs.0.score { return lhs.0.score > rhs.0.score }
+            // Same score: the provider's own order decides, but only within one provider —
+            // `sortText` is meaningless across providers. Items without it sort after those
+            // with one, preserving the old order where no provider expressed a preference.
+            if lhs.0.item.source == rhs.0.item.source {
+                switch (lhs.0.item.sortText, rhs.0.item.sortText) {
+                case let (left?, right?) where left != right: return left < right
+                case (nil, _?): return false
+                case (_?, nil): return true
+                default: break
+                }
+            }
             let lhsLabel = lhs.0.item.label, rhsLabel = rhs.0.item.label
             if lhsLabel.count != rhsLabel.count { return lhsLabel.count < rhsLabel.count }
             if lhsLabel != rhsLabel { return lhsLabel < rhsLabel }
@@ -46,12 +63,17 @@ public struct DefaultRanker: Ranker {
     }
 
     /// Scores are always positive for matching items: the tier dominates (100 apart), and
-    /// priority/recency/kind only order items within one tier.
-    static func score(item: CompletionItem, match: CompletionMatcher.Match, recentRank: Int?) -> Double {
+    /// priority/recency/kind only order items within one tier. An expected-type match sits
+    /// below `preselect` but above recency noise: the assigned type usually is what you want.
+    static func score(
+        item: CompletionItem, match: CompletionMatcher.Match, recentRank: Int?,
+        expectedTypeNames: Set<String> = []
+    ) -> Double {
         var score = 1000 + Double(match.tier.rawValue) * 100
         // IntelliJ matches the first letter's case: `UserS` means `UserService`, not a local `users`.
         if match.firstCharacterCaseMatches { score += 12 }
         if item.preselect { score += 20 }
+        if let detail = item.detail, expectedTypeNames.contains(detail) { score += 15 }
         score += max(-40, min(40, item.priority * 4))
         if let recentRank { score += max(0, 3 - Double(recentRank) * 0.1) }
         score += kindWeight(item.kind)

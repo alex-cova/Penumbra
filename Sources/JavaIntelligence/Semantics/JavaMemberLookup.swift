@@ -61,11 +61,10 @@ public enum JavaMemberLookup {
         if case .array(let element) = type {
             return arrayMembers(elementType: element)
         }
-        if case .typeVariable = type {
-            // No bound information travels with a type variable reference; offer `Object`'s.
+        if case .typeVariable(let name) = type {
             return await members(
-                of: .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil),
-                mode: mode, context: context, index: index, checkAccess: checkAccess
+                ofVariable: name, mode: mode, context: context, index: index,
+                checkAccess: checkAccess, seen: [name]
             )
         }
         guard case .classType(let qualifiedName, let arguments, let outer) = type else {
@@ -89,6 +88,53 @@ public enum JavaMemberLookup {
             await index.storeMemberSet(result, for: cacheKey)
         }
         return result
+    }
+
+    /// Members of a type variable: the members of its bounds, intersected by signature when
+    /// there are several (`T extends A & B` only has what both offer, JLS 4.4). Bounds are
+    /// resolved in the variable's scope first — a bound written as a bare name usually needs
+    /// it — and a bound that is itself a variable recurses with `seen` cutting cycles.
+    private static func members(
+        ofVariable name: String, mode: JavaMemberLookupMode, context: JavaResolutionContext, index: JavaIndex,
+        checkAccess: Bool, seen: Set<String>
+    ) async -> [JavaResolvedMember] {
+        let object = JavaTypeRef.classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
+        guard let bounds = context.typeParameterBounds[name], !bounds.isEmpty else {
+            return await members(of: object, mode: mode, context: context, index: index, checkAccess: checkAccess)
+        }
+        var perBound: [[JavaResolvedMember]] = []
+        for bound in bounds {
+            let resolved = await JavaTypeResolver.resolve(bound, context: context, index: index)
+            switch resolved {
+            case .typeVariable(let inner) where inner != name && !seen.contains(inner):
+                perBound.append(await members(
+                    ofVariable: inner, mode: mode, context: context, index: index,
+                    checkAccess: checkAccess, seen: seen.union([inner])
+                ))
+            case .typeVariable:
+                return await members(of: object, mode: mode, context: context, index: index, checkAccess: checkAccess)
+            default:
+                perBound.append(await members(of: resolved, mode: mode, context: context, index: index, checkAccess: checkAccess))
+            }
+        }
+        guard perBound.count > 1 else { return perBound.first ?? [] }
+        // Intersection by signature: the leftmost bound's members that every other bound has
+        // too. Order follows the leftmost bound, mirroring lookup on a single bound.
+        let rest = perBound.dropFirst().map { Set($0.map { signatureKey(of: $0) }) }
+        return perBound[0].filter { member in
+            rest.allSatisfy { $0.contains(signatureKey(of: member)) }
+        }
+    }
+
+    /// The same override key the member walk deduplicates on: fields by name, methods by
+    /// name plus erased parameter list.
+    private static func signatureKey(of member: JavaResolvedMember) -> String {
+        switch member {
+        case .field(let field, _):
+            return "field:\(field.name)"
+        case .method(let method, _):
+            return "method:\(method.name)(\(method.parameters.map { erasedKey($0.type) }.joined(separator: ",")))"
+        }
     }
 
     private static func walkMembers(

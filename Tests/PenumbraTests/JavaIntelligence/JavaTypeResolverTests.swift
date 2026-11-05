@@ -15,12 +15,14 @@ final class JavaTypeResolverTests: XCTestCase {
         return index
     }
 
-    private func stub(_ qualifiedName: String, innerTypeNames: [String] = []) -> JavaClassStub {
+    private func stub(_ qualifiedName: String, innerTypeNames: [String] = [], superclass: String? = nil) -> JavaClassStub {
         let simple = String(qualifiedName.split(separator: ".").last!)
         let pkg = qualifiedName.contains(".") ? qualifiedName.components(separatedBy: ".").dropLast().joined(separator: ".") : ""
         return JavaClassStub(
             binaryName: qualifiedName, qualifiedName: qualifiedName, simpleName: simple, packageName: pkg,
-            kind: .classKind, modifiers: [.publicFlag], innerTypeNames: innerTypeNames, origin: .jdkModule("test")
+            kind: .classKind, modifiers: [.publicFlag],
+            superclass: superclass.map { JavaTypeRef.classType(qualifiedName: $0, arguments: [], outer: nil) },
+            innerTypeNames: innerTypeNames, origin: .jdkModule("test")
         )
     }
 
@@ -65,7 +67,7 @@ final class JavaTypeResolverTests: XCTestCase {
         XCTAssertEqual(resolved, .unresolved(simpleName: "Ghost", arguments: []))
     }
 
-    func testOnDemandImportResolvesFirstMatch() async throws {
+    func testOnDemandImportResolvesSingleProvider() async throws {
         let index = try await makeIndex(withStubs: [stub("java.util.List")])
         let context = JavaResolutionContext(
             packageName: "",
@@ -76,6 +78,55 @@ final class JavaTypeResolverTests: XCTestCase {
         )
         let resolved = await JavaTypeResolver.resolve(.unresolved(simpleName: "List", arguments: []), context: context, index: index)
         XCTAssertEqual(resolved.erasedQualifiedName, "java.util.List")
+    }
+
+    /// F-05: when two on-demand imports both provide the name the reference is ambiguous
+    /// (JLS 6.5.2) — it stays unresolved instead of silently picking the first match.
+    func testAmbiguousOnDemandImportsStayUnresolved() async throws {
+        let index = try await makeIndex(withStubs: [stub("java.util.List"), stub("java.awt.List")])
+        let context = JavaResolutionContext(
+            packageName: "",
+            imports: [
+                JavaImportDeclaration(qualifiedName: "java.util", isStatic: false, isOnDemand: true),
+                JavaImportDeclaration(qualifiedName: "java.awt", isStatic: false, isOnDemand: true)
+            ]
+        )
+        let resolved = await JavaTypeResolver.resolve(.unresolved(simpleName: "List", arguments: []), context: context, index: index)
+        XCTAssertEqual(resolved, .unresolved(simpleName: "List", arguments: []))
+    }
+
+    /// F-05: a member type inherited from a supertype shadows imports (JLS 6.5.2 member types
+    /// resolve before any import), even though the supertype walk runs after the declared-nested
+    /// probe for performance.
+    func testInheritedNestedTypeBeatsSingleTypeImport() async throws {
+        let base = stub("com.example.Base", innerTypeNames: ["com.example.Base.Nested"])
+        let nested = stub("com.example.Base.Nested")
+        let outer = stub("com.example.Outer", superclass: "com.example.Base")
+        let imported = stub("com.other.Nested")
+        let index = try await makeIndex(withStubs: [base, nested, outer, imported])
+        let context = JavaResolutionContext(
+            packageName: "com.example",
+            imports: [JavaImportDeclaration(qualifiedName: "com.other.Nested", isStatic: false, isOnDemand: false)],
+            enclosingTypeQualifiedNames: ["com.example.Outer"]
+        )
+        let resolved = await JavaTypeResolver.resolve(.unresolved(simpleName: "Nested", arguments: []), context: context, index: index)
+        XCTAssertEqual(resolved.erasedQualifiedName, "com.example.Base.Nested")
+    }
+
+    /// F-05: the inherited member type also beats the same-package candidate and `java.lang`.
+    func testInheritedNestedTypeBeatsSamePackageAndJavaLang() async throws {
+        let base = stub("com.example.Base", innerTypeNames: ["com.example.Base.Helper"])
+        let nested = stub("com.example.Base.Helper")
+        let outer = stub("com.example.Outer", superclass: "com.example.Base")
+        let samePackage = stub("com.example.Helper")
+        let index = try await makeIndex(withStubs: [base, nested, outer, samePackage])
+        let context = JavaResolutionContext(
+            packageName: "com.example",
+            imports: [],
+            enclosingTypeQualifiedNames: ["com.example.Outer"]
+        )
+        let resolved = await JavaTypeResolver.resolve(.unresolved(simpleName: "Helper", arguments: []), context: context, index: index)
+        XCTAssertEqual(resolved.erasedQualifiedName, "com.example.Base.Helper")
     }
 
     func testJavaLangFallbackResolves() async throws {

@@ -369,6 +369,66 @@ final class JavaMemberLookupTests: XCTestCase {
             origin: .jdkModule("test")
         )
     }
+
+    // MARK: - Type-variable bounds (F-06)
+
+    /// A value of type `T` offers its bound's members, not just `Object`'s.
+    func testBoundedTypeVariableUsesBoundMembers() async throws {
+        let base = JavaClassStub(
+            binaryName: "Base", qualifiedName: "Base", simpleName: "Base", packageName: "",
+            kind: .classKind, modifiers: [.publicFlag],
+            methods: [JavaMethodStub(name: "baseOp", parameters: [], returnType: .void, modifiers: [.publicFlag])],
+            origin: .jdkModule("test")
+        )
+        let index = try await makeIndex(withStubs: [objectStub(), base])
+        let context = JavaResolutionContext(
+            packageName: "", imports: [],
+            typeParameterNames: ["T"], typeParameterBounds: ["T": [classType("Base")]]
+        )
+        let members = await JavaMemberLookup.members(
+            of: .typeVariable(name: "T"), mode: .instance, context: context, index: index
+        )
+        XCTAssertTrue(members.contains { $0.name == "baseOp" }, "bound member missing: \(members.map(\.name))")
+    }
+
+    /// `T extends A & B` only has what both bounds offer (JLS 4.4 intersection).
+    func testIntersectionBoundIntersectsMembers() async throws {
+        func stub(_ name: String, methods: [String]) -> JavaClassStub {
+            JavaClassStub(
+                binaryName: name, qualifiedName: name, simpleName: name, packageName: "",
+                kind: .classKind, modifiers: [.publicFlag],
+                methods: methods.map {
+                    JavaMethodStub(name: $0, parameters: [], returnType: .void, modifiers: [.publicFlag])
+                },
+                origin: .jdkModule("test")
+            )
+        }
+        let index = try await makeIndex(withStubs: [objectStub(), stub("A", methods: ["shared", "onlyA"]), stub("B", methods: ["shared", "onlyB"])])
+        let context = JavaResolutionContext(
+            packageName: "", imports: [],
+            typeParameterNames: ["T"], typeParameterBounds: ["T": [classType("A"), classType("B")]]
+        )
+        let members = await JavaMemberLookup.members(
+            of: .typeVariable(name: "T"), mode: .instance, context: context, index: index
+        )
+        let names = Set(members.map(\.name))
+        XCTAssertTrue(names.contains("shared"), "common member missing: \(names)")
+        XCTAssertFalse(names.contains("onlyA"), "A-only member leaks into the intersection: \(names)")
+        XCTAssertFalse(names.contains("onlyB"), "B-only member leaks into the intersection: \(names)")
+    }
+
+    /// An unbounded variable still falls back to `Object`.
+    func testUnboundedTypeVariableFallsBackToObject() async throws {
+        let index = try await makeIndex(withStubs: [objectStub()])
+        let context = JavaResolutionContext(
+            packageName: "", imports: [],
+            typeParameterNames: ["T"], typeParameterBounds: [:]
+        )
+        let members = await JavaMemberLookup.members(
+            of: .typeVariable(name: "T"), mode: .instance, context: context, index: index
+        )
+        XCTAssertTrue(members.contains { $0.name == "toString" })
+    }
 }
 
 extension JavaResolvedMember: Equatable {

@@ -22,19 +22,23 @@ public enum JavaFileUsageResolver {
         let file = JavaSourceStubBuilder.build(tree: tree, url: url)
         let locator = JavaUsageLocator(url: url, text: source)
         let gate = JavaDecompileGate(policy: .denied)
-        var found: [Range<Int>: JavaUsage] = [:]
-
-        for node in candidateNodes(named: name, target: target, in: tree) {
-            if Task.isCancelled { break }
-            let session = JavaNavigationSession(
-                source: source, fileURL: url, tree: tree, byteOffset: node.startByte, fileStubs: file,
-                index: environment.index, jdkHome: environment.jdkHome, cacheRoot: environment.cacheRoot,
-                openBuffer: environment.openBuffer, decompile: gate
-            )
-            let usage = await environment.withScope(for: url) {
-                await resolve(node, target: target, name: name, session: session, locator: locator)
+        let nodes = candidateNodes(named: name, target: target, in: tree)
+        // F-08: one scope for the whole file. The scope depends only on `url`, so installing
+        // it per candidate node was pure overhead; each node still gets its own session because
+        // the resolution context (enclosing types, type parameters) is offset-specific.
+        let found = await environment.withScope(for: url) {
+            var found: [Range<Int>: JavaUsage] = [:]
+            for node in nodes {
+                if Task.isCancelled { break }
+                let session = JavaNavigationSession(
+                    source: source, fileURL: url, tree: tree, byteOffset: node.startByte, fileStubs: file,
+                    index: environment.index, jdkHome: environment.jdkHome, cacheRoot: environment.cacheRoot,
+                    openBuffer: environment.openBuffer, decompile: gate
+                )
+                if let usage = await resolve(node, target: target, name: name, session: session, locator: locator),
+                   found[usage.byteRange] == nil { found[usage.byteRange] = usage }
             }
-            if let usage, found[usage.byteRange] == nil { found[usage.byteRange] = usage }
+            return found
         }
         return found.values.sorted { $0.byteRange.lowerBound < $1.byteRange.lowerBound }
     }

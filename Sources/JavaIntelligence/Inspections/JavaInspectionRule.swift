@@ -49,6 +49,7 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
     case unusedImport
     case duplicateImport
     case unresolvedImport
+    case ambiguousImport
     case missingOverride
     case unresolvedType
     case unresolvedMember
@@ -271,6 +272,7 @@ public enum JavaInspectionRule: String, CaseIterable, Sendable {
         .unusedImport: Info(code: "unused-import", title: "Unused import", group: .imports, severity: .warning, summary: "Reports imports that nothing in the file uses."),
         .duplicateImport: Info(code: "duplicate-import", title: "Duplicate import", group: .imports, severity: .warning, summary: "Reports an import that appears more than once."),
         .unresolvedImport: Info(code: "unresolved-import", title: "Unresolved import", group: .imports, severity: .warning, summary: "Reports imports that resolve to no known class."),
+        .ambiguousImport: Info(code: "ambiguous-import", title: "Ambiguous on-demand import", group: .imports, severity: .error, summary: "Reports a type name that two on-demand imports both provide."),
         .missingOverride: Info(code: "missing-override", title: "Missing '@Override' annotation", group: .inheritance, severity: .warning, summary: "Reports methods that override a supertype method without '@Override'."),
         .unresolvedType: Info(code: "unresolved-type", title: "Unresolved type", group: .compilerIssues, severity: .warning, summary: "Reports type names that are neither declared, imported nor in scope."),
         .unresolvedMember: Info(code: "unresolved-member", title: "Unresolved method or field", group: .compilerIssues, severity: .error, summary: "Reports a method or field access on a fully indexed type that declares no member of that name."),

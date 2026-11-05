@@ -14,16 +14,17 @@ public struct JavaResolutionContext: Sendable {
     /// Every type parameter name in scope: the enclosing type(s)' own parameters plus, when
     /// resolving inside a specific method, that method's parameters too.
     public let typeParameterNames: Set<String>
-    /// The first declared bound of each bounded type parameter in scope (`T extends Animal` →
-    /// `Animal`), unresolved as written. A value of type `T` has the bound's members.
-    public let typeParameterBounds: [String: JavaTypeRef]
+    /// Every declared bound of each bounded type parameter in scope, leftmost first
+    /// (`T extends A & B` keeps both), unresolved as written. A value of type `T` has the
+    /// members common to all its bounds (`Object`'s when unbounded).
+    public let typeParameterBounds: [String: [JavaTypeRef]]
 
     public init(
         packageName: String,
         imports: [JavaImportDeclaration],
         enclosingTypeQualifiedNames: [String] = [],
         typeParameterNames: Set<String> = [],
-        typeParameterBounds: [String: JavaTypeRef] = [:]
+        typeParameterBounds: [String: [JavaTypeRef]] = [:]
     ) {
         self.packageName = packageName
         self.imports = imports
@@ -68,10 +69,14 @@ public struct JavaResolutionContext: Sendable {
     }
 
     /// `outer` with `parameters` shadowing it: an inner `<T>` without a bound hides an outer bound.
-    private static func bounds(_ parameters: [JavaTypeParameter], over outer: [String: JavaTypeRef]) -> [String: JavaTypeRef] {
+    private static func bounds(_ parameters: [JavaTypeParameter], over outer: [String: [JavaTypeRef]]) -> [String: [JavaTypeRef]] {
         var result = outer
         for parameter in parameters {
-            result[parameter.name] = parameter.bounds.first
+            if parameter.bounds.isEmpty {
+                result.removeValue(forKey: parameter.name)
+            } else {
+                result[parameter.name] = parameter.bounds
+            }
         }
         return result
     }

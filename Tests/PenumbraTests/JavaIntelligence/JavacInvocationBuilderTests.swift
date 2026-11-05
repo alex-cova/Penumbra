@@ -152,7 +152,9 @@ final class JavacInvocationBuilderTests: XCTestCase {
         XCTAssertTrue(invocation.arguments.contains("-proc:none"))
     }
 
-    func testLombokFromAnnotationProcessorJarsOnly() throws {
+    /// F-07: the project model's processors (MapStruct, Dagger, …) all reach `-processorpath`,
+    /// model order first, Lombok included — not just Lombok.
+    func testAllModelProcessorsPassThrough() throws {
         let jdk = try makeJDK()
         let invocation = try XCTUnwrap(JavacInvocationBuilder.build(
             file: URL(fileURLWithPath: "/p/app/src/main/java/Foo.java"), text: "class Foo {}",
@@ -160,7 +162,10 @@ final class JavacInvocationBuilderTests: XCTestCase {
                 processorJars: ["/ap/mapstruct-processor.jar", "/ap/lombok-1.18.32.jar"], classpath: ["/jars/guava.jar"]
             )])), jdk: jdk, workDirectory: work
         ))
-        XCTAssertEqual(value(after: "-processorpath", in: invocation.arguments), "/ap/lombok-1.18.32.jar")
+        XCTAssertEqual(
+            value(after: "-processorpath", in: invocation.arguments),
+            "/ap/mapstruct-processor.jar:/ap/lombok-1.18.32.jar"
+        )
         XCTAssertFalse(invocation.arguments.contains("-proc:none"))
     }
 
@@ -175,15 +180,16 @@ final class JavacInvocationBuilderTests: XCTestCase {
         XCTAssertEqual(value(after: "-processorpath", in: invocation.arguments), "/ap/lombok-2.jar")
     }
 
-    func testNonLombokProcessorsStayOff() throws {
+    /// F-07: a lone non-Lombok processor runs too; `-proc:none` is only for no processors at all.
+    func testNonLombokProcessorsPassThrough() throws {
         let jdk = try makeJDK()
         let invocation = try XCTUnwrap(JavacInvocationBuilder.build(
             file: URL(fileURLWithPath: "/p/app/src/main/java/Foo.java"), text: "class Foo {}",
             kind: .gradle(model([generatedApp(processorJars: ["/ap/mapstruct-processor.jar"], classpath: [])])),
             jdk: jdk, workDirectory: work
         ))
-        XCTAssertTrue(invocation.arguments.contains("-proc:none"))
-        XCTAssertNil(value(after: "-processorpath", in: invocation.arguments))
+        XCTAssertFalse(invocation.arguments.contains("-proc:none"))
+        XCTAssertEqual(value(after: "-processorpath", in: invocation.arguments), "/ap/mapstruct-processor.jar")
     }
 
     func testPlainFolderInfersPackageRoot() throws {

@@ -17,6 +17,10 @@ final class JavaLombokMembersTests: XCTestCase {
 
     private func names(_ stub: JavaClassStub) -> [String] { stub.methods.map(\.name).sorted() }
 
+    private func allClasses(_ source: String) throws -> [JavaClassStub] {
+        JavaSourceStubBuilder.build(source: source, url: url).classes
+    }
+
     func testFieldGettersAndSetters() throws {
         let person = try stub("""
         package p;
@@ -99,6 +103,73 @@ final class JavaLombokMembersTests: XCTestCase {
         XCTAssertEqual(names(person), ["getGuarded", "getName", "setGuarded"])
         XCTAssertTrue(person.methods.first { $0.name == "setGuarded" }?.modifiers.contains(.protectedFlag) == true)
         XCTAssertTrue(person.methods.first { $0.name == "getName" }?.modifiers.contains(.publicFlag) == true)
+    }
+
+    /// F-07: `@Builder` adds a static `builder()` entry point plus a nested `*Builder` class
+    /// with one chained setter per field and `build()`.
+    func testBuilderGeneratesEntryPointAndNestedClass() throws {
+        let classes = try allClasses("""
+        import lombok.*;
+        @Builder class Person { private String name; private int age; private static int counter; }
+        """)
+        let person = try XCTUnwrap(classes.first { $0.simpleName == "Person" })
+        let entry = try XCTUnwrap(person.methods.first { $0.name == "builder" })
+        XCTAssertTrue(entry.modifiers.contains(.staticFlag))
+        XCTAssertEqual(entry.returnType, .classType(qualifiedName: "Person.PersonBuilder", arguments: [], outer: nil))
+        XCTAssertTrue(person.innerTypeNames.contains("Person.PersonBuilder"))
+
+        let builder = try XCTUnwrap(classes.first { $0.simpleName == "PersonBuilder" })
+        XCTAssertEqual(builder.qualifiedName, "Person.PersonBuilder")
+        XCTAssertTrue(builder.modifiers.contains(.staticFlag))
+        XCTAssertEqual(names(builder), ["age", "build", "name"])
+        XCTAssertEqual(
+            builder.methods.first { $0.name == "build" }?.returnType,
+            .classType(qualifiedName: "Person", arguments: [], outer: nil)
+        )
+        XCTAssertEqual(
+            builder.methods.first { $0.name == "name" }?.returnType,
+            .classType(qualifiedName: "Person.PersonBuilder", arguments: [], outer: nil),
+            "field setters chain on the builder"
+        )
+    }
+
+    /// F-07: an explicit `builder()` wins; the nested class still generates around it.
+    func testExplicitBuilderMethodWins() throws {
+        let person = try stub("""
+        import lombok.*;
+        @Builder class Person {
+            private String name;
+            public static PersonBuilder builder() { return null; }
+        }
+        """)
+        XCTAssertEqual(person.methods.filter { $0.name == "builder" }.count, 1)
+    }
+
+    /// F-07: `@With` (field- and class-level) adds `withField` copies; static fields are skipped.
+    func testWithGeneratesCopyMethods() throws {
+        let person = try stub("""
+        import lombok.*;
+        @With class Person {
+            private String name;
+            @With private boolean active;
+            private static int counter;
+        }
+        """)
+        let withs = person.methods.filter { $0.name.hasPrefix("with") }.map(\.name).sorted()
+        XCTAssertEqual(withs, ["withActive", "withName"])
+        XCTAssertEqual(
+            person.methods.first { $0.name == "withName" }?.returnType,
+            .classType(qualifiedName: "Person", arguments: [], outer: nil)
+        )
+    }
+
+    /// F-07: without a Lombok import, `@Builder`/`@With` generate nothing.
+    func testBuilderAndWithNeedTheLombokImport() throws {
+        let person = try stub("""
+        @Builder @With class Person { private String name; }
+        """)
+        XCTAssertTrue(person.methods.isEmpty)
+        XCTAssertFalse(person.innerTypeNames.contains("Person.PersonBuilder"))
     }
 
     func testAMethodYouWroteWins() throws {

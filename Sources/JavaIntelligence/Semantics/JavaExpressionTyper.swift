@@ -203,8 +203,8 @@ public enum JavaExpressionTyper {
         if raw.packageName != nil { return raw }
         let resolvedType = await JavaTypeResolver.resolve(raw.type, context: context, index: index)
         if !raw.isTypeReference, case .typeVariable(let name) = resolvedType {
-            // A value of type `T` has the members of `T`'s bound (`Object` when unbounded).
-            let bound = context.typeParameterBounds[name] ?? .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
+            // A value of type `T` has the members of `T`'s leftmost bound (`Object` when unbounded).
+            let bound = context.typeParameterBounds[name]?.first ?? .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
             let resolvedBound = await JavaTypeResolver.resolve(bound, context: context, index: index)
             if case .typeVariable = resolvedBound { return Typed(type: resolvedType, isTypeReference: false) }
             return Typed(type: resolvedBound, isTypeReference: false, typeVariable: name)

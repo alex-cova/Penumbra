@@ -546,12 +546,13 @@ public actor JavaCompletionProvider: CompletionProvider {
         )
     }
 
-    /// First bounds of the type parameters of every enclosing type and method, innermost winning.
-    static func typeParameterBounds(in tree: JavaSyntaxTree, atByteOffset byteOffset: Int) -> [String: JavaTypeRef] {
+    /// Bounds of the type parameters of every enclosing type and method, leftmost first and
+    /// innermost winning. Every `type_bound` child is a bound (`T extends A & B` keeps both).
+    static func typeParameterBounds(in tree: JavaSyntaxTree, atByteOffset byteOffset: Int) -> [String: [JavaTypeRef]] {
         let declarations: Set<String> = [
             "class_declaration", "interface_declaration", "record_declaration", "method_declaration", "constructor_declaration"
         ]
-        var bounds: [String: JavaTypeRef] = [:]
+        var bounds: [String: [JavaTypeRef]] = [:]
         var shadowed = Set<String>()
         var current: SyntaxNode? = tree.node(atByteOffset: byteOffset)
         while let node = current {
@@ -559,8 +560,11 @@ public actor JavaCompletionProvider: CompletionProvider {
                 for parameter in parameters.namedChildren(ofType: "type_parameter") {
                     guard let name = parameter.namedChildren.first(where: { $0.type == "type_identifier" || $0.type == "identifier" })?.text,
                           shadowed.insert(name).inserted else { continue }
-                    if let bound = parameter.firstNamedChild(ofType: "type_bound"), let first = bound.namedChildren.first {
-                        bounds[name] = JavaTypeNodeConverter.convert(first)
+                    if let bound = parameter.firstNamedChild(ofType: "type_bound") {
+                        let converted = bound.namedChildren.map(JavaTypeNodeConverter.convert)
+                        if !converted.isEmpty {
+                            bounds[name] = converted
+                        }
                     }
                 }
             }

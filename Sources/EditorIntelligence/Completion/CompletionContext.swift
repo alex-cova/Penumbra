@@ -23,6 +23,10 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
     /// Set when the request is a command-completion request, or a regular one that should
     /// carry a command section.
     public let commandMode: CommandMode?
+    /// Simple type names the completed expression is assigned to, when the requesting language
+    /// knows them (Java's expected type, `String` for `String s = …`). The ranker boosts items
+    /// whose `detail` names one of these. Empty when unknown — no item is boosted then.
+    public let expectedTypeNames: Set<String>
 
     /// How command completion was triggered.
     public enum CommandMode: Hashable, Sendable {
@@ -51,7 +55,8 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
         invocationCount: Int = 1,
         mode: CompletionMode = .basic,
         filter: Filter = .all,
-        commandMode: CommandMode? = nil
+        commandMode: CommandMode? = nil,
+        expectedTypeNames: Set<String> = []
     ) {
         self.document = document
         self.cursor = cursor
@@ -62,6 +67,7 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
         self.mode = mode
         self.filter = filter
         self.commandMode = commandMode
+        self.expectedTypeNames = expectedTypeNames
     }
 
     /// The character just before the prefix is a member-access `.` (or `::`).

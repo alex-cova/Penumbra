@@ -59,9 +59,57 @@ final class DefaultRankerTests: XCTestCase {
         let ranked = await ranker.rank(items: [first, second], context: makeContext(prefix: "foo"))
         XCTAssertEqual(ranked.first?.item.label, "fooB")
     }
+
+    /// F-17: same-score items from one provider follow the provider's own order instead of
+    /// length/alphabetical — that is what a language server's `sortText` is for.
+    func testSortTextOrdersSameSourceTies() async {
+        let ranker = DefaultRanker()
+        let items = [
+            makeItem(label: "printf", kind: .method, source: "LSP", sortText: "2"),
+            makeItem(label: "printx", kind: .method, source: "LSP", sortText: "1"),
+        ]
+        let ranked = await ranker.rank(items: items, context: makeContext(prefix: "print"))
+        XCTAssertEqual(ranked.map(\.item.label), ["printx", "printf"])
+    }
+
+    /// F-17: `sortText` never leaks across providers; other sources keep the old order.
+    func testSortTextDoesNotOrderAcrossSources() async {
+        let ranker = DefaultRanker()
+        let items = [
+            makeItem(label: "ab", kind: .method, source: "B", sortText: "1"),
+            makeItem(label: "aa", kind: .method, source: "A", sortText: "2"),
+        ]
+        let ranked = await ranker.rank(items: items, context: makeContext(prefix: ""))
+        XCTAssertEqual(ranked.map(\.item.source), ["A", "B"])
+    }
+
+    /// F-17: items without `sortText` sort after same-score items that have one.
+    func testMissingSortTextSortsLastWithinSource() async {
+        let ranker = DefaultRanker()
+        let items = [
+            makeItem(label: "aba", kind: .method, source: "LSP"),
+            makeItem(label: "abz", kind: .method, source: "LSP", sortText: "9"),
+        ]
+        let ranked = await ranker.rank(items: items, context: makeContext(prefix: "ab"))
+        XCTAssertEqual(ranked.map(\.item.label), ["abz", "aba"])
+    }
+
+    /// F-17: an expected type boosts the items whose `detail` names it, below `preselect`
+    /// but above recency noise.
+    func testExpectedTypeBoostsMatchingDetail() async {
+        let ranker = DefaultRanker()
+        let plain = makeItem(label: "size", kind: .method, source: "Java", priority: 1, detail: "int")
+        let typed = makeItem(label: "size", kind: .method, source: "Java", priority: 0, detail: "String")
+        var context = makeContext(prefix: "size")
+        let untyped = await ranker.rank(items: [typed, plain], context: context)
+        XCTAssertEqual(untyped.first?.item.detail, "int", "without expected types priority wins")
+        context = makeContext(prefix: "size", expectedTypeNames: ["String"])
+        let ranked = await ranker.rank(items: [typed, plain], context: context)
+        XCTAssertEqual(ranked.first?.item.detail, "String")
+    }
 }
 
-private func makeContext(prefix: String) -> CompletionContext {
+private func makeContext(prefix: String, expectedTypeNames: Set<String> = []) -> CompletionContext {
     let snapshot = TextSnapshot(version: 0, text: "\(prefix)")
     let position = TextPosition(line: 0, column: prefix.count, utf16Offset: prefix.count)
     let document = Document(
@@ -78,11 +126,15 @@ private func makeContext(prefix: String) -> CompletionContext {
         cursor: Cursor(position: position),
         trigger: .keystroke(prefix),
         prefix: prefix,
-        range: TextRange(start: position, end: position)
+        range: TextRange(start: position, end: position),
+        expectedTypeNames: expectedTypeNames
     )
 }
 
-private func makeItem(label: String, kind: CompletionItemKind, source: String, priority: Double = 0) -> CompletionItem {
+private func makeItem(
+    label: String, kind: CompletionItemKind, source: String, priority: Double = 0,
+    sortText: String? = nil, detail: String? = nil, preselect: Bool = false
+) -> CompletionItem {
     let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
     return CompletionItem(
         label: label,
@@ -90,6 +142,9 @@ private func makeItem(label: String, kind: CompletionItemKind, source: String, p
         kind: kind,
         range: TextRange(start: position, end: position),
         source: source,
-        priority: priority
+        sortText: sortText,
+        detail: detail,
+        priority: priority,
+        preselect: preselect
     )
 }

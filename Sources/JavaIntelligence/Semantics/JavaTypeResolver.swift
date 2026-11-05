@@ -6,14 +6,15 @@ import Foundation
 /// standard Java lookup order:
 ///
 /// 1. a type parameter in scope -> `.typeVariable`
-/// 2. a nested type declared by an enclosing type
+/// 2. a nested type declared by an enclosing type, or inherited from its supertypes (JLS 6.5.2:
+///    member types shadow imports)
 /// 3. a single-type import (`import java.util.List;`)
 /// 4. the same package
-/// 5. an on-demand import (`import java.util.*;`), first match wins
+/// 5. an on-demand import (`import java.util.*;`); when two of them provide the name the
+///    reference is ambiguous (JLS 6.5.2) and stays `.unresolved` for the ambiguity inspection
+///    to report, instead of silently picking the first match
 /// 6. `java.lang`
-/// 7. a nested type an enclosing type inherits from a supertype (JLS puts this with step 2; it
-///    runs last so ordinary names never pay for the supertype walk)
-/// 8. otherwise left as `.unresolved` -- e.g. a real class the index just doesn't have (an
+/// 7. otherwise left as `.unresolved` -- e.g. a real class the index just doesn't have (an
 ///    unindexed dependency), not necessarily an invalid reference
 ///
 /// Resolution recurses through the whole type (array element types, generic arguments, wildcard
@@ -92,6 +93,17 @@ public enum JavaTypeResolver {
             }
         }
 
+        // Member types an enclosing type inherits: JLS 6.5.2 resolves them before any import,
+        // so they run here even though the supertype walk costs more than the index probes
+        // below. An import colliding with an inherited nested type's name loses.
+        if let first = simpleName.first, first.isUppercase, !isWalkingSupertypes {
+            for enclosingQualifiedName in context.enclosingTypeQualifiedNames {
+                if let inherited = await nestedType(named: simpleName, in: enclosingQualifiedName, index: index) {
+                    return .classType(qualifiedName: inherited, arguments: arguments, outer: nil)
+                }
+            }
+        }
+
         if let singleTypeImport = context.imports.first(where: { !$0.isStatic && !$0.isOnDemand && lastComponent(of: $0.qualifiedName) == simpleName }) {
             return .classType(qualifiedName: singleTypeImport.qualifiedName, arguments: arguments, outer: nil)
         }
@@ -101,28 +113,23 @@ public enum JavaTypeResolver {
             return .classType(qualifiedName: samePackageCandidate, arguments: arguments, outer: nil)
         }
 
+        // On-demand imports resolve only when exactly one of them provides the name (JLS 6.5.2:
+        // two providers make the reference ambiguous, a compile error). Collect every match
+        // instead of returning the first: callers must never silently resolve to the wrong one.
+        var onDemandMatches: [String] = []
         for onDemandImport in context.imports where !onDemandImport.isStatic && onDemandImport.isOnDemand {
             let candidate = "\(onDemandImport.qualifiedName).\(simpleName)"
-            if await index.classStub(qualifiedName: candidate) != nil {
-                return .classType(qualifiedName: candidate, arguments: arguments, outer: nil)
+            if await index.classStub(qualifiedName: candidate) != nil, !onDemandMatches.contains(candidate) {
+                onDemandMatches.append(candidate)
             }
+        }
+        if onDemandMatches.count == 1, let match = onDemandMatches.first {
+            return .classType(qualifiedName: match, arguments: arguments, outer: nil)
         }
 
         let javaLangCandidate = "java.lang.\(simpleName)"
-        if await index.classStub(qualifiedName: javaLangCandidate) != nil {
+        if onDemandMatches.isEmpty, await index.classStub(qualifiedName: javaLangCandidate) != nil {
             return .classType(qualifiedName: javaLangCandidate, arguments: arguments, outer: nil)
-        }
-
-        // Nested types inherited from an enclosing type's supertypes. JLS 6.4.1 puts them before
-        // imports; they are checked last here so the common case (an imported or `java.lang` name)
-        // never pays for the supertype walk. Only an import that collides with an inherited nested
-        // type's simple name resolves differently.
-        if let first = simpleName.first, first.isUppercase, !isWalkingSupertypes {
-            for enclosingQualifiedName in context.enclosingTypeQualifiedNames {
-                if let inherited = await nestedType(named: simpleName, in: enclosingQualifiedName, index: index) {
-                    return .classType(qualifiedName: inherited, arguments: arguments, outer: nil)
-                }
-            }
         }
 
         return .unresolved(simpleName: simpleName, arguments: arguments)

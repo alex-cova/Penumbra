@@ -62,6 +62,8 @@ enum JavaDiagnosticsMerger {
         switch code {
         case "unresolved-member", "unresolved-type", "unresolved-import":
             return "compiler.err.cant.resolve"
+        case "ambiguous-import":
+            return "compiler.err.ref.ambiguous"
         case "unreachable-code":
             return "compiler.err.unreachable.stmt"
         default:

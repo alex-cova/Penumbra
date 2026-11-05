@@ -21,9 +21,9 @@ public struct JavacInvocation: Sendable {
 }
 
 /// Builds `javac` command lines that check one file against a project's classpath, without
-/// producing usable output and without running annotation processors -- except Lombok, which the
-/// project's own classpath ships and which would otherwise turn every generated getter into a
-/// false error.
+/// producing usable output. The annotation processors the project model resolved (Lombok,
+/// MapStruct, Dagger, …) run on `-processorpath`, so their generated members resolve instead of
+/// erroring; with none resolved, `-proc:none` keeps them off.
 /// The project's classpath truth for one file, shared by the cold CLI `javac` invocation and
 /// the warm analysis-server module: same jars, same source path, same language level.
 public struct JavacResolvedSettings: Sendable, Equatable {
@@ -84,17 +84,13 @@ public enum JavacInvocationBuilder {
     }
 
     /// The analysis-server module for a file: the resolved jars and dirs, `--release` capped at
-    /// the JDK like the CLI path, and Lombok as the only processor path (else `-proc:none`).
+    /// the JDK like the CLI path, and every processor the project model resolved on the
+    /// processor path (MapStruct/Dagger included, not just Lombok).
     /// `nil` under the same conditions as ``build(file:text:kind:jdk:workDirectory:)``.
     public static func serverModule(file: URL, text: String, kind: JavacProjectKind, jdk: JDKInstallation) -> JavaAnalysisServerModule? {
         guard let settings = resolve(file: file, text: text, kind: kind) else { return nil }
         let classpath = unique(settings.classpath)
-        let processorPath: [URL]
-        if case .gradle = kind, let lombok = settings.processorJars.first(where: isLombok) ?? classpath.first(where: isLombok) {
-            processorPath = [lombok]
-        } else {
-            processorPath = []
-        }
+        let processorPath = resolvedProcessorJars(settings: settings, classpath: classpath)
         return JavaAnalysisServerModule(
             moduleId: settings.moduleId, classpath: classpath, sourcepath: unique(settings.sourcepath),
             release: release(languageLevel: settings.languageLevel, jdkFeatureVersion: jdk.featureVersion),
@@ -123,7 +119,6 @@ public enum JavacInvocationBuilder {
         let languageLevel = settings.languageLevel
         let classpath = settings.classpath
         let sourcepath = settings.sourcepath
-        let processorJars = settings.processorJars
 
         var arguments = [
             // Compiler messages are localized; the parser reads the English ones.
@@ -147,11 +142,14 @@ public enum JavacInvocationBuilder {
         if !sourceDirs.isEmpty {
             arguments += ["-sourcepath", sourceDirs.map(\.path).joined(separator: ":")]
         }
-        // Lombok from the annotationProcessor configuration first, else the compile classpath.
-        if case .gradle = kind, let lombok = processorJars.first(where: isLombok) ?? classpathJars.first(where: isLombok) {
-            arguments += ["-processorpath", lombok.path]
-        } else {
+        // Every processor the project model resolved (annotationProcessor configuration),
+        // Lombok included; plus Lombok from the compile classpath when the model lists no
+        // Lombok at all (its old standalone behavior). Anything else means `-proc:none`.
+        let processors = resolvedProcessorJars(settings: settings, classpath: classpathJars)
+        if processors.isEmpty {
             arguments.append("-proc:none")
+        } else {
+            arguments += ["-processorpath", processors.map(\.path).joined(separator: ":")]
         }
         arguments.append(bufferFile.path)
 
@@ -181,6 +179,17 @@ public enum JavacInvocationBuilder {
 
     static func isLombok(_ jar: URL) -> Bool {
         jar.pathExtension.lowercased() == "jar" && jar.lastPathComponent.lowercased().hasPrefix("lombok")
+    }
+
+    /// Every processor jar for a compile: the model's annotation-processor jars first, plus
+    /// Lombok from the compile classpath when the model did not list any Lombok at all.
+    /// Order-preserving and deduplicated; empty when there is nothing to run.
+    static func resolvedProcessorJars(settings: JavacResolvedSettings, classpath: [URL]) -> [URL] {
+        var processors = unique(settings.processorJars)
+        if !processors.contains(where: isLombok), let lombok = classpath.first(where: isLombok) {
+            processors.append(lombok)
+        }
+        return processors
     }
 
     private static let packagePattern = try! NSRegularExpression(pattern: #"^\s*package\s+([\w.]+)\s*;"#, options: [.anchorsMatchLines])
