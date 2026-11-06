@@ -128,6 +128,7 @@ private extension FindPanelController {
             scheduler.cancel()
             session.clearHighlights()
             panelView.matchLabelText = ""
+            panelView.hasMatches = false
             emphasisManager?.removeEmphases(for: EmphasisGroup.find)
             return
         }
@@ -157,8 +158,10 @@ private extension FindPanelController {
     private func updateMatchLabel() {
         guard session.matchCount > 0, let currentIndex = session.currentIndex else {
             panelView.matchLabelText = session.query.isEmpty ? "" : "0/0"
+            panelView.hasMatches = false
             return
         }
+        panelView.hasMatches = true
         panelView.matchLabelText = "\(currentIndex + 1)/\(session.matchCount)\(session.isComplete ? "" : "+")"
     }
 

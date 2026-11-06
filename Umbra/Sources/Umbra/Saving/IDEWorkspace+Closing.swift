@@ -5,8 +5,10 @@ import Penumbra
 enum IDEClosePrompt: Equatable {
     /// A buffer with no file yet.
     case untitled
-    /// The buffer has a file, and writing it failed or would overwrite a newer version.
-    case couldNotSave(String)
+    /// Saving would overwrite a newer version on disk.
+    case conflict(String)
+    /// Writing the file failed.
+    case failed(String)
 }
 
 enum IDEClosePromptChoice: Equatable {
@@ -95,9 +97,9 @@ extension IDEWorkspace {
             case .skippedUntitled:
                 prompt = .untitled
             case .conflict:
-                prompt = .couldNotSave("The file changed on disk, and saving would replace the newer version.")
+                prompt = .conflict("The file changed on disk, and saving would replace the newer version.")
             case .failed(let message):
-                prompt = .couldNotSave(message)
+                prompt = .failed(message)
             }
             switch closePromptResolver(document, prompt) {
             case .save:
@@ -123,12 +125,26 @@ extension IDEWorkspace {
             case 1: return .discard
             default: return .cancel
             }
-        case .couldNotSave(let reason):
-            var alert = IDEAlert.confirm(
+        case .conflict(let reason):
+            var alert = IDEAlert.choice(
+                "Save changes to “\(document.displayName)”?",
+                detail: "\(reason)\nOverwrite keeps your edits; Don't Save closes and loses them.",
+                buttons: [.init(title: "Overwrite"), .init(title: "Don't Save", isDestructive: true), .init(title: "Cancel")])
+            switch alert.runModal() {
+            case 0: return .save
+            case 1: return .discard
+            default: return .cancel
+            }
+        case .failed(let reason):
+            var alert = IDEAlert.choice(
                 "“\(document.displayName)” could not be saved.",
-                detail: "\(reason)\nClosing the tab loses its unsaved changes.",
-                confirm: "Close Anyway", isDestructive: true)
-            return alert.confirms() ? .discard : .cancel
+                detail: "\(reason)\nTry saving again, or close and lose the unsaved changes.",
+                buttons: [.init(title: "Try Again"), .init(title: "Close Anyway", isDestructive: true), .init(title: "Cancel")])
+            switch alert.runModal() {
+            case 0: return .save
+            case 1: return .discard
+            default: return .cancel
+            }
         }
     }
 

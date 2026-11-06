@@ -7,6 +7,11 @@ struct IDEEmptyState: View {
     var title: String?
     var message: String?
     var isLoading = false
+    /// Optional primary action (e.g. "Open Folder…", "Clear Search"); nil keeps the plain state.
+    var actionTitle: String?
+    var action: (() -> Void)?
+    /// Shown as a Cancel button beside the spinner while loading.
+    var onCancel: (() -> Void)?
 
     var body: some View {
         VStack(spacing: IDEAppearance.Spacing.sm) {
@@ -29,9 +34,16 @@ struct IDEEmptyState: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .multilineTextAlignment(.center)
             }
+            if isLoading, let onCancel {
+                Button("Cancel", action: onCancel)
+                    .controlSize(.small)
+            } else if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .controlSize(.small)
+            }
         }
         .padding(IDEAppearance.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: action == nil && onCancel == nil ? .combine : .contain)
     }
 }

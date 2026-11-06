@@ -3156,16 +3156,29 @@ public final class EditorIntelligenceController {
         }
 
         if event.keyCode == 0x35 {
-            hideHover()
-            hideCodeActions()
-            hideWorkspaceSearch()
-            hideParameterHints()
+            // Layered Escape: one press dismisses only the topmost layer.
             if isCompletionVisible {
                 dismissCompletion()
                 return true
             }
             if inlineController.isVisible {
                 inlineController.dismiss(recordSuppression: true)
+                return true
+            }
+            if !codeActionView.isHidden {
+                hideCodeActions()
+                return true
+            }
+            if !parameterHintsView.isHidden {
+                hideParameterHints()
+                return true
+            }
+            if !workspaceSearchPanelView.isHidden {
+                hideWorkspaceSearch()
+                return true
+            }
+            if !hoverWindowView.isHidden {
+                hideHover()
                 return true
             }
         }

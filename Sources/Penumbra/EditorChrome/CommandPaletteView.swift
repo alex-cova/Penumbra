@@ -818,9 +818,10 @@ public final class CommandPaletteView: NSView {
         }
     }
 
-    /// Tab / ⇧Tab. Returns `false` (leaving the key to the field) when there are no tabs.
+    /// Tab / ⇧Tab. Cycles tabs when there are several; otherwise swallows the key so focus
+    /// stays in the query field instead of ejecting into the modal overlay's responder chain.
     private func cycleTab(by delta: Int) -> Bool {
-        guard tabs.count > 1, let selectedTab, let current = tabs.firstIndex(of: selectedTab) else { return false }
+        guard tabs.count > 1, let selectedTab, let current = tabs.firstIndex(of: selectedTab) else { return true }
         let next = (current + delta + tabs.count) % tabs.count
         onSelectTab?(tabs[next])
         return true

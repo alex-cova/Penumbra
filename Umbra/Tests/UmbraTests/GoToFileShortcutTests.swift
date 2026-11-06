@@ -33,15 +33,20 @@ final class GoToFileShortcutTests: XCTestCase {
         XCTAssertEqual(map.action(for: stroke), .quickOpenFile)
     }
 
-    func testDoubleShiftLeavesTheKeymapAlone() {
+    func testDoubleShiftRemovesThePresetsQuickOpenBinding() {
         for preset in KeymapPreset.allCases {
             var map = preset.keymap
-            let before = map
             GoToFileShortcut.doubleShift.apply(to: &map)
-            XCTAssertEqual(map.bindings, before.bindings, "double-tap changes nothing in \(preset.title)")
+            XCTAssertNil(map.stroke(for: .quickOpenFile), "double-tap Shift must be the only Quick Open trigger in \(preset.title)")
         }
         XCTAssertTrue(GoToFileShortcut.doubleShift.doubleShiftEnabled)
         XCTAssertFalse(GoToFileShortcut.commandP.doubleShiftEnabled)
+    }
+
+    func testDoubleShiftRemovesTheMenuShortcut() {
+        for preset in KeymapPreset.allCases {
+            XCTAssertNil(IDEMenuShortcuts.shortcut(for: .goToFile, in: preset, goToFile: .doubleShift))
+        }
     }
 
     func testMenuShowsTheChosenKey() {

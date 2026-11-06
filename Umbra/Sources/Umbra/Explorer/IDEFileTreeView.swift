@@ -42,6 +42,10 @@ struct IDEFileTreeView: View {
     var showsProjectLibraries = true
     var onCloseArchive: ((IDEExternalLibraryItem) -> Void)?
     var onOpenArchiveAsHex: ((IDEExternalLibraryItem) -> Void)?
+    /// Clears the name filter (filter-empty state's action); nil hides the action.
+    var onClearFilter: (() -> Void)?
+    /// Opens a project folder (no-folder state's action); nil hides the action.
+    var onOpenFolder: (() -> Void)?
     /// Folders opened so a match stays visible. Collapsing one hides that branch until the query
     /// changes; it does not rewrite the project's own expansion state.
     @Binding var collapsedWhileFiltering: Set<String>
@@ -59,7 +63,13 @@ struct IDEFileTreeView: View {
                     filter: filterNeedle, includesProjectLibraries: showsProjectLibraries
                 ) ?? []
                 if nodes.isEmpty && libraryRows.isEmpty {
-                    IDEFileTreeFilterEmptyState()
+                    IDEEmptyState(
+                        symbol: "magnifyingglass",
+                        title: "No matching files",
+                        message: "No files match “\(filterNeedle)”.",
+                        actionTitle: onClearFilter == nil ? nil : "Clear Search",
+                        action: onClearFilter
+                    )
                 } else {
                     GeometryReader { proxy in
                     ScrollViewReader { scroller in
@@ -125,7 +135,9 @@ struct IDEFileTreeView: View {
                 IDEEmptyState(
                     symbol: "folder.badge.plus",
                     title: project.isRootMissing ? "Folder Not Found" : "No Folder Open",
-                    message: project.isRootMissing ? "The project folder was moved or deleted." : "Open a project folder to browse files.")
+                    message: project.isRootMissing ? "The project folder was moved or deleted." : "Open a project folder to browse files.",
+                    actionTitle: onOpenFolder == nil ? nil : "Open Folder…",
+                    action: onOpenFolder)
             }
         }
         .onChange(of: filterNeedle) { _, _ in
@@ -254,7 +266,11 @@ struct IDEFileTreeView: View {
             return .handled
         case .return:
             guard let current, current.depth > 0 else { return .ignored }
-            actions?.beginRename(current.node.url)
+            if current.node.isDirectory {
+                toggle(current)
+            } else {
+                onOpenFile(current.node.url)
+            }
             return .handled
         case .delete where command:
             guard let current, current.depth > 0 else { return .ignored }
@@ -412,17 +428,6 @@ struct IDEFileTreeView: View {
     }
 
     private static let matchOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
-}
-
-private struct IDEFileTreeFilterEmptyState: View {
-    var body: some View {
-        Text("No matching files")
-            .font(IDEAppearance.Typography.caption)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .padding(.horizontal, IDEAppearance.Spacing.lg)
-            .padding(.top, IDEAppearance.Spacing.sm)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
 }
 
 private struct IDEFileTreeRow: View {
@@ -762,8 +767,8 @@ private struct IDEInlineRenameField: NSViewRepresentable {
         }
 
         func controlTextDidEndEditing(_ notification: Notification) {
-            guard let field = notification.object as? NSTextField else { return }
-            finish(commit: true, text: field.stringValue)
+            // Focus loss cancels, like the rename popovers and Finder: only Return commits.
+            finish(commit: false, text: "")
         }
 
         private func finish(commit: Bool, text: String) {

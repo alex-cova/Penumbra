@@ -1831,9 +1831,13 @@ enum GoToFileShortcut: String, Codable, CaseIterable, Identifiable {
     var doubleShiftEnabled: Bool { keyStroke == nil }
 
     /// Rebinds Go to File to ``keyStroke``, freeing the key from whatever editor action
-    /// held it (Parameter Info in the IntelliJ preset). No-op for ``doubleShift``.
+    /// held it (Parameter Info in the IntelliJ preset). For ``doubleShift``, removes the
+    /// preset's Quick Open binding so double-tap Shift is the only trigger.
     func apply(to map: inout Keymap) {
-        guard let stroke = keyStroke else { return }
+        guard let stroke = keyStroke else {
+            map.unbindAll(.quickOpenFile)
+            return
+        }
         map.unbind(stroke)
         map.bind(stroke, to: .quickOpenFile)
     }

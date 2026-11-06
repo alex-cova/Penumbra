@@ -49,6 +49,43 @@ struct IDEToolWindow: Identifiable {
     }
 }
 
+/// One built-in bottom-panel tool window as the stripe shows it: the single table the stripe
+/// builds from, so a bottom window's title, icon, shortcut and order are defined once here
+/// (the sidebar's tabs likewise come from `IDESidebarTabDescriptor`).
+struct IDEBottomToolWindowDescriptor {
+    let tab: IDEBottomPanelTab
+    let systemImage: String
+    let title: String
+    let shortcut: String?
+    let tint: PaletteIcon.Tint
+    /// Stripe order (`IDEToolWindow.Order`), not the bottom strip's own order.
+    let order: Int
+    let isAvailable: @MainActor (IDEWorkspace) -> Bool
+
+    static let builtIn: [IDEBottomToolWindowDescriptor] = [
+        IDEBottomToolWindowDescriptor(
+            tab: .sourceControl, systemImage: "clock.arrow.circlepath", title: "History",
+            shortcut: nil, tint: .green, order: IDEToolWindow.Order.history,
+            isAvailable: { $0.showsSourceControlTab }
+        ),
+        IDEBottomToolWindowDescriptor(
+            tab: .usages, systemImage: "text.magnifyingglass", title: "Usages",
+            shortcut: nil, tint: .secondary, order: IDEToolWindow.Order.usages,
+            isAvailable: { $0.showsUsagesTab }
+        ),
+        IDEBottomToolWindowDescriptor(
+            tab: .problems, systemImage: "exclamationmark.triangle", title: "Problems",
+            shortcut: "⌘⇧M", tint: .orange, order: IDEToolWindow.Order.problems,
+            isAvailable: { $0.showsProblemsTab }
+        ),
+        IDEBottomToolWindowDescriptor(
+            tab: .terminal, systemImage: "terminal", title: "Terminal",
+            shortcut: "⌃`", tint: .secondary, order: IDEToolWindow.Order.terminal,
+            isAvailable: { _ in true }
+        ),
+    ]
+}
+
 extension IDEWorkspace {
     /// Whether the leading stripe shows at all: it stays hidden until a folder or a file is open.
     var showsLeadingToolWindows: Bool { hasOpenProject || hasOpenDocuments }
@@ -66,27 +103,12 @@ extension IDEWorkspace {
                 tint: .secondary, placement: .leadingTop, isOpen: findInFiles.isVisible, toggle: toggleFindInFiles,
                 order: IDEToolWindow.Order.findInFiles
             ))
-            if showsSourceControlTab {
+            for descriptor in IDEBottomToolWindowDescriptor.builtIn where descriptor.isAvailable(self) {
                 windows.append(bottomToolWindow(
-                    .sourceControl, "clock.arrow.circlepath", "History", nil, .green, .leadingBottom,
-                    order: IDEToolWindow.Order.history
+                    descriptor.tab, descriptor.systemImage, descriptor.title, descriptor.shortcut,
+                    descriptor.tint, .leadingBottom, order: descriptor.order
                 ))
             }
-            if showsUsagesTab {
-                windows.append(bottomToolWindow(
-                    .usages, "text.magnifyingglass", "Usages", nil, .secondary, .leadingBottom,
-                    order: IDEToolWindow.Order.usages
-                ))
-            }
-            if showsProblemsTab {
-                windows.append(bottomToolWindow(
-                    .problems, "exclamationmark.triangle", "Problems", "⌘⇧M", .orange, .leadingBottom,
-                    order: IDEToolWindow.Order.problems
-                ))
-            }
-            windows.append(bottomToolWindow(
-                .terminal, "terminal", "Terminal", "⌃`", .secondary, .leadingBottom, order: IDEToolWindow.Order.terminal
-            ))
         }
         windows.append(contentsOf: languageModuleToolWindows())
         return windows.enumerated()

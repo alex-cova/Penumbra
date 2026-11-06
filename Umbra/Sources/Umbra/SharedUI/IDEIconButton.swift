@@ -49,6 +49,7 @@ struct IDEIconButton: View {
     @Environment(\.ideIconButtonSize) private var size
     @Environment(\.isEnabled) private var isEnvironmentEnabled
     @State private var isHovering = false
+    @FocusState private var isFocused: Bool
 
     private var isEnabled: Bool { isEnvironmentEnabled && !isDisabled }
 
@@ -63,13 +64,20 @@ struct IDEIconButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focused($isFocused)
+        .overlay {
+            if isFocused {
+                RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
+                    .stroke(IDEAppearance.ColorToken.accent, lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
+        }
         .disabled(isDisabled)
         .opacity(isEnabled ? 1 : IDEAppearance.Opacity.disabled)
         .onHover { isHovering = $0 }
         .help(help)
         .accessibilityLabel(help)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
-        .focusable(false)
     }
 
     private var background: Color {

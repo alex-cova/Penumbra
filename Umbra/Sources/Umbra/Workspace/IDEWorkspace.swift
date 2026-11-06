@@ -441,6 +441,13 @@ public final class IDEWorkspace {
     var statusLanguage = ""
     /// The active text document's file encoding, shown (and changed) from the status bar.
     var statusEncoding = TextFileEncoding.utf8
+    /// The active editor's line ending, shown (and changed) from the status bar.
+    var statusLineEnding = LineEnding.lf
+
+    func setStatusLineEnding(_ lineEnding: LineEnding) {
+        statusLineEnding = lineEnding
+        host(for: workbench.activePaneID).textView.lineEndings = lineEnding
+    }
     /// What Run, Test and HTTP Send apply to, as of the last availability refresh (F-11).
     /// Views and providers read the store; `IDEJavaRunHost` is satisfied by the forwards below.
     let runEligibility = IDERunEligibility()
@@ -1735,7 +1742,10 @@ public final class IDEWorkspace {
 
     /// Lists the tool windows (Terminal, Problems, …) and opens the one chosen.
     public func showToolWindows() {
-        _ = sharedPalette(for: host(for: workbench.activePaneID)).presentToolWindows()
+        guard sharedPalette(for: host(for: workbench.activePaneID)).presentToolWindows() else {
+            notifications.post("No tool windows available", detail: "Open a file or folder first.", category: .general, severity: .info)
+            return
+        }
     }
 
     /// The tool windows that exist right now, for Go to Tool Window. Choosing one opens it (never
@@ -1799,7 +1809,11 @@ public final class IDEWorkspace {
 
     /// Lists the declarations of the focused file (⌘F12 in the IntelliJ keymap).
     public func showFileStructure() {
-        _ = sharedPalette(for: host(for: workbench.activePaneID)).presentFileSymbols()
+        guard sharedPalette(for: host(for: workbench.activePaneID)).presentFileSymbols() else {
+            // Fall back to the sidebar Structure tab rather than silently doing nothing.
+            showSidebarTab(.structure)
+            return
+        }
     }
 
     public func showGoToSymbol() {
@@ -3786,6 +3800,16 @@ public final class IDEWorkspace {
             openArchive(url)
             return
         }
+        // Already open and loaded: focus the live buffer (keeping unsaved edits) instead of
+        // reloading from disk. A restored session placeholder (not file-backed yet) falls
+        // through and is materialised by the load below. Reload paths (Reopen with Encoding,
+        // Reload from Disk, external changes) use their own entry points and are unaffected.
+        if !asHex, !inRightSplit,
+           let (_, openDocument) = paneAndDocument(matching: url.standardizedFileURL),
+           openDocument.isFileBacked,
+           focusOpenDocument(url.standardizedFileURL, selecting: range) {
+            return
+        }
         do {
             let document = try await loadDocument(from: url, openAsHex: asHex)
             // The window may have closed while the file was read: opening it now would build
@@ -5479,6 +5503,7 @@ public final class IDEWorkspace {
         }
         statusLanguage = workbench.activePane.selectedDocument?.languageIdentifier ?? ""
         statusEncoding = workbench.activePane.selectedDocument?.encoding ?? .utf8
+        statusLineEnding = textView.lineEndings
         statusSelectionLength = range.length
         refreshJavaRunAvailability(from: textView)
         refreshHTTPSendAvailability(from: textView)

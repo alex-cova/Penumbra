@@ -59,6 +59,8 @@ final class IDEHexSession {
     var matchIndex: Int?
     var matchCapped = false
     var findRunning = false
+    /// The query text could not be parsed as a pattern (bad hex, bad integer).
+    var findPatternInvalid = false
     var diskDifferences: [HexDiskDifference]?
     var showsDiskCompare = false
     var externalChange = false
@@ -521,6 +523,7 @@ final class IDEHexSession {
             pattern = HexPattern.integer(text, width: findIntegerWidth, littleEndian: littleEndianFirst)
         }
         guard let pattern, !pattern.isEmpty else {
+            findPatternInvalid = pattern == nil && !text.trimmingCharacters(in: .whitespaces).isEmpty
             matches = []
             matchIndex = nil
             matchCapped = false
@@ -528,10 +531,14 @@ final class IDEHexSession {
             onChange?()
             return
         }
+        findPatternInvalid = false
         let snapshot = HexDocumentByteSource(document: document.snapshot())
         let origin = caret
         findRunning = true
         findTask = Task { [weak self] in
+            // Debounce: a keystroke cancels the pending scan before it starts.
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
             let found: (matches: [Range<Int64>], capped: Bool)
             do {
                 found = try await runDetached {
@@ -616,6 +623,8 @@ final class IDEHexSession {
 
     var matchStatus: String {
         if findRunning { return "Searching…" }
+        if findPatternInvalid { return "Invalid pattern" }
+        if findText.trimmingCharacters(in: .whitespaces).isEmpty { return "" }
         guard let index = matchIndex, !matches.isEmpty else {
             return matches.isEmpty ? "No matches" : ""
         }

@@ -8,6 +8,8 @@ import SwiftUI
 struct IDEProblemsPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var collapsedFiles: Set<URL> = []
+    @State private var selectedRowID: String?
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -75,16 +77,29 @@ struct IDEProblemsPanel: View {
         .buttonStyle(.plain)
     }
 
+    /// Flat keyboard order: build messages first, then rows of expanded files.
+    private func flatRowIDs(files: [ProblemFile], messages: [GradleProblem]) -> [String] {
+        messages.map { "message:\($0.id)" }
+            + files.flatMap { file in collapsedFiles.contains(file.url) ? [] : file.rows.map(\.id) }
+    }
+
     private var problemList: some View {
         let (files, messages) = workspace.visibleProblems()
+        let flatIDs = flatRowIDs(files: files, messages: messages)
         return Group {
             if files.isEmpty && messages.isEmpty {
                 emptyState
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(messages) { message in
-                            IDEBuildMessageRowView(message: message) { workspace.openBuildMessage(message) }
+                            IDEBuildMessageRowView(message: message, isSelected: selectedRowID == "message:\(message.id)") {
+                                selectedRowID = "message:\(message.id)"
+                                isListFocused = true
+                                workspace.openBuildMessage(message)
+                            }
+                            .id("message:\(message.id)")
                         }
                         ForEach(files) { file in
                             fileHeader(file)
@@ -92,7 +107,12 @@ struct IDEProblemsPanel: View {
                                 ForEach(file.rows) { row in
                                     IDEProblemRowView(
                                         row: row,
-                                        onOpen: { workspace.openProblem(row) },
+                                        isSelected: selectedRowID == row.id,
+                                        onOpen: {
+                                            selectedRowID = row.id
+                                            isListFocused = true
+                                            workspace.openProblem(row)
+                                        },
                                         onFix: { workspace.fixProblemWithAgent(row) },
                                         onQuickFixes: [IDEProblemsStore.inspectionSource, SwiftInspection.diagnosticSource].contains(row.diagnostic.source) ? { showQuickFixes(for: row) } : nil,
                                         rule: inspectionRule(for: row),
@@ -104,15 +124,54 @@ struct IDEProblemsPanel: View {
                                         },
                                         onConfigureRule: { workspace.showInspectionSettings(code: $0.code, language: $0.language) }
                                     )
+                                    .id(row.id)
                                 }
                             }
                         }
                     }
                     .padding(.vertical, IDEAppearance.Spacing.xs)
                 }
+                .focusable()
+                .focused($isListFocused)
+                .onKeyPress(phases: [.down, .repeat]) { press in
+                    handleListKey(press, flatIDs: flatIDs, files: files, messages: messages, proxy: proxy)
+                }
+                .onChange(of: selectedRowID) { _, id in
+                    if let id { proxy.scrollTo(id) }
+                }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func handleListKey(
+        _ press: KeyPress, flatIDs: [String], files: [ProblemFile], messages: [GradleProblem], proxy: ScrollViewProxy
+    ) -> KeyPress.Result {
+        switch press.key {
+        case .upArrow, .downArrow:
+            guard !flatIDs.isEmpty else { return .handled }
+            let current = selectedRowID.flatMap { flatIDs.firstIndex(of: $0) }
+            let next = press.key == .downArrow
+                ? min((current ?? -1) + 1, flatIDs.count - 1)
+                : max((current ?? flatIDs.count) - 1, 0)
+            selectedRowID = flatIDs[next]
+            return .handled
+        case .return:
+            guard let selectedRowID else { return .handled }
+            if selectedRowID.hasPrefix("message:") {
+                let raw = String(selectedRowID.dropFirst("message:".count))
+                if let message = messages.first(where: { "\($0.id)" == raw }) { workspace.openBuildMessage(message) }
+            } else if let row = files.flatMap(\.rows).first(where: { $0.id == selectedRowID }) {
+                workspace.openProblem(row)
+            }
+            return .handled
+        case .escape:
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            return .ignored
+        }
     }
 
     /// The inspection behind a row, nil for compiler, editor and tool diagnostics.
@@ -161,6 +220,7 @@ struct IDEProblemsPanel: View {
 /// A project-level Gradle message (failed task, dependency error, test summary).
 private struct IDEBuildMessageRowView: View {
     let message: GradleProblem
+    var isSelected = false
     let onOpen: () -> Void
 
     @State private var isHovering = false
@@ -200,7 +260,7 @@ private struct IDEBuildMessageRowView: View {
             }
             .padding(.horizontal, IDEAppearance.Spacing.md)
             .padding(.vertical, 3)
-            .background(isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
+            .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -211,6 +271,7 @@ private struct IDEBuildMessageRowView: View {
 
 private struct IDEProblemRowView: View {
     let row: ProblemRow
+    var isSelected = false
     let onOpen: () -> Void
     let onFix: () -> Void
     var onQuickFixes: (() -> Void)?
@@ -248,7 +309,7 @@ private struct IDEProblemRowView: View {
             .padding(.leading, IDEAppearance.Spacing.xl)
             .padding(.trailing, IDEAppearance.Spacing.md)
             .padding(.vertical, 3)
-            .background(isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
+            .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

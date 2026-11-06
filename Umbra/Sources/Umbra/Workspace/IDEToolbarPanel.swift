@@ -217,7 +217,7 @@ private struct IDETitlebarGlobalActions: View {
             .disabled(!workspace.hasOpenProject)
 
             IDEIconButton(
-                systemImage: "bubbles.and.sparkles",
+                systemImage: "sparkles",
                 help: "AI Mode",
                 action: { workspace.showAIMode() }
             )
@@ -329,7 +329,7 @@ private struct IDEAIToolbarRow: View {
                     action: workspace.notifications.togglePanel
                 )
                 IDEIconButton(
-                    systemImage: "bubbles.and.sparkles",
+                    systemImage: "curlybraces",
                     help: "Back to the Editor",
                     isActive: true,
                     action: workspace.showEditorMode

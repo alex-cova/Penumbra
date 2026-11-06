@@ -56,7 +56,7 @@ struct IDENotificationPanel: View {
         }
         .frame(width: 340)
         .idePanel(fill: IDEAppearance.ColorToken.card)
-        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+        .shadow(color: IDEAppearance.Shadow.cardColor, radius: 12, y: 4)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Notifications")
     }

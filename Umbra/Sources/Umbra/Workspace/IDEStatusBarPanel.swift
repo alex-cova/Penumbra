@@ -26,9 +26,7 @@ struct IDEStatusBarPanel: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
             encodingPicker
-            Text(trailingSummary)
-                .font(IDEAppearance.Typography.monoSmall)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            lineEndingPicker
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .frame(height: IDEAppearance.Spacing.statusBarHeight)
@@ -156,12 +154,37 @@ struct IDEStatusBarPanel: View {
         }
     }
 
-    private var trailingSummary: String {
-        var parts = ["LF"]
-        if workspace.isTerminalVisible {
-            parts.append("Terminal")
+    /// The active editor's actual line ending; the menu changes the ending used for new
+    /// line breaks (existing text is not rewritten).
+    @ViewBuilder
+    private var lineEndingPicker: some View {
+        let current = workspace.statusLineEnding
+        Menu {
+            ForEach(LineEnding.allCases, id: \.self) { ending in
+                Toggle(ending.statusTitle, isOn: Binding(
+                    get: { ending == current },
+                    set: { _ in workspace.setStatusLineEnding(ending) }
+                ))
+            }
+        } label: {
+            Text(current.statusTitle)
+                .font(IDEAppearance.Typography.monoSmall)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
-        return parts.joined(separator: "  ·  ")
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Line ending for new line breaks")
+        .accessibilityLabel("Line ending \(current.statusTitle)")
+    }
+}
+
+private extension LineEnding {
+    var statusTitle: String {
+        switch self {
+        case .lf: "LF"
+        case .crlf: "CRLF"
+        case .cr: "CR"
+        }
     }
 }
 
@@ -286,7 +309,6 @@ private struct IDEStatusBarBreadcrumbSegment: View {
         .accessibilityLabel(item.title)
         .accessibilityHint(help)
         .accessibilityAddTraits(.isButton)
-        .focusable(false)
     }
 
     private func openMenu() {

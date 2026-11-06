@@ -116,6 +116,8 @@ struct IDESidebarPanel: View {
                 showsProjectLibraries: preferences.explorerShowExternalLibraries,
                 onCloseArchive: { workspace.closeArchive($0) },
                 onOpenArchiveAsHex: { workspace.openArchiveAsHex($0) },
+                onClearFilter: { searchQuery = "" },
+                onOpenFolder: { workspace.openFolder() },
                 collapsedWhileFiltering: $collapsedWhileFiltering
             )
         }

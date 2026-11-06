@@ -14,6 +14,7 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
     @ViewBuilder let trailing: () -> Trailing
 
     @State private var isHovering = false
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         Button(action: onSelect) {
@@ -43,11 +44,18 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focused($isFocused)
+        .overlay {
+            if isFocused {
+                RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
+                    .stroke(IDEAppearance.ColorToken.accent, lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
+        }
         .onHover { isHovering = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel ?? title)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        .focusable(false)
     }
 
     private var backgroundColor: Color {

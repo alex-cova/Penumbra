@@ -24,6 +24,8 @@ final class IDECSVTableView: NSView {
     /// What the search field holds; rows with no cell containing it are hidden.
     private var query = ""
     private var searchTask: Task<Void, Never>?
+    /// Generation of the latest filter/sort request; stale detached results are dropped.
+    private var sortGeneration = 0
 
     private static let rowNumberID = NSUserInterfaceItemIdentifier("csv.row")
 
@@ -181,14 +183,6 @@ final class IDECSVTableView: NSView {
 
     // MARK: - Sorting
 
-    /// Rows that contain the search text in any cell (all rows when it is empty), in file order.
-    private func matchingRows() -> [Int] {
-        guard !query.isEmpty else { return Array(table.rows.indices) }
-        return table.rows.indices.filter { row in
-            table.rows[row].contains { $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
-        }
-    }
-
     private func updateFooter() {
         var parts: [String] = []
         if !query.isEmpty {
@@ -201,28 +195,51 @@ final class IDECSVTableView: NSView {
         footerHeight?.constant = parts.isEmpty ? 0 : 22
     }
 
-    /// Filters by the search text, then sorts by the chosen column.
+    /// Filters by the search text, then sorts by the chosen column. The scan and sort run in a
+    /// detached task (a 200k-row filter is not main-actor work); only the resulting order is
+    /// published, and a superseded generation is dropped.
     private func applySort() {
-        var indexes = matchingRows()
-        guard let sortKey, let column = columnIndex(of: sortKey) else {
-            order = indexes
-            return
-        }
-        let numeric = isNumeric(column)
-        let ascending = sortAscending
+        sortGeneration += 1
+        let generation = sortGeneration
         let rows = table.rows
-        if numeric {
-            let values = rows.map { Double($0[column].trimmingCharacters(in: .whitespaces)) ?? -.infinity }
-            indexes.sort { lhs, rhs in
-                values[lhs] == values[rhs] ? lhs < rhs : (values[lhs] < values[rhs]) == ascending
+        let query = query
+        let column = sortKey.flatMap { columnIndex(of: $0) }
+        let ascending = sortAscending
+        Task.detached(priority: .userInitiated) {
+            var indexes = rows.indices.filter { row in
+                query.isEmpty || rows[row].contains { $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
             }
-        } else {
-            indexes.sort { lhs, rhs in
-                let result = rows[lhs][column].localizedStandardCompare(rows[rhs][column])
-                return result == .orderedSame ? lhs < rhs : (result == .orderedAscending) == ascending
+            var numeric: Bool?
+            if let column {
+                var sawValue = false
+                var isNum = true
+                for row in rows {
+                    let value = row[column].trimmingCharacters(in: .whitespaces)
+                    if value.isEmpty { continue }
+                    sawValue = true
+                    if Double(value) == nil { isNum = false; break }
+                }
+                numeric = sawValue && isNum
+                if numeric == true {
+                    let values = rows.map { Double($0[column].trimmingCharacters(in: .whitespaces)) ?? -.infinity }
+                    indexes.sort { lhs, rhs in
+                        values[lhs] == values[rhs] ? lhs < rhs : (values[lhs] < values[rhs]) == ascending
+                    }
+                } else {
+                    indexes.sort { lhs, rhs in
+                        let result = rows[lhs][column].localizedStandardCompare(rows[rhs][column])
+                        return result == .orderedSame ? lhs < rhs : (result == .orderedAscending) == ascending
+                    }
+                }
+            }
+            await MainActor.run { [weak self] in
+                guard let self, generation == sortGeneration else { return }
+                if let column, let numeric { numericColumns[column] = numeric }
+                order = indexes
+                tableView.reloadData()
+                updateFooter()
             }
         }
-        order = indexes
     }
 
     /// True when every non-empty value in the column reads as a number.

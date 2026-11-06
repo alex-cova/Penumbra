@@ -58,6 +58,9 @@ enum IDEMenuShortcuts {
         in preset: KeymapPreset,
         goToFile: GoToFileShortcut? = nil
     ) -> KeyboardShortcut? {
+        if command == .goToFile, goToFile == .doubleShift {
+            return nil
+        }
         if command == .goToFile, let custom = goToFile?.menuShortcut {
             return custom
         }
@@ -347,7 +350,7 @@ enum IDESecondaryShortcutMonitor {
 }
 
 extension GoToFileShortcut {
-    /// The menu key equivalent, or `nil` for double-tap Shift (the menu keeps the preset default).
+    /// The menu key equivalent, or `nil` for double-tap Shift (which also removes the menu key).
     var menuShortcut: KeyboardShortcut? {
         switch self {
         case .commandP: KeyboardShortcut("p", modifiers: .command)

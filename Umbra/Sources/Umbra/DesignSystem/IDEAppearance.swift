@@ -66,6 +66,11 @@ enum IDEAppearance {
         static let indicator = 1.0
     }
 
+    /// Shared card shadow (toasts, notification panel): one colour/opacity, radius set by caller.
+    enum Shadow {
+        static let cardColor = Color.black.opacity(0.35)
+    }
+
     enum Opacity {
         /// A control that cannot be used right now.
         static let disabled = 0.4
