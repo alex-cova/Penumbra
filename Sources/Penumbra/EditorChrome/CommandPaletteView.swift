@@ -1503,7 +1503,7 @@ private final class PaletteItemCell: NSTableCellView {
         trailingToSourceRoot?.isActive = true
     }
 
-    /// Drops middle path components (`src/test/kotlin/…/conciliator/yuri`) until the location
+    /// Drops middle path components (`src/test/kotlin/…/demo/yuri`) until the location
     /// fits the room left of the module column.
     private func fitLocation() {
         guard !fullLocation.isEmpty else { return }

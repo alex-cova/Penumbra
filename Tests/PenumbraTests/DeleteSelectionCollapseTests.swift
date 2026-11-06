@@ -5,7 +5,7 @@ import XCTest
 /// Deleting a selection leaves a caret, and nothing keeps describing the deleted text.
 @MainActor
 final class DeleteSelectionCollapseTests: XCTestCase {
-    private static let request = "GET https://api.sicarx.com/stock/v1/medications?sku=7501125103049"
+    private static let request = "GET https://api.invokevirtual.com/stock/v1/medications?sku=7501125103049"
 
     private func makeView(text: String, language: TreeSitterLanguage) -> TextView {
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
@@ -47,7 +47,7 @@ final class DeleteSelectionCollapseTests: XCTestCase {
 
     func testDeletingSelectionDropsOccurrenceHighlightsOfTheDeletedText() async throws {
         let language = try XCTUnwrap(TreeSitterLanguage.bundled(forIdentifier: "http"))
-        let text = Self.request + "\n\n###\n" + Self.request + "\n\n###\nGET https://api.sicarx.com/other\n"
+        let text = Self.request + "\n\n###\n" + Self.request + "\n\n###\nGET https://api.invokevirtual.com/other\n"
         let textView = makeView(text: text, language: language)
         textView.highlightsOccurrencesOfSelection = true
         try await settle()
