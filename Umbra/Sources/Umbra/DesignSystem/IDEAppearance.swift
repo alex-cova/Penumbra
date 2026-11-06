@@ -86,6 +86,8 @@ enum IDEAppearance {
         static let titlebarGlyph = 14.0
         /// The digits in a count badge.
         static let badgeText = 9.0
+        /// The × of a closable tab.
+        static let closeGlyph = 9.0
     }
 
     enum Typography {
@@ -125,6 +127,8 @@ enum IDEAppearance {
         static var editor: Color { Color(hex: scheme.editor) }
         static var tabBar: Color { Color(hex: scheme.tabBar) }
         static var tabActive: Color { Color(hex: scheme.tabActive) }
+        /// The selected tab of a pane that does not have focus: the same fill, half as strong.
+        static var tabActiveInactivePane: Color { Color(hex: scheme.tabActive).opacity(0.5) }
         static let tabInactive = Color.clear
         static var tabHover: Color { Color(hex: scheme.tabHover) }
         static var controlHover: Color { Color(hex: scheme.controlHover) }

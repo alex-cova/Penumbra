@@ -16,37 +16,100 @@ struct IDEEditorTabsBar: View {
     /// crosses it — only what's drawn inside this slot changes.
     private let trailingSlotSide: CGFloat = 14
 
+    @State private var barWidth: CGFloat = 0
+    @State private var tabsWidth: CGFloat = 0
+
+    private var selectedTabID: UUID? {
+        tabs.first(where: \.isSelected)?.id
+    }
+
+    /// The strip is wider than the pane. Measured against the whole bar, not the scroll view, so
+    /// showing the overflow menu cannot change the answer.
+    private var isOverflowing: Bool {
+        tabsWidth > barWidth + 1
+    }
+
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(tabs) { tab in
-                    IDEChromeTabItem(
-                        title: tab.title,
-                        isSelected: tab.isSelected,
-                        onSelect: { workspace.selectTab(tab.id, in: paneID) },
-                        leading: {
-                            Image(systemName: tab.symbolName ?? IDEFileIcon.systemName(forFilename: tab.title))
-                                .font(.system(size: 10))
-                                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        },
-                        trailing: {
-                            IDEEditorTabCloseButton(
-                                isDirty: tab.isDirty && workspace.preferences.markModifiedTabs,
-                                side: trailingSlotSide,
-                                onClose: { workspace.requestCloseTab(tab.id, in: paneID) }
+        HStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(tabs) { tab in
+                            IDEChromeTabItem(
+                                title: tab.title,
+                                isSelected: tab.isSelected,
+                                isDimmed: !isActivePane,
+                                onSelect: { workspace.selectTab(tab.id, in: paneID) },
+                                leading: {
+                                    Image(systemName: tab.symbolName ?? IDEFileIcon.systemName(forFilename: tab.title))
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                },
+                                trailing: {
+                                    IDEEditorTabCloseButton(
+                                        isDirty: tab.isDirty && workspace.preferences.markModifiedTabs,
+                                        side: trailingSlotSide,
+                                        onClose: { workspace.requestCloseTab(tab.id, in: paneID) }
+                                    )
+                                }
                             )
+                            .id(tab.id)
+                            .contextMenu { tabMenu(for: tab) }
                         }
-                    )
-                    .contextMenu { tabMenu(for: tab) }
+                    }
+                    .padding(.horizontal, IDEAppearance.Spacing.sm)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabsWidth = $0 }
+                }
+                // A tab chosen from the menu, a keyboard shortcut or a file opened elsewhere must
+                // not stay out of sight.
+                .onChange(of: selectedTabID) { _, id in
+                    guard let id else { return }
+                    IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) { proxy.scrollTo(id) }
+                }
+                .onAppear {
+                    if let id = selectedTabID { proxy.scrollTo(id) }
                 }
             }
-            .padding(.horizontal, IDEAppearance.Spacing.sm)
+
+            if isOverflowing {
+                overflowMenu
+            }
         }
-        .opacity(isActivePane ? 1 : 0.55)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
         .frame(height: IDEAppearance.Spacing.tabHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(IDEAppearance.ColorToken.tabBar)
         .focusable(false)
+    }
+
+    /// Every tab of the pane in one list, for the ones scrolled out of view.
+    private var overflowMenu: some View {
+        Menu {
+            ForEach(tabs) { tab in
+                Button {
+                    workspace.selectTab(tab.id, in: paneID)
+                } label: {
+                    let title = tab.isDirty && workspace.preferences.markModifiedTabs ? "\(tab.title) •" : tab.title
+                    if tab.isSelected {
+                        Label(title, systemImage: "checkmark")
+                    } else {
+                        Text(title)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph - 2, weight: .semibold))
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.trailing, IDEAppearance.Spacing.xs)
+        .help("Show All Tabs")
+        .accessibilityLabel("Show All Tabs")
     }
 
     @ViewBuilder
@@ -93,8 +156,8 @@ struct IDEEditorTabsBar: View {
     }
 }
 
-/// Always shows a close button — the dirty dot only takes over the same slot while it isn't
-/// hovered, and swaps back to the "x" the moment the pointer lands on it.
+/// Always shows a close button. A dirty tab shows its dot in the slot until the pointer is over
+/// it; then the × takes the slot and the dot moves to its corner, so "unsaved" never disappears.
 private struct IDEEditorTabCloseButton: View {
     let isDirty: Bool
     let side: CGFloat
@@ -106,22 +169,32 @@ private struct IDEEditorTabCloseButton: View {
         Button(action: onClose) {
             ZStack {
                 if isDirty && !isHovering {
-                    Circle()
-                        .fill(IDEAppearance.ColorToken.accent)
-                        .frame(width: 6, height: 6)
+                    dot
                 } else {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: IDEAppearance.IconSize.closeGlyph, weight: .bold))
                         .foregroundStyle(isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 }
             }
             .frame(width: side, height: side)
+            .overlay(alignment: .topTrailing) {
+                if isDirty && isHovering {
+                    dot.offset(x: IDEAppearance.Spacing.xxs, y: -IDEAppearance.Spacing.xxs)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+        .help(isDirty ? "Close (unsaved changes)" : "Close")
         .accessibilityLabel(isDirty ? "Close Tab (Edited)" : "Close Tab")
         .accessibilityAddTraits(.isButton)
+    }
+
+    private var dot: some View {
+        Circle()
+            .fill(IDEAppearance.ColorToken.accent)
+            .frame(width: IDEAppearance.Spacing.dirtyDotSize, height: IDEAppearance.Spacing.dirtyDotSize)
     }
 }
 

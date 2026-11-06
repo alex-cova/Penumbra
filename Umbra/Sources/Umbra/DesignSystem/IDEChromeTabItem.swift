@@ -8,6 +8,9 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
     let isSelected: Bool
     /// Not selected, but showing alongside the selected one (a pane of a split terminal).
     var isShown = false
+    /// The strip belongs to a pane without focus: the selected tab's fill and bar soften, while
+    /// the title and icon keep their full contrast.
+    var isDimmed = false
     var accessibilityLabel: String?
     let onSelect: () -> Void
     @ViewBuilder let leading: () -> Leading
@@ -39,6 +42,7 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
                         .fill(IDEAppearance.ColorToken.accent)
                         .frame(height: 2)
                         .padding(.horizontal, 6)
+                        .opacity(isDimmed ? 0.4 : 1)
                 }
             }
             .contentShape(Rectangle())
@@ -59,7 +63,7 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
     }
 
     private var backgroundColor: Color {
-        if isSelected { return IDEAppearance.ColorToken.tabActive }
+        if isSelected { return isDimmed ? IDEAppearance.ColorToken.tabActiveInactivePane : IDEAppearance.ColorToken.tabActive }
         if isShown { return IDEAppearance.ColorToken.tabActive.opacity(0.5) }
         if isHovering { return IDEAppearance.ColorToken.tabHover }
         return IDEAppearance.ColorToken.tabInactive
