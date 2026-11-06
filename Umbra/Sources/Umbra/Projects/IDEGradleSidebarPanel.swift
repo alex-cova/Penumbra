@@ -260,13 +260,13 @@ struct IDEGradleSidebarPanel: View {
         if isFilterPresented {
             dismissFilter()
         } else {
-            withAnimation(.easeOut(duration: 0.16)) { isFilterPresented = true }
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) { isFilterPresented = true }
         }
     }
 
     private func dismissFilter() {
         guard isFilterPresented else { return }
-        withAnimation(.easeOut(duration: 0.16)) {
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) {
             isFilterPresented = false
             filterQuery.removeAll()
         }
@@ -283,13 +283,13 @@ struct IDEGradleSidebarPanel: View {
                case .task(let task) = node.kind {
                 runText = task.path
             }
-            withAnimation(.easeOut(duration: 0.16)) { isRunFieldPresented = true }
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) { isRunFieldPresented = true }
         }
     }
 
     private func dismissRunField() {
         guard isRunFieldPresented else { return }
-        withAnimation(.easeOut(duration: 0.16)) { isRunFieldPresented = false }
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) { isRunFieldPresented = false }
         isRunFocused = false
     }
 

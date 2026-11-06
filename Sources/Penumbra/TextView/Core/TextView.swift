@@ -3141,7 +3141,9 @@ private extension TextView {
         textInputView.textContainerInset = effectiveInset
     }
 
-    private func applyDistractionFreeChromeVisibility(_ isVisible: Bool, duration: TimeInterval) {
+    private func applyDistractionFreeChromeVisibility(_ isVisible: Bool, duration requestedDuration: TimeInterval) {
+        // Reduce Motion turns the fade into a cut; the host hears the same zero duration.
+        let duration = MotionPreference.reduceMotion ? 0 : requestedDuration
         // Focus-driven fades only move host-owned chrome through the delegate below. The editor's
         // own gutter, minimap, find panel, sticky lines and scrollers stay visible unless
         // Distraction Free itself is on.

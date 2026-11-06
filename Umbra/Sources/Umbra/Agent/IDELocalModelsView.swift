@@ -22,7 +22,7 @@ struct IDELocalModelsView: View {
             if let download = store.download {
                 downloadSection(download)
                     .padding(IDEAppearance.Spacing.md)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .ideTransition(.move(edge: .top).combined(with: .opacity))
                 Divider()
             }
             ScrollViewReader { proxy in
@@ -41,12 +41,12 @@ struct IDELocalModelsView: View {
                     guard let id else { return }
                     // After the details pane has been laid out under the row.
                     Task { @MainActor in
-                        withAnimation { proxy.scrollTo(id, anchor: .center) }
+                        IDEAppearance.Motion.animate(.default) { proxy.scrollTo(id, anchor: .center) }
                     }
                 }
             }
         }
-        .animation(.default, value: store.download?.id)
+        .ideAnimation(.default, value: store.download?.id)
         .frame(width: 600, height: 620)
         .background(IDEAppearance.ColorToken.panel)
         .task { store.prepareIfNeeded(); await store.refreshMemory() }

@@ -36,7 +36,7 @@ struct IDEAgentPage: View {
         if reduceMotion {
             agent.settings.opensAsPage = false
         } else {
-            withAnimation(.easeOut(duration: 0.15)) { agent.settings.opensAsPage = false }
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) { agent.settings.opensAsPage = false }
         }
     }
 }

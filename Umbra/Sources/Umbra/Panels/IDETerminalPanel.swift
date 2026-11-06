@@ -489,6 +489,7 @@ struct IDETerminalPanel: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isBottomTabSelected(.problems) ? 1 : 0)
                         .allowsHitTesting(workspace.isBottomTabSelected(.problems))
+                        .accessibilityHidden(!workspace.isBottomTabSelected(.problems))
                 }
 
                 if workspace.showsUsagesTab {
@@ -496,6 +497,7 @@ struct IDETerminalPanel: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isBottomTabSelected(.usages) ? 1 : 0)
                         .allowsHitTesting(workspace.isBottomTabSelected(.usages))
+                        .accessibilityHidden(!workspace.isBottomTabSelected(.usages))
                 }
 
                 if workspace.showsSourceControlTab {
@@ -503,6 +505,7 @@ struct IDETerminalPanel: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isBottomTabSelected(.sourceControl) ? 1 : 0)
                         .allowsHitTesting(workspace.isBottomTabSelected(.sourceControl))
+                        .accessibilityHidden(!workspace.isBottomTabSelected(.sourceControl))
                 }
 
                 // The language modules' tabs (Run, Gradle, HTTP, hierarchies, tests, debugger).
@@ -512,6 +515,7 @@ struct IDETerminalPanel: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(isSelected ? 1 : 0)
                         .allowsHitTesting(isSelected)
+                        .accessibilityHidden(!isSelected)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -585,6 +589,7 @@ struct IDETerminalPanes: View {
                     .offset(x: frame.minX, y: frame.minY + (isShown ? inset : 0))
                     .opacity(isShown ? 1 : 0)
                     .allowsHitTesting(isShown)
+                    .accessibilityHidden(!isShown)
                 }
 
                 if showsHeaders {

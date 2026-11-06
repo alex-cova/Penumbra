@@ -76,7 +76,7 @@ struct IDESidebarPanel: View {
                 IDEExplorerSearchField(query: $searchQuery, isFocused: $isSearchFocused, onDismiss: dismissSearch)
                     .padding(.horizontal, IDEAppearance.Spacing.sm)
                     .padding(.bottom, IDEAppearance.Spacing.sm)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .ideTransition(.opacity.combined(with: .move(edge: .top)))
             }
 
             IDEFileTreeView(
@@ -136,7 +136,7 @@ struct IDESidebarPanel: View {
         if isSearchPresented {
             dismissSearch()
         } else {
-            withAnimation(.easeOut(duration: 0.16)) {
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) {
                 isSearchPresented = true
             }
         }
@@ -144,7 +144,7 @@ struct IDESidebarPanel: View {
 
     private func dismissSearch() {
         guard isSearchPresented else { return }
-        withAnimation(.easeOut(duration: 0.16)) {
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) {
             isSearchPresented = false
             searchQuery.removeAll()
         }

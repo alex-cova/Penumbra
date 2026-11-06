@@ -23,10 +23,10 @@ struct IDEAIChatView: View {
             header
             if conversation.isEmpty {
                 emptyGreeting
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .ideTransition(.move(edge: .top).combined(with: .opacity))
             } else {
                 transcript
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .ideTransition(.opacity.combined(with: .move(edge: .bottom)))
             }
             // One composer for both states: a field that moved between the empty greeting and
             // the transcript would be destroyed and recreated, dropping focus on the first send.
@@ -35,7 +35,7 @@ struct IDEAIChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // On send the greeting slides up and out while the composer's glint
         // fades with it; the transcript slides in below.
-        .animation(.easeOut(duration: 0.35), value: conversation.isEmpty)
+        .ideAnimation(IDEAppearance.Motion.panel, value: conversation.isEmpty)
         .onAppear { chat.composerFocusRequest += 1 }
         .onChange(of: chat.modelRequest) { workspace.isAIModelsPresented = true }
     }

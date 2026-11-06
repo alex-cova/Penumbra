@@ -109,7 +109,7 @@ open class EditorScrollView: EditorView {
 
     /// Scrolls to `offset`, optionally animating the AppKit clip view with an ease-out curve.
     open func setContentOffset(_ offset: CGPoint, animationDuration: TimeInterval) {
-        guard animationDuration > 0, offset != storedContentOffset else {
+        guard animationDuration > 0, !MotionPreference.reduceMotion, offset != storedContentOffset else {
             contentOffset = offset
             return
         }

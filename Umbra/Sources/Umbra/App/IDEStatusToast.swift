@@ -26,15 +26,15 @@ struct IDEStatusToast: View {
         VStack(alignment: .trailing, spacing: IDEAppearance.Spacing.sm) {
             if let content {
                 card(content)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .ideTransition(.move(edge: .top).combined(with: .opacity))
             }
             if let notification = workspace.notifications.toast {
                 notificationCard(notification)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .ideTransition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.easeOut(duration: 0.18), value: content)
-        .animation(.easeOut(duration: 0.18), value: workspace.notifications.toast)
+        .ideAnimation(IDEAppearance.Motion.standard, value: content)
+        .ideAnimation(IDEAppearance.Motion.standard, value: workspace.notifications.toast)
     }
 
     @ViewBuilder

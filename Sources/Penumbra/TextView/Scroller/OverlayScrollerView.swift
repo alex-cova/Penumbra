@@ -204,7 +204,7 @@ final class OverlayScrollerView: EditorView {
         guard alphaValue != target else {
             return
         }
-        guard animated, duration > 0 else {
+        guard animated, duration > 0, !MotionPreference.reduceMotion else {
             alphaValue = target
             return
         }

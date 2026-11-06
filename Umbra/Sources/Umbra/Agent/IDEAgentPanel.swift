@@ -35,10 +35,10 @@ struct IDEAgentPanel: View {
             if !agent.todos.isEmpty, !isChecklistInInspector { IDEAgentTodoListView(items: agent.todos) }
             if placement == .aiMode, agent.entries.isEmpty {
                 aiEmptyGreeting
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .ideTransition(.move(edge: .top).combined(with: .opacity))
             } else {
                 transcript
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .ideTransition(.opacity.combined(with: .move(edge: .bottom)))
                 if placement != .aiMode { Divider().overlay(IDEAppearance.ColorToken.border) }
             }
             // One composer for both states: a field that moved between the empty greeting and
@@ -49,7 +49,7 @@ struct IDEAgentPanel: View {
         .background(placement == .docked ? IDEAppearance.ColorToken.panel : Color.clear)
         // On send the empty session's greeting slides up and out, as in Chat. The welcome
         // backdrop lives one level up, in IDEAICodeView, so it fills the whole card.
-        .animation(placement == .aiMode ? .easeOut(duration: 0.35) : nil, value: agent.entries.isEmpty)
+        .ideAnimation(placement == .aiMode ? IDEAppearance.Motion.panel : nil, value: agent.entries.isEmpty)
         .sheet(isPresented: $isSettingsPresented) {
             IDEAgentSettingsSheet(settings: settings)
         }
@@ -149,7 +149,7 @@ struct IDEAgentPanel: View {
         if reduceMotion {
             settings.opensAsPage = true
         } else {
-            withAnimation(.easeOut(duration: 0.15)) { settings.opensAsPage = true }
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) { settings.opensAsPage = true }
         }
     }
 

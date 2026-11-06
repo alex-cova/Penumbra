@@ -162,6 +162,7 @@ public struct IDERootView: View {
                             .idePanel()
                             .opacity(workspace.chromeOpacity)
                             .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                            .accessibilityHidden(workspace.chromeOpacity <= 0.05)
                     }
                 }
                 .onGeometryChange(for: Double.self) { Double($0.size.height) } action: {
@@ -255,14 +256,14 @@ public struct IDERootView: View {
                     IDENotificationPanel()
                         .padding(.top, topChromeHeight + IDEAppearance.Spacing.xs)
                         .padding(.trailing, IDEAppearance.Spacing.panelGap + IDEAppearance.Spacing.xs)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .ideTransition(.move(edge: .top).combined(with: .opacity))
                 }
                 .opacity(workspace.chromeOpacity)
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 .onExitCommand { workspace.notifications.setPanelPresented(false) }
             }
         }
-        .animation(.easeOut(duration: 0.15), value: workspace.notifications.isPanelPresented)
+        .ideAnimation(IDEAppearance.Motion.standard, value: workspace.notifications.isPanelPresented)
         .overlay {
             if workspace.showsFirstRunGuide {
                 IDEFirstRunGuideOverlay()

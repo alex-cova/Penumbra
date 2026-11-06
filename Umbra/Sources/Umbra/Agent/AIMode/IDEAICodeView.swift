@@ -13,7 +13,7 @@ struct IDEAICodeView: View {
             .frame(maxWidth: Self.columnWidth)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, IDEAppearance.Spacing.lg)
-            .animation(.easeOut(duration: 0.35), value: agent.entries.isEmpty)
+            .ideAnimation(IDEAppearance.Motion.panel, value: agent.entries.isEmpty)
             .onAppear {
                 // AI mode begins with a new session; it does not continue the project's latest one.
                 agent.startFresh()
