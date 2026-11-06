@@ -738,9 +738,14 @@ enum JavaDifferentialHarness {
                 if verdict.hoverScored {
                     score.hoverScored += 1
                     if verdict.hoverHit { score.hoverHit += 1 }
+                    let hoverRelative = resolved.path.hasPrefix(rootPath + "/")
+                        ? String(resolved.path.dropFirst(rootPath.count + 1))
+                        : resolved.lastPathComponent
                     hoverDetails.append(HoverDetail(
                         role: verdict.siteRole, dotted: verdict.siteDotted,
-                        hit: verdict.hoverHit, definitionHit: verdict.definitionMatched
+                        hit: verdict.hoverHit, definitionHit: verdict.definitionMatched,
+                        file: hoverRelative, siteName: site.name, offset: site.startUTF16,
+                        inSource: verdict.declarationInSource
                     ))
                 }
             }
@@ -828,13 +833,17 @@ enum JavaDifferentialHarness {
         return lines.joined(separator: "\n")
     }
 
-    /// Per-site detail for the H1 hover split: declared vs reference, and whether
-    /// definition matched at the same site.
+    /// Per-site detail for the H1 hover split and the Step 3 hover breakdown: declared
+    /// vs reference, and whether definition matched at the same site.
     struct HoverDetail: Sendable {
         var role: JavaIdentifierRole?
         var dotted: Bool
         var hit: Bool
         var definitionHit: Bool
+        var file: String = ""
+        var siteName: String = ""
+        var offset: Int = 0
+        var inSource: Bool = false
     }
 
     /// The three J1 headline rates plus the rank-bucket table per site role.
@@ -869,6 +878,39 @@ enum JavaDifferentialHarness {
             lines.append("differential \(name) hover-declared \(format(declared.filter(\.hit).count, declared.count)) "
                 + "hover-references \(format(references.filter(\.hit).count, references.count)) "
                 + "definition-hit-hover-miss \(renderingGap)")
+            // Step 3: hover-miss breakdown by role x dotted, with the definition-hit
+            // and in-source splits and up to 15 sample notes per dominant cell.
+            let misses = hoverDetails.filter { !$0.hit }
+            lines.append("differential \(name) hover misses \(misses.count)")
+            let order: [JavaIdentifierRole?] = [.declared, .call, .member, .typeName, .imported, .plain, nil]
+            var cells: [(label: String, items: [HoverDetail])] = []
+            for role in order {
+                let label = role.map { "\($0)" } ?? "unknown"
+                for dotted in [true, false] {
+                    let items = misses.filter { $0.role == role && $0.dotted == dotted }
+                    guard !items.isEmpty else { continue }
+                    cells.append((
+                        label: "[\(label) \(dotted ? "dotted" : "plain")]",
+                        items: items
+                    ))
+                }
+            }
+            cells.sort { $0.items.count > $1.items.count }
+            for cell in cells {
+                let items = cell.items
+                let defHit = items.filter(\.definitionHit).count
+                let inSource = items.filter(\.inSource).count
+                lines.append("differential \(name) hover-miss \(cell.label) count \(items.count) "
+                    + "definition-hit \(defHit) in-source \(inSource)")
+            }
+            for cell in cells.prefix(3) {
+                lines.append("differential \(name) hover-miss \(cell.label) samples:")
+                for item in cell.items.prefix(15) {
+                    lines.append("differential \(name) hover-sample \(item.file):\(item.offset) "
+                        + "`\(item.siteName)` (definition-hit \(item.definitionHit ? "yes" : "no"), "
+                        + "in-source \(item.inSource ? "yes" : "no"))")
+                }
+            }
         }
         let order: [JavaIdentifierRole?] = [.declared, .call, .member, .typeName, .imported, .plain, nil]
         for role in order {
