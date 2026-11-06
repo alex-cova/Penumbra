@@ -214,7 +214,7 @@ struct IDECallHierarchyPanel: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(store.rows) { row in
-                    HStack(spacing: 4) {
+                    HStack(spacing: IDEAppearance.Spacing.xs) {
                         Color.clear.frame(width: CGFloat(row.depth) * 14)
                         Button {
                             if row.canExpand { store.toggle(row.node) }
@@ -261,7 +261,7 @@ struct IDECallHierarchyTabItem: View {
     var body: some View {
         IDEChromeTabItem(title: title, isSelected: isSelected, onSelect: onSelect) {
             Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         } trailing: {
             EmptyView()

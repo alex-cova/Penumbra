@@ -332,7 +332,7 @@ private struct IDEInspectionSettingsRuleRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
             HStack(spacing: IDEAppearance.Spacing.md) {
                 Toggle(rule.title, isOn: enabledBinding)
                     .toggleStyle(.checkbox)
@@ -359,7 +359,7 @@ private struct IDEInspectionSettingsRuleRow: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, 20)
+                .padding(.leading, IDEAppearance.Spacing.indent)
             if let limit = rule.limit {
                 Stepper(value: limitBinding, in: limit.range, step: limit.step) {
                     Text("\(limit.label): \(thresholds.value(for: rule))")
@@ -367,7 +367,7 @@ private struct IDEInspectionSettingsRuleRow: View {
                         .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 }
                 .disabled(!resolution.isEnabled)
-                .padding(.leading, 20)
+                .padding(.leading, IDEAppearance.Spacing.indent)
             }
             scopes
         }
@@ -376,7 +376,7 @@ private struct IDEInspectionSettingsRuleRow: View {
     private var scopes: some View {
         let isOpen = expandedScopes.contains(rule.code)
         let overrides = overrides
-        return VStack(alignment: .leading, spacing: 4) {
+        return VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
             Button {
                 if isOpen { expandedScopes.remove(rule.code) } else { expandedScopes.insert(rule.code) }
             } label: {
@@ -388,7 +388,7 @@ private struct IDEInspectionSettingsRuleRow: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .padding(.leading, 20)
+            .padding(.leading, IDEAppearance.Spacing.indent)
             if isOpen {
                 ForEach(overrides, id: \.self) { override in
                     scopeRow(override)
@@ -399,11 +399,11 @@ private struct IDEInspectionSettingsRuleRow: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .padding(.leading, 36)
+                .padding(.leading, IDEAppearance.Spacing.indentNested)
                 Text("Everywhere else uses the choices above. The first matching scope wins.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .padding(.leading, 36)
+                    .padding(.leading, IDEAppearance.Spacing.indentNested)
             }
         }
     }
@@ -452,7 +452,7 @@ private struct IDEInspectionSettingsRuleRow: View {
                 .buttonStyle(.borderless)
                 .help("Remove this scope")
         }
-        .padding(.leading, 36)
+        .padding(.leading, IDEAppearance.Spacing.indentNested)
     }
 
     private func addScope(_ scope: JavaInspectionProfile.Scope) {

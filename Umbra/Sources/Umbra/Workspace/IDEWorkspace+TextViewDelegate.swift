@@ -39,7 +39,7 @@ extension IDEWorkspace: TextViewDelegate {
         didChangeDistractionFreeChromeVisibility isVisible: Bool,
         transitionDuration: TimeInterval
     ) {
-        withAnimation(isVisible ? .spring(duration: transitionDuration, bounce: 0.1) : .easeOut(duration: transitionDuration)) {
+        IDEAppearance.Motion.animate(isVisible ? .spring(duration: transitionDuration, bounce: 0.1) : .easeOut(duration: transitionDuration)) {
             chromeOpacity = isVisible ? 1 : 0
         }
     }

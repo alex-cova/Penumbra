@@ -180,7 +180,7 @@ private struct IDEFirstRunGuideRail: View {
             }
             .padding(.horizontal, IDEAppearance.Spacing.md)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 ForEach(IDEFirstRunGuidePage.allCases) { guidePage in
                     IDEFirstRunGuideRailRow(
                         page: guidePage,
@@ -387,7 +387,7 @@ private struct IDEFirstRunKeymapPage: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .fixedSize(horizontal: false, vertical: true)
 
-            VStack(spacing: 2) {
+            VStack(spacing: IDEAppearance.Spacing.xxs) {
                 ForEach(KeymapPreset.allCases) { preset in
                     IDEFirstRunKeymapChoiceRow(
                         preset: preset,
@@ -423,7 +423,7 @@ private struct IDEFirstRunKeymapChoiceRow: View {
                     )
                     .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                     Text(preset.title)
                         .font(IDEAppearance.Typography.body)
                         .foregroundStyle(IDEAppearance.ColorToken.foreground)
@@ -469,7 +469,7 @@ private struct IDEFirstRunShortcutRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
                 .frame(width: 72, alignment: .center)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 Text(title)
                     .font(IDEAppearance.Typography.body)
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
@@ -491,7 +491,7 @@ private struct IDEFirstRunLessonRow: View {
 
     var body: some View {
         Label {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 Text(title)
                     .font(IDEAppearance.Typography.body)
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
@@ -517,7 +517,7 @@ private struct IDEFirstRunSigilChip: View {
     let label: String
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: IDEAppearance.Spacing.tight) {
             Text(sigil)
                 .font(IDEAppearance.Typography.monoCaption)
                 .foregroundStyle(IDEAppearance.ColorToken.accent)

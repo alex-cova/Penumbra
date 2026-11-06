@@ -116,6 +116,9 @@ public final class CommandPaletteController {
     }
 
     private weak var textView: TextView?
+    /// The editor that presented the palette; dismiss restores focus here, not to whichever
+    /// pane last attached to this shared controller.
+    private weak var presentingTextView: TextView?
     private weak var overlayContainer: NSView?
     let paletteView = CommandPaletteView()
     private let backdrop = PaletteBackdropView()
@@ -359,7 +362,8 @@ public final class CommandPaletteController {
         currentSections = []
         paletteModel.hide()
         backdrop.isHidden = true
-        _ = textView?.focusTextInput()
+        _ = (presentingTextView ?? textView)?.focusTextInput()
+        presentingTextView = nil
     }
 
     // MARK: - Wiring
@@ -475,6 +479,7 @@ public final class CommandPaletteController {
     }
 
     private func showOverlay() {
+        if backdrop.isHidden { presentingTextView = textView }
         if backdrop.superview == nil, let container = overlayContainer {
             installOverlay(in: container)
         }

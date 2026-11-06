@@ -42,7 +42,7 @@ struct IDEToolbarPanel: View {
             )
             .fixedSize()
 
-            HStack(spacing: 2) {
+            HStack(spacing: IDEAppearance.Spacing.xxs) {
                 IDEToolbarActionCluster(
                     showsCloseGroup: workspace.hasMultiplePanes,
                     items: workspace.toolbarItems(),
@@ -51,7 +51,8 @@ struct IDEToolbarPanel: View {
 
                 IDETitlebarGlobalActions(
                     showsGoToFile: workspace.hasOpenProject || workspace.hasOpenDocuments,
-                    hasNotifications: !workspace.notifications.items.isEmpty,
+                    notificationSymbol: workspace.notifications.bellSymbol,
+                    unseenNotifications: workspace.notifications.unseenCount,
                     isNotificationsOpen: workspace.notifications.isPanelPresented,
                     showQuickOpen: workspace.showQuickOpen,
                     showCommandPalette: workspace.showCommandPalette,
@@ -84,7 +85,7 @@ private struct IDETitlebarPanelToggles: View {
     let toggleRightPanel: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: IDEAppearance.Spacing.xxs) {
             IDEIconButton(
                 systemImage: "sidebar.left",
                 help: isLeftPanelOpen ? "Hide Left Panel" : "Show Left Panel",
@@ -141,7 +142,7 @@ private struct IDETitlebarProjectTitle: View {
                             .lineLimit(1)
                     }
                     .padding(.horizontal, IDEAppearance.Spacing.xs)
-                    .padding(.vertical, 3)
+                    .padding(.vertical, IDEAppearance.Spacing.tight)
                     .background(isHoveringBranch ? IDEAppearance.ColorToken.controlHover : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
                     .contentShape(Rectangle())
@@ -176,7 +177,8 @@ private struct IDETitlebarProjectTitle: View {
 /// The always-available actions at the trailing end of the titlebar.
 private struct IDETitlebarGlobalActions: View {
     let showsGoToFile: Bool
-    let hasNotifications: Bool
+    let notificationSymbol: String
+    let unseenNotifications: Int
     let isNotificationsOpen: Bool
     let showQuickOpen: () -> Void
     let showCommandPalette: () -> Void
@@ -185,7 +187,7 @@ private struct IDETitlebarGlobalActions: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: IDEAppearance.Spacing.xxs) {
             IDEIconButton(
                 systemImage: "bolt",
                 help: "Actions…",
@@ -201,10 +203,11 @@ private struct IDETitlebarGlobalActions: View {
             }
 
             IDEIconButton(
-                systemImage: hasNotifications ? "bell.badge" : "bell",
+                systemImage: notificationSymbol,
                 help: "Notifications",
-                tint: hasNotifications && !isNotificationsOpen ? IDEAppearance.ColorToken.accent : nil,
+                tint: unseenNotifications > 0 && !isNotificationsOpen ? IDEAppearance.ColorToken.accent : nil,
                 isActive: isNotificationsOpen,
+                badge: unseenNotifications,
                 action: toggleNotifications
             )
 
@@ -217,7 +220,7 @@ private struct IDETitlebarGlobalActions: View {
             .disabled(!workspace.hasOpenProject)
 
             IDEIconButton(
-                systemImage: "bubbles.and.sparkles",
+                systemImage: "sparkles",
                 help: "AI Mode",
                 action: { workspace.showAIMode() }
             )
@@ -240,7 +243,7 @@ private struct IDEToolbarActionCluster: View {
     let closeActivePane: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: IDEAppearance.Spacing.xxs) {
             if showsCloseGroup {
                 IDEIconButton(
                     systemImage: "rectangle.slash",
@@ -309,7 +312,7 @@ private struct IDEAIToolbarRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 2) {
+            HStack(spacing: IDEAppearance.Spacing.xxs) {
                 // Changes, Plan and Browser belong to Code: Chat has no project, files or plan.
                 if workspace.aiTab == .code {
                     IDEIconButton(
@@ -321,15 +324,16 @@ private struct IDEAIToolbarRow: View {
                 }
                 IDEIconButton(systemImage: "bolt", help: "Actions…", action: workspace.showCommandPalette)
                 IDEIconButton(
-                    systemImage: workspace.notifications.items.isEmpty ? "bell" : "bell.badge",
+                    systemImage: workspace.notifications.bellSymbol,
                     help: "Notifications",
-                    tint: !workspace.notifications.items.isEmpty && !workspace.notifications.isPanelPresented
+                    tint: workspace.notifications.unseenCount > 0 && !workspace.notifications.isPanelPresented
                         ? IDEAppearance.ColorToken.accent : nil,
                     isActive: workspace.notifications.isPanelPresented,
+                    badge: workspace.notifications.unseenCount,
                     action: workspace.notifications.togglePanel
                 )
                 IDEIconButton(
-                    systemImage: "bubbles.and.sparkles",
+                    systemImage: "curlybraces",
                     help: "Back to the Editor",
                     isActive: true,
                     action: workspace.showEditorMode

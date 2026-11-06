@@ -561,7 +561,7 @@ struct IDEPreferencesEditorPane: View {
         let isSelected = preferences.inlineCompletionModelID == result.id
         return HStack(alignment: .center, spacing: IDEAppearance.Spacing.sm) {
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 Text(LocalModelFormat.shortName(result.id))
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
                     .lineLimit(1)

@@ -70,7 +70,7 @@ struct HandleSplitter: SplitDivider {
                     height: horizontal ? handleLength : handleThickness
                 )
         }
-        .animation(.easeOut(duration: 0.12), value: hovering)
+        .ideAnimation(IDEAppearance.Motion.quick, value: hovering)
         .contentShape(Rectangle())
         .onHover { inside in
             hovering = inside

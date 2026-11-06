@@ -76,7 +76,7 @@ struct IDEWorkspaceEditPreviewSheet: View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
             header
             if !model.plan.warnings.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                     ForEach(model.plan.warnings, id: \.self) { warning in
                         Label(warning, systemImage: "exclamationmark.triangle.fill")
                             .font(IDEAppearance.Typography.caption)
@@ -174,7 +174,7 @@ private struct IDEWorkspaceEditPreviewRow: View {
     /// Two rows, `−` the old line and `+` the new one, so the result of a replacement is visible
     /// before it is applied. Only shown when the old and new lines differ.
     private func diffBody(_ preview: WorkspaceEditPreviewLine) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: IDEAppearance.Spacing.sm) {
             Toggle("", isOn: Binding(get: { isOn }, set: { _ in onToggle() }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()
@@ -183,7 +183,7 @@ private struct IDEWorkspaceEditPreviewRow: View {
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .frame(minWidth: 32, alignment: .trailing)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.hairline) {
                 diffLine(marker: "−", preview.before, preview.removed, preview.after, tint: IDEAppearance.ColorToken.error)
                 diffLine(marker: "+", preview.before, preview.added, preview.after, tint: IDEAppearance.ColorToken.gitAdded)
             }
@@ -207,7 +207,7 @@ private struct IDEWorkspaceEditPreviewRow: View {
         }
         text.append(middle)
         text.append(AttributedString(after))
-        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+        return HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.snug) {
             Text(marker)
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(tint)
@@ -220,7 +220,7 @@ private struct IDEWorkspaceEditPreviewRow: View {
     }
 
     private var singleLineBody: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
             Toggle("", isOn: Binding(get: { isOn }, set: { _ in onToggle() }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()

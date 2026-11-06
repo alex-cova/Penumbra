@@ -122,15 +122,15 @@ private struct IDEJDKSettingsRow: View {
         let isUserAdded = jdk.isUserAdded(installation)
         let isDefault = jdk.isDefault(installation)
         return HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 HStack(spacing: IDEAppearance.Spacing.xs) {
                     Text(installation.displayName)
                         .foregroundStyle(IDEAppearance.ColorToken.foreground)
                     ForEach(badges, id: \.self) { badge in
                         Text(badge)
                             .font(.caption)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
+                            .padding(.horizontal, IDEAppearance.Spacing.compact)
+                            .padding(.vertical, IDEAppearance.Spacing.hairline)
                             .background(IDEAppearance.ColorToken.card, in: Capsule())
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
                     }

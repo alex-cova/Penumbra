@@ -302,7 +302,7 @@ struct IDETypeHierarchyPanel: View {
     private func emptyState(_ text: String) -> some View {
         VStack(spacing: IDEAppearance.Spacing.xs) {
             Image(systemName: "square.stack.3d.up")
-                .font(.system(size: 18))
+                .font(.system(size: IDEAppearance.IconSize.emptyStateGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             Text(text)
                 .font(IDEAppearance.Typography.body)
@@ -321,7 +321,7 @@ private struct IDETypeHierarchyRowView: View {
     let onOpen: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: IDEAppearance.Spacing.snug) {
             Color.clear.frame(width: CGFloat(row.depth) * 14, height: 1)
             Button(action: onToggle) {
                 IDEDisclosureChevron(isExpanded: row.isExpanded)
@@ -333,7 +333,7 @@ private struct IDETypeHierarchyRowView: View {
             .accessibilityLabel(row.isExpanded ? "Collapse" : "Expand")
 
             Image(systemName: kindSymbol)
-                .font(.system(size: 11))
+                .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                 .foregroundStyle((row.node.origin == .project) ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
                 .frame(width: 14)
             Text(row.node.name)
@@ -350,7 +350,7 @@ private struct IDETypeHierarchyRowView: View {
                 Text(badge)
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, IDEAppearance.Spacing.xs)
                     .background(IDEAppearance.ColorToken.tabInactive, in: RoundedRectangle(cornerRadius: 3))
             }
             if row.isLoading {
@@ -409,7 +409,7 @@ struct IDETypeHierarchyTabItem: View {
     var body: some View {
         IDEChromeTabItem(title: title, isSelected: isSelected, onSelect: onSelect) {
             Image(systemName: "square.stack.3d.up")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         } trailing: {
             EmptyView()

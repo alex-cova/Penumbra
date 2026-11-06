@@ -379,9 +379,7 @@ private extension SelectionOverlayController {
         [caretView] + secondaryCaretViews.prefix(shownSecondaryCaretCount)
     }
 
-    private static var reduceMotion: Bool {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-    }
+    private static var reduceMotion: Bool { MotionPreference.reduceMotion }
 
     private func handleStartDrag(with event: NSEvent) {
         guard let selection = textInputView.selection else {

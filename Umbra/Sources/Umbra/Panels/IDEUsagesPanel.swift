@@ -63,25 +63,63 @@ final class IDEUsagesStore {
 struct IDEUsagesPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var collapsedFiles: Set<URL> = []
+    @State private var selectedLocationID: Location.ID?
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         let store = workspace.usages
+        let flat = store.files.flatMap { file in collapsedFiles.contains(file.url) ? [] : file.usages }
         Group {
             if store.files.isEmpty {
                 IDEEmptyState(title: store.isSearching ? "Searching for usages…" : "No usages", isLoading: store.isSearching)
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(store.files) { file in
                             fileHeader(file)
                             if !collapsedFiles.contains(file.url) {
                                 ForEach(file.usages) { location in
-                                    IDEUsageRowView(location: location) { _ = workspace.openNavigationLocation(location) }
+                                    IDEUsageRowView(location: location, isSelected: selectedLocationID == location.id) {
+                                        selectedLocationID = location.id
+                                        isListFocused = true
+                                        _ = workspace.openNavigationLocation(location)
+                                    }
+                                    .id(location.id)
                                 }
                             }
                         }
                     }
                     .padding(.vertical, IDEAppearance.Spacing.xs)
+                }
+                .focusable()
+                .focused($isListFocused)
+                .onKeyPress(phases: [.down, .repeat]) { press in
+                    switch press.key {
+                    case .upArrow, .downArrow:
+                        guard !flat.isEmpty else { return .handled }
+                        let current = selectedLocationID.flatMap { id in flat.firstIndex { $0.id == id } }
+                        let next = press.key == .downArrow
+                            ? min((current ?? -1) + 1, flat.count - 1)
+                            : max((current ?? flat.count) - 1, 0)
+                        selectedLocationID = flat[next].id
+                        return .handled
+                    case .return:
+                        if let id = selectedLocationID, let location = flat.first(where: { $0.id == id }) {
+                            _ = workspace.openNavigationLocation(location)
+                        }
+                        return .handled
+                    case .escape:
+                        workspace.closeUsages()
+                        workspace.focusActiveEditor()
+                        return .handled
+                    default:
+                        return .ignored
+                    }
+                }
+                .onChange(of: selectedLocationID) { _, id in
+                    if let id { proxy.scrollTo(id) }
+                }
                 }
             }
         }
@@ -101,13 +139,14 @@ struct IDEUsagesPanel: View {
 
 private struct IDEUsageRowView: View {
     let location: Location
+    var isSelected = false
     let onOpen: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
                 Text("\((location.usage?.line ?? location.range.start.line) + 1)")
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -126,16 +165,16 @@ private struct IDEUsageRowView: View {
                     Text(kind)
                         .font(IDEAppearance.Typography.caption)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
+                        .padding(.horizontal, IDEAppearance.Spacing.compact)
+                        .padding(.vertical, IDEAppearance.Spacing.hairline)
                         .background(IDEAppearance.ColorToken.controlHover)
                         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                 }
             }
             .padding(.leading, IDEAppearance.Spacing.xl)
             .padding(.trailing, IDEAppearance.Spacing.md)
-            .padding(.vertical, 3)
-            .background(isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
+            .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -199,7 +238,7 @@ struct IDEUsagesTabItem: View {
     var body: some View {
         IDEChromeTabItem(title: title, isSelected: isSelected, onSelect: onSelect) {
             Image(systemName: "text.magnifyingglass")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         } trailing: {
             EmptyView()

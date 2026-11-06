@@ -2,7 +2,7 @@ import XCTest
 @testable import Penumbra
 
 final class PalettePathElisionTests: XCTestCase {
-    private let path = "src/test/kotlin/com/sicarx/conciliator/yuri/integration"
+    private let path = "src/test/kotlin/com/invokevirtual/demo/yuri/integration"
 
     func testKeepsAPathThatFits() {
         XCTAssertEqual(PalettePathElision.elide(path) { _ in true }, path)
@@ -10,7 +10,7 @@ final class PalettePathElisionTests: XCTestCase {
 
     func testDropsTheFewestMiddleComponentsKeepingThreeInFront() {
         let elided = PalettePathElision.elide(path) { $0.count <= 46 }
-        XCTAssertEqual(elided, "src/test/kotlin/…/conciliator/yuri/integration")
+        XCTAssertEqual(elided, "src/test/kotlin/…/demo/yuri/integration")
     }
 
     func testShrinksTheHeadBeforeTheTailRunsOut() {

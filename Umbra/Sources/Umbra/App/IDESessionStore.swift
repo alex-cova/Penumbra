@@ -169,9 +169,12 @@ struct IDEAppSessionRecord: Codable, Equatable {
     }
 }
 
-/// One window's state (`last-window.json`): its project, tabs and panel layout. Only the last
-/// window is restored at launch, so there is one of these, not one per window.
+/// One window's state: its project, tabs and panel layout. `windows.json` holds one of these per
+/// window that was open, most recently key first, and every one of them is restored at launch.
 struct IDEWindowSession: Codable {
+    /// Which window this is, so it updates its own entry and no other. Files written before windows
+    /// were stored one by one have none; `IDESessionFiles.loadWindows` assigns one.
+    var windowID: UUID?
     var restoration: EditorRestorationState?
     var projectRootBookmark: Data?
     var sidebarWidth = IDEAppearance.Spacing.sidebarWidth
@@ -203,6 +206,7 @@ struct IDEWindowSession: Codable {
     static let empty = IDEWindowSession()
 
     init(
+        windowID: UUID? = nil,
         restoration: EditorRestorationState? = nil,
         projectRootBookmark: Data? = nil,
         sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
@@ -225,6 +229,7 @@ struct IDEWindowSession: Codable {
         aiInspectorTab: IDEAIInspectorTab? = nil,
         aiInspectorWidth: Double? = nil
     ) {
+        self.windowID = windowID
         self.restoration = restoration
         self.projectRootBookmark = projectRootBookmark
         self.sidebarWidth = sidebarWidth
@@ -255,6 +260,7 @@ struct IDEWindowSession: Codable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        windowID = try? container.decodeIfPresent(UUID.self, forKey: .windowID)
         restoration = try container.decodeIfPresent(EditorRestorationState.self, forKey: .restoration)
         projectRootBookmark = try container.decodeIfPresent(Data.self, forKey: .projectRootBookmark)
         sidebarWidth = try container.decodeIfPresent(Double.self, forKey: .sidebarWidth)
@@ -314,8 +320,10 @@ struct IDEWindowSession: Codable {
 /// store can be pointed at a temporary folder; `standard` is Application Support.
 ///
 /// - `app.json`: `IDEAppSessionRecord`, shared by all windows.
-/// - `last-window.json`: `IDEWindowSession`, the most recently active window.
-/// - `session.json`: the pre-split file, kept untouched so a downgrade still finds its session.
+/// - `windows.json`: `[IDEWindowSession]`, one per open window, most recently key first.
+/// - `last-window.json`: the single window older versions kept; read once when `windows.json` does
+///   not exist yet, and left untouched so a downgrade still finds its session.
+/// - `session.json`: the pre-split file, likewise left untouched.
 struct IDESessionFiles {
     let directory: URL
 
@@ -330,6 +338,7 @@ struct IDESessionFiles {
     var legacyURL: URL { directory.appendingPathComponent("session.json") }
     var appURL: URL { directory.appendingPathComponent("app.json") }
     var windowURL: URL { directory.appendingPathComponent("last-window.json") }
+    var windowsURL: URL { directory.appendingPathComponent("windows.json") }
 
     /// Nil when the file is missing or unreadable, so callers fall back to defaults.
     func loadApp() -> IDEAppSessionRecord? { read(IDEAppSessionRecord.self, at: appURL) }
@@ -337,6 +346,50 @@ struct IDESessionFiles {
 
     func saveApp(_ record: IDEAppSessionRecord) { write(record, to: appURL) }
     func saveWindow(_ session: IDEWindowSession) { write(session, to: windowURL) }
+
+    /// Every stored window, most recently key first. Without a `windows.json` the old single window
+    /// is the only one. Entries that have no `windowID` get one, and the file is written then, so
+    /// the id a window adopts is the id the file already holds.
+    func loadWindows() -> [IDEWindowSession] {
+        var windows: [IDEWindowSession]
+        var needsWrite = false
+        if let stored = read([IDEWindowSession].self, at: windowsURL) {
+            windows = stored
+        } else if let legacy = loadWindow() {
+            windows = [legacy]
+            needsWrite = true
+        } else {
+            return []
+        }
+        for index in windows.indices where windows[index].windowID == nil {
+            windows[index].windowID = UUID()
+            needsWrite = true
+        }
+        if needsWrite { saveWindows(windows) }
+        return windows
+    }
+
+    func saveWindows(_ windows: [IDEWindowSession]) { write(windows, to: windowsURL) }
+
+    /// Stores `session` as its window's entry: in place when the window is already listed, at the
+    /// front when it is new. A session with no `windowID` cannot be matched and is ignored.
+    func upsertWindow(_ session: IDEWindowSession) {
+        guard let id = session.windowID else { return }
+        var windows = loadWindows()
+        if let index = windows.firstIndex(where: { $0.windowID == id }) {
+            windows[index] = session
+        } else {
+            windows.insert(session, at: 0)
+        }
+        saveWindows(windows)
+    }
+
+    /// Drops a window's entry; writes nothing when it has none.
+    func removeWindow(id: UUID) {
+        let windows = loadWindows()
+        guard windows.contains(where: { $0.windowID == id }) else { return }
+        saveWindows(windows.filter { $0.windowID != id })
+    }
 
     /// First launch after the split: turns `session.json` into `app.json` and `last-window.json`.
     /// Does nothing once `app.json` exists, or when there is no readable old session. The old file
@@ -364,13 +417,29 @@ struct IDESessionFiles {
     }
 }
 
-/// The app's own `last-window.json`, for the workspace and root view.
+/// The app's own `windows.json`, for the workspace and root view.
 enum IDEWindowSessionStore {
-    static func load() -> IDEWindowSession {
-        IDESessionFiles.standard.loadWindow() ?? .empty
+    /// Every window to restore, most recently key first.
+    static func loadAll() -> [IDEWindowSession] {
+        IDESessionFiles.standard.loadWindows()
     }
 
+    /// The window restored first: its layout is also what a new blank window opens at.
+    static func load() -> IDEWindowSession {
+        loadAll().first ?? .empty
+    }
+
+    /// Stores one window's session under its `windowID`.
     static func save(_ session: IDEWindowSession) {
-        IDESessionFiles.standard.saveWindow(session)
+        IDESessionFiles.standard.upsertWindow(session)
+    }
+
+    static func remove(windowID: UUID) {
+        IDESessionFiles.standard.removeWindow(id: windowID)
+    }
+
+    /// Replaces the whole list: at quit (every open window) and when the last window closes (just that one).
+    static func replaceAll(_ sessions: [IDEWindowSession]) {
+        IDESessionFiles.standard.saveWindows(sessions)
     }
 }

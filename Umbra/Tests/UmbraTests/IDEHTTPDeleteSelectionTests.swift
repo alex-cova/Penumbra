@@ -13,8 +13,8 @@ final class IDEHTTPDeleteSelectionTests: XCTestCase {
             .appendingPathComponent("http-delete-\(UUID().uuidString)", isDirectory: true).resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         let file = project.appendingPathComponent("stock.http")
-        let first = "GET https://api.sicarx.com/stock/v1/medications?sku=7501125103049\n"
-        let request = first + "\n###\n\nGET https://api.sicarx.com/stock/v1/medications?sku=1\n\n###\n\nGET https://api.sicarx.com/stock/v1/medications?sku=2\n"
+        let first = "GET https://api.invokevirtual.com/stock/v1/medications?sku=7501125103049\n"
+        let request = first + "\n###\n\nGET https://api.invokevirtual.com/stock/v1/medications?sku=1\n\n###\n\nGET https://api.invokevirtual.com/stock/v1/medications?sku=2\n"
         try request.write(to: file, atomically: true, encoding: .utf8)
 
         let workspace = IDEWorkspace()

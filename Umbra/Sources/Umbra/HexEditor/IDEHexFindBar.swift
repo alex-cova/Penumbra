@@ -21,17 +21,19 @@ struct IDEHexFindBar: View {
                     .onSubmit { session.updateFind() }
                 modeOptions
                 Button("Next") { session.findNext() }
+                    .disabled(session.matches.isEmpty)
                 Button("Previous") { session.findPrevious() }
+                    .disabled(session.matches.isEmpty)
                 Button("Close") { session.closeFindBar() }
             }
             HStack(spacing: 8) {
                 TextField("Replace", text: $replacement)
                     .textFieldStyle(.roundedBorder)
                 Button("Replace") { session.replaceCurrent(with: replacement) }
-                    .disabled(session.readOnly)
+                    .disabled(session.readOnly || session.matchIndex == nil)
                 Text(session.matchStatus)
                     .font(.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .foregroundStyle(session.findPatternInvalid ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
                 Spacer(minLength: 0)
             }
         }

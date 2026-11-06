@@ -13,7 +13,7 @@ struct IDESettingsToggle: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
             Toggle(title, isOn: $isOn)
                 .toggleStyle(.checkbox)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
@@ -22,7 +22,7 @@ struct IDESettingsToggle: View {
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 20)
+                    .padding(.leading, IDEAppearance.Spacing.indent)
             }
         }
     }

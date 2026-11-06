@@ -430,7 +430,6 @@ struct IDETerminalPanel: View {
 
     var body: some View {
         let _ = IDEBodyDiagnostics.note("IDETerminalPanel")
-        let _ = workspace.uiColorSchemeEpoch
         VStack(spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.sm) {
                 IDETerminalTabsBar()
@@ -489,6 +488,7 @@ struct IDETerminalPanel: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isBottomTabSelected(.problems) ? 1 : 0)
                         .allowsHitTesting(workspace.isBottomTabSelected(.problems))
+                        .accessibilityHidden(!workspace.isBottomTabSelected(.problems))
                 }
 
                 if workspace.showsUsagesTab {
@@ -496,6 +496,7 @@ struct IDETerminalPanel: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isBottomTabSelected(.usages) ? 1 : 0)
                         .allowsHitTesting(workspace.isBottomTabSelected(.usages))
+                        .accessibilityHidden(!workspace.isBottomTabSelected(.usages))
                 }
 
                 if workspace.showsSourceControlTab {
@@ -503,6 +504,7 @@ struct IDETerminalPanel: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(workspace.isBottomTabSelected(.sourceControl) ? 1 : 0)
                         .allowsHitTesting(workspace.isBottomTabSelected(.sourceControl))
+                        .accessibilityHidden(!workspace.isBottomTabSelected(.sourceControl))
                 }
 
                 // The language modules' tabs (Run, Gradle, HTTP, hierarchies, tests, debugger).
@@ -512,6 +514,7 @@ struct IDETerminalPanel: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(isSelected ? 1 : 0)
                         .allowsHitTesting(isSelected)
+                        .accessibilityHidden(!isSelected)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -585,6 +588,7 @@ struct IDETerminalPanes: View {
                     .offset(x: frame.minX, y: frame.minY + (isShown ? inset : 0))
                     .opacity(isShown ? 1 : 0)
                     .allowsHitTesting(isShown)
+                    .accessibilityHidden(!isShown)
                 }
 
                 if showsHeaders {
@@ -630,27 +634,7 @@ struct IDETerminalPanes: View {
     }
 
     private func dividerView(_ divider: IDETerminalTiling.Divider) -> some View {
-        let isHorizontal = divider.axis == .horizontal
-        let grab: CGFloat = 8
-        let container = divider.container
-        return Rectangle()
-            .fill(IDEAppearance.ColorToken.border)
-            .frame(width: isHorizontal ? 1 : container.width, height: isHorizontal ? container.height : 1)
-            .frame(width: isHorizontal ? grab : container.width, height: isHorizontal ? container.height : grab)
-            .contentShape(Rectangle())
-            .pointerStyle(isHorizontal ? .columnResize : .rowResize)
-            .offset(
-                x: isHorizontal ? divider.position - grab / 2 : container.minX,
-                y: isHorizontal ? container.minY : divider.position - grab / 2)
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .named(coordinateSpaceName))
-                    .onChanged { drag in
-                        let origin = isHorizontal ? container.minX : container.minY
-                        let length = isHorizontal ? container.width : container.height
-                        guard length > 0 else { return }
-                        let location = isHorizontal ? drag.location.x : drag.location.y
-                        workspace.bottomPanel.moveDivider(divider, toFraction: Double((location - origin) / length))
-                    })
+        IDETerminalDividerHandle(divider: divider, coordinateSpaceName: coordinateSpaceName)
     }
 
     /// The part of a pane the drop would take: the half on that edge, or all of it.
@@ -719,7 +703,7 @@ private struct IDETerminalPaneHeader: View {
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             Image(systemName: "terminal")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             Text(tab.title)
                 .font(IDEAppearance.Typography.tabLabel.weight(isFocused ? .medium : .regular))
@@ -869,5 +853,78 @@ private extension NSColor {
         guard let rgb = usingColorSpace(.sRGB) else { return 0 }
         func byte(_ value: CGFloat) -> UInt32 { UInt32((min(max(value, 0), 1) * 255).rounded()) }
         return (byte(rgb.redComponent) << 16) | (byte(rgb.greenComponent) << 8) | byte(rgb.blueComponent)
+    }
+}
+
+/// The draggable line between two terminal panes. Drag to resize, double-click (or Return when
+/// focused) to share the two panes evenly, arrow keys or VoiceOver's adjust action to nudge it.
+private struct IDETerminalDividerHandle: View {
+    let divider: IDETerminalTiling.Divider
+    let coordinateSpaceName: String
+
+    @Environment(IDEWorkspace.self) private var workspace
+    @FocusState private var isFocused: Bool
+
+    /// One keyboard or VoiceOver step, as a fraction of the split.
+    private static let step = 0.05
+    private let grab: CGFloat = 8
+
+    private var isHorizontal: Bool { divider.axis == .horizontal }
+
+    var body: some View {
+        let container = divider.container
+        Rectangle()
+            .fill(isFocused ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.border)
+            .frame(
+                width: isHorizontal ? (isFocused ? 2 : 1) : container.width,
+                height: isHorizontal ? container.height : (isFocused ? 2 : 1))
+            .frame(width: isHorizontal ? grab : container.width, height: isHorizontal ? container.height : grab)
+            .contentShape(Rectangle())
+            .pointerStyle(isHorizontal ? .columnResize : .rowResize)
+            .offset(
+                x: isHorizontal ? divider.position - grab / 2 : container.minX,
+                y: isHorizontal ? container.minY : divider.position - grab / 2)
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .named(coordinateSpaceName))
+                    .onChanged { drag in
+                        let origin = isHorizontal ? container.minX : container.minY
+                        let length = isHorizontal ? container.width : container.height
+                        guard length > 0 else { return }
+                        let location = isHorizontal ? drag.location.x : drag.location.y
+                        workspace.bottomPanel.moveDivider(divider, toFraction: Double((location - origin) / length))
+                    })
+            .onTapGesture(count: 2) { workspace.bottomPanel.resetDivider(divider) }
+            .focusable()
+            .focusEffectDisabled()
+            .focused($isFocused)
+            .onKeyPress(keys: [.leftArrow, .upArrow, .rightArrow, .downArrow]) { press in
+                guard let direction = direction(of: press.key) else { return .ignored }
+                workspace.bottomPanel.nudgeDivider(divider, by: direction * Self.step)
+                return .handled
+            }
+            .onKeyPress(.return) {
+                workspace.bottomPanel.resetDivider(divider)
+                return .handled
+            }
+            .accessibilityElement()
+            .accessibilityLabel("Terminal divider")
+            .accessibilityHint("Adjust to resize the panes. Press Return to share them evenly.")
+            .accessibilityValue("\(Int((IDETerminalTiling.fraction(of: divider) * 100).rounded())) percent")
+            .accessibilityAdjustableAction { adjustment in
+                switch adjustment {
+                case .increment: workspace.bottomPanel.nudgeDivider(divider, by: Self.step)
+                case .decrement: workspace.bottomPanel.nudgeDivider(divider, by: -Self.step)
+                @unknown default: break
+                }
+            }
+    }
+
+    /// +1 toward the trailing or bottom edge, -1 toward the leading or top, nil for the other axis.
+    private func direction(of key: KeyEquivalent) -> Double? {
+        switch (isHorizontal, key) {
+        case (true, .leftArrow), (false, .upArrow): -1
+        case (true, .rightArrow), (false, .downArrow): 1
+        default: nil
+        }
     }
 }

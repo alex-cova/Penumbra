@@ -61,10 +61,10 @@ final class SymbolHoverProviderTests: XCTestCase {
         let documentID = DocumentID()
         let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
         await index.index([Symbol(
-            name: "conciliator", kind: .word, documentID: documentID,
+            name: "fixture", kind: .word, documentID: documentID,
             range: TextRange(start: position, end: position)
         )], for: documentID)
-        let context = makeHoverContext(documentID: documentID, text: "conciliator", offset: 5, languageIdentifier: "http")
+        let context = makeHoverContext(documentID: documentID, text: "fixture", offset: 5, languageIdentifier: "http")
         let result = await SymbolHoverProvider(index: index).provide(context: context)
         XCTAssertNil(result)
     }

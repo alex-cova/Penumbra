@@ -191,7 +191,19 @@ final class IDEBottomPanelModel {
     }
 
     func moveDivider(_ divider: IDETerminalTiling.Divider, toFraction fraction: Double) {
-        tiling.moveDivider(path: divider.path, index: divider.index, toFraction: fraction)
+        tiling.moveDivider(
+            path: divider.path, index: divider.index, toFraction: fraction,
+            minimum: IDETerminalTiling.minimumFraction(for: divider))
+    }
+
+    /// Moves a divider by `step` of its split (negative toward the leading or top edge).
+    func nudgeDivider(_ divider: IDETerminalTiling.Divider, by step: Double) {
+        moveDivider(divider, toFraction: IDETerminalTiling.fraction(of: divider) + step)
+    }
+
+    /// Puts the divider back at the middle of its two neighbours.
+    func resetDivider(_ divider: IDETerminalTiling.Divider) {
+        tiling.resetDivider(path: divider.path, index: divider.index)
     }
 
     // MARK: Tabs

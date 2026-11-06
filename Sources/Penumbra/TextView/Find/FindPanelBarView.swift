@@ -34,6 +34,16 @@ final class FindPanelBarView: NSView, NSTextFieldDelegate {
         }
     }
 
+    /// Whether Prev/Next/Replace/All have anything to act on; kept in sync by the controller.
+    var hasMatches = false {
+        didSet {
+            previousButton.isEnabled = hasMatches
+            nextButton.isEnabled = hasMatches
+            replaceButton.isEnabled = hasMatches
+            replaceAllButton.isEnabled = hasMatches
+        }
+    }
+
     var isMatchCaseEnabled: Bool {
         get { matchCaseButton.state == .on }
         set { matchCaseButton.state = newValue ? .on : .off }
@@ -90,6 +100,7 @@ final class FindPanelBarView: NSView, NSTextFieldDelegate {
         [previousButton, nextButton, closeButton].forEach { $0.target = self }
         previousButton.action = #selector(previousClicked)
         nextButton.action = #selector(nextClicked)
+        [previousButton, nextButton, replaceButton, replaceAllButton].forEach { $0.isEnabled = false }
         closeButton.action = #selector(closeClicked)
         [replaceButton, replaceAllButton].forEach { $0.bezelStyle = .rounded }
         modeControl.selectedSegment = 0

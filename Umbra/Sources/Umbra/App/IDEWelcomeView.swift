@@ -194,12 +194,8 @@ private struct IDEWelcomeProjectContent: View {
 
     /// Recent files that live inside this project.
     private var projectFiles: [URL] {
-        guard let root = rootURL?.standardizedFileURL.path else { return [] }
-        let prefix = root.hasSuffix("/") ? root : root + "/"
-        return workspace.recentFileURLs
-            .filter { $0.standardizedFileURL.path.hasPrefix(prefix) }
-            .prefix(8)
-            .map { $0 }
+        guard let rootURL else { return [] }
+        return IDEProjectRecentFiles.files(in: rootURL, from: workspace.recentFileURLs, limit: 8)
     }
 
     var body: some View {
@@ -224,7 +220,7 @@ private struct IDEWelcomeProjectContent: View {
                             .font(IDEAppearance.Typography.sectionHeader)
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
                             .textCase(.uppercase)
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                             ForEach(projectFiles, id: \.path) { url in
                                 IDEWelcomeRecentRow(
                                     title: url.lastPathComponent,
@@ -353,7 +349,7 @@ private struct IDEWelcomeRecentProjectsSection: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .textCase(.uppercase)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 ForEach(urls, id: \.path) { url in
                     IDEWelcomeRecentRow(
                         title: url.lastPathComponent,
@@ -380,7 +376,7 @@ private struct IDEWelcomeRecentFilesSection: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .textCase(.uppercase)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 ForEach(urls, id: \.path) { url in
                     IDEWelcomeRecentRow(
                         title: url.lastPathComponent,
@@ -418,7 +414,7 @@ private struct IDEWelcomeRecentRow: View {
 
             Button(action: onRemove) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: IDEAppearance.IconSize.closeGlyph, weight: .bold))
                     .foregroundStyle(
                         isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted
                     )
@@ -485,7 +481,7 @@ private struct IDEWelcomeLinkButtonStyle: ButtonStyle {
                     : IDEAppearance.ColorToken.foreground
             )
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 3)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
             .contentShape(Rectangle())
     }
 }

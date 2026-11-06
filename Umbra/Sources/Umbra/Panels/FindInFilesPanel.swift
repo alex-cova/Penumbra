@@ -215,7 +215,7 @@ private struct FindInFilesMaskField: View {
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
             Image(systemName: "line.3.horizontal.decrease")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             TextField("File mask, e.g. *.java, !*Test.java", text: $mask)
                 .textFieldStyle(.plain)
@@ -244,7 +244,7 @@ private struct FindInFilesSearchField: View {
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
             Image(systemName: symbol)
-                .font(.system(size: 11))
+                .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             TextField(placeholder, text: $query)
                 .textFieldStyle(.plain)
@@ -298,12 +298,12 @@ private struct FindInFilesHitRow: View {
         Button(action: onOpen) {
             HStack(alignment: .top, spacing: IDEAppearance.Spacing.xs) {
                 Image(systemName: IDEFileIcon.systemName(forFilename: hit.url.lastPathComponent))
-                    .font(.system(size: 11))
+                    .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .frame(width: 14)
-                    .padding(.top, 2)
+                    .padding(.top, IDEAppearance.Spacing.xxs)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                     Text(label)
                         .font(IDEAppearance.Typography.monoCaption)
                         .foregroundStyle(IDEAppearance.ColorToken.foreground)

@@ -82,7 +82,7 @@ struct IDEStructurePanel: View {
     private func emptyState(_ text: String) -> some View {
         VStack(spacing: IDEAppearance.Spacing.xs) {
             Image(systemName: "list.bullet.indent")
-                .font(.system(size: 18))
+                .font(.system(size: IDEAppearance.IconSize.emptyStateGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             Text(text)
                 .font(IDEAppearance.Typography.body)
@@ -105,7 +105,7 @@ private struct IDEStructureRowView: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 6) {
+            HStack(spacing: IDEAppearance.Spacing.snug) {
                 Color.clear.frame(width: CGFloat(row.depth) * 14, height: 1)
                 Button(action: onToggle) {
                     IDEDisclosureChevron(isExpanded: row.isExpanded)
@@ -117,7 +117,7 @@ private struct IDEStructureRowView: View {
                 .accessibilityLabel(row.isExpanded ? "Collapse" : "Expand")
 
                 Image(systemName: kindSymbol)
-                    .font(.system(size: 11))
+                    .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                     .foregroundStyle(kindTint)
                     .frame(width: 14)
 
@@ -129,7 +129,7 @@ private struct IDEStructureRowView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, IDEAppearance.Spacing.sm)
-            .padding(.vertical, 3)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
             .background(background)
             .contentShape(Rectangle())
         }

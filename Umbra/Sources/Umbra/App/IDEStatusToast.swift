@@ -5,6 +5,7 @@ import SwiftUI
 /// notification center announces and later keeps in the bell's list.
 struct IDEStatusToast: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @State private var expandedNotificationID: UUID?
     private var projectSystems: IDEProjectSystems { workspace.projectSystems }
 
     /// The first busy system, otherwise the sidebar's system. A Gradle-only window follows Gradle.
@@ -25,15 +26,15 @@ struct IDEStatusToast: View {
         VStack(alignment: .trailing, spacing: IDEAppearance.Spacing.sm) {
             if let content {
                 card(content)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .ideTransition(.move(edge: .top).combined(with: .opacity))
             }
             if let notification = workspace.notifications.toast {
                 notificationCard(notification)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .ideTransition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.easeOut(duration: 0.18), value: content)
-        .animation(.easeOut(duration: 0.18), value: workspace.notifications.toast)
+        .ideAnimation(IDEAppearance.Motion.standard, value: content)
+        .ideAnimation(IDEAppearance.Motion.standard, value: workspace.notifications.toast)
     }
 
     @ViewBuilder
@@ -82,7 +83,7 @@ struct IDEStatusToast: View {
                     Image(systemName: notification.severity.symbolName)
                         .foregroundStyle(notification.severity.tint)
                         .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                         Text(notification.title)
                             .foregroundStyle(notification.severity == .error ? notification.severity.tint : IDEAppearance.ColorToken.foreground)
                             .lineLimit(1)
@@ -90,8 +91,22 @@ struct IDEStatusToast: View {
                         if let detail = notification.detail {
                             Text(detail)
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-                                .lineLimit(2)
+                                .lineLimit(expandedNotificationID == notification.id ? nil : 2)
                                 .truncationMode(.tail)
+                            HStack(spacing: IDEAppearance.Spacing.sm) {
+                                Text(expandedNotificationID == notification.id ? "Show Less" : "Show More")
+                                    .foregroundStyle(IDEAppearance.ColorToken.accent)
+                                    .onTapGesture {
+                                        expandedNotificationID = expandedNotificationID == notification.id ? nil : notification.id
+                                    }
+                                    .accessibilityAddTraits(.isButton)
+                                    .accessibilityLabel(expandedNotificationID == notification.id ? "Show Less" : "Show More")
+                                Text("View in Notifications")
+                                    .foregroundStyle(IDEAppearance.ColorToken.accent)
+                                    .onTapGesture { workspace.notifications.setPanelPresented(true) }
+                                    .accessibilityAddTraits(.isButton)
+                                    .accessibilityLabel("View in Notifications")
+                            }
                         }
                         if let link = notification.action?.linkTitle {
                             Text(link)
@@ -162,7 +177,7 @@ private extension View {
                     .strokeBorder(IDEAppearance.ColorToken.border, lineWidth: 1)
                     .allowsHitTesting(false)
             }
-            .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+            .shadow(color: IDEAppearance.Shadow.cardColor, radius: 10, y: 4)
             .accessibilityElement(children: .contain)
     }
 }

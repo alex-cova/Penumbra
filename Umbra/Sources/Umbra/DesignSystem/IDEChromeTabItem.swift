@@ -8,16 +8,20 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
     let isSelected: Bool
     /// Not selected, but showing alongside the selected one (a pane of a split terminal).
     var isShown = false
+    /// The strip belongs to a pane without focus: the selected tab's fill and bar soften, while
+    /// the title and icon keep their full contrast.
+    var isDimmed = false
     var accessibilityLabel: String?
     let onSelect: () -> Void
     @ViewBuilder let leading: () -> Leading
     @ViewBuilder let trailing: () -> Trailing
 
     @State private var isHovering = false
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 6) {
+            HStack(spacing: IDEAppearance.Spacing.snug) {
                 leading()
                     .frame(width: 12)
 
@@ -28,8 +32,8 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
 
                 trailing()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, IDEAppearance.Spacing.cozy)
+            .padding(.vertical, IDEAppearance.Spacing.compact)
             .background(backgroundColor)
             .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
             .overlay(alignment: .top) {
@@ -37,21 +41,29 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
                     RoundedRectangle(cornerRadius: IDEAppearance.Radius.indicator)
                         .fill(IDEAppearance.ColorToken.accent)
                         .frame(height: 2)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, IDEAppearance.Spacing.snug)
+                        .opacity(isDimmed ? 0.4 : 1)
                 }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focused($isFocused)
+        .overlay {
+            if isFocused {
+                RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
+                    .stroke(IDEAppearance.ColorToken.accent, lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
+        }
         .onHover { isHovering = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel ?? title)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        .focusable(false)
     }
 
     private var backgroundColor: Color {
-        if isSelected { return IDEAppearance.ColorToken.tabActive }
+        if isSelected { return isDimmed ? IDEAppearance.ColorToken.tabActiveInactivePane : IDEAppearance.ColorToken.tabActive }
         if isShown { return IDEAppearance.ColorToken.tabActive.opacity(0.5) }
         if isHovering { return IDEAppearance.ColorToken.tabHover }
         return IDEAppearance.ColorToken.tabInactive
@@ -68,7 +80,7 @@ struct IDEChromeTabCloseButton: View {
     var body: some View {
         Button(action: onClose) {
             Image(systemName: "xmark")
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: IDEAppearance.IconSize.closeGlyph, weight: .bold))
                 .foregroundStyle(isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 .frame(width: side, height: side)
                 .contentShape(Rectangle())

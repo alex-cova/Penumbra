@@ -172,4 +172,61 @@ final class IDENotificationCenterTests: XCTestCase {
         XCTAssertEqual(center.items.first?.action?.linkTitle, "Reveal in Finder")
         XCTAssertNil(IDENotificationAction.openFile("/tmp/a").linkTitle, "other actions show no link")
     }
+
+    // MARK: Unseen count (the bell's badge)
+
+    func testEntriesPostedWhilePanelIsClosedCountAsUnseen() {
+        let center = makeCenter()
+        XCTAssertEqual(center.unseenCount, 0)
+        XCTAssertEqual(center.bellSymbol, "bell")
+        center.post("one")
+        center.post("two")
+        XCTAssertEqual(center.unseenCount, 2)
+        XCTAssertEqual(center.bellSymbol, "bell", "the count badge says what is new")
+    }
+
+    func testOpeningThePanelSeesEverythingButKeepsTheEntries() {
+        let center = makeCenter()
+        center.post("one")
+        center.post("two")
+        center.setPanelPresented(true)
+        XCTAssertEqual(center.unseenCount, 0)
+        XCTAssertEqual(center.items.count, 2, "seen is not dismissed")
+        XCTAssertEqual(center.bellSymbol, "bell.badge", "seen entries still wait")
+    }
+
+    func testEntriesPostedWhilePanelIsOpenAreSeenAtOnce() {
+        let center = makeCenter()
+        center.setPanelPresented(true)
+        center.post("while open")
+        XCTAssertEqual(center.unseenCount, 0)
+        center.setPanelPresented(false)
+        center.post("after close")
+        XCTAssertEqual(center.unseenCount, 1)
+    }
+
+    func testDismissingAndClearingLowerTheUnseenCount() {
+        let center = makeCenter()
+        center.post("one")
+        center.post("two")
+        center.remove(center.items[0].id)
+        XCTAssertEqual(center.unseenCount, 1)
+        center.clear()
+        XCTAssertEqual(center.unseenCount, 0)
+        XCTAssertEqual(center.bellSymbol, "bell")
+    }
+
+    func testTurningACategoryOffDropsItsUnseenEntries() {
+        let center = makeCenter()
+        center.post("git", category: .git)
+        center.post("general")
+        center.setCategory(.git, enabled: false)
+        XCTAssertEqual(center.unseenCount, 1)
+    }
+
+    func testTheUnseenCountSurvivesTheCapacityTrim() {
+        let center = makeCenter()
+        for index in 0..<(IDENotificationCenter.capacity + 5) { center.post("n\(index)") }
+        XCTAssertEqual(center.unseenCount, IDENotificationCenter.capacity)
+    }
 }

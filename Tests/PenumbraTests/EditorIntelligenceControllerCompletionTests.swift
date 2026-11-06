@@ -15,8 +15,8 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeTextView(_ text: String, caret: Int) -> TextView {
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+    private func makeTextView(_ text: String, caret: Int, height: CGFloat = 300) -> TextView {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: height), styleMask: [.titled], backing: .buffered, defer: false)
         let textView = TextView(frame: window.contentView!.bounds)
         textView.theme = DefaultTheme()
         textView.text = text
@@ -99,7 +99,8 @@ final class EditorIntelligenceControllerCompletionTests: XCTestCase {
 
     func testPopupIsVisibleInViewportWhenScrolledFarDown() async throws {
         let lines = (0..<300).map { "line \($0)" }.joined(separator: "\n") + "\nfoo"
-        let textView = makeTextView(lines, caret: (lines as NSString).length)
+        // Tall enough for the whole popup (twelve rows, a section header and the key-hint footer).
+        let textView = makeTextView(lines, caret: (lines as NSString).length, height: 360)
         textView.layoutSubtreeIfNeeded()
         textView.scrollRangeToVisible(textView.selectedRange)
         let provider = StubProvider { context in context.isMemberAccess ? ["bar", "baz"] : [] }

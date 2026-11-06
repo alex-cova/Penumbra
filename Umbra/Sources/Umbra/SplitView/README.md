@@ -104,6 +104,8 @@ rather than fighting each other.
 
 ## Umbra changes (on top of the Hextech port)
 
+- **Reduce Motion.** The hover animation in `Splitter` and `HandleSplitter` goes through
+  `ideAnimation(_:value:)` (`DesignSystem/IDEMotion.swift`), which is off while Reduce Motion is on.
 - **Explicit `@MainActor`** on `LayoutHolder`, `FractionHolder`, `SideHolder` and `SplitStyling`,
   and `nonisolated` dropped from the value types: the Umbra target builds in Swift 6 mode
   *without* `defaultIsolation: MainActor` (see `Package.swift`), so the default is already

@@ -31,6 +31,9 @@ final class IDEWindowRegistry {
     private struct NewWindowJob {
         var urls: [URL]
         var aiOpen: IDEAIOpenRequest?
+        /// A window that was open at the last quit, to be reopened as it was. Taken by that
+        /// window's `bootstrap` (`takeRestoreSession`), never by `register`.
+        var restore: IDEWindowSession?
     }
 
     /// Opens waiting for something they need: a window to exist, or SwiftUI's `openWindow` to be
@@ -41,13 +44,15 @@ final class IDEWindowRegistry {
     /// One entry per window requested through `openNewWindow`, in request order; the next workspace
     /// to register takes the first and opens its URLs.
     private var newWindowJobs: [NewWindowJob] = []
+    /// Windows to reopen after the first one restored, waiting for `openWindow` to be wired.
+    private var pendingRestoredSessions: [IDEWindowSession] = []
     /// The window a requested new window should join as a native tab, taken by its configurator.
     private var pendingTabParent: NSWindow?
     /// Set by a Dock reopen with no window left: the next window to appear is centered on screen
     /// instead of taking SwiftUI's saved or cascaded position.
     private var centersNextWindow = false
-    /// Quitting is going ahead. A closing window must not write its open folder over the session
-    /// `saveSessionsForTermination` stores, and a remaining window must not take over that file.
+    /// Quitting is going ahead. `noteTermination` has stored every window; a window that closes
+    /// after that must not change what was stored.
     private(set) var isTerminating = false
 
     private init() {
@@ -84,7 +89,9 @@ final class IDEWindowRegistry {
         workspaces.first { $0.window === window }
     }
 
-    func register(_ workspace: IDEWorkspace) {
+    /// `restoredFromJob`: the window took one of the queued restore jobs in `bootstrap`, so it is
+    /// not also the window a queued folder or file request is waiting for.
+    func register(_ workspace: IDEWorkspace, restoredFromJob: Bool = false) {
         guard !workspaces.contains(where: { $0 === workspace }) else { return }
         hasHadWindow = true
         let current = workspaces
@@ -94,8 +101,8 @@ final class IDEWindowRegistry {
             isKey: workspace.window?.isKeyWindow == true,
             in: current.map(\.windowID)
         ))
-        if !newWindowJobs.isEmpty {
-            let job = newWindowJobs.removeFirst()
+        if !restoredFromJob, let index = newWindowJobs.firstIndex(where: { $0.restore == nil }) {
+            let job = newWindowJobs.remove(at: index)
             if !job.urls.isEmpty {
                 workspace.pendingAIOpen = job.aiOpen
                 workspace.openDroppedURLs(job.urls)
@@ -104,27 +111,30 @@ final class IDEWindowRegistry {
         drainPendingOpens()
     }
 
-    /// Called when the workspace's window closes. When it was the session window and another
-    /// window with content remains, that one takes over and saves its layout right away, so "the
-    /// last window" stays a window that is still open. With none left the closed window's own
-    /// save (made as it closed) stands. While quitting, no window takes over: each session window
-    /// already wrote the session with its folder closed.
+    /// Called when the workspace's window closes. Its stored entry was already dealt with as it
+    /// closed (`IDEWorkspace.saveSessionForWindowClose`): dropped, or kept with the folder closed
+    /// when it was the last window with content.
     func unregister(_ workspace: IDEWorkspace) {
-        let successor = IDESessionWindowPolicy.successor(afterClosing: workspace.windowID, in: policyWindows)
         entries.removeAll { $0.workspace == nil || $0.workspace === workspace }
-        if let successor, !isTerminating {
-            self.workspace(withID: successor)?.saveSession()
-        }
     }
 
-    /// Quitting has been confirmed. Call before windows close, so their saves do not put a folder
-    /// back into `last-window.json`.
+    /// Quitting has been confirmed. Call before any window closes: this stores every window with
+    /// its project and tabs, most recently key first, so the next launch brings them all back. The
+    /// windows that close after it leave the stored list alone (`isTerminating`).
     func noteTermination() {
         isTerminating = true
+        guard IDEWorkspace.isSessionPersistenceEnabled else { return }
+        IDEWindowSessionStore.replaceAll(Self.sessionsForTermination(of: workspaces))
     }
 
-    /// True when this window's save is the one the next launch restores, and no other window with
-    /// content will replace it. That save must forget the open folder.
+    /// What quitting stores: every window that has been used, in the order given (most recently key
+    /// first), with its project and tabs as they are. A blank window opened beside others is left out.
+    static func sessionsForTermination(of workspaces: [IDEWorkspace]) -> [IDEWindowSession] {
+        workspaces.filter { !$0.isPristine }.map { $0.makeSession() }
+    }
+
+    /// True when this window is the last one with content, so it closes with its folder forgotten
+    /// and a Dock click opens the Welcome screen. Any other window just drops its stored entry.
     func forgetsFolderWhenClosing(_ workspace: IDEWorkspace) -> Bool {
         guard isSessionWindow(workspace) else { return false }
         return IDESessionWindowPolicy.successor(afterClosing: workspace.windowID, in: policyWindows) == nil
@@ -161,9 +171,9 @@ final class IDEWindowRegistry {
         )
     }
 
-    /// The window whose layout is saved to `last-window.json` and restored at the next launch: the
-    /// one that was key last, skipping pristine windows. A blank window opened next to others must
-    /// not replace the project you were working in just because you clicked into it.
+    /// The window that was key last, skipping pristine ones: the one whose stored entry leads the
+    /// list, and the last window with content when it closes. A blank window opened next to others
+    /// must not count just because you clicked into it.
     var sessionWindow: IDEWorkspace? {
         IDESessionWindowPolicy.sessionWindow(in: policyWindows).flatMap { workspace(withID: $0) }
     }
@@ -276,9 +286,18 @@ final class IDEWindowRegistry {
 
     // MARK: - New windows
 
+    /// Unwires `openWindow` and forgets queued restores, so a test that wired a fake leaves the shared
+    /// registry as it found it.
+    func resetOpeningForTests() {
+        openWindowAction = nil
+        pendingRestoredSessions = []
+        newWindowJobs = []
+    }
+
     /// Called by `IDEWindowReopenBridge` once SwiftUI's `openWindow` is available.
     func setOpenWindowAction(_ action: @escaping () -> Void) {
         openWindowAction = action
+        drainRestoredWindows()
         drainPendingOpens()
     }
 
@@ -291,6 +310,31 @@ final class IDEWindowRegistry {
         pendingTabParent = parent
         openWindowAction()
         return true
+    }
+
+    // MARK: - Restoring every window
+
+    /// The first window has restored the first stored window; this opens one more window for each of
+    /// the others. They wait for `openWindow` when it is not wired yet (cold launch).
+    func queueRestoredWindows(_ sessions: [IDEWindowSession]) {
+        pendingRestoredSessions.append(contentsOf: sessions)
+        drainRestoredWindows()
+    }
+
+    private func drainRestoredWindows() {
+        guard let openWindowAction, !pendingRestoredSessions.isEmpty else { return }
+        let sessions = pendingRestoredSessions
+        pendingRestoredSessions = []
+        for session in sessions {
+            newWindowJobs.append(NewWindowJob(urls: [], aiOpen: nil, restore: session))
+            openWindowAction()
+        }
+    }
+
+    /// Called by a window's `bootstrap`: the stored window it is to become, if one was queued for it.
+    func takeRestoreSession() -> IDEWindowSession? {
+        guard let index = newWindowJobs.firstIndex(where: { $0.restore != nil }) else { return nil }
+        return newWindowJobs.remove(at: index).restore
     }
 
     /// File ▸ New Window Tab and the tab bar's + button.
@@ -392,11 +436,10 @@ final class IDEWindowRegistry {
         }
     }
 
-    /// On quit: the shared lists, and the last window with its folder closed. The next launch opens
-    /// on the Welcome screen, the way a Dock click does after the last window was closed.
+    /// On quit: the shared lists. The windows themselves were stored by `noteTermination`, before
+    /// they started to close.
     func saveSessionsForTermination() {
         IDEAppState.shared.save()
-        sessionWindow?.saveSessionForgettingFolder()
     }
 }
 

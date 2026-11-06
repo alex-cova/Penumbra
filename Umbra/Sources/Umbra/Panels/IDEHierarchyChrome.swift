@@ -23,13 +23,13 @@ struct IDEHierarchyPinStrip: View {
             HStack(spacing: IDEAppearance.Spacing.xs) {
                 chip("Current", isSelected: selected == nil) { onSelect(nil) }
                 ForEach(pins, id: \.id) { pin in
-                    HStack(spacing: 4) {
+                    HStack(spacing: IDEAppearance.Spacing.xs) {
                         chip(pin.title, isSelected: selected == pin.id, systemImage: "pin.fill") { onSelect(pin.id) }
                         Button {
                             onUnpin(pin.id)
                         } label: {
                             Image(systemName: "xmark")
-                                .font(.system(size: 8, weight: .bold))
+                                .font(.system(size: IDEAppearance.IconSize.microGlyph, weight: .bold))
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                         }
                         .buttonStyle(.plain)
@@ -39,21 +39,21 @@ struct IDEHierarchyPinStrip: View {
                 }
             }
             .padding(.horizontal, IDEAppearance.Spacing.md)
-            .padding(.vertical, 3)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
         }
     }
 
     private func chip(_ title: String, isSelected: Bool, systemImage: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 3) {
+            HStack(spacing: IDEAppearance.Spacing.tight) {
                 if let systemImage {
-                    Image(systemName: systemImage).font(.system(size: 8))
+                    Image(systemName: systemImage).font(.system(size: IDEAppearance.IconSize.microGlyph))
                 }
                 Text(title).lineLimit(1)
             }
             .font(IDEAppearance.Typography.caption)
             .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, IDEAppearance.Spacing.snug)
             .padding(.vertical, IDEAppearance.Spacing.xxs)
             .background(isSelected ? IDEAppearance.ColorToken.tabActive : Color.clear, in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.selection))
         }

@@ -274,9 +274,9 @@ private struct IDESwiftInspectionRuleRow: View {
     private var overrides: [SwiftInspectionProfile.ScopedOverride] { profile.scopedOverrides.filter { $0.code == rule.code } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
             Toggle(isOn: Binding(get: { resolution.isEnabled }, set: { value in edit { $0.setEnabled(value, for: rule) } })) {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.hairline) {
                     Text(rule.title).font(IDEAppearance.Typography.body)
                     Text(rule.summary)
                         .font(IDEAppearance.Typography.caption)
@@ -304,14 +304,14 @@ private struct IDESwiftInspectionRuleRow: View {
                     }
                     .buttonStyle(.link)
                 }
-                .padding(.leading, 20)
-                if expanded.contains(rule.code) { scopes.padding(.leading, 20) }
+                .padding(.leading, IDEAppearance.Spacing.indent)
+                if expanded.contains(rule.code) { scopes.padding(.leading, IDEAppearance.Spacing.indent) }
             }
         }
     }
 
     private var scopes: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
             ForEach(Array(profile.scopedOverrides.enumerated()).filter { $0.element.code == rule.code }, id: \.offset) { index, override in
                 HStack(spacing: IDEAppearance.Spacing.md) {
                     Text(override.scope.title).font(IDEAppearance.Typography.monoSmall).frame(minWidth: 120, alignment: .leading)

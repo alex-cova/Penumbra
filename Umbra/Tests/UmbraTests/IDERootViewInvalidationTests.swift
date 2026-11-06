@@ -175,4 +175,24 @@ final class IDERootViewInvalidationTests: XCTestCase {
         _ = await evaluations("toggling the sidebar") { workspace.isSidebarVisible.toggle() }
         _ = await evaluations("toggling the bottom terminal") { workspace.isTerminalVisible.toggle() }
     }
+
+    /// Chrome follows a new colour scheme because its tokens are read from the observable
+    /// `IDEThemeStore`, with no epoch counter and no `.id` to bump.
+    func testChangingTheColourSchemeRepaintsTheChromeThroughObservation() async throws {
+        let store = IDEThemeStore.shared
+        let original = store.scheme
+        defer { store.setScheme(original) }
+        let other = original.id == IDEUmbraLightUIColorScheme.shared.id
+            ? IDEUmbraUIColorScheme.shared : IDEUmbraLightUIColorScheme.shared
+        await workspace.openDocument(from: try write("Scheme.java", lines: 200))
+        await settle(1.0)
+
+        let changed = await evaluations("switching the colour scheme") { store.setScheme(other) }
+
+        // The toolbar's own body does not read a token (its buttons and labels are views that do), so
+        // it is the root, which paints the window, and the status bar that are re-evaluated.
+        XCTAssertGreaterThanOrEqual(changed["IDERootView"] ?? 0, 1, "the window repaints")
+        XCTAssertGreaterThanOrEqual(changed["IDEStatusBarPanel"] ?? 0, 1, "so does the status bar")
+        XCTAssertEqual(changed["IDEEditorLayoutNode"], 0, "the editor layout is not rebuilt for it")
+    }
 }

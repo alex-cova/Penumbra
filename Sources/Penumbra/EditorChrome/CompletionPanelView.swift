@@ -30,6 +30,9 @@ public final class CompletionPanelView: NSView {
     /// Kept for source compatibility; the panel now sizes its width to its content.
     public static let defaultWidth: CGFloat = minimumWidth
 
+    /// What the two accepting keys do: Enter inserts, Tab also replaces the rest of the identifier.
+    static let keyHint = "⏎ Insert · ⇥ Replace"
+
     private static let iconSize: CGFloat = 16
     private static let horizontalPadding: CGFloat = 6
     private static let iconGap: CGFloat = 6
@@ -62,13 +65,21 @@ public final class CompletionPanelView: NSView {
     }
 
     public func update(model: CompletionPanelModel) {
-        let itemsChanged = model.items.map(\.id) != self.model.items.map(\.id)
+        // Rows are compared by what they say, not by `id`: every batch from a provider builds
+        // fresh items, so ids differ even when the list a user is reading has not changed.
+        let itemsChanged = model.items.map(\.identityKey) != self.model.items.map(\.identityKey)
+        let anchor = itemsChanged ? scrollAnchor() : nil
+        let previousSelection = self.model.selectedIndex
         self.model = model
         hoveredIndex = nil
         if itemsChanged {
-            firstVisibleIndex = 0
+            restoreScroll(to: anchor)
         }
         scrollSelectionIntoView()
+        if previousSelection != model.selectedIndex || itemsChanged {
+            NSAccessibility.post(element: self, notification: .selectedChildrenChanged)
+        }
+        refreshToolTips()
         if model.isComputing {
             spinner.startAnimation(nil)
             spinner.isHidden = false
@@ -83,6 +94,7 @@ public final class CompletionPanelView: NSView {
     public override func layout() {
         super.layout()
         spinner.frame = NSRect(x: Self.horizontalPadding, y: bounds.height - Self.footerHeight + 2, width: 14, height: 14)
+        refreshToolTips()
     }
 
     /// The size this panel should have for `model`: up to `maxVisibleRows` rows, and wide enough
@@ -109,15 +121,21 @@ public final class CompletionPanelView: NSView {
         return NSSize(width: min(maximumWidth, max(minimumWidth, ceil(widest + scrollerAllowance))), height: height)
     }
 
-    private static func contentWidth(of item: CompletionItem) -> CGFloat {
-        var width = horizontalPadding + iconSize + iconGap
-        width += (item.label as NSString).size(withAttributes: [.font: boldLabelFont]).width
+    /// The label, its tail and its origin on one line, before any truncation.
+    private static func textRunWidth(of item: CompletionItem) -> CGFloat {
+        var width = (item.label as NSString).size(withAttributes: [.font: boldLabelFont]).width
         if let tail = item.labelDetail, !tail.isEmpty {
             width += (tail as NSString).size(withAttributes: [.font: detailFont]).width
         }
         if let origin = item.origin, !origin.isEmpty {
             width += ("  \(origin)" as NSString).size(withAttributes: [.font: detailFont]).width
         }
+        return width
+    }
+
+    private static func contentWidth(of item: CompletionItem) -> CGFloat {
+        var width = horizontalPadding + iconSize + iconGap
+        width += textRunWidth(of: item)
         if let detail = item.detail, !detail.isEmpty {
             width += columnGap + (detail as NSString).size(withAttributes: [.font: detailFont]).width
         }
@@ -128,6 +146,29 @@ public final class CompletionPanelView: NSView {
 
     private var visibleRowCount: Int {
         min(model.items.count, Self.maxVisibleRows)
+    }
+
+    /// What to keep still when the list is replaced: the selected row if it is on screen, else the
+    /// top row, with its distance from the top of the list.
+    private func scrollAnchor() -> (key: String, offset: Int)? {
+        let items = model.items
+        let visible = firstVisibleIndex..<min(items.count, firstVisibleIndex + Self.maxVisibleRows)
+        if let selected = model.selectedIndex, visible.contains(selected) {
+            return (items[selected].identityKey, selected - firstVisibleIndex)
+        }
+        guard items.indices.contains(firstVisibleIndex) else { return nil }
+        return (items[firstVisibleIndex].identityKey, 0)
+    }
+
+    /// Puts the anchored row back at the same distance from the top; the list starts over only
+    /// when that row is gone.
+    private func restoreScroll(to anchor: (key: String, offset: Int)?) {
+        guard let anchor, let index = model.items.firstIndex(where: { $0.identityKey == anchor.key }) else {
+            firstVisibleIndex = 0
+            return
+        }
+        let maxFirst = max(0, model.items.count - Self.maxVisibleRows)
+        firstVisibleIndex = max(0, min(index - anchor.offset, maxFirst))
     }
 
     private func scrollSelectionIntoView() {
@@ -152,6 +193,7 @@ public final class CompletionPanelView: NSView {
         let rows = Int(delta.rounded(delta > 0 ? .up : .down))
         guard rows != 0 else { return }
         firstVisibleIndex = max(0, min(count - Self.maxVisibleRows, firstVisibleIndex - rows))
+        refreshToolTips()
         needsDisplay = true
     }
 
@@ -266,10 +308,20 @@ public final class CompletionPanelView: NSView {
             let footer = NSRect(x: 0, y: bounds.height - Self.footerHeight, width: bounds.width, height: Self.footerHeight)
             NSColor.separatorColor.setFill()
             NSRect(x: 0, y: footer.minY, width: bounds.width, height: 1).fill()
+            let attributes: [NSAttributedString.Key: Any] = [.font: Self.detailFont, .foregroundColor: NSColor.secondaryLabelColor]
+            let leadingX = model.isComputing ? Self.horizontalPadding + 16 : Self.horizontalPadding
+            var leadingEnd = leadingX
             if let advertisement = model.advertisement, !advertisement.isEmpty {
-                let attributes: [NSAttributedString.Key: Any] = [.font: Self.detailFont, .foregroundColor: NSColor.secondaryLabelColor]
-                let x = model.isComputing ? Self.horizontalPadding + 16 : Self.horizontalPadding
-                (advertisement as NSString).draw(at: NSPoint(x: x, y: footer.minY + 2), withAttributes: attributes)
+                (advertisement as NSString).draw(at: NSPoint(x: leadingX, y: footer.minY + 2), withAttributes: attributes)
+                leadingEnd += (advertisement as NSString).size(withAttributes: attributes).width
+            }
+            // The hint sits at the trailing edge and gives way to a long advertisement.
+            if model.showsKeyHintRow {
+                let hint = Self.keyHint as NSString
+                let x = bounds.width - Self.horizontalPadding - hint.size(withAttributes: attributes).width
+                if x >= leadingEnd + Self.columnGap {
+                    hint.draw(at: NSPoint(x: x, y: footer.minY + 2), withAttributes: attributes)
+                }
             }
         }
 
@@ -399,5 +451,85 @@ public final class CompletionPanelView: NSView {
         case .text: return ("a", NSColor.systemGray.withAlphaComponent(0.6))
         case .command: return (">", NSColor.systemIndigo)
         }
+    }
+}
+
+// MARK: - Accessibility
+
+extension CompletionPanelView {
+    /// What VoiceOver reads for a row: the name with its parameters, then the type or package.
+    static func accessibilityLabel(for item: CompletionItem) -> String {
+        var parts = [item.label + (item.labelDetail ?? "")]
+        if let detail = item.detail, !detail.isEmpty { parts.append(detail) }
+        if item.isDeprecated { parts.append("deprecated") }
+        return parts.joined(separator: ", ")
+    }
+
+    public override func isAccessibilityElement() -> Bool { true }
+
+    public override func accessibilityRole() -> NSAccessibility.Role? { .list }
+
+    public override func accessibilityLabel() -> String? { "Completions" }
+
+    /// One element per row on screen. They are rebuilt on every query, so frames follow scrolling.
+    public override func accessibilityChildren() -> [Any]? {
+        accessibilityRowElements()
+    }
+
+    public override func accessibilitySelectedChildren() -> [Any]? {
+        accessibilityRowElements().filter { $0.isAccessibilitySelected() }
+    }
+
+    func accessibilityRowElements() -> [NSAccessibilityElement] {
+        (0..<visibleRowCount).compactMap { row in
+            let index = firstVisibleIndex + row
+            guard model.items.indices.contains(index) else { return nil }
+            let rect = rowRect(forVisibleRow: row)
+            let element = NSAccessibilityElement()
+            element.setAccessibilityRole(.row)
+            element.setAccessibilityLabel(Self.accessibilityLabel(for: model.items[index]))
+            element.setAccessibilityParent(self)
+            element.setAccessibilityFrame(window.map { $0.convertToScreen(convert(rect, to: nil)) } ?? rect)
+            element.setAccessibilitySelected(index == model.selectedIndex)
+            return element
+        }
+    }
+}
+
+// MARK: - Tooltips for clipped rows
+
+extension CompletionPanelView: NSViewToolTipOwner {
+    /// Whether the row's label run or type column does not fit at the panel's current width.
+    func isTruncated(_ item: CompletionItem) -> Bool {
+        let textX = Self.horizontalPadding + Self.iconSize + Self.iconGap
+        let rightEdge = bounds.width - Self.horizontalPadding - (model.items.count > Self.maxVisibleRows ? 6 : 0)
+        let labelWidth = (item.label as NSString).size(withAttributes: [.font: Self.boldLabelFont]).width
+        var detailWidth: CGFloat = 0
+        if let detail = item.detail, !detail.isEmpty {
+            let natural = (detail as NSString).size(withAttributes: [.font: Self.detailFont]).width
+            if natural > max(40, rightEdge - textX - labelWidth - Self.columnGap) { return true }
+            detailWidth = natural
+        }
+        let allowed = max(20, rightEdge - textX - (detailWidth > 0 ? detailWidth + Self.columnGap : 0))
+        return Self.textRunWidth(of: item) > allowed
+    }
+
+    /// Rebuilds the tooltip rectangles: one per visible row that is clipped, none for the rest.
+    func refreshToolTips() {
+        removeAllToolTips()
+        guard bounds.width > 0 else { return }
+        for row in 0..<visibleRowCount {
+            let index = firstVisibleIndex + row
+            guard model.items.indices.contains(index), isTruncated(model.items[index]) else { continue }
+            addToolTip(rowRect(forVisibleRow: row), owner: self, userData: nil)
+        }
+    }
+
+    public func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        guard let index = rowIndex(at: point), model.items.indices.contains(index) else { return "" }
+        let item = model.items[index]
+        return [item.label + (item.labelDetail ?? ""), item.detail ?? ""]
+            .filter { !$0.isEmpty }
+            .joined(separator: " — ")
     }
 }

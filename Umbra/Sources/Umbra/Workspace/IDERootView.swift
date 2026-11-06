@@ -58,10 +58,6 @@ public struct IDERootView: View {
         let _ = workspace.layoutEpoch
         let _ = workspace.windowMode
         let _ = workspace.showsWelcome
-        let _ = workspace.preferences.uiFontName
-        let _ = workspace.preferences.uiFontSize
-        let _ = workspace.preferences.uiColorSchemeID
-        let _ = workspace.uiColorSchemeEpoch
         VStack(spacing: 0) {
             // Full screen: the native tab bar is the topmost strip and the toolbar row sits under it.
             if chrome.hasTabBarAboveToolbar {
@@ -111,7 +107,8 @@ public struct IDERootView: View {
                                 IDEEditorLayoutNode(layout: workspace.editorLayout)
                                     .id(workspace.layoutEpoch)
                             } else {
-                                IDEWelcomeView()
+                                // The welcome page, or in a project the quieter empty editor.
+                                IDENoDocumentView()
                             }
                         }
                         .allowsHitTesting(!workspace.isSettingsVisible && !isAgentPageShown)
@@ -162,6 +159,7 @@ public struct IDERootView: View {
                             .idePanel()
                             .opacity(workspace.chromeOpacity)
                             .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                            .accessibilityHidden(workspace.chromeOpacity <= 0.05)
                     }
                 }
                 .onGeometryChange(for: Double.self) { Double($0.size.height) } action: {
@@ -215,7 +213,8 @@ public struct IDERootView: View {
 
             if !isAIMode {
                 IDEStatusBarPanel()
-                    .id(workspace.uiColorSchemeEpoch)
+                    // The status bar's menus are native controls; a new scheme rebuilds them.
+                    .id(IDEAppearance.scheme.id)
                     .opacity(workspace.chromeOpacity)
                     .allowsHitTesting(workspace.chromeOpacity > 0.05)
             }
@@ -255,14 +254,14 @@ public struct IDERootView: View {
                     IDENotificationPanel()
                         .padding(.top, topChromeHeight + IDEAppearance.Spacing.xs)
                         .padding(.trailing, IDEAppearance.Spacing.panelGap + IDEAppearance.Spacing.xs)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .ideTransition(.move(edge: .top).combined(with: .opacity))
                 }
                 .opacity(workspace.chromeOpacity)
                 .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 .onExitCommand { workspace.notifications.setPanelPresented(false) }
             }
         }
-        .animation(.easeOut(duration: 0.15), value: workspace.notifications.isPanelPresented)
+        .ideAnimation(IDEAppearance.Motion.standard, value: workspace.notifications.isPanelPresented)
         .overlay {
             if workspace.showsFirstRunGuide {
                 IDEFirstRunGuideOverlay()
@@ -350,13 +349,19 @@ public struct IDERootView: View {
         }
         .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
-        .onChange(of: workspace.preferences.uiColorSchemeID) { _, _ in
+        .onReceive(NotificationCenter.default.publisher(for: IDEAppearance.didChangeNotification)) { _ in
             workspace.refreshUIColorScheme()
         }
         .task {
             guard !didBootstrap else { return }
             didBootstrap = true
             workspace.bootstrap()
+            // A restored window arrives with its own panel widths, not the first window's that
+            // `init` read; the size-saving task below would otherwise store those over them.
+            sidebarWidth = workspace.sidebarWidth
+            projectSidebarWidth = workspace.projectSidebarWidth
+            agentPanelWidth = workspace.agentPanelWidth
+            aiInspectorWidth = workspace.aiInspectorWidth
             workspace.focusActiveEditor()
         }
         .onChange(of: sidebarWidth) { _, newWidth in

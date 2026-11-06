@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 @testable import Umbra
 
-/// The session is split into `app.json` (shared by every window) and `last-window.json` (the window
-/// that was active last), migrated once from the old `session.json`.
+/// The session is split into `app.json` (shared by every window) and `windows.json` (one entry per
+/// window), migrated once from the old `session.json` and `last-window.json`.
 @MainActor
 final class IDESessionFilesTests: XCTestCase {
     private var directory: URL!
@@ -194,6 +194,103 @@ final class IDESessionFilesTests: XCTestCase {
     func testMissingFilesLoadAsNil() {
         XCTAssertNil(files.loadApp())
         XCTAssertNil(files.loadWindow())
+    }
+
+    // MARK: - Windows (windows.json)
+
+    private func window(_ id: UUID?, width: Double) -> IDEWindowSession {
+        IDEWindowSession(windowID: id, sidebarWidth: width)
+    }
+
+    func testEveryWindowRoundTripsInOrder() {
+        let ids = [UUID(), UUID(), UUID()]
+        files.saveWindows([window(ids[0], width: 201), window(ids[1], width: 202), window(ids[2], width: 203)])
+
+        let loaded = files.loadWindows()
+
+        XCTAssertEqual(loaded.map(\.windowID), ids)
+        XCTAssertEqual(loaded.map(\.sidebarWidth), [201, 202, 203])
+    }
+
+    func testAnOldLastWindowFileBecomesTheOnlyStoredWindow() throws {
+        files.saveWindow(IDEWindowSession(projectRootBookmark: Data([7]), sidebarWidth: 321))
+
+        let first = files.loadWindows()
+
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(first.first?.sidebarWidth, 321)
+        XCTAssertEqual(first.first?.projectRootBookmark, Data([7]))
+        let id = try XCTUnwrap(first.first?.windowID, "a window with no id is given one")
+        XCTAssertTrue(exists(files.windowsURL), "and the id is written, so the window adopts the id the file holds")
+        XCTAssertEqual(files.loadWindows().first?.windowID, id, "the same id on every later read")
+        XCTAssertTrue(exists(files.windowURL), "last-window.json is left alone for a downgrade")
+    }
+
+    func testWindowsJsonWinsOverTheOldLastWindowFile() {
+        let id = UUID()
+        files.saveWindow(IDEWindowSession(sidebarWidth: 111))
+        files.saveWindows([window(id, width: 222)])
+
+        XCTAssertEqual(files.loadWindows().map(\.sidebarWidth), [222])
+    }
+
+    func testAnEntryWithoutAnIdGetsOneAndKeepsItsPlace() throws {
+        let known = UUID()
+        files.saveWindows([window(known, width: 1), window(nil, width: 2)])
+
+        let loaded = files.loadWindows()
+
+        XCTAssertEqual(loaded.map(\.sidebarWidth), [1, 2])
+        XCTAssertEqual(loaded[0].windowID, known)
+        XCTAssertNotNil(loaded[1].windowID)
+        XCTAssertEqual(files.loadWindows().map(\.windowID), loaded.map(\.windowID))
+    }
+
+    func testUpsertUpdatesAWindowInPlaceAndPutsANewOneFirst() {
+        let a = UUID(), b = UUID(), c = UUID()
+        files.saveWindows([window(a, width: 1), window(b, width: 2)])
+
+        files.upsertWindow(window(b, width: 20))
+        XCTAssertEqual(files.loadWindows().map(\.windowID), [a, b])
+        XCTAssertEqual(files.loadWindows().map(\.sidebarWidth), [1, 20])
+
+        files.upsertWindow(window(c, width: 3))
+        XCTAssertEqual(files.loadWindows().map(\.windowID), [c, a, b])
+    }
+
+    func testAWindowWithoutAnIdCannotBeStored() {
+        files.upsertWindow(window(nil, width: 5))
+
+        XCTAssertFalse(exists(files.windowsURL))
+    }
+
+    func testRemovingAWindowDropsOnlyItsEntryAndWritesNothingForAStranger() {
+        let a = UUID(), b = UUID()
+        files.saveWindows([window(a, width: 1), window(b, width: 2)])
+
+        files.removeWindow(id: a)
+        XCTAssertEqual(files.loadWindows().map(\.windowID), [b])
+
+        let before = try? Data(contentsOf: files.windowsURL)
+        files.removeWindow(id: UUID())
+        XCTAssertEqual(try? Data(contentsOf: files.windowsURL), before)
+    }
+
+    func testACorruptWindowsFileLoadsAsNoWindowsAndLeavesTheAppFileAlone() throws {
+        files.saveApp(IDEAppSessionRecord(recentProjects: [URL(fileURLWithPath: "/tmp/p")]))
+        try Data("{ broken".utf8).write(to: files.windowsURL)
+
+        XCTAssertTrue(files.loadWindows().isEmpty)
+        XCTAssertEqual(files.loadApp()?.recentProjects, [URL(fileURLWithPath: "/tmp/p")])
+    }
+
+    func testAWindowSessionFromBeforeWindowIdsStillDecodes() throws {
+        let old = Data(#"{"sidebarWidth": 250, "isSidebarVisible": true}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(IDEWindowSession.self, from: old)
+
+        XCTAssertNil(decoded.windowID)
+        XCTAssertEqual(decoded.sidebarWidth, 250)
     }
 
     // MARK: - App state

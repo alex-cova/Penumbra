@@ -64,7 +64,7 @@ struct Splitter: SplitDivider {
                 handle(width: Self.handleLength, height: Self.handleThickness)
             }
         }
-        .animation(.easeOut(duration: 0.12), value: hovering)
+        .ideAnimation(IDEAppearance.Motion.quick, value: hovering)
         .contentShape(Rectangle())
         .task { dividerColor = color } // Otherwise, styling.color does not appear at open
         // If we are previewing hiding a side using drag-to-hide, and the splitter will be

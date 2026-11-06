@@ -318,7 +318,7 @@ private struct IDEJavaPostfixSection: View {
                 }
             }
             .disabled(!preferences.javaPostfix.isEnabled)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), alignment: .leading)], alignment: .leading, spacing: 4) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), alignment: .leading)], alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
                 ForEach(JavaPostfixConfiguration.builtInKeys, id: \.self) { key in
                     Toggle(key, isOn: postfixKeyBinding(key))
                         .toggleStyle(.checkbox)

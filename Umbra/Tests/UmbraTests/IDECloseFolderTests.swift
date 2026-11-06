@@ -275,6 +275,33 @@ final class IDECloseFolderTests: XCTestCase {
         XCTAssertFalse(IDEWindowRegistry.shared.forgetsFolderWhenClosing(extra))
     }
 
+    // MARK: - Quitting keeps every window
+
+    func testQuitStoresEveryUsedWindowWithItsFolderAndLeavesOutBlankOnes() throws {
+        let extra = IDEWorkspace()
+        extra.bootstrap()
+        defer { extra.windowWillClose() }
+        XCTAssertTrue(extra.isPristine)
+        let second = IDEWorkspace()
+        second.bootstrap()
+        defer { second.windowWillClose() }
+        second.newFile()
+        XCTAssertFalse(second.isPristine)
+
+        let sessions = IDEWindowRegistry.sessionsForTermination(of: [workspace, extra, second])
+
+        XCTAssertEqual(sessions.map(\.windowID), [workspace.windowID, second.windowID],
+                       "most recently key first, the blank window left out")
+        XCTAssertNotNil(sessions.first?.projectRootBookmark, "quitting does not forget the folder")
+        XCTAssertEqual(sessions.first?.terminalTabs?.count, 1, "the shell that was selected comes back")
+    }
+
+    func testEachWindowKeepsItsOwnIdInItsSession() {
+        let session = workspace.makeSession()
+
+        XCTAssertEqual(session.windowID, workspace.windowID)
+    }
+
     private func assertTerminalsAreHome() {
         let expected = home.standardizedFileURL.path
         XCTAssertEqual(workspace.terminalTabs.count, 2)

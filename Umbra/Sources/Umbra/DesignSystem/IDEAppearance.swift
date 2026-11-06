@@ -5,21 +5,34 @@ import SwiftUI
 /// Shared design tokens for the Umbra shell.
 /// VARIANCE 7 · DENSITY 8
 enum IDEAppearance {
-    nonisolated(unsafe) private(set) static var scheme: IDEUIColorScheme = IDEUmbraUIColorScheme.shared
+    /// The current colour scheme, read from `IDEThemeStore`: a read inside a SwiftUI body is
+    /// tracked, so the view redraws when the scheme changes.
+    static var scheme: IDEUIColorScheme { IDEThemeStore.shared.scheme }
+
+    /// Posted when the colour scheme or the UI font changes; see `IDEAppearanceObserver`.
+    static let didChangeNotification = Notification.Name("com.umbra.IDEAppearance.didChange")
 
     @MainActor
     static func applyUIColorScheme(_ scheme: IDEUIColorScheme) {
-        self.scheme = scheme
+        IDEThemeStore.shared.setScheme(scheme)
     }
 
     static var preferredColorScheme: ColorScheme {
         scheme.isDark ? .dark : .light
     }
     enum Spacing {
+        /// A hairline gap: a badge's vertical padding, stacked secondary lines.
+        static let hairline = 1.0
         /// Tightest stack gap (two-point vertical rhythm in dense rows).
         static let xxs = 2.0
+        /// Row padding in dense lists (problems, usages, structure).
+        static let tight = 3.0
         static let xs = 4.0
+        static let compact = 5.0
+        static let snug = 6.0
         static let sm = 8.0
+        /// A tab's horizontal padding.
+        static let cozy = 10.0
         static let md = 12.0
         static let lg = 16.0
         static let xl = 24.0
@@ -44,6 +57,8 @@ enum IDEAppearance {
         /// Smallest width or height of one editor pane in a split.
         static let editorPaneMinLength = 120.0
         static let welcomeMaxWidth = 520.0
+        /// The column of hints in the empty editor.
+        static let emptyEditorWidth = 280.0
         /// Gap between the floating panels, and between them and the window edge. Resize handles
         /// live in these gaps.
         static let panelGap = 6.0
@@ -54,6 +69,9 @@ enum IDEAppearance {
         static let trafficLightsInset = 78.0
         static let titlebarButton = 28.0
         static let dirtyDotSize = 5.0
+        /// Indent of a setting's detail lines under its toggle, and of a nested level beneath.
+        static let indent = 20.0
+        static let indentNested = 36.0
     }
 
     enum Radius {
@@ -64,6 +82,11 @@ enum IDEAppearance {
         static let selection = 4.0
         /// Tab-strip selected indicator bar.
         static let indicator = 1.0
+    }
+
+    /// Shared card shadow (toasts, notification panel): one colour/opacity, radius set by caller.
+    enum Shadow {
+        static let cardColor = Color.black.opacity(0.35)
     }
 
     enum Opacity {
@@ -79,6 +102,20 @@ enum IDEAppearance {
         static let breadcrumbChevron = 8.0
         static let toolbarGlyph = 12.0
         static let titlebarGlyph = 14.0
+        /// Disclosure and close marks in dense rows.
+        static let microGlyph = 8.0
+        /// File and tab icons, small list glyphs.
+        static let smallGlyph = 10.0
+        /// Row status icons (problems, tests, hierarchy kinds).
+        static let rowGlyph = 11.0
+        /// A notification's severity icon.
+        static let bodyGlyph = 13.0
+        /// The glyph above an empty-state message.
+        static let emptyStateGlyph = 18.0
+        /// The digits in a count badge.
+        static let badgeText = 9.0
+        /// The × of a closable tab.
+        static let closeGlyph = 9.0
     }
 
     enum Typography {
@@ -118,6 +155,8 @@ enum IDEAppearance {
         static var editor: Color { Color(hex: scheme.editor) }
         static var tabBar: Color { Color(hex: scheme.tabBar) }
         static var tabActive: Color { Color(hex: scheme.tabActive) }
+        /// The selected tab of a pane that does not have focus: the same fill, half as strong.
+        static var tabActiveInactivePane: Color { Color(hex: scheme.tabActive).opacity(0.5) }
         static let tabInactive = Color.clear
         static var tabHover: Color { Color(hex: scheme.tabHover) }
         static var controlHover: Color { Color(hex: scheme.controlHover) }
@@ -182,8 +221,9 @@ extension Color {
 enum IDEUIFonts {
     static let defaultFamilyName = "SF Compact"
     static let defaultFontSize: Double = 13
-    private(set) nonisolated(unsafe) static var currentFamilyName = defaultFamilyName
-    private(set) nonisolated(unsafe) static var currentFontSize = defaultFontSize
+    /// Read from `IDEThemeStore`, so a font read in a SwiftUI body is tracked like a colour.
+    static var currentFamilyName: String { IDEThemeStore.shared.fontFamily }
+    static var currentFontSize: Double { IDEThemeStore.shared.fontSize }
 
     static let familyNames: [String] = {
         NSFontManager.shared.availableFontFamilies
@@ -199,11 +239,11 @@ enum IDEUIFonts {
     }
 
     static func setCurrentFamilyName(_ name: String) {
-        currentFamilyName = name
+        IDEThemeStore.shared.setFontFamily(name)
     }
 
     static func setCurrentFontSize(_ size: Double) {
-        currentFontSize = size
+        IDEThemeStore.shared.setFontSize(size)
     }
 
     static func scaledSize(_ base: CGFloat) -> CGFloat {
@@ -278,7 +318,7 @@ struct IDEPanelTitle: View {
             .foregroundStyle(IDEAppearance.ColorToken.foreground)
             .lineLimit(1)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
-            .padding(.vertical, 3)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
             .background(
                 IDEAppearance.ColorToken.card,
                 in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)

@@ -696,7 +696,7 @@ struct IDEChangesPanel: View {
 
     private var changedFilesHeader: some View {
         Button {
-            withAnimation(.easeOut(duration: 0.12)) { changedFilesExpanded.toggle() }
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.quick) { changedFilesExpanded.toggle() }
         } label: {
             HStack(spacing: IDEAppearance.Spacing.xs) {
                 IDEDisclosureChevron(isExpanded: changedFilesExpanded)
@@ -966,7 +966,7 @@ private struct IDEUnsyncedRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: IDEAppearance.Spacing.xs) {
                 Button {
-                    if canExpand { withAnimation(.easeOut(duration: 0.12)) { isExpanded.toggle() } }
+                    if canExpand { IDEAppearance.Motion.animate(IDEAppearance.Motion.quick) { isExpanded.toggle() } }
                 } label: {
                     HStack(spacing: IDEAppearance.Spacing.xs) {
                         IDEDisclosureChevron(isExpanded: isExpanded && canExpand)

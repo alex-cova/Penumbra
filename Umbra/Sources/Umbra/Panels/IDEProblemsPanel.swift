@@ -8,6 +8,8 @@ import SwiftUI
 struct IDEProblemsPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var collapsedFiles: Set<URL> = []
+    @State private var selectedRowID: String?
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,18 +39,18 @@ struct IDEProblemsPanel: View {
             stripButton("Project Errors", isSelected: runs.selection == .project) { runs.selection = .project }
             ForEach(runs.runs) { run in
                 Button { runs.selection = .run(run.id) } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: IDEAppearance.Spacing.xs) {
                         if run.state == .running { ProgressView().controlSize(.mini) }
                         Text(run.title)
                             .font(IDEAppearance.Typography.tabLabel)
                             .lineLimit(1)
                             .foregroundStyle(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                        Button { runs.close(run.id) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .semibold)) }
+                        Button { runs.close(run.id) } label: { Image(systemName: "xmark").font(.system(size: IDEAppearance.IconSize.microGlyph, weight: .semibold)) }
                             .buttonStyle(.borderless)
                             .help("Close results")
                     }
                     .padding(.horizontal, IDEAppearance.Spacing.sm)
-                    .padding(.vertical, 3)
+                    .padding(.vertical, IDEAppearance.Spacing.tight)
                     .background(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.tabActive : .clear)
                     .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
                     .contentShape(Rectangle())
@@ -59,7 +61,7 @@ struct IDEProblemsPanel: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
-        .padding(.vertical, 3)
+        .padding(.vertical, IDEAppearance.Spacing.tight)
     }
 
     private func stripButton(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -68,23 +70,36 @@ struct IDEProblemsPanel: View {
                 .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
                 .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 .padding(.horizontal, IDEAppearance.Spacing.sm)
-                .padding(.vertical, 3)
+                .padding(.vertical, IDEAppearance.Spacing.tight)
                 .background(isSelected ? IDEAppearance.ColorToken.tabActive : .clear)
                 .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
         }
         .buttonStyle(.plain)
     }
 
+    /// Flat keyboard order: build messages first, then rows of expanded files.
+    private func flatRowIDs(files: [ProblemFile], messages: [GradleProblem]) -> [String] {
+        messages.map { "message:\($0.id)" }
+            + files.flatMap { file in collapsedFiles.contains(file.url) ? [] : file.rows.map(\.id) }
+    }
+
     private var problemList: some View {
         let (files, messages) = workspace.visibleProblems()
+        let flatIDs = flatRowIDs(files: files, messages: messages)
         return Group {
             if files.isEmpty && messages.isEmpty {
                 emptyState
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(messages) { message in
-                            IDEBuildMessageRowView(message: message) { workspace.openBuildMessage(message) }
+                            IDEBuildMessageRowView(message: message, isSelected: selectedRowID == "message:\(message.id)") {
+                                selectedRowID = "message:\(message.id)"
+                                isListFocused = true
+                                workspace.openBuildMessage(message)
+                            }
+                            .id("message:\(message.id)")
                         }
                         ForEach(files) { file in
                             fileHeader(file)
@@ -92,7 +107,12 @@ struct IDEProblemsPanel: View {
                                 ForEach(file.rows) { row in
                                     IDEProblemRowView(
                                         row: row,
-                                        onOpen: { workspace.openProblem(row) },
+                                        isSelected: selectedRowID == row.id,
+                                        onOpen: {
+                                            selectedRowID = row.id
+                                            isListFocused = true
+                                            workspace.openProblem(row)
+                                        },
                                         onFix: { workspace.fixProblemWithAgent(row) },
                                         onQuickFixes: [IDEProblemsStore.inspectionSource, SwiftInspection.diagnosticSource].contains(row.diagnostic.source) ? { showQuickFixes(for: row) } : nil,
                                         rule: inspectionRule(for: row),
@@ -104,15 +124,54 @@ struct IDEProblemsPanel: View {
                                         },
                                         onConfigureRule: { workspace.showInspectionSettings(code: $0.code, language: $0.language) }
                                     )
+                                    .id(row.id)
                                 }
                             }
                         }
                     }
                     .padding(.vertical, IDEAppearance.Spacing.xs)
                 }
+                .focusable()
+                .focused($isListFocused)
+                .onKeyPress(phases: [.down, .repeat]) { press in
+                    handleListKey(press, flatIDs: flatIDs, files: files, messages: messages, proxy: proxy)
+                }
+                .onChange(of: selectedRowID) { _, id in
+                    if let id { proxy.scrollTo(id) }
+                }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func handleListKey(
+        _ press: KeyPress, flatIDs: [String], files: [ProblemFile], messages: [GradleProblem], proxy: ScrollViewProxy
+    ) -> KeyPress.Result {
+        switch press.key {
+        case .upArrow, .downArrow:
+            guard !flatIDs.isEmpty else { return .handled }
+            let current = selectedRowID.flatMap { flatIDs.firstIndex(of: $0) }
+            let next = press.key == .downArrow
+                ? min((current ?? -1) + 1, flatIDs.count - 1)
+                : max((current ?? flatIDs.count) - 1, 0)
+            selectedRowID = flatIDs[next]
+            return .handled
+        case .return:
+            guard let selectedRowID else { return .handled }
+            if selectedRowID.hasPrefix("message:") {
+                let raw = String(selectedRowID.dropFirst("message:".count))
+                if let message = messages.first(where: { "\($0.id)" == raw }) { workspace.openBuildMessage(message) }
+            } else if let row = files.flatMap(\.rows).first(where: { $0.id == selectedRowID }) {
+                workspace.openProblem(row)
+            }
+            return .handled
+        case .escape:
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            return .ignored
+        }
     }
 
     /// The inspection behind a row, nil for compiler, editor and tool diagnostics.
@@ -137,7 +196,7 @@ struct IDEProblemsPanel: View {
     private var emptyState: some View {
         VStack(spacing: IDEAppearance.Spacing.xs) {
             Image(systemName: "checkmark.circle")
-                .font(.system(size: 18))
+                .font(.system(size: IDEAppearance.IconSize.emptyStateGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             Text(workspace.problems.isEmpty ? "No problems" : "No problems match the filter")
                 .font(IDEAppearance.Typography.body)
@@ -161,6 +220,7 @@ struct IDEProblemsPanel: View {
 /// A project-level Gradle message (failed task, dependency error, test summary).
 private struct IDEBuildMessageRowView: View {
     let message: GradleProblem
+    var isSelected = false
     let onOpen: () -> Void
 
     @State private var isHovering = false
@@ -180,9 +240,9 @@ private struct IDEBuildMessageRowView: View {
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
                 Image(systemName: IDEProblemStyle.symbol(for: severity))
-                    .font(.system(size: 11))
+                    .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                     .foregroundStyle(IDEProblemStyle.color(for: severity))
                     .frame(width: 14)
                 Text(text)
@@ -199,8 +259,8 @@ private struct IDEBuildMessageRowView: View {
                 }
             }
             .padding(.horizontal, IDEAppearance.Spacing.md)
-            .padding(.vertical, 3)
-            .background(isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
+            .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -211,6 +271,7 @@ private struct IDEBuildMessageRowView: View {
 
 private struct IDEProblemRowView: View {
     let row: ProblemRow
+    var isSelected = false
     let onOpen: () -> Void
     let onFix: () -> Void
     var onQuickFixes: (() -> Void)?
@@ -226,9 +287,9 @@ private struct IDEProblemRowView: View {
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
                 Image(systemName: IDEProblemStyle.symbol(for: row.diagnostic.severity))
-                    .font(.system(size: 11))
+                    .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                     .foregroundStyle(IDEProblemStyle.color(for: row.diagnostic.severity))
                     .frame(width: 14)
                 Text(row.diagnostic.message)
@@ -247,8 +308,8 @@ private struct IDEProblemRowView: View {
             }
             .padding(.leading, IDEAppearance.Spacing.xl)
             .padding(.trailing, IDEAppearance.Spacing.md)
-            .padding(.vertical, 3)
-            .background(isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
+            .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -258,7 +319,7 @@ private struct IDEProblemRowView: View {
                 Button(action: onFix) {
                     Label("Fix with Agent", systemImage: "sparkles")
                         .font(IDEAppearance.Typography.caption)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, IDEAppearance.Spacing.snug)
                         .padding(.vertical, IDEAppearance.Spacing.xxs)
                         .background(IDEAppearance.ColorToken.card, in: Capsule())
                 }
@@ -338,7 +399,7 @@ struct IDEProblemsControls: View {
             }
         } label: {
             Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
         .buttonStyle(.borderless)
@@ -357,9 +418,9 @@ struct IDEProblemsControls: View {
                 workspace.problems.toggleSeverity(.hint)
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: IDEAppearance.Spacing.xs) {
                 Image(systemName: IDEProblemStyle.symbol(for: severity))
-                    .font(.system(size: 10))
+                    .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 Text("\(count)")
                     .font(IDEAppearance.Typography.monoSmall)
             }
@@ -387,7 +448,7 @@ struct IDEProblemsTabItem: View {
             onSelect: onSelect
         ) {
             Image(systemName: errorCount > 0 ? "xmark.octagon.fill" : "exclamationmark.triangle")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(errorCount > 0 ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
         } trailing: {
             EmptyView()

@@ -74,6 +74,13 @@ size-10 glyph icons when modernized to the shared chrome). The pass deliberately
 mapping size-10/11/9 text to scaled `Typography` tokens vs `IconSize` glyph tokens needs an owner design call,
 since literals bypass `IDEUIFonts.scaledSize`.
 
+**Decision (Premium UX plan, P2 A):** an SF Symbol's size is a fixed `IDEAppearance.IconSize` token (a glyph does
+not follow the UI text size); text uses the scaled `IDEAppearance.Typography` fonts. The core chrome folders
+(`DesignSystem`, `SharedUI`, `Workspace`, `Explorer`, `Panels`, `App`, `Settings`, `Editor`) are swept and
+`Scripts/check-design-tokens.sh` (a CI step) keeps them so: no numeric `.system(size:)`, `.padding(…, N)` or
+`spacing: N` (zero allowed) unless the line ends `// token-exempt: <why>`. The feature folders (Agent, Git, Run,
+Database, Debug, Diagrams, Projects, SwiftUIPreview, Profiler, HexEditor, Inspections, …) are not swept yet.
+
 Lessons worth keeping:
 
 - A path built from `#filePath` breaks when its file moves. The debug adapter and analysis server jars were found

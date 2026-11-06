@@ -187,4 +187,32 @@ final class JavaDifferentialTests: XCTestCase {
         let differences = report.differences(from: baseline)
         XCTAssertTrue(differences.isEmpty, differences.joined(separator: "\n"))
     }
+
+    /// H1: the sampler drops words inside comments and strings, including the shapes the
+    /// old line-based check leaked: trailing `//` comments and inner `/* */` lines.
+    func testIdentifierSitesExcludesCommentsAndStrings() {
+        let source = """
+        package com.example;
+        /** Javadoc words like HelperFactory are not code. */
+        public class CommentSampler {
+            // trailing words like TrailingWidget should not sample
+            /* block words like BlockGadget
+               inner words like InnerSprocket span lines */
+            String fieldName = "string words like StringLiteral do not count";
+            void helperMethod() {
+                int localName = fieldName.length(); // call words like CallWidget leaked before
+            }
+        }
+        """
+        let sampled = JavaDifferentialHarness.identifierSites(in: source, limit: 100)
+        let names = Set(sampled.sites.map(\.name))
+        for leaked in ["HelperFactory", "TrailingWidget", "BlockGadget", "InnerSprocket", "StringLiteral", "CallWidget"] {
+            XCTAssertFalse(names.contains(leaked), "\(leaked) sampled from a comment or string")
+        }
+        for kept in ["CommentSampler", "fieldName", "helperMethod", "localName", "length"] {
+            XCTAssertTrue(names.contains(kept), "\(kept) missing from sampled sites")
+        }
+        XCTAssertGreaterThan(sampled.excluded, 0, "nothing sampled out")
+        XCTAssertGreaterThan(sampled.leaks, 0, "the old check leaked nothing here")
+    }
 }

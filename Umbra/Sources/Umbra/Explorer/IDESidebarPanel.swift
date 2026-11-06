@@ -76,7 +76,7 @@ struct IDESidebarPanel: View {
                 IDEExplorerSearchField(query: $searchQuery, isFocused: $isSearchFocused, onDismiss: dismissSearch)
                     .padding(.horizontal, IDEAppearance.Spacing.sm)
                     .padding(.bottom, IDEAppearance.Spacing.sm)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .ideTransition(.opacity.combined(with: .move(edge: .top)))
             }
 
             IDEFileTreeView(
@@ -116,6 +116,8 @@ struct IDESidebarPanel: View {
                 showsProjectLibraries: preferences.explorerShowExternalLibraries,
                 onCloseArchive: { workspace.closeArchive($0) },
                 onOpenArchiveAsHex: { workspace.openArchiveAsHex($0) },
+                onClearFilter: { searchQuery = "" },
+                onOpenFolder: { workspace.openFolder() },
                 collapsedWhileFiltering: $collapsedWhileFiltering
             )
         }
@@ -134,7 +136,7 @@ struct IDESidebarPanel: View {
         if isSearchPresented {
             dismissSearch()
         } else {
-            withAnimation(.easeOut(duration: 0.16)) {
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) {
                 isSearchPresented = true
             }
         }
@@ -142,7 +144,7 @@ struct IDESidebarPanel: View {
 
     private func dismissSearch() {
         guard isSearchPresented else { return }
-        withAnimation(.easeOut(duration: 0.16)) {
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) {
             isSearchPresented = false
             searchQuery.removeAll()
         }
@@ -199,7 +201,7 @@ private struct IDEExplorerSearchField: View {
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
+                .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .accessibilityHidden(true)
 
@@ -217,7 +219,7 @@ private struct IDEExplorerSearchField: View {
                     query.removeAll()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
+                        .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
                 .buttonStyle(.plain)
