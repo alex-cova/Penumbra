@@ -52,6 +52,8 @@ enum IDEAppearance {
         /// Smallest width or height of one editor pane in a split.
         static let editorPaneMinLength = 120.0
         static let welcomeMaxWidth = 520.0
+        /// The column of hints in the empty editor.
+        static let emptyEditorWidth = 280.0
         /// Gap between the floating panels, and between them and the window edge. Resize handles
         /// live in these gaps.
         static let panelGap = 6.0

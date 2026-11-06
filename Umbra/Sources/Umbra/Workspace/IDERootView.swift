@@ -111,7 +111,8 @@ public struct IDERootView: View {
                                 IDEEditorLayoutNode(layout: workspace.editorLayout)
                                     .id(workspace.layoutEpoch)
                             } else {
-                                IDEWelcomeView()
+                                // The welcome page, or in a project the quieter empty editor.
+                                IDENoDocumentView()
                             }
                         }
                         .allowsHitTesting(!workspace.isSettingsVisible && !isAgentPageShown)

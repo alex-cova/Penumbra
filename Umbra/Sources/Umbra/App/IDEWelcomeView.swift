@@ -194,12 +194,8 @@ private struct IDEWelcomeProjectContent: View {
 
     /// Recent files that live inside this project.
     private var projectFiles: [URL] {
-        guard let root = rootURL?.standardizedFileURL.path else { return [] }
-        let prefix = root.hasSuffix("/") ? root : root + "/"
-        return workspace.recentFileURLs
-            .filter { $0.standardizedFileURL.path.hasPrefix(prefix) }
-            .prefix(8)
-            .map { $0 }
+        guard let rootURL else { return [] }
+        return IDEProjectRecentFiles.files(in: rootURL, from: workspace.recentFileURLs, limit: 8)
     }
 
     var body: some View {
