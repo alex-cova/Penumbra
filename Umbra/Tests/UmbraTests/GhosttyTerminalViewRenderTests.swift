@@ -194,4 +194,133 @@ final class GhosttyTerminalViewRenderTests: XCTestCase {
         guard let t = inkBounds(in: tabbed), let s = inkBounds(in: spaced) else { return }
         XCTAssertEqual(t.maxX, s.maxX, "B after a tab must land in column 8, as after seven spaces")
     }
+
+    // MARK: Settings ▸ Terminal
+
+    private func settingsConfiguration(_ change: (inout IDETerminalSettings) -> Void) -> GhosttyTerminalViewConfiguration {
+        var settings = IDETerminalSettings()
+        change(&settings)
+        return GhosttyTerminalViewConfiguration(
+            settings: settings, scheme: (0xFFFFFF, 0x000000, 0xFFFFFF), termName: "xterm-256color")
+    }
+
+    func testRowHeightAdjustmentChangesHowManyRowsFit() {
+        let view = makeView(size: CGSize(width: 800, height: 1200))
+        let normal = view.gridLayout
+        view.apply(settingsConfiguration { $0.cellHeightAdjustPercent = 50 })
+        view.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(view.gridLayout.cellHeight, normal.cellHeight)
+        XCTAssertLessThan(view.gridLayout.rows, normal.rows)
+        view.apply(settingsConfiguration { $0.cellHeightAdjustPercent = 0 })
+        XCTAssertEqual(view.gridLayout.rows, normal.rows)
+    }
+
+    func testUnsafePasteRule() {
+        XCTAssertFalse(GhosttyTerminalView.isUnsafePaste("ls -la", bracketed: false))
+        XCTAssertTrue(GhosttyTerminalView.isUnsafePaste("ls\n", bracketed: false))
+        XCTAssertTrue(GhosttyTerminalView.isUnsafePaste("a\rb", bracketed: false))
+        XCTAssertFalse(GhosttyTerminalView.isUnsafePaste("ls\n", bracketed: true), "a bracketed paste is held back by the shell")
+        XCTAssertTrue(GhosttyTerminalView.isUnsafePaste("x\u{1B}[201~rm -rf", bracketed: true), "it must not be able to close the bracket")
+    }
+
+    /// Runs `body` with the general pasteboard holding `text`, and puts back what was there.
+    private func withPasteboard(_ text: String?, _ body: () -> Void) {
+        let board = NSPasteboard.general
+        let saved = board.string(forType: .string)
+        board.clearContents()
+        if let text { board.setString(text, forType: .string) }
+        body()
+        board.clearContents()
+        if let saved { board.setString(saved, forType: .string) }
+    }
+
+    func testPasteWithLineBreaksAsksFirstWhenProtected() {
+        let view = makeView()
+        var questions: [String] = []
+        view.confirm = { message, _, _, completion in
+            questions.append(message)
+            completion(false)
+        }
+        withPasteboard("echo hi\n") {
+            view.pasteFromPasteboard()
+            XCTAssertEqual(questions.count, 1)
+            view.pasteFromPasteboard()
+            XCTAssertEqual(questions.count, 2)
+        }
+    }
+
+    func testPasteIsNotQuestionedWhenProtectionIsOffOrTheTextIsPlain() {
+        let view = makeView()
+        var asked = 0
+        view.confirm = { _, _, _, completion in
+            asked += 1
+            completion(false)
+        }
+        withPasteboard("echo hi") {
+            view.pasteFromPasteboard()
+        }
+        view.apply(settingsConfiguration { $0.confirmUnsafePaste = false })
+        withPasteboard("echo hi\n") {
+            view.pasteFromPasteboard()
+        }
+        XCTAssertEqual(asked, 0)
+    }
+
+    private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        return condition()
+    }
+
+    func testClipboardReadAsksOnceWhilePending() {
+        let view = makeView()
+        view.apply(settingsConfiguration { $0.clipboardRead = .ask })
+        var pending: [(Bool) -> Void] = []
+        view.confirm = { _, _, _, completion in pending.append(completion) }
+        view.feedOutput("\u{1B}]52;c;?\u{07}")
+        XCTAssertTrue(waitUntil { pending.count == 1 })
+        view.feedOutput("\u{1B}]52;c;?\u{07}")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(pending.count, 1, "a second request while the prompt is open does not stack another")
+        pending[0](false)
+        view.feedOutput("\u{1B}]52;c;?\u{07}")
+        XCTAssertTrue(waitUntil { pending.count == 2 }, "after an answer the next request asks again")
+    }
+
+    func testClipboardWriteReachesThePasteboardOnlyWhenAllowed() {
+        let view = makeView()
+        withPasteboard("before") {
+            view.apply(settingsConfiguration { $0.clipboardWrite = .deny })
+            view.feedOutput("\u{1B}]52;c;aGVsbG8=\u{07}")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            XCTAssertEqual(NSPasteboard.general.string(forType: .string), "before")
+
+            view.apply(settingsConfiguration { $0.clipboardWrite = .allow })
+            view.feedOutput("\u{1B}]52;c;aGVsbG8=\u{07}")
+            XCTAssertTrue(waitUntil { NSPasteboard.general.string(forType: .string) == "hello" })
+        }
+    }
+
+    func testDesktopNotificationsAndTitlesFollowTheirSwitches() {
+        let view = makeView()
+        var notifications: [String] = []
+        var titles: [String] = []
+        view.onDesktopNotification = { _, body in notifications.append(body) }
+        view.onTitleUpdate = { titles.append($0) }
+
+        view.feedOutput("\u{1B}]9;one\u{07}\u{1B}]2;first\u{07}")
+        XCTAssertTrue(waitUntil { notifications == ["one"] && titles == ["first"] })
+
+        view.apply(settingsConfiguration {
+            $0.desktopNotifications = false
+            $0.allowTitleChange = false
+        })
+        view.feedOutput("\u{1B}]9;two\u{07}\u{1B}]2;second\u{07}")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(notifications, ["one"])
+        XCTAssertEqual(titles, ["first"])
+    }
 }

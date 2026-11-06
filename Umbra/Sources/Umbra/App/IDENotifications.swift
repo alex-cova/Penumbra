@@ -34,6 +34,7 @@ enum IDENotificationCategory: String, CaseIterable, Identifiable {
     case maven
     case git
     case agent
+    case terminal
     case general
 
     var id: String { rawValue }
@@ -44,6 +45,7 @@ enum IDENotificationCategory: String, CaseIterable, Identifiable {
         case .maven: "Maven"
         case .git: "Git"
         case .agent: "Agent"
+        case .terminal: "Terminal"
         case .general: "General"
         }
     }

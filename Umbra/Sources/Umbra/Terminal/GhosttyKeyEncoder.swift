@@ -44,9 +44,19 @@ final class GhosttyKeystrokeEncoder {
     /// terminal, then applies Umbra's Option-as-Meta preference on top
     /// (`setopt_from_terminal` always resets it to false).
     func syncToTerminal(_ terminal: GhosttyTerminal?, optionAsMeta: Bool) {
+        syncToTerminal(terminal, optionAsAlt: optionAsMeta ? .both : .off)
+    }
+
+    /// Same, with `macos-option-as-alt` choosing which Option key acts as Meta.
+    func syncToTerminal(_ terminal: GhosttyTerminal?, optionAsAlt: IDETerminalOptionAsAlt) {
         guard let encoder, let terminal else { return }
         ghostty_key_encoder_setopt_from_terminal(encoder, terminal)
-        var asAlt = optionAsMeta ? GHOSTTY_OPTION_AS_ALT_TRUE : GHOSTTY_OPTION_AS_ALT_FALSE
+        var asAlt: GhosttyOptionAsAlt = switch optionAsAlt {
+        case .off: GHOSTTY_OPTION_AS_ALT_FALSE
+        case .both: GHOSTTY_OPTION_AS_ALT_TRUE
+        case .left: GHOSTTY_OPTION_AS_ALT_LEFT
+        case .right: GHOSTTY_OPTION_AS_ALT_RIGHT
+        }
         ghostty_key_encoder_setopt(encoder, GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, &asAlt)
     }
 

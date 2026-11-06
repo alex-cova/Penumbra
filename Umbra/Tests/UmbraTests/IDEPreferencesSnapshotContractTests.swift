@@ -46,4 +46,26 @@ final class IDEPreferencesSnapshotContractTests: XCTestCase {
         let minimal = object.filter { Self.requiredKeys.contains($0.key) }
         XCTAssertTrue(decodes(minimal), "every setting added since must be optional")
     }
+
+    func testTerminalSettingsTravelWithTheSnapshotAndAnOlderFileLeavesThemAlone() throws {
+        var snapshot = IDEPreferences.shared.snapshot()
+        var custom = IDETerminalSettings()
+        custom.copyOnSelect = true
+        custom.scrollbackLines = 7_000
+        snapshot.terminal = custom
+        let decoded = try JSONDecoder().decode(IDEPreferencesSnapshot.self, from: JSONEncoder().encode(snapshot))
+        XCTAssertEqual(decoded.terminal, custom)
+
+        var object = try encodedObject()
+        object.removeValue(forKey: "terminal")
+        let data = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertNil(try JSONDecoder().decode(IDEPreferencesSnapshot.self, from: data).terminal,
+                     "a file from before Settings ▸ Terminal has no terminal settings, and restore() then uses the defaults")
+    }
+
+    func testTheShellSettingsStayOnThisMac() throws {
+        let object = try encodedObject()
+        XCTAssertNil(object["terminalShell"])
+        XCTAssertNil(object["shell"])
+    }
 }

@@ -151,6 +151,8 @@ public final class IDEPreferences {
         /// The same keys `IDELocalHistoryRecorder` already reads. Not the `com.umbra.editor` prefix.
         static let localHistoryDays = "umbra.localHistory.days"
         static let localHistoryMegabytes = "umbra.localHistory.megabytes"
+        static let terminalSettings = "com.umbra.terminal.settings"
+        static let terminalShell = "com.umbra.terminal.shell"
     }
 
     var fontSize: Double {
@@ -1051,6 +1053,35 @@ public final class IDEPreferences {
         }
     }
 
+    /// Settings ▸ Terminal: look and behaviour. Shared through ``IDEPreferencesSnapshot``.
+    var terminal: IDETerminalSettings {
+        didSet {
+            let clamped = terminal.clamped()
+            if clamped != terminal {
+                terminal = clamped
+                return
+            }
+            guard let data = try? JSONEncoder().encode(terminal) else { return }
+            UserDefaults.standard.set(data, forKey: Keys.terminalSettings)
+        }
+    }
+
+    /// Settings ▸ Terminal ▸ Shell: what starts in a new tab. Machine-local: not part of `IDEPreferencesSnapshot`.
+    var terminalShell: IDETerminalShellSettings {
+        didSet {
+            guard let data = try? JSONEncoder().encode(terminalShell) else { return }
+            UserDefaults.standard.set(data, forKey: Keys.terminalShell)
+        }
+    }
+
+    /// The font the terminal draws with: the editor's, or the one chosen in Settings ▸ Terminal.
+    func effectiveTerminalFont() -> NSFont {
+        if terminal.fontFollowsEditor {
+            return IDEEditorFonts.nsFont(familyName: fontName, size: CGFloat(fontSize))
+        }
+        return IDEEditorFonts.nsFont(familyName: terminal.fontFamily, size: CGFloat(terminal.fontSize))
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         fontSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 13
@@ -1220,6 +1251,10 @@ public final class IDEPreferences {
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)
         localHistoryDays = min(max((defaults.object(forKey: Keys.localHistoryDays) as? NSNumber)?.intValue ?? 7, 1), 365)
         localHistoryMegabytes = min(max((defaults.object(forKey: Keys.localHistoryMegabytes) as? NSNumber)?.intValue ?? 500, 50), 10_000)
+        terminal = defaults.data(forKey: Keys.terminalSettings)
+            .flatMap { try? JSONDecoder().decode(IDETerminalSettings.self, from: $0) } ?? IDETerminalSettings()
+        terminalShell = defaults.data(forKey: Keys.terminalShell)
+            .flatMap { try? JSONDecoder().decode(IDETerminalShellSettings.self, from: $0) } ?? IDETerminalShellSettings()
         IDEUIFonts.setCurrentFamilyName(uiFontName)
         IDEUIFonts.setCurrentFontSize(uiFontSize)
         IDEAppearance.applyUIColorScheme(uiColorScheme)
@@ -1437,7 +1472,8 @@ public final class IDEPreferences {
             showScrollbars: showScrollbars,
             showEditorFragmentPreview: showEditorFragmentPreview,
             flattenJavaPackages: flattenJavaPackages,
-            javaPostfix: javaPostfix
+            javaPostfix: javaPostfix,
+            terminal: terminal
         )
     }
 
@@ -1495,6 +1531,7 @@ public final class IDEPreferences {
         showEditorFragmentPreview = snapshot.showEditorFragmentPreview
         flattenJavaPackages = snapshot.flattenJavaPackages
         javaPostfix = snapshot.javaPostfix
+        terminal = snapshot.terminal ?? IDETerminalSettings()
     }
 }
 
@@ -1550,6 +1587,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var showEditorFragmentPreview: Bool
     var flattenJavaPackages: Bool
     var javaPostfix: JavaPostfixConfiguration
+    /// Nil in a file written before Settings ▸ Terminal existed.
+    var terminal: IDETerminalSettings?
 
     init(
         fontSize: Double,
@@ -1602,7 +1641,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         showScrollbars: Bool = true,
         showEditorFragmentPreview: Bool = true,
         flattenJavaPackages: Bool = false,
-        javaPostfix: JavaPostfixConfiguration = .standard
+        javaPostfix: JavaPostfixConfiguration = .standard,
+        terminal: IDETerminalSettings? = nil
     ) {
         self.fontSize = fontSize
         self.fontName = fontName
@@ -1655,6 +1695,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.showEditorFragmentPreview = showEditorFragmentPreview
         self.flattenJavaPackages = flattenJavaPackages
         self.javaPostfix = javaPostfix
+        self.terminal = terminal
     }
 
     init(from decoder: Decoder) throws {
@@ -1714,6 +1755,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         showEditorFragmentPreview = try container.decodeIfPresent(Bool.self, forKey: .showEditorFragmentPreview) ?? true
         flattenJavaPackages = try container.decodeIfPresent(Bool.self, forKey: .flattenJavaPackages) ?? false
         javaPostfix = try container.decodeIfPresent(JavaPostfixConfiguration.self, forKey: .javaPostfix) ?? .standard
+        terminal = try? container.decodeIfPresent(IDETerminalSettings.self, forKey: .terminal)
     }
 }
 

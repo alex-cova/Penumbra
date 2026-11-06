@@ -30,6 +30,25 @@ final class GhosttyVtTerminalTests: XCTestCase {
         func bells() -> Int {
             lock.withLock { list.filter { if case .bell = $0 { return true }; return false }.count }
         }
+        func clipboardWrites() -> [String] {
+            lock.withLock {
+                list.compactMap {
+                    if case let .clipboardWrite(text) = $0 { return text }
+                    return nil
+                }
+            }
+        }
+        func clipboardReadRequests() -> Int {
+            lock.withLock { list.filter { if case .clipboardReadRequested = $0 { return true }; return false }.count }
+        }
+        func notifications() -> [(title: String, body: String)] {
+            lock.withLock {
+                list.compactMap {
+                    if case let .desktopNotification(title, body) = $0 { return (title, body) }
+                    return nil
+                }
+            }
+        }
         func ptyReplies() -> [Data] {
             lock.withLock {
                 list.compactMap {
@@ -147,5 +166,171 @@ final class GhosttyVtTerminalTests: XCTestCase {
         XCTAssertNotNil(term.recentText(lines: 10))
         term.reset()
         XCTAssertNil(term.recentText(lines: 10))
+    }
+
+    // MARK: Settings ▸ Terminal (GhosttyVtConfiguration)
+
+    private func configured(_ change: (inout GhosttyVtConfiguration) -> Void) -> (GhosttyVtTerminal, Events) {
+        let (term, events) = terminal()
+        var config = GhosttyVtConfiguration()
+        change(&config)
+        term.configure(config)
+        return (term, events)
+    }
+
+    private func firstCell(_ term: GhosttyVtTerminal) -> GhosttySnapshotCell? {
+        term.renderSnapshot()?.grid.first?.cells.first
+    }
+
+    func testCustomPaletteChangesTheResolvedColor() {
+        var palette = IDETerminalPalette.defaultANSI
+        palette[1] = 0x112233
+        let (term, _) = configured { $0.ansiPalette = palette }
+        term.write(Data("\u{1B}[31mR".utf8))
+        XCTAssertEqual(firstCell(term)?.fg, GhosttyRGB(r: 0x11, g: 0x22, b: 0x33))
+    }
+
+    func testPaletteBeyondTheSixteenAnsiColorsStaysTheBuiltInOne() {
+        let (term, _) = configured { $0.ansiPalette = IDETerminalPalette.defaultANSI }
+        // Index 196 is a cube color (pure red), which a 16-color override must not disturb.
+        term.write(Data("\u{1B}[38;5;196mR".utf8))
+        XCTAssertEqual(firstCell(term)?.fg, GhosttyRGB(r: 255, g: 0, b: 0))
+    }
+
+    func testNoPaletteRestoresTheBuiltInDefault() {
+        let (term, _) = configured { $0.ansiPalette = [UInt32](repeating: 0x010203, count: 16) }
+        term.write(Data("\u{1B}[31mR".utf8))
+        XCTAssertEqual(firstCell(term)?.fg, GhosttyRGB(r: 1, g: 2, b: 3))
+        // Configuring again with nil restores the built-in palette.
+        term.configure(GhosttyVtConfiguration())
+        term.write(Data("\u{1B}[2J\u{1B}[H\u{1B}[31mR".utf8))
+        XCTAssertNotEqual(firstCell(term)?.fg, GhosttyRGB(r: 1, g: 2, b: 3))
+    }
+
+    func testDefaultColorsAreTheConfiguredOnes() {
+        let (term, _) = configured {
+            $0.foreground = 0xAABBCC
+            $0.background = 0x102030
+        }
+        let snapshot = term.renderSnapshot()
+        XCTAssertEqual(snapshot?.fg, GhosttyRGB(r: 0xAA, g: 0xBB, b: 0xCC))
+        XCTAssertEqual(snapshot?.bg, GhosttyRGB(r: 0x10, g: 0x20, b: 0x30))
+    }
+
+    func testDefaultCursorFollowsTheConfigurationOnReset() {
+        let (term, _) = configured {
+            $0.cursorStyle = .underline
+            $0.cursorBlinks = true
+        }
+        term.write(Data("\u{1B}[0 q".utf8))
+        XCTAssertEqual(term.renderSnapshot()?.cursor.style, .underline)
+        XCTAssertEqual(term.renderSnapshot()?.cursor.blinking, true)
+        // A program's own choice wins until it resets.
+        term.write(Data("\u{1B}[2 q".utf8))
+        XCTAssertEqual(term.renderSnapshot()?.cursor.style, .block)
+        XCTAssertEqual(term.renderSnapshot()?.cursor.blinking, false)
+        term.write(Data("\u{1B}[0 q".utf8))
+        XCTAssertEqual(term.renderSnapshot()?.cursor.style, .underline)
+    }
+
+    func testEachCursorStyleIsAvailableAsTheDefault() {
+        let expected: [(IDETerminalCursorStyle, GhosttyCursorShape)] = [
+            (.block, .block), (.bar, .bar), (.underline, .underline), (.hollow, .hollow),
+        ]
+        for (setting, shape) in expected {
+            let (term, _) = configured { $0.cursorStyle = setting }
+            term.write(Data("\u{1B}[0 q".utf8))
+            XCTAssertEqual(term.renderSnapshot()?.cursor.style, shape, "\(setting)")
+        }
+    }
+
+    func testScrollbackLimitTrimsHistory() {
+        let flood = Data((1...5000).map { "line \($0)\r\n" }.joined().utf8)
+        let (limited, _) = configured { $0.scrollbackLines = 50 }
+        limited.write(flood)
+        let (roomy, _) = configured { $0.scrollbackLines = 100_000 }
+        roomy.write(flood)
+        let limitedTotal = limited.scrollbar()?.total ?? 0
+        let roomyTotal = roomy.scrollbar()?.total ?? 0
+        // libghostty trims by page, so the limit is approximate: far below the flood, far above nothing.
+        XCTAssertLessThan(limitedTotal, 1000)
+        XCTAssertGreaterThan(roomyTotal, 4000)
+    }
+
+    func testTitleReportIsOffByDefaultAndOptIn() {
+        let (off, offEvents) = configured { $0.titleReport = false }
+        off.write(Data("\u{1B}]2;secret\u{07}\u{1B}[21t".utf8))
+        XCTAssertFalse(offEvents.ptyReplies().contains { String(decoding: $0, as: UTF8.self).contains("secret") })
+
+        let (on, onEvents) = configured { $0.titleReport = true }
+        on.write(Data("\u{1B}]2;secret\u{07}\u{1B}[21t".utf8))
+        XCTAssertTrue(onEvents.ptyReplies().contains { String(decoding: $0, as: UTF8.self).contains("secret") })
+    }
+
+    // OSC 52: "hello" is aGVsbG8=, "clip" is Y2xpcA==.
+
+    func testClipboardWriteIsDeliveredWhenAllowed() {
+        let (term, events) = configured { $0.clipboardWriteAllowed = true }
+        term.write(Data("\u{1B}]52;c;aGVsbG8=\u{07}".utf8))
+        XCTAssertEqual(events.clipboardWrites(), ["hello"])
+    }
+
+    func testClipboardWriteIsDroppedWhenDenied() {
+        let (term, events) = configured { $0.clipboardWriteAllowed = false }
+        term.write(Data("\u{1B}]52;c;aGVsbG8=\u{07}".utf8))
+        XCTAssertEqual(events.clipboardWrites(), [])
+    }
+
+    private func repliedWithClip(_ events: Events) -> Bool {
+        events.ptyReplies().contains { String(decoding: $0, as: UTF8.self).contains("Y2xpcA==") }
+    }
+
+    func testClipboardReadIsAnsweredWhenAllowed() {
+        let (term, events) = configured { $0.clipboardRead = .allow }
+        term.setClipboardReader { "clip" }
+        term.write(Data("\u{1B}]52;c;?\u{07}".utf8))
+        XCTAssertTrue(repliedWithClip(events))
+        XCTAssertEqual(events.clipboardReadRequests(), 0)
+    }
+
+    func testClipboardReadIsRefusedWhenDenied() {
+        let (term, events) = configured { $0.clipboardRead = .deny }
+        term.setClipboardReader { "clip" }
+        term.write(Data("\u{1B}]52;c;?\u{07}".utf8))
+        XCTAssertFalse(repliedWithClip(events))
+        XCTAssertEqual(events.clipboardReadRequests(), 0, "a denial is silent")
+    }
+
+    func testClipboardReadAsksFirstThenFollowsTheGrant() {
+        let (term, events) = configured { $0.clipboardRead = .ask }
+        term.setClipboardReader { "clip" }
+        term.write(Data("\u{1B}]52;c;?\u{07}".utf8))
+        XCTAssertFalse(repliedWithClip(events), "the first read is refused while the user decides")
+        XCTAssertEqual(events.clipboardReadRequests(), 1)
+
+        term.grantClipboardRead()
+        term.write(Data("\u{1B}]52;c;?\u{07}".utf8))
+        XCTAssertTrue(repliedWithClip(events), "after Allow, the program's next read is answered")
+        XCTAssertEqual(events.clipboardReadRequests(), 1)
+    }
+
+    func testDesktopNotificationsFollowTheSwitch() {
+        let (on, onEvents) = configured { $0.desktopNotifications = true }
+        on.write(Data("\u{1B}]9;build finished\u{07}".utf8))
+        on.write(Data("\u{1B}]777;notify;Title;Body text\u{07}".utf8))
+        let received = onEvents.notifications()
+        XCTAssertTrue(received.contains { $0.body == "build finished" }, "\(received)")
+        XCTAssertTrue(received.contains { $0.title == "Title" && $0.body == "Body text" }, "\(received)")
+
+        let (off, offEvents) = configured { $0.desktopNotifications = false }
+        off.write(Data("\u{1B}]9;ignored\u{07}".utf8))
+        XCTAssertEqual(offEvents.notifications().count, 0)
+    }
+
+    func testReconfiguringKeepsTheScreenContents() {
+        let (term, _) = terminal()
+        term.write(Data("keep me\r\n".utf8))
+        term.configure(GhosttyVtConfiguration())
+        XCTAssertTrue(term.plainText()?.contains("keep me") ?? false)
     }
 }

@@ -117,6 +117,23 @@ final class GhosttyPtyProcessTests: XCTestCase {
         )
     }
 
+    func testArgumentsAndEnvironmentReachTheChild() {
+        let sink = Sink()
+        let process = GhosttyPtyProcess()
+        process.onOutput = { [weak sink] in sink?.append($0) }
+        process.onExit = { [weak sink] in sink?.recordExit($0) }
+        let started = process.start(
+            executable: "/bin/sh",
+            execName: "sh",
+            currentDirectory: workdir!,
+            arguments: ["-c", "echo ARGS:$0:$1:$2:$FOO_TEST", "zero", "one", "two"],
+            environment: ["FOO_TEST": "bar", "HOME": homedir!])
+        XCTAssertTrue(started)
+        defer { process.terminate() }
+        XCTAssertTrue(waitForOutput(sink, containing: "ARGS:zero:one:two:bar"))
+        XCTAssertEqual(waitForExit(sink), 0, "a command that finishes exits cleanly")
+    }
+
     func testTermSet() {
         let sink = Sink()
         let process = startedProcess(sink: sink)

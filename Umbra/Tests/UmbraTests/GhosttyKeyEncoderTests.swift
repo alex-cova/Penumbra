@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import Umbra
 
@@ -102,5 +103,38 @@ final class GhosttyKeyEncoderTests: XCTestCase {
         XCTAssertEqual(
             encode(enc, term, keyCode: 0x7E, text: ""),
             Data("\u{1B}OA".utf8))
+    }
+
+    // MARK: macos-option-as-alt
+
+    private func encodeA(optionAsAlt: IDETerminalOptionAsAlt, modifiers: GhosttyModifiers) -> Data? {
+        let term = GhosttyVtTerminal(cols: 80, rows: 24)!
+        let enc = GhosttyKeystrokeEncoder()!
+        term.withTerminal { enc.syncToTerminal($0, optionAsAlt: optionAsAlt) }
+        return encode(enc, term, keyCode: 0x00, text: "a", modifiers: modifiers)
+    }
+
+    func testOptionAsAltLeftOnlyPrefixesForTheLeftKey() {
+        XCTAssertEqual(encodeA(optionAsAlt: .left, modifiers: .alt), Data("\u{1B}a".utf8))
+        XCTAssertEqual(encodeA(optionAsAlt: .left, modifiers: [.alt, .altSide]), Data("a".utf8))
+    }
+
+    func testOptionAsAltRightOnlyPrefixesForTheRightKey() {
+        XCTAssertEqual(encodeA(optionAsAlt: .right, modifiers: [.alt, .altSide]), Data("\u{1B}a".utf8))
+        XCTAssertEqual(encodeA(optionAsAlt: .right, modifiers: .alt), Data("a".utf8))
+    }
+
+    func testOptionAsAltBothAndOff() {
+        XCTAssertEqual(encodeA(optionAsAlt: .both, modifiers: [.alt, .altSide]), Data("\u{1B}a".utf8))
+        XCTAssertEqual(encodeA(optionAsAlt: .both, modifiers: .alt), Data("\u{1B}a".utf8))
+        XCTAssertEqual(encodeA(optionAsAlt: .off, modifiers: .alt), Data("a".utf8))
+    }
+
+    func testRightOptionDeviceFlagSetsTheSideBit() {
+        let right = NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.option.rawValue | 0x40)
+        XCTAssertTrue(GhosttyModifiers(appKitFlags: right).contains(.altSide))
+        XCTAssertFalse(GhosttyModifiers(appKitFlags: .option).contains(.altSide))
+        XCTAssertFalse(GhosttyModifiers(appKitFlags: NSEvent.ModifierFlags(rawValue: 0x40)).contains(.altSide),
+                       "the side bit means nothing without Option held")
     }
 }

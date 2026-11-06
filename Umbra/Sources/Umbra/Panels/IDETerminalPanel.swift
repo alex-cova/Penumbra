@@ -3,7 +3,8 @@ import SwiftUI
 
 // MARK: - Shell helpers
 
-private enum IDETerminalShell {
+/// The account's shell, for a terminal whose Settings ▸ Terminal ▸ Shell leaves the command empty.
+enum IDETerminalShell {
     static func resolvedShell() -> String {
         let bufsize = sysconf(_SC_GETPW_R_SIZE_MAX)
         guard bufsize > 0 else {
@@ -78,6 +79,17 @@ final class IDETerminalHostView: NSView {
     var workingDirectory: URL?
     var onTitleUpdate: ((String) -> Void)?
     var onDirectoryUpdate: ((URL) -> Void)?
+    /// OSC 9 / OSC 777 from a program in this terminal: title (may be empty) and body.
+    var onDesktopNotification: ((String, String) -> Void)? {
+        get { ghosttyView.onDesktopNotification }
+        set { ghosttyView.onDesktopNotification = newValue }
+    }
+
+    /// Settings ▸ Terminal as last applied; the colours are resolved against the UI scheme every time.
+    private var terminalSettings = IDETerminalSettings()
+    private var leadingInset: NSLayoutConstraint?
+    private var topInset: NSLayoutConstraint?
+    private var bottomInset: NSLayoutConstraint?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -86,26 +98,21 @@ final class IDETerminalHostView: NSView {
         ghosttyView.onDirectoryUpdate = { [weak self] in self?.onDirectoryUpdate?($0) }
         ghosttyView.onProcessTerminated = { [weak self] in self?.handleProcessTerminated() }
         ghosttyView.translatesAutoresizingMaskIntoConstraints = false
-        ghosttyView.optionAsMeta = true
-        ghosttyView.applyColors(
-            background: IDEAppearance.NSToken.editor,
-            foreground: IDEAppearance.NSToken.foreground,
-            cursor: IDEAppearance.NSToken.accent)
-        applyEditorFont(
-            name: IDEPreferences.shared.fontName,
-            size: IDEPreferences.shared.fontSize
-        )
         // Inset so the prompt doesn't touch the bottom panel card's rounded edge; the host paints
         // the terminal's background so the inset reads as part of the terminal.
         wantsLayer = true
-        layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
         addSubview(child)
-        NSLayoutConstraint.activate([
-            child.topAnchor.constraint(equalTo: topAnchor),
-            child.leadingAnchor.constraint(equalTo: leadingAnchor, constant: IDEAppearance.Spacing.sm),
-            child.trailingAnchor.constraint(equalTo: trailingAnchor),
-            child.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
+        let leading = child.leadingAnchor.constraint(equalTo: leadingAnchor)
+        let top = child.topAnchor.constraint(equalTo: topAnchor)
+        let bottom = child.bottomAnchor.constraint(equalTo: bottomAnchor)
+        leadingInset = leading
+        topInset = top
+        bottomInset = bottom
+        NSLayoutConstraint.activate([top, leading, child.trailingAnchor.constraint(equalTo: trailingAnchor), bottom])
+        applyTerminalAppearance(
+            IDEPreferences.shared.terminal,
+            editorFontName: IDEPreferences.shared.fontName,
+            editorFontSize: IDEPreferences.shared.fontSize)
     }
 
     @available(*, unavailable)
@@ -132,13 +139,10 @@ final class IDETerminalHostView: NSView {
         }
     }
 
+    /// The UI colour scheme changed: the terminal follows it unless Settings ▸ Terminal has its own colours.
     func applyUIColorScheme() {
-        ghosttyView.applyColors(
-            background: IDEAppearance.NSToken.editor,
-            foreground: IDEAppearance.NSToken.foreground,
-            cursor: IDEAppearance.NSToken.accent)
+        refreshAppearance(editorFontName: lastEditorFont.name, editorFontSize: lastEditorFont.size)
         ghosttyView.setNeedsDisplay(ghosttyView.bounds)
-        layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
     }
 
     func setMirrorsOutput(_ mirror: Bool) {
@@ -162,9 +166,38 @@ final class IDETerminalHostView: NSView {
         }
     }
 
-    func applyEditorFont(name: String, size: Double) {
-        let font = IDEEditorFonts.nsFont(familyName: name, size: CGFloat(size))
-        ghosttyView.applyFont(font)
+    private var lastEditorFont: (name: String, size: Double) = (IDEEditorFonts.defaultFamilyName, 13)
+
+    /// Applies Settings ▸ Terminal: font (the editor's, or the terminal's own), colours, cursor, padding and
+    /// behaviour. Cheap when nothing changed, so the representable calls it on every update.
+    func applyTerminalAppearance(_ settings: IDETerminalSettings, editorFontName: String, editorFontSize: Double) {
+        terminalSettings = settings
+        refreshAppearance(editorFontName: editorFontName, editorFontSize: editorFontSize)
+    }
+
+    private func refreshAppearance(editorFontName: String, editorFontSize: Double) {
+        lastEditorFont = (editorFontName, editorFontSize)
+        let settings = terminalSettings
+        if settings.fontFollowsEditor {
+            ghosttyView.applyFont(IDEEditorFonts.nsFont(familyName: editorFontName, size: CGFloat(editorFontSize)))
+        } else {
+            ghosttyView.applyFont(IDEEditorFonts.nsFont(familyName: settings.fontFamily, size: CGFloat(settings.fontSize)))
+        }
+        let configuration = GhosttyTerminalViewConfiguration(
+            settings: settings,
+            scheme: (
+                foreground: IDEAppearance.NSToken.foreground.terminalHex,
+                background: IDEAppearance.NSToken.editor.terminalHex,
+                cursor: IDEAppearance.NSToken.accent.terminalHex),
+            termName: IDEPreferences.shared.terminalShell.termName)
+        ghosttyView.apply(configuration)
+        layer?.backgroundColor = NSColor(
+            srgbRed: CGFloat((configuration.vt.background >> 16) & 0xFF) / 255,
+            green: CGFloat((configuration.vt.background >> 8) & 0xFF) / 255,
+            blue: CGFloat(configuration.vt.background & 0xFF) / 255, alpha: 1).cgColor
+        leadingInset?.constant = settings.paddingX
+        topInset?.constant = settings.paddingY
+        bottomInset?.constant = -settings.paddingY
     }
 
     func requestFocus() {
@@ -252,12 +285,17 @@ final class IDETerminalHostView: NSView {
         guard bounds.width > 1, bounds.height > 1 else { return }
         guard !ghosttyView.isProcessRunning else { return }
 
-        let shell = IDETerminalShell.resolvedShell()
-        let cwd = (workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser).path
+        // Settings ▸ Terminal ▸ Shell is read here, so a change reaches the next shell that starts.
+        let launch = IDETerminalLaunch.make(
+            shell: IDEPreferences.shared.terminalShell,
+            resolvedLoginShell: IDETerminalShell.resolvedShell(),
+            projectDirectory: workingDirectory)
         ghosttyView.startProcess(
-            executable: shell,
-            execName: IDETerminalShell.loginExecName(for: shell),
-            currentDirectory: cwd)
+            executable: launch.executable,
+            execName: launch.execName,
+            currentDirectory: launch.directory,
+            arguments: launch.arguments,
+            environment: launch.environment)
     }
 
     func handleProcessTerminated() {
@@ -277,8 +315,10 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
     let isActive: Bool
     /// Shown in a column, selected or not.
     let isColumnVisible: Bool
-    let fontName: String
-    let fontSize: Double
+    let terminalSettings: IDETerminalSettings
+    /// The editor's font, which the terminal follows unless its settings choose another.
+    let editorFontName: String
+    let editorFontSize: Double
     let uiColorSchemeID: String
     let focusRequestID: UInt64
     let restartRequestID: UInt64
@@ -288,6 +328,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
     let takeAgentFeed: () -> String
     let onTitleUpdate: (String) -> Void
     let onDirectoryUpdate: (URL) -> Void
+    let onDesktopNotification: (String, String) -> Void
     /// Tells the workspace about the view, so closing the window can end its shell.
     let onHostCreated: (IDETerminalHostView) -> Void
 
@@ -297,10 +338,11 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         view.workingDirectory = workingDirectory
         view.onTitleUpdate = onTitleUpdate
         view.onDirectoryUpdate = onDirectoryUpdate
+        view.onDesktopNotification = onDesktopNotification
         view.setMirrorsOutput(mirrorsOutput)
         view.setActive(isActive)
         view.setColumnVisible(isColumnVisible)
-        view.applyEditorFont(name: fontName, size: fontSize)
+        view.applyTerminalAppearance(terminalSettings, editorFontName: editorFontName, editorFontSize: editorFontSize)
         context.coordinator.hostView = view
         context.coordinator.lastFocusRequestID = focusRequestID
         context.coordinator.lastRestartRequestID = restartRequestID
@@ -316,13 +358,14 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
     func updateNSView(_ view: IDETerminalHostView, context: Context) {
         view.onTitleUpdate = onTitleUpdate
         view.onDirectoryUpdate = onDirectoryUpdate
+        view.onDesktopNotification = onDesktopNotification
         view.setMirrorsOutput(mirrorsOutput)
-        view.applyEditorFont(name: fontName, size: fontSize)
         view.syncWorkingDirectory(workingDirectory)
         if context.coordinator.lastUIColorSchemeID != uiColorSchemeID {
             context.coordinator.lastUIColorSchemeID = uiColorSchemeID
             view.applyUIColorScheme()
         }
+        view.applyTerminalAppearance(terminalSettings, editorFontName: editorFontName, editorFontSize: editorFontSize)
         let wasActive = context.coordinator.wasActive
         view.setActive(isActive)
         view.setColumnVisible(isColumnVisible)
@@ -515,8 +558,9 @@ struct IDETerminalPanes: View {
                         workingDirectory: tab.workingDirectory,
                         isActive: workspace.isTerminalVisible && isSelected,
                         isColumnVisible: workspace.isTerminalVisible && isShown,
-                        fontName: workspace.preferences.fontName,
-                        fontSize: workspace.preferences.fontSize,
+                        terminalSettings: workspace.preferences.terminal,
+                        editorFontName: workspace.preferences.fontName,
+                        editorFontSize: workspace.preferences.fontSize,
                         uiColorSchemeID: workspace.preferences.uiColorSchemeID,
                         focusRequestID: workspace.terminalFocusRequestID,
                         restartRequestID: tab.restartRequestID,
@@ -528,6 +572,12 @@ struct IDETerminalPanes: View {
                         // here would keep the whole workspace alive through it after the window closes.
                         onTitleUpdate: { [weak workspace = workspace] in workspace?.updateTerminalTabTitle(tab.id, title: $0) },
                         onDirectoryUpdate: { [weak workspace = workspace] in workspace?.updateTerminalTabDirectory(tab.id, url: $0) },
+                        onDesktopNotification: { [weak workspace = workspace] title, body in
+                            workspace?.notifications.post(
+                                title.isEmpty ? "Terminal" : title,
+                                detail: body.isEmpty ? nil : body,
+                                category: .terminal)
+                        },
                         onHostCreated: { [weak workspace = workspace] in workspace?.registerTerminalHost($0, tabID: tab.id) }
                     )
                     .id(tab.id)
@@ -810,5 +860,14 @@ struct IDEHTTPConsoleControls: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+    }
+}
+
+private extension NSColor {
+    /// `0xRRGGBB` in sRGB, for the terminal's configuration.
+    var terminalHex: UInt32 {
+        guard let rgb = usingColorSpace(.sRGB) else { return 0 }
+        func byte(_ value: CGFloat) -> UInt32 { UInt32((min(max(value, 0), 1) * 255).rounded()) }
+        return (byte(rgb.redComponent) << 16) | (byte(rgb.greenComponent) << 8) | byte(rgb.blueComponent)
     }
 }

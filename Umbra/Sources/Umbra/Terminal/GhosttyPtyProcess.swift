@@ -61,6 +61,7 @@ final class GhosttyPtyProcess: @unchecked Sendable {
     ///   - executable: Resolved shell path (e.g. `/bin/zsh`).
     ///   - execName: `argv[0]` (e.g. `-zsh`) so rc files load like Terminal.app.
     ///   - currentDirectory: The shell's starting directory.
+    ///   - arguments: `argv[1…]`, after `execName`.
     ///   - environment: Merged over the parent environment. `TERM` defaults
     ///     to `xterm-256color`, `COLORTERM` to `truecolor` when absent.
     @discardableResult
@@ -68,6 +69,7 @@ final class GhosttyPtyProcess: @unchecked Sendable {
         executable: String,
         execName: String,
         currentDirectory: String,
+        arguments: [String] = [],
         environment: [String: String]? = nil,
         cols: Int = 80,
         rows: Int = 24
@@ -78,6 +80,7 @@ final class GhosttyPtyProcess: @unchecked Sendable {
                 executable: executable,
                 execName: execName,
                 currentDirectory: currentDirectory,
+                arguments: arguments,
                 environment: environment,
                 cols: cols,
                 rows: rows
@@ -322,6 +325,7 @@ final class GhosttyPtyProcess: @unchecked Sendable {
         executable: String,
         execName: String,
         currentDirectory: String,
+        arguments: [String],
         environment: [String: String]?,
         cols: Int,
         rows: Int
@@ -367,7 +371,7 @@ final class GhosttyPtyProcess: @unchecked Sendable {
             for (key, value) in environment { merged[key] = value }
         }
         let envStrings = merged.map { "\($0.key)=\($0.value)" }
-        let argv: [String] = [execName]
+        let argv: [String] = [execName] + arguments
 
         var pid = pid_t(-1)
         let spawned: Int32 = envStrings.withCStringArray { envp in

@@ -16,6 +16,34 @@ enum GhosttyVtEvent: Sendable {
     /// The terminal answered a device query (DSR, DECRQM, XTWINOPS, …).
     /// Send these bytes back to the PTY master.
     case writePty(Data)
+    /// A program wrote text to the clipboard (OSC 52) and the configuration allows it.
+    case clipboardWrite(String)
+    /// A program asked to read the clipboard while the policy is "ask". The request was refused;
+    /// the host may prompt and, on consent, call ``GhosttyVtTerminal/grantClipboardRead()``.
+    case clipboardReadRequested
+    /// OSC 9 / OSC 777, while desktop notifications are on.
+    case desktopNotification(title: String, body: String)
+}
+
+/// What Settings ▸ Terminal decides about the parser itself: colours, the default cursor, scrollback,
+/// and what a program may do through escape sequences. Applied with ``GhosttyVtTerminal/configure(_:)``.
+struct GhosttyVtConfiguration: Equatable, Sendable {
+    /// `0xRRGGBB`. Answered to OSC 10/11/12 queries and used for cells with no colour of their own.
+    var foreground: UInt32 = 0xD8DEE9
+    var background: UInt32 = 0x1E2127
+    var cursorColor: UInt32 = 0xFFCC66
+    /// The sixteen ANSI entries; nil keeps libghostty's built-in palette. Entries 16-255 always stay the built-in cube and ramp.
+    var ansiPalette: [UInt32]?
+    /// What `CSI 0 q` and a reset return the cursor to.
+    var cursorStyle = IDETerminalCursorStyle.bar
+    var cursorBlinks = false
+    var scrollbackLines = 10_000
+    /// The name XTGETTCAP reports (`term`).
+    var termName = IDETerminalShellSettings.defaultTermName
+    var titleReport = false
+    var clipboardRead = IDETerminalClipboardAccess.ask
+    var clipboardWriteAllowed = true
+    var desktopNotifications = true
 }
 
 /// DEC/ANSI mode numbers for `GhosttyVtTerminal.isModeSet`, packed per
@@ -62,6 +90,20 @@ final class GhosttyVtTerminal: @unchecked Sendable {
     var terminal: GhosttyTerminal?
     var renderState: GhosttyRenderState?
     private let eventBox = GhosttyVtEventBox()
+    /// Kept alive for the C side, which may borrow the XTGETTCAP name instead of copying it.
+    private var termNameStorage: UnsafeMutablePointer<CChar>?
+
+    /// Where a clipboard read is answered from. Called on the terminal queue while the stream is paused,
+    /// so it must not wait on the main thread (`NSPasteboard.string(forType:)` does not).
+    func setClipboardReader(_ reader: (@Sendable () -> String?)?) {
+        queue.sync { eventBox.clipboardReader = reader }
+    }
+
+    /// Lets this terminal's programs read the clipboard from now on (the user said yes to the prompt that
+    /// ``GhosttyVtEvent/clipboardReadRequested`` raised). The program has to ask again.
+    func grantClipboardRead() {
+        queue.sync { eventBox.readPolicy = .allow }
+    }
 
     /// Creates a terminal with the given grid size in cells.
     init?(cols: Int = 80, rows: Int = 24) {
@@ -93,6 +135,80 @@ final class GhosttyVtTerminal: @unchecked Sendable {
         queue.sync {
             if let state { ghostty_render_state_free(state) }
             if let term { ghostty_terminal_free(term) }
+        }
+        if let termNameStorage { free(termNameStorage) }
+    }
+
+    /// Applies Settings ▸ Terminal to the parser. Safe to call again whenever the settings change; the
+    /// terminal keeps its contents. A cursor that is already showing keeps its shape until the next
+    /// `CSI 0 q` (a program may have chosen it), so the host writes that after a change.
+    func configure(_ config: GhosttyVtConfiguration) {
+        queue.sync {
+            guard let term = self.terminal else { return }
+            eventBox.readPolicy = config.clipboardRead
+            eventBox.writeAllowed = config.clipboardWriteAllowed
+            eventBox.notificationsEnabled = config.desktopNotifications
+
+            func rgb(_ hex: UInt32) -> GhosttyColorRgb {
+                GhosttyColorRgb(r: UInt8((hex >> 16) & 0xFF), g: UInt8((hex >> 8) & 0xFF), b: UInt8(hex & 0xFF))
+            }
+            var foreground = rgb(config.foreground)
+            var background = rgb(config.background)
+            var cursorColor = rgb(config.cursorColor)
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &foreground)
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &background)
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cursorColor)
+
+            // NULL resets to the built-in palette, which is also where entries 16-255 come from.
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, nil)
+            if let ansi = config.ansiPalette, ansi.count == 16 {
+                var palette = [GhosttyColorRgb](repeating: GhosttyColorRgb(r: 0, g: 0, b: 0), count: 256)
+                let readable = palette.withUnsafeMutableBufferPointer { buffer -> Bool in
+                    ghostty_terminal_get(term, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT, buffer.baseAddress) == GHOSTTY_SUCCESS
+                }
+                if readable {
+                    for (index, hex) in ansi.enumerated() { palette[index] = rgb(hex) }
+                    palette.withUnsafeBufferPointer { buffer in
+                        _ = ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, buffer.baseAddress)
+                    }
+                }
+            }
+
+            var style: GhosttyTerminalCursorStyle = switch config.cursorStyle {
+            case .block: GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK
+            case .bar: GHOSTTY_TERMINAL_CURSOR_STYLE_BAR
+            case .underline: GHOSTTY_TERMINAL_CURSOR_STYLE_UNDERLINE
+            case .hollow: GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK_HOLLOW
+            }
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE, &style)
+            var blinks = config.cursorBlinks
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK, &blinks)
+
+            // Both limits apply, whichever is reached first. The byte limit is a guard against very wide,
+            // heavily styled lines, sized so it does not cut the line limit short for ordinary output.
+            var lines = max(config.scrollbackLines, 0)
+            var bytes = lines * 2048
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &lines)
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &bytes)
+
+            var report = config.titleReport
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_TITLE_REPORT, &report)
+
+            if let previous = termNameStorage { free(previous) }
+            let name = config.termName.isEmpty ? IDETerminalShellSettings.defaultTermName : config.termName
+            let storage = strdup(name)
+            termNameStorage = storage
+            var termInfo = GhosttyString(ptr: UnsafeRawPointer(storage).map { $0.assumingMemoryBound(to: UInt8.self) }, len: strlen(name))
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_TERMINFO_NAME, &termInfo)
+
+            // A NULL callback makes libghostty ignore the request, which is what "deny" should look like
+            // to the program. "Ask" needs the callback: it refuses and tells the host.
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
+                                 config.clipboardWriteAllowed ? vtClipboardWriteCallbackPointer : nil)
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_CLIPBOARD_READ,
+                                 config.clipboardRead == .deny ? nil : vtClipboardReadCallbackPointer)
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
+                                 config.desktopNotifications ? vtNotificationCallbackPointer : nil)
         }
     }
 
@@ -267,9 +383,75 @@ final class GhosttyVtTerminal: @unchecked Sendable {
 private final class GhosttyVtEventBox {
     weak var owner: GhosttyVtTerminal?
 
+    // Read and written on the terminal queue only (callbacks run inside `vt_write`, and
+    // `configure` / `grantClipboardRead` / `setClipboardReader` take the queue too).
+    var readPolicy = IDETerminalClipboardAccess.ask
+    var writeAllowed = true
+    var notificationsEnabled = true
+    var clipboardReader: (@Sendable () -> String?)?
+
     func emit(_ event: GhosttyVtEvent) {
         owner?.emit(event)
     }
+
+    func handleClipboardRead(_ read: UnsafePointer<GhosttyClipboardRead>) {
+        var reply = GhosttyClipboardReadReply()
+        reply.size = MemoryLayout<GhosttyClipboardReadReply>.size
+        // Only the standard clipboard exists on macOS; text is the only representation served.
+        guard readPolicy == .allow, read.pointee.location == GHOSTTY_CLIPBOARD_LOCATION_STANDARD else {
+            reply.result = GHOSTTY_CLIPBOARD_READ_RESULT_DENIED
+            read.pointee.reply?(read, &reply)
+            // The program is refused either way; under "ask" the host hears about it once per request.
+            if readPolicy == .ask { emit(.clipboardReadRequested) }
+            return
+        }
+        guard let text = clipboardReader?() else {
+            reply.result = GHOSTTY_CLIPBOARD_READ_RESULT_SUCCESS
+            reply.contents_len = 0
+            read.pointee.reply?(read, &reply)
+            return
+        }
+        let mime = Array("text/plain".utf8)
+        let data = Array(text.utf8)
+        mime.withUnsafeBufferPointer { mimeBuffer in
+            data.withUnsafeBufferPointer { dataBuffer in
+                let content = GhosttyClipboardContent(
+                    mime: GhosttyString(ptr: mimeBuffer.baseAddress, len: mimeBuffer.count),
+                    data: GhosttyString(ptr: dataBuffer.baseAddress, len: dataBuffer.count))
+                withUnsafePointer(to: content) { contentPointer in
+                    reply.result = GHOSTTY_CLIPBOARD_READ_RESULT_SUCCESS
+                    reply.contents = contentPointer
+                    reply.contents_len = 1
+                    read.pointee.reply?(read, &reply)
+                }
+            }
+        }
+    }
+
+    func handleClipboardWrite(_ write: UnsafePointer<GhosttyClipboardWrite>) {
+        var reply = GhosttyClipboardWriteReply()
+        reply.size = MemoryLayout<GhosttyClipboardWriteReply>.size
+        guard writeAllowed, write.pointee.location == GHOSTTY_CLIPBOARD_LOCATION_STANDARD else {
+            reply.result = GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED
+            write.pointee.reply?(write, &reply)
+            return
+        }
+        if let contents = write.pointee.contents, write.pointee.contents_len > 0 {
+            for index in 0..<write.pointee.contents_len {
+                let content = contents[index]
+                guard vtString(content.mime).hasPrefix("text/") else { continue }
+                emit(.clipboardWrite(vtString(content.data)))
+                break
+            }
+        }
+        reply.result = GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS
+        write.pointee.reply?(write, &reply)
+    }
+}
+
+private func vtString(_ string: GhosttyString) -> String {
+    guard let pointer = string.ptr, string.len > 0 else { return "" }
+    return String(decoding: UnsafeBufferPointer(start: pointer, count: string.len), as: UTF8.self)
 }
 
 // MARK: - C callbacks (run on the terminal queue during vt_write)
@@ -300,6 +482,34 @@ private let vtPwdCallback: GhosttyTerminalPwdChangedFn = { terminal, userdata in
     if let pwd = owner.string(for: GHOSTTY_TERMINAL_DATA_PWD) {
         box.emit(.pwdChanged(pwd))
     }
+}
+
+private let vtClipboardReadCallback: GhosttyTerminalClipboardReadFn = { _, userdata, read in
+    guard let read, let box = vtBox(userdata) else { return }
+    box.handleClipboardRead(read)
+}
+
+private let vtClipboardWriteCallback: GhosttyTerminalClipboardWriteFn = { _, userdata, write in
+    guard let write, let box = vtBox(userdata) else { return }
+    box.handleClipboardWrite(write)
+}
+
+private let vtNotificationCallback: GhosttyTerminalDesktopNotificationFn = { _, userdata, notification in
+    guard let notification, let box = vtBox(userdata), box.notificationsEnabled else { return }
+    box.emit(.desktopNotification(
+        title: vtString(notification.pointee.title), body: vtString(notification.pointee.body)))
+}
+
+private var vtClipboardReadCallbackPointer: UnsafeRawPointer {
+    unsafeBitCast(vtClipboardReadCallback, to: UnsafeRawPointer.self)
+}
+
+private var vtClipboardWriteCallbackPointer: UnsafeRawPointer {
+    unsafeBitCast(vtClipboardWriteCallback, to: UnsafeRawPointer.self)
+}
+
+private var vtNotificationCallbackPointer: UnsafeRawPointer {
+    unsafeBitCast(vtNotificationCallback, to: UnsafeRawPointer.self)
 }
 
 private var vtWritePtyCallbackPointer: UnsafeRawPointer {

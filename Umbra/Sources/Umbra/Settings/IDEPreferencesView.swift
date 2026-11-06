@@ -154,6 +154,8 @@ public struct IDEPreferencesView: View {
             IDEPreferencesSavingPane(preferences: preferences)
         case .appearance:
             IDEPreferencesAppearancePane(preferences: preferences)
+        case .terminal:
+            IDEPreferencesTerminalPane(preferences: preferences)
         case .focus:
             IDEPreferencesFocusPane(preferences: preferences)
         case .project:

@@ -21,9 +21,17 @@ final class GhosttyTerminalView: NSView {
     var onTitleUpdate: ((String) -> Void)?
     var onDirectoryUpdate: ((URL) -> Void)?
     var onProcessTerminated: (() -> Void)?
+    /// OSC 9 / OSC 777 while `desktop-notifications` is on: title (may be empty) and body.
+    var onDesktopNotification: ((String, String) -> Void)?
 
-    /// Whether Option acts as Meta (matches SwiftTerm's `optionAsMetaKey`).
-    var optionAsMeta = true
+    /// Asks the user a yes/no question about what a program is doing (an unsafe paste, a clipboard read).
+    /// The default is a sheet on the window; tests replace it. `completion` runs on the main actor.
+    var confirm: (_ message: String, _ detail: String, _ acceptTitle: String, _ completion: @escaping (Bool) -> Void) -> Void = { message, detail, acceptTitle, completion in
+        completion(false)
+    }
+
+    /// Settings ▸ Terminal as the view sees it. Change it with ``apply(_:)``.
+    private(set) var configuration = GhosttyTerminalViewConfiguration()
 
     // MARK: - Backend
 
@@ -33,7 +41,8 @@ final class GhosttyTerminalView: NSView {
     private var mouseEncoder: GhosttyMouseReportEncoder?
     private var mirrorsOutput = false
     private var started = false
-    private var startConfig: (executable: String, execName: String, directory: String)?
+    private var startConfig: (executable: String, execName: String, directory: String, arguments: [String], environment: [String: String]?)?
+    private var isAskingClipboardRead = false
 
     // MARK: - Appearance
 
@@ -41,11 +50,14 @@ final class GhosttyTerminalView: NSView {
     private var backgroundColor: NSColor = .textBackgroundColor
     private var foregroundColor: NSColor = .textColor
     private var cursorColor: NSColor = .controlAccentColor
-    private var gridLayout = GhosttyGridLayout(cellWidth: 8, cellHeight: 16, cols: 80, rows: 24)
+    private(set) var gridLayout = GhosttyGridLayout(cellWidth: 8, cellHeight: 16, cols: 80, rows: 24)
     private var baseCTFont: CTFont!
     private var styledFonts: [FontTraits: CTFont] = [:]
     private var colorCache: [UInt32: NSColor] = [:]
     private var bellFlashUntil = Date.distantPast
+    private var selectionColor: NSColor?
+    /// Half the extra height `adjust-cell-height` adds to a row, so text stays centred in it.
+    private var textYOffset: CGFloat = 0
 
     // MARK: - Scrollback viewing
 
@@ -70,6 +82,10 @@ final class GhosttyTerminalView: NSView {
         wantsLayer = true
         rebuildFonts()
         ensureBlinkTimer()
+        confirm = { [weak self] message, detail, acceptTitle, completion in
+            self?.presentSheet(message: message, detail: detail, acceptTitle: acceptTitle, completion: completion)
+                ?? completion(false)
+        }
     }
 
     @available(*, unavailable)
@@ -91,16 +107,55 @@ final class GhosttyTerminalView: NSView {
     }
 
     func applyColors(background: NSColor, foreground: NSColor, cursor: NSColor) {
-        backgroundColor = background
-        foregroundColor = foreground
-        cursorColor = cursor
+        var next = configuration
+        next.vt.background = Self.hex(of: background)
+        next.vt.foreground = Self.hex(of: foreground)
+        next.vt.cursorColor = Self.hex(of: cursor)
+        apply(next)
+    }
+
+    /// Applies Settings ▸ Terminal. Cheap when nothing changed; live for a running shell.
+    func apply(_ new: GhosttyTerminalViewConfiguration) {
+        let old = configuration
+        guard new != old else { return }
+        configuration = new
+        backgroundColor = Self.color(hex: new.vt.background)
+        foregroundColor = Self.color(hex: new.vt.foreground)
+        cursorColor = Self.color(hex: new.vt.cursorColor)
+        selectionColor = new.selectionColor.map { Self.color(hex: $0).withAlphaComponent(0.6) }
+        colorCache.removeAll()
+        if let terminal {
+            terminal.configure(new.vt)
+            // The parser only uses the default cursor on CSI 0 q (a program may be showing its own), so
+            // a changed default is shown by asking for it.
+            if new.vt.cursorStyle != old.vt.cursorStyle || new.vt.cursorBlinks != old.vt.cursorBlinks {
+                terminal.write(Data("\u{1B}[0 q".utf8))
+            }
+        }
+        if new.cellHeightAdjustPercent != old.cellHeightAdjustPercent {
+            relayout()
+        }
         needsDisplay = true
+    }
+
+    private static func color(hex: UInt32) -> NSColor {
+        NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
+                blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+    }
+
+    private static func hex(of color: NSColor) -> UInt32 {
+        guard let rgb = color.usingColorSpace(.sRGB) else { return 0 }
+        func byte(_ value: CGFloat) -> UInt32 { UInt32((min(max(value, 0), 1) * 255).rounded()) }
+        return (byte(rgb.redComponent) << 16) | (byte(rgb.greenComponent) << 8) | byte(rgb.blueComponent)
     }
 
     /// Starts the shell. Idempotent: safe to call on every layout while the
     /// process is already running.
-    func startProcess(executable: String, execName: String, currentDirectory: String) {
-        startConfig = (executable, execName, currentDirectory)
+    func startProcess(
+        executable: String, execName: String, currentDirectory: String,
+        arguments: [String] = [], environment: [String: String]? = nil
+    ) {
+        startConfig = (executable, execName, currentDirectory, arguments, environment)
         guard !mirrorsOutput else { return }
         guard !process.running else { return }
         ensureBackend()
@@ -108,7 +163,8 @@ final class GhosttyTerminalView: NSView {
             executable: executable,
             execName: execName,
             currentDirectory: currentDirectory,
-            environment: nil,
+            arguments: arguments,
+            environment: environment,
             cols: gridLayout.cols,
             rows: gridLayout.rows)
         started = true
@@ -140,7 +196,9 @@ final class GhosttyTerminalView: NSView {
             startProcess(
                 executable: config.executable,
                 execName: config.execName,
-                currentDirectory: config.directory)
+                currentDirectory: config.directory,
+                arguments: config.arguments,
+                environment: config.environment)
         }
     }
 
@@ -157,12 +215,6 @@ final class GhosttyTerminalView: NSView {
     /// The shell pid while running, -1 otherwise (for SIGHUP parity).
     var shellPid: pid_t { process.shellPid }
 
-    /// View-level default cursor, matching the old SwiftTerm
-    /// `setCursorStyle(.steadyBar)`. Apps may override it; RIS returns to
-    /// the parser default (a divergence from SwiftTerm, which restores the
-    /// view default — recorded in the plan's Risks).
-    private var initialCursorSequence = "\u{1B}[6 q"
-
     private func ensureBackend() {
         if terminal == nil {
             terminal = GhosttyVtTerminal(cols: gridLayout.cols, rows: gridLayout.rows)
@@ -174,7 +226,11 @@ final class GhosttyTerminalView: NSView {
             let backend = terminal
             process.onOutput = { [weak self] data in
                 backend?.write(data)
-                Task { @MainActor [weak self] in self?.needsDisplay = true }
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if self.configuration.scrollToBottomOnOutput { self.snapToBottom() }
+                    self.needsDisplay = true
+                }
             }
             process.onExit = { [weak self] _ in
                 Task { @MainActor [weak self] in
@@ -183,7 +239,11 @@ final class GhosttyTerminalView: NSView {
                     self?.onProcessTerminated?()
                 }
             }
-            terminal?.write(Data(initialCursorSequence.utf8))
+            // The configured default cursor (steady bar unless Settings ▸ Terminal says otherwise) is
+            // the parser's own default, so a program's reset and RIS return to it too.
+            terminal?.configure(configuration.vt)
+            terminal?.setClipboardReader { NSPasteboard.general.string(forType: .string) }
+            terminal?.write(Data("\u{1B}[0 q".utf8))
         }
     }
 
@@ -191,14 +251,14 @@ final class GhosttyTerminalView: NSView {
         // Already on the main thread (hopped in onEvent).
         switch event {
         case let .titleChanged(title):
-            onTitleUpdate?(title)
+            if configuration.allowTitleChange { onTitleUpdate?(title) }
         case let .pwdChanged(path):
             if let url = GhosttyTerminalView.directoryURL(fromOSC7: path) {
                 onDirectoryUpdate?(url)
             }
         case .bell:
-            // Visual bell: NSBeep is unavailable to Swift in this SDK, and a
-            // flash suits an editor better than a system beep anyway.
+            if configuration.bell.beeps { NSSound.beep() }
+            guard configuration.bell.flashes else { break }
             bellFlashUntil = Date().addingTimeInterval(0.15)
             needsDisplay = true
             Task { @MainActor [weak self] in
@@ -207,6 +267,48 @@ final class GhosttyTerminalView: NSView {
             }
         case let .writePty(data):
             process.write(data)
+        case let .clipboardWrite(text):
+            let board = NSPasteboard.general
+            board.clearContents()
+            board.setString(text, forType: .string)
+        case .clipboardReadRequested:
+            askToAllowClipboardRead()
+        case let .desktopNotification(title, body):
+            onDesktopNotification?(title, body)
+        }
+    }
+
+    /// The program asked for the clipboard while the policy is "ask". It was refused; on consent this
+    /// terminal answers later reads, and the program has to ask again.
+    private func askToAllowClipboardRead() {
+        guard !isAskingClipboardRead else { return }
+        isAskingClipboardRead = true
+        confirm(
+            "Allow this terminal to read your clipboard?",
+            "A program running in this terminal asked for the clipboard contents. Allow only if you started it.",
+            "Allow"
+        ) { [weak self] allowed in
+            guard let self else { return }
+            self.isAskingClipboardRead = false
+            if allowed { self.terminal?.grantClipboardRead() }
+        }
+    }
+
+    private func presentSheet(
+        message: String, detail: String, acceptTitle: String, completion: @escaping (Bool) -> Void
+    ) {
+        guard let window else {
+            completion(false)
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.addButton(withTitle: acceptTitle)
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            completion(response == .alertFirstButtonReturn)
         }
     }
 
@@ -236,10 +338,13 @@ final class GhosttyTerminalView: NSView {
 
     private func relayout() {
         let metrics = Self.cellMetrics(for: baseCTFont)
+        // `adjust-cell-height`: a taller or shorter row, with the text kept in the middle of it.
+        let adjusted = max(1, (metrics.height * (1 + CGFloat(configuration.cellHeightAdjustPercent) / 100)).rounded())
+        textYOffset = ((adjusted - metrics.height) / 2).rounded()
         let newLayout = GhosttyGridLayout.fitting(
             boundsSize: bounds.size,
             cellWidth: metrics.width,
-            cellHeight: metrics.height)
+            cellHeight: adjusted)
         let sizeChanged = newLayout.cols != gridLayout.cols || newLayout.rows != gridLayout.rows
         gridLayout = newLayout
         scroller?.frame = scrollerFrame()
@@ -356,12 +461,12 @@ final class GhosttyTerminalView: NSView {
         guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         var attributes: [NSAttributedString.Key: Any] = [
             .font: styledFont(bold: first.bold, italic: first.italic),
-            .foregroundColor: first.faint ? fg.withAlphaComponent(0.6) : fg,
+            .foregroundColor: first.faint ? fg.withAlphaComponent(configuration.faintOpacity) : fg,
         ]
         if first.underline != 0 { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
         if first.strikethrough { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
         let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
-        context.textPosition = CGPoint(x: CGFloat(col) * gridLayout.cellWidth, y: yOrigin + CTFontGetAscent(baseCTFont))
+        context.textPosition = CGPoint(x: CGFloat(col) * gridLayout.cellWidth, y: yOrigin + textYOffset + CTFontGetAscent(baseCTFont))
         // Blinking text hides on the off phase; steady otherwise.
         if !first.blink || blinkPhaseOn {
             CTLineDraw(line, context)
@@ -393,7 +498,7 @@ final class GhosttyTerminalView: NSView {
 
     private func drawSelection(snapshot: GhosttyRenderSnapshot, context: CGContext) {
         guard hasSelection, let selection = orderedSelection() else { return }
-        NSColor.selectedTextBackgroundColor.withAlphaComponent(0.35).setFill()
+        (selectionColor ?? NSColor.selectedTextBackgroundColor.withAlphaComponent(0.35)).setFill()
         let lastRow = min(selection.to.row, snapshot.grid.count - 1)
         for row in selection.from.row...max(lastRow, selection.from.row) {
             guard row < snapshot.grid.count, row < gridLayout.rows else { break }
@@ -434,7 +539,9 @@ final class GhosttyTerminalView: NSView {
         guard let term = terminal, let keyEncoder else { return }
         if hasSelection { clearSelection() }
         // Typing resumes at the prompt: park the viewport back at live.
-        snapToBottom()
+        if configuration.scrollToBottomOnKeystroke { snapToBottom() }
+        if configuration.hideMouseWhileTyping { NSCursor.setHiddenUntilMouseMoves(true) }
+        let optionAsAlt = configuration.optionAsAlt
         let keystroke = GhosttyKeystroke(
             keyCode: UInt16(event.keyCode),
             modifiers: GhosttyModifiers(appKitFlags: event.modifierFlags),
@@ -442,7 +549,7 @@ final class GhosttyTerminalView: NSView {
             unshiftedText: event.charactersIgnoringModifiers,
             isRepeat: event.isARepeat)
         let bytes: Data? = term.withTerminal { terminal in
-            keyEncoder.syncToTerminal(terminal, optionAsMeta: optionAsMeta)
+            keyEncoder.syncToTerminal(terminal, optionAsAlt: optionAsAlt)
             return keyEncoder.encode(keystroke)
         }
         if let bytes {
@@ -524,9 +631,33 @@ final class GhosttyTerminalView: NSView {
 
     func pasteFromPasteboard() {
         guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        let bracketed = terminal?.isModeSet(GhosttyTerminalModes.bracketedPaste) == true
+        // `clipboard-paste-protection`: text with a line break would run as commands the moment it lands in a
+        // plain prompt. Inside a bracketed paste the shell holds it until Enter, so only text that can end
+        // the bracket early is unsafe there.
+        if configuration.confirmUnsafePaste, Self.isUnsafePaste(text, bracketed: bracketed) {
+            confirm(
+                "Paste text that may run commands?",
+                "The text contains line breaks or control sequences, so the shell may run it as soon as it is pasted.",
+                "Paste"
+            ) { [weak self] allowed in
+                if allowed { self?.writePaste(text, bracketed: bracketed) }
+            }
+            return
+        }
+        writePaste(text, bracketed: bracketed)
+    }
+
+    static func isUnsafePaste(_ text: String, bracketed: Bool) -> Bool {
+        let safe = text.withCString { ghostty_paste_is_safe($0, text.utf8.count) }
+        if safe { return false }
+        return !bracketed || text.contains("\u{1B}[201~")
+    }
+
+    private func writePaste(_ text: String, bracketed: Bool) {
         var payload = text.replacing("\r\n", with: "\n")
         payload = payload.replacing("\r", with: "\n")
-        if terminal?.isModeSet(GhosttyTerminalModes.bracketedPaste) == true {
+        if bracketed {
             payload = "\u{1B}[200~" + payload + "\u{1B}[201~"
         }
         process.write(Data(payload.utf8))
@@ -647,6 +778,10 @@ final class GhosttyTerminalView: NSView {
             sendMouseReport(GhosttyMouseReport(action: .release, button: button,
                                                modifiers: GhosttyModifiers(appKitFlags: event.modifierFlags),
                                                x: pos.x, y: pos.y))
+        } else if configuration.copyOnSelect, !appWantsMouse(),
+                  let anchor = selectionAnchor, let active = selectionActive,
+                  anchor.col != active.col || anchor.row != active.row {
+            copySelectionToPasteboard()
         }
     }
 
