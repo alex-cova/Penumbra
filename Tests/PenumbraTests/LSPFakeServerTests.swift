@@ -644,6 +644,203 @@ final class LSPFakeServerTests: XCTestCase {
         XCTAssertEqual(peer.methods.filter { $0 == "textDocument/didChange" }.count, 1)
     }
 
+    // MARK: - Incremental document sync (P1)
+
+    func testIncrementalDidChangeSendsOneRangedChange() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2)
+        defer { fixture.stop() }
+        let id = DocumentID()
+        await fixture.workspace.openDocument(incrementalDocument(id, "let a = 1"))
+        try await waitForSyncCount(fixture.peer, 1)
+
+        let edit = appendTextEdit("2", to: "let a = 1")
+        await fixture.workspace.handleEditorEvent(.documentEdited(
+            id, [edit], newSnapshot: TextSnapshot(version: 1, text: "let a = 12")
+        ))
+        try await waitForSyncCount(fixture.peer, 2)
+
+        let notes = fixture.peer.documentSyncNotifications
+        XCTAssertEqual(notes.map(\.method), ["textDocument/didOpen", "textDocument/didChange"])
+        let change = try XCTUnwrap(notes.last?.params)
+        XCTAssertEqual((change["textDocument"] as? [String: Any])?["version"] as? Int, 2)
+        let changes = try XCTUnwrap(change["contentChanges"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes[0]["text"] as? String, "2")
+        let range = try XCTUnwrap(changes[0]["range"] as? [String: Any])
+        XCTAssertEqual((range["start"] as? [String: Any])?["line"] as? Int, 0)
+        XCTAssertEqual((range["start"] as? [String: Any])?["character"] as? Int, 9)
+        XCTAssertEqual((range["end"] as? [String: Any])?["character"] as? Int, 9)
+        XCTAssertEqual(fixture.peer.mirroredText(for: "file:///tmp/A.swift"), "let a = 12")
+    }
+
+    func testFullSyncServerStillReceivesWholeText() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 1)
+        defer { fixture.stop() }
+        let id = DocumentID()
+        await fixture.workspace.openDocument(incrementalDocument(id, "let a = 1"))
+        try await waitForSyncCount(fixture.peer, 1)
+
+        let edit = appendTextEdit("2", to: "let a = 1")
+        await fixture.workspace.handleEditorEvent(.documentEdited(
+            id, [edit], newSnapshot: TextSnapshot(version: 1, text: "let a = 12")
+        ))
+        try await waitForSyncCount(fixture.peer, 2)
+
+        let notes = fixture.peer.documentSyncNotifications
+        XCTAssertEqual(notes.map(\.method), ["textDocument/didOpen", "textDocument/didChange"])
+        let change = try XCTUnwrap(notes.last?.params)
+        XCTAssertEqual((change["textDocument"] as? [String: Any])?["version"] as? Int, 2)
+        let changes = try XCTUnwrap(change["contentChanges"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes[0]["text"] as? String, "let a = 12")
+        XCTAssertNil(changes[0]["range"] as? [String: Any])
+        XCTAssertEqual(fixture.peer.mirroredText(for: "file:///tmp/A.swift"), "let a = 12")
+    }
+
+    func testRequestDrivenResendFallsBackToFullTextThenRecovers() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2)
+        defer { fixture.stop() }
+        let id = DocumentID()
+        await fixture.workspace.openDocument(incrementalDocument(id, "let a = 1"))
+        try await waitForSyncCount(fixture.peer, 1)
+
+        // A request made before the debounce fires resends the whole text off the event stream.
+        let origin = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        let typed = incrementalDocument(id, "let a = 12", version: 1)
+        _ = try await fixture.client.requestCompletions(for: typed, at: origin)
+        try await waitForSyncCount(fixture.peer, 2)
+
+        // The debounced event carries pre-resend positions: ranges would apply twice, so full text.
+        await fixture.workspace.handleEditorEvent(.documentEdited(
+            id, [appendTextEdit("2", to: "let a = 1")],
+            newSnapshot: TextSnapshot(version: 2, text: "let a = 12")
+        ))
+        try await waitForSyncCount(fixture.peer, 3)
+
+        // The next edit starts from what the server holds again: incremental.
+        await fixture.workspace.handleEditorEvent(.documentEdited(
+            id, [appendTextEdit("3", to: "let a = 12")],
+            newSnapshot: TextSnapshot(version: 3, text: "let a = 123")
+        ))
+        try await waitForSyncCount(fixture.peer, 4)
+
+        let notes = fixture.peer.documentSyncNotifications
+        XCTAssertEqual(notes.map(\.method), [
+            "textDocument/didOpen", "textDocument/didChange",
+            "textDocument/didChange", "textDocument/didChange",
+        ])
+        XCTAssertEqual(
+            (notes[1].params["textDocument"] as? [String: Any])?["version"] as? Int, 2,
+            "the request resends the whole text"
+        )
+        let resent = try XCTUnwrap(notes[2].params["contentChanges"] as? [[String: Any]])
+        XCTAssertEqual(resent.count, 1)
+        XCTAssertEqual(resent[0]["text"] as? String, "let a = 12")
+        XCTAssertNil(resent[0]["range"] as? [String: Any], "pre-resend positions must not go as ranges")
+        let ranged = try XCTUnwrap(notes[3].params["contentChanges"] as? [[String: Any]])
+        XCTAssertEqual(ranged.count, 1)
+        XCTAssertEqual(ranged[0]["text"] as? String, "3")
+        let range = try XCTUnwrap(ranged[0]["range"] as? [String: Any])
+        XCTAssertEqual((range["start"] as? [String: Any])?["character"] as? Int, 10)
+        XCTAssertEqual(fixture.peer.mirroredText(for: "file:///tmp/A.swift"), "let a = 123")
+    }
+
+    func testIncrementalRangeCharacterIsUTF16() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2)
+        defer { fixture.stop() }
+        let id = DocumentID()
+        // "let a = 😀" is 10 UTF-16 units (the emoji is a surrogate pair) but 9 scalars.
+        await fixture.workspace.openDocument(incrementalDocument(id, "let a = 😀"))
+        try await waitForSyncCount(fixture.peer, 1)
+
+        let at = TextPosition(line: 0, column: 10, utf16Offset: 10)
+        await fixture.workspace.handleEditorEvent(.documentEdited(
+            id, [EditorIntelligence.TextEdit(range: TextRange(start: at, end: at), replacement: "!")],
+            newSnapshot: TextSnapshot(version: 1, text: "let a = 😀!")
+        ))
+        try await waitForSyncCount(fixture.peer, 2)
+
+        let change = try XCTUnwrap(fixture.peer.documentSyncNotifications.last?.params)
+        let changes = try XCTUnwrap(change["contentChanges"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+        let range = try XCTUnwrap(changes[0]["range"] as? [String: Any])
+        XCTAssertEqual((range["start"] as? [String: Any])?["character"] as? Int, 10)
+        XCTAssertEqual(fixture.peer.mirroredText(for: "file:///tmp/A.swift"), "let a = 😀!")
+    }
+
+    func testIncrementalMirrorHoldsAcrossRandomEditsAndRequests() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2)
+        defer { fixture.stop() }
+        let id = DocumentID()
+        let uri = "file:///tmp/A.swift"
+        var text = "func f() {\n    let x = 1\n    return x\n}\n"
+        await fixture.workspace.openDocument(incrementalDocument(id, text))
+        try await waitForSyncCount(fixture.peer, 1)
+
+        let origin = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        var rng = SeededEdits(state: 0x5EED)
+        var version = 0
+        for step in 0..<200 {
+            var current = text
+            var edits: [EditorIntelligence.TextEdit] = []
+            for _ in 0..<(1 + Int(rng.next() % 2)) {
+                let (edit, next) = randomTextEdit(in: current, rng: &rng)
+                edits.append(edit)
+                current = next
+            }
+            text = current
+            version += 1
+            await fixture.workspace.handleEditorEvent(.documentEdited(
+                id, edits, newSnapshot: TextSnapshot(version: version, text: text)
+            ))
+            if step % 10 == 9 {
+                let fresh = incrementalDocument(id, text, version: version)
+                _ = try await fixture.client.requestCompletions(for: fresh, at: origin)
+            }
+            let deadline = Date().addingTimeInterval(5)
+            while fixture.peer.mirroredText(for: uri) != text, Date() < deadline {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertEqual(fixture.peer.mirroredText(for: uri), text, "mirror drifts at step \(step)")
+        }
+    }
+
+    func testIncrementalPathNeverReadsTheWholeSnapshot() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2)
+        defer { fixture.stop() }
+        let id = DocumentID()
+        let counter = FullReadCounter()
+        let fullLength = ("let a = 1" as NSString).length
+        let reader = TextRangeReader(utf16Length: fullLength) { [counter] offset, length in
+            counter.record(offset: offset, length: length, fullLength: fullLength)
+            let ns = "let a = 1" as NSString
+            return ns.substring(with: NSRange(location: offset, length: min(length, fullLength - offset)))
+        }
+        let origin = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        let document = Document(
+            id: id, url: URL(fileURLWithPath: "/tmp/A.swift"), displayName: "A.swift",
+            contentSnapshot: TextSnapshot(version: 0, utf16Length: fullLength, text: nil, rangeReader: reader),
+            selection: Selection(range: TextRange(start: origin, end: origin)),
+            cursor: Cursor(position: origin), viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
+            languageIdentifier: "swift"
+        )
+        await fixture.workspace.openDocument(document)
+        try await waitForSyncCount(fixture.peer, 1)
+
+        await fixture.workspace.handleEditorEvent(.documentEdited(
+            id, [appendTextEdit("2", to: "let a = 1")],
+            newSnapshot: TextSnapshot(version: 1, text: "let a = 12")
+        ))
+        try await waitForSyncCount(fixture.peer, 2)
+
+        // One full read for didOpen; the ranged didChange reads nothing.
+        XCTAssertEqual(counter.fullReads, 1)
+        let change = try XCTUnwrap(fixture.peer.documentSyncNotifications.last?.params)
+        let changes = try XCTUnwrap(change["contentChanges"] as? [[String: Any]])
+        XCTAssertEqual(changes.first?["text"] as? String, "2")
+        XCTAssertEqual(fixture.peer.mirroredText(for: "file:///tmp/A.swift"), "let a = 12")
+    }
+
     func testTheCompletionListSaysWhetherTheServerCutItShort() async throws {
         let toServer = Pipe()
         let fromServer = Pipe()
@@ -758,6 +955,161 @@ final class LSPFakeServerTests: XCTestCase {
             languageIdentifier: "swift"
         )
     }
+
+    // MARK: - Incremental sync fixtures
+
+    private struct IncrementalFixture {
+        let peer: ScriptedLSPPeer
+        let client: LanguageServerClient
+        let workspace: Workspace
+        let sync: LSPWorkspaceDocumentSync
+        let stop: () -> Void
+    }
+
+    private func makeIncrementalFixture(syncKind: Int) async -> IncrementalFixture {
+        let toServer = Pipe()
+        let fromServer = Pipe()
+        let peer = ScriptedLSPPeer()
+        peer.syncKind = syncKind
+        let server = Task.detached {
+            peer.serve(reading: toServer.fileHandleForReading, writing: fromServer.fileHandleForWriting)
+        }
+        let clientWrite = HandleWriter(toServer.fileHandleForWriting)
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let reader = Task.detached {
+            let handle = fromServer.fileHandleForReading
+            while true {
+                let data = handle.availableData
+                if data.isEmpty {
+                    continuation.finish()
+                    return
+                }
+                continuation.yield(data)
+            }
+        }
+        let client = LanguageServerClient.make(
+            write: { try clientWrite.write($0) },
+            read: stream,
+            documentURI: { $0.url?.absoluteString ?? "untitled:\($0.id)" },
+            workspaceRoot: URL(fileURLWithPath: "/tmp")
+        )
+        let workspace = Workspace()
+        let sync = LSPWorkspaceDocumentSync(client: client, languages: ["swift"])
+        _ = await client.advertisedFeatures() // runs `initialize`, as the host does
+        await sync.start(workspace: workspace)
+        return IncrementalFixture(peer: peer, client: client, workspace: workspace, sync: sync, stop: {
+            clientWrite.close()
+            try? fromServer.fileHandleForWriting.close()
+            server.cancel()
+            reader.cancel()
+        })
+    }
+
+    private func incrementalDocument(_ id: DocumentID, _ text: String, version: Int = 0) -> Document {
+        let origin = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        return Document(
+            id: id, url: URL(fileURLWithPath: "/tmp/A.swift"), displayName: "A.swift",
+            contentSnapshot: TextSnapshot(version: version, text: text),
+            selection: Selection(range: TextRange(start: origin, end: origin)),
+            cursor: Cursor(position: origin), viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
+            languageIdentifier: "swift"
+        )
+    }
+
+    private func waitForSyncCount(_ peer: ScriptedLSPPeer, _ count: Int) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while peer.documentSyncNotifications.count < count, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    /// An insertion at the end of `text`, with line/column measured in UTF-16 units.
+    private func appendTextEdit(_ insertion: String, to text: String) -> EditorIntelligence.TextEdit {
+        let offset = (text as NSString).length
+        let (line, column) = lineColumn(of: offset, in: text)
+        let at = TextPosition(line: line, column: column, utf16Offset: offset)
+        return EditorIntelligence.TextEdit(range: TextRange(start: at, end: at), replacement: insertion)
+    }
+
+    private func lineColumn(of utf16Offset: Int, in text: String) -> (line: Int, column: Int) {
+        let ns = text as NSString
+        var line = 0
+        var start = 0
+        for index in 0..<min(utf16Offset, ns.length) where ns.character(at: index) == 0x0A {
+            line += 1
+            start = index + 1
+        }
+        return (line, utf16Offset - start)
+    }
+
+    /// One random single-character insert, delete or replace at a character boundary.
+    private func randomTextEdit(in text: String, rng: inout SeededEdits) -> (EditorIntelligence.TextEdit, String) {
+        let insertions = ["x", "yz", " ", "\n", "😀", "let ", ";"]
+        let ns = text as NSString
+        let characters = Array(text)
+        let index = characters.isEmpty ? 0 : Int(rng.next() % UInt64(characters.count + 1))
+        var offset = 0
+        for character in characters.prefix(index) {
+            offset += (String(character) as NSString).length
+        }
+        let operation = rng.next() % 3
+        var deleteLength = 0
+        var insertion = ""
+        if operation == 0 || index >= characters.count {
+            insertion = insertions[Int(rng.next() % UInt64(insertions.count))]
+        } else {
+            deleteLength = (String(characters[index]) as NSString).length
+            if operation == 2 {
+                insertion = insertions[Int(rng.next() % UInt64(insertions.count))]
+            }
+        }
+        let (line, column) = lineColumn(of: offset, in: text)
+        let (endLine, endColumn) = lineColumn(of: offset + deleteLength, in: text)
+        let edit = EditorIntelligence.TextEdit(
+            range: TextRange(
+                start: TextPosition(line: line, column: column, utf16Offset: offset),
+                end: TextPosition(line: endLine, column: endColumn, utf16Offset: offset + deleteLength)
+            ),
+            replacement: insertion
+        )
+        let next = ns.replacingCharacters(
+            in: NSRange(location: offset, length: deleteLength), with: insertion
+        )
+        return (edit, next)
+    }
+}
+
+/// Deterministic RNG for the sync mirror fuzz test: the same seed replays the same edits.
+private struct SeededEdits {
+    var state: UInt64
+    mutating func next() -> UInt64 {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        var x = state
+        x ^= x >> 29
+        x = x &* 0xBF58476D1CE4E5B9
+        x ^= x >> 27
+        x = x &* 0x94D049BB133111EB
+        x ^= x >> 31
+        return x
+    }
+}
+
+/// Counts full-snapshot reads through a `TextRangeReader`, for the elided-text sync test.
+private final class FullReadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reads = 0
+    func record(offset: Int, length: Int, fullLength: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        if offset == 0 && length == fullLength {
+            reads += 1
+        }
+    }
+    var fullReads: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return reads
+    }
 }
 
 private final class ProgressLog: @unchecked Sendable {
@@ -835,6 +1187,23 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
         set { lock.lock(); defer { lock.unlock() }; incomplete = newValue }
     }
 
+    /// Advertised in the `initialize` result as `textDocumentSync` (1 = full, 2 = incremental).
+    /// Nil (the default) advertises nothing, like a server that never declares sync.
+    private var advertisedSyncKind: Int?
+    var syncKind: Int? {
+        get { lock.lock(); defer { lock.unlock() }; return advertisedSyncKind }
+        set { lock.lock(); defer { lock.unlock() }; advertisedSyncKind = newValue }
+    }
+    /// What the server holds per URI after applying every `didOpen`/`didChange` in order.
+    private var mirrored: [String: String] = [:]
+
+    /// The text the server holds for `uri`, or nil when it never saw the document.
+    func mirroredText(for uri: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return mirrored[uri]
+    }
+
     /// The `initializationOptions` the client sent with `initialize`.
     var clientInitializationOptions: Any? {
         lock.lock()
@@ -884,7 +1253,9 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
         seen.append(method)
         if method == "initialize" { initializeParams = object["params"] as? [String: Any] ?? [:] }
         if ["textDocument/didOpen", "textDocument/didChange", "textDocument/didClose"].contains(method) {
-            syncNotifications.append((method, object["params"] as? [String: Any] ?? [:]))
+            let params = object["params"] as? [String: Any] ?? [:]
+            syncNotifications.append((method, params))
+            Self.applyMirror(method: method, params: params, mirrored: &mirrored)
         }
         if method == "textDocument/codeAction" {
             let context = (object["params"] as? [String: Any])?["context"] as? [String: Any]
@@ -901,26 +1272,88 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
             Self.sendApplyEdit(on: output)
             return
         }
-        let body = Self.response(id: id, method: method, incompleteCompletion: incompleteCompletion)
+        let body = Self.response(
+            id: id, method: method, incompleteCompletion: incompleteCompletion, syncKind: syncKind
+        )
         var framed = Data("Content-Length: \(body.count)\r\n\r\n".utf8)
         framed.append(body)
         try? output.write(contentsOf: framed)
     }
 
-    private static func response(id: Any, method: String, incompleteCompletion: Bool = false) -> Data {
+    /// Applies `didOpen`/`didChange` to the mirror, the way a language server would: a change
+    /// without a range replaces the whole text, ranged changes apply in order at UTF-16 offsets.
+    private static func applyMirror(method: String, params: [String: Any], mirrored: inout [String: String]) {
+        switch method {
+        case "textDocument/didOpen":
+            guard let document = params["textDocument"] as? [String: Any],
+                  let uri = document["uri"] as? String,
+                  let text = document["text"] as? String else { return }
+            mirrored[uri] = text
+        case "textDocument/didChange":
+            guard let document = params["textDocument"] as? [String: Any],
+                  let uri = document["uri"] as? String,
+                  let changes = params["contentChanges"] as? [[String: Any]] else { return }
+            var current = mirrored[uri] ?? ""
+            for change in changes {
+                guard let text = change["text"] as? String else { continue }
+                guard let range = change["range"] as? [String: Any] else {
+                    current = text
+                    continue
+                }
+                current = applyRangedMirrorChange(range: range, text: text, to: current)
+            }
+            mirrored[uri] = current
+        case "textDocument/didClose":
+            guard let uri = (params["textDocument"] as? [String: Any])?["uri"] as? String else { return }
+            mirrored.removeValue(forKey: uri)
+        default:
+            break
+        }
+    }
+
+    private static func applyRangedMirrorChange(range: [String: Any], text: String, to current: String) -> String {
+        func point(_ value: Any?) -> (line: Int, character: Int)? {
+            guard let point = value as? [String: Any],
+                  let line = point["line"] as? Int,
+                  let character = point["character"] as? Int else { return nil }
+            return (line, character)
+        }
+        guard let start = point(range["start"]), let end = point(range["end"]) else { return current }
+        let ns = current as NSString
+        var starts = [0]
+        for index in 0..<ns.length where ns.character(at: index) == 0x0A {
+            starts.append(index + 1)
+        }
+        func offset(line: Int, character: Int) -> Int {
+            guard line < starts.count else { return ns.length }
+            let lineStart = starts[line]
+            let lineEnd = line + 1 < starts.count ? starts[line + 1] - 1 : ns.length
+            return min(lineStart + character, lineEnd)
+        }
+        let lower = offset(line: start.line, character: start.character)
+        let upper = offset(line: end.line, character: end.character)
+        guard lower <= upper else { return current }
+        return ns.replacingCharacters(in: NSRange(location: lower, length: upper - lower), with: text)
+    }
+
+    private static func response(
+        id: Any, method: String, incompleteCompletion: Bool = false, syncKind: Int? = nil
+    ) -> Data {
         let result: Any
         switch method {
         case "initialize":
-            result = [
-                "capabilities": [
-                    "completionProvider": ["resolveProvider": true, "triggerCharacters": ["."]],
-                    "definitionProvider": false,
-                    "renameProvider": true,
-                    "codeActionProvider": true,
-                    "callHierarchyProvider": true,
-                    "typeHierarchyProvider": true
-                ]
-            ] as [String: Any]
+            var capabilities: [String: Any] = [
+                "completionProvider": ["resolveProvider": true, "triggerCharacters": ["."]],
+                "definitionProvider": false,
+                "renameProvider": true,
+                "codeActionProvider": true,
+                "callHierarchyProvider": true,
+                "typeHierarchyProvider": true,
+            ]
+            if let syncKind {
+                capabilities["textDocumentSync"] = syncKind
+            }
+            result = ["capabilities": capabilities] as [String: Any]
         case "textDocument/completion":
             let items = [["label": "Box", "insertText": "Box"]]
             result = incompleteCompletion ? ["isIncomplete": true, "items": items] as [String: Any] : items as Any

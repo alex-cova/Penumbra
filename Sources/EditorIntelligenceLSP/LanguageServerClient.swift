@@ -24,6 +24,10 @@ public actor LanguageServerClient: LSPClient {
     private struct SentDocument {
         var version: Int
         var utf16Length: Int
+        /// Whether the server's text equals the buffer with every observed event applied. A
+        /// request racing the debounce resends the whole text off the event stream; the next
+        /// `.documentEdited` still carries pre-resend positions, so it must go full text too.
+        var alignedWithEvents: Bool
     }
     private let onProgress: (@Sendable ([LSPWorkProgress]) -> Void)?
 
@@ -460,7 +464,7 @@ public actor LanguageServerClient: LSPClient {
         let uri = documentURI(document)
         uris[document.id] = uri
         let snapshot = document.contentSnapshot
-        sent[document.id] = SentDocument(version: version, utf16Length: snapshot.utf16Length)
+        sent[document.id] = SentDocument(version: version, utf16Length: snapshot.utf16Length, alignedWithEvents: true)
         let text = snapshot.substring(utf16Offset: 0, length: snapshot.utf16Length)
         let params = LSPDocumentSyncMapper.openParams(
             uri: uri,
@@ -484,14 +488,67 @@ public actor LanguageServerClient: LSPClient {
         }
     }
 
-    public func notifyFullChange(_ document: Document, version: Int) async {
+    public func notifyFullChange(_ document: Document, version: Int, alignsEvents: Bool = true) async {
         let uri = uris[document.id] ?? documentURI(document)
         uris[document.id] = uri
         let snapshot = document.contentSnapshot
-        sent[document.id] = SentDocument(version: version, utf16Length: snapshot.utf16Length)
+        sent[document.id] = SentDocument(version: version, utf16Length: snapshot.utf16Length, alignedWithEvents: alignsEvents)
         let text = snapshot.substring(utf16Offset: 0, length: snapshot.utf16Length)
         let params = LSPDocumentSyncMapper.fullChangeParams(uri: uri, version: version, text: text)
         try? await server.textDocumentDidChange(params)
+    }
+
+    /// Sends a `.documentEdited` update: ranged `contentChanges` when the server holds the text
+    /// the edits start from and declared incremental sync, else the whole text.
+    ///
+    /// The bookkeeping is separate from `notifyIncrementalChanges` (the sync bridge's batched
+    /// path, which clears `sent`): ranges need the server's base, so this keeps the version and
+    /// length it last sent plus whether anything since moved the server off the event stream.
+    /// Each `TextEdit` holds positions in the text as it stood before that edit (LSP's sequential
+    /// rule), so a batch sends in the order observed. Never reads the snapshot on the ranged
+    /// path: file-backed documents elide `text`, and the edits already carry what changed.
+    public func notifyEdited(_ document: Document, edits: [EditorIntelligence.TextEdit]) async {
+        guard let state = sent[document.id] else { return }
+        guard await advertisesIncrementalSync(),
+              state.alignedWithEvents,
+              !edits.isEmpty,
+              state.utf16Length == baseLength(of: document, edits: edits) else {
+            await notifyFullChange(document, version: state.version + 1)
+            return
+        }
+        let uri = uris[document.id] ?? documentURI(document)
+        uris[document.id] = uri
+        let nextVersion = state.version + 1
+        let events = edits.map { edit in
+            TextDocumentContentChangeEvent(
+                range: lspRange(from: edit.range),
+                rangeLength: edit.range.end.utf16Offset - edit.range.start.utf16Offset,
+                text: edit.replacement
+            )
+        }
+        sent[document.id] = SentDocument(
+            version: nextVersion, utf16Length: document.contentSnapshot.utf16Length, alignedWithEvents: true
+        )
+        try? await server.textDocumentDidChange(DidChangeTextDocumentParams(
+            uri: uri, version: nextVersion, contentChanges: events
+        ))
+    }
+
+    /// The UTF-16 length the server holds if `edits` start from it: the new length minus what
+    /// the edits added. A mismatch means the buffer moved without an observed edit, or the edits
+    /// start from older text, so ranges would apply at the wrong base.
+    private func baseLength(of document: Document, edits: [EditorIntelligence.TextEdit]) -> Int {
+        let added = edits.reduce(0) { total, edit in
+            total + (edit.replacement as NSString).length - (edit.range.end.utf16Offset - edit.range.start.utf16Offset)
+        }
+        return document.contentSnapshot.utf16Length - added
+    }
+
+    /// Whether the server declared incremental `textDocumentSync`. Unknown or full means ranges
+    /// would drift or be rejected, so edits go as full text.
+    private func advertisesIncrementalSync() async -> Bool {
+        guard let capabilities = await capabilities() else { return false }
+        return LSPServerCapabilities.textDocumentSyncKind(in: capabilities) == .incremental
     }
 
     /// Sends `document`'s whole text as the next version when the server may not have it. Only for a
@@ -501,15 +558,21 @@ public actor LanguageServerClient: LSPClient {
     /// Returns whether it sent.
     @discardableResult
     public func syncFullText(of document: Document, force: Bool = false) async -> Bool {
+        await syncFullText(of: document, force: force, alignsEvents: true)
+    }
+
+    private func syncFullText(of document: Document, force: Bool, alignsEvents: Bool) async -> Bool {
         guard let state = sent[document.id] else { return false }
         guard force || document.contentSnapshot.utf16Length != state.utf16Length else { return false }
-        await notifyFullChange(document, version: state.version + 1)
+        await notifyFullChange(document, version: state.version + 1, alignsEvents: alignsEvents)
         return true
     }
 
     /// Called before a request about `document`, so the server answers about the text on screen.
+    /// A resend here moves the server off the event stream: the next `.documentEdited` still
+    /// carries pre-resend positions and must go full text, or its ranges would apply twice.
     private func ensureSynced(_ document: Document) async {
-        await syncFullText(of: document)
+        await syncFullText(of: document, force: false, alignsEvents: false)
     }
 
     public func notifySaved(_ document: Document, text: String?) async {

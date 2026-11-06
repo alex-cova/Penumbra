@@ -7,10 +7,12 @@ import Foundation
 /// been sent the file.
 ///
 /// It follows an EIP ``Workspace``, whose events already say when a tab opens, closes or changes (the
-/// app's indexer and Java support read the same stream), and syncs the **whole text** on each change.
-/// The workbench adapter has already debounced edits by then, and that adapter itself copies the text
-/// once per pause, so this costs the same order of work. Any later change resends everything, so a
-/// missed one heals itself.
+/// app's indexer and Java support read the same stream). A `.documentEdited` event carries ranged
+/// edits, which go as one incremental `didChange` when the server declared incremental sync and the
+/// client's bookkeeping proves the ranges start from what the server holds; anything else (open,
+/// full-sync servers, a request that raced the debounce, an unprovable base) resends the whole text,
+/// so a missed update heals itself.
+/// The workbench adapter has already debounced edits by then.
 ///
 /// What counts as a change: ``Workspace/updateDocument(_:)`` is also called for every document on
 /// routine refreshes (tab switches, pane syncs) with nothing new, so a `.documentChanged` event is
@@ -87,7 +89,7 @@ public actor LSPWorkspaceDocumentSync {
         switch event {
         case .documentOpened(let document): await opened(document)
         case .documentChanged(let document): await changed(document, force: false)
-        case .documentEdited(let document, _): await changed(document, force: true)
+        case .documentEdited(let document, let edits): await edited(document, edits: edits)
         case .documentClosed(let id): await closed(id)
         default: break
         }
@@ -104,6 +106,15 @@ public actor LSPWorkspaceDocumentSync {
         guard tracked.contains(document.id) else { return await opened(document) }
         guard isSynced(document) else { return await closed(document.id) }
         await client.syncFullText(of: document, force: force)
+    }
+
+    /// Ranged edits after a pause: one `didChange` with `contentChanges` when the client's
+    /// bookkeeping proves the ranges start from what the server holds, else the whole text.
+    /// Rollback is one line: send `.documentEdited` back to `changed(document, force: true)`.
+    private func edited(_ document: Document, edits: [EditorIntelligence.TextEdit]) async {
+        guard tracked.contains(document.id) else { return await opened(document) }
+        guard isSynced(document) else { return await closed(document.id) }
+        await client.notifyEdited(document, edits: edits)
     }
 
     private func closed(_ id: DocumentID) async {

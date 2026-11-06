@@ -10,7 +10,7 @@ show the measurement.
 | Path | Budget (Release, 20k and 120k-line Java) | Measured (2026-09-25 / 2026-09-27) |
 |---|---|---|
 | Keystroke (`insertText` + layout) | < 4 ms, flat with file size | ~1–3 ms |
-| Enter | < 2 ms at top of file; mid-file is a known gap (~12 ms, Phase 1) | 0.8–1.5 ms / 1.6–1.7 ms top; ~12 / ~21 ms mid |
+| Enter | < 2 ms at top of file and mid-file | 0.7–0.8 ms / 0.8–1.0 ms top; ~1.1 / ~1.4 ms mid-file (walked, median; p90 ~2.2 / ~1.7 ms; 2026-11-06 Release `enter-session synthetic`) |
 | Scroll page (offset + layout + display) | < 6 ms | ~3.1–3.5 ms / ~6.7 ms |
 | Live line handles after a full scroll | < ~2k | ~450–950 |
 | malloc after scrolling a 120k-line file | < 200 MB | ~140 MB |

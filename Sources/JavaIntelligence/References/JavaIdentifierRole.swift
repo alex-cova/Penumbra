@@ -67,7 +67,8 @@ public enum JavaRoleExtractor {
         return result
     }
 
-    private static func role(of token: SyntaxNode) -> JavaIdentifierRoles? {
+    /// Visible for the differential harness's per-site role tags; not a second classifier.
+    static func role(of token: SyntaxNode) -> JavaIdentifierRoles? {
         // `s::length` selects a member of the qualifier, which itself can bind a field (a bound
         // receiver) or a type, so it carries both roles; the union only ever keeps files the
         // classifier could also match, never fewer. The selected name resolves like a member use.

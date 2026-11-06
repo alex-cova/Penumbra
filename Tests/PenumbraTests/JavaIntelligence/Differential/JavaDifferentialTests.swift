@@ -76,7 +76,8 @@ final class JavaDifferentialTests: XCTestCase {
                 name: "greet", startUTF16: greet.location, endUTF16: greet.location + 5
             )
             let verdict = await JavaDifferentialHarness.verdict(
-                site: site, symbol: greetSymbol, text: foo, file: fooURL, world: world
+                site: site, symbol: greetSymbol, text: foo, file: fooURL, world: world,
+                roles: JavaDifferentialHarness.roleMap(in: foo), sourceRoot: root
             )
             XCTAssertTrue(verdict.definitionMatched, verdict.note)
             XCTAssertTrue(verdict.completionHit, verdict.note)
@@ -86,6 +87,82 @@ final class JavaDifferentialTests: XCTestCase {
             await client.shutdown()
             throw error
         }
+    }
+
+    /// The J1 flip on a tiny stub index: `aa` is declared after twelve `aaN` fields, so raw
+    /// provider order buries it past the top-8, while the ranked popup's exact-tier match puts
+    /// it first. Fails before ranking, passes after — the case the old scorer could not see.
+    func testRankedPopupBeatsProviderOrderOnATinyIndex() async throws {
+        let environment = try ParityTestSupport.requireEnvironment()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("differential-rank-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var fields = (1...12).map { "        public int aa\($0) = \($0);" }.joined(separator: "\n")
+        fields += "\n        public int aa = 100;"
+        let flip = """
+        public class Flip {
+        \(fields)
+            int use(Flip f) { return f.aa; }
+        }
+        """
+        let flipURL = root.appendingPathComponent("Flip.java")
+        try flip.write(to: flipURL, atomically: true, encoding: .utf8)
+
+        let world = try await JavaDifferentialHarness.makeWorld(
+            sourceRoot: root,
+            jdkShard: try JavaDifferentialHarness.writeJDKShard(installation: environment.jdk),
+            installation: environment.jdk
+        )
+        let ns = flip as NSString
+        let use = ns.range(of: "f.aa")
+        XCTAssertNotEqual(use.location, NSNotFound)
+        let site = JavaDifferentialHarness.IdentifierSite(
+            name: "aa", startUTF16: use.location + 2, endUTF16: use.location + 4
+        )
+        let symbol = JavaAnalysisSymbol(
+            position: site.lastUTF16, kind: "field", name: "aa", qualified: "Flip.aa",
+            declarationFile: nil, declarationStartLine: nil, declarationEndLine: nil
+        )
+        let verdict = await JavaDifferentialHarness.verdict(
+            site: site, symbol: symbol, text: flip, file: flipURL, world: world,
+            roles: JavaDifferentialHarness.roleMap(in: flip), sourceRoot: root
+        )
+        XCTAssertFalse(verdict.legacyCompletionHit, "provider-order top-8 should miss buried `aa`: \(verdict.note)")
+        XCTAssertEqual(verdict.completionRank, 1, verdict.note)
+        XCTAssertTrue(verdict.completionHit, verdict.note)
+        XCTAssertEqual(verdict.siteRole, .member, verdict.note)
+        XCTAssertTrue(verdict.siteDotted, verdict.note)
+    }
+
+    /// The tail is deleted: with the caret mid-identifier, the completion buffer holds the
+    /// typed prefix plus whatever follows the identifier, never the identifier's own tail.
+    func testCompletionBufferDeletesTheIdentifierTail() {
+        let text = "foo fromJson bar"
+        let ns = text as NSString
+        let range = ns.range(of: "fromJson")
+        let site = JavaDifferentialHarness.IdentifierSite(
+            name: "fromJson", startUTF16: range.location, endUTF16: NSMaxRange(range)
+        )
+        XCTAssertEqual(
+            JavaDifferentialHarness.completionBuffer(text: text, site: site, typedLength: 2),
+            "foo fr bar"
+        )
+    }
+
+    /// Non-ratcheting diagnostic run: the same scorer with `JAVA_DIFFERENTIAL_FILES` and
+    /// `JAVA_DIFFERENTIAL_POSITIONS` overrides, printing the three headline rates and the
+    /// rank-bucket table per role. Never fails on sample shape.
+    func testSliceReportPrintsRankBucketsPerRole() async throws {
+        guard ProcessInfo.processInfo.environment["JAVA_DIFFERENTIAL_REPORT"] == "1" else {
+            throw XCTSkip("Set JAVA_DIFFERENTIAL_REPORT=1 to print rank buckets per role (uses JAVA_DIFFERENTIAL_FILES / JAVA_DIFFERENTIAL_POSITIONS overrides)")
+        }
+        let report = try await JavaDifferentialHarness.run()
+        print(report.summary)
+        let resolved = report.projects.reduce(0) { $0 + $1.completionScored + $1.definitionScored }
+        XCTAssertGreaterThan(resolved, 0, "the oracle resolved nothing\n\(report.summary)")
     }
 
     func testPinnedProjectsHoldTheBaseline() async throws {

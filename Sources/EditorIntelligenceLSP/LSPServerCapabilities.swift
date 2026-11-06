@@ -38,6 +38,20 @@ public enum LSPServerCapabilities {
         features(in: capabilities).contains(feature)
     }
 
+    /// The `textDocumentSync` kind the server declared (`TextDocumentSyncOptions.change`, or the
+    /// bare kind). Nil when the server said nothing: the client treats that as full sync and
+    /// never sends ranges it cannot prove the server applies.
+    public static func textDocumentSyncKind(in capabilities: ServerCapabilities) -> TextDocumentSyncKind? {
+        switch capabilities.textDocumentSync {
+        case .none:
+            return nil
+        case .optionA(let options):
+            return options.change
+        case .optionB(let kind):
+            return kind
+        }
+    }
+
     private static func enabled<Options: Sendable>(_ value: TwoTypeOption<Bool, Options>?) -> Bool {
         switch value {
         case .none: return false
