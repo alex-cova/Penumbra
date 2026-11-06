@@ -11,7 +11,16 @@ An identifier of at least four characters is sampled at a fixed stride. The orac
 the file and resolves the symbol at its last character (`Trees.getElement`).
 
 - Definition recall: of the symbols declared in source, the share whose file Umbra opens on a line inside the declaration.
+  Kept for one revision: it counts clicks on a declaration's own name, which the provider
+  answers with itself.
+- Definition recall (references only): the same, excluding declaration-name clicks. Clicks on
+  a declaration are reported apart: answered as self, with the super method or an implementation,
+  with the package or its directory, or not at all.
+- By-design answers count as matched in the references-only column and are counted visibly:
+  a package-segment click answered with the package or its directory (`JavaPackageNavigation`),
+  and a declared abstract site answered with its implementations.
 - Wrong-symbol rate: of the positions Umbra answers, the share that land outside that declaration.
+  The references-only rate excludes declaration clicks and by-design package answers.
 - Completion top-8: the symbol's name is among the 8 highest-ranked candidates when the prefix is its first 2 characters.
   The ranked popup is scored: the identifier tail is deleted, the trigger is `.keystroke`,
   and `DefaultRanker` orders the list, the way the popup sees a typed prefix.
@@ -25,13 +34,18 @@ The same shape applies later to TypeScript (`tsserver`) and Swift (`sourcekit-ls
 
 | project | commit | definition recall | wrong-symbol | completion top-8 | completion (provider order) | hover | usages recall | wrong-usages |
 |---|---|---|---|---|---|---|---|---|
-| gson | `828a97be0f8d58108b140b77df8dc76b657f4a87` | 83.7% (36/43) | 12.1% (5/41) | 80.3% (53/66) | 42.4% (28/66) | 68.1% (45/66) | 100.0% (2/2) | 0.0% (0/2) |
-| jackson-core | `a6f49caedcb398efe14c06c4e9abf6e672c412f5` | 90.1% (46/51) | 9.8% (5/51) | 81.1% (56/69) | 56.5% (39/69) | 63.7% (44/69) | 100.0% (2/2) | 0.0% (0/2) |
+| gson | `828a97be0f8d58108b140b77df8dc76b657f4a87` | 77.7% (35/45) | 14.6% (6/41) | 76.1% (51/67) | 34.3% (23/67) | 59.7% (40/67) | 100.0% (2/2) | 0.0% (0/2) |
+| jackson-core | `a6f49caedcb398efe14c06c4e9abf6e672c412f5` | 90.5% (48/53) | 7.6% (4/52) | 86.1% (62/72) | 51.3% (37/72) | 66.6% (48/72) | 100.0% (2/2) | 0.0% (0/2) |
 
 Sample: 6 files per project, 12 identifiers per file, stride-picked so one package cannot fill the run; 2 public method declarations per project for usages (each oracle call compiles the whole module, so this stays small).
 
-Ranked completion, all sites: 80.7% (109/135).
-Excluding declarations: 97.9% (96/98).
-Dotted call/member only: 100.0% (14/14).
-Rank buckets (1 / 2-3 / 4-8 / 9+ / absent / empty): 85 / 20 / 4 / 0 / 26 / 0.
-Definition misses (no answer / other file / same file, other lines): 2 / 10 / 0.
+Ranked completion, all sites: 81.2% (113/139).
+Excluding declarations: 100.0% (101/101).
+Dotted call/member only: 100.0% (17/17).
+Rank buckets (1 / 2-3 / 4-8 / 9+ / absent / empty): 85 / 19 / 9 / 0 / 26 / 0.
+Definition misses (no answer / other file / same file, other lines): 5 / 10 / 0.
+Definition recall, references only: 100.0% (60/60).
+Wrong-symbol, references only: 0.0% (0/60).
+Declared clicks (self / implementations / package / none / other): 29 / 4 / 0 / 5 / 0.
+Package-segment clicks answered by design: 10.
+Sampled out as comments or strings: 3605 (of which the old line-based check leaked 200).

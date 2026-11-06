@@ -61,9 +61,18 @@ enum JavaDifferentialHarness {
         /// and whether the oracle's declaration lives in the indexed source shard.
         var definitionOutcome: DefinitionOutcome = .unscored
         var definitionCandidates = 0
+        var umbraHits = ""
         var declarationInSource = false
         /// The oracle's declaration as `File.java:start-end`, for miss samples.
         var oracleTarget = ""
+        /// H1: the raw hits, so by-design rules can inspect targets (packages, directories).
+        var definitionHits: [JavaDefinitionHit] = []
+        /// H1: the declaration is abstract (checked against the parsed tree), for the
+        /// implementations column.
+        var definitionIsAbstract = false
+        /// H1: by-design outcomes, scored as matched and counted visibly.
+        var definitionPackageTarget = false
+        var definitionImplementations = false
         var completionScored = false
         /// Ranked top-8: the popup's list after `DefaultRanker`, with the identifier tail deleted
         /// and a `.keystroke` trigger, the way the popup sees a typed prefix.
@@ -148,6 +157,25 @@ enum JavaDifferentialHarness {
         var definitionNoAnswer: Int = 0
         var definitionOtherFile: Int = 0
         var definitionSameFileOtherLines: Int = 0
+        /// H1 references-only headline: reference sites exclude `declared` clicks.
+        var definitionReferenceScored: Int = 0
+        var definitionReferenceAnswered: Int = 0
+        var definitionReferenceMatched: Int = 0
+        var definitionReferencePackaged: Int = 0
+        var definitionReferenceWrongSymbol: Int = 0
+        /// H1 declared columns: self / super+impl-matched / implementations / none.
+        var definitionDeclaredScored: Int = 0
+        var definitionDeclaredMatched: Int = 0
+        var definitionDeclaredSelf: Int = 0
+        var definitionDeclaredPackaged: Int = 0
+        var definitionDeclaredImplementations: Int = 0
+        var definitionDeclaredNone: Int = 0
+        /// H1: declared, answered, but neither matched nor by-design (super-method answers).
+        var definitionDeclaredOther: Int = 0
+        /// H1 comment sampling: regex candidates removed as comments/strings, and among
+        /// them the ones the old line-based check would have leaked.
+        var definitionNonCodeExcluded: Int = 0
+        var definitionCommentLeaksFixed: Int = 0
         /// Ranked-list rank buckets over all completion sites, in `CompletionRankBucket` order.
         var rankBuckets: [Int] = []
 
@@ -160,7 +188,15 @@ enum JavaDifferentialHarness {
             completionScoredNonDeclared: Int = 0, completionHitNonDeclared: Int = 0,
             completionScoredDotted: Int = 0, completionHitDotted: Int = 0,
             definitionNoAnswer: Int = 0, definitionOtherFile: Int = 0,
-            definitionSameFileOtherLines: Int = 0, rankBuckets: [Int] = []
+            definitionSameFileOtherLines: Int = 0, rankBuckets: [Int] = [],
+            definitionReferenceScored: Int = 0, definitionReferenceAnswered: Int = 0,
+            definitionReferenceMatched: Int = 0, definitionReferencePackaged: Int = 0,
+            definitionReferenceWrongSymbol: Int = 0, definitionDeclaredScored: Int = 0,
+            definitionDeclaredMatched: Int = 0, definitionDeclaredSelf: Int = 0,
+            definitionDeclaredPackaged: Int = 0, definitionDeclaredImplementations: Int = 0,
+            definitionDeclaredNone: Int = 0, definitionDeclaredOther: Int = 0,
+            definitionNonCodeExcluded: Int = 0,
+            definitionCommentLeaksFixed: Int = 0
         ) {
             self.name = name
             self.tag = tag
@@ -186,6 +222,20 @@ enum JavaDifferentialHarness {
             self.definitionNoAnswer = definitionNoAnswer
             self.definitionOtherFile = definitionOtherFile
             self.definitionSameFileOtherLines = definitionSameFileOtherLines
+            self.definitionReferenceScored = definitionReferenceScored
+            self.definitionReferenceAnswered = definitionReferenceAnswered
+            self.definitionReferenceMatched = definitionReferenceMatched
+            self.definitionReferencePackaged = definitionReferencePackaged
+            self.definitionReferenceWrongSymbol = definitionReferenceWrongSymbol
+            self.definitionDeclaredScored = definitionDeclaredScored
+            self.definitionDeclaredMatched = definitionDeclaredMatched
+            self.definitionDeclaredSelf = definitionDeclaredSelf
+            self.definitionDeclaredPackaged = definitionDeclaredPackaged
+            self.definitionDeclaredImplementations = definitionDeclaredImplementations
+            self.definitionDeclaredNone = definitionDeclaredNone
+            self.definitionDeclaredOther = definitionDeclaredOther
+            self.definitionNonCodeExcluded = definitionNonCodeExcluded
+            self.definitionCommentLeaksFixed = definitionCommentLeaksFixed
             self.rankBuckets = rankBuckets
         }
 
@@ -216,6 +266,20 @@ enum JavaDifferentialHarness {
             definitionOtherFile = try container.decodeIfPresent(Int.self, forKey: .definitionOtherFile) ?? 0
             definitionSameFileOtherLines = try container.decodeIfPresent(Int.self, forKey: .definitionSameFileOtherLines) ?? 0
             rankBuckets = try container.decodeIfPresent([Int].self, forKey: .rankBuckets) ?? []
+            definitionReferenceScored = try container.decodeIfPresent(Int.self, forKey: .definitionReferenceScored) ?? 0
+            definitionReferenceAnswered = try container.decodeIfPresent(Int.self, forKey: .definitionReferenceAnswered) ?? 0
+            definitionReferenceMatched = try container.decodeIfPresent(Int.self, forKey: .definitionReferenceMatched) ?? 0
+            definitionReferencePackaged = try container.decodeIfPresent(Int.self, forKey: .definitionReferencePackaged) ?? 0
+            definitionReferenceWrongSymbol = try container.decodeIfPresent(Int.self, forKey: .definitionReferenceWrongSymbol) ?? 0
+            definitionDeclaredScored = try container.decodeIfPresent(Int.self, forKey: .definitionDeclaredScored) ?? 0
+            definitionDeclaredMatched = try container.decodeIfPresent(Int.self, forKey: .definitionDeclaredMatched) ?? 0
+            definitionDeclaredSelf = try container.decodeIfPresent(Int.self, forKey: .definitionDeclaredSelf) ?? 0
+            definitionDeclaredPackaged = try container.decodeIfPresent(Int.self, forKey: .definitionDeclaredPackaged) ?? 0
+            definitionDeclaredImplementations = try container.decodeIfPresent(Int.self, forKey: .definitionDeclaredImplementations) ?? 0
+            definitionDeclaredNone = try container.decodeIfPresent(Int.self, forKey: .definitionDeclaredNone) ?? 0
+            definitionDeclaredOther = try container.decodeIfPresent(Int.self, forKey: .definitionDeclaredOther) ?? 0
+            definitionNonCodeExcluded = try container.decodeIfPresent(Int.self, forKey: .definitionNonCodeExcluded) ?? 0
+            definitionCommentLeaksFixed = try container.decodeIfPresent(Int.self, forKey: .definitionCommentLeaksFixed) ?? 0
         }
 
         var wrongSymbols: Int { definitionAnswered - definitionMatched }
@@ -292,6 +356,8 @@ enum JavaDifferentialHarness {
                 }
                 lines += compare(project.name, "definition recall", project.definitionMatched, previous.definitionMatched, higherIsBetter: true)
                 lines += compare(project.name, "wrong-symbol", project.wrongSymbols, previous.wrongSymbols, higherIsBetter: false)
+                lines += compare(project.name, "definition recall references-only", project.definitionReferenceMatched, previous.definitionReferenceMatched, higherIsBetter: true)
+                lines += compare(project.name, "wrong-symbol references-only", project.definitionReferenceWrongSymbol, previous.definitionReferenceWrongSymbol, higherIsBetter: false)
                 lines += compare(project.name, "completion top-\(topK)", project.completionHit, previous.completionHit, higherIsBetter: true)
                 lines += compare(project.name, "completion top-\(topK) non-declared", project.completionHitNonDeclared, previous.completionHitNonDeclared, higherIsBetter: true)
                 lines += compare(project.name, "completion top-\(topK) dotted", project.completionHitDotted, previous.completionHitDotted, higherIsBetter: true)
@@ -308,7 +374,7 @@ enum JavaDifferentialHarness {
 
         var summary: String {
             projects.map { project in
-                "\(project.name) \(project.commit.prefix(12)) definition \(format(project.definitionMatched, project.definitionScored)) wrong-symbol \(format(project.wrongSymbols, project.definitionAnswered)) completion \(format(project.completionHit, project.completionScored)) non-declared \(format(project.completionHitNonDeclared, project.completionScoredNonDeclared)) dotted \(format(project.completionHitDotted, project.completionScoredDotted)) hover \(format(project.hoverHit, project.hoverScored)) usages \(format(project.usagesMatched, project.usagesScored)) wrong-usages \(format(project.wrongUsages, project.usagesAnswered))"
+                "\(project.name) \(project.commit.prefix(12)) definition \(format(project.definitionMatched, project.definitionScored)) wrong-symbol \(format(project.wrongSymbols, project.definitionAnswered)) definition-ref \(format(project.definitionReferenceMatched, project.definitionReferenceScored)) wrong-symbol-ref \(format(project.definitionReferenceWrongSymbol, project.definitionReferenceAnswered)) declared \(format(project.definitionDeclaredMatched, project.definitionDeclaredScored)) self \(project.definitionDeclaredSelf) impl \(project.definitionDeclaredImplementations) pkg \(project.definitionDeclaredPackaged + project.definitionReferencePackaged) none \(project.definitionDeclaredNone) other \(project.definitionDeclaredOther) noncode \(project.definitionNonCodeExcluded) leaks \(project.definitionCommentLeaksFixed) completion \(format(project.completionHit, project.completionScored)) non-declared \(format(project.completionHitNonDeclared, project.completionScoredNonDeclared)) dotted \(format(project.completionHitDotted, project.completionScoredDotted)) hover \(format(project.hoverHit, project.hoverScored)) usages \(format(project.usagesMatched, project.usagesScored)) wrong-usages \(format(project.wrongUsages, project.usagesAnswered))"
             }.joined(separator: "\n")
         }
 
@@ -327,7 +393,16 @@ enum JavaDifferentialHarness {
                 "the file and resolves the symbol at its last character (`Trees.getElement`).",
                 "",
                 "- Definition recall: of the symbols declared in source, the share whose file Umbra opens on a line inside the declaration.",
+                "  Kept for one revision: it counts clicks on a declaration's own name, which the provider",
+                "  answers with itself.",
+                "- Definition recall (references only): the same, excluding declaration-name clicks. Clicks on",
+                "  a declaration are reported apart: answered as self, with the super method or an implementation,",
+                "  with the package or its directory, or not at all.",
+                "- By-design answers count as matched in the references-only column and are counted visibly:",
+                "  a package-segment click answered with the package or its directory (`JavaPackageNavigation`),",
+                "  and a declared abstract site answered with its implementations.",
                 "- Wrong-symbol rate: of the positions Umbra answers, the share that land outside that declaration.",
+                "  The references-only rate excludes declaration clicks and by-design package answers.",
                 "- Completion top-\(topK): the symbol's name is among the \(topK) highest-ranked candidates when the prefix is its first \(prefixLength) characters.",
                 "  The ranked popup is scored: the identifier tail is deleted, the trigger is `.keystroke`,",
                 "  and `DefaultRanker` orders the list, the way the popup sees a typed prefix.",
@@ -353,6 +428,11 @@ enum JavaDifferentialHarness {
             lines.append("Dotted call/member only: \(format(projects.map(\.completionHitDotted).reduce(0, +), projects.map(\.completionScoredDotted).reduce(0, +))).")
             lines.append("Rank buckets (1 / 2-3 / 4-8 / 9+ / absent / empty): \(bucketLine(projects.map(\.rankBuckets))).")
             lines.append("Definition misses (no answer / other file / same file, other lines): \(projects.map(\.definitionNoAnswer).reduce(0, +)) / \(projects.map(\.definitionOtherFile).reduce(0, +)) / \(projects.map(\.definitionSameFileOtherLines).reduce(0, +)).")
+            lines.append("Definition recall, references only: \(format(projects.map(\.definitionReferenceMatched).reduce(0, +), projects.map(\.definitionReferenceScored).reduce(0, +))).")
+            lines.append("Wrong-symbol, references only: \(format(projects.map(\.definitionReferenceWrongSymbol).reduce(0, +), projects.map(\.definitionReferenceAnswered).reduce(0, +))).")
+            lines.append("Declared clicks (self / implementations / package / none / other): \(projects.map(\.definitionDeclaredSelf).reduce(0, +)) / \(projects.map(\.definitionDeclaredImplementations).reduce(0, +)) / \(projects.map(\.definitionDeclaredPackaged).reduce(0, +)) / \(projects.map(\.definitionDeclaredNone).reduce(0, +)) / \(projects.map(\.definitionDeclaredOther).reduce(0, +)).")
+            lines.append("Package-segment clicks answered by design: \(projects.map(\.definitionReferencePackaged).reduce(0, +) + projects.map(\.definitionDeclaredPackaged).reduce(0, +)).")
+            lines.append("Sampled out as comments or strings: \(projects.map(\.definitionNonCodeExcluded).reduce(0, +)) (of which the old line-based check leaked \(projects.map(\.definitionCommentLeaksFixed).reduce(0, +))).")
             lines.append("")
             return lines.joined(separator: "\n")
         }
@@ -531,6 +611,11 @@ enum JavaDifferentialHarness {
         var siteName: String
         var offset: Int
         var oracleTarget: String
+        /// H1: by-design flags, for the suspect-rule overflow check.
+        var packageTarget = false
+        var implementations = false
+        /// H1: Umbra's definition hits as `File:line` pairs, for the genuine-miss list.
+        var umbraHits = ""
     }
 
     static func score(
@@ -545,11 +630,15 @@ enum JavaDifferentialHarness {
         )
         var details: [SiteDetail] = []
         var definitionDetails: [DefinitionDetail] = []
+        var hoverDetails: [HoverDetail] = []
         let rootPath = sourceRoot.resolvingSymlinksInPath().path
         for file in files {
             let resolved = file.resolvingSymlinksInPath()
             guard let text = try? String(contentsOf: resolved, encoding: .utf8), text.utf16.count < 400_000 else { continue }
-            let sites = identifierSites(in: text, limit: positionsPerFile)
+            let sampled = identifierSites(in: text, limit: positionsPerFile)
+            let sites = sampled.sites
+            score.definitionNonCodeExcluded += sampled.excluded
+            score.definitionCommentLeaksFixed += sampled.leaks
             guard !sites.isEmpty else { continue }
             let symbols: [JavaAnalysisSymbol]
             do {
@@ -562,18 +651,44 @@ enum JavaDifferentialHarness {
                 continue
             }
             let byPosition = Dictionary(symbols.map { ($0.position, $0) }, uniquingKeysWith: { first, _ in first })
-            let roles = roleMap(in: text)
+            let (roles, abstractOffsets) = siteMaps(in: text)
             score.positions += sites.count
             for site in sites {
                 guard let symbol = byPosition[site.lastUTF16] else { continue }
                 let verdict = await self.verdict(
                     site: site, symbol: symbol, text: text, file: resolved,
-                    world: world, roles: roles, sourceRoot: sourceRoot
+                    world: world, roles: roles, sourceRoot: sourceRoot,
+                    abstractOffsets: abstractOffsets
                 )
                 if verdict.definitionScored {
                     score.definitionScored += 1
                     if verdict.definitionMatched { score.definitionMatched += 1 }
                     if verdict.definitionAnswered { score.definitionAnswered += 1 }
+                    // H1: reference-only headline. Declared sites are reported apart;
+                    // `role == nil` (untagged) counts as a reference.
+                    let declared = verdict.siteRole == .declared
+                    if declared {
+                        score.definitionDeclaredScored += 1
+                        if verdict.definitionMatched { score.definitionDeclaredMatched += 1 }
+                        if verdict.definitionPackageTarget { score.definitionDeclaredPackaged += 1 }
+                        else if verdict.definitionImplementations { score.definitionDeclaredImplementations += 1 }
+                        else if verdict.definitionMatched { score.definitionDeclaredSelf += 1 }
+                        else if !verdict.definitionAnswered { score.definitionDeclaredNone += 1 }
+                        else { score.definitionDeclaredOther += 1 }
+                    } else {
+                        score.definitionReferenceScored += 1
+                        if verdict.definitionAnswered { score.definitionReferenceAnswered += 1 }
+                        if verdict.definitionMatched || verdict.definitionPackageTarget {
+                            score.definitionReferenceMatched += 1
+                        }
+                        if verdict.definitionPackageTarget { score.definitionReferencePackaged += 1 }
+                        // Reference-only wrong-symbol: answered without the oracle's
+                        // declaration and without a by-design package target.
+                        if verdict.definitionAnswered,
+                           !(verdict.definitionMatched || verdict.definitionPackageTarget) {
+                            score.definitionReferenceWrongSymbol += 1
+                        }
+                    }
                     switch verdict.definitionOutcome {
                     case .noAnswer: score.definitionNoAnswer += 1
                     case .otherFile: score.definitionOtherFile += 1
@@ -589,7 +704,10 @@ enum JavaDifferentialHarness {
                         declarationInSource: verdict.declarationInSource,
                         kind: symbol.kind, candidates: verdict.definitionCandidates,
                         file: relative, siteName: site.name, offset: site.startUTF16,
-                        oracleTarget: verdict.oracleTarget
+                        oracleTarget: verdict.oracleTarget,
+                        packageTarget: verdict.definitionPackageTarget,
+                        implementations: verdict.definitionImplementations,
+                        umbraHits: verdict.umbraHits
                     ))
                 }
                 if verdict.completionScored {
@@ -620,10 +738,14 @@ enum JavaDifferentialHarness {
                 if verdict.hoverScored {
                     score.hoverScored += 1
                     if verdict.hoverHit { score.hoverHit += 1 }
+                    hoverDetails.append(HoverDetail(
+                        role: verdict.siteRole, dotted: verdict.siteDotted,
+                        hit: verdict.hoverHit, definitionHit: verdict.definitionMatched
+                    ))
                 }
             }
         }
-        print(bucketReport(name: name, score: score, details: details))
+        print(bucketReport(name: name, score: score, details: details, hoverDetails: hoverDetails))
         print(definitionMissReport(name: name, details: definitionDetails))
         return score
     }
@@ -634,6 +756,35 @@ enum JavaDifferentialHarness {
     static func definitionMissReport(name: String, details: [DefinitionDetail]) -> String {
         let roleOrder: [JavaIdentifierRole?] = [.declared, .call, .member, .typeName, .imported, .plain, nil]
         var lines = ["differential \(name) definition miss breakdown"]
+        // H1: by-design admissions. The J6 audit sized these buckets at about 94 package
+        // segments and 59 abstract declarations; a rule admitting more is suspect.
+        let packaged = details.filter(\.packageTarget)
+        let implementations = details.filter(\.implementations)
+        lines.append("differential \(name) by-design package-target \(packaged.count) "
+            + "implementations \(implementations.count)")
+        let packageSuspects = packaged.dropFirst(94)
+        let implementationSuspects = implementations.dropFirst(59)
+        for item in packageSuspects.prefix(15) {
+            lines.append("differential \(name) package-suspect \(item.file):\(item.offset) "
+                + "`\(item.siteName)` -> \(item.oracleTarget) (kind \(item.kind))")
+        }
+        for item in implementationSuspects.prefix(15) {
+            lines.append("differential \(name) implementations-suspect \(item.file):\(item.offset) "
+                + "`\(item.siteName)` -> \(item.oracleTarget) (kind \(item.kind))")
+        }
+        // H1: every remaining genuine reference miss: a non-declared site the oracle
+        // scores, answered without the declaration and without a by-design target.
+        let genuine = details.filter {
+            $0.role != .declared && $0.outcome != .matched && $0.outcome != .unscored && !$0.packageTarget
+        }
+        lines.append("differential \(name) genuine-reference-misses \(genuine.count)")
+        for item in genuine {
+            lines.append("differential \(name) genuine-miss \(item.file):\(item.offset) "
+                + "`\(item.siteName)` [\(item.role.map { "\($0)" } ?? "unknown") \(item.dotted ? "dotted" : "plain")] "
+                + "-> \(item.oracleTarget) (kind \(item.kind), candidates \(item.candidates), "
+                + "inSource \(item.declarationInSource), outcome \(item.outcome.rawValue), "
+                + "umbra [\(item.umbraHits)])")
+        }
         for outcome in [DefinitionOutcome.noAnswer, DefinitionOutcome.otherFile] {
             let misses = details.filter { $0.outcome == outcome }
             guard !misses.isEmpty else { continue }
@@ -677,8 +828,20 @@ enum JavaDifferentialHarness {
         return lines.joined(separator: "\n")
     }
 
+    /// Per-site detail for the H1 hover split: declared vs reference, and whether
+    /// definition matched at the same site.
+    struct HoverDetail: Sendable {
+        var role: JavaIdentifierRole?
+        var dotted: Bool
+        var hit: Bool
+        var definitionHit: Bool
+    }
+
     /// The three J1 headline rates plus the rank-bucket table per site role.
-    static func bucketReport(name: String, score: ProjectScore, details: [SiteDetail]) -> String {
+    static func bucketReport(
+        name: String, score: ProjectScore, details: [SiteDetail],
+        hoverDetails: [HoverDetail] = []
+    ) -> String {
         var lines = [
             "differential \(name) completion \(format(score.completionHit, score.completionScored)) "
                 + "non-declared \(format(score.completionHitNonDeclared, score.completionScoredNonDeclared)) "
@@ -686,8 +849,27 @@ enum JavaDifferentialHarness {
                 + "legacy \(format(score.legacyCompletionHit, score.completionScored))",
             "differential \(name) definition misses no-answer \(score.definitionNoAnswer) "
                 + "other-file \(score.definitionOtherFile) same-file-other-lines \(score.definitionSameFileOtherLines)",
+            // H1: the references-only headline. Declared clicks are reported apart.
+            "differential \(name) definition-references \(format(score.definitionReferenceMatched, score.definitionReferenceScored)) "
+                + "wrong-symbol \(format(score.definitionReferenceWrongSymbol, score.definitionReferenceAnswered)) "
+                + "packaged \(score.definitionReferencePackaged)",
+            "differential \(name) definition-declared total \(score.definitionDeclaredScored) "
+                + "matched \(format(score.definitionDeclaredMatched, score.definitionDeclaredScored)) "
+                + "self \(score.definitionDeclaredSelf) implementations \(score.definitionDeclaredImplementations) "
+                + "packaged \(score.definitionDeclaredPackaged) none \(score.definitionDeclaredNone) "
+                + "other \(score.definitionDeclaredOther)",
+            "differential \(name) non-code sampled-out \(score.definitionNonCodeExcluded) "
+                + "old-check-leaks \(score.definitionCommentLeaksFixed)",
             "differential \(name) rank buckets 1 | 2-3 | 4-8 | 9+ | absent | empty",
         ]
+        if !hoverDetails.isEmpty {
+            let declared = hoverDetails.filter { $0.role == .declared }
+            let references = hoverDetails.filter { $0.role != .declared }
+            let renderingGap = hoverDetails.filter { $0.definitionHit && !$0.hit }.count
+            lines.append("differential \(name) hover-declared \(format(declared.filter(\.hit).count, declared.count)) "
+                + "hover-references \(format(references.filter(\.hit).count, references.count)) "
+                + "definition-hit-hover-miss \(renderingGap)")
+        }
         let order: [JavaIdentifierRole?] = [.declared, .call, .member, .typeName, .imported, .plain, nil]
         for role in order {
             let label = role.map { "\($0)" } ?? "unknown"
@@ -705,12 +887,14 @@ enum JavaDifferentialHarness {
 
     static func verdict(
         site: IdentifierSite, symbol: JavaAnalysisSymbol, text: String, file: URL,
-        world: World, roles: [Int: JavaIdentifierRole] = [:], sourceRoot: URL? = nil
+        world: World, roles: [Int: JavaIdentifierRole] = [:], sourceRoot: URL? = nil,
+        abstractOffsets: Set<Int> = []
     ) async -> Verdict {
         var verdict = Verdict()
         let prefix = String(site.name.prefix(prefixLength))
         verdict.siteRole = roles[site.startUTF16]
         verdict.siteDotted = isDotted(at: site.startUTF16, in: text)
+        verdict.definitionIsAbstract = abstractOffsets.contains(site.startUTF16)
         if symbol.hasSourceDeclaration,
            let declarationFile = symbol.declarationFile,
            let startLine = symbol.declarationStartLine,
@@ -721,6 +905,7 @@ enum JavaDifferentialHarness {
                 jdkHome: world.jdkHome, cacheRoot: world.cacheRoot, openBuffer: world.openBuffer,
                 decompile: JavaDecompileGate(policy: .denied)
             )
+            verdict.definitionHits = hits
             verdict.definitionCandidates = hits.count
             verdict.oracleTarget = "\(URL(fileURLWithPath: declarationFile).lastPathComponent):\(startLine)-\(endLine)"
             verdict.definitionAnswered = hits.contains { $0.url != nil }
@@ -743,10 +928,31 @@ enum JavaDifferentialHarness {
             } else {
                 verdict.definitionOutcome = .otherFile
             }
+            // H1: by-design outcomes. A package segment answered with the package or its
+            // directory is what the product is supposed to do (JavaPackageNavigation);
+            // a declared abstract site answered at all is answered with implementations
+            // (resolve only offers those for abstract declarations).
+            if symbol.kind == "package", !symbol.qualified.isEmpty {
+                let packagePath = symbol.qualified.replacingOccurrences(of: ".", with: "/")
+                verdict.definitionPackageTarget = hits.contains { hit in
+                    switch hit.target {
+                    case .package(let name):
+                        return name == symbol.qualified
+                    case .directory:
+                        return hit.url.map { $0.path.hasSuffix(packagePath) } ?? false
+                    default:
+                        return false
+                    }
+                }
+            }
+            if verdict.siteRole == .declared, verdict.definitionIsAbstract, verdict.definitionAnswered {
+                verdict.definitionImplementations = true
+            }
             let renderedHits = hits.map { hit -> String in
                 let path = hit.url?.lastPathComponent ?? "nil"
                 return "\(path):\(hit.range.start.line + 1)"
             }.joined(separator: ", ")
+            verdict.umbraHits = renderedHits
             verdict.note = "definition [\(renderedHits)] oracle \(URL(fileURLWithPath: declarationFile).lastPathComponent):\(startLine)-\(endLine)"
         }
         guard site.name.hasPrefix(prefix), symbol.name.count >= prefixLength else { return verdict }
@@ -800,8 +1006,15 @@ enum JavaDifferentialHarness {
 
     /// Maps each identifier token's start UTF-16 offset to its winning role, parsed once per file.
     static func roleMap(in text: String) -> [Int: JavaIdentifierRole] {
-        guard let tree = JavaSyntaxParser().parse(text) else { return [:] }
+        siteMaps(in: text).roles
+    }
+
+    /// One parse per file: the role map plus the start offsets of abstract declarations
+    /// (for H1's implementations column).
+    static func siteMaps(in text: String) -> (roles: [Int: JavaIdentifierRole], abstract: Set<Int>) {
+        guard let tree = JavaSyntaxParser().parse(text) else { return ([:], []) }
         var map: [Int: JavaIdentifierRole] = [:]
+        var abstract: Set<Int> = []
         var stack = [tree.rootNode]
         while let node = stack.popLast() {
             if node.type == "identifier" || node.type == "type_identifier",
@@ -809,10 +1022,14 @@ enum JavaDifferentialHarness {
                let primary = primaryRole(roles),
                let offset = utf16Offset(of: node.byteRange.lowerBound, in: text) {
                 map[offset] = primary
+                if roles.contains(.declared),
+                   JavaGoToImplementation.isAbstractDeclaration(in: tree, atByteOffset: node.byteRange.lowerBound) {
+                    abstract.insert(offset)
+                }
             }
             stack.append(contentsOf: node.children)
         }
-        return map
+        return (map, abstract)
     }
 
     /// One tag per site: declarations first, then the use kinds. A method-reference qualifier
@@ -854,6 +1071,13 @@ enum JavaDifferentialHarness {
         return text.utf16.distance(from: text.utf16.startIndex, to: mapped)
     }
 
+    static func byteOffset(of utf16Offset: Int, in text: String) -> Int? {
+        guard utf16Offset >= 0,
+              let index = text.utf16.index(text.utf16.startIndex, offsetBy: utf16Offset, limitedBy: text.utf16.endIndex),
+              let mapped = index.samePosition(in: text.utf8) else { return nil }
+        return text.utf8.distance(from: text.utf8.startIndex, to: mapped)
+    }
+
     static func makeWorld(sourceRoot: URL, jdkShard: URL, installation: JDKInstallation) async throws -> World {
         var stubs: [JavaClassStub] = []
         for file in javaFiles(under: sourceRoot, limit: Int.max) {
@@ -893,18 +1117,49 @@ enum JavaDifferentialHarness {
 
     // MARK: - Sampling
 
-    /// Identifiers of at least four characters, outside comments and keywords, spread across the file.
-    static func identifierSites(in text: String, limit: Int) -> [IdentifierSite] {
+    /// Identifiers of at least four characters, outside comments, strings and keywords,
+    /// spread across the file. Returns the sampled sites, how many regex candidates the
+    /// tree-sitter filter removed, and among those how many the old line-based
+    /// `isInComment` check would have leaked through.
+    static func identifierSites(in text: String, limit: Int) -> (
+        sites: [IdentifierSite], excluded: Int, leaks: Int
+    ) {
         let ns = text as NSString
-        guard let expression = try? NSRegularExpression(pattern: #"\b[A-Za-z_$][A-Za-z0-9_$]{3,}\b"#) else { return [] }
+        guard let expression = try? NSRegularExpression(pattern: #"\b[A-Za-z_$][A-Za-z0-9_$]{3,}\b"#) else { return ([], 0, 0) }
+        let nonCode = nonCodeRanges(in: text)
         var sites: [IdentifierSite] = []
+        var excluded = 0
+        var leaks = 0
         expression.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
             guard let match else { return }
             let name = ns.substring(with: match.range)
-            guard !keywords.contains(name), !isInComment(ns, range: match.range) else { return }
+            guard !keywords.contains(name) else { return }
+            if nonCode.contains(where: { NSLocationInRange(match.range.location, $0) }) {
+                excluded += 1
+                if !isInComment(ns, range: match.range) { leaks += 1 }
+                return
+            }
             sites.append(IdentifierSite(name: name, startUTF16: match.range.location, endUTF16: NSMaxRange(match.range)))
         }
-        return strideSample(sites, count: limit)
+        return (strideSample(sites, count: limit), excluded, leaks)
+    }
+
+    /// UTF-16 ranges of comments and string literals from the tree-sitter tree.
+    /// The old line-based `isInComment` misses trailing `//` comments and inner lines
+    /// of `/* */` blocks; the tree sees the actual tokens.
+    static func nonCodeRanges(in text: String) -> [NSRange] {
+        guard let tree = JavaSyntaxParser().parse(text) else { return [] }
+        var ranges: [NSRange] = []
+        var stack = [tree.rootNode]
+        while let node = stack.popLast() {
+            if node.type == "line_comment" || node.type == "block_comment" || node.type == "string_literal",
+               let lower = utf16Offset(of: node.byteRange.lowerBound, in: text),
+               let upper = utf16Offset(of: node.byteRange.upperBound, in: text) {
+                ranges.append(NSRange(location: lower, length: upper - lower))
+            }
+            stack.append(contentsOf: node.children)
+        }
+        return ranges
     }
 
     static func javaFiles(under root: URL, limit: Int) -> [URL] {
