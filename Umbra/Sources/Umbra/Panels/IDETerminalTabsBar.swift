@@ -5,7 +5,7 @@ struct IDETerminalTabsBar: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
+            HStack(spacing: IDEAppearance.Spacing.xs) {
                 ForEach(workspace.terminalTabs) { tab in
                     IDETerminalTabItem(
                         tab: tab,
@@ -79,7 +79,7 @@ private struct IDETerminalTabItem: View {
     var body: some View {
         IDEChromeTabItem(title: tab.title, isSelected: isSelected, isShown: isShown, onSelect: onSelect) {
             Image(systemName: "terminal")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         } trailing: {
             IDEChromeTabCloseButton(side: trailingSlotSide, onClose: onClose)
@@ -113,7 +113,7 @@ struct IDEHTTPTabItem: View {
                         .scaleEffect(0.6)
                 } else {
                     Image(systemName: "paperplane")
-                        .font(.system(size: 10))
+                        .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
             }
@@ -136,7 +136,7 @@ private struct IDESourceControlTabItem: View {
             onSelect: onSelect
         ) {
             Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         } trailing: {
             EmptyView()

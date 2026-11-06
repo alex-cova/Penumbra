@@ -16,10 +16,18 @@ enum IDEAppearance {
         scheme.isDark ? .dark : .light
     }
     enum Spacing {
+        /// A hairline gap: a badge's vertical padding, stacked secondary lines.
+        static let hairline = 1.0
         /// Tightest stack gap (two-point vertical rhythm in dense rows).
         static let xxs = 2.0
+        /// Row padding in dense lists (problems, usages, structure).
+        static let tight = 3.0
         static let xs = 4.0
+        static let compact = 5.0
+        static let snug = 6.0
         static let sm = 8.0
+        /// A tab's horizontal padding.
+        static let cozy = 10.0
         static let md = 12.0
         static let lg = 16.0
         static let xl = 24.0
@@ -54,6 +62,9 @@ enum IDEAppearance {
         static let trafficLightsInset = 78.0
         static let titlebarButton = 28.0
         static let dirtyDotSize = 5.0
+        /// Indent of a setting's detail lines under its toggle, and of a nested level beneath.
+        static let indent = 20.0
+        static let indentNested = 36.0
     }
 
     enum Radius {
@@ -84,6 +95,16 @@ enum IDEAppearance {
         static let breadcrumbChevron = 8.0
         static let toolbarGlyph = 12.0
         static let titlebarGlyph = 14.0
+        /// Disclosure and close marks in dense rows.
+        static let microGlyph = 8.0
+        /// File and tab icons, small list glyphs.
+        static let smallGlyph = 10.0
+        /// Row status icons (problems, tests, hierarchy kinds).
+        static let rowGlyph = 11.0
+        /// A notification's severity icon.
+        static let bodyGlyph = 13.0
+        /// The glyph above an empty-state message.
+        static let emptyStateGlyph = 18.0
         /// The digits in a count badge.
         static let badgeText = 9.0
         /// The × of a closable tab.
@@ -289,7 +310,7 @@ struct IDEPanelTitle: View {
             .foregroundStyle(IDEAppearance.ColorToken.foreground)
             .lineLimit(1)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
-            .padding(.vertical, 3)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
             .background(
                 IDEAppearance.ColorToken.card,
                 in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)

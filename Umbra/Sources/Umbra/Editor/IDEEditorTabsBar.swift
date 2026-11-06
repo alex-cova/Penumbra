@@ -33,7 +33,7 @@ struct IDEEditorTabsBar: View {
         HStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: IDEAppearance.Spacing.xs) {
                         ForEach(tabs) { tab in
                             IDEChromeTabItem(
                                 title: tab.title,
@@ -42,7 +42,7 @@ struct IDEEditorTabsBar: View {
                                 onSelect: { workspace.selectTab(tab.id, in: paneID) },
                                 leading: {
                                     Image(systemName: tab.symbolName ?? IDEFileIcon.systemName(forFilename: tab.title))
-                                        .font(.system(size: 10))
+                                        .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                                 },
                                 trailing: {

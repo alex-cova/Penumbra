@@ -146,7 +146,7 @@ private struct IDEUsageRowView: View {
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
                 Text("\((location.usage?.line ?? location.range.start.line) + 1)")
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -165,15 +165,15 @@ private struct IDEUsageRowView: View {
                     Text(kind)
                         .font(IDEAppearance.Typography.caption)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
+                        .padding(.horizontal, IDEAppearance.Spacing.compact)
+                        .padding(.vertical, IDEAppearance.Spacing.hairline)
                         .background(IDEAppearance.ColorToken.controlHover)
                         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                 }
             }
             .padding(.leading, IDEAppearance.Spacing.xl)
             .padding(.trailing, IDEAppearance.Spacing.md)
-            .padding(.vertical, 3)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
             .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
             .contentShape(Rectangle())
         }
@@ -238,7 +238,7 @@ struct IDEUsagesTabItem: View {
     var body: some View {
         IDEChromeTabItem(title: title, isSelected: isSelected, onSelect: onSelect) {
             Image(systemName: "text.magnifyingglass")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         } trailing: {
             EmptyView()

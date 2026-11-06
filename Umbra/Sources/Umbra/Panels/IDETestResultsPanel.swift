@@ -360,7 +360,7 @@ struct IDETestResultsPanel: View {
 
     private func statusIcon(_ status: IDETestCaseResult.Status) -> some View {
         Image(systemName: icon(for: status))
-            .font(.system(size: 11))
+            .font(.system(size: IDEAppearance.IconSize.rowGlyph))
             .foregroundStyle(color(for: status))
     }
 
@@ -410,7 +410,7 @@ struct IDEStackTraceText: View {
     let onOpen: (IDEStackFrameReference) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.hairline) {
             ForEach(Array(text.split(separator: "\n", omittingEmptySubsequences: false).prefix(200).enumerated()), id: \.offset) { _, line in
                 let string = String(line)
                 if let frame = IDEStackFrameReference.parse(string) {
@@ -443,7 +443,7 @@ struct IDETestResultsTabItem: View {
     var body: some View {
         IDEChromeTabItem(title: title, isSelected: isSelected, onSelect: onSelect) {
             Image(systemName: "flask")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         } trailing: {
             EmptyView()

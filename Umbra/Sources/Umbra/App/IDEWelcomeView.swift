@@ -224,7 +224,7 @@ private struct IDEWelcomeProjectContent: View {
                             .font(IDEAppearance.Typography.sectionHeader)
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
                             .textCase(.uppercase)
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                             ForEach(projectFiles, id: \.path) { url in
                                 IDEWelcomeRecentRow(
                                     title: url.lastPathComponent,
@@ -353,7 +353,7 @@ private struct IDEWelcomeRecentProjectsSection: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .textCase(.uppercase)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 ForEach(urls, id: \.path) { url in
                     IDEWelcomeRecentRow(
                         title: url.lastPathComponent,
@@ -380,7 +380,7 @@ private struct IDEWelcomeRecentFilesSection: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .textCase(.uppercase)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 ForEach(urls, id: \.path) { url in
                     IDEWelcomeRecentRow(
                         title: url.lastPathComponent,
@@ -418,7 +418,7 @@ private struct IDEWelcomeRecentRow: View {
 
             Button(action: onRemove) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: IDEAppearance.IconSize.closeGlyph, weight: .bold))
                     .foregroundStyle(
                         isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted
                     )
@@ -485,7 +485,7 @@ private struct IDEWelcomeLinkButtonStyle: ButtonStyle {
                     : IDEAppearance.ColorToken.foreground
             )
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 3)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
             .contentShape(Rectangle())
     }
 }

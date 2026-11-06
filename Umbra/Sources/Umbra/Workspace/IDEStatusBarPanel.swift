@@ -117,13 +117,13 @@ struct IDEStatusBarPanel: View {
             Button {
                 workspace.showProblems()
             } label: {
-                HStack(spacing: 8) {
-                    HStack(spacing: 3) {
+                HStack(spacing: IDEAppearance.Spacing.sm) {
+                    HStack(spacing: IDEAppearance.Spacing.tight) {
                         Image(systemName: "xmark.octagon.fill")
                             .foregroundStyle(errors > 0 ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
                         Text("\(errors)")
                     }
-                    HStack(spacing: 3) {
+                    HStack(spacing: IDEAppearance.Spacing.tight) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(warnings > 0 ? IDEAppearance.ColorToken.gitModified : IDEAppearance.ColorToken.muted)
                         Text("\(warnings)")
@@ -295,7 +295,7 @@ private struct IDEStatusBarBreadcrumbSegment: View {
                     .foregroundStyle(isLast || isHovering || isMenuOpen ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .padding(.horizontal, 3)
+                    .padding(.horizontal, IDEAppearance.Spacing.tight)
                     .background(
                         RoundedRectangle(cornerRadius: IDEAppearance.Radius.selection)
                             .fill(isMenuOpen || isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear)

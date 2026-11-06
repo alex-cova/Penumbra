@@ -12,7 +12,7 @@ struct IDELargeFileBanner: View {
         let selectedID = workspace.tabsByPane[paneID]?.first(where: \.isSelected)?.id
         let document = workspace.workbench.layout.findPane(id: paneID)?.documents.first { $0.id == selectedID }
         if let document, let notice = document.largeFileNotice {
-            HStack(spacing: 8) {
+            HStack(spacing: IDEAppearance.Spacing.sm) {
                 Image(systemName: "gauge.with.dots.needle.33percent")
                 Text(notice.message)
                     .lineLimit(2)
@@ -22,7 +22,7 @@ struct IDELargeFileBanner: View {
                 Spacer()
             }
             .font(.caption)
-            .padding(6)
+            .padding(IDEAppearance.Spacing.snug)
             .background(IDEAppearance.ColorToken.gitModified.opacity(0.25))
         }
     }

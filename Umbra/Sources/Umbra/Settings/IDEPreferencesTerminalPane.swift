@@ -301,7 +301,7 @@ private struct IDETerminalPalettePreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("user@umbra ~ % ls --color")
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(size: 12, design: .monospaced)) // token-exempt: a fixed-size sample, not chrome
                 .foregroundStyle(terminalColor(palette.foreground))
                 .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.top, IDEAppearance.Spacing.sm)

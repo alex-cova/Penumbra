@@ -83,7 +83,7 @@ struct IDEStatusToast: View {
                     Image(systemName: notification.severity.symbolName)
                         .foregroundStyle(notification.severity.tint)
                         .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                         Text(notification.title)
                             .foregroundStyle(notification.severity == .error ? notification.severity.tint : IDEAppearance.ColorToken.foreground)
                             .lineLimit(1)

@@ -704,7 +704,7 @@ private struct IDETerminalPaneHeader: View {
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             Image(systemName: "terminal")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             Text(tab.title)
                 .font(IDEAppearance.Typography.tabLabel.weight(isFocused ? .medium : .regular))

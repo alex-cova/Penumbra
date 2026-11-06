@@ -21,7 +21,7 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 6) {
+            HStack(spacing: IDEAppearance.Spacing.snug) {
                 leading()
                     .frame(width: 12)
 
@@ -32,8 +32,8 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
 
                 trailing()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, IDEAppearance.Spacing.cozy)
+            .padding(.vertical, IDEAppearance.Spacing.compact)
             .background(backgroundColor)
             .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
             .overlay(alignment: .top) {
@@ -41,7 +41,7 @@ struct IDEChromeTabItem<Leading: View, Trailing: View>: View {
                     RoundedRectangle(cornerRadius: IDEAppearance.Radius.indicator)
                         .fill(IDEAppearance.ColorToken.accent)
                         .frame(height: 2)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, IDEAppearance.Spacing.snug)
                         .opacity(isDimmed ? 0.4 : 1)
                 }
             }
@@ -80,7 +80,7 @@ struct IDEChromeTabCloseButton: View {
     var body: some View {
         Button(action: onClose) {
             Image(systemName: "xmark")
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: IDEAppearance.IconSize.closeGlyph, weight: .bold))
                 .foregroundStyle(isHovering ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 .frame(width: side, height: side)
                 .contentShape(Rectangle())

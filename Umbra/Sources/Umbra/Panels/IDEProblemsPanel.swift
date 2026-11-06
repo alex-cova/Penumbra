@@ -39,18 +39,18 @@ struct IDEProblemsPanel: View {
             stripButton("Project Errors", isSelected: runs.selection == .project) { runs.selection = .project }
             ForEach(runs.runs) { run in
                 Button { runs.selection = .run(run.id) } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: IDEAppearance.Spacing.xs) {
                         if run.state == .running { ProgressView().controlSize(.mini) }
                         Text(run.title)
                             .font(IDEAppearance.Typography.tabLabel)
                             .lineLimit(1)
                             .foregroundStyle(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
-                        Button { runs.close(run.id) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .semibold)) }
+                        Button { runs.close(run.id) } label: { Image(systemName: "xmark").font(.system(size: IDEAppearance.IconSize.microGlyph, weight: .semibold)) }
                             .buttonStyle(.borderless)
                             .help("Close results")
                     }
                     .padding(.horizontal, IDEAppearance.Spacing.sm)
-                    .padding(.vertical, 3)
+                    .padding(.vertical, IDEAppearance.Spacing.tight)
                     .background(runs.selection == .run(run.id) ? IDEAppearance.ColorToken.tabActive : .clear)
                     .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
                     .contentShape(Rectangle())
@@ -61,7 +61,7 @@ struct IDEProblemsPanel: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
-        .padding(.vertical, 3)
+        .padding(.vertical, IDEAppearance.Spacing.tight)
     }
 
     private func stripButton(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -70,7 +70,7 @@ struct IDEProblemsPanel: View {
                 .font(IDEAppearance.Typography.tabLabel.weight(isSelected ? .medium : .regular))
                 .foregroundStyle(isSelected ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
                 .padding(.horizontal, IDEAppearance.Spacing.sm)
-                .padding(.vertical, 3)
+                .padding(.vertical, IDEAppearance.Spacing.tight)
                 .background(isSelected ? IDEAppearance.ColorToken.tabActive : .clear)
                 .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
         }
@@ -196,7 +196,7 @@ struct IDEProblemsPanel: View {
     private var emptyState: some View {
         VStack(spacing: IDEAppearance.Spacing.xs) {
             Image(systemName: "checkmark.circle")
-                .font(.system(size: 18))
+                .font(.system(size: IDEAppearance.IconSize.emptyStateGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             Text(workspace.problems.isEmpty ? "No problems" : "No problems match the filter")
                 .font(IDEAppearance.Typography.body)
@@ -240,9 +240,9 @@ private struct IDEBuildMessageRowView: View {
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
                 Image(systemName: IDEProblemStyle.symbol(for: severity))
-                    .font(.system(size: 11))
+                    .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                     .foregroundStyle(IDEProblemStyle.color(for: severity))
                     .frame(width: 14)
                 Text(text)
@@ -259,7 +259,7 @@ private struct IDEBuildMessageRowView: View {
                 }
             }
             .padding(.horizontal, IDEAppearance.Spacing.md)
-            .padding(.vertical, 3)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
             .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
             .contentShape(Rectangle())
         }
@@ -287,9 +287,9 @@ private struct IDEProblemRowView: View {
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
                 Image(systemName: IDEProblemStyle.symbol(for: row.diagnostic.severity))
-                    .font(.system(size: 11))
+                    .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                     .foregroundStyle(IDEProblemStyle.color(for: row.diagnostic.severity))
                     .frame(width: 14)
                 Text(row.diagnostic.message)
@@ -308,7 +308,7 @@ private struct IDEProblemRowView: View {
             }
             .padding(.leading, IDEAppearance.Spacing.xl)
             .padding(.trailing, IDEAppearance.Spacing.md)
-            .padding(.vertical, 3)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
             .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
             .contentShape(Rectangle())
         }
@@ -319,7 +319,7 @@ private struct IDEProblemRowView: View {
                 Button(action: onFix) {
                     Label("Fix with Agent", systemImage: "sparkles")
                         .font(IDEAppearance.Typography.caption)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, IDEAppearance.Spacing.snug)
                         .padding(.vertical, IDEAppearance.Spacing.xxs)
                         .background(IDEAppearance.ColorToken.card, in: Capsule())
                 }
@@ -399,7 +399,7 @@ struct IDEProblemsControls: View {
             }
         } label: {
             Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
         .buttonStyle(.borderless)
@@ -418,9 +418,9 @@ struct IDEProblemsControls: View {
                 workspace.problems.toggleSeverity(.hint)
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: IDEAppearance.Spacing.xs) {
                 Image(systemName: IDEProblemStyle.symbol(for: severity))
-                    .font(.system(size: 10))
+                    .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 Text("\(count)")
                     .font(IDEAppearance.Typography.monoSmall)
             }
@@ -448,7 +448,7 @@ struct IDEProblemsTabItem: View {
             onSelect: onSelect
         ) {
             Image(systemName: errorCount > 0 ? "xmark.octagon.fill" : "exclamationmark.triangle")
-                .font(.system(size: 10))
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                 .foregroundStyle(errorCount > 0 ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
         } trailing: {
             EmptyView()

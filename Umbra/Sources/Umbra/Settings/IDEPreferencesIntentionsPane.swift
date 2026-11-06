@@ -117,7 +117,7 @@ private struct IDEIntentionSettingsRow: View {
             Text(intention.summary)
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 example("Before", intention.before)
                 example("After", intention.after)
             }

@@ -25,7 +25,7 @@ struct IDEFileGroupHeader: View {
     }
 
     private var content: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: IDEAppearance.Spacing.snug) {
             if let isCollapsed {
                 IDEDisclosureChevron(isExpanded: !isCollapsed)
             }
@@ -43,7 +43,7 @@ struct IDEFileGroupHeader: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
-        .padding(.vertical, 3)
+        .padding(.vertical, IDEAppearance.Spacing.tight)
         .contentShape(Rectangle())
     }
 }

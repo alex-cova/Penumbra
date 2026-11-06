@@ -42,7 +42,7 @@ struct IDEToolbarPanel: View {
             )
             .fixedSize()
 
-            HStack(spacing: 2) {
+            HStack(spacing: IDEAppearance.Spacing.xxs) {
                 IDEToolbarActionCluster(
                     showsCloseGroup: workspace.hasMultiplePanes,
                     items: workspace.toolbarItems(),
@@ -85,7 +85,7 @@ private struct IDETitlebarPanelToggles: View {
     let toggleRightPanel: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: IDEAppearance.Spacing.xxs) {
             IDEIconButton(
                 systemImage: "sidebar.left",
                 help: isLeftPanelOpen ? "Hide Left Panel" : "Show Left Panel",
@@ -142,7 +142,7 @@ private struct IDETitlebarProjectTitle: View {
                             .lineLimit(1)
                     }
                     .padding(.horizontal, IDEAppearance.Spacing.xs)
-                    .padding(.vertical, 3)
+                    .padding(.vertical, IDEAppearance.Spacing.tight)
                     .background(isHoveringBranch ? IDEAppearance.ColorToken.controlHover : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
                     .contentShape(Rectangle())
@@ -187,7 +187,7 @@ private struct IDETitlebarGlobalActions: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: IDEAppearance.Spacing.xxs) {
             IDEIconButton(
                 systemImage: "bolt",
                 help: "Actions…",
@@ -243,7 +243,7 @@ private struct IDEToolbarActionCluster: View {
     let closeActivePane: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: IDEAppearance.Spacing.xxs) {
             if showsCloseGroup {
                 IDEIconButton(
                     systemImage: "rectangle.slash",
@@ -312,7 +312,7 @@ private struct IDEAIToolbarRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 2) {
+            HStack(spacing: IDEAppearance.Spacing.xxs) {
                 // Changes, Plan and Browser belong to Code: Chat has no project, files or plan.
                 if workspace.aiTab == .code {
                     IDEIconButton(

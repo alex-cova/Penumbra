@@ -38,7 +38,7 @@ private struct IDESidebarTabBar: View {
 
     var body: some View {
         let active = workspace.activeSidebarTab
-        HStack(spacing: 2) {
+        HStack(spacing: IDEAppearance.Spacing.xxs) {
             ForEach(workspace.sidebarTabs) { tab in
                 IDESidebarTabItem(
                     tab: tab,
@@ -101,7 +101,7 @@ private struct IDESidebarTabItem: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 5) {
+            HStack(spacing: IDEAppearance.Spacing.compact) {
                 Image(systemName: tab.systemImage)
                     .font(.system(size: descriptor?.iconSize ?? 11, weight: .medium))
                     .foregroundStyle(iconColor)
@@ -122,12 +122,12 @@ private struct IDESidebarTabItem: View {
                     Text("\(badge)")
                         .font(IDEAppearance.Typography.monoSmall)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .padding(.horizontal, 4)
+                        .padding(.horizontal, IDEAppearance.Spacing.xs)
                         .background(IDEAppearance.ColorToken.controlHover, in: Capsule())
                 }
                 if isHovering, tab.isClosable {
                     Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(.system(size: IDEAppearance.IconSize.microGlyph, weight: .semibold))
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                         .frame(width: 14, height: 14)
                         .contentShape(Rectangle())

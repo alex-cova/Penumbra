@@ -206,11 +206,11 @@ private struct IDEStreamTraceView: View {
                                 .font(IDEAppearance.Typography.monoSmall)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
-                                .padding(.horizontal, 6)
+                                .padding(.horizontal, IDEAppearance.Spacing.snug)
                                 .frame(width: Self.columnWidth, height: Self.rowHeight - 2, alignment: .leading)
                                 .background(isRelated ? Color.accentColor.opacity(0.25) : IDEAppearance.ColorToken.card,
                                             in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.selection))
-                                .padding(.vertical, 1)
+                                .padding(.vertical, IDEAppearance.Spacing.hairline)
                                 .accessibilityAddTraits(.isButton)
                                 .onTapGesture { model.selection = (stage, index) }
                                 .help(element.value)
@@ -224,7 +224,7 @@ private struct IDEStreamTraceView: View {
                     .frame(width: Self.columnWidth, alignment: .topLeading)
                     .offset(x: x(stage))
                 }
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
                     Text(model.chain?.terminal.name ?? "result")
                         .font(IDEAppearance.Typography.caption.weight(.semibold))
                         .frame(height: Self.headerHeight)

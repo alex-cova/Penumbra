@@ -123,10 +123,10 @@ private struct IDENotificationRow: View {
                 HStack(alignment: .top, spacing: IDEAppearance.Spacing.sm) {
                     Image(systemName: item.severity.symbolName)
                         .foregroundStyle(item.severity.tint)
-                        .font(.system(size: 13))
-                        .padding(.top, 1)
+                        .font(.system(size: IDEAppearance.IconSize.bodyGlyph))
+                        .padding(.top, IDEAppearance.Spacing.hairline)
                         .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                         Text(item.title)
                             .font(IDEAppearance.Typography.tabLabel.weight(.medium))
                             .foregroundStyle(IDEAppearance.ColorToken.foreground)

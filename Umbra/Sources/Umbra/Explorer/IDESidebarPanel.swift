@@ -201,7 +201,7 @@ private struct IDEExplorerSearchField: View {
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
+                .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .accessibilityHidden(true)
 
@@ -219,7 +219,7 @@ private struct IDEExplorerSearchField: View {
                     query.removeAll()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
+                        .font(.system(size: IDEAppearance.IconSize.rowGlyph))
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
                 .buttonStyle(.plain)

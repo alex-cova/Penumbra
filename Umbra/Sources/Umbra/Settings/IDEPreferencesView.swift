@@ -103,7 +103,7 @@ public struct IDEPreferencesView: View {
 
     private var sidebar: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
                 ForEach(visibleDomains) { domain in
                     IDEPreferencesSidebarRow(domain: domain, isSelected: domain == shownDomain) {
                         selectedDomain = domain
