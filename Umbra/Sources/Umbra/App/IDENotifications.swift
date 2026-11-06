@@ -88,6 +88,19 @@ final class IDENotificationCenter {
     /// `toastDuration`.
     private(set) var toast: IDENotification?
     private(set) var isPanelPresented = false
+    /// Entries posted while the panel was closed and not yet seen. Opening the panel sees them all.
+    private var unseenIDs: Set<IDENotification.ID> = []
+
+    /// How many entries arrived since the panel was last open: the bell's count badge.
+    var unseenCount: Int {
+        items.reduce(0) { unseenIDs.contains($1.id) ? $0 + 1 : $0 }
+    }
+
+    /// The bell glyph: plain while the count badge says what is new, dotted while seen entries
+    /// still wait, plain when there are none.
+    var bellSymbol: String {
+        unseenCount == 0 && !items.isEmpty ? "bell.badge" : "bell"
+    }
 
     /// Do Not Disturb: notifications are still recorded, but none is announced.
     var isMuted: Bool {
@@ -164,18 +177,22 @@ final class IDENotificationCenter {
         items.insert(notification, at: 0)
         if items.count > Self.capacity {
             items.removeLast(items.count - Self.capacity)
+            unseenIDs.formIntersection(items.map(\.id))
         }
+        if !isPanelPresented { unseenIDs.insert(notification.id) }
         guard !isMuted, !isPanelPresented else { return }
         announce(notification)
     }
 
     func remove(_ id: IDENotification.ID) {
         items.removeAll { $0.id == id }
+        unseenIDs.remove(id)
         if toast?.id == id { dismissToast() }
     }
 
     func clear() {
         items.removeAll()
+        unseenIDs.removeAll()
         dismissToast()
     }
 
@@ -191,7 +208,10 @@ final class IDENotificationCenter {
 
     func setPanelPresented(_ presented: Bool) {
         isPanelPresented = presented
-        if presented { dismissToast() }
+        if presented {
+            unseenIDs.removeAll()
+            dismissToast()
+        }
     }
 
     func isEnabled(_ category: IDENotificationCategory) -> Bool {

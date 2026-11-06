@@ -84,6 +84,8 @@ enum IDEAppearance {
         static let breadcrumbChevron = 8.0
         static let toolbarGlyph = 12.0
         static let titlebarGlyph = 14.0
+        /// The digits in a count badge.
+        static let badgeText = 9.0
     }
 
     enum Typography {

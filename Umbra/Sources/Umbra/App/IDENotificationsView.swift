@@ -115,6 +115,7 @@ private struct IDENotificationRow: View {
     let dismiss: () -> Void
 
     @State private var isHovering = false
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: IDEAppearance.Spacing.sm) {
@@ -152,6 +153,7 @@ private struct IDENotificationRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .focusable(false)
             .disabled(item.action == nil)
 
             Button(action: dismiss) {
@@ -162,14 +164,36 @@ private struct IDENotificationRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .opacity(isHovering ? 1 : 0)
+            .focusable(false)
+            .opacity(isHovering || isFocused ? 1 : 0)
             .help("Dismiss")
             .accessibilityLabel("Dismiss notification")
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .padding(.vertical, IDEAppearance.Spacing.sm)
-        .background(isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear)
+        .background(isHovering || isFocused ? IDEAppearance.ColorToken.controlHover : Color.clear)
         .onHover { isHovering = $0 }
-        .focusable(false)
+        // The row is the one keyboard stop: Return opens it, Delete dismisses it. Its dismiss
+        // button shows while the row has focus, not only under the pointer.
+        .focusable()
+        .focusEffectDisabled()
+        .focused($isFocused)
+        .overlay {
+            if isFocused {
+                RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
+                    .stroke(IDEAppearance.ColorToken.accent, lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onKeyPress(.return) {
+            guard item.action != nil else { return .ignored }
+            open()
+            return .handled
+        }
+        .onKeyPress(keys: [.delete, .deleteForward]) { _ in
+            dismiss()
+            return .handled
+        }
+        .accessibilityAction(named: "Dismiss", dismiss)
     }
 }

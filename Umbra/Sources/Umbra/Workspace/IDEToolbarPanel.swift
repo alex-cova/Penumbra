@@ -51,7 +51,8 @@ struct IDEToolbarPanel: View {
 
                 IDETitlebarGlobalActions(
                     showsGoToFile: workspace.hasOpenProject || workspace.hasOpenDocuments,
-                    hasNotifications: !workspace.notifications.items.isEmpty,
+                    notificationSymbol: workspace.notifications.bellSymbol,
+                    unseenNotifications: workspace.notifications.unseenCount,
                     isNotificationsOpen: workspace.notifications.isPanelPresented,
                     showQuickOpen: workspace.showQuickOpen,
                     showCommandPalette: workspace.showCommandPalette,
@@ -176,7 +177,8 @@ private struct IDETitlebarProjectTitle: View {
 /// The always-available actions at the trailing end of the titlebar.
 private struct IDETitlebarGlobalActions: View {
     let showsGoToFile: Bool
-    let hasNotifications: Bool
+    let notificationSymbol: String
+    let unseenNotifications: Int
     let isNotificationsOpen: Bool
     let showQuickOpen: () -> Void
     let showCommandPalette: () -> Void
@@ -201,10 +203,11 @@ private struct IDETitlebarGlobalActions: View {
             }
 
             IDEIconButton(
-                systemImage: hasNotifications ? "bell.badge" : "bell",
+                systemImage: notificationSymbol,
                 help: "Notifications",
-                tint: hasNotifications && !isNotificationsOpen ? IDEAppearance.ColorToken.accent : nil,
+                tint: unseenNotifications > 0 && !isNotificationsOpen ? IDEAppearance.ColorToken.accent : nil,
                 isActive: isNotificationsOpen,
+                badge: unseenNotifications,
                 action: toggleNotifications
             )
 
@@ -321,11 +324,12 @@ private struct IDEAIToolbarRow: View {
                 }
                 IDEIconButton(systemImage: "bolt", help: "Actions…", action: workspace.showCommandPalette)
                 IDEIconButton(
-                    systemImage: workspace.notifications.items.isEmpty ? "bell" : "bell.badge",
+                    systemImage: workspace.notifications.bellSymbol,
                     help: "Notifications",
-                    tint: !workspace.notifications.items.isEmpty && !workspace.notifications.isPanelPresented
+                    tint: workspace.notifications.unseenCount > 0 && !workspace.notifications.isPanelPresented
                         ? IDEAppearance.ColorToken.accent : nil,
                     isActive: workspace.notifications.isPanelPresented,
+                    badge: workspace.notifications.unseenCount,
                     action: workspace.notifications.togglePanel
                 )
                 IDEIconButton(

@@ -44,6 +44,8 @@ struct IDEIconButton: View {
     var tint: Color?
     var isActive = false
     var isDisabled = false
+    /// A count shown on the button's corner while above zero ("99+" past 99).
+    var badge = 0
     let action: () -> Void
 
     @Environment(\.ideIconButtonSize) private var size
@@ -72,11 +74,24 @@ struct IDEIconButton: View {
                     .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if badge > 0 {
+                Text(badge > 99 ? "99+" : "\(badge)")
+                    .font(.system(size: IDEAppearance.IconSize.badgeText, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, IDEAppearance.Spacing.xs)
+                    .frame(minWidth: IDEAppearance.Spacing.md)
+                    .background(IDEAppearance.ColorToken.accent, in: Capsule())
+                    .offset(x: IDEAppearance.Spacing.xs, y: -IDEAppearance.Spacing.xxs)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .disabled(isDisabled)
         .opacity(isEnabled ? 1 : IDEAppearance.Opacity.disabled)
         .onHover { isHovering = $0 }
         .help(help)
-        .accessibilityLabel(help)
+        .accessibilityLabel(badge > 0 ? "\(help), \(badge) new" : help)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
     }
 
