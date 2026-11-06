@@ -508,8 +508,13 @@ public actor LanguageServerClient: LSPClient {
     /// rule), so a batch sends in the order observed. Never reads the snapshot on the ranged
     /// path: file-backed documents elide `text`, and the edits already carry what changed.
     public func notifyEdited(_ document: Document, edits: [EditorIntelligence.TextEdit]) async {
+        guard sent[document.id] != nil else { return }
+        // Ask before reading `sent`: until the capabilities are cached this await suspends the
+        // actor, and a request's `ensureSynced` can resend the whole text meanwhile. A copy of
+        // `sent` taken before it would still say "aligned" and send these ranges on top.
+        let incremental = await advertisesIncrementalSync()
         guard let state = sent[document.id] else { return }
-        guard await advertisesIncrementalSync(),
+        guard incremental,
               state.alignedWithEvents,
               !edits.isEmpty,
               state.utf16Length == baseLength(of: document, edits: edits) else {
@@ -561,6 +566,7 @@ public actor LanguageServerClient: LSPClient {
         await syncFullText(of: document, force: force, alignsEvents: true)
     }
 
+    @discardableResult
     private func syncFullText(of document: Document, force: Bool, alignsEvents: Bool) async -> Bool {
         guard let state = sent[document.id] else { return false }
         guard force || document.contentSnapshot.utf16Length != state.utf16Length else { return false }
