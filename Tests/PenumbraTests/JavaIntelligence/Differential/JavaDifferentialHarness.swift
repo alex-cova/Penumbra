@@ -62,6 +62,8 @@ enum JavaDifferentialHarness {
         var definitionOutcome: DefinitionOutcome = .unscored
         var definitionCandidates = 0
         var declarationInSource = false
+        /// The oracle's declaration as `File.java:start-end`, for miss samples.
+        var oracleTarget = ""
         var completionScored = false
         /// Ranked top-8: the popup's list after `DefaultRanker`, with the identifier tail deleted
         /// and a `.keystroke` trigger, the way the popup sees a typed prefix.
@@ -516,6 +518,21 @@ enum JavaDifferentialHarness {
         var empty: Bool
     }
 
+    /// Per-site detail for the J6 miss breakdown: everything needed to read a miss without
+    /// re-running the scorer. `file` is relative to the project source root when possible.
+    struct DefinitionDetail: Sendable {
+        var outcome: DefinitionOutcome
+        var role: JavaIdentifierRole?
+        var dotted: Bool
+        var declarationInSource: Bool
+        var kind: String
+        var candidates: Int
+        var file: String
+        var siteName: String
+        var offset: Int
+        var oracleTarget: String
+    }
+
     static func score(
         name: String, tag: String, commit: String, sourceRoot: URL, moduleId: String,
         client: JavaAnalysisServerClient, world: World, filesPerProject: Int, positionsPerFile: Int
@@ -527,6 +544,8 @@ enum JavaDifferentialHarness {
             completionScored: 0, completionHit: 0, hoverScored: 0, hoverHit: 0
         )
         var details: [SiteDetail] = []
+        var definitionDetails: [DefinitionDetail] = []
+        let rootPath = sourceRoot.resolvingSymlinksInPath().path
         for file in files {
             let resolved = file.resolvingSymlinksInPath()
             guard let text = try? String(contentsOf: resolved, encoding: .utf8), text.utf16.count < 400_000 else { continue }
@@ -561,6 +580,17 @@ enum JavaDifferentialHarness {
                     case .sameFileOtherLines: score.definitionSameFileOtherLines += 1
                     case .unscored, .matched: break
                     }
+                    let relative = resolved.path.hasPrefix(rootPath + "/")
+                        ? String(resolved.path.dropFirst(rootPath.count + 1))
+                        : resolved.lastPathComponent
+                    definitionDetails.append(DefinitionDetail(
+                        outcome: verdict.definitionOutcome,
+                        role: verdict.siteRole, dotted: verdict.siteDotted,
+                        declarationInSource: verdict.declarationInSource,
+                        kind: symbol.kind, candidates: verdict.definitionCandidates,
+                        file: relative, siteName: site.name, offset: site.startUTF16,
+                        oracleTarget: verdict.oracleTarget
+                    ))
                 }
                 if verdict.completionScored {
                     score.completionScored += 1
@@ -594,7 +624,57 @@ enum JavaDifferentialHarness {
             }
         }
         print(bucketReport(name: name, score: score, details: details))
+        print(definitionMissReport(name: name, details: definitionDetails))
         return score
+    }
+
+    /// J6 breakdown of definition misses: for `noAnswer` (the gated bucket) and `otherFile`
+    /// (reference), a role × dotted table, the share whose oracle declaration is outside the
+    /// indexed source root, the oracle kind histogram, and up to 15 sample notes per top cell.
+    static func definitionMissReport(name: String, details: [DefinitionDetail]) -> String {
+        let roleOrder: [JavaIdentifierRole?] = [.declared, .call, .member, .typeName, .imported, .plain, nil]
+        var lines = ["differential \(name) definition miss breakdown"]
+        for outcome in [DefinitionOutcome.noAnswer, DefinitionOutcome.otherFile] {
+            let misses = details.filter { $0.outcome == outcome }
+            guard !misses.isEmpty else { continue }
+            let outside = misses.filter { !$0.declarationInSource }.count
+            lines.append("differential \(name) \(outcome.rawValue) total \(misses.count) "
+                + "oracleOutsideSourceRoot \(outside)")
+            var cells: [(label: String, items: [DefinitionDetail])] = []
+            for role in roleOrder {
+                let label = role.map { "\($0)" } ?? "unknown"
+                for dotted in [true, false] {
+                    let items = misses.filter { $0.role == role && $0.dotted == dotted }
+                    guard !items.isEmpty else { continue }
+                    cells.append((
+                        label: "[\(label) \(dotted ? "dotted" : "plain")]",
+                        items: items
+                    ))
+                }
+            }
+            cells.sort { $0.items.count > $1.items.count }
+            for cell in cells {
+                let items = cell.items
+                let cellOutside = items.filter { !$0.declarationInSource }.count
+                lines.append("differential \(name) \(outcome.rawValue) \(cell.label) "
+                    + "count \(items.count) oracleOutsideSourceRoot \(cellOutside)")
+            }
+            let kinds = Dictionary(grouping: misses, by: \.kind)
+                .map { ($0.key, $0.value.count) }
+                .sorted { $0.1 > $1.1 }
+            lines.append("differential \(name) \(outcome.rawValue) kinds "
+                + kinds.map { "\($0.0)=\($0.1)" }.joined(separator: " "))
+            for cell in cells.prefix(3) {
+                lines.append("differential \(name) \(outcome.rawValue) \(cell.label) samples:")
+                for item in cell.items.prefix(15) {
+                    lines.append("differential \(name) sample \(item.file):\(item.offset) "
+                        + "`\(item.siteName)` -> \(item.oracleTarget) "
+                        + "(kind \(item.kind), candidates \(item.candidates), "
+                        + "inSource \(item.declarationInSource))")
+                }
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// The three J1 headline rates plus the rank-bucket table per site role.
@@ -642,6 +722,7 @@ enum JavaDifferentialHarness {
                 decompile: JavaDecompileGate(policy: .denied)
             )
             verdict.definitionCandidates = hits.count
+            verdict.oracleTarget = "\(URL(fileURLWithPath: declarationFile).lastPathComponent):\(startLine)-\(endLine)"
             verdict.definitionAnswered = hits.contains { $0.url != nil }
             verdict.definitionMatched = hits.contains { hit in
                 guard let url = hit.url else { return false }

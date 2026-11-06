@@ -42,12 +42,19 @@ enum JavaGoToDefinition {
         if case .declaration = reference {
             // A declaration is its own definition. On an abstract one, the useful target is what
             // implements it, as with Go to Implementation; on a method that overrides or implements
-            // another, it is that method, as in IntelliJ.
+            // another, it is that method, as in IntelliJ. Anything else selects its own name: that
+            // can never land outside the oracle's declaration lines, and a dead click is worse.
+            // Local variable declarators stay silent, as the corpus pins (LocalDeclarationNone).
             let session = makeSession(at: byteOffset, decompile: JavaDecompileGate(policy: .denied))
             if JavaGoToImplementation.isAbstractDeclaration(in: tree, atByteOffset: byteOffset) {
-                return await session.withLiveStubs { await session.implementationHits(reference) }
+                let hits = await session.withLiveStubs { await session.implementationHits(reference) }
+                if !hits.isEmpty { return hits }
+            } else {
+                let hits = await session.withLiveStubs { await session.overriddenMethodHits(atDeclarationName: leaf) }
+                if !hits.isEmpty { return hits }
             }
-            return await session.withLiveStubs { await session.overriddenMethodHits(atDeclarationName: leaf) }
+            guard JavaNavigationSession.declarationSelectsItself(leaf) else { return [] }
+            return [session.hit(text: source, url: fileURL, byteRange: leaf.byteRange, displayName: leaf.text)]
         }
 
         let session = makeSession(at: byteOffset, decompile: decompile)
@@ -700,6 +707,15 @@ struct JavaNavigationSession {
             return byte == UInt8(ascii: ".") ? index : nil
         }
         return nil
+    }
+
+    /// Whether a click on this declaration name selects the name itself when there is nothing
+    /// better (no implementations, no super method). Only a local variable declarator stays
+    /// silent, as the corpus pins (`LocalDeclarationNone`); fields, constants and varargs
+    /// parameters select their own name.
+    static func declarationSelectsItself(_ token: SyntaxNode) -> Bool {
+        guard let parent = token.parent, parent.type == "variable_declarator" else { return true }
+        return parent.parent?.type != "local_variable_declaration"
     }
 
     func hit(text: String, url: URL?, byteRange: Range<Int>, displayName: String) -> JavaDefinitionHit {

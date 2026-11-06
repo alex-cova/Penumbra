@@ -25,8 +25,8 @@ The same shape applies later to TypeScript (`tsserver`) and Swift (`sourcekit-ls
 
 | project | commit | definition recall | wrong-symbol | completion top-8 | completion (provider order) | hover | usages recall | wrong-usages |
 |---|---|---|---|---|---|---|---|---|
-| gson | `828a97be0f8d58108b140b77df8dc76b657f4a87` | 41.8% (18/43) | 21.7% (5/23) | 80.3% (53/66) | 42.4% (28/66) | 68.1% (45/66) | 100.0% (2/2) | 0.0% (0/2) |
-| jackson-core | `a6f49caedcb398efe14c06c4e9abf6e672c412f5` | 56.8% (29/51) | 14.7% (5/34) | 81.1% (56/69) | 56.5% (39/69) | 63.7% (44/69) | 100.0% (2/2) | 0.0% (0/2) |
+| gson | `828a97be0f8d58108b140b77df8dc76b657f4a87` | 83.7% (36/43) | 12.1% (5/41) | 80.3% (53/66) | 42.4% (28/66) | 68.1% (45/66) | 100.0% (2/2) | 0.0% (0/2) |
+| jackson-core | `a6f49caedcb398efe14c06c4e9abf6e672c412f5` | 90.1% (46/51) | 9.8% (5/51) | 81.1% (56/69) | 56.5% (39/69) | 63.7% (44/69) | 100.0% (2/2) | 0.0% (0/2) |
 
 Sample: 6 files per project, 12 identifiers per file, stride-picked so one package cannot fill the run; 2 public method declarations per project for usages (each oracle call compiles the whole module, so this stays small).
 
@@ -34,4 +34,4 @@ Ranked completion, all sites: 80.7% (109/135).
 Excluding declarations: 97.9% (96/98).
 Dotted call/member only: 100.0% (14/14).
 Rank buckets (1 / 2-3 / 4-8 / 9+ / absent / empty): 85 / 20 / 4 / 0 / 26 / 0.
-Definition misses (no answer / other file / same file, other lines): 37 / 10 / 0.
+Definition misses (no answer / other file / same file, other lines): 2 / 10 / 0.
