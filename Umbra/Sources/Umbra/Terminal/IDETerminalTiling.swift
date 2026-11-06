@@ -161,8 +161,32 @@ struct IDETerminalTiling: Equatable {
         for id in paneIDs where !ids.contains(id) { remove(id) }
     }
 
+    /// The least a pane may be given along its split's axis, in points: a column keeps room for a
+    /// usable line, a row keeps its 24 pt header (when split) and some 48 pt of shell.
+    static func minimumPaneLength(along axis: Axis) -> CGFloat {
+        axis == .horizontal ? 120 : 72
+    }
+
+    /// `minimumPaneLength` as a fraction of `divider`'s split, so a short panel keeps the same
+    /// point floor that a tall one does.
+    static func minimumFraction(for divider: Divider) -> Double {
+        let length = divider.axis == .horizontal ? divider.container.width : divider.container.height
+        guard length > 0 else { return 0.08 }
+        return Double(minimumPaneLength(along: divider.axis) / length)
+    }
+
+    /// Where `divider` sits in its split, as a fraction of the split's length.
+    static func fraction(of divider: Divider) -> Double {
+        let horizontal = divider.axis == .horizontal
+        let origin = horizontal ? divider.container.minX : divider.container.minY
+        let length = horizontal ? divider.container.width : divider.container.height
+        guard length > 0 else { return 0 }
+        return Double((divider.position - origin) / length)
+    }
+
     /// Moves the divider between children `index` and `index + 1` of the split at `path` so the first
     /// `index + 1` children take `fraction` of the split, never leaving a child under `minimum`.
+    /// When the pair cannot hold two minimums the boundary settles at the middle of the pair.
     mutating func moveDivider(path: [Int], index: Int, toFraction fraction: Double, minimum: Double = 0.08) {
         guard let root else { return }
         self.root = Self.updating(root, path: path[...]) { node in
@@ -170,13 +194,26 @@ struct IDETerminalTiling: Equatable {
                   index >= 0, index + 1 < children.count else { return node }
             let before = fractions[..<index].reduce(0, +)
             let after = fractions[(index + 2)...].reduce(0, +)
-            let lower = before + minimum
-            let upper = 1 - after - minimum
-            guard lower <= upper else { return node }
-            let boundary = min(max(fraction, lower), upper)
             let pair = fractions[index] + fractions[index + 1]
+            let floor = min(minimum, pair / 2)
+            let lower = before + floor
+            let upper = before + pair - floor
+            let boundary = min(max(fraction, lower), upper)
             fractions[index] = boundary - before
             fractions[index + 1] = pair - fractions[index]
+            return .split(axis: axis, children: children, fractions: fractions)
+        }
+    }
+
+    /// Gives the two children either side of a divider an even share of what they hold together.
+    mutating func resetDivider(path: [Int], index: Int) {
+        guard let root else { return }
+        self.root = Self.updating(root, path: path[...]) { node in
+            guard case .split(let axis, let children, var fractions) = node,
+                  index >= 0, index + 1 < children.count else { return node }
+            let pair = fractions[index] + fractions[index + 1]
+            fractions[index] = pair / 2
+            fractions[index + 1] = pair / 2
             return .split(axis: axis, children: children, fractions: fractions)
         }
     }

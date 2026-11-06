@@ -87,6 +87,69 @@ final class IDETerminalTilingTests: XCTestCase {
         XCTAssertEqual(tiling.rects(in: bounds)[ids[0]]?.width ?? 0, 1200 * 0.08, accuracy: 1)
     }
 
+    func testTheMinimumIsAFloorInPointsNotAShareOfTheSplit() throws {
+        let tiling = IDETerminalTiling.preset(.twoRows, ids: ids)
+        let tall = try XCTUnwrap(tiling.dividers(in: CGRect(x: 0, y: 0, width: 1200, height: 900)).first)
+        let short = try XCTUnwrap(tiling.dividers(in: CGRect(x: 0, y: 0, width: 1200, height: 120)).first)
+        XCTAssertEqual(IDETerminalTiling.minimumFraction(for: tall), 72.0 / 900, accuracy: 0.0001)
+        XCTAssertEqual(IDETerminalTiling.minimumFraction(for: short), 72.0 / 120, accuracy: 0.0001)
+
+        var squeezed = tiling
+        squeezed.moveDivider(
+            path: tall.path, index: tall.index, toFraction: 0.99,
+            minimum: IDETerminalTiling.minimumFraction(for: tall))
+        let rects = squeezed.rects(in: CGRect(x: 0, y: 0, width: 1200, height: 900))
+        XCTAssertEqual(rects[ids[1]]?.height ?? 0, 72, accuracy: 1)
+    }
+
+    func testAPairTooSmallForTwoMinimumsSettlesAtItsMiddle() throws {
+        var tiling = IDETerminalTiling.preset(.twoRows, ids: ids)
+        let area = CGRect(x: 0, y: 0, width: 1200, height: 100)
+        let divider = try XCTUnwrap(tiling.dividers(in: area).first)
+        tiling.moveDivider(
+            path: divider.path, index: divider.index, toFraction: 0.9,
+            minimum: IDETerminalTiling.minimumFraction(for: divider))
+        let rects = tiling.rects(in: area)
+        XCTAssertEqual(rects[ids[0]]?.height, 50)
+        XCTAssertEqual(rects[ids[1]]?.height, 50)
+    }
+
+    func testResettingADividerSharesTheTwoNeighboursEvenly() throws {
+        var tiling = IDETerminalTiling.preset(.threeColumns, ids: ids)
+        let divider = try XCTUnwrap(tiling.dividers(in: bounds).first)
+        tiling.moveDivider(path: divider.path, index: divider.index, toFraction: 0.1)
+        tiling.resetDivider(path: divider.path, index: divider.index)
+        let rects = tiling.rects(in: bounds)
+        XCTAssertEqual(rects[ids[0]]?.width, 400)
+        XCTAssertEqual(rects[ids[1]]?.width, 400)
+        XCTAssertEqual(rects[ids[2]]?.width, 400)
+
+        // Only the pair moves: with the second divider off-centre, resetting the first leaves the
+        // third pane's share alone.
+        let second = try XCTUnwrap(tiling.dividers(in: bounds).last)
+        tiling.moveDivider(path: second.path, index: second.index, toFraction: 0.5)
+        let before = try XCTUnwrap(tiling.rects(in: bounds)[ids[2]]?.width)
+        tiling.resetDivider(path: divider.path, index: divider.index)
+        XCTAssertEqual(tiling.rects(in: bounds)[ids[2]]?.width, before)
+    }
+
+    @MainActor
+    func testAKeyboardStepMovesADividerByAShareOfItsSplitAndStopsAtTheFloor() throws {
+        let panel = IDEBottomPanelModel()
+        panel.apply(.twoColumns, filling: ids)
+        var divider = try XCTUnwrap(panel.tiling.dividers(in: bounds).first)
+        XCTAssertEqual(IDETerminalTiling.fraction(of: divider), 0.5, accuracy: 0.001)
+        panel.nudgeDivider(divider, by: 0.05)
+        divider = try XCTUnwrap(panel.tiling.dividers(in: bounds).first)
+        XCTAssertEqual(IDETerminalTiling.fraction(of: divider), 0.55, accuracy: 0.002)
+        for _ in 0..<40 {
+            divider = try XCTUnwrap(panel.tiling.dividers(in: bounds).first)
+            panel.nudgeDivider(divider, by: -0.05)
+        }
+        divider = try XCTUnwrap(panel.tiling.dividers(in: bounds).first)
+        XCTAssertEqual(divider.position, 120, accuracy: 1, "a column keeps 120 pt")
+    }
+
     func testDividersOfANestedSplitKnowTheirContainer() throws {
         let tiling = IDETerminalTiling.preset(.quarters, ids: ids)
         let dividers = tiling.dividers(in: bounds)
