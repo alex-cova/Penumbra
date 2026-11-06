@@ -2149,7 +2149,9 @@ public final class EditorIntelligenceController {
             replacementRange: replacementRange,
             prefix: typedPrefix,
             isComputing: completionIsComputing,
-            advertisement: completionAdvertisement
+            advertisement: completionAdvertisement,
+            // The read-only command list inserts nothing, so Tab and Enter do not differ there.
+            showsKeyHint: readOnlyFilter == nil
         )
         completionPanelView.update(model: model)
         if reposition || completionPanelView.isHidden {

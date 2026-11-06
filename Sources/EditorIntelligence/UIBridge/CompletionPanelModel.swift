@@ -14,6 +14,9 @@ public struct CompletionPanelModel: Sendable, Identifiable, CustomStringConverti
     public let isComputing: Bool
     /// Hint under the list: a second Ctrl+Space, or smart completion.
     public let advertisement: String?
+    /// Show "⏎ Insert · ⇥ Replace" in the footer while there are rows. Off for lists where the
+    /// two keys do not differ (the read-only command list).
+    public let showsKeyHint: Bool
 
     public init(
         id: UUID = UUID(),
@@ -23,7 +26,8 @@ public struct CompletionPanelModel: Sendable, Identifiable, CustomStringConverti
         prefix: String = "",
         emptyText: String? = nil,
         isComputing: Bool = false,
-        advertisement: String? = nil
+        advertisement: String? = nil,
+        showsKeyHint: Bool = true
     ) {
         self.id = id
         self.items = items
@@ -33,10 +37,16 @@ public struct CompletionPanelModel: Sendable, Identifiable, CustomStringConverti
         self.emptyText = emptyText
         self.isComputing = isComputing
         self.advertisement = advertisement
+        self.showsKeyHint = showsKeyHint
     }
 
     public var showsFooter: Bool {
-        isComputing || (advertisement?.isEmpty == false)
+        isComputing || (advertisement?.isEmpty == false) || showsKeyHintRow
+    }
+
+    /// The footer carries the key hint: there are rows to accept and the host wants it shown.
+    public var showsKeyHintRow: Bool {
+        showsKeyHint && !items.isEmpty
     }
 
     public var description: String {
