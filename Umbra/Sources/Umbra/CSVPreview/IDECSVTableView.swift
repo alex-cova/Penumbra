@@ -29,6 +29,9 @@ final class IDECSVTableView: NSView {
 
     private static let rowNumberID = NSUserInterfaceItemIdentifier("csv.row")
 
+    /// Recolours the open table when the UI colour scheme or font changes.
+    private var appearanceObserver: IDEAppearanceObserver?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -89,6 +92,11 @@ final class IDECSVTableView: NSView {
             message.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
         applyColors()
+        appearanceObserver = IDEAppearanceObserver { [weak self] in
+            guard let self else { return }
+            applyColors()
+            tableView.reloadData()
+        }
     }
 
     @available(*, unavailable)

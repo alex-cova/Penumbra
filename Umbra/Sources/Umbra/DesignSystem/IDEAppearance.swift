@@ -5,11 +5,16 @@ import SwiftUI
 /// Shared design tokens for the Umbra shell.
 /// VARIANCE 7 · DENSITY 8
 enum IDEAppearance {
-    nonisolated(unsafe) private(set) static var scheme: IDEUIColorScheme = IDEUmbraUIColorScheme.shared
+    /// The current colour scheme, read from `IDEThemeStore`: a read inside a SwiftUI body is
+    /// tracked, so the view redraws when the scheme changes.
+    static var scheme: IDEUIColorScheme { IDEThemeStore.shared.scheme }
+
+    /// Posted when the colour scheme or the UI font changes; see `IDEAppearanceObserver`.
+    static let didChangeNotification = Notification.Name("com.umbra.IDEAppearance.didChange")
 
     @MainActor
     static func applyUIColorScheme(_ scheme: IDEUIColorScheme) {
-        self.scheme = scheme
+        IDEThemeStore.shared.setScheme(scheme)
     }
 
     static var preferredColorScheme: ColorScheme {
@@ -216,8 +221,9 @@ extension Color {
 enum IDEUIFonts {
     static let defaultFamilyName = "SF Compact"
     static let defaultFontSize: Double = 13
-    private(set) nonisolated(unsafe) static var currentFamilyName = defaultFamilyName
-    private(set) nonisolated(unsafe) static var currentFontSize = defaultFontSize
+    /// Read from `IDEThemeStore`, so a font read in a SwiftUI body is tracked like a colour.
+    static var currentFamilyName: String { IDEThemeStore.shared.fontFamily }
+    static var currentFontSize: Double { IDEThemeStore.shared.fontSize }
 
     static let familyNames: [String] = {
         NSFontManager.shared.availableFontFamilies
@@ -233,11 +239,11 @@ enum IDEUIFonts {
     }
 
     static func setCurrentFamilyName(_ name: String) {
-        currentFamilyName = name
+        IDEThemeStore.shared.setFontFamily(name)
     }
 
     static func setCurrentFontSize(_ size: Double) {
-        currentFontSize = size
+        IDEThemeStore.shared.setFontSize(size)
     }
 
     static func scaledSize(_ base: CGFloat) -> CGFloat {

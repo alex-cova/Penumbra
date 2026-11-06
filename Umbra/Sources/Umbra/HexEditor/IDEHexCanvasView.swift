@@ -16,6 +16,8 @@ final class IDEHexCanvasView: NSView {
     private let rowCacheLimit = 256
     private var rowCache: [Int64: NSAttributedString] = [:]
     private var cacheGeneration: Int = -1
+    /// Repaints when the UI colour scheme or font changes; the canvas draws every colour itself.
+    private var appearanceObserver: IDEAppearanceObserver?
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -29,6 +31,10 @@ final class IDEHexCanvasView: NSView {
         scroller.target = self
         scroller.action = #selector(scrollerMoved(_:))
         addSubview(scroller)
+        appearanceObserver = IDEAppearanceObserver { [weak self] in
+            self?.layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
+            self?.needsDisplay = true
+        }
     }
 
     @available(*, unavailable)

@@ -30,7 +30,6 @@ public struct IDEPreferencesView: View {
     }
 
     public var body: some View {
-        let _ = preferences.uiColorSchemeID
         VStack(spacing: 0) {
             IDESettingsTabHeader(onClose: workspace.hideSettings)
                 .onAppear { takeRequestedDomain() }

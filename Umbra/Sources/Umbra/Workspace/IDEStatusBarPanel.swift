@@ -6,7 +6,6 @@ struct IDEStatusBarPanel: View {
 
     var body: some View {
         let _ = IDEBodyDiagnostics.note("IDEStatusBarPanel")
-        let _ = workspace.uiColorSchemeEpoch
         HStack(spacing: IDEAppearance.Spacing.sm) {
             IDEStatusBarBreadcrumb()
             // Takes whatever the row has left, so the trailing items never truncate.

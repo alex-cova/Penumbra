@@ -58,10 +58,6 @@ public struct IDERootView: View {
         let _ = workspace.layoutEpoch
         let _ = workspace.windowMode
         let _ = workspace.showsWelcome
-        let _ = workspace.preferences.uiFontName
-        let _ = workspace.preferences.uiFontSize
-        let _ = workspace.preferences.uiColorSchemeID
-        let _ = workspace.uiColorSchemeEpoch
         VStack(spacing: 0) {
             // Full screen: the native tab bar is the topmost strip and the toolbar row sits under it.
             if chrome.hasTabBarAboveToolbar {
@@ -217,7 +213,8 @@ public struct IDERootView: View {
 
             if !isAIMode {
                 IDEStatusBarPanel()
-                    .id(workspace.uiColorSchemeEpoch)
+                    // The status bar's menus are native controls; a new scheme rebuilds them.
+                    .id(IDEAppearance.scheme.id)
                     .opacity(workspace.chromeOpacity)
                     .allowsHitTesting(workspace.chromeOpacity > 0.05)
             }
@@ -352,7 +349,7 @@ public struct IDERootView: View {
         }
         .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
-        .onChange(of: workspace.preferences.uiColorSchemeID) { _, _ in
+        .onReceive(NotificationCenter.default.publisher(for: IDEAppearance.didChangeNotification)) { _ in
             workspace.refreshUIColorScheme()
         }
         .task {
