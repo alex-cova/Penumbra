@@ -215,10 +215,12 @@ public final class IDEWorkspace {
     weak var window: NSWindow?
 
     /// Names this window to `IDEOpenRouter` and the registry.
-    let windowID = UUID()
+    /// Which stored window this is. A window restored from a session adopts that entry's id, so it
+    /// updates its own entry in `windows.json` and no other.
+    @ObservationIgnored private(set) var windowID = UUID()
 
     /// Off in tests that create workspaces, so they neither restore nor overwrite the developer's
-    /// real `last-window.json` and `app.json`.
+    /// real `windows.json` and `app.json`.
     static var isSessionPersistenceEnabled = true
 
     /// A weak handle for the menu bar; see `IDEWorkspaceRef`.
@@ -227,6 +229,16 @@ public final class IDEWorkspace {
     /// Opened blank next to other windows instead of restoring the last one.
     @ObservationIgnored
     private var startedAsExtraWindow = false
+
+    /// This window took one of the restore jobs the first window queued, so the registry does not
+    /// also hand it a folder or file request meant for another window.
+    @ObservationIgnored
+    private var restoredFromSessionJob = false
+
+    /// The window is closing and has already dealt with its stored entry; a later save (a debounced
+    /// panel resize, say) must not write it back.
+    @ObservationIgnored
+    private var hasStoredSessionForClose = false
 
     /// The project folder's name, or "Umbra": what tells this window apart in the Window menu and
     /// in the native tab bar.
@@ -974,10 +986,20 @@ public final class IDEWorkspace {
         }
         // First use restores the saved preferences and recent lists.
         _ = IDEAppState.shared
-        // A window opened with none other open (launch, or Dock reopen after closing the last one)
-        // restores the last window; one opened next to another starts empty.
-        if IDEWindowRegistry.shared.shouldRestoreLastWindow, Self.isSessionPersistenceEnabled {
-            loadSession(IDEWindowSessionStore.load())
+        // Launch (or Dock reopen after closing the last window) restores every stored window: this
+        // one takes the first and queues a window for each of the others. A window opened for one of
+        // those takes its stored session; one opened next to another window starts empty.
+        let registry = IDEWindowRegistry.shared
+        if Self.isSessionPersistenceEnabled, let session = registry.takeRestoreSession() {
+            restoredFromSessionJob = true
+            adoptStoredWindow(session)
+            loadSession(session)
+        } else if registry.shouldRestoreLastWindow, Self.isSessionPersistenceEnabled {
+            let stored = IDEWindowSessionStore.loadAll()
+            let first = stored.first ?? .empty
+            adoptStoredWindow(first)
+            loadSession(first)
+            registry.queueRestoredWindows(Array(stored.dropFirst()))
         } else {
             startedAsExtraWindow = true
             // A window that does not restore still opens at the widths the user last used, which
@@ -1015,7 +1037,7 @@ public final class IDEWorkspace {
             await self.intelligenceServices.javaSupport.connect(to: self.workspaceBridge.workspace)
         }
 
-        IDEWindowRegistry.shared.register(self)
+        IDEWindowRegistry.shared.register(self, restoredFromJob: restoredFromSessionJob)
     }
 
     /// `--open <file>` and `--open-folder <dir>`; only the first window of the process calls this.
@@ -3335,6 +3357,7 @@ public final class IDEWorkspace {
         let selectedShell = keptShell?.id
         syncLiveTextForSession()
         return IDEWindowSession(
+            windowID: windowID,
             restoration: hasOpenDocuments && !hasOnlyUntouchedEmptyFile ? workbench.makeRestorationState() : nil,
             projectRootBookmark: project.makeBookmarkData(),
             sidebarWidth: sidebarWidth ?? self.sidebarWidth,
@@ -3382,12 +3405,15 @@ public final class IDEWorkspace {
         projectSidebarWidth: Double? = nil,
         terminalHeight: Double? = nil
     ) {
-        // Recents and preferences are shared, so any window may write them; the window layout
-        // goes to `last-window.json` only from the session window (see `IDEWindowRegistry`), or a
-        // background window (a finished Gradle sync) would replace the one the user works in.
-        guard !isTornDown, Self.isSessionPersistenceEnabled else { return }
+        // Recents and preferences are shared, so any window may write them. The window layout goes
+        // to this window's own entry in `windows.json`; a blank window opened next to others has
+        // none (it would only bring back an empty window).
+        guard !isTornDown, Self.isSessionPersistenceEnabled, !hasStoredSessionForClose else { return }
         appState.save()
-        guard IDEWindowRegistry.shared.isSessionWindow(self) else { return }
+        if isPristine {
+            IDEWindowSessionStore.remove(windowID: windowID)
+            return
+        }
         IDEWindowSessionStore.save(makeSession(
             sidebarWidth: sidebarWidth,
             projectSidebarWidth: projectSidebarWidth,
@@ -3395,35 +3421,36 @@ public final class IDEWorkspace {
         ))
     }
 
-    /// The window is closing. The last window that would be restored forgets its folder, so a Dock
-    /// click opens the Welcome screen. While quitting, the session window writes that same session
-    /// here, because it may already be gone by `applicationWillTerminate`.
+    /// The window is closing. The last window with content stores itself with its folder closed, so
+    /// a Dock click opens the Welcome screen; any other window drops its entry, so the next launch
+    /// does not bring back a window that was closed on purpose. While quitting the whole list was
+    /// stored before any window closed (`IDEWindowRegistry.noteTermination`) and stays as it is.
     func saveSessionForWindowClose() {
         guard !isTornDown, Self.isSessionPersistenceEnabled else { return }
         let registry = IDEWindowRegistry.shared
-        // Quit writes the closed-folder session from here too: the windows can finish closing
-        // before `applicationWillTerminate`, and by then nothing is left to save.
-        if registry.isTerminating {
-            if registry.isSessionWindow(self) {
-                saveSessionForgettingFolder()
-            }
-            return
-        }
+        if registry.isTerminating { return }
+        hasStoredSessionForClose = true
         if registry.forgetsFolderWhenClosing(self) {
             saveSessionForgettingFolder()
         } else {
-            saveSession()
+            appState.save()
+            IDEWindowSessionStore.remove(windowID: windowID)
         }
     }
 
-    /// Writes this window's layout with the folder closed. Used when the last window closes and when
-    /// the app quits, so the next open does not bring the folder or its terminal directory back.
+    /// Stores this window, alone, with the folder closed. Used when the last window with content
+    /// closes, so the next open does not bring the folder or its terminal directory back.
     func saveSessionForgettingFolder() {
         guard !isTornDown, Self.isSessionPersistenceEnabled else { return }
         appState.save()
-        IDEWindowSessionStore.save(
+        IDEWindowSessionStore.replaceAll([
             makeSession().closingFolder(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
-        )
+        ])
+    }
+
+    /// Becomes the window `session` was stored for, so later saves update that entry.
+    private func adoptStoredWindow(_ session: IDEWindowSession) {
+        if let id = session.windowID { windowID = id }
     }
 
     // MARK: - Private

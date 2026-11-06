@@ -359,6 +359,12 @@ public struct IDERootView: View {
             guard !didBootstrap else { return }
             didBootstrap = true
             workspace.bootstrap()
+            // A restored window arrives with its own panel widths, not the first window's that
+            // `init` read; the size-saving task below would otherwise store those over them.
+            sidebarWidth = workspace.sidebarWidth
+            projectSidebarWidth = workspace.projectSidebarWidth
+            agentPanelWidth = workspace.agentPanelWidth
+            aiInspectorWidth = workspace.aiInspectorWidth
             workspace.focusActiveEditor()
         }
         .onChange(of: sidebarWidth) { _, newWidth in
