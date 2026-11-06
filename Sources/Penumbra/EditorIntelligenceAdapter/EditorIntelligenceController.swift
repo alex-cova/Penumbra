@@ -1067,6 +1067,17 @@ public final class EditorIntelligenceController {
                 let kept = result?.discardingTargets(in: self.textView, changedSince: generation)
                 // An answer for text that has since changed is dropped without a "no result" hint.
                 if kept == nil, result != nil { return }
+                // A result that is the caret identifier itself shows usages instead
+                // (`NavigationSelfRedirect`): focusing it would reselect the name and push
+                // a no-op checkpoint. The rerun re-checks the generation and F24 rule.
+                if kind == .definition, let kept, let textView = self.textView,
+                   generation == textView.contentGeneration,
+                   let identifier = NavigationSelfRedirect.identifierRange(at: utf16, in: text as NSString)
+                       ?? (utf16 > 0 ? NavigationSelfRedirect.identifierRange(at: utf16 - 1, in: text as NSString) : nil),
+                   NavigationSelfRedirect.selfLocation(in: kept, kind: kind, identifier: identifier, documentURL: documentURL) != nil {
+                    self.navigate(kind: .references, atUTF16Offset: utf16)
+                    return
+                }
                 switch kept {
                 case .single(let location):
                     self.focus(location)

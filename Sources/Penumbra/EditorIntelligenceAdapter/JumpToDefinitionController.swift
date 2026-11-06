@@ -70,7 +70,8 @@ public final class JumpToDefinitionController {
         navigate(at: position, kind: kind, clickedIdentifier: nil)
     }
 
-    private func navigate(at position: TextPosition, kind: NavigationKind, clickedIdentifier: NSRange?) {
+    /// Visible for the click-path redirect tests; not API.
+    func navigate(at position: TextPosition, kind: NavigationKind, clickedIdentifier: NSRange?) {
         clearHover()
         guard adapter.currentDocument != nil, let textView else {
             return
@@ -94,7 +95,7 @@ public final class JumpToDefinitionController {
                   // exists, and must not move the caret away from what the user just did (F24).
                   let current = result.discardingTargets(in: self.textView, changedSince: text.generation)
             else { return }
-            self.deliver(current, kind: kind, clickedIdentifier: clickedIdentifier)
+            self.deliver(current, kind: kind, clickedIdentifier: clickedIdentifier, position: position, generation: text.generation)
         }
     }
 
@@ -106,7 +107,22 @@ public final class JumpToDefinitionController {
     }
 
     /// Acts on a definition result: goes to the one target, or offers the several.
-    private func deliver(_ result: NavigationResult, kind: NavigationKind, clickedIdentifier: NSRange?) {
+    /// A result that is the clicked or caret identifier itself shows usages instead
+    /// (`NavigationSelfRedirect`): selecting the name would reselect what is already
+    /// selected and push a no-op checkpoint.
+    private func deliver(_ result: NavigationResult, kind: NavigationKind, clickedIdentifier: NSRange?, position: TextPosition, generation: UInt64) {
+        if kind == .definition,
+           let textView,
+           generation == textView.contentGeneration,
+           let identifier = clickedIdentifier ?? identifierRange(at: position.utf16Offset, in: textView)
+               ?? (position.utf16Offset > 0 ? identifierRange(at: position.utf16Offset - 1, in: textView) : nil),
+           NavigationSelfRedirect.selfLocation(in: result, kind: kind, identifier: identifier, documentURL: textView.documentURL) != nil {
+            // Rerunning navigation re-checks the generation and F24 rule for the references
+            // answer. This cancels the current task, which is safe: there is no suspension
+            // point between here and its end, and kind `.references` never redirects back.
+            navigate(at: position, kind: .references, clickedIdentifier: clickedIdentifier)
+            return
+        }
         switch result {
         case .single(let location):
             go(to: location)
@@ -289,26 +305,7 @@ public final class JumpToDefinitionController {
     }
 
     private func identifierRange(in text: NSString, at offset: Int) -> NSRange? {
-        guard offset >= 0, offset < text.length, isIdentifierCharacter(text.character(at: offset)) else { return nil }
-        var start = offset
-        while start > 0, isIdentifierCharacter(text.character(at: start - 1)) {
-            start -= 1
-        }
-        let first = text.character(at: start)
-        if first >= 48 && first <= 57 { return nil }
-        var end = offset + 1
-        while end < text.length, isIdentifierCharacter(text.character(at: end)) {
-            end += 1
-        }
-        return NSRange(location: start, length: end - start)
-    }
-
-    private func isIdentifierCharacter(_ unit: unichar) -> Bool {
-        if unit == 95 || unit == 36 { return true }
-        if unit >= 65 && unit <= 90 { return true }
-        if unit >= 97 && unit <= 122 { return true }
-        if unit >= 48 && unit <= 57 { return true }
-        return unit > 127
+        NavigationSelfRedirect.identifierRange(at: offset, in: text)
     }
 
     @objc private func handleClick(_ gesture: NSClickGestureRecognizer) {
@@ -320,8 +317,13 @@ public final class JumpToDefinitionController {
            let identifier = identifierRange(at: index, in: textView),
            let cached = cachedHoverResult(for: identifier) {
             // ⌘-hover already resolved this word in this text: the click is its answer.
+            // A cached self result redirects to usages through the same check as a fresh one.
             clearHover()
-            deliver(cached, kind: .definition, clickedIdentifier: identifier)
+            deliver(
+                cached, kind: .definition, clickedIdentifier: identifier,
+                position: TextPosition(line: 0, column: index, utf16Offset: index),
+                generation: textView.contentGeneration
+            )
             return
         }
         if let index = textView.characterIndex(at: point),
