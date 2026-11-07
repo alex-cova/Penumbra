@@ -56,7 +56,7 @@ struct IDEEmbeddedDiffView: NSViewRepresentable {
                 self.onRequestChanged?(session.request)
             }
             self.session = session
-            weak var workspace = view.workspace
+            weak let workspace = view.workspace
             viewer.onJumpToSource = { path, line in workspace?.openDiffSource(path: path, line: line) }
             viewer.show(session, preferences: view.workspace.preferences)
         }

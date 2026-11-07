@@ -193,7 +193,6 @@ struct IDETerminalTiling: Equatable {
             guard case .split(let axis, let children, var fractions) = node,
                   index >= 0, index + 1 < children.count else { return node }
             let before = fractions[..<index].reduce(0, +)
-            let after = fractions[(index + 2)...].reduce(0, +)
             let pair = fractions[index] + fractions[index + 1]
             let floor = min(minimum, pair / 2)
             let lower = before + floor

@@ -358,7 +358,7 @@ struct IDERenameSymbolTool: AgentTool {
                 await context.ledger.record(path: file.relativePath, text: after)
                 applied.append((file.relativePath, file.edits.count))
             } catch {
-                await context.editFailures?.recordFailure(file.relativePath)
+                _ = await context.editFailures?.recordFailure(file.relativePath)
                 failures.append("\(file.relativePath): \(error.localizedDescription)")
             }
         }

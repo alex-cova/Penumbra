@@ -99,6 +99,7 @@ enum IDEAIBrowserChromeKeys {
             && event.charactersIgnoringModifiers?.lowercased() == "l"
     }
 
+    @MainActor
     static func isWebKitFirstResponder(_ responder: NSResponder?) -> Bool {
         var current = responder
         while let node = current {

@@ -523,7 +523,7 @@ struct IDETerminalPanes: View {
     private let headerHeight: CGFloat = 24
     private let coordinateSpaceName = "terminalPanes"
     /// Marks the drag payload as a terminal tab, so other text dropped here is ignored.
-    static let dragPrefix = "umbra-terminal-tab:"
+    nonisolated static let dragPrefix = "umbra-terminal-tab:"
 
     struct DropPreview: Equatable {
         var target: UUID
