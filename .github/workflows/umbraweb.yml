@@ -1,0 +1,39 @@
+name: Deploy Umbra website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'umbraweb/**'
+      - '.github/workflows/umbraweb.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: umbraweb
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: umbraweb
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: umbraweb/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Deploy to Cloudflare Workers
+        run: npm run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

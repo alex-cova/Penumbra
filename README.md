@@ -6,7 +6,7 @@
 
 **Umbra** is a fast macOS code editor with a built-in coding agent. **Penumbra** is the AppKit text engine and IDE-intelligence libraries underneath it. Use Umbra as your daily editor; embed Penumbra when you are building your own macOS editing surface.
 
-[Download Umbra](https://github.com/alex-cova/Penumbra/releases) · [Website](https://alex-cova.github.io/Penumbra) · [Build from source](#build-from-source) · [Embed Penumbra](#installation)
+[Download Umbra](https://github.com/alex-cova/Penumbra/releases) · [Website](https://umbraeditor.com) · [Build from source](#build-from-source) · [Embed Penumbra](#installation)
 
 > ### Meta Global AI Developer Hackathon
 >
@@ -290,7 +290,9 @@ Penumbra/
 │   └── Umbra.xcodeproj            # For SwiftUI Previews and run/debug
 ├── Packages/                      # AgentKit(+MLX, Apple), DatabaseKit, GitIntelligence, SubprocessKit, TreeSitter, Luna
 ├── Tools/PerfHarness/             # Release performance CLI
-└── Tools/AgentEval/               # Agent evaluator (its own package)
+├── Tools/AgentEval/               # Agent evaluator (its own package)
+├── umbraweb/                      # Marketing site (vinext), deployed to https://umbraeditor.com
+└── website/                       # Sparkle appcast served by GitHub Pages
 ```
 
 Deeper internals: [CLAUDE.md](CLAUDE.md), [Umbra/CLAUDE.md](Umbra/CLAUDE.md), [Sources/Penumbra/CLAUDE.md](Sources/Penumbra/CLAUDE.md), [Sources/EditorIntelligence/CLAUDE.md](Sources/EditorIntelligence/CLAUDE.md).

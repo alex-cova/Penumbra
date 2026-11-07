@@ -1,3 +1,4 @@
+# Sparkle appcast only. The marketing site is umbraweb/, deployed by umbraweb.yml.
 name: Deploy GitHub Pages
 
 on:
