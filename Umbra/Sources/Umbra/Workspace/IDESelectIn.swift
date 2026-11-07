@@ -18,7 +18,7 @@ extension IDEWorkspace {
         }
         entries.append(("Finder", url.path, { NSWorkspace.shared.activateFileViewerSelecting([url]) }))
         entries.append(("Structure", "The declarations of \(url.lastPathComponent)", { [weak self] in
-            self?.showSidebarTab(.structure)
+            self?.showAndFocusSidebarTab(.structure)
         }))
         entries.append(("Terminal", folder.path, { [weak self] in
             self?.showTerminal()

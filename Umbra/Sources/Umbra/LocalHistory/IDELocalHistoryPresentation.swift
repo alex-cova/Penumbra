@@ -53,6 +53,16 @@ enum IDELocalHistoryPresentation {
         return date.formatted(.dateTime.weekday(.wide).day().month(.wide))
     }
 
+    /// Event ids in the order the file/folder History list paints them.
+    static func keyboardEventIDs(fileEvents events: [IDELocalHistoryEvent]) -> [UUID] {
+        byDay(events, time: \.time).flatMap(\.items).map(\.id)
+    }
+
+    /// Event ids in the order the project History list paints them (group headers are skipped).
+    static func keyboardEventIDs(projectEvents events: [IDELocalHistoryEvent]) -> [UUID] {
+        byDay(groups(events), time: \.time).flatMap { $0.items.flatMap(\.events) }.map(\.id)
+    }
+
     /// Events (newest first) split into days, keeping their order.
     static func byDay<T>(_ items: [T], time: (T) -> Date, now: Date = Date(), calendar: Calendar = .current) -> [(heading: String, items: [T])] {
         var sections: [(heading: String, items: [T])] = []

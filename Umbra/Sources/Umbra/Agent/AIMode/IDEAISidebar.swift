@@ -7,6 +7,10 @@ import SwiftUI
 struct IDEAISidebar: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var query = ""
+    @State private var highlightedSavedID: UUID?
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isSearchFocused: Bool
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,17 +23,29 @@ struct IDEAISidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
                     switch workspace.aiTab {
-                    case .code: IDEAICodeList(query: query)
-                    case .chat: IDEAIChatList(query: query)
+                    case .code: IDEAICodeList(query: query, highlightedSavedID: highlightedSavedID)
+                    case .chat: IDEAIChatList(query: query, highlightedSavedID: highlightedSavedID)
                     }
                 }
                 .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.bottom, IDEAppearance.Spacing.sm)
             }
             .scrollContentBackground(.hidden)
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleListKey(press)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(IDEAppearance.ColorToken.panel)
+        .onChange(of: workspace.aiTab) { _, _ in highlightedSavedID = nil }
+        .onChange(of: query) { _, _ in
+            if let highlightedSavedID, !keyboardRows.contains(.saved(highlightedSavedID)) {
+                self.highlightedSavedID = nil
+            }
+        }
     }
 
     private var searchField: some View {
@@ -40,6 +56,17 @@ struct IDEAISidebar: View {
             TextField(workspace.aiTab == .chat ? "Search chats" : "Search sessions", text: $query)
                 .textFieldStyle(.plain)
                 .font(IDEAppearance.Typography.caption)
+                .focused($isSearchFocused)
+                .onKeyPress(.downArrow) {
+                    isListFocused = true
+                    if currentRow == nil { move(by: 1) }
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    if query.isEmpty { return .ignored }
+                    query = ""
+                    return .handled
+                }
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -56,12 +83,150 @@ struct IDEAISidebar: View {
 
     private func startNew() {
         query = ""
+        highlightedSavedID = nil
         switch workspace.aiTab {
         case .code:
             workspace.agent.newConversation()
             workspace.agent.composerFocusRequest += 1
         case .chat:
             workspace.aiChat.newChat()
+        }
+    }
+
+    private var keyboardRows: [IDEAISidebarKeyboard.Row] {
+        switch workspace.aiTab {
+        case .chat:
+            let chat = workspace.aiChat
+            return IDEAISidebarKeyboard.chatOrder(
+                openIDs: IDEAIChatList.openChats(in: chat, query: query).map(\.id),
+                savedIDs: IDEAIChatList.savedRows(in: chat, query: query).map(\.id)
+            )
+        case .code:
+            let agent = workspace.agent
+            let groups = IDEAISessions.groups(
+                current: agent.history, currentRoot: agent.projectRoot?.path,
+                others: workspace.aiSessions.summaries, query: query)
+            return IDEAISidebarKeyboard.codeOrder(groups: groups.map { group in
+                let isCurrent = isCurrent(group)
+                return (
+                    openIDs: IDEAISessionGroupView.openChats(agent: agent, isCurrent: isCurrent, query: query).map(\.id),
+                    savedIDs: IDEAISessionGroupView.savedRows(in: group, agent: agent).map(\.id)
+                )
+            })
+        }
+    }
+
+    private func isCurrent(_ group: IDEAISessionGroup) -> Bool {
+        guard let root = workspace.agent.projectRoot else { return false }
+        return URL(fileURLWithPath: group.projectRoot).standardizedFileURL == root.standardizedFileURL
+    }
+
+    private var currentRow: IDEAISidebarKeyboard.Row? {
+        if let highlightedSavedID { return .saved(highlightedSavedID) }
+        switch workspace.aiTab {
+        case .chat: return .open(workspace.aiChat.selectedID)
+        case .code: return .open(workspace.agent.selectedID)
+        }
+    }
+
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            move(by: press.key == .downArrow ? 1 : -1)
+            return .handled
+        case .return:
+            typeahead.reset()
+            activate(currentRow)
+            return .handled
+        case .escape:
+            typeahead.reset()
+            if isSearchFocused {
+                isSearchFocused = false
+                return .handled
+            }
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            let titles = titlesByRow
+            if let row = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: keyboardRows,
+                selected: currentRow,
+                title: { titles[$0] ?? "" }
+            ) {
+                highlight(row)
+            }
+            return .handled
+        }
+    }
+
+    private var titlesByRow: [IDEAISidebarKeyboard.Row: String] {
+        var titles: [IDEAISidebarKeyboard.Row: String] = [:]
+        switch workspace.aiTab {
+        case .chat:
+            let chat = workspace.aiChat
+            for conversation in IDEAIChatList.openChats(in: chat, query: query) {
+                titles[.open(conversation.id)] = conversation.title
+            }
+            for row in IDEAIChatList.savedRows(in: chat, query: query) {
+                titles[.saved(row.id)] = row.title
+            }
+        case .code:
+            let agent = workspace.agent
+            let groups = IDEAISessions.groups(
+                current: agent.history, currentRoot: agent.projectRoot?.path,
+                others: workspace.aiSessions.summaries, query: query)
+            for group in groups {
+                let isCurrent = isCurrent(group)
+                for conversation in IDEAISessionGroupView.openChats(agent: agent, isCurrent: isCurrent, query: query) {
+                    titles[.open(conversation.id)] = conversation.title
+                }
+                for row in IDEAISessionGroupView.savedRows(in: group, agent: agent) {
+                    titles[.saved(row.id)] = row.title
+                }
+            }
+        }
+        return titles
+    }
+
+    private func move(by delta: Int) {
+        guard let next = IDEListNeighbor.move(currentRow, in: keyboardRows, by: delta) else { return }
+        highlight(next)
+        isListFocused = true
+    }
+
+    private func highlight(_ row: IDEAISidebarKeyboard.Row) {
+        switch row {
+        case .open(let id):
+            highlightedSavedID = nil
+            switch workspace.aiTab {
+            case .chat: workspace.aiChat.select(id)
+            case .code: workspace.agent.select(id)
+            }
+        case .saved(let id):
+            highlightedSavedID = id
+        }
+    }
+
+    private func activate(_ row: IDEAISidebarKeyboard.Row?) {
+        guard case .saved(let id) = row else { return }
+        highlightedSavedID = nil
+        switch workspace.aiTab {
+        case .chat:
+            workspace.aiChat.resume(id)
+        case .code:
+            let groups = IDEAISessions.groups(
+                current: workspace.agent.history, currentRoot: workspace.agent.projectRoot?.path,
+                others: workspace.aiSessions.summaries, query: query)
+            if let group = groups.first(where: { $0.rows.contains { $0.id == id } }) {
+                if isCurrent(group) {
+                    workspace.agent.resume(id)
+                } else {
+                    workspace.openProjectInAIMode(URL(fileURLWithPath: group.projectRoot), resumeChat: id)
+                }
+            }
         }
     }
 }
@@ -71,6 +236,7 @@ struct IDEAISidebar: View {
 private struct IDEAICodeList: View {
     @Environment(IDEWorkspace.self) private var workspace
     let query: String
+    var highlightedSavedID: UUID?
 
     private var agent: IDEAgentController { workspace.agent }
 
@@ -81,7 +247,7 @@ private struct IDEAICodeList: View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
             if !workspace.hasOpenProject && query.isEmpty { IDEAIProjectsSection() }
             ForEach(groups) { group in
-                IDEAISessionGroupView(group: group, isCurrent: isCurrent(group), query: query)
+                IDEAISessionGroupView(group: group, isCurrent: isCurrent(group), query: query, highlightedSavedID: highlightedSavedID)
             }
             if groups.isEmpty && !query.isEmpty {
                 Text("No sessions match “\(query)”.")
@@ -126,24 +292,28 @@ private struct IDEAISessionGroupView: View {
     let group: IDEAISessionGroup
     let isCurrent: Bool
     let query: String
+    var highlightedSavedID: UUID?
     @State private var renaming: IDEAgentConversation?
     @State private var renameDraft = ""
     @State private var isRenamingPresented = false
 
     private var agent: IDEAgentController { workspace.agent }
 
-    /// Chats of this window with something in them, then saved sessions they do not already show.
-    private var openChats: [IDEAgentConversation] {
+    static func openChats(agent: IDEAgentController, isCurrent: Bool, query: String) -> [IDEAgentConversation] {
         guard isCurrent else { return [] }
         let live = agent.conversations.filter { !$0.isEmpty || $0.isRunning }
         guard !query.isEmpty else { return live }
         return live.filter { IDEAgentHistorySearch.rank([SessionSummary(id: $0.id, title: $0.title, updatedAt: Date())], query: query, requiresMatch: true).isEmpty == false }
     }
 
-    private var savedRows: [SessionSummary] {
+    static func savedRows(in group: IDEAISessionGroup, agent: IDEAgentController) -> [SessionSummary] {
         let open = Set(agent.conversations.map(\.conversationID))
         return group.rows.filter { !open.contains($0.id) }
     }
+
+    /// Chats of this window with something in them, then saved sessions they do not already show.
+    private var openChats: [IDEAgentConversation] { Self.openChats(agent: agent, isCurrent: isCurrent, query: query) }
+    private var savedRows: [SessionSummary] { Self.savedRows(in: group, agent: agent) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -155,16 +325,8 @@ private struct IDEAISessionGroupView: View {
                     .lineLimit(1)
                     .help(group.projectRoot)
                 Spacer(minLength: 0)
-                Button(action: newSession) {
-                    Image(systemName: "plus")
-                        .font(.system(size: IDEAppearance.IconSize.toolbarGlyph - 2, weight: .semibold))
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .frame(width: 18, height: 18)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("New session in \(group.name)")
-                .accessibilityLabel("New session in \(group.name)")
+                IDEIconButton(systemImage: "plus", help: "New session in \(group.name)") { newSession() }
+                    .ideIconButtonSize(.compact)
             }
             .padding(.horizontal, IDEAppearance.Spacing.xs)
 
@@ -185,7 +347,13 @@ private struct IDEAISessionGroupView: View {
                 }
             }
             ForEach(savedRows) { row in
-                IDEAISidebarRow(title: row.title, isSelected: false, status: .none, action: { open(row) })
+                IDEAISidebarRow(
+                    title: row.title,
+                    isSelected: false,
+                    isHighlighted: highlightedSavedID == row.id,
+                    status: .none,
+                    action: { open(row) }
+                )
                     .help(row.updatedAt.formatted(date: .abbreviated, time: .shortened))
                     .contextMenu {
                         if isCurrent { Button("Delete", role: .destructive) { agent.deleteConversation(row.id) } }
@@ -243,6 +411,7 @@ struct IDEAISidebarRow: View {
 
     let title: String
     let isSelected: Bool
+    var isHighlighted = false
     var status: Status = .none
     let action: () -> Void
     @State private var isHovering = false
@@ -266,7 +435,11 @@ struct IDEAISidebarRow: View {
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? IDEAppearance.ColorToken.card : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
+            .background(
+                isSelected || isHighlighted
+                    ? IDEAppearance.ColorToken.card
+                    : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear)
+            )
             .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
             .contentShape(Rectangle())
         }

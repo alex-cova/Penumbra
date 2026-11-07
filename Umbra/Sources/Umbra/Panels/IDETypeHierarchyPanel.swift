@@ -188,6 +188,7 @@ final class IDETypeHierarchyStore {
 /// Double-click or Return opens the selected type's declaration.
 struct IDETypeHierarchyPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @State private var typeahead = IDETypeaheadBuffer()
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -232,25 +233,17 @@ struct IDETypeHierarchyPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
             Spacer()
-            Button {
+            IDEIconButton(
+                systemImage: "pin",
+                help: "Pin Tab: keep this hierarchy when the next one opens"
+            ) {
                 workspace.pinTypeHierarchy()
-            } label: {
-                Image(systemName: "pin")
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help("Pin Tab: keep this hierarchy when the next one opens")
-            .accessibilityLabel("Pin hierarchy")
-            Button {
+            IDEIconButton(systemImage: "xmark", help: "Close Hierarchy") {
                 workspace.closeTypeHierarchy()
-            } label: {
-                Image(systemName: "xmark")
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help("Close Hierarchy")
-            .accessibilityLabel("Close hierarchy")
         }
+        .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .padding(.vertical, IDEAppearance.Spacing.xs)
     }
@@ -277,24 +270,57 @@ struct IDETypeHierarchyPanel: View {
         .focusable()
         .focused($isFocused)
         .focusEffectDisabled()
-        .onKeyPress(.return) {
-            if let id = store.selectedID, let node = store.node(withID: id) { workspace.openTypeHierarchyNode(node, in: store) }
-            return .handled
+        .onKeyPress(phases: [.down, .repeat]) { press in
+            handleKey(press, store: store, rows: rows)
         }
-        .onKeyPress(.downArrow) {
+    }
+
+    private func handleKey(
+        _ press: KeyPress,
+        store: IDETypeHierarchyStore,
+        rows: [IDETypeHierarchyStore.Row]
+    ) -> KeyPress.Result {
+        switch press.key {
+        case .return:
+            typeahead.reset()
+            if let id = store.selectedID, let node = store.node(withID: id) {
+                workspace.openTypeHierarchyNode(node, in: store)
+            }
+            return .handled
+        case .downArrow:
+            typeahead.reset()
             store.moveSelection(by: 1)
             return .handled
-        }
-        .onKeyPress(.upArrow) {
+        case .upArrow:
+            typeahead.reset()
             store.moveSelection(by: -1)
             return .handled
-        }
-        .onKeyPress(.rightArrow) {
-            if let id = store.selectedID, let row = rows.first(where: { $0.id == id }), !row.isExpanded { store.toggle(row.node) }
+        case .rightArrow:
+            typeahead.reset()
+            if let id = store.selectedID, let row = rows.first(where: { $0.id == id }), !row.isExpanded {
+                store.toggle(row.node)
+            }
             return .handled
-        }
-        .onKeyPress(.leftArrow) {
-            if let id = store.selectedID, let row = rows.first(where: { $0.id == id }), row.isExpanded { store.toggle(row.node) }
+        case .leftArrow:
+            typeahead.reset()
+            if let id = store.selectedID, let row = rows.first(where: { $0.id == id }), row.isExpanded {
+                store.toggle(row.node)
+            }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let id = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: rows.map(\.id),
+                selected: store.selectedID,
+                title: { id in rows.first { $0.id == id }?.node.name ?? "" }
+            ) {
+                store.selectedID = id
+            }
             return .handled
         }
     }

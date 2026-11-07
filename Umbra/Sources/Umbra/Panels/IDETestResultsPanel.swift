@@ -181,10 +181,72 @@ final class IDETestResultsStore {
     }
 }
 
+/// Classes and cases as a flat list so arrow keys can walk Test Results like Gradle.
+enum IDETestResultsTree {
+    enum Kind: Equatable {
+        case group(String)
+        case test(String)
+    }
+
+    struct Row: Identifiable, Equatable {
+        var id: String
+        var title: String
+        var depth: Int
+        var canDisclose: Bool
+        var isExpanded: Bool
+        var kind: Kind
+        var status: IDETestCaseResult.Status
+        var duration: TimeInterval
+        var className: String
+        var testName: String?
+    }
+
+    static func groupKey(_ className: String) -> String { "group:\(className)" }
+
+    static func flatten(groups: [IDETestResultGroup], collapsed: Set<String>) -> [Row] {
+        var rows: [Row] = []
+        for group in groups {
+            let expanded = !collapsed.contains(group.className)
+            let short = group.className.split(separator: ".").last.map(String.init) ?? group.className
+            rows.append(Row(
+                id: groupKey(group.className),
+                title: short,
+                depth: 0,
+                canDisclose: true,
+                isExpanded: expanded,
+                kind: .group(group.className),
+                status: group.status,
+                duration: group.duration,
+                className: group.className,
+                testName: nil
+            ))
+            guard expanded else { continue }
+            for testCase in group.cases {
+                rows.append(Row(
+                    id: testCase.id,
+                    title: testCase.name,
+                    depth: 1,
+                    canDisclose: false,
+                    isExpanded: false,
+                    kind: .test(testCase.id),
+                    status: testCase.status,
+                    duration: testCase.duration,
+                    className: testCase.className,
+                    testName: testCase.name
+                ))
+            }
+        }
+        return rows
+    }
+}
+
 /// The bottom panel's Test Results tab: a toolbar (Rerun, Rerun Failed, Debug Failed, filters,
 /// sort), the tests by class, and the selected test's message, stack trace and output.
 struct IDETestResultsPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @State private var selectedRowID: String?
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         let store = workspace.testResults
@@ -201,6 +263,13 @@ struct IDETestResultsPanel: View {
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .focusable()
+                .focused($isListFocused)
+                .focusEffectDisabled()
+                .onKeyPress(.escape) {
+                    workspace.focusActiveEditor()
+                    return .handled
+                }
             } else {
                 SplitPanes(minPrimary: 220, minSecondary: 220, storageKey: "umbra.testResults.split") {
                     tree(store)
@@ -236,7 +305,7 @@ struct IDETestResultsPanel: View {
                                      help: store.showsSkipped ? "Hide Ignored" : "Show Ignored") {
                 store.showsSkipped.toggle()
             }
-            Menu("Sort and Expand", systemImage: "arrow.up.arrow.down") {
+            IDEIconMenu(systemImage: "arrow.up.arrow.down", help: "Sort and Expand") {
                 Picker("Sort", selection: Bindable(store).sort) {
                     ForEach(IDETestResultsStore.Sort.allCases, id: \.self) { Text("By \($0.rawValue)").tag($0) }
                 }
@@ -245,10 +314,6 @@ struct IDETestResultsPanel: View {
                 Button("Expand All") { store.collapsedClasses = [] }
                 Button("Collapse All") { store.collapsedClasses = Set(store.groups.map(\.className)) }
             }
-            .labelStyle(.iconOnly)
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Sort and Expand")
             if store.isRunning {
                 ProgressView().controlSize(.mini)
             }
@@ -260,55 +325,131 @@ struct IDETestResultsPanel: View {
             }
             Spacer(minLength: 0)
         }
+        .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .frame(height: IDEAppearance.Spacing.iconButton + 4)
     }
 
     private func tree(_ store: IDETestResultsStore) -> some View {
-        List(selection: Bindable(store).selectedID) {
-            ForEach(store.groups) { group in
-                let collapsed = store.collapsedClasses.contains(group.className)
-                Button {
-                    if collapsed { store.collapsedClasses.remove(group.className) } else { store.collapsedClasses.insert(group.className) }
-                } label: {
-                    HStack(spacing: IDEAppearance.Spacing.xs) {
-                        IDEDisclosureChevron(isExpanded: !collapsed)
-                            .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        statusIcon(group.status)
-                        Text(group.className.split(separator: ".").last.map(String.init) ?? group.className)
-                            .font(IDEAppearance.Typography.body.weight(.medium))
-                            .help(group.className)
-                        Spacer(minLength: 0)
-                        durationText(group.duration)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(group.className)
-                .tag(nil as String?)
-                if !collapsed {
-                    ForEach(group.cases) { testCase in
-                        HStack(spacing: IDEAppearance.Spacing.xs) {
-                            statusIcon(testCase.status)
-                            Text(testCase.name)
-                                .font(IDEAppearance.Typography.body)
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                            durationText(testCase.duration)
-                        }
-                        .padding(.leading, IDEAppearance.Spacing.md + 4)
-                        .tag(testCase.id as String?)
-                        .onTapGesture(count: 2) { workspace.openTestSource(testCase) }
-                        .contextMenu {
-                            Button("Jump to Source") { workspace.openTestSource(testCase) }
-                            Button("Run ‘\(testCase.name)’") { workspace.runTestCase(testCase, debug: false) }
-                            Button("Debug ‘\(testCase.name)’") { workspace.runTestCase(testCase, debug: true) }
-                        }
+        let rows = IDETestResultsTree.flatten(groups: store.groups, collapsed: store.collapsedClasses)
+        let highlight = selectedRowID ?? store.selectedID
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows) { row in
+                        IDETestResultsTreeRow(
+                            row: row,
+                            isSelected: highlight == row.id,
+                            statusIcon: { statusIcon(row.status) },
+                            duration: { durationText(row.duration) },
+                            onSelect: { select(row, in: store, toggling: row.canDisclose) },
+                            onActivate: { activate(row, in: store) },
+                            menu: { testMenu(row, store: store) }
+                        )
+                        .id(row.id)
                     }
                 }
+                .padding(.vertical, IDEAppearance.Spacing.xs)
+            }
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleKey(press, rows: rows, store: store)
+            }
+            .onChange(of: highlight) { _, id in
+                if let id { proxy.scrollTo(id) }
+            }
+            .onChange(of: store.selectedID) { _, id in
+                if let id, rows.contains(where: { $0.id == id }) { selectedRowID = id }
             }
         }
-        .listStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func testMenu(_ row: IDETestResultsTree.Row, store: IDETestResultsStore) -> some View {
+        if case .test(let id) = row.kind, let testCase = store.cases.first(where: { $0.id == id }) {
+            Button("Jump to Source") { workspace.openTestSource(testCase) }
+            Button("Run ‘\(testCase.name)’") { workspace.runTestCase(testCase, debug: false) }
+            Button("Debug ‘\(testCase.name)’") { workspace.runTestCase(testCase, debug: true) }
+        }
+    }
+
+    private func handleKey(
+        _ press: KeyPress, rows: [IDETestResultsTree.Row], store: IDETestResultsStore
+    ) -> KeyPress.Result {
+        let currentID = selectedRowID ?? store.selectedID
+        let current = rows.first { $0.id == currentID }
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            if let id = IDEListNeighbor.move(currentID, in: rows.map(\.id), by: delta),
+               let row = rows.first(where: { $0.id == id }) {
+                select(row, in: store, toggling: false)
+            }
+            return .handled
+        case .rightArrow:
+            typeahead.reset()
+            guard let current, current.canDisclose, !current.isExpanded else { return .ignored }
+            toggle(current, in: store)
+            return .handled
+        case .leftArrow:
+            typeahead.reset()
+            guard let current else { return .ignored }
+            if current.canDisclose, current.isExpanded {
+                toggle(current, in: store)
+            } else if let index = rows.firstIndex(where: { $0.id == current.id }),
+                      let parent = rows[..<index].last(where: { $0.depth < current.depth }) {
+                select(parent, in: store, toggling: false)
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            guard let current else { return .ignored }
+            activate(current, in: store)
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let row = IDEListTypeahead.match(
+                query: typeahead.typed(character), in: rows, selected: current, title: \.title
+            ) {
+                select(row, in: store, toggling: false)
+            }
+            return .handled
+        }
+    }
+
+    private func select(_ row: IDETestResultsTree.Row, in store: IDETestResultsStore, toggling: Bool) {
+        selectedRowID = row.id
+        isListFocused = true
+        if case .test(let id) = row.kind { store.selectedID = id }
+        if toggling { toggle(row, in: store) }
+    }
+
+    private func toggle(_ row: IDETestResultsTree.Row, in store: IDETestResultsStore) {
+        guard case .group(let className) = row.kind else { return }
+        if store.collapsedClasses.contains(className) {
+            store.collapsedClasses.remove(className)
+        } else {
+            store.collapsedClasses.insert(className)
+        }
+    }
+
+    private func activate(_ row: IDETestResultsTree.Row, in store: IDETestResultsStore) {
+        select(row, in: store, toggling: false)
+        switch row.kind {
+        case .group:
+            toggle(row, in: store)
+        case .test(let id):
+            if let testCase = store.cases.first(where: { $0.id == id }) {
+                workspace.openTestSource(testCase)
+            }
+        }
     }
 
     @ViewBuilder
@@ -387,6 +528,49 @@ struct IDETestResultsPanel: View {
         case .failed, .aborted: return .red
         case .skipped: return IDEAppearance.ColorToken.muted
         }
+    }
+}
+
+private struct IDETestResultsTreeRow<StatusIcon: View, Duration: View, Menu: View>: View {
+    let row: IDETestResultsTree.Row
+    let isSelected: Bool
+    @ViewBuilder let statusIcon: () -> StatusIcon
+    @ViewBuilder let duration: () -> Duration
+    let onSelect: () -> Void
+    let onActivate: () -> Void
+    @ViewBuilder let menu: () -> Menu
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            if row.canDisclose {
+                IDEDisclosureChevron(isExpanded: row.isExpanded)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            } else {
+                Spacer().frame(width: 12)
+            }
+            statusIcon()
+            Text(row.title)
+                .font(row.depth == 0 ? IDEAppearance.Typography.body.weight(.medium) : IDEAppearance.Typography.body)
+                .lineLimit(1)
+                .help(row.depth == 0 ? row.className : row.title)
+            Spacer(minLength: 0)
+            duration()
+        }
+        .padding(.leading, CGFloat(row.depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
+        .padding(.trailing, IDEAppearance.Spacing.sm)
+        .padding(.vertical, IDEAppearance.Spacing.tight)
+        .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear))
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .onTapGesture(count: 2, perform: onActivate)
+        .simultaneousGesture(TapGesture().onEnded(onSelect))
+        .contextMenu { menu() }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(row.depth == 0 ? row.className : "\(row.className).\(row.title)")
+        .accessibilityValue(row.canDisclose ? (row.isExpanded ? "Expanded" : "Collapsed") : "")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

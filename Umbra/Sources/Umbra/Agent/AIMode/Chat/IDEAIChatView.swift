@@ -279,22 +279,26 @@ private struct IDEAIChatDisclosureCard: View {
 struct IDEAIChatList: View {
     @Environment(IDEWorkspace.self) private var workspace
     let query: String
+    var highlightedSavedID: UUID?
     @State private var renaming: IDEAIChatConversation?
     @State private var renameDraft = ""
     @State private var isRenamingPresented = false
 
     private var chat: IDEAIChatController { workspace.aiChat }
 
-    private var openChats: [IDEAIChatConversation] {
+    static func openChats(in chat: IDEAIChatController, query: String) -> [IDEAIChatConversation] {
         let live = chat.conversations.filter { !$0.isEmpty || $0.isRunning }
         guard !query.isEmpty else { return live }
         return live.filter { !IDEAgentHistorySearch.rank([SessionSummary(id: $0.id, title: $0.title, updatedAt: Date())], query: query, requiresMatch: true).isEmpty }
     }
 
-    private var savedRows: [SessionSummary] {
+    static func savedRows(in chat: IDEAIChatController, query: String) -> [SessionSummary] {
         let open = Set(chat.conversations.map(\.conversationID))
         return IDEAgentHistorySearch.rank(chat.history.filter { !open.contains($0.id) }, query: query, requiresMatch: !query.isEmpty)
     }
+
+    private var openChats: [IDEAIChatConversation] { Self.openChats(in: chat, query: query) }
+    private var savedRows: [SessionSummary] { Self.savedRows(in: chat, query: query) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -314,7 +318,12 @@ struct IDEAIChatList: View {
                 }
             }
             ForEach(savedRows) { row in
-                IDEAISidebarRow(title: row.title, isSelected: false, action: { chat.resume(row.id) })
+                IDEAISidebarRow(
+                    title: row.title,
+                    isSelected: false,
+                    isHighlighted: highlightedSavedID == row.id,
+                    action: { chat.resume(row.id) }
+                )
                     .help(row.updatedAt.formatted(date: .abbreviated, time: .shortened))
                     .contextMenu { Button("Delete", role: .destructive) { chat.delete(row.id) } }
             }

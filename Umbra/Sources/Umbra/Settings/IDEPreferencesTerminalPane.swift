@@ -161,14 +161,10 @@ struct IDEPreferencesTerminalPane: View {
                 Text("Environment Variables")
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 Spacer(minLength: 0)
-                Button {
+                IDEIconButton(systemImage: "plus", help: "Add Variable") {
                     preferences.terminalShell.environment.append(IDETerminalEnvironmentVariable())
-                } label: {
-                    Image(systemName: "plus")
                 }
-                .buttonStyle(.borderless)
-                .help("Add Variable")
-                .accessibilityLabel("Add Variable")
+                .ideIconButtonSize(.compact)
             }
             ForEach($preferences.terminalShell.environment) { $variable in
                 HStack(spacing: IDEAppearance.Spacing.sm) {
@@ -184,14 +180,10 @@ struct IDEPreferencesTerminalPane: View {
                     TextField("value", text: $variable.value)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Variable value")
-                    Button {
+                    IDEIconButton(systemImage: "minus.circle", help: "Remove Variable") {
                         preferences.terminalShell.environment.removeAll { $0.id == variable.id }
-                    } label: {
-                        Image(systemName: "minus.circle")
                     }
-                    .buttonStyle(.borderless)
-                    .help("Remove Variable")
-                    .accessibilityLabel("Remove Variable")
+                    .ideIconButtonSize(.compact)
                 }
             }
             if preferences.terminalShell.environment.isEmpty {

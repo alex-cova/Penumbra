@@ -312,6 +312,9 @@ extension TextInputView {
                 cancelSnippetSession()
                 return
             }
+            if onUnhandledEscape?() == true {
+                return
+            }
         default:
             break
         }
@@ -406,6 +409,9 @@ extension TextInputView {
         case #selector(cancelOperation(_:)):
             if hasActiveSnippetSession {
                 cancelSnippetSession()
+                break
+            }
+            if onUnhandledEscape?() == true {
                 break
             }
             super.doCommand(by: selector)

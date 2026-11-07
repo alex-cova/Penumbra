@@ -16,18 +16,15 @@ struct IDEGradleTaskPickerSheet: View {
     let prompt: IDEGradleRunTaskPrompt
     @State private var query = ""
     @State private var selection: String?
+    @FocusState private var isFilterFocused: Bool
+    @FocusState private var isListFocused: Bool
 
     /// Filtered by name, description or group; `application` first since that is where run tasks live.
     private var groups: [JavaGradleProjectModel.TaskGroup] {
-        let needle = query.trimmingCharacters(in: .whitespaces)
-        let tasks = needle.isEmpty ? prompt.tasks : prompt.tasks.filter {
-            $0.name.localizedCaseInsensitiveContains(needle)
-                || $0.description.localizedCaseInsensitiveContains(needle)
-                || $0.group.localizedCaseInsensitiveContains(needle)
-        }
-        let grouped = JavaGradleProjectModel.groupTasks(tasks)
-        return grouped.filter { $0.name == "application" } + grouped.filter { $0.name != "application" }
+        IDEGradleTaskPickerOrder.groups(tasks: prompt.tasks, query: query)
     }
+
+    private var keyboardIDs: [String] { IDEGradleTaskPickerOrder.keyboardIDs(groups) }
 
     private var moduleName: String {
         prompt.projectPath == ":" ? "the root project" : prompt.projectPath
@@ -49,6 +46,17 @@ struct IDEGradleTaskPickerSheet: View {
 
             TextField("Filter tasks", text: $query)
                 .textFieldStyle(.roundedBorder)
+                .focused($isFilterFocused)
+                .onKeyPress(.downArrow) {
+                    if selection == nil { selection = keyboardIDs.first }
+                    isListFocused = true
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    guard !query.isEmpty else { return .ignored }
+                    query = ""
+                    return .handled
+                }
 
             List(selection: $selection) {
                 ForEach(groups, id: \.name) { group in
@@ -73,10 +81,16 @@ struct IDEGradleTaskPickerSheet: View {
                 }
             }
             .frame(height: 260)
+            .focused($isListFocused)
             .onKeyPress(.return) {
                 guard let selection else { return .ignored }
                 workspace.chooseGradleRunTask(selection)
                 return .handled
+            }
+            .onChange(of: query) { _, _ in
+                if let selection, !keyboardIDs.contains(selection) {
+                    self.selection = nil
+                }
             }
 
             Text("Your choice is saved as a run configuration. Change it with Edit Configurations.")
@@ -96,5 +110,24 @@ struct IDEGradleTaskPickerSheet: View {
         }
         .padding(IDEAppearance.Spacing.lg)
         .frame(width: 440)
+        .onAppear { isFilterFocused = true }
+    }
+}
+
+/// Painted Gradle-task order: `application` first, then Gradle's group order, names in path order.
+enum IDEGradleTaskPickerOrder {
+    static func groups(tasks: [JavaGradleProjectModel.GradleTask], query: String) -> [JavaGradleProjectModel.TaskGroup] {
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        let filtered = needle.isEmpty ? tasks : tasks.filter {
+            $0.name.localizedCaseInsensitiveContains(needle)
+                || $0.description.localizedCaseInsensitiveContains(needle)
+                || $0.group.localizedCaseInsensitiveContains(needle)
+        }
+        let grouped = JavaGradleProjectModel.groupTasks(filtered)
+        return grouped.filter { $0.name == "application" } + grouped.filter { $0.name != "application" }
+    }
+
+    static func keyboardIDs(_ groups: [JavaGradleProjectModel.TaskGroup]) -> [String] {
+        groups.flatMap { $0.tasks.map(\.name) }
     }
 }

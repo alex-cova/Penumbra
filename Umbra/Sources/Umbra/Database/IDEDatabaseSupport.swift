@@ -536,8 +536,10 @@ final class IDEDatabaseSupport {
         sqlTesting[id] = session
     }
 
-    static func connectionKey(_ id: UUID) -> String { "connection:\(id.uuidString)" }
-    static func schemaKey(_ id: UUID) -> String { "schema:\(id.uuidString)" }
-    static func tableKey(_ id: UUID, _ table: String) -> String { "table:\(id.uuidString):\(table)" }
-    static func mongoDatabaseKey(_ id: UUID, _ name: String) -> String { "mongo:\(id.uuidString):\(name)" }
+    static func connectionKey(_ id: UUID) -> String { IDEDatabaseTree.connectionKey(id) }
+    static func schemaKey(_ id: UUID) -> String { IDEDatabaseTree.schemaKey(id) }
+    static func tableKey(_ id: UUID, _ table: String) -> String { IDEDatabaseTree.tableKey(id, table) }
+    static func mongoDatabaseKey(_ id: UUID, _ name: String) -> String {
+        IDEDatabaseTree.mongoDatabaseKey(id, name)
+    }
 }

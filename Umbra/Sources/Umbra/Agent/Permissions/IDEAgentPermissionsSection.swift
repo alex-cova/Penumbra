@@ -53,14 +53,10 @@ struct IDEAgentPermissionsSection: View {
                             }
                             Spacer(minLength: 0)
                             if entry.origin.isEditable {
-                                Button {
+                                IDEIconButton(systemImage: "minus.circle", help: "Remove \(entry.rule.description)") {
                                     model.remove(entry)
-                                } label: {
-                                    Image(systemName: "minus.circle")
                                 }
-                                .buttonStyle(.plain)
-                                .help("Remove this rule")
-                                .accessibilityLabel("Remove \(entry.rule.description)")
+                                .ideIconButtonSize(.compact)
                             }
                         }
                     }

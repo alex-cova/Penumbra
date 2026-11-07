@@ -563,20 +563,14 @@ private final class IDENpmOutputBuffer: @unchecked Sendable {
 /// Which script the arrow keys, Return, and ⌘C act on. Names in a package.json are unique.
 enum IDENpmScriptList {
     static func neighbor(of selected: String?, in names: [String], delta: Int) -> String? {
-        guard !names.isEmpty else { return nil }
-        let index: Int
-        if let selected, let current = names.firstIndex(of: selected) {
-            index = min(max(current + delta, 0), names.count - 1)
-        } else {
-            index = delta < 0 ? names.count - 1 : 0
-        }
-        return names[index]
+        IDEListNeighbor.move(selected, in: names, by: delta)
     }
 }
 
 struct IDENpmSidebarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var selectedName: String?
+    @State private var typeahead = IDETypeaheadBuffer()
     @FocusState private var isListFocused: Bool
 
     var body: some View {
@@ -633,6 +627,7 @@ struct IDENpmSidebarPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.panel)
+        .ideProjectSidebarFocus(on: $isListFocused)
     }
 
     private var header: some View {
@@ -640,21 +635,14 @@ struct IDENpmSidebarPanel: View {
             IDEPanelTitle("npm")
                 .frame(maxWidth: .infinity, alignment: .leading)
             if workspace.npm.isRunningTasks {
-                Button(action: { workspace.npm.cancelTasks() }) {
-                    Image(systemName: "stop.fill")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.error)
-                .help("Stop")
-                .accessibilityLabel("Stop")
+                IDEIconButton(
+                    systemImage: "stop.fill",
+                    help: "Stop",
+                    tint: IDEAppearance.ColorToken.error,
+                    action: { workspace.npm.cancelTasks() }
+                )
             }
-            Button(action: { workspace.npm.reload() }) {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help("Reload")
-            .accessibilityLabel("Reload")
+            IDEIconButton(systemImage: "arrow.clockwise", help: "Reload", action: { workspace.npm.reload() })
         }
         .padding(.leading, IDEAppearance.Spacing.sm)
         .padding(.trailing, IDEAppearance.Spacing.xs)
@@ -683,18 +671,38 @@ struct IDENpmSidebarPanel: View {
     private func handleKey(_ press: KeyPress, scroller: ScrollViewProxy) -> KeyPress.Result {
         switch press.key {
         case .upArrow:
+            typeahead.reset()
             moveSelection(by: -1, scroller: scroller)
             return .handled
         case .downArrow:
+            typeahead.reset()
             moveSelection(by: 1, scroller: scroller)
             return .handled
         case .return:
+            typeahead.reset()
             guard let selectedName, !workspace.npm.isRunningTasks else { return .ignored }
             run(selectedName)
             return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
         default:
-            return .ignored
+            return typeaheadSelect(press, scroller: scroller)
         }
+    }
+
+    private func typeaheadSelect(_ press: KeyPress, scroller: ScrollViewProxy) -> KeyPress.Result {
+        guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+        let names = workspace.npm.tasks.map(\.name)
+        if let name = IDEListTypeahead.match(
+            query: typeahead.typed(character), in: names, selected: selectedName, title: { $0 }
+        ) {
+            selectedName = name
+            isListFocused = true
+            scroller.scrollTo(name)
+        }
+        return .handled
     }
 
     private func copySelectedScript() -> Bool {
@@ -716,6 +724,13 @@ struct IDENpmSidebarPanel: View {
             .padding(.horizontal, IDEAppearance.Spacing.lg)
             .padding(.top, IDEAppearance.Spacing.sm)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(.escape) {
+                workspace.focusActiveEditor()
+                return .handled
+            }
     }
 }
 

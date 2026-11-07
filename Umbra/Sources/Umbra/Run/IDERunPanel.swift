@@ -137,41 +137,30 @@ struct IDERunControls: View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             if let session = workspace.runs.selected {
                 status(of: session)
-                Button { workspace.rerun(session) } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .help("Rerun")
-                    .accessibilityLabel("Rerun")
-                Button { session.stop() } label: { Image(systemName: "stop.fill") }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(session.isActive ? Color.red : IDEAppearance.ColorToken.muted)
-                    .help("Stop")
-                    .accessibilityLabel("Stop")
-                    .disabled(!session.isActive)
-                Button { workspace.runScrollToEndRequest += 1 } label: { Image(systemName: "arrow.down.to.line") }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .help("Scroll to End")
-                    .accessibilityLabel("Scroll to End")
-                Button { session.clearConsole() } label: { Image(systemName: "trash") }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .help("Clear Console")
-                    .accessibilityLabel("Clear Console")
-                Menu {
+                IDEIconButton(systemImage: "arrow.clockwise", help: "Rerun") {
+                    workspace.rerun(session)
+                }
+                IDEIconButton(
+                    systemImage: "stop.fill",
+                    help: "Stop",
+                    tint: session.isActive ? Color.red : nil,
+                    isDisabled: !session.isActive
+                ) {
+                    session.stop()
+                }
+                IDEIconButton(systemImage: "arrow.down.to.line", help: "Scroll to End") {
+                    workspace.runScrollToEndRequest += 1
+                }
+                IDEIconButton(systemImage: "trash", help: "Clear Console") {
+                    session.clearConsole()
+                }
+                IDEIconMenu(systemImage: "doc.on.doc", help: "Copy") {
                     Button("Copy Output") { copy(session.log.plainText) }
                     Button("Copy Command Line") { copy(session.commandLine ?? "") }
                         .disabled(session.commandLine == nil)
                     Divider()
                     Button("Close Finished Runs") { workspace.runs.closeFinished() }
-                } label: {
-                    Image(systemName: "doc.on.doc")
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Copy")
-                .accessibilityLabel("Copy")
             }
         }
     }

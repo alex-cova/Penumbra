@@ -66,26 +66,22 @@ struct IDESwiftUIPreviewPanel: View {
 
             environmentMenu
 
-            Button("Show the build log", systemImage: "text.alignleft") { isLogVisible.toggle() }
-                .buttonStyle(.borderless)
-                .labelStyle(.iconOnly)
-                .help("Show the build log")
-            Button("Rebuild the preview", systemImage: "arrow.clockwise") { session.rebuild() }
-                .buttonStyle(.borderless)
-                .labelStyle(.iconOnly)
-                .help("Rebuild the preview")
-            Button("Close the preview", systemImage: "xmark", action: onClose)
-                .buttonStyle(.borderless)
-                .labelStyle(.iconOnly)
-                .help("Close the preview")
+            IDEIconButton(systemImage: "text.alignleft", help: "Show the build log", isActive: isLogVisible) {
+                isLogVisible.toggle()
+            }
+            IDEIconButton(systemImage: "arrow.clockwise", help: "Rebuild the preview") {
+                session.rebuild()
+            }
+            IDEIconButton(systemImage: "xmark", help: "Close the preview", action: onClose)
         }
-        .padding(.horizontal, 10)
+        .ideIconButtonSize(.compact)
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
         .frame(height: 34)
     }
 
     /// Text size, language, layout direction and window size: what the preview is shown under.
     private var environmentMenu: some View {
-        Menu {
+        IDEIconMenu(systemImage: "slider.horizontal.3", help: "Text size, language, layout direction, size and device") {
             Picker("Text Size", selection: Binding(get: { session.textSize }, set: { session.setTextSize($0) })) {
                 ForEach(IDESwiftUIPreviewSession.TextSize.allCases, id: \.self) { Text($0.title).tag($0) }
             }
@@ -131,13 +127,7 @@ struct IDESwiftUIPreviewPanel: View {
                     ))
                 }
             }
-        } label: {
-            Image(systemName: "slider.horizontal.3")
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Text size, language, layout direction, size and device")
     }
 
     private static let macDeviceTag = "umbra.mac"

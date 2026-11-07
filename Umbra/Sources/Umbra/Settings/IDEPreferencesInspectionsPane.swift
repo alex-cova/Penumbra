@@ -442,16 +442,13 @@ private struct IDEInspectionSettingsRuleRow: View {
             }
             .labelsHidden()
             .frame(width: 210)
-            Button { move(override, by: -1) } label: { Image(systemName: "arrow.up") }
-                .buttonStyle(.borderless)
-                .help("Check this scope earlier")
-            Button { move(override, by: 1) } label: { Image(systemName: "arrow.down") }
-                .buttonStyle(.borderless)
-                .help("Check this scope later")
-            Button { edit { $0.scopedOverrides.removeAll { $0 == override } } } label: { Image(systemName: "minus.circle") }
-                .buttonStyle(.borderless)
-                .help("Remove this scope")
+            IDEIconButton(systemImage: "arrow.up", help: "Check this scope earlier") { move(override, by: -1) }
+            IDEIconButton(systemImage: "arrow.down", help: "Check this scope later") { move(override, by: 1) }
+            IDEIconButton(systemImage: "minus.circle", help: "Remove this scope") {
+                edit { $0.scopedOverrides.removeAll { $0 == override } }
+            }
         }
+        .ideIconButtonSize(.compact)
         .padding(.leading, IDEAppearance.Spacing.indentNested)
     }
 

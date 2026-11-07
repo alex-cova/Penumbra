@@ -245,6 +245,9 @@ struct IDEGitPushSheet: View {
     @State private var isLoading = true
     @State private var expanded: String?
     @State private var files: [String: [GitChangedFile]] = [:]
+    @State private var selected: IDEGitPushKeyboard.Row?
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
     init(request: IDEGitPushRequest, sheetID: String) {
         self.request = request
@@ -307,60 +310,88 @@ struct IDEGitPushSheet: View {
         }
         .task(id: "\(remote)/\(target)") {
             isLoading = true
+            expanded = nil
+            selected = nil
+            files = [:]
             commits = await gitStatus.outgoingCommits(source: request.branch, remote: remote, target: target)
             isLoading = false
         }
     }
 
+    private var keyboardRows: [IDEGitPushKeyboard.Row] {
+        IDEGitPushKeyboard.flatten(commits: commits, expanded: expanded, files: files)
+    }
+
     private var commitList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if commits.isEmpty {
-                    Text(isLoading ? "Loading…" : "Nothing to push: \(remote)/\(target) already has these commits.")
-                        .font(IDEAppearance.Typography.caption)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .padding(IDEAppearance.Spacing.sm)
-                }
-                ForEach(commits) { commit in
-                    VStack(alignment: .leading, spacing: 0) {
-                        Button {
-                            toggle(commit)
-                        } label: {
-                            HStack(spacing: IDEAppearance.Spacing.sm) {
-                                IDEDisclosureChevron(isExpanded: expanded == commit.hash)
-                                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                                Text(commit.subject).lineLimit(1)
-                                Spacer(minLength: 0)
-                                Text(commit.shortHash)
-                                    .font(IDEAppearance.Typography.monoSmall)
-                                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                            }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if commits.isEmpty {
+                        Text(isLoading ? "Loading…" : "Nothing to push: \(remote)/\(target) already has these commits.")
                             .font(IDEAppearance.Typography.caption)
-                            .padding(.vertical, 3)
-                            .padding(.horizontal, IDEAppearance.Spacing.sm)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        if expanded == commit.hash {
-                            ForEach(files[commit.hash] ?? []) { file in
-                                Button {
-                                    workspace.openCommitDiff(
-                                        hash: commit.hash, shortHash: commit.shortHash, file: file,
-                                        files: files[commit.hash] ?? [])
-                                } label: {
-                                    Text("\(String(file.status))  \(file.path)")
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .padding(IDEAppearance.Spacing.sm)
+                    }
+                    ForEach(commits) { commit in
+                        VStack(alignment: .leading, spacing: 0) {
+                            Button {
+                                isListFocused = true
+                                selected = .commit(commit.hash)
+                                toggle(commit)
+                            } label: {
+                                HStack(spacing: IDEAppearance.Spacing.sm) {
+                                    IDEDisclosureChevron(isExpanded: expanded == commit.hash)
+                                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                    Text(commit.subject).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    Text(commit.shortHash)
                                         .font(IDEAppearance.Typography.monoSmall)
                                         .foregroundStyle(IDEAppearance.ColorToken.muted)
-                                        .padding(.leading, IDEAppearance.Spacing.xl)
-                                        .padding(.vertical, IDEAppearance.Spacing.xxs)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .contentShape(Rectangle())
                                 }
-                                .buttonStyle(.plain)
+                                .font(IDEAppearance.Typography.caption)
+                                .padding(.vertical, 3)
+                                .padding(.horizontal, IDEAppearance.Spacing.sm)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(selected == .commit(commit.hash) ? IDEAppearance.ColorToken.selection : .clear)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .id(IDEGitPushKeyboard.Row.commit(commit.hash))
+                            if expanded == commit.hash {
+                                ForEach(files[commit.hash] ?? []) { file in
+                                    Button {
+                                        isListFocused = true
+                                        selected = .file(commit: commit.hash, path: file.path)
+                                        open(file, of: commit)
+                                    } label: {
+                                        Text("\(String(file.status))  \(file.path)")
+                                            .font(IDEAppearance.Typography.monoSmall)
+                                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                            .padding(.leading, IDEAppearance.Spacing.xl)
+                                            .padding(.vertical, IDEAppearance.Spacing.xxs)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .background(
+                                                selected == .file(commit: commit.hash, path: file.path)
+                                                    ? IDEAppearance.ColorToken.selection : .clear
+                                            )
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .id(IDEGitPushKeyboard.Row.file(commit: commit.hash, path: file.path))
+                                }
                             }
                         }
                     }
                 }
+            }
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleListKey(press)
+            }
+            .onChange(of: selected) { _, row in
+                if let row { proxy.scrollTo(row) }
             }
         }
         .frame(height: 200)
@@ -368,14 +399,123 @@ struct IDEGitPushSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
     }
 
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        let rows = keyboardRows
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            if let next = IDEListNeighbor.move(selected, in: rows, by: press.key == .downArrow ? 1 : -1) {
+                selected = next
+                isListFocused = true
+            }
+            return .handled
+        case .rightArrow:
+            typeahead.reset()
+            if case .commit(let hash) = selected, let commit = commit(hash) {
+                expand(commit)
+            }
+            return .handled
+        case .leftArrow:
+            typeahead.reset()
+            switch selected {
+            case .file(let hash, _):
+                selected = .commit(hash)
+            case .commit(let hash) where expanded == hash:
+                expanded = nil
+            default:
+                break
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            switch selected {
+            case .file(let hash, let path):
+                open(path, of: hash)
+                return .handled
+            case .commit(let hash):
+                if let commit = commit(hash) { toggle(commit) }
+                return .handled
+            case nil:
+                return .ignored
+            }
+        case .escape:
+            typeahead.reset()
+            return .ignored
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let row = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: rows,
+                selected: selected,
+                title: { IDEGitPushKeyboard.title($0, commits: commits) }
+            ) {
+                selected = row
+                isListFocused = true
+            }
+            return .handled
+        }
+    }
+
+    private func commit(_ hash: String) -> GitCommit? {
+        commits.first { $0.hash == hash }
+    }
+
     private func toggle(_ commit: GitCommit) {
         if expanded == commit.hash {
             expanded = nil
             return
         }
+        expand(commit)
+    }
+
+    private func expand(_ commit: GitCommit) {
         expanded = commit.hash
         guard files[commit.hash] == nil else { return }
         Task { files[commit.hash] = await gitStatus.commitFiles(hash: commit.hash) }
+    }
+
+    private func open(_ file: GitChangedFile, of commit: GitCommit) {
+        workspace.openCommitDiff(
+            hash: commit.hash, shortHash: commit.shortHash, file: file,
+            files: files[commit.hash] ?? [])
+    }
+
+    private func open(_ path: String, of hash: String) {
+        guard let commit = commit(hash),
+              let file = files[hash]?.first(where: { $0.path == path }) else { return }
+        open(file, of: commit)
+    }
+}
+
+/// Painted Push-sheet order: outgoing commits, then that commit's files while it is open.
+enum IDEGitPushKeyboard {
+    enum Row: Hashable {
+        case commit(String)
+        case file(commit: String, path: String)
+    }
+
+    static func flatten(
+        commits: [GitCommit], expanded: String?, files: [String: [GitChangedFile]]
+    ) -> [Row] {
+        var rows: [Row] = []
+        for commit in commits {
+            rows.append(.commit(commit.hash))
+            if expanded == commit.hash {
+                for file in files[commit.hash] ?? [] {
+                    rows.append(.file(commit: commit.hash, path: file.path))
+                }
+            }
+        }
+        return rows
+    }
+
+    static func title(_ row: Row, commits: [GitCommit]) -> String {
+        switch row {
+        case .commit(let hash):
+            commits.first { $0.hash == hash }?.subject ?? hash
+        case .file(_, let path):
+            path
+        }
     }
 }
 

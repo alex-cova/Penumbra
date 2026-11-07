@@ -28,7 +28,7 @@ extension IDEWorkspace {
             host(for: workbench.activePaneID).intelligenceController?.showHint("No expression at the caret")
             return
         }
-        quickEvaluatePopover.present(expression: expression, session: debugSession, in: textView, at: range.location)
+        quickEvaluatePopover.present(expression: expression, session: debugSession, workspace: self, in: textView, at: range.location)
     }
 
     func debugSourceRoots() -> [URL] {

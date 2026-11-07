@@ -11,8 +11,10 @@ struct IDEMavenSidebarPanel: View {
     @State private var isFilterPresented = false
     @State private var isGoalPresented = false
     @State private var goalText = ""
+    @State private var typeahead = IDETypeaheadBuffer()
     @FocusState private var goalFocused: Bool
     @FocusState private var filterFocused: Bool
+    @FocusState private var isTreeFocused: Bool
 
     private var maven: IDEMavenProjectSystem { workspace.maven }
 
@@ -27,6 +29,18 @@ struct IDEMavenSidebarPanel: View {
         .onChange(of: maven.model?.modules.map(\.path) ?? []) { _, paths in
             for path in paths { expanded.insert("module:\(path)") }
             for path in paths { expanded.insert("\(path)/lifecycle") }
+        }
+        .ideProjectSidebarFocus { focusPanel() }
+    }
+
+    /// The goal field when it is open, else the filter, else the tree.
+    private func focusPanel() {
+        if isGoalPresented {
+            goalFocused = true
+        } else if isFilterPresented {
+            filterFocused = true
+        } else {
+            isTreeFocused = true
         }
     }
 
@@ -125,24 +139,41 @@ struct IDEMavenSidebarPanel: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(IDEAppearance.Spacing.lg)
+                    .focusable()
+                    .focused($isTreeFocused)
+                    .focusEffectDisabled()
+                    .onKeyPress(.escape) {
+                        workspace.focusActiveEditor()
+                        return .handled
+                    }
             } else {
                 GeometryReader { proxy in
-                    ScrollView([.vertical, .horizontal]) {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(rows) { row in
-                                IDEMavenTreeRow(
-                                    row: row,
-                                    isSelected: selectedID == row.id,
-                                    onSelect: {
-                                        selectedID = row.id
-                                        if row.canDisclose { toggle(row.id) }
-                                    },
-                                    onActivate: { activate(row.node) }
-                                )
+                    ScrollViewReader { scroller in
+                        ScrollView([.vertical, .horizontal]) {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(rows) { row in
+                                    IDEMavenTreeRow(
+                                        row: row,
+                                        isSelected: selectedID == row.id,
+                                        onSelect: {
+                                            selectedID = row.id
+                                            isTreeFocused = true
+                                            if row.canDisclose { toggle(row.id) }
+                                        },
+                                        onActivate: { activate(row.node) }
+                                    )
+                                    .id(row.id)
+                                }
                             }
+                            .padding(.vertical, IDEAppearance.Spacing.xs)
+                            .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
                         }
-                        .padding(.vertical, IDEAppearance.Spacing.xs)
-                        .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
+                        .focusable()
+                        .focused($isTreeFocused)
+                        .focusEffectDisabled()
+                        .onKeyPress(phases: [.down, .repeat]) { press in
+                            handleKey(press, rows: rows, scroller: scroller)
+                        }
                     }
                 }
             }
@@ -204,6 +235,76 @@ struct IDEMavenSidebarPanel: View {
         }
         .padding(IDEAppearance.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .focusable()
+        .focused($isTreeFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.escape) {
+            workspace.focusActiveEditor()
+            return .handled
+        }
+    }
+
+    private func handleKey(
+        _ press: KeyPress,
+        rows: [IDEMavenTree.Row],
+        scroller: ScrollViewProxy
+    ) -> KeyPress.Result {
+        guard !rows.isEmpty else { return .ignored }
+        let current = rows.first { $0.id == selectedID }
+
+        func select(_ id: String) {
+            selectedID = id
+            scroller.scrollTo(id)
+        }
+
+        switch press.key {
+        case .upArrow:
+            typeahead.reset()
+            if let id = IDEListNeighbor.move(selectedID, in: rows.map(\.id), by: -1) { select(id) }
+            return .handled
+        case .downArrow:
+            typeahead.reset()
+            if let id = IDEListNeighbor.move(selectedID, in: rows.map(\.id), by: 1) { select(id) }
+            return .handled
+        case .rightArrow:
+            typeahead.reset()
+            guard let current, current.canDisclose, !current.isExpanded else { return .ignored }
+            toggle(current.id)
+            return .handled
+        case .leftArrow:
+            typeahead.reset()
+            guard let current else { return .ignored }
+            if current.canDisclose, current.isExpanded {
+                toggle(current.id)
+            } else if let index = rows.firstIndex(where: { $0.id == current.id }),
+                      let parent = rows[..<index].last(where: { $0.depth < current.depth }) {
+                select(parent.id)
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            guard let current else { return .ignored }
+            if current.node.kind == .goal {
+                activate(current.node)
+            } else if current.canDisclose {
+                toggle(current.id)
+            } else {
+                activate(current.node)
+            }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let row = IDEListTypeahead.match(
+                query: typeahead.typed(character), in: rows, selected: current, title: { $0.node.title }
+            ) {
+                select(row.id)
+            }
+            return .handled
+        }
     }
 
     private func toggle(_ id: String) {

@@ -286,6 +286,9 @@ public final class IDEWorkspace {
             if self?.agent.settings.opensAsPage == true { self?.dismissSettingsForAgent() }
         }
         agent.onLayoutChanged = { [weak self] in self?.saveSession() }
+        // The page takes the editor out of the key-view loop and its close puts it back; do it
+        // before the caller focuses the editor rather than waiting for SwiftUI's next update.
+        agent.onPanelVisibilityChanged = { [weak self] in self?.refreshEditorKeyLoop() }
         agent.isUserWatching = { [weak self] in self?.window?.isKeyWindow == true }
         agent.onNotify = { [weak self] chat, title, detail, severity in
             self?.notifications.post(title, detail: detail, category: .agent, severity: severity, action: .showAgentChat(chat))
@@ -317,6 +320,13 @@ public final class IDEWorkspace {
     var isSidebarVisible = false
     /// The left sidebar's tab. Read `activeSidebarTab`: this may name a tab that is unavailable now.
     var selectedSidebarTab = IDESidebarTab.explorer
+    /// Bumped when a shortcut or Go to Tool Window wants the visible sidebar pane to take the keyboard.
+    var sidebarFocusRequestID: UInt64 = 0
+    /// The tab that should consume ``sidebarFocusRequestID``; nil after the pane focuses or the sidebar hides.
+    var pendingSidebarFocusTab: IDESidebarTab?
+    /// Bumped when the Gradle / project sidebar should take the keyboard.
+    var projectSidebarFocusRequestID: UInt64 = 0
+    var wantsProjectSidebarFocus = false
     /// What the History tab lists: the active file, one folder, or every file's recent changes.
     var localHistoryScope = IDELocalHistoryScope.file
     /// A file to show instead of whichever editor is active. Cleared when the user picks This File or Recent Changes.
@@ -354,6 +364,11 @@ public final class IDEWorkspace {
     /// Settings open over the editor area, like a tab, instead of in their own window. The editor
     /// underneath stays mounted so its carets and scroll positions survive.
     private(set) var isSettingsVisible = false
+    /// True while Settings or the agent page covers the editor: the editor stays mounted but is
+    /// skipped in the key-view loop so Tab cannot type into it.
+    var isEditorCoveredByOverlay: Bool {
+        isSettingsVisible || (agent.coversEditor && hasOpenProject && !isAIMode)
+    }
     /// Editor, or AI mode over the whole window. The editor stays mounted underneath AI mode.
     var windowMode: IDEWindowMode = .editor {
         didSet { if oldValue != windowMode { noteAIModeChanged() } }
@@ -405,6 +420,7 @@ public final class IDEWorkspace {
         isBottomPanelExpanded = false
         agent.dismissPage()
         isSettingsVisible = true
+        refreshEditorKeyLoop()
         // Otherwise keystrokes keep going to the editor hidden under the settings.
         window?.makeFirstResponder(nil)
     }
@@ -415,22 +431,35 @@ public final class IDEWorkspace {
         isSettingsVisible = false
         returnsToAIModeFromSettings = false
         isBottomPanelExpanded = false
+        refreshEditorKeyLoop()
         window?.makeFirstResponder(nil)
     }
 
     /// The chat page takes the place Settings has; opening it closes Settings without moving focus.
     func dismissSettingsForAgent() {
         isSettingsVisible = false
+        refreshEditorKeyLoop()
     }
 
     func hideSettings() {
         guard isSettingsVisible else { return }
         isSettingsVisible = false
+        refreshEditorKeyLoop()
         if returnsToAIModeFromSettings {
             showAIMode()
             return
         }
         focusActiveEditor()
+    }
+
+    /// Settings and the agent page cover the editor; Tab must not land in the caret underneath.
+    func refreshEditorKeyLoop() {
+        let enabled = !isEditorCoveredByOverlay
+        // Only panes that already have a host: this runs during restore, and a pane that mounts
+        // later is set by `IDETextViewRepresentable.updateNSView`.
+        for pane in workbench.layout.flattenedPanes() where hostedPaneIDs.contains(pane.id) {
+            host(for: pane.id).textView.participatesInKeyViewLoop = enabled
+        }
     }
 
     var windowTitle = "Umbra"
@@ -1775,12 +1804,12 @@ public final class IDEWorkspace {
         func add(_ id: String, _ title: String, _ action: @escaping @MainActor @Sendable () -> Void) {
             entries.append(ToolWindowEntry(id: id, title: title, action: action))
         }
-        add("explorer", "Project") { [weak self] in self?.showSidebarTab(.explorer) }
-        add("structure", "Structure") { [weak self] in self?.showSidebarTab(.structure) }
+        add("explorer", "Project") { [weak self] in self?.showAndFocusSidebarTab(.explorer) }
+        add("structure", "Structure") { [weak self] in self?.showAndFocusSidebarTab(.structure) }
         if showsSourceControlTab {
-            add("changes", "Changes") { [weak self] in self?.showSidebarTab(.changes) }
+            add("changes", "Changes") { [weak self] in self?.showAndFocusSidebarTab(.changes) }
         }
-        add("breakpoints", "Breakpoints") { [weak self] in self?.showSidebarTab(.breakpoints) }
+        add("breakpoints", "Breakpoints") { [weak self] in self?.showAndFocusSidebarTab(.breakpoints) }
         if let system = projectSystems.active {
             add(system.id, system.displayName) { [weak self] in
                 guard let self, !self.isProjectSidebarVisible else { return }
@@ -1831,7 +1860,7 @@ public final class IDEWorkspace {
     public func showFileStructure() {
         guard sharedPalette(for: host(for: workbench.activePaneID)).presentFileSymbols() else {
             // Fall back to the sidebar Structure tab rather than silently doing nothing.
-            showSidebarTab(.structure)
+            showAndFocusSidebarTab(.structure)
             return
         }
     }
@@ -2506,6 +2535,32 @@ public final class IDEWorkspace {
         bottomPanel.requestFocus()
     }
 
+    /// Moves the keyboard into the sidebar tab that is showing. Mouse clicks on the tab bar use
+    /// ``showSidebarTab`` instead, so typing in the editor is not stolen.
+    func requestSidebarFocus() {
+        pendingSidebarFocusTab = activeSidebarTab
+        sidebarFocusRequestID += 1
+    }
+
+    /// True when this tab should take the keyboard; clears the pending request so a later remount
+    /// (clicking the tab) does not steal it back.
+    func consumeSidebarFocusIfNeeded(for tab: IDESidebarTab) -> Bool {
+        guard pendingSidebarFocusTab == tab else { return false }
+        pendingSidebarFocusTab = nil
+        return true
+    }
+
+    func requestProjectSidebarFocus() {
+        wantsProjectSidebarFocus = true
+        projectSidebarFocusRequestID += 1
+    }
+
+    func consumeProjectSidebarFocusIfNeeded() -> Bool {
+        guard wantsProjectSidebarFocus else { return false }
+        wantsProjectSidebarFocus = false
+        return true
+    }
+
     /// Opens a Go to Definition target. A file already open is focused without reloading it, so a
     /// dirty buffer keeps the user's edits. JDK and dependency sources extracted into the index
     /// cache are ordinary files the read-only check in ``applyState`` then locks.
@@ -2825,14 +2880,20 @@ public final class IDEWorkspace {
 
     public func toggleSidebar() {
         isSidebarVisible.toggle()
-        focusActiveEditor()
+        if isSidebarVisible {
+            requestSidebarFocus()
+        } else {
+            pendingSidebarFocusTab = nil
+            focusActiveEditor()
+        }
     }
 
     public func toggleStructureSidebar() {
         toggleSidebarTab(.structure)
     }
 
-    /// Shows the sidebar on `tab`, reopening it if it was closed.
+    /// Shows the sidebar on `tab`, reopening it if it was closed. Does not move the keyboard: the
+    /// tab bar uses this so a click while typing does not steal the editor.
     func showSidebarTab(_ tab: IDESidebarTab) {
         guard isSidebarTabAvailable(tab) else { return }
         closedSidebarTabs.remove(tab)
@@ -2842,16 +2903,23 @@ public final class IDEWorkspace {
         saveSession()
     }
 
+    /// Shows `tab` and moves the keyboard into it (Go to Tool Window, Select In, the tab's shortcut).
+    func showAndFocusSidebarTab(_ tab: IDESidebarTab) {
+        showSidebarTab(tab)
+        requestSidebarFocus()
+    }
+
     /// Tool-window behavior (IntelliJ): the shortcut of the tab being shown hides the sidebar, the
-    /// shortcut of any other tab switches to it.
+    /// shortcut of any other tab switches to it. Showing focuses the pane; hiding restores the editor.
     func toggleSidebarTab(_ tab: IDESidebarTab) {
         if showsSidebar && activeSidebarTab == tab {
             isSidebarVisible = false
+            pendingSidebarFocusTab = nil
             saveSession()
+            focusActiveEditor()
         } else {
-            showSidebarTab(tab)
+            showAndFocusSidebarTab(tab)
         }
-        focusActiveEditor()
     }
 
     /// Reveal and create commands act on the Explorer, whatever tab the sidebar was on.
@@ -2869,7 +2937,12 @@ public final class IDEWorkspace {
 
     public func toggleProjectSidebar() {
         isProjectSidebarVisible.toggle()
-        focusActiveEditor()
+        if isProjectSidebarVisible {
+            requestProjectSidebarFocus()
+        } else {
+            wantsProjectSidebarFocus = false
+            focusActiveEditor()
+        }
         saveSession()
     }
 
@@ -3565,6 +3638,11 @@ public final class IDEWorkspace {
         // wording fits both.
         host.textView.onUnhandledKeymapAction = { [weak controller = host.intelligenceController] action in
             controller?.showHint("\(action.title): nothing to do here")
+        }
+        // After snippets, extra carets and completion have had Escape, Find in Files takes the
+        // keyboard back if the drawer is still open from opening a hit.
+        host.textView.onUnhandledEscape = { [weak self] in
+            self?.handleEditorEscape() ?? false
         }
         host.intelligenceController?.onOpenInlineCompletionSettings = { [weak self] in
             self?.showSettings()
@@ -5402,6 +5480,7 @@ public final class IDEWorkspace {
         }
         showExplorer()
         project.revealAndSelect(url: url, centered: true)
+        requestSidebarFocus()
     }
 
     private func autoRevealActiveDocumentIfNeeded() {

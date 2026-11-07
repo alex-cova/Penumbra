@@ -84,7 +84,7 @@ struct IDEEditorTabsBar: View {
 
     /// Every tab of the pane in one list, for the ones scrolled out of view.
     private var overflowMenu: some View {
-        Menu {
+        IDEIconMenu(systemImage: "chevron.down", help: "Show All Tabs") {
             ForEach(tabs) { tab in
                 Button {
                     workspace.selectTab(tab.id, in: paneID)
@@ -97,19 +97,8 @@ struct IDEEditorTabsBar: View {
                     }
                 }
             }
-        } label: {
-            Image(systemName: "chevron.down")
-                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph - 2, weight: .semibold))
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
-                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
         .padding(.trailing, IDEAppearance.Spacing.xs)
-        .help("Show All Tabs")
-        .accessibilityLabel("Show All Tabs")
     }
 
     @ViewBuilder

@@ -65,7 +65,7 @@ private struct IDESidebarTabBar: View {
     }
 
     private var addMenu: some View {
-        Menu {
+        IDEIconMenu(systemImage: "plus", help: "Add Tab") {
             ForEach(workspace.reopenableSidebarTabs) { tab in
                 Button {
                     workspace.showSidebarTab(tab)
@@ -73,17 +73,7 @@ private struct IDESidebarTabBar: View {
                     Label(tab.title, systemImage: tab.systemImage)
                 }
             }
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
-                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Add Tab")
         .accessibilityLabel("Add Sidebar Tab")
     }
 }

@@ -119,6 +119,10 @@ final class IDEInspectionRunTests: XCTestCase {
         let collapsed = IDEInspectionResultsTree.flatten(nodes, collapsed: [collapsedID])
         XCTAssertLessThan(collapsed.count, all.count)
         XCTAssertEqual(IDEInspectionResultsTree.problems(in: nodes).count, 4)
+        XCTAssertEqual(
+            IDEListNeighbor.move(all[0].node.id, in: all.map(\.node.id), by: 1),
+            all[1].node.id
+        )
     }
 
     func testStoreKeepsRecentRunsAndSelection() {

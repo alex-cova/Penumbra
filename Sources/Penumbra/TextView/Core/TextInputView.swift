@@ -1237,6 +1237,9 @@ final class TextInputView: EditorView {
     /// fallback. The key is swallowed all the same (so it never becomes text); this is how anyone
     /// can tell it happened. See ``TextView/onUnhandledKeymapAction``.
     var onUnhandledKeymapAction: ((EditorActionID) -> Void)?
+    /// Called when Escape was not consumed by block selection, extra carets or snippets.
+    /// Return `true` to consume it. See ``TextView/onUnhandledEscape``.
+    var onUnhandledEscape: (() -> Bool)?
     /// Detects a double tap of bare Shift for Search Everywhere.
     var doubleShiftDetector = DoubleModifierDetector()
     /// Whether a double-tap of bare Shift opens Quick Open. Hosts with a dedicated key for
@@ -1357,8 +1360,12 @@ final class TextInputView: EditorView {
         setupFoldingObserver()
     }
 
+    /// False while a covering overlay (Settings, a page over the editor) owns the keyboard, so Tab
+    /// cannot land in this view.
+    var participatesInKeyViewLoop = true
+
     override var acceptsFirstResponder: Bool {
-        true
+        participatesInKeyViewLoop
     }
 
     /// `NSTextView` accepts the first click on an inactive window so the editor focuses

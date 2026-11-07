@@ -64,6 +64,7 @@ struct IDEUsagesPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var collapsedFiles: Set<URL> = []
     @State private var selectedLocationID: Location.ID?
+    @State private var typeahead = IDETypeaheadBuffer()
     @FocusState private var isListFocused: Bool
 
     var body: some View {
@@ -95,27 +96,7 @@ struct IDEUsagesPanel: View {
                 .focusable()
                 .focused($isListFocused)
                 .onKeyPress(phases: [.down, .repeat]) { press in
-                    switch press.key {
-                    case .upArrow, .downArrow:
-                        guard !flat.isEmpty else { return .handled }
-                        let current = selectedLocationID.flatMap { id in flat.firstIndex { $0.id == id } }
-                        let next = press.key == .downArrow
-                            ? min((current ?? -1) + 1, flat.count - 1)
-                            : max((current ?? flat.count) - 1, 0)
-                        selectedLocationID = flat[next].id
-                        return .handled
-                    case .return:
-                        if let id = selectedLocationID, let location = flat.first(where: { $0.id == id }) {
-                            _ = workspace.openNavigationLocation(location)
-                        }
-                        return .handled
-                    case .escape:
-                        workspace.closeUsages()
-                        workspace.focusActiveEditor()
-                        return .handled
-                    default:
-                        return .ignored
-                    }
+                    handleListKey(press, flat: flat)
                 }
                 .onChange(of: selectedLocationID) { _, id in
                     if let id { proxy.scrollTo(id) }
@@ -124,6 +105,47 @@ struct IDEUsagesPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func handleListKey(_ press: KeyPress, flat: [Location]) -> KeyPress.Result {
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            guard !flat.isEmpty else { return .handled }
+            let ids = flat.map(\.id)
+            if let next = IDEListNeighbor.move(selectedLocationID, in: ids, by: press.key == .downArrow ? 1 : -1) {
+                selectedLocationID = next
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            if let id = selectedLocationID, let location = flat.first(where: { $0.id == id }) {
+                _ = workspace.openNavigationLocation(location)
+            }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.closeUsages()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let location = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: flat,
+                selected: flat.first { $0.id == selectedLocationID },
+                title: usageTypeaheadTitle
+            ) {
+                selectedLocationID = location.id
+            }
+            return .handled
+        }
+    }
+
+    private func usageTypeaheadTitle(_ location: Location) -> String {
+        let file = location.url?.lastPathComponent ?? ""
+        let line = location.usage?.lineText ?? location.displayName
+        return "\(file) \(line)"
     }
 
     private func fileHeader(_ file: IDEUsageFile) -> some View {
@@ -216,15 +238,9 @@ struct IDEUsagesControls: View {
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
-            Button {
+            IDEIconButton(systemImage: "xmark", help: "Close Usages") {
                 workspace.closeUsages()
-            } label: {
-                Image(systemName: "xmark")
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help("Close Usages")
-            .accessibilityLabel("Close Usages")
         }
     }
 }

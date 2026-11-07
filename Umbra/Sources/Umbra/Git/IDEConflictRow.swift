@@ -4,6 +4,8 @@ import SwiftUI
 /// side without opening it.
 struct IDEConflictRow: View {
     let change: IDEGitChange
+    var isSelected = false
+    var onSelect: (() -> Void)?
     let onMerge: () -> Void
     let onTakeYours: () -> Void
     let onTakeTheirs: () -> Void
@@ -30,8 +32,10 @@ struct IDEConflictRow: View {
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .padding(.vertical, 3)
+        .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture(count: 2, perform: onMerge)
+        .onTapGesture { onSelect?() }
         .contextMenu {
             Button("Merge…", action: onMerge)
             Divider()

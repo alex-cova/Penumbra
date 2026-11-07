@@ -11,8 +11,16 @@ struct IDELocalModelsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedID: String?
+    @State private var cursorID: String?
     @State private var tokenDraft = ""
     @State private var filter = IDELocalModelFilter()
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isSearchFocused: Bool
+    @FocusState private var isListFocused: Bool
+
+    private var searchIDs: [String] {
+        IDELocalModelSearchOrder.ids(store.results, filter: filter)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -38,11 +46,10 @@ struct IDELocalModelsView: View {
                     .padding(IDEAppearance.Spacing.md)
                 }
                 .onChange(of: selectedID) { _, id in
-                    guard let id else { return }
-                    // After the details pane has been laid out under the row.
-                    Task { @MainActor in
-                        IDEAppearance.Motion.animate(.default) { proxy.scrollTo(id, anchor: .center) }
-                    }
+                    scrollSearchRow(id, in: proxy)
+                }
+                .onChange(of: cursorID) { _, id in
+                    scrollSearchRow(id, in: proxy)
                 }
             }
         }
@@ -157,9 +164,8 @@ struct IDELocalModelsView: View {
             }
             .controlSize(.small)
             .disabled(store.availability != .available || store.isLoading)
-            Button { store.delete(model) } label: { Image(systemName: "trash") }
-                .buttonStyle(.borderless)
-                .help("Delete from disk")
+            IDEIconButton(systemImage: "trash", help: "Delete from disk") { store.delete(model) }
+                .ideIconButtonSize(.compact)
         }
         .foregroundStyle(IDEAppearance.ColorToken.foreground)
         .padding(IDEAppearance.Spacing.sm)
@@ -298,7 +304,18 @@ struct IDELocalModelsView: View {
             HStack {
                 TextField("Search Hugging Face for MLX models, e.g. Qwen2.5 Instruct", text: $store.query)
                     .textFieldStyle(.roundedBorder)
+                    .focused($isSearchFocused)
                     .onSubmit { Task { await store.search() } }
+                    .onKeyPress(.downArrow) {
+                        if cursorID == nil { cursorID = searchIDs.first }
+                        isListFocused = true
+                        return .handled
+                    }
+                    .onKeyPress(.escape) {
+                        guard !store.query.isEmpty else { return .ignored }
+                        store.query = ""
+                        return .handled
+                    }
                 Button("Search") { Task { await store.search() } }.disabled(store.isSearching)
                 if store.isSearching { ProgressView().controlSize(.small) }
             }
@@ -309,13 +326,26 @@ struct IDELocalModelsView: View {
                 Text(error).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
             }
             let shown = store.results.filter(filter.matches)
-            ForEach(shown) { result in
-                // The details open right under the row that was clicked, not at the end of the list.
-                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
-                    resultRow(result)
-                    if selectedID == result.id { detailsPane(result) }
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+                ForEach(shown) { result in
+                    // The details open right under the row that was clicked, not at the end of the list.
+                    VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+                        resultRow(result)
+                        if selectedID == result.id { detailsPane(result) }
+                    }
+                    .id(result.id)
                 }
-                .id(result.id)
+            }
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleSearchKey(press)
+            }
+            .onChange(of: searchIDs) { _, ids in
+                if let cursorID, !ids.contains(cursorID) {
+                    self.cursorID = nil
+                }
             }
             if filter.isActive, shown.count < store.results.count {
                 Text(shown.isEmpty
@@ -328,14 +358,12 @@ struct IDELocalModelsView: View {
     }
 
     private func resultRow(_ result: HFModelSummary) -> some View {
-        let isSelected = selectedID == result.id
+        let isCursor = cursorID == result.id
+        let isExpanded = selectedID == result.id
         return Button {
-            if isSelected {
-                selectedID = nil
-            } else {
-                selectedID = result.id
-                Task { await store.loadDetails(for: result.id) }
-            }
+            isListFocused = true
+            cursorID = result.id
+            toggleDetails(result.id)
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -353,12 +381,12 @@ struct IDELocalModelsView: View {
                 if store.installed.contains(where: { $0.id == result.id }) {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(IDEAppearance.ColorToken.run)
                 }
-                Image(systemName: isSelected ? "chevron.down" : "chevron.right")
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
             .padding(IDEAppearance.Spacing.sm)
-            .background(isSelected ? IDEAppearance.ColorToken.controlHover : IDEAppearance.ColorToken.card)
+            .background(isCursor || isExpanded ? IDEAppearance.ColorToken.controlHover : IDEAppearance.ColorToken.card)
             .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
             .contentShape(Rectangle())
         }
@@ -408,6 +436,63 @@ struct IDELocalModelsView: View {
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
     }
 
+    private func handleSearchKey(_ press: KeyPress) -> KeyPress.Result {
+        let ids = searchIDs
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            if let next = IDEListNeighbor.move(cursorID, in: ids, by: press.key == .downArrow ? 1 : -1) {
+                cursorID = next
+                isListFocused = true
+            }
+            return .handled
+        case .rightArrow:
+            typeahead.reset()
+            if let cursorID { expandDetails(cursorID) }
+            return .handled
+        case .leftArrow:
+            typeahead.reset()
+            if selectedID == cursorID { selectedID = nil }
+            return .handled
+        case .return:
+            typeahead.reset()
+            if let cursorID { toggleDetails(cursorID) }
+            return cursorID == nil ? .ignored : .handled
+        case .escape:
+            typeahead.reset()
+            return .ignored
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let id = IDEListTypeahead.match(
+                query: typeahead.typed(character), in: ids, selected: cursorID, title: { $0 }
+            ) {
+                cursorID = id
+                isListFocused = true
+            }
+            return .handled
+        }
+    }
+
+    private func toggleDetails(_ id: String) {
+        if selectedID == id {
+            selectedID = nil
+            return
+        }
+        expandDetails(id)
+    }
+
+    private func expandDetails(_ id: String) {
+        selectedID = id
+        Task { await store.loadDetails(for: id) }
+    }
+
+    private func scrollSearchRow(_ id: String?, in proxy: ScrollViewProxy) {
+        guard let id else { return }
+        Task { @MainActor in
+            IDEAppearance.Motion.animate(.default) { proxy.scrollTo(id, anchor: .center) }
+        }
+    }
+
     // MARK: - Footer
 
     private var footer: some View {
@@ -439,5 +524,12 @@ struct IDELocalModelsView: View {
             }
         }
         .foregroundStyle(IDEAppearance.ColorToken.foreground)
+    }
+}
+
+/// Painted search-result order: Hub hits that still match Precision and Parameters.
+enum IDELocalModelSearchOrder {
+    static func ids(_ results: [HFModelSummary], filter: IDELocalModelFilter) -> [String] {
+        results.filter(filter.matches).map(\.id)
     }
 }

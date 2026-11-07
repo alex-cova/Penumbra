@@ -21,11 +21,7 @@ struct IDEProjectConsoleControls: View {
     }
 
     private func button(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol) }
-            .buttonStyle(.borderless)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help(help)
-            .accessibilityLabel(help)
+        IDEIconButton(systemImage: symbol, help: help, action: action)
     }
 
     @ViewBuilder

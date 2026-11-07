@@ -57,13 +57,14 @@ struct IDEIconButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(size.glyph)
-                .foregroundStyle(tint ?? (isActive || (isHovering && isEnabled) ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted))
-                .frame(width: size.width, height: size.height)
-                .background(background)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-                .contentShape(Rectangle())
+            IDEIconChrome(
+                systemImage: systemImage,
+                size: size,
+                tint: tint,
+                isActive: isActive,
+                isHovering: isHovering,
+                isEnabled: isEnabled
+            )
         }
         .buttonStyle(.plain)
         .focused($isFocused)
@@ -74,19 +75,7 @@ struct IDEIconButton: View {
                     .allowsHitTesting(false)
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if badge > 0 {
-                Text(badge > 99 ? "99+" : "\(badge)")
-                    .font(.system(size: IDEAppearance.IconSize.badgeText, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .padding(.horizontal, IDEAppearance.Spacing.xs)
-                    .frame(minWidth: IDEAppearance.Spacing.md)
-                    .background(IDEAppearance.ColorToken.accent, in: Capsule())
-                    .offset(x: IDEAppearance.Spacing.xs, y: -IDEAppearance.Spacing.xxs)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-        }
+        .overlay(alignment: .topTrailing) { IDEIconBadge(count: badge) }
         .disabled(isDisabled)
         .opacity(isEnabled ? 1 : IDEAppearance.Opacity.disabled)
         .onHover { isHovering = $0 }
@@ -94,11 +83,86 @@ struct IDEIconButton: View {
         .accessibilityLabel(badge > 0 ? "\(help), \(badge) new" : help)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
     }
+}
+
+/// A toolbar menu whose label is the same square glyph as ``IDEIconButton``.
+struct IDEIconMenu<Content: View>: View {
+    let systemImage: String
+    let help: String
+    var tint: Color?
+    var isActive = false
+    var isDisabled = false
+    var badge = 0
+    @ViewBuilder var content: () -> Content
+
+    @Environment(\.ideIconButtonSize) private var size
+    @Environment(\.isEnabled) private var isEnvironmentEnabled
+    @State private var isHovering = false
+
+    private var isEnabled: Bool { isEnvironmentEnabled && !isDisabled }
+
+    var body: some View {
+        Menu(content: content) {
+            IDEIconChrome(
+                systemImage: systemImage,
+                size: size,
+                tint: tint,
+                isActive: isActive,
+                isHovering: isHovering,
+                isEnabled: isEnabled
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .overlay(alignment: .topTrailing) { IDEIconBadge(count: badge) }
+        .disabled(isDisabled)
+        .opacity(isEnabled ? 1 : IDEAppearance.Opacity.disabled)
+        .onHover { isHovering = $0 }
+        .help(help)
+        .accessibilityLabel(badge > 0 ? "\(help), \(badge) new" : help)
+    }
+}
+
+private struct IDEIconChrome: View {
+    let systemImage: String
+    let size: IDEIconButton.Size
+    var tint: Color?
+    var isActive: Bool
+    var isHovering: Bool
+    var isEnabled: Bool
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(size.glyph)
+            .foregroundStyle(tint ?? (isActive || (isHovering && isEnabled) ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted))
+            .frame(width: size.width, height: size.height)
+            .background(background)
+            .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+            .contentShape(Rectangle())
+    }
 
     private var background: Color {
-        // Titlebar toggles fill with the titlebar active color; everywhere else uses selection.
         if isActive { return size == .titlebar ? IDEAppearance.ColorToken.card : IDEAppearance.ColorToken.selection }
         return isHovering && isEnabled ? IDEAppearance.ColorToken.controlHover : Color.clear
+    }
+}
+
+private struct IDEIconBadge: View {
+    let count: Int
+
+    var body: some View {
+        if count > 0 {
+            Text(count > 99 ? "99+" : "\(count)")
+                .font(.system(size: IDEAppearance.IconSize.badgeText, weight: .bold))
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, IDEAppearance.Spacing.xs)
+                .frame(minWidth: IDEAppearance.Spacing.md)
+                .background(IDEAppearance.ColorToken.accent, in: Capsule())
+                .offset(x: IDEAppearance.Spacing.xs, y: -IDEAppearance.Spacing.xxs)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -114,7 +178,7 @@ extension EnvironmentValues {
 }
 
 extension View {
-    /// Sets the size of every `IDEIconButton` inside.
+    /// Sets the size of every `IDEIconButton` and `IDEIconMenu` inside.
     func ideIconButtonSize(_ size: IDEIconButton.Size) -> some View {
         environment(\.ideIconButtonSize, size)
     }

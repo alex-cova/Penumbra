@@ -159,6 +159,75 @@ final class IDEDatabaseTests: XCTestCase {
         XCTAssertEqual(support.result.error, DatabaseError.readOnlyViolation.errorDescription)
         XCTAssertEqual(fake.statements.count, 1, "A refused statement is not sent")
     }
+
+    func testADisconnectedSourceShowsAPlaceholderWhenExpanded() {
+        let connection = DatabaseConnection(name: "shop", engine: .postgres, host: "db.example.com")
+        let collapsed = IDEDatabaseTree.flatten(
+            connections: [connection], connected: [], sqlSchemas: [:], mongoSchemas: [:], expanded: []
+        )
+        XCTAssertEqual(collapsed.map(\.kind), [.connection(connection.id)])
+        XCTAssertTrue(collapsed[0].canDisclose)
+        XCTAssertFalse(collapsed[0].isExpanded)
+
+        let open = IDEDatabaseTree.flatten(
+            connections: [connection], connected: [], sqlSchemas: [:], mongoSchemas: [:],
+            expanded: [IDEDatabaseSupport.connectionKey(connection.id)]
+        )
+        XCTAssertEqual(open.map(\.kind), [.connection(connection.id), .placeholder(connection.id)])
+        XCTAssertEqual(open[1].title, "Not connected")
+        XCTAssertFalse(open[1].canDisclose)
+    }
+
+    func testAnExpandedSQLSourceListsTablesThenColumns() {
+        let connection = DatabaseConnection(name: "shop", engine: .postgres, database: "shop")
+        let schema = IDEDatabaseSQLSchema(
+            tables: ["users", "orders"],
+            columns: ["users": [
+                SQLColumn(name: "id", declaredType: "int", isPrimaryKey: true, isNotNull: true),
+                SQLColumn(name: "email", declaredType: "text", isPrimaryKey: false, isNotNull: true),
+            ]]
+        )
+        let connectionKey = IDEDatabaseSupport.connectionKey(connection.id)
+        let schemaKey = IDEDatabaseSupport.schemaKey(connection.id)
+        let usersKey = IDEDatabaseSupport.tableKey(connection.id, "users")
+        let rows = IDEDatabaseTree.flatten(
+            connections: [connection],
+            connected: [connection.id],
+            sqlSchemas: [connection.id: schema],
+            mongoSchemas: [:],
+            expanded: [connectionKey, schemaKey, usersKey]
+        )
+        XCTAssertEqual(rows.map(\.title), ["shop", "shop", "users", "id", "email", "orders"])
+        XCTAssertEqual(rows.map(\.depth), [0, 1, 2, 3, 3, 2])
+        XCTAssertEqual(rows[3].detail, "int")
+        XCTAssertEqual(rows[3].systemImage, "key.fill")
+        XCTAssertEqual(rows[4].systemImage, "circle")
+        XCTAssertTrue(rows[5].canDisclose)
+        XCTAssertFalse(rows[5].isExpanded)
+
+        let neighbor = IDEListNeighbor.move(usersKey, in: rows.map(\.id), by: 1)
+        XCTAssertEqual(neighbor, IDEDatabaseTree.columnKey(connection.id, "users", "id"))
+    }
+
+    func testMongoListsDatabasesAndCollections() {
+        let connection = DatabaseConnection(name: "local", engine: .mongo)
+        let schema = IDEDatabaseMongoSchema(
+            databases: ["app", "admin"],
+            collections: ["app": ["users", "sessions"]]
+        )
+        let connectionKey = IDEDatabaseSupport.connectionKey(connection.id)
+        let appKey = IDEDatabaseSupport.mongoDatabaseKey(connection.id, "app")
+        let rows = IDEDatabaseTree.flatten(
+            connections: [connection],
+            connected: [connection.id],
+            sqlSchemas: [:],
+            mongoSchemas: [connection.id: schema],
+            expanded: [connectionKey, appKey]
+        )
+        XCTAssertEqual(rows.map(\.title), ["local", "app", "users", "sessions", "admin"])
+        XCTAssertEqual(rows[2].kind, .mongoCollection(connection.id, "app", "users"))
+        XCTAssertFalse(rows[4].isExpanded)
+    }
 }
 
 private final class RecordingSQL: SQLExecuting, @unchecked Sendable {

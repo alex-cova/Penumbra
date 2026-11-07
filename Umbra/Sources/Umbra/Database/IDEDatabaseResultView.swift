@@ -35,21 +35,23 @@ struct IDEDatabaseResultView: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 8) {
-            Button {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            IDEIconButton(
+                systemImage: "chevron.left",
+                help: "Previous page",
+                isDisabled: !support.result.canGoBack || support.isRunning
+            ) {
                 Task { await support.goToPage(support.result.page - 1) }
-            } label: {
-                Image(systemName: "chevron.left")
             }
-            .disabled(!support.result.canGoBack || support.isRunning)
             Text("Page \(support.result.page + 1)")
                 .font(IDEAppearance.Typography.monoSmall)
-            Button {
+            IDEIconButton(
+                systemImage: "chevron.right",
+                help: "Next page",
+                isDisabled: !support.result.canGoForward || support.isRunning
+            ) {
                 Task { await support.goToPage(support.result.page + 1) }
-            } label: {
-                Image(systemName: "chevron.right")
             }
-            .disabled(!support.result.canGoForward || support.isRunning)
             if let message = support.result.message {
                 Text(message)
                     .font(IDEAppearance.Typography.monoSmall)
@@ -59,17 +61,14 @@ struct IDEDatabaseResultView: View {
                 ProgressView().controlSize(.small)
             }
             Spacer(minLength: 0)
-            Menu("Export") {
+            IDEIconMenu(systemImage: "square.and.arrow.up", help: "Export", isDisabled: support.result.columns.isEmpty) {
                 Button("CSV") { export(.csv) }
                 Button("TSV") { export(.tsv) }
                 Button("JSON") { export(.json) }
             }
-            .disabled(support.result.columns.isEmpty)
-            .menuStyle(.borderlessButton)
-            .fixedSize()
         }
-        .buttonStyle(.borderless)
-        .padding(.horizontal, 10)
+        .ideIconButtonSize(.compact)
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, IDEAppearance.Spacing.xs)
     }
 

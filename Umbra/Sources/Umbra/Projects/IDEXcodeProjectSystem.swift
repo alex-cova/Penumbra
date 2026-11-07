@@ -493,6 +493,7 @@ final class IDEXcodeProjectSystem: IDEProjectSystem {
 
 struct IDEXcodeSidebarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         let system = workspace.xcode
@@ -501,23 +502,22 @@ struct IDEXcodeSidebarPanel: View {
             if case let .failed(summary) = system.syncState {
                 pinned(summary)
             } else if let model = system.model {
-                ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        section("Project")
-                        infoRow(symbol: "hammer", title: model.name, detail: model.format == .xcproj ? "project.xcproj" : "pbxproj")
-                        section("Tasks")
-                        ForEach(system.tasks, id: \.path) { task in
-                            taskRow(task, system: system)
-                        }
-                        if !model.targets.isEmpty {
-                            section("Targets")
-                            ForEach(model.targets, id: \.name) { target in
-                                infoRow(symbol: target.kind.systemImage, title: target.name, detail: target.kind.rawValue)
-                            }
+                IDEProjectTaskList(
+                    tasks: system.tasks,
+                    isRunDisabled: system.isRunningTasks,
+                    onRun: { system.runTasks([$0.path]) },
+                    isListFocused: $isListFocused
+                ) {
+                    section("Project")
+                    infoRow(symbol: "hammer", title: model.name, detail: model.format == .xcproj ? "project.xcproj" : "pbxproj")
+                    section("Tasks")
+                } footer: {
+                    if !model.targets.isEmpty {
+                        section("Targets")
+                        ForEach(model.targets, id: \.name) { target in
+                            infoRow(symbol: target.kind.systemImage, title: target.name, detail: target.kind.rawValue)
                         }
                     }
-                    .padding(.vertical, IDEAppearance.Spacing.xs)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             } else {
                 pinned("No Xcode project")
@@ -532,6 +532,7 @@ struct IDEXcodeSidebarPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.panel)
+        .ideProjectSidebarFocus(on: $isListFocused)
     }
 
     private func header(_ system: IDEXcodeProjectSystem) -> some View {
@@ -539,17 +540,14 @@ struct IDEXcodeSidebarPanel: View {
             IDEPanelTitle("Xcode")
                 .frame(maxWidth: .infinity, alignment: .leading)
             if system.isRunningTasks {
-                Button(action: { system.cancelTasks() }) { Image(systemName: "stop.fill") }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(IDEAppearance.ColorToken.error)
-                    .help("Stop")
-                    .accessibilityLabel("Stop")
+                IDEIconButton(
+                    systemImage: "stop.fill",
+                    help: "Stop",
+                    tint: IDEAppearance.ColorToken.error,
+                    action: { system.cancelTasks() }
+                )
             }
-            Button(action: { system.reload() }) { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help("Reload")
-                .accessibilityLabel("Reload")
+            IDEIconButton(systemImage: "arrow.clockwise", help: "Reload", action: { system.reload() })
         }
         .padding(.leading, IDEAppearance.Spacing.sm)
         .padding(.trailing, IDEAppearance.Spacing.xs)
@@ -563,33 +561,6 @@ struct IDEXcodeSidebarPanel: View {
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.top, IDEAppearance.Spacing.sm)
             .padding(.bottom, IDEAppearance.Spacing.xxs)
-    }
-
-    private func taskRow(_ task: IDEProjectTask, system: IDEXcodeProjectSystem) -> some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
-            Button(action: { system.runTasks([task.path]) }) {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .frame(width: 12, height: 16)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderless)
-            .disabled(system.isRunningTasks)
-            .help(task.summary)
-            .accessibilityLabel("Run \(task.name)")
-            Text(task.name)
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, IDEAppearance.Spacing.sm)
-        .padding(.vertical, 3)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            if !system.isRunningTasks { system.runTasks([task.path]) }
-        }
     }
 
     private func infoRow(symbol: String, title: String, detail: String) -> some View {

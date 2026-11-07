@@ -120,12 +120,10 @@ struct IDEAgentSettingsView: View {
                             Text(settings.helperModelName).tag(settings.helperModelName)
                                 }
                             }
-                            Button { Task { await settings.refreshOllamaModels(adjustSelection: false) } } label: {
-                            Image(systemName: "arrow.clockwise")
+                            IDEIconButton(systemImage: "arrow.clockwise", help: "Reload the installed models") {
+                                Task { await settings.refreshOllamaModels(adjustSelection: false) }
                             }
-                                .buttonStyle(.borderless)
-                                .help("Reload the installed models")
-                                .accessibilityLabel("Reload the installed models")
+                            .ideIconButtonSize(.compact)
                         }
                         case .mlx:
                             Picker("Model", selection: $settings.helperModelName) {
@@ -395,9 +393,10 @@ struct IDEAgentSettingsView: View {
             if settings.isLoadingOllamaModels {
                 ProgressView().controlSize(.small)
             } else {
-                Button { Task { await settings.refreshOllamaModels() } } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-                    .help("Reload the installed models")
+                IDEIconButton(systemImage: "arrow.clockwise", help: "Reload the installed models") {
+                    Task { await settings.refreshOllamaModels() }
+                }
+                .ideIconButtonSize(.compact)
             }
         }
         if let error = settings.ollamaError {

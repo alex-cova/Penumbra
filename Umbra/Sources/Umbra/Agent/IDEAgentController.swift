@@ -36,7 +36,11 @@ final class IDEAgentController {
     @ObservationIgnored var exportHandler: @MainActor (_ name: String, _ markdown: String) -> Void = IDEAgentController.presentSavePanel
 
     var isPanelVisible = false {
-        didSet { if oldValue != isPanelVisible { layoutChanged() } }
+        didSet {
+            guard oldValue != isPanelVisible else { return }
+            onPanelVisibilityChanged?()
+            layoutChanged()
+        }
     }
     /// AI mode's Code tab is on screen. Counts as the chat being open for notifications, without the
     /// docked panel, which would be a second view of the same chats.
@@ -47,6 +51,8 @@ final class IDEAgentController {
     /// Called when what a window session keeps of the agent changed: the chats, the selection, the panel.
     @ObservationIgnored var onLayoutChanged: (() -> Void)?
     @ObservationIgnored private var layoutNotificationsSuspended = false
+    /// Called whenever the panel opens or closes, including during a restore (unlike `onLayoutChanged`).
+    @ObservationIgnored var onPanelVisibilityChanged: (() -> Void)?
     /// Called before the chat page opens, so the window can close what it would cover (Settings).
     @ObservationIgnored var onPanelRequested: (() -> Void)?
     /// Bumped when something fills the composer from outside, so the panel moves focus to it.

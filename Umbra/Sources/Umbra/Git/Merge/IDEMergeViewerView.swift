@@ -535,25 +535,23 @@ struct IDEMergeToolbar: View {
 
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
-            Button { model.viewer?.goToChange(forward: false) } label: { Image(systemName: "chevron.up") }
-                .help("Previous Change (⇧F7)")
-            Button { model.viewer?.goToChange(forward: true) } label: { Image(systemName: "chevron.down") }
-                .help("Next Change (F7)")
-            Menu {
+            IDEIconButton(systemImage: "arrow.up", help: "Previous Change (⇧F7)") {
+                model.viewer?.goToChange(forward: false)
+            }
+            IDEIconButton(systemImage: "arrow.down", help: "Next Change (F7)") {
+                model.viewer?.goToChange(forward: true)
+            }
+            IDEIconMenu(systemImage: "wand.and.stars", help: "Apply Non-Conflicting Changes") {
                 Button("Apply Non-Conflicting Changes from Left") { model.viewer?.applyNonConflicting(from: .left) }
                 Button("Apply Non-Conflicting Changes from Right") { model.viewer?.applyNonConflicting(from: .right) }
                 Button("Apply All Non-Conflicting Changes") { model.viewer?.applyNonConflicting(from: nil) }
-            } label: {
-                Image(systemName: "wand.and.stars")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Apply Non-Conflicting Changes")
             Divider().frame(height: 14)
             Button("Accept Left") { model.viewer?.acceptWhole(.left) }
+                .buttonStyle(.borderless)
                 .help("Replace the result with the left side")
             Button("Accept Right") { model.viewer?.acceptWhole(.right) }
+                .buttonStyle(.borderless)
                 .help("Replace the result with the right side")
             Spacer(minLength: 0)
             if let error = model.error {
@@ -562,12 +560,13 @@ struct IDEMergeToolbar: View {
             Text(model.unresolved == 0 ? "No conflicts left" : "\(model.unresolved) conflict\(model.unresolved == 1 ? "" : "s") left")
                 .foregroundStyle(model.unresolved == 0 ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.gitConflict)
             Button("Apply") { model.session?.apply() }
+                .buttonStyle(.borderless)
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!model.isReady || model.isApplying)
                 .help("Save the result and mark the file resolved (⌘↩)")
         }
-        .buttonStyle(.borderless)
         .font(IDEAppearance.Typography.caption)
+        .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .frame(height: IDEMergeViewerView.toolbarHeight)
         .background(IDEAppearance.ColorToken.tabBar)

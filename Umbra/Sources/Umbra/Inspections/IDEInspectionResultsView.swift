@@ -14,6 +14,9 @@ struct IDEInspectionResultsView: View {
     @State private var filter = ""
     @State private var collapsed: Set<String> = []
     @State private var selection: String?
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isFilterFocused: Bool
+    @FocusState private var isListFocused: Bool
 
     private var options: IDEInspectionResultsTree.Options {
         IDEInspectionResultsTree.Options(
@@ -50,38 +53,43 @@ struct IDEInspectionResultsView: View {
     // MARK: Toolbar
 
     private func toolbar(nodes: [IDEInspectionResultsTree.Node]) -> some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
             if run.state == .running {
                 ProgressView().controlSize(.small)
                 Text("Analyzing \(run.done) of \(run.total)")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
-                Button { run.cancel() } label: { Image(systemName: "stop.fill") }
-                    .buttonStyle(.borderless)
-                    .help("Stop")
+                IDEIconButton(systemImage: "stop.fill", help: "Stop", tint: .red) { run.cancel() }
             } else {
-                Button { workspace.rerunInspection(run) } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-                    .keyboardShortcut("r", modifiers: .command)
-                    .help("Rerun inspection")
+                IDEIconButton(systemImage: "arrow.clockwise", help: "Rerun inspection") {
+                    workspace.rerunInspection(run)
+                }
+                .keyboardShortcut("r", modifiers: .command)
                 Text(summary)
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
             Divider().frame(height: 14)
-            Button { move(-1, in: nodes) } label: { Image(systemName: "chevron.up") }
-                .buttonStyle(.borderless)
+            IDEIconButton(systemImage: "chevron.up", help: "Previous problem") { move(-1, in: nodes) }
                 .keyboardShortcut(.upArrow, modifiers: [.control, .option])
-                .help("Previous problem")
-            Button { move(1, in: nodes) } label: { Image(systemName: "chevron.down") }
-                .buttonStyle(.borderless)
+            IDEIconButton(systemImage: "chevron.down", help: "Next problem") { move(1, in: nodes) }
                 .keyboardShortcut(.downArrow, modifiers: [.control, .option])
-                .help("Next problem")
             Spacer(minLength: IDEAppearance.Spacing.sm)
             TextField("Filter", text: $filter)
                 .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
                 .frame(width: 140)
-            Menu {
+                .focused($isFilterFocused)
+                .onKeyPress(.downArrow) {
+                    isListFocused = true
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    if filter.isEmpty { return .ignored }
+                    filter = ""
+                    return .handled
+                }
+            IDEIconMenu(systemImage: "line.3.horizontal.decrease.circle", help: "View options") {
                 Picker("Group by", selection: $grouping) {
                     ForEach(IDEInspectionResultsTree.Grouping.allCases) { Text($0.rawValue).tag($0) }
                 }
@@ -90,22 +98,13 @@ struct IDEInspectionResultsView: View {
                 Divider()
                 Button("Expand All") { collapsed = [] }
                 Button("Collapse All") { collapsed = Set(allGroupIDs(nodes)) }
-            } label: {
-                Image(systemName: "line.3.horizontal.decrease.circle")
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("View options")
-            Menu {
+            IDEIconMenu(systemImage: "square.and.arrow.up", help: "Export results") {
                 Button("SARIF…") { workspace.exportInspectionRun(run, as: .sarif) }
                 Button("HTML…") { workspace.exportInspectionRun(run, as: .html) }
-            } label: {
-                Image(systemName: "square.and.arrow.up")
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Export results")
         }
+        .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .padding(.vertical, IDEAppearance.Spacing.xs)
     }
@@ -147,82 +146,115 @@ struct IDEInspectionResultsView: View {
     // MARK: List
 
     private func list(_ rows: [(node: IDEInspectionResultsTree.Node, depth: Int)]) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(rows, id: \.node.id) { row in
-                    rowView(row.node, depth: row.depth)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows, id: \.node.id) { row in
+                        rowView(row.node, depth: row.depth)
+                            .id(row.node.id)
+                    }
                 }
+                .padding(.vertical, IDEAppearance.Spacing.xs)
             }
-            .padding(.vertical, IDEAppearance.Spacing.xs)
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleKey(press, rows: rows)
+            }
+            .onChange(of: selection) { _, id in
+                if let id { proxy.scrollTo(id) }
+            }
         }
     }
 
+    private func handleKey(
+        _ press: KeyPress, rows: [(node: IDEInspectionResultsTree.Node, depth: Int)]
+    ) -> KeyPress.Result {
+        let current = rows.first { $0.node.id == selection }
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            if let id = IDEListNeighbor.move(selection, in: rows.map(\.node.id), by: delta) {
+                highlight(id)
+            }
+            return .handled
+        case .rightArrow:
+            typeahead.reset()
+            guard let current, current.node.kind != .problem, collapsed.contains(current.node.id) else { return .ignored }
+            toggle(current.node)
+            return .handled
+        case .leftArrow:
+            typeahead.reset()
+            guard let current else { return .ignored }
+            if current.node.kind != .problem, !collapsed.contains(current.node.id) {
+                toggle(current.node)
+            } else if let index = rows.firstIndex(where: { $0.node.id == current.node.id }),
+                      let parent = rows[..<index].last(where: { $0.depth < current.depth }) {
+                highlight(parent.node.id)
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            guard let current else { return .ignored }
+            activate(current.node)
+            return .handled
+        case .escape:
+            typeahead.reset()
+            if isFilterFocused {
+                isFilterFocused = false
+                return .handled
+            }
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let node = IDEListTypeahead.match(
+                query: typeahead.typed(character), in: rows.map(\.node), selected: current?.node, title: \.title
+            ) {
+                highlight(node.id)
+            }
+            return .handled
+        }
+    }
+
+    private func highlight(_ id: String) {
+        selection = id
+        isListFocused = true
+    }
+
+    private func activate(_ node: IDEInspectionResultsTree.Node) {
+        if node.kind == .problem {
+            select(node)
+        } else {
+            highlight(node.id)
+            toggle(node)
+        }
+        isListFocused = true
+    }
+
     private func rowView(_ node: IDEInspectionResultsTree.Node, depth: Int) -> some View {
-        let isSelected = selection == node.id
-        return HStack(spacing: 6) {
-            if node.kind == .problem {
-                Image(systemName: IDEProblemStyle.symbol(for: Self.diagnosticSeverity(node.severity)))
-                    .font(.system(size: 11))
-                    .foregroundStyle(IDEProblemStyle.color(for: Self.diagnosticSeverity(node.severity)))
-                    .frame(width: 14)
-            } else {
-                IDEDisclosureChevron(isExpanded: !collapsed.contains(node.id), width: 14)
-                if node.kind == .file { Image(systemName: "doc.text").font(.system(size: 10)) }
-            }
-            Text(node.title)
-                .font(node.kind == .problem ? IDEAppearance.Typography.body : IDEAppearance.Typography.sidebarHeader)
-                .foregroundStyle(node.isExcluded || node.isResolved ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
-                .strikethrough(node.isExcluded || node.isResolved)
-                .lineLimit(1)
-            if let subtitle = node.subtitle, node.kind != .problem {
-                Text(subtitle)
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-            }
-            Spacer(minLength: 8)
-            if node.kind == .problem {
-                Text(node.subtitle ?? "")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            } else {
-                Text("\(node.count)")
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            }
-        }
-        .padding(.leading, IDEAppearance.Spacing.md + CGFloat(depth) * 14)
-        .padding(.trailing, IDEAppearance.Spacing.md)
-        .padding(.vertical, 3)
-        .background(isSelected ? IDEAppearance.ColorToken.controlHover : .clear)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            if node.kind == .problem { select(node) } else { toggle(node) }
-        }
-        .accessibilityAddTraits(.isButton)
-        .onTapGesture {
-            if node.kind == .problem { select(node) } else {
-                selection = node.id
-                toggle(node)
-            }
-        }
-        .contextMenu { contextMenu(for: node) }
-        .accessibilityLabel(node.kind == .problem ? "Problem: \(node.title)" : "\(node.title), \(node.count) problems")
+        IDEInspectionResultRow(
+            node: node,
+            depth: depth,
+            isSelected: selection == node.id,
+            isExpanded: !collapsed.contains(node.id),
+            onSelect: {
+                if node.kind == .problem {
+                    select(node)
+                } else {
+                    highlight(node.id)
+                    toggle(node)
+                }
+            },
+            onActivate: { activate(node) },
+            menu: { contextMenu(for: node) }
+        )
     }
 
     private func toggle(_ node: IDEInspectionResultsTree.Node) {
         if collapsed.contains(node.id) { collapsed.remove(node.id) } else { collapsed.insert(node.id) }
-    }
-
-    private static func diagnosticSeverity(_ severity: IDEInspectionSeverity?) -> DiagnosticSeverity {
-        switch severity {
-        case .error: .error
-        case .warning: .warning
-        case .weakWarning, .noHighlighting: .hint
-        case .info: .information
-        case nil: .information
-        }
     }
 
     // MARK: Context menu
@@ -347,6 +379,75 @@ struct IDEInspectionResultsView: View {
             if let found = find(id, in: node.children) { return found }
         }
         return nil
+    }
+}
+
+private struct IDEInspectionResultRow<Menu: View>: View {
+    let node: IDEInspectionResultsTree.Node
+    let depth: Int
+    let isSelected: Bool
+    let isExpanded: Bool
+    let onSelect: () -> Void
+    let onActivate: () -> Void
+    @ViewBuilder let menu: () -> Menu
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if node.kind == .problem {
+                Image(systemName: IDEProblemStyle.symbol(for: Self.diagnosticSeverity(node.severity)))
+                    .font(.system(size: 11))
+                    .foregroundStyle(IDEProblemStyle.color(for: Self.diagnosticSeverity(node.severity)))
+                    .frame(width: 14)
+            } else {
+                IDEDisclosureChevron(isExpanded: isExpanded, width: 14)
+                if node.kind == .file { Image(systemName: "doc.text").font(.system(size: 10)) }
+            }
+            Text(node.title)
+                .font(node.kind == .problem ? IDEAppearance.Typography.body : IDEAppearance.Typography.sidebarHeader)
+                .foregroundStyle(node.isExcluded || node.isResolved ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
+                .strikethrough(node.isExcluded || node.isResolved)
+                .lineLimit(1)
+            if let subtitle = node.subtitle, node.kind != .problem {
+                Text(subtitle)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer(minLength: 8)
+            if node.kind == .problem {
+                Text(node.subtitle ?? "")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            } else {
+                Text("\(node.count)")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+        }
+        .padding(.leading, IDEAppearance.Spacing.md + CGFloat(depth) * 14)
+        .padding(.trailing, IDEAppearance.Spacing.md)
+        .padding(.vertical, 3)
+        .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear))
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .onTapGesture(count: 2, perform: onActivate)
+        .simultaneousGesture(TapGesture().onEnded(onSelect))
+        .contextMenu { menu() }
+        .accessibilityLabel(node.kind == .problem ? "Problem: \(node.title)" : "\(node.title), \(node.count) problems")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private static func diagnosticSeverity(_ severity: IDEInspectionSeverity?) -> DiagnosticSeverity {
+        switch severity {
+        case .error: .error
+        case .warning: .warning
+        case .weakWarning, .noHighlighting: .hint
+        case .info: .information
+        case nil: .information
+        }
     }
 }
 

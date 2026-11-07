@@ -45,6 +45,7 @@ struct IDEProfilerView: View {
                 presentationMenu
                 exportMenu
             }
+            .ideIconButtonSize(.compact)
             HStack(spacing: IDEAppearance.Spacing.sm) {
                 if session.kind != .gc {
                     Picker("View", selection: $session.mode) {
@@ -89,18 +90,18 @@ struct IDEProfilerView: View {
         let matches = session.searchMatches
         if !session.searchText.trimmingCharacters(in: .whitespaces).isEmpty {
             HStack(spacing: 2) {
-                Button { session.previousMatch() } label: { Image(systemName: "chevron.up") }
-                    .help("Previous occurrence")
-                Button { session.nextMatch() } label: { Image(systemName: "chevron.down") }
-                    .help("Next occurrence")
+                IDEIconButton(systemImage: "chevron.up", help: "Previous occurrence", isDisabled: matches.isEmpty) {
+                    session.previousMatch()
+                }
+                IDEIconButton(systemImage: "chevron.down", help: "Next occurrence", isDisabled: matches.isEmpty) {
+                    session.nextMatch()
+                }
                 Text(matches.isEmpty ? "no match" : "\((session.searchCursor % max(matches.count, 1)) + 1) of \(matches.count.formatted())")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .frame(minWidth: 52, alignment: .leading)
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .disabled(matches.isEmpty)
+            .ideIconButtonSize(.compact)
         }
     }
 
@@ -199,7 +200,7 @@ struct IDEProfilerView: View {
     }
 
     private var exportMenu: some View {
-        Menu {
+        IDEIconMenu(systemImage: "square.and.arrow.up", help: "Export", isDisabled: session.profile == nil) {
             Button("Copy Flame Graph Image") { copyImage() }
                 .disabled(session.mode != .flame || session.kind == .gc)
             Button("Save Flame Graph Image…") { saveImage() }
@@ -213,12 +214,7 @@ struct IDEProfilerView: View {
                 if let url = session.primaryRecording { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             }
             Button("Open as Hex") { session.openAsHex?() }
-        } label: {
-            Image(systemName: "square.and.arrow.up")
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .disabled(session.profile == nil)
     }
 
     private var statusLine: String {
@@ -447,7 +443,11 @@ private struct IDEProfilerPresentationMenu: View {
 
     var body: some View {
         @Bindable var session = session
-        return Menu {
+        return IDEIconMenu(
+            systemImage: "slider.horizontal.3",
+            help: "Presentation Settings",
+            isDisabled: session.profile == nil || session.kind == .gc
+        ) {
             Picker("Percentages", selection: $session.percentBase) {
                 ForEach(IDEProfilerSession.PercentBase.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -477,13 +477,7 @@ private struct IDEProfilerPresentationMenu: View {
                     Button("Show All Classes") { session.classFilters = [] }
                 }
             }
-        } label: {
-            Image(systemName: "slider.horizontal.3")
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .disabled(session.profile == nil || session.kind == .gc)
-        .help("Presentation Settings")
         .alert("Hide Classes", isPresented: $isAskingForPattern) {
             TextField("org.springframework, *Proxy", text: $patternText)
             Button("Hide") {
@@ -612,15 +606,10 @@ private struct IDEProfilerHotMethods: View {
     }
 
     private func detailTree(_ tree: JavaProfileTree, symbols: JavaProfileSymbols) -> some View {
-        List {
-            ForEach(IDEProfilerTreeRow.rows(of: JavaProfileTree.root, in: tree)) { row in
-                IDEProfilerTreeNodeView(
-                    session: session, tree: tree, symbols: symbols, row: row, expandHottest: true, allowsTransforms: false
-                )
-            }
-        }
-        .listStyle(.plain)
-        .id(session.selectedMethod.map { Int($0) } ?? -1)
+        IDEProfilerFlatTree(
+            session: session, tree: tree, symbols: symbols, allowsTransforms: false,
+            resetID: "\(session.selectedMethod.map { Int($0) } ?? -1)"
+        )
     }
 
     private func calleeList(of method: Int32, symbols: JavaProfileSymbols) -> some View {
@@ -680,7 +669,12 @@ private struct IDEProfilerCompareMenu: View {
         @Bindable var session = session
         let open = candidates.filter { $0.profile != nil }
         let recent = candidates.filter { $0.profile == nil }
-        Menu {
+        IDEIconMenu(
+            systemImage: "arrow.left.arrow.right",
+            help: "Compare With Baseline",
+            isActive: session.baselineTitle != nil,
+            isDisabled: session.profile == nil || session.kind == .gc
+        ) {
             if session.baselineTitle != nil {
                 Button("Stop Comparing") { session.clearBaseline() }
                 Picker("Compare", selection: $session.comparisonBasis) {
@@ -705,13 +699,7 @@ private struct IDEProfilerCompareMenu: View {
                 }
             }
             Button("Choose Recording…") { session.chooseBaselineFile?() }
-        } label: {
-            Image(systemName: "arrow.left.arrow.right")
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .disabled(session.profile == nil || session.kind == .gc)
-        .help("Compare With Baseline")
         .onAppear { reload() }
         .onChange(of: session.phase) { reload() }
         .onChange(of: session.baselineTitle) { reload() }
@@ -791,6 +779,39 @@ private struct IDEProfilerComparisonTable: View {
 
 // MARK: - Call tree
 
+/// Visible call-tree rows so arrow keys can walk the profiler like Coverage.
+enum IDEProfilerCallTreeRows {
+    static let childLimit = 200
+
+    struct Row: Identifiable, Equatable {
+        var id: Int { node }
+        var node: Int
+        var depth: Int
+        var canDisclose: Bool
+        var isExpanded: Bool
+    }
+
+    static func flatten(tree: JavaProfileTree, expanded: Set<Int>) -> [Row] {
+        var rows: [Row] = []
+        func visit(_ parent: Int, depth: Int) {
+            for child in tree.children(of: parent).prefix(childLimit) {
+                let canDisclose = tree.hasChildren(child)
+                let isExpanded = canDisclose && expanded.contains(child)
+                rows.append(Row(node: child, depth: depth, canDisclose: canDisclose, isExpanded: isExpanded))
+                if isExpanded { visit(child, depth: depth + 1) }
+            }
+        }
+        visit(JavaProfileTree.root, depth: 0)
+        return rows
+    }
+
+    /// The hottest child of the root opens first, as the nested tree used to.
+    static func hottestPath(in tree: JavaProfileTree) -> Set<Int> {
+        guard let first = tree.children(of: JavaProfileTree.root).first else { return [] }
+        return [first]
+    }
+}
+
 private struct IDEProfilerCallTree: View {
     let session: IDEProfilerSession
 
@@ -800,25 +821,17 @@ private struct IDEProfilerCallTree: View {
             VStack(spacing: 0) {
                 comparisonHeader
                 Divider()
-                List {
-                    ForEach(IDEProfilerTreeRow.rows(of: JavaProfileTree.root, in: comparison.tree)) { row in
-                        IDEProfilerTreeNodeView(
-                            session: session, tree: comparison.tree, symbols: comparison.symbols, row: row,
-                            expandHottest: true, allowsTransforms: false, comparison: comparison
-                        )
-                    }
-                }
-                .listStyle(.plain)
-                .id("\(session.treeRevision)-\(session.comparisonBasis)")
+                IDEProfilerFlatTree(
+                    session: session, tree: comparison.tree, symbols: comparison.symbols,
+                    allowsTransforms: false, comparison: comparison,
+                    resetID: "\(session.treeRevision)-\(session.comparisonBasis)"
+                )
             }
         } else if let tree = session.tree, let symbols = session.symbols {
-            List {
-                ForEach(IDEProfilerTreeRow.rows(of: JavaProfileTree.root, in: tree)) { row in
-                    IDEProfilerTreeNodeView(session: session, tree: tree, symbols: symbols, row: row, expandHottest: true)
-                }
-            }
-            .listStyle(.plain)
-            .id(session.treeRevision)
+            IDEProfilerFlatTree(
+                session: session, tree: tree, symbols: symbols, allowsTransforms: true,
+                resetID: "\(session.treeRevision)"
+            )
         }
     }
 
@@ -838,56 +851,164 @@ private struct IDEProfilerCallTree: View {
     }
 }
 
-struct IDEProfilerTreeRow: Identifiable {
-    var id: Int { node }
-    var node: Int
+private struct IDEProfilerFlatTree: View {
+    @Environment(IDEWorkspace.self) private var workspace
+    let session: IDEProfilerSession
+    let tree: JavaProfileTree
+    let symbols: JavaProfileSymbols
+    var allowsTransforms = true
+    var comparison: JavaProfileComparison?
+    let resetID: String
+    @State private var expanded: Set<Int> = []
+    @State private var selectedNode: Int?
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
-    static func rows(of parent: Int, in tree: JavaProfileTree) -> [IDEProfilerTreeRow] {
-        tree.children(of: parent).prefix(200).map { IDEProfilerTreeRow(node: $0) }
+    var body: some View {
+        let rows = IDEProfilerCallTreeRows.flatten(tree: tree, expanded: expanded)
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows) { row in
+                        IDEProfilerTreeNodeView(
+                            session: session, tree: tree, symbols: symbols, row: row,
+                            isSelected: isSelected(row),
+                            allowsTransforms: allowsTransforms, comparison: comparison,
+                            onSelect: { select(row) },
+                            onActivate: { activate(row) }
+                        )
+                        .id(row.id)
+                    }
+                }
+                .padding(.vertical, IDEAppearance.Spacing.xs)
+            }
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleKey(press, rows: rows)
+            }
+            .onChange(of: selectedNode) { _, id in
+                if let id { proxy.scrollTo(id) }
+            }
+            .onAppear { seedHottest() }
+            .onChange(of: resetID) { _, _ in seedHottest(resetting: true) }
+        }
+    }
+
+    private func seedHottest(resetting: Bool = false) {
+        if resetting || expanded.isEmpty {
+            expanded = IDEProfilerCallTreeRows.hottestPath(in: tree)
+        }
+        if resetting { selectedNode = nil }
+    }
+
+    private func isSelected(_ row: IDEProfilerCallTreeRows.Row) -> Bool {
+        if selectedNode == row.node { return true }
+        guard selectedNode == nil, comparison == nil else { return false }
+        let frame = tree.frame(of: row.node)
+        return frame >= 0 && session.selectedMethod == symbols.frame(frame).method
+    }
+
+    private func handleKey(_ press: KeyPress, rows: [IDEProfilerCallTreeRows.Row]) -> KeyPress.Result {
+        let current = rows.first { $0.node == selectedNode }
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            if let id = IDEListNeighbor.move(selectedNode, in: rows.map(\.node), by: delta),
+               let row = rows.first(where: { $0.node == id }) {
+                select(row)
+            }
+            return .handled
+        case .rightArrow:
+            typeahead.reset()
+            guard let current, current.canDisclose, !current.isExpanded else { return .ignored }
+            toggle(current)
+            return .handled
+        case .leftArrow:
+            typeahead.reset()
+            guard let current else { return .ignored }
+            if current.canDisclose, current.isExpanded {
+                toggle(current)
+            } else if let index = rows.firstIndex(where: { $0.node == current.node }),
+                      let parent = rows[..<index].last(where: { $0.depth < current.depth }) {
+                select(parent)
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            guard let current else { return .ignored }
+            activate(current)
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let row = IDEListTypeahead.match(
+                query: typeahead.typed(character), in: rows, selected: current,
+                title: { IDEFlameGraphNSView.label(frame: tree.frame(of: $0.node), symbols: symbols) }
+            ) {
+                select(row)
+            }
+            return .handled
+        }
+    }
+
+    private func select(_ row: IDEProfilerCallTreeRows.Row) {
+        selectedNode = row.node
+        isListFocused = true
+        let frame = tree.frame(of: row.node)
+        if frame >= 0, comparison == nil { session.selectedMethod = symbols.frame(frame).method }
+    }
+
+    private func toggle(_ row: IDEProfilerCallTreeRows.Row) {
+        guard row.canDisclose else { return }
+        if expanded.contains(row.node) {
+            expanded.remove(row.node)
+        } else {
+            expanded.insert(row.node)
+        }
+    }
+
+    private func activate(_ row: IDEProfilerCallTreeRows.Row) {
+        select(row)
+        if row.canDisclose {
+            toggle(row)
+        } else {
+            openSource(frame: tree.frame(of: row.node))
+        }
+    }
+
+    private func openSource(frame: Int32) {
+        guard frame >= 0 else { return }
+        let method = symbols.method(ofFrame: frame)
+        guard !method.className.isEmpty else { return }
+        session.openFrame?(method.className, Int(symbols.frame(frame).line), symbols.sourcePath(ofFrame: frame))
     }
 }
 
-/// One node of the call tree, expanded lazily: its children are only listed when it is open, and the
-/// hottest child of an expanded node opens first.
+/// One visible call-tree row: indent, chevron, label and the share numbers.
 private struct IDEProfilerTreeNodeView: View {
     let session: IDEProfilerSession
     let tree: JavaProfileTree
     let symbols: JavaProfileSymbols
-    let row: IDEProfilerTreeRow
-    var expandHottest = false
+    let row: IDEProfilerCallTreeRows.Row
+    let isSelected: Bool
     /// Off for the detail pane's trees: their node numbers are not the shown tree's.
     var allowsTransforms = true
     /// Set for a differential tree: the numbers are shares before and now, and their change.
     var comparison: JavaProfileComparison?
-    @State private var isExpanded = false
+    let onSelect: () -> Void
+    let onActivate: () -> Void
+
+    @State private var isHovering = false
 
     static let numberWidth: CGFloat = 52
 
     var body: some View {
-        let hasChildren = tree.hasChildren(row.node)
-        if hasChildren {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                if isExpanded {
-                    ForEach(IDEProfilerTreeRow.rows(of: row.node, in: tree)) { child in
-                        IDEProfilerTreeNodeView(
-                            session: session, tree: tree, symbols: symbols, row: child, allowsTransforms: allowsTransforms,
-                            comparison: comparison
-                        )
-                    }
-                }
-            } label: {
-                label
-            }
-            .onAppear {
-                // The hottest path opens on its own at the top, like a profiler's "hot path".
-                if expandHottest, !isExpanded, tree.children(of: JavaProfileTree.root).first == row.node { isExpanded = true }
-            }
-        } else {
-            label
-        }
-    }
-
-    private var label: some View {
         let frame = tree.frame(of: row.node)
         let total = tree.totalCount(of: row.node)
         let own = tree.selfCount(of: row.node)
@@ -895,10 +1016,13 @@ private struct IDEProfilerTreeNodeView: View {
             guard session.percentBase == .parent, let parent = tree.parent(of: row.node), parent != JavaProfileTree.root else { return nil }
             return tree.totalCount(of: parent)
         }()
-        // A merged tree has a symbol table of its own, so a method number from it is not one of the
-        // profile's: the source is opened by class name, and nothing is selected.
-        let isSelected = comparison == nil && frame >= 0 && session.selectedMethod == symbols.frame(frame).method
         return HStack(spacing: IDEAppearance.Spacing.xs) {
+            if row.canDisclose {
+                IDEDisclosureChevron(isExpanded: row.isExpanded, size: 10, width: 12)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            } else {
+                Spacer().frame(width: 12)
+            }
             Text(IDEFlameGraphNSView.label(frame: frame, symbols: symbols))
                 .font(IDEAppearance.Typography.body)
                 .fontWeight(isSelected ? .semibold : .regular)
@@ -919,12 +1043,15 @@ private struct IDEProfilerTreeNodeView: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
         }
+        .padding(.leading, CGFloat(row.depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
+        .padding(.trailing, IDEAppearance.Spacing.sm)
+        .padding(.vertical, IDEAppearance.Spacing.tight)
+        .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear))
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { openSource(frame: frame) }
-        .accessibilityAddTraits(.isButton)
-        .onTapGesture {
-            if frame >= 0, comparison == nil { session.selectedMethod = symbols.frame(frame).method }
-        }
+        .onHover { isHovering = $0 }
+        .onTapGesture(count: 2, perform: onActivate)
+        .simultaneousGesture(TapGesture().onEnded(onSelect))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .contextMenu {
             if frame >= 0 {
                 Button("Open Source") { openSource(frame: frame) }

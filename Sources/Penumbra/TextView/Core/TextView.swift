@@ -92,6 +92,13 @@ public struct DocumentTextExport: Sendable {
     public var onUnhandledKeymapAction: ((EditorActionID) -> Void)? {
         didSet { textInputView.onUnhandledKeymapAction = onUnhandledKeymapAction }
     }
+    /// Called when Escape was not consumed by the editor (block selection, extra carets,
+    /// snippets). Return `true` to consume it. Hosts use this so Find in Files can take the
+    /// keyboard back after a hit opened in the editor; interceptors still run first, so
+    /// completion and hover keep the top of the Escape stack.
+    public var onUnhandledEscape: (() -> Bool)? {
+        didSet { textInputView.onUnhandledEscape = onUnhandledEscape }
+    }
     private var keyDownInterceptors: [(NSEvent) -> Bool] = []
 
     /// Registers an additional key-down interceptor. Interceptors run after ``keyDownHandler``,
@@ -303,6 +310,13 @@ public struct DocumentTextExport: Sendable {
     var stringViewObjectIdentifier: ObjectIdentifier {
         ObjectIdentifier(textInputView.stringView)
     }
+    /// When false, the editor stays on screen but is skipped in the window key-view loop, so Tab
+    /// from a covering overlay cannot land in the hidden caret.
+    public var participatesInKeyViewLoop: Bool {
+        get { textInputView.participatesInKeyViewLoop }
+        set { textInputView.participatesInKeyViewLoop = newValue }
+    }
+
     /// A Boolean value that indicates whether the text view is editable.
     ///
     /// Turning this off does not resign first responder or hide the caret. A read-only

@@ -433,13 +433,9 @@ struct IDETerminalPanel: View {
         VStack(spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.sm) {
                 IDETerminalTabsBar()
-                Button(action: { workspace.addTerminalTab() }) {
-                    Image(systemName: "plus")
+                IDEIconButton(systemImage: "plus", help: "New Terminal Tab") {
+                    workspace.addTerminalTab()
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help("New Terminal Tab")
-                .accessibilityLabel("New Terminal Tab")
                 if workspace.isBottomTabSelected(.usages) {
                     IDEUsagesControls()
                 } else if workspace.isBottomTabSelected(.problems) {
@@ -451,32 +447,24 @@ struct IDETerminalPanel: View {
                     // A language module's tab brings its own header controls.
                     controls(workspace)
                 } else {
-                    Button(action: workspace.restartTerminal) {
-                        Image(systemName: "arrow.clockwise")
+                    IDEIconButton(systemImage: "arrow.clockwise", help: "Restart shell") {
+                        workspace.restartTerminal()
                     }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .help("Restart shell")
-                    .accessibilityLabel("Restart shell")
                 }
                 IDETerminalLayoutMenu()
-                Button(action: workspace.toggleBottomPanelExpanded) {
-                    Image(systemName: workspace.isBottomPanelExpanded
+                IDEIconButton(
+                    systemImage: workspace.isBottomPanelExpanded
                         ? "arrow.down.right.and.arrow.up.left"
-                        : "arrow.up.forward.square")
+                        : "arrow.up.forward.square",
+                    help: workspace.isBottomPanelExpanded ? "Restore Panel Size" : "Expand Over the Editor"
+                ) {
+                    workspace.toggleBottomPanelExpanded()
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help(workspace.isBottomPanelExpanded ? "Restore Panel Size" : "Expand Over the Editor")
-                .accessibilityLabel(workspace.isBottomPanelExpanded ? "Restore Panel Size" : "Expand Over the Editor")
-                Button(action: workspace.hideTerminal) {
-                    Image(systemName: "xmark")
+                IDEIconButton(systemImage: "xmark", help: "Close") {
+                    workspace.hideTerminal()
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help("Close")
-                .accessibilityLabel("Close")
             }
+            .ideIconButtonSize(.compact)
             .padding(.horizontal, IDEAppearance.Spacing.md)
             .padding(.vertical, IDEAppearance.Spacing.xs)
 
@@ -764,7 +752,7 @@ private struct IDETerminalLayoutMenu: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        Menu {
+        IDEIconMenu(systemImage: "rectangle.split.3x1", help: "Terminal Layout") {
             Section("Split") {
                 Button("Split Right") { workspace.splitTerminal(.trailing) }
                 Button("Split Down") { workspace.splitTerminal(.bottom) }
@@ -788,15 +776,7 @@ private struct IDETerminalLayoutMenu: View {
                     ))
                 }
             }
-        } label: {
-            Image(systemName: "rectangle.split.3x1")
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .foregroundStyle(IDEAppearance.ColorToken.muted)
-        .help("Terminal Layout")
-        .accessibilityLabel("Terminal Layout")
     }
 }
 
@@ -821,21 +801,14 @@ struct IDEHTTPConsoleControls: View {
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
-            Button(action: { workspace.httpSupport.resend() }) {
-                Image(systemName: "arrow.clockwise")
+            IDEIconButton(
+                systemImage: "arrow.clockwise",
+                help: "Send Request Again",
+                isDisabled: !workspace.httpSupport.canResend
+            ) {
+                workspace.httpSupport.resend()
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .disabled(!workspace.httpSupport.canResend)
-            .help("Send Request Again")
-            .accessibilityLabel("Send Request Again")
-            Button(action: copyOutput) {
-                Image(systemName: "doc.on.doc")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help("Copy HTTP Response")
-            .accessibilityLabel("Copy HTTP Response")
+            IDEIconButton(systemImage: "doc.on.doc", help: "Copy HTTP Response", action: copyOutput)
         }
     }
 

@@ -78,6 +78,55 @@ final class IDEGitStatusHistoryActionsTests: XCTestCase {
         XCTAssertEqual(model.selectedCommitHashes.count, 3)
     }
 
+    func testShiftExtendingBackTowardTheAnchorShrinksTheRange() async throws {
+        for (file, subject) in [("1\n", "one"), ("2\n", "two"), ("3\n", "three"), ("4\n", "four")] {
+            try await commit("a.txt", file, subject)
+        }
+        let model = try await makeModel(expecting: 4)
+        let hashes = model.commits.map(\.hash)
+
+        model.selectCommit(hashes[0])
+        model.extendCommitSelection(to: hashes[1])
+        model.extendCommitSelection(to: hashes[2])
+        XCTAssertEqual(model.selectedCommitHashes, Set(hashes[0...2]))
+
+        model.extendCommitSelection(to: hashes[1])
+        XCTAssertEqual(model.selectedCommitHashes, Set(hashes[0...1]), "⇧↑ after ⇧↓⇧↓ leaves two rows")
+        XCTAssertEqual(model.selectedCommitHash, hashes[1])
+    }
+
+    func testShiftClickRangesFromTheOriginalAnchorEachTime() async throws {
+        for (file, subject) in [("1\n", "one"), ("2\n", "two"), ("3\n", "three"), ("4\n", "four")] {
+            try await commit("a.txt", file, subject)
+        }
+        let model = try await makeModel(expecting: 4)
+        let hashes = model.commits.map(\.hash)
+
+        model.selectCommit(hashes[1])
+        model.extendCommitSelection(to: hashes[3])
+        model.extendCommitSelection(to: hashes[2])
+
+        XCTAssertEqual(model.selectedCommitHashes, Set(hashes[1...2]))
+        XCTAssertEqual(model.commitSelectionAnchor, hashes[1])
+    }
+
+    func testShiftExtendCrossesTheAnchorAndAPlainSelectMovesIt() async throws {
+        for (file, subject) in [("1\n", "one"), ("2\n", "two"), ("3\n", "three")] {
+            try await commit("a.txt", file, subject)
+        }
+        let model = try await makeModel(expecting: 3)
+        let hashes = model.commits.map(\.hash)
+
+        model.selectCommit(hashes[1])
+        model.extendCommitSelection(to: hashes[2])
+        model.extendCommitSelection(to: hashes[0])
+        XCTAssertEqual(model.selectedCommitHashes, Set(hashes[0...1]))
+
+        model.selectCommit(hashes[2])
+        XCTAssertEqual(model.selectedCommitHashes, [hashes[2]])
+        XCTAssertEqual(model.commitSelectionAnchor, hashes[2])
+    }
+
     func testSelectingACommitListsTheBranchesThatContainIt() async throws {
         try await commit("a.txt", "1\n", "one")
         try await git("branch", "other")

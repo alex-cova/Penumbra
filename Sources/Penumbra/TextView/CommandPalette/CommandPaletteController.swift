@@ -136,6 +136,14 @@ public final class CommandPaletteController {
     /// Set by ⌘E until the first results arrive or the user moves, types or filters.
     private var pendingInitialRecentSelection = false
     private var lastQueries: [EditorPaletteMode: String] = [:]
+    /// Query whose rows are currently in `currentSections`. Nil while a search is in flight, so
+    /// Return waits instead of confirming a stale row.
+    private var displayedQuery: String?
+    private enum PendingActivation {
+        case primary
+        case alternate
+    }
+    private var pendingActivation: PendingActivation?
 
     var flatItems: [PaletteItem] { currentSections.flatMap(\.items) }
 
@@ -360,6 +368,8 @@ public final class CommandPaletteController {
         paletteView.isSearching = false
         isStaticList = false
         currentSections = []
+        displayedQuery = nil
+        pendingActivation = nil
         paletteModel.hide()
         backdrop.isHidden = true
         _ = (presentingTextView ?? textView)?.focusTextInput()
@@ -413,6 +423,8 @@ public final class CommandPaletteController {
         paletteModel.query = seed
         paletteModel.selectedIndex = 0
         paletteModel.isPresented = true
+        displayedQuery = nil
+        pendingActivation = nil
         paletteView.placeholder = placeholder
         paletteView.query = seed
         configureTabs()
@@ -718,6 +730,7 @@ public final class CommandPaletteController {
         // search keeps a longer debounce so it isn't restarted for every character.
         let debounce: UInt64? = isDiskSearch ? 150 : (fileIndex != nil ? 10 : nil)
         let delay = debounce ?? engine.debounceMilliseconds
+        displayedQuery = nil
         paletteView.emptyStateMessage = emptyStateMessage(for: rawQuery)
         paletteView.isSearching = delay >= PaletteChromeMetrics.searchingIndicatorMinimumDebounce
         engine.search(
@@ -729,10 +742,13 @@ public final class CommandPaletteController {
             self.paletteView.isSearching = false
             self.paletteView.emptyStateMessage = self.emptyStateMessage(for: rawQuery)
             self.currentSections = sections
+            self.displayedQuery = rawQuery
+            self.paletteModel.selectedIndex = 0
             self.applyInitialRecentSelection(query: rawQuery)
             self.paletteModel.clampSelection(count: self.flatItems.count)
             self.paletteView.update(sections: sections, selectedItemIndex: self.paletteModel.selectedIndex)
             self.focusDestinationsIfNoFiles()
+            self.consumePendingActivation()
         }
     }
 
@@ -824,6 +840,12 @@ public final class CommandPaletteController {
             textView?.goToLine(target - 1)
             return
         }
+        // A newer query is still in flight: wait for its rows rather than confirming the previous
+        // query's selection (index 5 of "Foo" is not row 5 of "Foobar").
+        if !isStaticList, displayedQuery != paletteModel.query {
+            pendingActivation = alternate ? .alternate : .primary
+            return
+        }
         let items = flatItems
         guard items.indices.contains(paletteModel.selectedIndex) else {
             // Nothing recent matches: carry the query over to Go to File, as IntelliJ does.
@@ -848,6 +870,13 @@ public final class CommandPaletteController {
         guard let action else { return }
         dismiss()
         action()
+    }
+
+    private func consumePendingActivation() {
+        guard let pending = pendingActivation else { return }
+        pendingActivation = nil
+        guard paletteModel.isPresented else { return }
+        activateSelection(alternate: pending == .alternate)
     }
 
     private func activateDestination() {
@@ -885,6 +914,7 @@ public final class CommandPaletteController {
         paletteView.onQueryChange = { [weak self] query in
             guard let self else { return }
             self.paletteModel.query = query
+            self.paletteModel.selectedIndex = 0
             self.pendingInitialRecentSelection = false
             if self.usesNavigationChrome {
                 self.selectedDestinationIndex = 0

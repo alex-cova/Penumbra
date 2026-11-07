@@ -117,6 +117,17 @@ final class IDECallHierarchyStore {
         return copy
     }
 
+    func node(withID id: String) -> HierarchyItem? {
+        rows.first { $0.id == id }?.node
+    }
+
+    func moveSelection(by delta: Int) {
+        let visible = rows
+        guard !visible.isEmpty else { return }
+        let current = visible.firstIndex { $0.id == selectedID } ?? -1
+        selectedID = visible[min(max(0, current + delta), visible.count - 1)].id
+    }
+
     func toggle(_ node: HierarchyItem) {
         if expanded.contains(node.id) {
             expanded.remove(node.id)
@@ -154,6 +165,8 @@ final class IDECallHierarchyStore {
 
 struct IDECallHierarchyPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         let store = workspace.visibleCallHierarchy
@@ -194,26 +207,26 @@ struct IDECallHierarchyPanel: View {
                 .font(IDEAppearance.Typography.body.weight(.medium))
                 .lineLimit(1)
             Spacer()
-            Button { workspace.pinCallHierarchy() } label: {
-                Image(systemName: "pin")
+            IDEIconButton(
+                systemImage: "pin",
+                help: "Pin Tab: keep this hierarchy when the next one opens"
+            ) {
+                workspace.pinCallHierarchy()
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-            .help("Pin Tab: keep this hierarchy when the next one opens")
-            .accessibilityLabel("Pin hierarchy")
-            Button { workspace.closeCallHierarchy() } label: {
-                Image(systemName: "xmark")
+            IDEIconButton(systemImage: "xmark", help: "Close Hierarchy") {
+                workspace.closeCallHierarchy()
             }
-            .buttonStyle(.plain)
         }
+        .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, IDEAppearance.Spacing.xs)
     }
 
     private func tree(_ store: IDECallHierarchyStore) -> some View {
-        ScrollView {
+        let rows = store.rows
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(store.rows) { row in
+                ForEach(rows) { row in
                     HStack(spacing: IDEAppearance.Spacing.xs) {
                         Color.clear.frame(width: CGFloat(row.depth) * 14)
                         Button {
@@ -238,9 +251,68 @@ struct IDECallHierarchyPanel: View {
                     // Double-tap first, or the single tap consumes the click.
                     .onTapGesture(count: 2) { workspace.openCallHierarchyNode(row.node, in: store) }
                     .accessibilityAddTraits(.isButton)
-                    .onTapGesture { store.selectedID = row.node.id }
+                    .onTapGesture {
+                        store.selectedID = row.node.id
+                        isFocused = true
+                    }
                 }
             }
+        }
+        .focusable()
+        .focused($isFocused)
+        .focusEffectDisabled()
+        .onKeyPress(phases: [.down, .repeat]) { press in
+            handleKey(press, store: store, rows: rows)
+        }
+    }
+
+    private func handleKey(
+        _ press: KeyPress,
+        store: IDECallHierarchyStore,
+        rows: [IDECallHierarchyStore.Row]
+    ) -> KeyPress.Result {
+        switch press.key {
+        case .return:
+            typeahead.reset()
+            if let id = store.selectedID, let node = store.node(withID: id) {
+                workspace.openCallHierarchyNode(node, in: store)
+            }
+            return .handled
+        case .downArrow:
+            typeahead.reset()
+            store.moveSelection(by: 1)
+            return .handled
+        case .upArrow:
+            typeahead.reset()
+            store.moveSelection(by: -1)
+            return .handled
+        case .rightArrow:
+            typeahead.reset()
+            if let id = store.selectedID, let row = rows.first(where: { $0.id == id }), row.canExpand, !row.isExpanded {
+                store.toggle(row.node)
+            }
+            return .handled
+        case .leftArrow:
+            typeahead.reset()
+            if let id = store.selectedID, let row = rows.first(where: { $0.id == id }), row.isExpanded {
+                store.toggle(row.node)
+            }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let id = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: rows.map(\.id),
+                selected: store.selectedID,
+                title: { id in rows.first { $0.id == id }?.node.name ?? "" }
+            ) {
+                store.selectedID = id
+            }
+            return .handled
         }
     }
 

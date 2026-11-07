@@ -6,6 +6,8 @@ import SwiftUI
 struct IDEBreakpointsPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var newBreakpointKind: IDENewBreakpointKind?
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
     private struct Group: Identifiable {
         let id: String
@@ -58,11 +60,16 @@ struct IDEBreakpointsPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.panel)
+        .ideSidebarFocus(.breakpoints, on: $isListFocused)
         .sheet(item: $newBreakpointKind) { kind in
             IDENewBreakpointSheet(kind: kind) { breakpoint in
                 workspace.addBreakpoint(breakpoint)
             }
         }
+    }
+
+    private var breakpointIDs: [UUID] {
+        groups.flatMap { $0.breakpoints.map(\.id) }
     }
 
     private var toolbar: some View {
@@ -72,17 +79,11 @@ struct IDEBreakpointsPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .padding(.leading, IDEAppearance.Spacing.xs)
             Spacer(minLength: 0)
-            Menu {
+            IDEIconMenu(systemImage: "plus", help: "Add Breakpoint") {
                 Button("Java Exception Breakpoint…") { newBreakpointKind = .exception }
                 Button("Java Method Breakpoint…") { newBreakpointKind = .method }
                 Button("Java Field Watchpoint…") { newBreakpointKind = .field }
-            } label: {
-                Image(systemName: "plus")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Add Breakpoint")
             IDEIconButton(
                 systemImage: workspace.breakpointsMuted ? "circle.slash.fill" : "circle.slash",
                 help: workspace.breakpointsMuted ? "Unmute Breakpoints" : "Mute Breakpoints"
@@ -99,24 +100,82 @@ struct IDEBreakpointsPanel: View {
     }
 
     private var list: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(groups) { group in
-                    header(group)
-                    ForEach(group.breakpoints) { breakpoint in
-                        IDEBreakpointRow(
-                            breakpoint: breakpoint,
-                            isSelected: workspace.selectedBreakpointID == breakpoint.id,
-                            isMuted: workspace.breakpointsMuted,
-                            onSelect: { workspace.selectedBreakpointID = breakpoint.id },
-                            onOpen: { workspace.openBreakpoint(breakpoint) },
-                            onToggle: { workspace.setBreakpointEnabled(breakpoint, enabled: !breakpoint.isEnabled) },
-                            onRemove: { workspace.removeBreakpoint(breakpoint) }
-                        )
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(groups) { group in
+                        header(group)
+                        ForEach(group.breakpoints) { breakpoint in
+                            IDEBreakpointRow(
+                                breakpoint: breakpoint,
+                                isSelected: workspace.selectedBreakpointID == breakpoint.id,
+                                isMuted: workspace.breakpointsMuted,
+                                onSelect: {
+                                    isListFocused = true
+                                    workspace.selectedBreakpointID = breakpoint.id
+                                },
+                                onOpen: { workspace.openBreakpoint(breakpoint) },
+                                onToggle: { workspace.setBreakpointEnabled(breakpoint, enabled: !breakpoint.isEnabled) },
+                                onRemove: { workspace.removeBreakpoint(breakpoint) }
+                            )
+                            .id(breakpoint.id)
+                        }
                     }
                 }
+                .padding(.vertical, IDEAppearance.Spacing.xs)
             }
-            .padding(.vertical, IDEAppearance.Spacing.xs)
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleListKey(press)
+            }
+            .onChange(of: workspace.selectedBreakpointID) { _, id in
+                if let id { proxy.scrollTo(id) }
+            }
+        }
+    }
+
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        let ids = breakpointIDs
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            if let next = IDEListNeighbor.move(workspace.selectedBreakpointID, in: ids, by: delta) {
+                workspace.selectedBreakpointID = next
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            if let id = workspace.selectedBreakpointID,
+               let breakpoint = workspace.breakpoints.first(where: { $0.id == id }) {
+                workspace.openBreakpoint(breakpoint)
+            }
+            return .handled
+        case .space:
+            typeahead.reset()
+            if let id = workspace.selectedBreakpointID,
+               let breakpoint = workspace.breakpoints.first(where: { $0.id == id }) {
+                workspace.setBreakpointEnabled(breakpoint, enabled: !breakpoint.isEnabled)
+            }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            let breakpoints = groups.flatMap(\.breakpoints)
+            if let breakpoint = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: breakpoints,
+                selected: breakpoints.first { $0.id == workspace.selectedBreakpointID },
+                title: \.title
+            ) {
+                workspace.selectedBreakpointID = breakpoint.id
+            }
+            return .handled
         }
     }
 
@@ -192,6 +251,13 @@ struct IDEBreakpointsPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, IDEAppearance.Spacing.md)
+        .focusable()
+        .focused($isListFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.escape) {
+            workspace.focusActiveEditor()
+            return .handled
+        }
         .accessibilityElement(children: .combine)
     }
 }

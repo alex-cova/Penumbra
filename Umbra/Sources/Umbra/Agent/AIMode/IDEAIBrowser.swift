@@ -1,4 +1,5 @@
 import AgentKit
+import AppKit
 import Foundation
 import Observation
 import WebKit
@@ -88,6 +89,23 @@ enum IDEAIBrowserAddress {
             }
         }
         return found
+    }
+}
+
+/// Address-bar shortcuts that must work even while the page (a `WKWebView`) is first responder.
+enum IDEAIBrowserChromeKeys {
+    static func isFocusAddress(_ event: NSEvent) -> Bool {
+        event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+            && event.charactersIgnoringModifiers?.lowercased() == "l"
+    }
+
+    static func isWebKitFirstResponder(_ responder: NSResponder?) -> Bool {
+        var current = responder
+        while let node = current {
+            if node is WKWebView { return true }
+            current = node.nextResponder
+        }
+        return false
     }
 }
 

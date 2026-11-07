@@ -23,6 +23,9 @@ extension IDENotificationSeverity {
 /// The bell's dropdown: a card under the titlebar, top-right, listing what is waiting.
 struct IDENotificationPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @State private var selectedID: IDENotification.ID?
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
     private var center: IDENotificationCenter { workspace.notifications }
 
@@ -39,19 +42,44 @@ struct IDENotificationPanel: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, minHeight: 150)
                     .padding(.horizontal, IDEAppearance.Spacing.md)
+                    .focusable()
+                    .focused($isListFocused)
+                    .focusEffectDisabled()
+                    .onKeyPress(.escape) { closePanel() }
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(center.items) { item in
-                            IDENotificationRow(item: item) {
-                                workspace.activate(item)
-                            } dismiss: {
-                                center.remove(item.id)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(center.items) { item in
+                                IDENotificationRow(
+                                    item: item,
+                                    isSelected: selectedID == item.id,
+                                    onSelect: {
+                                        selectedID = item.id
+                                        isListFocused = true
+                                    },
+                                    open: { workspace.activate(item) },
+                                    dismiss: { dismiss(item.id) }
+                                )
+                                .id(item.id)
                             }
                         }
                     }
+                    .frame(maxHeight: 360)
+                    .focusable()
+                    .focused($isListFocused)
+                    .focusEffectDisabled()
+                    .onKeyPress(phases: [.down, .repeat]) { press in
+                        handleKey(press)
+                    }
+                    .onKeyPress(keys: [.delete, .deleteForward]) { _ in
+                        if let selectedID { dismiss(selectedID) }
+                        return .handled
+                    }
+                    .onChange(of: selectedID) { _, id in
+                        if let id { proxy.scrollTo(id) }
+                    }
                 }
-                .frame(maxHeight: 360)
             }
         }
         .frame(width: 340)
@@ -59,6 +87,14 @@ struct IDENotificationPanel: View {
         .shadow(color: IDEAppearance.Shadow.cardColor, radius: 12, y: 4)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Notifications")
+        .onAppear {
+            if selectedID == nil { selectedID = center.items.first?.id }
+            isListFocused = true
+        }
+        .onChange(of: center.items.map(\.id)) { _, ids in
+            if let selectedID, ids.contains(selectedID) { return }
+            self.selectedID = ids.first
+        }
     }
 
     private var header: some View {
@@ -86,40 +122,82 @@ struct IDENotificationPanel: View {
     }
 
     private var categoryMenu: some View {
-        Menu {
+        IDEIconMenu(systemImage: "slider.horizontal.3", help: "Notification Sources") {
             ForEach(IDENotificationCategory.allCases) { category in
                 Toggle(category.displayName, isOn: Binding(
                     get: { center.isEnabled(category) },
                     set: { center.setCategory(category, enabled: $0) }
                 ))
             }
-        } label: {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: IDEAppearance.IconSize.titlebarGlyph))
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(width: 26, height: 26)
-                .contentShape(Rectangle())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Notification Sources")
-        .accessibilityLabel("Notification Sources")
+    }
+
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        let ids = center.items.map(\.id)
+        let current = center.items.first { $0.id == selectedID }
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            if let id = IDEListNeighbor.move(selectedID, in: ids, by: delta) {
+                selectedID = id
+                isListFocused = true
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            guard let current, current.action != nil else { return .ignored }
+            workspace.activate(current)
+            return .handled
+        case .escape:
+            typeahead.reset()
+            return closePanel()
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let item = IDEListTypeahead.match(
+                query: typeahead.typed(character), in: center.items, selected: current, title: \.title
+            ) {
+                selectedID = item.id
+                isListFocused = true
+            }
+            return .handled
+        }
+    }
+
+    private func dismiss(_ id: IDENotification.ID) {
+        let ids = center.items.map(\.id)
+        let fallback: IDENotification.ID?
+        if let index = ids.firstIndex(of: id) {
+            fallback = index + 1 < ids.count ? ids[index + 1] : (index > 0 ? ids[index - 1] : nil)
+        } else {
+            fallback = selectedID
+        }
+        center.remove(id)
+        selectedID = fallback
+        isListFocused = true
+    }
+
+    private func closePanel() -> KeyPress.Result {
+        workspace.notifications.setPanelPresented(false)
+        return .handled
     }
 }
 
 private struct IDENotificationRow: View {
     let item: IDENotification
+    var isSelected = false
+    let onSelect: () -> Void
     let open: () -> Void
     let dismiss: () -> Void
 
     @State private var isHovering = false
-    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: IDEAppearance.Spacing.sm) {
-            Button(action: open) {
+            Button {
+                onSelect()
+                open()
+            } label: {
                 HStack(alignment: .top, spacing: IDEAppearance.Spacing.sm) {
                     Image(systemName: item.severity.symbolName)
                         .foregroundStyle(item.severity.tint)
@@ -165,35 +243,17 @@ private struct IDENotificationRow: View {
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .opacity(isHovering || isFocused ? 1 : 0)
+            .opacity(isHovering || isSelected ? 1 : 0)
             .help("Dismiss")
             .accessibilityLabel("Dismiss notification")
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .padding(.vertical, IDEAppearance.Spacing.sm)
-        .background(isHovering || isFocused ? IDEAppearance.ColorToken.controlHover : Color.clear)
+        .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear))
+        .contentShape(Rectangle())
         .onHover { isHovering = $0 }
-        // The row is the one keyboard stop: Return opens it, Delete dismisses it. Its dismiss
-        // button shows while the row has focus, not only under the pointer.
-        .focusable()
-        .focusEffectDisabled()
-        .focused($isFocused)
-        .overlay {
-            if isFocused {
-                RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
-                    .stroke(IDEAppearance.ColorToken.accent, lineWidth: 1.5)
-                    .allowsHitTesting(false)
-            }
-        }
-        .onKeyPress(.return) {
-            guard item.action != nil else { return .ignored }
-            open()
-            return .handled
-        }
-        .onKeyPress(keys: [.delete, .deleteForward]) { _ in
-            dismiss()
-            return .handled
-        }
+        .onTapGesture(perform: onSelect)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(named: "Dismiss", dismiss)
     }
 }

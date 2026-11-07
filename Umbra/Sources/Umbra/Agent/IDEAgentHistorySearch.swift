@@ -22,8 +22,11 @@ struct IDEAgentHistoryPopover: View {
     let dismiss: () -> Void
 
     @State private var query = ""
+    @State private var selectedID: UUID?
     @State private var deleting: SessionSummary?
+    @State private var typeahead = IDETypeaheadBuffer()
     @FocusState private var isSearching: Bool
+    @FocusState private var isListFocused: Bool
 
     private var results: [SessionSummary] { IDEAgentHistorySearch.rank(agent.history, query: query) }
 
@@ -32,7 +35,20 @@ struct IDEAgentHistoryPopover: View {
             TextField("Search earlier chats", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .focused($isSearching)
-                .onSubmit { if let first = results.first { open(first) } }
+                .onSubmit { openSelected() }
+                .onKeyPress(.downArrow) {
+                    isListFocused = true
+                    if selectedID == nil { selectedID = results.first?.id }
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    if query.isEmpty {
+                        dismiss()
+                    } else {
+                        query = ""
+                    }
+                    return .handled
+                }
                 .padding(IDEAppearance.Spacing.sm)
             Divider().overlay(IDEAppearance.ColorToken.border)
 
@@ -41,20 +57,37 @@ struct IDEAgentHistoryPopover: View {
             } else if results.isEmpty {
                 message("No chat matches “\(query)”.")
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(results) { summary in
-                            row(summary)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(results) { summary in
+                                row(summary)
+                                    .id(summary.id)
+                            }
                         }
                     }
+                    .frame(maxHeight: 340)
+                    .focusable()
+                    .focused($isListFocused)
+                    .focusEffectDisabled()
+                    .onKeyPress(phases: [.down, .repeat]) { press in
+                        handleListKey(press)
+                    }
+                    .onChange(of: selectedID) { _, id in
+                        if let id { proxy.scrollTo(id) }
+                    }
                 }
-                .frame(maxHeight: 340)
             }
         }
         .frame(width: 340)
         .onAppear {
             agent.refreshHistory()
             isSearching = true
+        }
+        .onChange(of: query) { _, _ in
+            if let selectedID, !results.contains(where: { $0.id == selectedID }) {
+                self.selectedID = results.first?.id
+            }
         }
         .confirmationDialog(
             "Delete “\(deleting?.title ?? "")”?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
@@ -80,7 +113,9 @@ struct IDEAgentHistoryPopover: View {
 
     private func row(_ summary: SessionSummary) -> some View {
         let isOpen = agent.conversations.contains { $0.conversationID == summary.id }
+        let isSelected = selectedID == summary.id
         return Button {
+            selectedID = summary.id
             open(summary)
         } label: {
             HStack(spacing: IDEAppearance.Spacing.sm) {
@@ -101,6 +136,8 @@ struct IDEAgentHistoryPopover: View {
             }
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -117,6 +154,51 @@ struct IDEAgentHistoryPopover: View {
         if let cost = summary.cost { parts.append(IDEAgentPrices.format(cost)) }
         if isOpen { parts.append("open") }
         return parts.joined(separator: "  ·  ")
+    }
+
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        let ids = results.map(\.id)
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            if let next = IDEListNeighbor.move(selectedID, in: ids, by: press.key == .downArrow ? 1 : -1) {
+                selectedID = next
+                isListFocused = true
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            openSelected()
+            return .handled
+        case .delete, .deleteForward:
+            typeahead.reset()
+            deleting = results.first { $0.id == selectedID }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            dismiss()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let id = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: ids,
+                selected: selectedID,
+                title: { id in results.first { $0.id == id }?.title ?? "" }
+            ) {
+                selectedID = id
+                isListFocused = true
+            }
+            return .handled
+        }
+    }
+
+    private func openSelected() {
+        if let selectedID, let summary = results.first(where: { $0.id == selectedID }) {
+            open(summary)
+        } else if let first = results.first {
+            open(first)
+        }
     }
 
     private func open(_ summary: SessionSummary) {

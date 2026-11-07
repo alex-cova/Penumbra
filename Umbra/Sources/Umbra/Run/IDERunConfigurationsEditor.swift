@@ -108,6 +108,35 @@ final class IDERunConfigurationsEditor {
         return result
     }
 
+    /// Painted order: configurations by kind and folder, then every kind's template.
+    var keyboardOrder: [Selection] {
+        var order: [Selection] = []
+        for kind in JavaRunConfiguration.Kind.allCases {
+            for group in groups(of: kind) {
+                for configuration in group.configurations {
+                    order.append(.configuration(configuration.id))
+                }
+            }
+        }
+        for kind in JavaRunConfiguration.Kind.allCases {
+            order.append(.template(kind))
+        }
+        return order
+    }
+
+    func title(for selection: Selection) -> String {
+        switch selection {
+        case .configuration(let id):
+            return configurations.first { $0.id == id }?.displayName ?? ""
+        case .template(let kind):
+            return kind.title
+        }
+    }
+
+    func moveSelection(by delta: Int) {
+        selection = IDEListNeighbor.move(selection, in: keyboardOrder, by: delta)
+    }
+
     // MARK: - Editing
 
     /// A new configuration of `kind` from its template, selected. `target` is what it launches.

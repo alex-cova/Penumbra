@@ -107,4 +107,25 @@ final class IDEHierarchyStoreTests: XCTestCase {
         XCTAssertEqual(pinned.languageIdentifier, "java")
         XCTAssertEqual(scopes.last, .production)
     }
+
+    func testCallStoreArrowsMoveSelectionAndStopAtTheEnds() async {
+        let store = IDECallHierarchyStore()
+        store.loader = { _, _, _, _ in [self.item("caller"), self.item("other")] }
+        store.show(root: item("target"), file: nil)
+        store.toggle(store.rows[0].node)
+        await settle()
+        XCTAssertEqual(store.rows.map(\.node.name), ["target", "caller", "other"])
+        XCTAssertEqual(store.selectedID, "target")
+        store.moveSelection(by: 1)
+        XCTAssertEqual(store.selectedID, "caller")
+        store.moveSelection(by: 1)
+        XCTAssertEqual(store.selectedID, "other")
+        store.moveSelection(by: 1)
+        XCTAssertEqual(store.selectedID, "other")
+        store.moveSelection(by: -1)
+        XCTAssertEqual(store.selectedID, "caller")
+        store.selectedID = nil
+        store.moveSelection(by: 1)
+        XCTAssertEqual(store.selectedID, "target")
+    }
 }

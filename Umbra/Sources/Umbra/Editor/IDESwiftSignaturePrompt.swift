@@ -183,14 +183,12 @@ struct IDESwiftSignaturePromptView: View {
     private func row(_ index: Int, _ parameter: SwiftSignatureParameter) -> some View {
         let isNew = parameter.oldIndex == nil
         return HStack(spacing: IDEAppearance.Spacing.xs) {
-            Button { model.move(index, by: -1) } label: { Image(systemName: "arrow.up") }
-                .buttonStyle(.borderless)
-                .disabled(!model.canMove(index, by: -1))
-                .help("Move up")
-            Button { model.move(index, by: 1) } label: { Image(systemName: "arrow.down") }
-                .buttonStyle(.borderless)
-                .disabled(!model.canMove(index, by: 1))
-                .help("Move down")
+            IDEIconButton(systemImage: "arrow.up", help: "Move up", isDisabled: !model.canMove(index, by: -1)) {
+                model.move(index, by: -1)
+            }
+            IDEIconButton(systemImage: "arrow.down", help: "Move down", isDisabled: !model.canMove(index, by: 1)) {
+                model.move(index, by: 1)
+            }
             field("label", text: Binding(get: { model.parameters[index].label }, set: { model.parameters[index].label = $0 }), width: 90)
             field("name", text: Binding(get: { model.parameters[index].name }, set: { model.rename(index, to: $0) }), width: 100)
             if isNew {
@@ -208,10 +206,11 @@ struct IDESwiftSignaturePromptView: View {
             } else {
                 Color.clear.frame(width: 80)
             }
-            Button { model.remove(index) } label: { Image(systemName: "minus.circle") }
-                .buttonStyle(.borderless)
-                .help("Remove this parameter")
+            IDEIconButton(systemImage: "minus.circle", help: "Remove this parameter") {
+                model.remove(index)
+            }
         }
+        .ideIconButtonSize(.compact)
     }
 
     private func field(_ prompt: String, text: Binding<String>, width: CGFloat) -> some View {

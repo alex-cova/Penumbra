@@ -208,3 +208,75 @@ final class IDECoverageController {
         return parts.joined(separator: " · ")
     }
 }
+
+/// Packages and classes as a flat list so arrow keys can walk Coverage like Gradle.
+@MainActor
+enum IDECoverageTree {
+    enum Kind: Equatable {
+        case package(String)
+        case klass(String)
+    }
+
+    struct Row: Identifiable, Equatable {
+        var id: String
+        var title: String
+        var depth: Int
+        var canDisclose: Bool
+        var isExpanded: Bool
+        var kind: Kind
+        var linePercent: Int?
+        var branchPercent: Int?
+        var methodPercent: Int?
+        var linesCovered: Int
+        var linesTotal: Int
+        var sourceURL: URL?
+        var firstMissedLine: Int?
+    }
+
+    static func packageKey(_ name: String) -> String { "package:\(name)" }
+    static func classKey(_ binaryName: String) -> String { "class:\(binaryName)" }
+
+    static func flatten(
+        packages: [IDECoverageController.PackageRow],
+        collapsed: Set<String>
+    ) -> [Row] {
+        var rows: [Row] = []
+        for package in packages {
+            let expanded = !collapsed.contains(package.name)
+            rows.append(Row(
+                id: packageKey(package.name),
+                title: package.name,
+                depth: 0,
+                canDisclose: true,
+                isExpanded: expanded,
+                kind: .package(package.name),
+                linePercent: package.linePercent,
+                branchPercent: nil,
+                methodPercent: nil,
+                linesCovered: 0,
+                linesTotal: 0,
+                sourceURL: nil,
+                firstMissedLine: nil
+            ))
+            guard expanded else { continue }
+            for item in package.classes {
+                rows.append(Row(
+                    id: classKey(item.binaryName),
+                    title: item.displayName,
+                    depth: 1,
+                    canDisclose: false,
+                    isExpanded: false,
+                    kind: .klass(item.binaryName),
+                    linePercent: item.linePercent,
+                    branchPercent: item.branchPercent,
+                    methodPercent: item.methodPercent,
+                    linesCovered: item.lines.covered,
+                    linesTotal: item.lines.total,
+                    sourceURL: item.sourceURL,
+                    firstMissedLine: item.firstMissedLine
+                ))
+            }
+        }
+        return rows
+    }
+}

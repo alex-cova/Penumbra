@@ -10,6 +10,8 @@ struct IDEAgentRewindSheet: View {
     @State private var selectedID: UUID?
     @State private var scope: IDEAgentRewind.Scope = .both
     @State private var isWorking = false
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
     private var targets: [IDEAgentRewindTarget] { agent.selected.rewindTargets }
     private var selected: IDEAgentRewindTarget? { targets.first { $0.id == (selectedID ?? request.entryID ?? targets.first?.id) } }
@@ -27,16 +29,28 @@ struct IDEAgentRewindSheet: View {
                     .font(IDEAppearance.Typography.body)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             } else {
-                ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(targets) { target in
-                            row(target)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 2) {
+                            ForEach(targets) { target in
+                                row(target)
+                                    .id(target.id)
+                            }
                         }
                     }
+                    .frame(minHeight: 120, maxHeight: 220)
+                    .background(IDEAppearance.ColorToken.editor)
+                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+                    .focusable()
+                    .focused($isListFocused)
+                    .focusEffectDisabled()
+                    .onKeyPress(phases: [.down, .repeat]) { press in
+                        handleListKey(press)
+                    }
+                    .onChange(of: selectedID) { _, id in
+                        if let id { proxy.scrollTo(id) }
+                    }
                 }
-                .frame(minHeight: 120, maxHeight: 220)
-                .background(IDEAppearance.ColorToken.editor)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
 
                 VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
                     ForEach(IDEAgentRewind.Scope.allCases, id: \.self) { option in
@@ -101,7 +115,38 @@ struct IDEAgentRewindSheet: View {
         }
         .padding(IDEAppearance.Spacing.lg)
         .frame(width: 460)
-        .onAppear { selectedID = request.entryID ?? targets.first?.id }
+        .onAppear {
+            selectedID = request.entryID ?? targets.first?.id
+            isListFocused = true
+        }
+    }
+
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        let ids = targets.map(\.id)
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            if let next = IDEListNeighbor.move(selectedID, in: ids, by: press.key == .downArrow ? 1 : -1) {
+                selectedID = next
+                isListFocused = true
+            }
+            return .handled
+        case .return, .escape:
+            typeahead.reset()
+            return .ignored
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let id = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: ids,
+                selected: selectedID,
+                title: { id in targets.first { $0.id == id }?.text ?? "" }
+            ) {
+                selectedID = id
+                isListFocused = true
+            }
+            return .handled
+        }
     }
 
     private func row(_ target: IDEAgentRewindTarget) -> some View {
@@ -111,6 +156,7 @@ struct IDEAgentRewindSheet: View {
         if target.files > 0 { parts.append("\(target.files) \(target.files == 1 ? "file" : "files") changed") }
         let detail = parts.joined(separator: " · ")
         return Button {
+            isListFocused = true
             selectedID = target.id
         } label: {
             VStack(alignment: .leading, spacing: 1) {

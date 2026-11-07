@@ -255,19 +255,21 @@ struct IDERunConfigurationForm: View {
                                 .font(IDEAppearance.Typography.body)
                             Spacer()
                         }
-                        Button("Move Up", systemImage: "chevron.up") { move(index, by: -1) }
-                            .disabled(index == 0)
-                            .labelStyle(.iconOnly)
-                            .help("Move Up")
-                        Button("Move Down", systemImage: "chevron.down") { move(index, by: 1) }
-                            .disabled(index == configuration.beforeLaunch.count - 1)
-                            .labelStyle(.iconOnly)
-                            .help("Move Down")
-                        Button("Remove Step", systemImage: "minus.circle") { configuration.beforeLaunch.remove(at: index) }
-                            .labelStyle(.iconOnly)
-                            .help("Remove Step")
+                        IDEIconButton(systemImage: "chevron.up", help: "Move Up", isDisabled: index == 0) {
+                            move(index, by: -1)
+                        }
+                        IDEIconButton(
+                            systemImage: "chevron.down",
+                            help: "Move Down",
+                            isDisabled: index == configuration.beforeLaunch.count - 1
+                        ) {
+                            move(index, by: 1)
+                        }
+                        IDEIconButton(systemImage: "minus.circle", help: "Remove Step") {
+                            configuration.beforeLaunch.remove(at: index)
+                        }
                     }
-                    .buttonStyle(.borderless)
+                    .ideIconButtonSize(.compact)
                 }
                 Menu {
                     Button("Run Gradle Task") { configuration.beforeLaunch.append(.gradleTasks([])) }

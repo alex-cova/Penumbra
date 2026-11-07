@@ -28,7 +28,15 @@ extension IDEWorkspace {
 
     func hideFindInFiles() {
         findInFiles.isVisible = false
+        findInFiles.wantsResultsFocus = false
+        findInFiles.wantsQueryFocus = false
+        findInFiles.editorEscapeReturnsToDrawer = false
         focusActiveEditor()
+    }
+
+    /// Escape from the editor while Find in Files is open returns to the results (or the query).
+    func handleEditorEscape() -> Bool {
+        findInFiles.requestFocusFromEditor()
     }
 
     func runFindInFiles() {
@@ -55,7 +63,7 @@ extension IDEWorkspace {
         }
         findInFiles.resetStaleScope(root: root)
         let filter = findInFilesFilter
-        findInFiles.status = "Searching…"
+        let generation = findInFiles.beginSearch()
         Task {
             let visible = await IDEGitVisibleFiles.relativePaths(under: root)
             let hits = await intelligenceController.searchProject(
@@ -67,7 +75,7 @@ extension IDEWorkspace {
                 filter: filter,
                 visibleRelativePaths: visible
             )
-            findInFiles.setResults(hits)
+            findInFiles.setResults(hits, generation: generation)
         }
     }
 
@@ -188,9 +196,16 @@ extension IDEWorkspace {
     }
 
     func openFindInFilesHit(_ hit: ProjectSearchResult) {
+        findInFiles.selectedHitID = hit.id
+        findInFiles.editorEscapeReturnsToDrawer = true
         let length = max(0, hit.range.end.utf16Offset - hit.range.start.utf16Offset)
         let range = NSRange(location: hit.range.start.utf16Offset, length: length)
         Task { await openDocument(from: hit.url, selecting: range) }
+    }
+
+    func openSelectedFindInFilesHit() {
+        guard let hit = findInFiles.selectedHit else { return }
+        openFindInFilesHit(hit)
     }
 
     func toggleFindInFiles() {

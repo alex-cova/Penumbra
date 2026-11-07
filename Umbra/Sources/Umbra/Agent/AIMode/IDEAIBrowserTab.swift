@@ -26,6 +26,7 @@ private struct IDEAIBrowserContent: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var address = ""
     @FocusState private var isAddressFocused: Bool
+    @State private var addressShortcutMonitor: Any?
 
     private var servers: [URL] { IDEAIBrowserAddress.localServers(in: workspace.agent.selected.entries) }
 
@@ -76,24 +77,52 @@ private struct IDEAIBrowserContent: View {
             // The field follows the page unless the user is typing in it.
             if !isAddressFocused, let url { address = url.absoluteString }
         }
+        .onAppear { installAddressShortcutMonitor() }
+        .onDisappear { removeAddressShortcutMonitor() }
+    }
+
+    /// ⌘L while the page has the keyboard focuses the address. The editor keeps ⌘L for Go to Line
+    /// because this only fires when a `WKWebView` is first responder.
+    private func installAddressShortcutMonitor() {
+        removeAddressShortcutMonitor()
+        addressShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard IDEAIBrowserChromeKeys.isFocusAddress(event),
+                  let window = event.window ?? NSApp.keyWindow,
+                  IDEAIBrowserChromeKeys.isWebKitFirstResponder(window.firstResponder)
+            else { return event }
+            isAddressFocused = true
+            return nil
+        }
+    }
+
+    private func removeAddressShortcutMonitor() {
+        if let addressShortcutMonitor {
+            NSEvent.removeMonitor(addressShortcutMonitor)
+            self.addressShortcutMonitor = nil
+        }
     }
 
     // MARK: - Toolbar
 
     private var toolbar: some View {
         HStack(spacing: 2) {
-            IDEAIBrowserButton(symbol: "chevron.left", help: "Back", isEnabled: model.canGoBack, action: model.goBack)
-            IDEAIBrowserButton(symbol: "chevron.right", help: "Forward", isEnabled: model.canGoForward, action: model.goForward)
+            IDEIconButton(systemImage: "chevron.left", help: "Back", isDisabled: !model.canGoBack, action: model.goBack)
+            IDEIconButton(systemImage: "chevron.right", help: "Forward", isDisabled: !model.canGoForward, action: model.goForward)
             if model.page.isLoading {
-                IDEAIBrowserButton(symbol: "xmark", help: "Stop Loading", isEnabled: true, action: model.stop)
+                IDEIconButton(systemImage: "xmark", help: "Stop Loading", action: model.stop)
             } else {
-                IDEAIBrowserButton(symbol: "arrow.clockwise", help: "Reload", isEnabled: model.hasStarted, action: model.reload)
+                IDEIconButton(systemImage: "arrow.clockwise", help: "Reload", isDisabled: !model.hasStarted, action: model.reload)
             }
             TextField("Address, such as localhost:3000", text: $address)
                 .textFieldStyle(.plain)
                 .font(IDEAppearance.Typography.monoSmall)
                 .focused($isAddressFocused)
                 .onSubmit { model.go(to: address) }
+                .onKeyPress(.escape) {
+                    if model.isPicking { model.setPicking(false) }
+                    isAddressFocused = false
+                    return .handled
+                }
                 .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .frame(height: IDEAppearance.Spacing.iconButton)
                 .background(
@@ -103,35 +132,37 @@ private struct IDEAIBrowserContent: View {
                     RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous)
                         .strokeBorder(isAddressFocused ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.border))
                 .accessibilityLabel("Address")
-            IDEAIBrowserButton(
-                symbol: "cursorarrow.rays", help: model.isPicking ? "Stop Selecting" : "Select an Element to Add a Note",
-                isEnabled: model.hasStarted, isActive: model.isPicking
+            IDEIconButton(
+                systemImage: "cursorarrow.rays",
+                help: model.isPicking ? "Stop Selecting" : "Select an Element to Add a Note",
+                isActive: model.isPicking,
+                isDisabled: !model.hasStarted
             ) { model.setPicking(!model.isPicking) }
             if !servers.isEmpty {
-                Menu {
+                IDEIconMenu(systemImage: "server.rack", help: "Local servers this chat started") {
                     ForEach(servers, id: \.self) { url in
                         Button(url.absoluteString) { open(url) }
                     }
-                } label: {
-                    Image(systemName: "server.rack")
-                        .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Local servers this chat started")
-                .accessibilityLabel("Local servers")
             }
-            IDEAIBrowserButton(
-                symbol: "safari", help: "Open in Default Browser", isEnabled: model.page.url != nil
+            IDEIconButton(
+                systemImage: "safari", help: "Open in Default Browser", isDisabled: model.page.url == nil
             ) {
                 if let url = model.page.url { NSWorkspace.shared.open(url) }
             }
         }
+        .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.xs)
         .padding(.vertical, IDEAppearance.Spacing.xs)
+        // ⌘L focuses the address when this chrome has the keyboard; the editor keeps ⌘L for Go to Line.
+        .onKeyPress(keys: [KeyEquivalent("l")], phases: .down) { press in
+            guard press.modifiers.contains(.command),
+                  press.modifiers.isDisjoint(with: [.option, .control, .shift]) else {
+                return .ignored
+            }
+            isAddressFocused = true
+            return .handled
+        }
     }
 
     private func open(_ url: URL) {
@@ -265,30 +296,3 @@ private struct IDEAIBrowserContent: View {
     }
 }
 
-private struct IDEAIBrowserButton: View {
-    let symbol: String
-    let help: String
-    let isEnabled: Bool
-    var isActive = false
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                .foregroundStyle(
-                    isActive ? IDEAppearance.ColorToken.accent
-                        : isEnabled ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted.opacity(0.5))
-                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
-                .background(
-                    isActive ? IDEAppearance.ColorToken.card : Color.clear,
-                    in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
-        .help(help)
-        .accessibilityLabel(help)
-        .accessibilityAddTraits(isActive ? .isSelected : [])
-    }
-}

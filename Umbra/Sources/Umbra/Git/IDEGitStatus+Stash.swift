@@ -30,6 +30,12 @@ extension IDEGitStatusModel {
         }
     }
 
+    /// Arrow keys in the Stashes list. `visible` is display order.
+    func moveStashSelection(by delta: Int, in visible: [String]) {
+        guard let next = IDEListNeighbor.move(selectedStashHash, in: visible, by: delta) else { return }
+        selectStash(next)
+    }
+
     /// Git ▸ Stash Changes…: asks for a message and what to include.
     func requestStashChanges() {
         guard isRepository else { return }

@@ -610,6 +610,7 @@ final class IDEProjectOutputBuffer: @unchecked Sendable {
 
 struct IDESwiftPMSidebarPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         let system = workspace.swiftPM
@@ -620,27 +621,26 @@ struct IDESwiftPMSidebarPanel: View {
             } else if system.manifest == nil {
                 pinned("No Package.swift")
             } else {
-                ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        section("Tasks")
-                        ForEach(system.tasks, id: \.path) { task in
-                            taskRow(task, system: system)
-                        }
-                        if let manifest = system.manifest, !manifest.targets.isEmpty {
-                            section("Targets")
-                            ForEach(manifest.targets, id: \.name) { target in
-                                infoRow(symbol: Self.symbol(for: target.kind), title: target.name, detail: target.kind.rawValue)
-                            }
-                        }
-                        if let manifest = system.manifest, !manifest.packages.isEmpty {
-                            section("Dependencies")
-                            ForEach(manifest.packages, id: \.name) { package in
-                                infoRow(symbol: "shippingbox", title: package.name, detail: package.isLocal ? "local" : "")
-                            }
+                IDEProjectTaskList(
+                    tasks: system.tasks,
+                    isRunDisabled: system.isRunningTasks,
+                    onRun: { system.runTasks([$0.path]) },
+                    isListFocused: $isListFocused
+                ) {
+                    section("Tasks")
+                } footer: {
+                    if let manifest = system.manifest, !manifest.targets.isEmpty {
+                        section("Targets")
+                        ForEach(manifest.targets, id: \.name) { target in
+                            infoRow(symbol: Self.symbol(for: target.kind), title: target.name, detail: target.kind.rawValue)
                         }
                     }
-                    .padding(.vertical, IDEAppearance.Spacing.xs)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    if let manifest = system.manifest, !manifest.packages.isEmpty {
+                        section("Dependencies")
+                        ForEach(manifest.packages, id: \.name) { package in
+                            infoRow(symbol: "shippingbox", title: package.name, detail: package.isLocal ? "local" : "")
+                        }
+                    }
                 }
             }
             if case .untrusted = system.syncState {
@@ -653,6 +653,7 @@ struct IDESwiftPMSidebarPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.panel)
+        .ideProjectSidebarFocus(on: $isListFocused)
     }
 
     private func header(_ system: IDESwiftPMProjectSystem) -> some View {
@@ -660,17 +661,14 @@ struct IDESwiftPMSidebarPanel: View {
             IDEPanelTitle("SwiftPM")
                 .frame(maxWidth: .infinity, alignment: .leading)
             if system.isRunningTasks {
-                Button(action: { system.cancelTasks() }) { Image(systemName: "stop.fill") }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(IDEAppearance.ColorToken.error)
-                    .help("Stop")
-                    .accessibilityLabel("Stop")
+                IDEIconButton(
+                    systemImage: "stop.fill",
+                    help: "Stop",
+                    tint: IDEAppearance.ColorToken.error,
+                    action: { system.cancelTasks() }
+                )
             }
-            Button(action: { system.reload() }) { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help("Reload")
-                .accessibilityLabel("Reload")
+            IDEIconButton(systemImage: "arrow.clockwise", help: "Reload", action: { system.reload() })
         }
         .padding(.leading, IDEAppearance.Spacing.sm)
         .padding(.trailing, IDEAppearance.Spacing.xs)
@@ -684,33 +682,6 @@ struct IDESwiftPMSidebarPanel: View {
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.top, IDEAppearance.Spacing.sm)
             .padding(.bottom, IDEAppearance.Spacing.xxs)
-    }
-
-    private func taskRow(_ task: IDEProjectTask, system: IDESwiftPMProjectSystem) -> some View {
-        HStack(spacing: IDEAppearance.Spacing.sm) {
-            Button(action: { system.runTasks([task.path]) }) {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .frame(width: 12, height: 16)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderless)
-            .disabled(system.isRunningTasks)
-            .help(task.summary)
-            .accessibilityLabel("Run \(task.name)")
-            Text(task.name)
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, IDEAppearance.Spacing.sm)
-        .padding(.vertical, 3)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            if !system.isRunningTasks { system.runTasks([task.path]) }
-        }
     }
 
     private func infoRow(symbol: String, title: String, detail: String) -> some View {

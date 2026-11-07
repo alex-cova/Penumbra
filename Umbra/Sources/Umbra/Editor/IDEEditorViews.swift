@@ -375,7 +375,9 @@ struct IDETextViewRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ container: EditorHostContainer, context: Context) {
-        container.mount(workspace.host(for: paneID))
+        let host = workspace.host(for: paneID)
+        container.mount(host)
+        host.textView.participatesInKeyViewLoop = !workspace.isEditorCoveredByOverlay
     }
 }
 

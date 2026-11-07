@@ -42,20 +42,9 @@ struct IDESidebarPanel: View {
                     )
                 }
 
-                Menu {
+                IDEIconMenu(systemImage: "ellipsis", help: "Explorer Options") {
                     IDEExplorerOptionsMenu(preferences: preferences)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
-                        .contentShape(Rectangle())
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Explorer Options")
-                .accessibilityLabel("Explorer Options")
 
                 IDEIconButton(
                     systemImage: "magnifyingglass",
@@ -73,7 +62,7 @@ struct IDESidebarPanel: View {
             }
 
             if isSearchPresented {
-                IDEExplorerSearchField(query: $searchQuery, isFocused: $isSearchFocused, onDismiss: dismissSearch)
+                IDEExplorerSearchField(query: $searchQuery, isFocused: $isSearchFocused, onDismiss: handleSearchEscape)
                     .padding(.horizontal, IDEAppearance.Spacing.sm)
                     .padding(.bottom, IDEAppearance.Spacing.sm)
                     .ideTransition(.opacity.combined(with: .move(edge: .top)))
@@ -118,7 +107,10 @@ struct IDESidebarPanel: View {
                 onOpenArchiveAsHex: { workspace.openArchiveAsHex($0) },
                 onClearFilter: { searchQuery = "" },
                 onOpenFolder: { workspace.openFolder() },
-                collapsedWhileFiltering: $collapsedWhileFiltering
+                collapsedWhileFiltering: $collapsedWhileFiltering,
+                focusRequestID: workspace.sidebarFocusRequestID,
+                consumeFocus: { workspace.consumeSidebarFocusIfNeeded(for: .explorer) },
+                onEscape: { workspace.focusActiveEditor() }
             )
         }
         .onChange(of: workspace.project.revealRequest) { _, request in
@@ -149,7 +141,17 @@ struct IDESidebarPanel: View {
             searchQuery.removeAll()
         }
         isSearchFocused = false
-        workspace.focusActiveEditor()
+        workspace.requestSidebarFocus()
+    }
+
+    /// First Escape clears the query; an empty field closes the filter and returns to the tree.
+    private func handleSearchEscape() {
+        if IDEExplorerFilterEscape.shouldClearQuery(searchQuery) {
+            searchQuery.removeAll()
+            isSearchFocused = true
+            return
+        }
+        dismissSearch()
     }
 
     private func expandAll() {
@@ -190,6 +192,13 @@ struct IDEExplorerOptionsMenu: View {
         Section("Behavior") {
             Toggle("Always Select Opened File", isOn: $preferences.explorerAutoReveal)
         }
+    }
+}
+
+/// Escape in the Explorer filter: a non-empty query clears first; an empty field closes the filter.
+enum IDEExplorerFilterEscape {
+    static func shouldClearQuery(_ query: String) -> Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
@@ -239,7 +248,6 @@ private struct IDEExplorerSearchField: View {
                 )
         }
         .task { isFocused.wrappedValue = true }
-        .onExitCommand(perform: onDismiss)
     }
 }
 

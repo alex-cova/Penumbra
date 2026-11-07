@@ -77,6 +77,9 @@ final class IDEGitStatusModel {
     private(set) var historyLimit = 300
     /// Every selected commit in the Log (⌘/⇧-click); `selectedCommitHash` is the primary one.
     var selectedCommitHashes: Set<String> = []
+    /// Where ⇧-click and ⇧-arrow ranges start. Unlike `selectedCommitHash` (the commit whose detail
+    /// shows) it stays put while a range grows or shrinks.
+    var commitSelectionAnchor: String?
     /// The branches that contain the selected commit.
     private(set) var commitBranches: [String] = []
     /// The history of selected lines of a file, shown in place of the log while it is set.
@@ -198,6 +201,7 @@ final class IDEGitStatusModel {
         repository = nil
         commits = []
         selectedCommitHash = nil
+        commitSelectionAnchor = nil
         selectedCommitFile = nil
         commitDetailText = nil
         selectedCommitFiles = []
@@ -334,10 +338,13 @@ final class IDEGitStatusModel {
         }
     }
 
-    func selectCommit(_ hash: String?) {
+    func selectCommit(_ hash: String?, replacingSelection: Bool = true) {
         if hash != selectedCommitHash { selectedCommitFile = nil }
         selectedCommitHash = hash
-        selectedCommitHashes = hash.map { [$0] } ?? []
+        if replacingSelection {
+            selectedCommitHashes = hash.map { [$0] } ?? []
+            commitSelectionAnchor = hash
+        }
         commitBranches = []
         commitDetailTask?.cancel()
         guard let hash, let rootURL else {
@@ -364,6 +371,12 @@ final class IDEGitStatusModel {
         selectedChangePath = path
         selectedChangePaths = path.map { [$0] } ?? []
         loadDiff(for: path)
+    }
+
+    /// Arrow keys in the Changes list: one row, replacing the selection. `visible` is display order.
+    func moveChangeSelection(by delta: Int, in visible: [String]) {
+        guard let next = IDEListNeighbor.move(selectedChangePath, in: visible, by: delta) else { return }
+        selectChange(next)
     }
 
     /// ⌘-click: adds or removes one row, keeping the others.

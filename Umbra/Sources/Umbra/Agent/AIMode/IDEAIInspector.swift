@@ -59,19 +59,11 @@ struct IDEAIInspector: View {
                     onSelect: { workspace.aiInspectorTab = tab })
             }
             Spacer(minLength: 0)
-            Button {
+            IDEIconButton(systemImage: "xmark", help: "Hide Changes, Plan and Browser") {
                 workspace.showsAIInspector = false
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: IDEAppearance.IconSize.toolbarGlyph - 2, weight: .medium))
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .help("Hide this panel")
-            .accessibilityLabel("Hide Changes, Plan and Browser")
         }
+        .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.xs)
         .frame(height: IDEAppearance.Spacing.tabHeight + 2)
         .frame(maxWidth: .infinity, alignment: .leading)

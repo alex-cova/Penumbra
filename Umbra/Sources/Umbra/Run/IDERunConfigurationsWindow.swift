@@ -9,6 +9,8 @@ struct IDERunConfigurationsWindow: View {
     let editor: IDERunConfigurationsEditor
     @State private var folderPromptFor: UUID?
     @State private var folderName = ""
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,32 +48,45 @@ struct IDERunConfigurationsWindow: View {
         VStack(spacing: 0) {
             listToolbar
             Divider().overlay(IDEAppearance.ColorToken.border)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(JavaRunConfiguration.Kind.allCases, id: \.self) { kind in
-                        let groups = editor.groups(of: kind)
-                        if !groups.isEmpty {
-                            sectionHeader(kind.title)
-                            ForEach(groups, id: \.folder) { group in
-                                if let folder = group.folder {
-                                    Label(folder, systemImage: "folder")
-                                        .font(IDEAppearance.Typography.caption)
-                                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                                        .padding(.leading, 18)
-                                        .padding(.top, 4)
-                                }
-                                ForEach(group.configurations, id: \.id) { configuration in
-                                    row(configuration, indent: group.folder == nil ? 18 : 32)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(JavaRunConfiguration.Kind.allCases, id: \.self) { kind in
+                            let groups = editor.groups(of: kind)
+                            if !groups.isEmpty {
+                                sectionHeader(kind.title)
+                                ForEach(groups, id: \.folder) { group in
+                                    if let folder = group.folder {
+                                        Label(folder, systemImage: "folder")
+                                            .font(IDEAppearance.Typography.caption)
+                                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                                            .padding(.leading, 18)
+                                            .padding(.top, 4)
+                                    }
+                                    ForEach(group.configurations, id: \.id) { configuration in
+                                        row(configuration, indent: group.folder == nil ? 18 : 32)
+                                            .id(IDERunConfigurationsEditor.Selection.configuration(configuration.id))
+                                    }
                                 }
                             }
                         }
+                        sectionHeader("Templates")
+                        ForEach(JavaRunConfiguration.Kind.allCases, id: \.self) { kind in
+                            templateRow(kind)
+                                .id(IDERunConfigurationsEditor.Selection.template(kind))
+                        }
                     }
-                    sectionHeader("Templates")
-                    ForEach(JavaRunConfiguration.Kind.allCases, id: \.self) { kind in
-                        templateRow(kind)
-                    }
+                    .padding(.vertical, 6)
                 }
-                .padding(.vertical, 6)
+                .focusable()
+                .focused($isListFocused)
+                .focusEffectDisabled()
+                .onKeyPress(phases: [.down, .repeat]) { press in
+                    handleListKey(press)
+                }
+                .onChange(of: editor.selection) { _, selection in
+                    if let selection { proxy.scrollTo(selection) }
+                }
             }
         }
         .background(IDEAppearance.ColorToken.sidebar)
@@ -79,42 +94,73 @@ struct IDERunConfigurationsWindow: View {
 
     private var listToolbar: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
-            Menu {
+            IDEIconMenu(systemImage: "plus", help: "Add New Configuration") {
                 ForEach(JavaRunConfiguration.Kind.allCases, id: \.self) { kind in
                     Button(kind.title) { editor.add(kind: kind, target: workspace.defaultTarget(for: kind)) }
                 }
-            } label: {
-                Image(systemName: "plus")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Add New Configuration")
-            toolbarButton("minus", help: "Remove Configuration", enabled: editor.selectedConfigurationID != nil) {
+            IDEIconButton(
+                systemImage: "minus",
+                help: "Remove Configuration",
+                isDisabled: editor.selectedConfigurationID == nil
+            ) {
                 if let id = editor.selectedConfigurationID { editor.remove(id) }
             }
-            toolbarButton("plus.square.on.square", help: "Duplicate", enabled: editor.selectedConfigurationID != nil) {
+            IDEIconButton(
+                systemImage: "plus.square.on.square",
+                help: "Duplicate",
+                isDisabled: editor.selectedConfigurationID == nil
+            ) {
                 if let id = editor.selectedConfigurationID { editor.duplicate(id) }
             }
-            toolbarButton("folder.badge.plus", help: "Move into New Folder", enabled: editor.selectedConfigurationID != nil) {
+            IDEIconButton(
+                systemImage: "folder.badge.plus",
+                help: "Move into New Folder",
+                isDisabled: editor.selectedConfigurationID == nil
+            ) {
                 folderName = ""
                 folderPromptFor = editor.selectedConfigurationID
             }
             if let id = editor.selectedConfigurationID, editor.selected?.isTemporary == true {
-                toolbarButton("checkmark.circle", help: "Save Configuration", enabled: true) { editor.keep(id) }
+                IDEIconButton(systemImage: "checkmark.circle", help: "Save Configuration") { editor.keep(id) }
             }
             Spacer()
         }
+        .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, 6)
     }
 
-    private func toolbarButton(_ symbol: String, help: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol) }
-            .buttonStyle(.borderless)
-            .disabled(!enabled)
-            .help(help)
-            .accessibilityLabel(help)
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            editor.moveSelection(by: press.key == .downArrow ? 1 : -1)
+            isListFocused = true
+            return .handled
+        case .return:
+            typeahead.reset()
+            return .handled
+        case .delete, .deleteForward:
+            typeahead.reset()
+            if let id = editor.selectedConfigurationID { editor.remove(id) }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            return .ignored
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let next = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: editor.keyboardOrder,
+                selected: editor.selection,
+                title: editor.title(for:)
+            ) {
+                editor.selection = next
+                isListFocused = true
+            }
+            return .handled
+        }
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -162,7 +208,10 @@ struct IDERunConfigurationsWindow: View {
         .background(isSelected ? IDEAppearance.ColorToken.accent.opacity(0.22) : Color.clear)
         .contentShape(Rectangle())
         .accessibilityAddTraits(.isButton)
-        .onTapGesture { editor.selection = .configuration(configuration.id) }
+        .onTapGesture {
+            isListFocused = true
+            editor.selection = .configuration(configuration.id)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(configuration.displayName)\(configuration.isTemporary ? ", temporary" : "")\(broken ? ", has errors" : "")")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
@@ -186,7 +235,10 @@ struct IDERunConfigurationsWindow: View {
         .background(isSelected ? IDEAppearance.ColorToken.accent.opacity(0.22) : Color.clear)
         .contentShape(Rectangle())
         .accessibilityAddTraits(.isButton)
-        .onTapGesture { editor.selection = .template(kind) }
+        .onTapGesture {
+            isListFocused = true
+            editor.selection = .template(kind)
+        }
         .accessibilityLabel("\(kind.title) template")
     }
 

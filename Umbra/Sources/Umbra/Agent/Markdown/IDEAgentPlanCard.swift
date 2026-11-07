@@ -91,14 +91,10 @@ struct IDEAgentPlanCard: View {
                     .controlSize(.small)
                 Spacer()
                 if let plan = entry.planText {
-                    Button {
+                    IDEIconButton(systemImage: "square.and.pencil", help: "Open the plan in an editor tab") {
                         workspace.agentOpenText(title: "Plan", text: plan)
-                    } label: {
-                        Image(systemName: "square.and.pencil")
                     }
-                    .buttonStyle(.borderless)
-                    .help("Open the plan in an editor tab")
-                    .accessibilityLabel("Open the plan in an editor tab")
+                    .ideIconButtonSize(.compact)
                 }
             }
         }

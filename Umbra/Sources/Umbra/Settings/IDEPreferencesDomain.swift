@@ -70,4 +70,11 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
         return title.localizedCaseInsensitiveContains(query)
             || searchTerms.contains { $0.localizedCaseInsensitiveContains(query) }
     }
+
+    /// Next or previous page in `domains`. Stays on the first or last rather than wrapping.
+    static func moving(from current: IDEPreferencesDomain, in domains: [IDEPreferencesDomain], by delta: Int) -> IDEPreferencesDomain {
+        guard !domains.isEmpty else { return current }
+        let index = domains.firstIndex(of: current) ?? 0
+        return domains[min(max(index + delta, 0), domains.count - 1)]
+    }
 }

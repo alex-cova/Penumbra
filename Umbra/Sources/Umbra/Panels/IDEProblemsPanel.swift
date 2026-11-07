@@ -9,6 +9,7 @@ struct IDEProblemsPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var collapsedFiles: Set<URL> = []
     @State private var selectedRowID: String?
+    @State private var typeahead = IDETypeaheadBuffer()
     @FocusState private var isListFocused: Bool
 
     var body: some View {
@@ -150,6 +151,7 @@ struct IDEProblemsPanel: View {
     ) -> KeyPress.Result {
         switch press.key {
         case .upArrow, .downArrow:
+            typeahead.reset()
             guard !flatIDs.isEmpty else { return .handled }
             let current = selectedRowID.flatMap { flatIDs.firstIndex(of: $0) }
             let next = press.key == .downArrow
@@ -158,6 +160,7 @@ struct IDEProblemsPanel: View {
             selectedRowID = flatIDs[next]
             return .handled
         case .return:
+            typeahead.reset()
             guard let selectedRowID else { return .handled }
             if selectedRowID.hasPrefix("message:") {
                 let raw = String(selectedRowID.dropFirst("message:".count))
@@ -167,11 +170,30 @@ struct IDEProblemsPanel: View {
             }
             return .handled
         case .escape:
+            typeahead.reset()
             workspace.focusActiveEditor()
             return .handled
         default:
-            return .ignored
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let id = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: flatIDs,
+                selected: selectedRowID,
+                title: { typeaheadTitle(for: $0, files: files, messages: messages) }
+            ) {
+                selectedRowID = id
+            }
+            return .handled
         }
+    }
+
+    private func typeaheadTitle(for id: String, files: [ProblemFile], messages: [GradleProblem]) -> String {
+        if id.hasPrefix("message:") {
+            let raw = String(id.dropFirst("message:".count))
+            return messages.first { "\($0.id)" == raw }?.message ?? ""
+        }
+        guard let row = files.flatMap(\.rows).first(where: { $0.id == id }) else { return "" }
+        return "\(row.url.lastPathComponent) \(row.diagnostic.message)"
     }
 
     /// The inspection behind a row, nil for compiler, editor and tool diagnostics.
@@ -390,22 +412,18 @@ struct IDEProblemsControls: View {
     private var copyButton: some View {
         let visible = workspace.visibleProblems()
         let canCopy = workspace.inspectionRuns.selectedRun == nil && !(visible.files.isEmpty && visible.messages.isEmpty)
-        return Button {
+        return IDEIconButton(
+            systemImage: didCopy ? "checkmark" : "doc.on.doc",
+            help: "Copy Problems as Markdown",
+            isDisabled: !canCopy
+        ) {
             workspace.copyProblemsAsMarkdown()
             didCopy = true
             Task {
                 try? await Task.sleep(for: .seconds(1.5))
                 didCopy = false
             }
-        } label: {
-            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
-        .buttonStyle(.borderless)
-        .disabled(!canCopy)
-        .help("Copy Problems as Markdown")
-        .accessibilityLabel("Copy Problems as Markdown")
     }
 
     private func filterToggle(_ severity: DiagnosticSeverity, count: Int, label: String) -> some View {

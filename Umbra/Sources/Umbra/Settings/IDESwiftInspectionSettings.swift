@@ -334,9 +334,10 @@ private struct IDESwiftInspectionRuleRow: View {
                     }
                     .labelsHidden()
                     .frame(width: 200)
-                    Button { edit { $0.scopedOverrides.remove(at: index) } } label: { Image(systemName: "minus.circle") }
-                        .buttonStyle(.borderless)
-                        .help("Remove this scope")
+                    IDEIconButton(systemImage: "minus.circle", help: "Remove this scope") {
+                        edit { $0.scopedOverrides.remove(at: index) }
+                    }
+                    .ideIconButtonSize(.compact)
                 }
             }
             HStack(spacing: IDEAppearance.Spacing.md) {

@@ -240,6 +240,31 @@ private struct IDEStreamTraceView: View {
             .frame(width: width, height: height, alignment: .topLeading)
             .padding(IDEAppearance.Spacing.sm)
         }
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(phases: [.down, .repeat]) { press in
+            handleTraceKey(press, stages: stages)
+        }
+    }
+
+    private func handleTraceKey(_ press: KeyPress, stages: [[JavaStreamTraceElement]]) -> KeyPress.Result {
+        let counts = stages.map(\.count)
+        let selected = model.selection.map { IDEStreamTraceKeyboard.Cell(stage: $0.stage, index: $0.index) }
+        let next: IDEStreamTraceKeyboard.Cell?
+        switch press.key {
+        case .upArrow:
+            next = IDEStreamTraceKeyboard.move(selected, stageCounts: counts, dStage: 0, dIndex: -1)
+        case .downArrow:
+            next = IDEStreamTraceKeyboard.move(selected, stageCounts: counts, dStage: 0, dIndex: 1)
+        case .leftArrow:
+            next = IDEStreamTraceKeyboard.move(selected, stageCounts: counts, dStage: -1, dIndex: 0)
+        case .rightArrow:
+            next = IDEStreamTraceKeyboard.move(selected, stageCounts: counts, dStage: 1, dIndex: 0)
+        default:
+            return .ignored
+        }
+        if let next { model.selection = (next.stage, next.index) }
+        return .handled
     }
 
     private func x(_ stage: Int) -> CGFloat {

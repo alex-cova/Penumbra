@@ -49,6 +49,13 @@ struct IDEFileTreeView: View {
     /// Folders opened so a match stays visible. Collapsing one hides that branch until the query
     /// changes; it does not rewrite the project's own expansion state.
     @Binding var collapsedWhileFiltering: Set<String>
+    /// Bumped when a shortcut wants this tree to take the keyboard.
+    var focusRequestID: UInt64 = 0
+    /// Returns true when this tree should consume a pending sidebar focus request.
+    var consumeFocus: (() -> Bool)?
+    /// Escape from the tree restores the editor.
+    var onEscape: (() -> Void)?
+    @State private var typeahead = IDETypeaheadBuffer()
 
     var body: some View {
         Group {
@@ -117,6 +124,7 @@ struct IDEFileTreeView: View {
                         .contextMenu { creationContextMenu(for: creationDirectory) }
                     }
                     .focusable(actions != nil)
+                    .ideFocus(onRequest: focusRequestID, consume: { consumeFocus?() ?? false })
                     .focusEffectDisabled()
                     .onKeyPress(phases: [.down, .repeat]) { press in
                         handleKey(press, nodes: nodes, libraryRows: libraryRows)
@@ -222,6 +230,10 @@ struct IDEFileTreeView: View {
 
     private func handleKey(_ press: KeyPress, nodes: [FlatNode], libraryRows: [IDEExternalLibraryItem]) -> KeyPress.Result {
         guard project.renamingPath == nil else { return .ignored }
+        if let typed = typeaheadSelect(press, nodes: nodes, libraryRows: libraryRows) {
+            return typed
+        }
+        typeahead.reset()
         if project.selectedPath == nil, let selected = externalLibraries?.selectedID,
            let libraryIndex = libraryRows.firstIndex(where: { $0.id == selected }) {
             return handleLibraryKey(press, rows: libraryRows, index: libraryIndex, nodes: nodes)
@@ -276,6 +288,10 @@ struct IDEFileTreeView: View {
             guard let current, current.depth > 0 else { return .ignored }
             actions?.trash(current.node.url)
             return .handled
+        case .escape:
+            guard let onEscape else { return .ignored }
+            onEscape()
+            return .handled
         default:
             if press.key == Self.f2Key, let current, current.depth > 0 {
                 actions?.beginRename(current.node.url)
@@ -283,6 +299,43 @@ struct IDEFileTreeView: View {
             }
             return .ignored
         }
+    }
+
+    private struct TypeaheadItem: Equatable {
+        enum Kind: Equatable { case file, library }
+        var id: String
+        var kind: Kind
+        var title: String
+    }
+
+    private func typeaheadSelect(
+        _ press: KeyPress, nodes: [FlatNode], libraryRows: [IDEExternalLibraryItem]
+    ) -> KeyPress.Result? {
+        guard let character = IDEListTypeahead.character(from: press) else { return nil }
+        let items =
+            nodes.map { TypeaheadItem(id: $0.node.id, kind: .file, title: $0.node.displayName ?? $0.node.name) }
+            + libraryRows.map { TypeaheadItem(id: $0.id, kind: .library, title: $0.title) }
+        let selected: TypeaheadItem?
+        if let path = project.selectedPath {
+            selected = items.first { $0.kind == .file && $0.id == path }
+        } else if let libraryID = externalLibraries?.selectedID {
+            selected = items.first { $0.kind == .library && $0.id == libraryID }
+        } else {
+            selected = nil
+        }
+        if let next = IDEListTypeahead.match(
+            query: typeahead.typed(character), in: items, selected: selected, title: \.title
+        ) {
+            if next.kind == .file {
+                externalLibraries?.selectedID = nil
+                project.selectedPath = next.id
+                project.requestScroll(to: next.id)
+            } else if let row = libraryRows.first(where: { $0.id == next.id }) {
+                selectLibraryRow(row)
+                project.requestScroll(to: row.id)
+            }
+        }
+        return .handled
     }
 
     private static let f2Key = KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!))

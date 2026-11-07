@@ -77,6 +77,9 @@ private struct IDEAIChangesRefreshKey: Hashable {
 struct IDEAIChangesTab: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var expanded: Set<String> = []
+    @State private var selectedPath: String?
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
     private var conversation: IDEAgentConversation { workspace.agent.selected }
 
@@ -96,13 +99,25 @@ struct IDEAIChangesTab: View {
                 VStack(spacing: 0) {
                     header(files: files)
                     Divider().overlay(IDEAppearance.ColorToken.border)
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            if !pending.isEmpty { pendingSection(pending) }
-                            ForEach(files) { file in
-                                row(for: file)
-                                Divider().overlay(IDEAppearance.ColorToken.border.opacity(0.5))
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                if !pending.isEmpty { pendingSection(pending) }
+                                ForEach(files) { file in
+                                    row(for: file)
+                                        .id(file.path)
+                                    Divider().overlay(IDEAppearance.ColorToken.border.opacity(0.5))
+                                }
                             }
+                        }
+                        .focusable()
+                        .focused($isListFocused)
+                        .focusEffectDisabled()
+                        .onKeyPress(phases: [.down, .repeat]) { press in
+                            handleKey(press, files: files)
+                        }
+                        .onChange(of: selectedPath) { _, path in
+                            if let path { proxy.scrollTo(path) }
                         }
                     }
                 }
@@ -172,6 +187,8 @@ struct IDEAIChangesTab: View {
         let result = workspace.aiChanges.results[file.path]
         return VStack(alignment: .leading, spacing: 0) {
             Button {
+                isListFocused = true
+                selectedPath = file.path
                 if isExpanded { expanded.remove(file.path) } else { expanded.insert(file.path) }
             } label: {
                 HStack(spacing: IDEAppearance.Spacing.xs) {
@@ -206,6 +223,7 @@ struct IDEAIChangesTab: View {
                 .font(IDEAppearance.Typography.monoSmall)
                 .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.vertical, IDEAppearance.Spacing.xs + 2)
+                .background(selectedPath == file.path ? IDEAppearance.ColorToken.selection : Color.clear)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -249,6 +267,49 @@ struct IDEAIChangesTab: View {
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.bottom, IDEAppearance.Spacing.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func handleKey(_ press: KeyPress, files: [IDEAIChangedFile]) -> KeyPress.Result {
+        let paths = files.map(\.path)
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            if let next = IDEListNeighbor.move(selectedPath, in: paths, by: press.key == .downArrow ? 1 : -1) {
+                selectedPath = next
+                isListFocused = true
+            }
+            return .handled
+        case .rightArrow:
+            typeahead.reset()
+            if let selectedPath { expanded.insert(selectedPath) }
+            return .handled
+        case .leftArrow:
+            typeahead.reset()
+            if let selectedPath { expanded.remove(selectedPath) }
+            return .handled
+        case .return:
+            typeahead.reset()
+            if let selectedPath, let file = files.first(where: { $0.path == selectedPath }) {
+                openDiff(file)
+            }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let path = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: paths,
+                selected: selectedPath,
+                title: { path in files.first { $0.path == path }?.name ?? "" }
+            ) {
+                selectedPath = path
+                isListFocused = true
+            }
+            return .handled
+        }
     }
 
     private func openDiff(_ file: IDEAIChangedFile) {

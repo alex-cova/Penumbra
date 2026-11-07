@@ -379,6 +379,26 @@ final class IDEProfilerQueryTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(session.comparisonCompatibility).isIncompatible, "this side has no CPU samples now")
     }
 
+    func testFlattenedCallTreeRowsFollowExpansion() throws {
+        let session = makeSession()
+        let tree = try XCTUnwrap(session.tree)
+        let hottest = IDEProfilerCallTreeRows.hottestPath(in: tree)
+        XCTAssertEqual(hottest.count, 1)
+        let open = IDEProfilerCallTreeRows.flatten(tree: tree, expanded: hottest)
+        XCTAssertGreaterThan(open.count, 1)
+        XCTAssertTrue(open[0].canDisclose)
+        XCTAssertTrue(open[0].isExpanded)
+        XCTAssertEqual(open[0].depth, 0)
+        XCTAssertEqual(open[1].depth, 1)
+        let shut = IDEProfilerCallTreeRows.flatten(tree: tree, expanded: [])
+        XCTAssertEqual(shut.count, tree.children(of: JavaProfileTree.root).prefix(IDEProfilerCallTreeRows.childLimit).count)
+        XCTAssertFalse(shut[0].isExpanded)
+        XCTAssertEqual(
+            IDEListNeighbor.move(open[0].node, in: open.map(\.node), by: 1),
+            open[1].node
+        )
+    }
+
     func testAThreadOnlyTheTargetHasRefusesTheComparison() throws {
         let session = IDEProfilerSession(recordings: [], title: "now")
         session.setProfileForTesting(timedProfile(period: 10, thread: "pool-1"))

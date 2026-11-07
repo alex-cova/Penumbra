@@ -7,8 +7,21 @@ struct IDEGitBranchPopup: View {
     @Environment(IDEWorkspace.self) private var workspace
     @Binding var isPresented: Bool
     @State private var query = ""
+    @State private var selectedID: String?
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isSearchFocused: Bool
+    @FocusState private var isListFocused: Bool
 
     private var gitStatus: IDEGitStatusModel { workspace.gitStatus }
+
+    private var keyboardIDs: [String] {
+        IDEGitBranchPopupKeyboard.order(
+            showingActions: query.isEmpty,
+            localIDs: locals.map(\.id),
+            remoteIDs: remotes.map(\.id),
+            tagNames: tags.map(\.name)
+        )
+    }
 
     private func matches(_ name: String) -> Bool {
         query.isEmpty || name.localizedCaseInsensitiveContains(query)
@@ -38,23 +51,54 @@ struct IDEGitBranchPopup: View {
                 TextField("Search branches and tags", text: $query)
                     .textFieldStyle(.plain)
                     .font(IDEAppearance.Typography.body)
+                    .focused($isSearchFocused)
+                    .onKeyPress(.downArrow) {
+                        isListFocused = true
+                        if selectedID == nil { selectedID = keyboardIDs.first }
+                        return .handled
+                    }
+                    .onKeyPress(.escape) {
+                        if query.isEmpty {
+                            isPresented = false
+                        } else {
+                            query = ""
+                        }
+                        return .handled
+                    }
             }
             .padding(IDEAppearance.Spacing.sm)
             Rectangle().fill(IDEAppearance.ColorToken.border).frame(height: 1)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if query.isEmpty { actions }
-                    group("Local", locals.map { .branch($0) })
-                    group("Remote", remotes.map { .branch($0) })
-                    group("Tags", tags.map { .tag($0) })
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if query.isEmpty { actions }
+                        group("Local", locals.map { .branch($0) })
+                        group("Remote", remotes.map { .branch($0) })
+                        group("Tags", tags.map { .tag($0) })
+                    }
+                    .padding(.vertical, IDEAppearance.Spacing.xs)
                 }
-                .padding(.vertical, IDEAppearance.Spacing.xs)
+                .focusable()
+                .focused($isListFocused)
+                .focusEffectDisabled()
+                .onKeyPress(phases: [.down, .repeat]) { press in
+                    handleListKey(press)
+                }
+                .onChange(of: selectedID) { _, id in
+                    if let id { proxy.scrollTo(id) }
+                }
             }
         }
         .frame(width: 360, height: 440)
         .onAppear {
+            isSearchFocused = true
             gitStatus.loadTags()
             gitStatus.loadRemotes()
+        }
+        .onChange(of: query) { _, _ in
+            if let selectedID, !keyboardIDs.contains(selectedID) {
+                self.selectedID = keyboardIDs.first
+            }
         }
     }
 
@@ -62,41 +106,32 @@ struct IDEGitBranchPopup: View {
 
     @ViewBuilder
     private var actions: some View {
-        actionRow("Update Project…", systemImage: "arrow.down.circle") { workspace.pullProject() }
-        actionRow("Fetch", systemImage: "arrow.triangle.2.circlepath") { gitStatus.fetch() }
-        actionRow("Push…", systemImage: "arrow.up.circle") { workspace.pushProject() }
-        actionRow("New Branch…", systemImage: "plus") {
-            promptNewBranch(from: gitStatus.currentBranch)
+        ForEach(IDEGitBranchPopupKeyboard.Action.allCases, id: \.id) { action in
+            actionRow(action)
         }
-        actionRow("Checkout Tag or Revision…", systemImage: "tag") {
-            gitStatus.sheets.present(.textPrompt(IDEGitTextPrompt(
-                title: "Checkout Tag or Revision",
-                message: "A tag, a commit id or any revision. HEAD becomes detached.",
-                placeholder: "v1.0 or a1b2c3d",
-                confirmTitle: "Checkout",
-                action: { gitStatus.checkoutRevision($0) }
-            )))
-        }
-        actionRow("Delete Merged Branches…", systemImage: "trash") { gitStatus.requestDeleteMergedBranches() }
         Rectangle().fill(IDEAppearance.ColorToken.border).frame(height: 1).padding(.vertical, IDEAppearance.Spacing.xs)
     }
 
-    private func actionRow(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button {
-            isPresented = false
-            action()
+    private func actionRow(_ action: IDEGitBranchPopupKeyboard.Action) -> some View {
+        let isSelected = selectedID == action.id
+        return Button {
+            selectedID = action.id
+            run(action)
         } label: {
             HStack(spacing: IDEAppearance.Spacing.sm) {
-                Image(systemName: systemImage).frame(width: 16).foregroundStyle(IDEAppearance.ColorToken.muted)
-                Text(title)
+                Image(systemName: action.systemImage).frame(width: 16).foregroundStyle(IDEAppearance.ColorToken.muted)
+                Text(action.title)
                 Spacer(minLength: 0)
             }
             .font(IDEAppearance.Typography.body)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.vertical, IDEAppearance.Spacing.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .id(action.id)
     }
 
     // MARK: Rows
@@ -132,7 +167,9 @@ struct IDEGitBranchPopup: View {
     }
 
     private func branchRow(_ branch: GitBranch) -> some View {
-        Button {
+        let isSelected = selectedID == branch.id
+        return Button {
+            selectedID = branch.id
             isPresented = false
             gitStatus.checkout(branch)
         } label: {
@@ -152,14 +189,20 @@ struct IDEGitBranchPopup: View {
             .font(IDEAppearance.Typography.body)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .id(branch.id)
         .contextMenu { branchMenu(branch) }
     }
 
     private func tagRow(_ tag: GitTag) -> some View {
-        Button {
+        let id = IDEGitBranchPopupKeyboard.tagID(tag.name)
+        let isSelected = selectedID == id
+        return Button {
+            selectedID = id
             isPresented = false
             gitStatus.checkoutRevision(tag.name)
         } label: {
@@ -175,9 +218,12 @@ struct IDEGitBranchPopup: View {
             .font(IDEAppearance.Typography.body)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? IDEAppearance.ColorToken.selection : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .id(id)
         .contextMenu {
             Button("Checkout") { isPresented = false; gitStatus.checkoutRevision(tag.name) }
             Button("New Branch from Tag…") { promptNewBranch(from: tag.name) }
@@ -250,6 +296,88 @@ struct IDEGitBranchPopup: View {
                 )))
             }
             .disabled(IDEGitPreferences.isProtected(branch.shortName))
+        }
+    }
+
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        let ids = keyboardIDs
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            if let next = IDEListNeighbor.move(selectedID, in: ids, by: press.key == .downArrow ? 1 : -1) {
+                selectedID = next
+                isListFocused = true
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            activate(selectedID)
+            return .handled
+        case .escape:
+            typeahead.reset()
+            if isSearchFocused {
+                isSearchFocused = false
+                return .handled
+            }
+            isPresented = false
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            let titles = titlesByID
+            if let id = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: ids,
+                selected: selectedID,
+                title: { titles[$0] ?? $0 }
+            ) {
+                selectedID = id
+                isListFocused = true
+            }
+            return .handled
+        }
+    }
+
+    private var titlesByID: [String: String] {
+        var titles: [String: String] = [:]
+        for action in IDEGitBranchPopupKeyboard.Action.allCases { titles[action.id] = action.title }
+        for branch in locals + remotes { titles[branch.id] = branch.name }
+        for tag in tags { titles[IDEGitBranchPopupKeyboard.tagID(tag.name)] = tag.name }
+        return titles
+    }
+
+    private func activate(_ id: String?) {
+        guard let id else { return }
+        if let action = IDEGitBranchPopupKeyboard.Action(id: id) {
+            run(action)
+            return
+        }
+        if id.hasPrefix("tag/") {
+            isPresented = false
+            gitStatus.checkoutRevision(String(id.dropFirst(4)))
+            return
+        }
+        if let branch = (locals + remotes).first(where: { $0.id == id }) {
+            isPresented = false
+            gitStatus.checkout(branch)
+        }
+    }
+
+    private func run(_ action: IDEGitBranchPopupKeyboard.Action) {
+        isPresented = false
+        switch action {
+        case .update: workspace.pullProject()
+        case .fetch: gitStatus.fetch()
+        case .push: workspace.pushProject()
+        case .newBranch: promptNewBranch(from: gitStatus.currentBranch)
+        case .checkoutRevision:
+            gitStatus.sheets.present(.textPrompt(IDEGitTextPrompt(
+                title: "Checkout Tag or Revision",
+                message: "A tag, a commit id or any revision. HEAD becomes detached.",
+                placeholder: "v1.0 or a1b2c3d",
+                confirmTitle: "Checkout",
+                action: { gitStatus.checkoutRevision($0) }
+            )))
+        case .deleteMerged: gitStatus.requestDeleteMergedBranches()
         }
     }
 

@@ -37,6 +37,16 @@ final class IDEAgentRewindTargetTests: XCTestCase {
         XCTAssertEqual(targets[2].files, 3)
         XCTAssertEqual(targets[2].laterMessages, 2)
         XCTAssertEqual(targets.map(\.itemIndex), [8, 4, 0])
+        let ids = targets.map(\.id)
+        XCTAssertEqual(IDEListNeighbor.move(ids[0], in: ids, by: 1), ids[1], "arrows walk newest-first, the painted order")
+        XCTAssertEqual(
+            IDEListTypeahead.match(query: "t", in: ids, selected: nil, title: { id in targets.first { $0.id == id }?.text ?? "" }),
+            ids[0]
+        )
+        XCTAssertEqual(
+            IDEListTypeahead.match(query: "t", in: ids, selected: ids[0], title: { id in targets.first { $0.id == id }?.text ?? "" }),
+            ids[1]
+        )
     }
 
     func testARevertedRunIsNotCountedAndAMessageWithoutAPositionIsSkipped() {

@@ -6,6 +6,7 @@ import SwiftUI
 struct IDEDebugPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @FocusState private var evaluateFieldFocused: Bool
+    @FocusState private var isEvaluateListFocused: Bool
     @State private var handledFocusRequest = 0
     @State private var pane = Pane.debugger
 
@@ -93,48 +94,38 @@ struct IDEDebugPanel: View {
         return HStack(spacing: IDEAppearance.Spacing.xs) {
             paneSwitcher(session)
             Divider().frame(height: 14)
-            tool("arrow.clockwise", "Rerun", enabled: true) { workspace.rerunDebugSession() }
-            tool("play.fill", "Resume", enabled: stopped, color: .green) { session.resume() }
-            tool("pause.fill", "Pause", enabled: session.state == .running) { session.pause() }
-            tool("stop.fill", "Stop", enabled: session.isActive, color: .red) { workspace.stopDebugging() }
+            IDEIconButton(systemImage: "arrow.clockwise", help: "Rerun") { workspace.rerunDebugSession() }
+            IDEIconButton(systemImage: "play.fill", help: "Resume", tint: .green, isDisabled: !stopped) { session.resume() }
+            IDEIconButton(systemImage: "pause.fill", help: "Pause", isDisabled: session.state != .running) { session.pause() }
+            IDEIconButton(systemImage: "stop.fill", help: "Stop", tint: .red, isDisabled: !session.isActive) { workspace.stopDebugging() }
             Divider().frame(height: 14)
-            tool("arrow.turn.down.right", "Step Over", enabled: stopped) { session.stepOver() }
-            tool("arrow.down.to.line", "Step Into", enabled: stopped) { session.stepInto() }
-            tool("arrow.down.to.line.compact", "Force Step Into", enabled: stopped, color: .red) { session.forceStepInto() }
-            tool("arrow.down.right.and.arrow.up.left", "Smart Step Into", enabled: stopped) { workspace.debugSmartStepInto() }
-            tool("arrow.up.to.line", "Step Out", enabled: stopped) { session.stepOut() }
-            tool("arrow.right.to.line", "Run to Cursor", enabled: stopped) { workspace.debugRunToCursor(force: false) }
+            IDEIconButton(systemImage: "arrow.turn.down.right", help: "Step Over", isDisabled: !stopped) { session.stepOver() }
+            IDEIconButton(systemImage: "arrow.down.to.line", help: "Step Into", isDisabled: !stopped) { session.stepInto() }
+            IDEIconButton(systemImage: "arrow.down.to.line.compact", help: "Force Step Into", tint: .red, isDisabled: !stopped) { session.forceStepInto() }
+            IDEIconButton(systemImage: "arrow.down.right.and.arrow.up.left", help: "Smart Step Into", isDisabled: !stopped) { workspace.debugSmartStepInto() }
+            IDEIconButton(systemImage: "arrow.up.to.line", help: "Step Out", isDisabled: !stopped) { session.stepOut() }
+            IDEIconButton(systemImage: "arrow.right.to.line", help: "Run to Cursor", isDisabled: !stopped) { workspace.debugRunToCursor(force: false) }
             Divider().frame(height: 14)
-            tool("function", "Evaluate Expression", enabled: stopped) { workspace.showEvaluateExpression(prefill: nil) }
-            tool("arrow.uturn.backward", "Drop Frame", enabled: stopped) { session.dropFrame() }
-            tool("water.waves", "Trace Current Stream Chain", enabled: stopped) { workspace.traceCurrentStream() }
+            IDEIconButton(systemImage: "function", help: "Evaluate Expression", isDisabled: !stopped) { workspace.showEvaluateExpression(prefill: nil) }
+            IDEIconButton(systemImage: "arrow.uturn.backward", help: "Drop Frame", isDisabled: !stopped) { session.dropFrame() }
+            IDEIconButton(systemImage: "water.waves", help: "Trace Current Stream Chain", isDisabled: !stopped) { workspace.traceCurrentStream() }
             Divider().frame(height: 14)
-            tool("circle.grid.2x2", "View Breakpoints", enabled: true) { workspace.viewBreakpoints() }
-            tool(workspace.breakpointsMuted ? "circle.slash.fill" : "circle.slash",
-                 workspace.breakpointsMuted ? "Unmute Breakpoints" : "Mute Breakpoints", enabled: true,
-                 color: workspace.breakpointsMuted ? .red : nil) { workspace.toggleBreakpointsMuted() }
+            IDEIconButton(systemImage: "circle.grid.2x2", help: "View Breakpoints") { workspace.viewBreakpoints() }
+            IDEIconButton(
+                systemImage: workspace.breakpointsMuted ? "circle.slash.fill" : "circle.slash",
+                help: workspace.breakpointsMuted ? "Unmute Breakpoints" : "Mute Breakpoints",
+                tint: workspace.breakpointsMuted ? .red : nil,
+                isActive: workspace.breakpointsMuted
+            ) { workspace.toggleBreakpointsMuted() }
             Spacer(minLength: IDEAppearance.Spacing.sm)
             status(session)
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .lineLimit(1)
         }
+        .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, IDEAppearance.Spacing.xs)
-    }
-
-    private func tool(_ symbol: String, _ help: String, enabled: Bool, color: Color? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12))
-                .foregroundStyle(enabled ? (color ?? IDEAppearance.ColorToken.foreground) : IDEAppearance.ColorToken.muted.opacity(0.5))
-                .frame(width: 22, height: 20)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .help(help)
-        .accessibilityLabel(help)
     }
 
     @ViewBuilder
@@ -218,43 +209,18 @@ struct IDEDebugPanel: View {
                     .help("Threads: another suspended thread's frames and variables")
                 }
                 Spacer(minLength: 0)
-                Toggle(isOn: Bindable(workspace).hideLibraryFrames) {
-                    Image(systemName: "line.3.horizontal.decrease")
+                IDEIconButton(
+                    systemImage: "line.3.horizontal.decrease",
+                    help: "Hide Library Frames",
+                    isActive: workspace.hideLibraryFrames
+                ) {
+                    workspace.hideLibraryFrames.toggle()
                 }
-                .toggleStyle(.button)
-                .controlSize(.small)
-                .help("Hide Library Frames")
             }
+            .ideIconButtonSize(.compact)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.vertical, IDEAppearance.Spacing.xs)
-            let frames = workspace.hideLibraryFrames ? session.stackFrames.filter { !$0.isLibrary } : session.stackFrames
-            List(frames, selection: Binding(
-                get: { session.selectedFrameIndex },
-                set: { index in
-                    session.selectFrame(index)
-                    if let frame = session.stackFrames.first(where: { $0.index == index }), frame.filePath.hasPrefix("/") {
-                        workspace.revealDebugStop(file: URL(fileURLWithPath: frame.filePath), line: frame.line, selectsLine: false)
-                    }
-                }
-            )) { frame in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(frame.name):\(frame.line), \(frame.className.split(separator: ".").last ?? "")")
-                        .font(IDEAppearance.Typography.body)
-                        .foregroundStyle(frame.isLibrary ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
-                    Text(frame.className)
-                        .font(IDEAppearance.Typography.caption)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .lineLimit(1)
-                }
-                .tag(frame.index)
-                .contextMenu {
-                    Button("Drop Frame") {
-                        session.selectFrame(frame.index)
-                        session.dropFrame()
-                    }
-                    .disabled(frame.index == session.stackFrames.last?.index)
-                }
-            }
+            IDEDebugFramesList(session: session)
         }
     }
 
@@ -266,25 +232,43 @@ struct IDEDebugPanel: View {
                 Text("Variables")
                     .font(IDEAppearance.Typography.caption.weight(.semibold))
                 Spacer()
-                Button {
-                    workspace.addWatch(session.evaluationDraft.isEmpty ? "" : session.evaluationDraft)
-                } label: {
-                    Image(systemName: "plus")
+                IDEIconButton(systemImage: "plus", help: "New Watch (type it below)", isDisabled: session.evaluationDraft.isEmpty) {
+                    workspace.addWatch(session.evaluationDraft)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help("New Watch (type it below)")
-                .disabled(session.evaluationDraft.isEmpty)
             }
+            .ideIconButtonSize(.compact)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
             .padding(.vertical, IDEAppearance.Spacing.xs)
-            List {
-                ForEach(workspace.watches, id: \.self) { watch in
-                    IDEWatchRow(expression: watch, outcome: session.watchResults[watch], session: session)
-                }
-                ForEach(session.variables) { value in
-                    IDEDebugValueRow(session: session, value: value, onAddWatch: { workspace.addWatch($0) })
-                }
+            IDEDebugValueList(
+                session: session,
+                groups: [
+                    .init(idPrefix: "watch:", isWatch: true, roots: watchRoots(session)),
+                    .init(roots: session.variables)
+                ],
+                resetID: "\(session.selectedFrameIndex)-\(session.variables.map(\.id).joined(separator: ","))-\(workspace.watches.joined(separator: ","))",
+                emptyMessage: session.isStopped ? "No variables in this frame." : "Variables appear when the program is paused.",
+                onAddWatch: { workspace.addWatch($0) }
+            )
+        }
+    }
+
+    private func watchRoots(_ session: JavaDebugSession) -> [JavaDebugValue] {
+        workspace.watches.map { expression in
+            switch session.watchResults[expression] {
+            case .value(let value)?:
+                JavaDebugValue(
+                    name: expression, type: value.type, value: value.value,
+                    expression: value.expression.isEmpty ? expression : value.expression,
+                    hasChildren: value.hasChildren, children: value.children
+                )
+            case .failure(let message)?:
+                JavaDebugValue(name: expression, type: "", value: message, expression: expression)
+            case nil:
+                JavaDebugValue(
+                    name: expression, type: "",
+                    value: session.isStopped ? "…" : "Not available",
+                    expression: expression
+                )
             }
         }
     }
@@ -318,31 +302,43 @@ struct IDEDebugPanel: View {
                 .focused($evaluateFieldFocused)
                 .disabled(!session.isStopped)
                 .onSubmit { submitEvaluation(session) }
+                .onKeyPress(.downArrow) {
+                    isEvaluateListFocused = true
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    if session.evaluationDraft.isEmpty { return .ignored }
+                    session.evaluationDraft = ""
+                    return .handled
+                }
                 .padding(.horizontal, IDEAppearance.Spacing.sm)
                 .padding(.bottom, IDEAppearance.Spacing.xs)
-            List(session.evaluations) { evaluation in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(evaluation.expression)
-                        .font(IDEAppearance.Typography.monoSmall.weight(.semibold))
-                        .lineLimit(1)
-                    switch evaluation.outcome {
-                    case .value(let value):
-                        IDEDebugValueRow(session: session, value: value, onAddWatch: { workspace.addWatch($0) })
-                    case .failure(let message):
-                        Text(message)
-                            .font(IDEAppearance.Typography.caption)
-                            .foregroundStyle(.red)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .contextMenu {
-                    Button("Add to Watches") { workspace.addWatch(evaluation.expression) }
-                    Button("Evaluate Again") { Task { await session.evaluate(evaluation.expression) } }
-                }
-            }
+            IDEDebugValueList(
+                session: session,
+                groups: [.init(roots: evaluationRoots(session))],
+                resetID: session.evaluations.map { "\($0.id)" }.joined(separator: ","),
+                emptyMessage: session.isStopped ? "Evaluate an expression to see its value." : "Pause the program to evaluate.",
+                onAddWatch: { workspace.addWatch($0) },
+                listFocus: $isEvaluateListFocused
+            )
         }
         .onAppear { focusEvaluationFieldIfRequested(session) }
         .onChange(of: session.evaluationFocusRequest) { _, _ in focusEvaluationFieldIfRequested(session) }
+    }
+
+    private func evaluationRoots(_ session: JavaDebugSession) -> [JavaDebugValue] {
+        session.evaluations.map { evaluation in
+            switch evaluation.outcome {
+            case .value(let value):
+                JavaDebugValue(
+                    name: evaluation.expression, type: value.type, value: value.value,
+                    expression: value.expression.isEmpty ? evaluation.expression : value.expression,
+                    hasChildren: value.hasChildren, children: value.children
+                )
+            case .failure(let message):
+                JavaDebugValue(name: evaluation.expression, type: "", value: message, expression: evaluation.expression)
+            }
+        }
     }
 
     private func submitEvaluation(_ session: JavaDebugSession) {
@@ -401,64 +397,143 @@ struct IDEDebugPanel: View {
     }
 }
 
-/// One watch: its expression and its value at this stop; double click to edit, empty to remove.
-private struct IDEWatchRow: View {
+/// Stack frames as a flat list so arrow keys and type-select walk them like Variables.
+private struct IDEDebugFramesList: View {
     @Environment(IDEWorkspace.self) private var workspace
-    let expression: String
-    let outcome: JavaDebugEvaluation.Outcome?
     let session: JavaDebugSession
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
-    @State private var isEditing = false
-    @State private var draft = ""
+    private var frames: [JavaDebugStackFrame] {
+        workspace.hideLibraryFrames ? session.stackFrames.filter { !$0.isLibrary } : session.stackFrames
+    }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.xs) {
-            Image(systemName: "eyeglasses")
-                .font(.system(size: 10))
-                .foregroundStyle(IDEAppearance.ColorToken.accent)
-            if isEditing {
-                TextField("Watch", text: $draft)
-                    .textFieldStyle(.roundedBorder)
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .onSubmit {
-                        workspace.replaceWatch(expression, with: draft)
-                        isEditing = false
+        let rows = frames
+        return Group {
+            if rows.isEmpty {
+                Text(session.isStopped ? "No frames." : "Frames appear when the program is paused.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .focusable()
+                    .focused($isListFocused)
+                    .focusEffectDisabled()
+                    .onKeyPress(.escape) {
+                        workspace.focusActiveEditor()
+                        return .handled
                     }
-                    .onExitCommand { isEditing = false }
             } else {
-                switch outcome {
-                case .value(let value)?:
-                    IDEDebugValueRow(session: session, value: JavaDebugValue(
-                        name: expression, type: value.type, value: value.value, expression: value.expression,
-                        hasChildren: value.hasChildren, children: value.children
-                    ))
-                case .failure(let message)?:
-                    Text(expression).font(IDEAppearance.Typography.body.weight(.medium))
-                    Spacer(minLength: IDEAppearance.Spacing.xs)
-                    Text(message)
-                        .font(IDEAppearance.Typography.caption)
-                        .foregroundStyle(.red)
-                        .lineLimit(1)
-                case nil:
-                    Text(expression).font(IDEAppearance.Typography.body.weight(.medium))
-                    Spacer(minLength: IDEAppearance.Spacing.xs)
-                    Text(session.isStopped ? "…" : "Not available")
-                        .font(IDEAppearance.Typography.caption)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(rows) { frame in
+                                IDEDebugFrameRow(
+                                    frame: frame,
+                                    isSelected: session.selectedFrameIndex == frame.index,
+                                    onSelect: { select(frame) },
+                                    onActivate: { select(frame) },
+                                    onDrop: {
+                                        session.selectFrame(frame.index)
+                                        session.dropFrame()
+                                    },
+                                    canDrop: frame.index != session.stackFrames.last?.index
+                                )
+                                .id(frame.index)
+                            }
+                        }
+                        .padding(.vertical, IDEAppearance.Spacing.xs)
+                    }
+                    .focusable()
+                    .focused($isListFocused)
+                    .focusEffectDisabled()
+                    .onKeyPress(phases: [.down, .repeat]) { press in
+                        handleKey(press, rows: rows)
+                    }
+                    .onChange(of: session.selectedFrameIndex) { _, index in
+                        proxy.scrollTo(index)
+                    }
                 }
             }
         }
-        .onTapGesture(count: 2) {
-            draft = expression
-            isEditing = true
-        }
-        .contextMenu {
-            Button("Edit Watch") {
-                draft = expression
-                isEditing = true
+    }
+
+    private func handleKey(_ press: KeyPress, rows: [JavaDebugStackFrame]) -> KeyPress.Result {
+        let current = rows.first { $0.index == session.selectedFrameIndex }
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            if let index = IDEListNeighbor.move(session.selectedFrameIndex, in: rows.map(\.index), by: delta),
+               let frame = rows.first(where: { $0.index == index }) {
+                select(frame)
             }
-            Button("Remove Watch") { workspace.removeWatch(expression) }
+            return .handled
+        case .return:
+            typeahead.reset()
+            if let current { select(current) }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let frame = IDEListTypeahead.match(
+                query: typeahead.typed(character), in: rows, selected: current, title: Self.title
+            ) {
+                select(frame)
+            }
+            return .handled
         }
+    }
+
+    private func select(_ frame: JavaDebugStackFrame) {
+        session.selectFrame(frame.index)
+        isListFocused = true
+        guard frame.filePath.hasPrefix("/") else { return }
+        workspace.revealDebugStop(file: URL(fileURLWithPath: frame.filePath), line: frame.line, selectsLine: false)
+    }
+
+    private static func title(_ frame: JavaDebugStackFrame) -> String {
+        let simple = frame.className.split(separator: ".").last.map(String.init) ?? frame.className
+        return "\(frame.name) \(simple)"
+    }
+}
+
+private struct IDEDebugFrameRow: View {
+    let frame: JavaDebugStackFrame
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onActivate: () -> Void
+    let onDrop: () -> Void
+    let canDrop: Bool
+
+    @State private var isHovering = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(frame.name):\(frame.line), \(frame.className.split(separator: ".").last ?? "")")
+                .font(IDEAppearance.Typography.body)
+                .foregroundStyle(frame.isLibrary ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.foreground)
+            Text(frame.className)
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.vertical, IDEAppearance.Spacing.tight)
+        .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear))
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .onTapGesture(count: 2, perform: onActivate)
+        .simultaneousGesture(TapGesture().onEnded(onSelect))
+        .contextMenu {
+            Button("Drop Frame", action: onDrop)
+                .disabled(!canDrop)
+        }
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -526,7 +601,14 @@ private struct IDEDebugMemoryView: View {
                         Text(instancesOf.map { "Instances of \($0)" } ?? "Select a class to list its instances")
                             .font(IDEAppearance.Typography.caption.weight(.semibold))
                             .padding(IDEAppearance.Spacing.xs)
-                        List(instances) { IDEDebugValueRow(session: session, value: $0) }
+                        IDEDebugValueList(
+                            session: session,
+                            groups: [.init(roots: instances)],
+                            resetID: "\(instancesOf ?? "")-\(instances.map(\.id).joined(separator: ","))",
+                            emptyMessage: instancesOf == nil
+                                ? "Select a class to list its instances."
+                                : "No instances of this class."
+                        )
                     }
                 } divider: {
                     Splitter.rule()

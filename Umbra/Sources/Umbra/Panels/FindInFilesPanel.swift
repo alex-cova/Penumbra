@@ -16,45 +16,40 @@ struct FindInFilesPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
     @FocusState private var queryFocused: Bool
     @FocusState private var replacementFocused: Bool
+    @FocusState private var isListFocused: Bool
     @State private var maskRerun: Task<Void, Never>?
+    @State private var typeahead = IDETypeaheadBuffer()
 
     var body: some View {
         @Bindable var model = workspace.findInFiles
         VStack(spacing: 0) {
             HStack(spacing: IDEAppearance.Spacing.sm) {
-                FindInFilesSearchField(query: $model.query, isFocused: $queryFocused) {
-                    workspace.runFindInFiles()
+                FindInFilesSearchField(
+                    query: $model.query,
+                    isFocused: $queryFocused,
+                    onMoveDown: moveFromQueryIntoResults
+                ) {
+                    submitQuery()
                 }
 
                 FindInFilesOptionToggle(label: "Aa", help: "Match Case", isOn: $model.isCaseSensitive)
                 FindInFilesOptionToggle(label: "W", help: "Whole Word", isOn: $model.matchesWholeWord)
                 FindInFilesOptionToggle(label: ".*", help: "Regular Expression", isOn: $model.usesRegex)
 
-                Button(action: workspace.runFindInFiles) {
-                    Image(systemName: "magnifyingglass")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.accent)
-                .help("Search")
-                .accessibilityLabel("Search")
-
-                Button {
+                IDEIconButton(
+                    systemImage: "magnifyingglass",
+                    help: "Search",
+                    tint: IDEAppearance.ColorToken.accent,
+                    action: submitQuery
+                )
+                IDEIconButton(
+                    systemImage: "arrow.left.arrow.right",
+                    help: "Replace",
+                    isActive: workspace.findInFiles.isReplaceVisible
+                ) {
                     workspace.findInFiles.isReplaceVisible.toggle()
-                } label: {
-                    Image(systemName: "arrow.left.arrow.right")
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(workspace.findInFiles.isReplaceVisible ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
-                .help("Replace")
-                .accessibilityLabel("Show Replace")
-
-                Button(action: workspace.hideFindInFiles) {
-                    Image(systemName: "xmark")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .help("Close")
-                .accessibilityLabel("Close")
+                IDEIconButton(systemImage: "xmark", help: "Close", action: workspace.hideFindInFiles)
             }
             .padding(.leading, IDEAppearance.Spacing.md)
             .padding(.trailing, IDEAppearance.Spacing.md)
@@ -112,24 +107,124 @@ struct FindInFilesPanel: View {
             if workspace.findInFiles.hits.isEmpty {
                 IDEEmptyState(symbol: "magnifyingglass", message: emptyMessage)
             } else {
-                List(workspace.findInFiles.hits) { hit in
-                    FindInFilesHitRow(hit: hit, label: hitLabel(hit)) {
-                        workspace.openFindInFilesHit(hit)
-                    }
-                }
-                .listStyle(.plain)
+                resultsList
             }
         }
         .frame(height: workspace.findInFiles.isReplaceVisible ? 292 : 256)
         .background(IDEAppearance.ColorToken.sidebar)
         .task { queryFocused = true }
-        .onExitCommand { workspace.hideFindInFiles() }
+        .onExitCommand {
+            if isListFocused {
+                queryFocused = true
+            } else {
+                workspace.hideFindInFiles()
+            }
+        }
+        .onChange(of: workspace.findInFiles.resultsVersion) {
+            takeResultsFocusIfRequested()
+        }
+        .onChange(of: workspace.findInFiles.focusGeneration) {
+            takeResultsFocusIfRequested()
+            takeQueryFocusIfRequested()
+        }
         // Results shown for one set of options would be wrong for another.
         .onChange(of: workspace.findInFiles.isCaseSensitive) { rerunIfSearching() }
         .onChange(of: workspace.findInFiles.matchesWholeWord) { rerunIfSearching() }
         .onChange(of: workspace.findInFiles.usesRegex) { rerunIfSearching() }
         .onChange(of: workspace.findInFiles.scope) { rerunIfSearching() }
         .onChange(of: workspace.findInFiles.mask) { scheduleMaskRerun() }
+    }
+
+    private var resultsList: some View {
+        let hits = workspace.findInFiles.hits
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(hits) { hit in
+                        FindInFilesHitRow(
+                            hit: hit,
+                            label: hitLabel(hit),
+                            isSelected: workspace.findInFiles.selectedHitID == hit.id
+                        ) {
+                            isListFocused = true
+                            workspace.openFindInFilesHit(hit)
+                        }
+                        .id(hit.id)
+                    }
+                }
+                .padding(.vertical, IDEAppearance.Spacing.xs)
+            }
+            .focusable()
+            .focused($isListFocused)
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleResultsKey(press)
+            }
+            .onChange(of: workspace.findInFiles.selectedHitID) { _, id in
+                if let id { proxy.scrollTo(id) }
+            }
+            .accessibilityLabel("Search results")
+        }
+    }
+
+    private func handleResultsKey(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case .upArrow:
+            typeahead.reset()
+            _ = workspace.findInFiles.moveSelection(-1)
+            return .handled
+        case .downArrow:
+            typeahead.reset()
+            _ = workspace.findInFiles.moveSelection(1)
+            return .handled
+        case .return:
+            typeahead.reset()
+            workspace.openSelectedFindInFilesHit()
+            return .handled
+        case .escape:
+            typeahead.reset()
+            queryFocused = true
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            let hits = workspace.findInFiles.hits
+            if let hit = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: hits,
+                selected: workspace.findInFiles.selectedHit,
+                title: hitLabel
+            ) {
+                workspace.findInFiles.selectedHitID = hit.id
+            }
+            return .handled
+        }
+    }
+
+    /// Return in the query field searches, then the list takes keyboard focus when hits arrive.
+    private func submitQuery() {
+        workspace.findInFiles.wantsResultsFocus = true
+        workspace.runFindInFiles()
+    }
+
+    private func moveFromQueryIntoResults() -> KeyPress.Result {
+        if workspace.findInFiles.selectedHitID == nil {
+            guard workspace.findInFiles.moveSelection(1) else { return .ignored }
+        }
+        guard workspace.findInFiles.selectedHitID != nil else { return .ignored }
+        isListFocused = true
+        return .handled
+    }
+
+    private func takeResultsFocusIfRequested() {
+        guard workspace.findInFiles.wantsResultsFocus else { return }
+        workspace.findInFiles.wantsResultsFocus = false
+        guard workspace.findInFiles.selectedHitID != nil else { return }
+        isListFocused = true
+    }
+
+    private func takeQueryFocusIfRequested() {
+        guard workspace.findInFiles.wantsQueryFocus else { return }
+        workspace.findInFiles.wantsQueryFocus = false
+        queryFocused = true
     }
 
     /// Typing a mask re-runs the search once the typing pauses, not on every character.
@@ -239,6 +334,7 @@ private struct FindInFilesSearchField: View {
     var isFocused: FocusState<Bool>.Binding
     var placeholder = "Search project files"
     var symbol = "magnifyingglass"
+    var onMoveDown: (() -> KeyPress.Result)?
     let onSubmit: () -> Void
 
     var body: some View {
@@ -251,6 +347,7 @@ private struct FindInFilesSearchField: View {
                 .font(IDEAppearance.Typography.monoCaption)
                 .focused(isFocused)
                 .onSubmit(onSubmit)
+                .onKeyPress(.downArrow) { onMoveDown?() ?? .ignored }
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .frame(height: 24)
@@ -292,7 +389,10 @@ private struct FindInFilesOptionToggle: View {
 private struct FindInFilesHitRow: View {
     let hit: ProjectSearchResult
     let label: String
+    var isSelected = false
     let onOpen: () -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
         Button(action: onOpen) {
@@ -314,11 +414,15 @@ private struct FindInFilesHitRow: View {
                         .lineLimit(1)
                 }
             }
+            .padding(.horizontal, IDEAppearance.Spacing.md)
+            .padding(.vertical, IDEAppearance.Spacing.tight)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(Color.clear)
+        .onHover { isHovering = $0 }
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -328,7 +432,7 @@ private struct FindInFilesHitRow: View {
             let workspace = IDEWorkspace()
             workspace.findInFiles.query = "TODO"
             workspace.findInFiles.status = "2 results"
-            workspace.findInFiles.hits = [
+            workspace.findInFiles.setResults([
                 ProjectSearchResult(
                     url: URL(fileURLWithPath: "/project/src/ui/Editor.swift"),
                     line: 41,
@@ -349,7 +453,7 @@ private struct FindInFilesHitRow: View {
                         end: TextPosition(line: 12, column: 12, utf16Offset: 4)
                     )
                 )
-            ]
+            ])
             return workspace
         }())
         .preferredColorScheme(IDEAppearance.preferredColorScheme)

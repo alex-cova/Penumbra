@@ -236,16 +236,15 @@ struct IDEInspectionByNameSheet: View {
     @State private var query = ""
     @State private var language: IDEInspectionLanguage = .java
     @State private var highlighted: IDEInspectionRuleInfo?
+    @FocusState private var isFilterFocused: Bool
+    @FocusState private var isListFocused: Bool
 
     private var matches: [IDEInspectionRuleInfo] {
-        let words = query.lowercased().split(separator: " ").map(String.init)
-        let all = language.rules
-        guard !words.isEmpty else { return all.sorted { $0.title < $1.title } }
-        return all.filter { rule in
-            let haystack = (rule.title + " " + rule.code + " " + rule.groupTitle).lowercased()
-            return words.allSatisfy { haystack.contains($0) }
-        }
-        .sorted { $0.title < $1.title }
+        IDEInspectionByNameOrder.matches(rules: language.rules, query: query)
+    }
+
+    private var visibleMatches: [IDEInspectionRuleInfo] {
+        IDEInspectionByNameOrder.visible(matches)
     }
 
     var body: some View {
@@ -256,12 +255,23 @@ struct IDEInspectionByNameSheet: View {
                 Text("Swift").tag(IDEInspectionLanguage.swift)
             }
             .pickerStyle(.segmented)
-            .onChange(of: language) { highlighted = nil }
+            .onChange(of: language) { _, _ in highlighted = nil }
             TextField("Inspection name", text: $query)
                 .textFieldStyle(.roundedBorder)
-                .onSubmit { pick(highlighted ?? matches.first) }
+                .focused($isFilterFocused)
+                .onSubmit { pick(highlighted ?? visibleMatches.first) }
+                .onKeyPress(.downArrow) {
+                    if highlighted == nil { highlighted = visibleMatches.first }
+                    isListFocused = true
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    guard !query.isEmpty else { return .ignored }
+                    query = ""
+                    return .handled
+                }
             HStack(alignment: .top, spacing: IDEAppearance.Spacing.md) {
-                List(matches.prefix(200).map { $0 }, id: \.self, selection: $highlighted) { rule in
+                List(visibleMatches, id: \.self, selection: $highlighted) { rule in
                     HStack {
                         Text(rule.title)
                         Spacer()
@@ -274,8 +284,19 @@ struct IDEInspectionByNameSheet: View {
                     .onTapGesture(count: 2) { pick(rule) }
                 }
                 .frame(minHeight: 260)
+                .focused($isListFocused)
+                .onKeyPress(.return) {
+                    guard let rule = highlighted ?? visibleMatches.first else { return .ignored }
+                    pick(rule)
+                    return .handled
+                }
+                .onChange(of: query) { _, _ in
+                    if let highlighted, !visibleMatches.contains(highlighted) {
+                        self.highlighted = nil
+                    }
+                }
                 VStack(alignment: .leading, spacing: 6) {
-                    if let rule = highlighted ?? matches.first {
+                    if let rule = highlighted ?? visibleMatches.first {
                         Text(rule.title).font(IDEAppearance.Typography.sidebarHeader)
                         Text(rule.summary).font(IDEAppearance.Typography.body)
                         Text(rule.hasQuickFix ? "Has a quick fix" : "No quick fix")
@@ -290,19 +311,41 @@ struct IDEInspectionByNameSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { workspace.inspectionRuns.isNamePickerPresented = false }
                     .keyboardShortcut(.cancelAction)
-                Button("Continue") { pick(highlighted ?? matches.first) }
+                Button("Continue") { pick(highlighted ?? visibleMatches.first) }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(matches.isEmpty)
+                    .disabled(visibleMatches.isEmpty)
             }
         }
         .padding(IDEAppearance.Spacing.lg)
         .frame(width: 640)
-        .onAppear { language = workspace.inspectionRuns.nameQueryLanguage }
+        .onAppear {
+            language = workspace.inspectionRuns.nameQueryLanguage
+            isFilterFocused = true
+        }
     }
 
     private func pick(_ rule: IDEInspectionRuleInfo?) {
         guard let rule else { return }
         workspace.inspectionRuns.isNamePickerPresented = false
         workspace.presentRunInspectionByName(rule: rule)
+    }
+}
+
+/// Painted Run Inspection by Name order: title-sorted, then the words in the query.
+enum IDEInspectionByNameOrder {
+    static let visibleLimit = 200
+
+    static func matches(rules: [IDEInspectionRuleInfo], query: String) -> [IDEInspectionRuleInfo] {
+        let words = query.lowercased().split(separator: " ").map(String.init)
+        let sorted = rules.sorted { $0.title < $1.title }
+        guard !words.isEmpty else { return sorted }
+        return sorted.filter { rule in
+            let haystack = (rule.title + " " + rule.code + " " + rule.groupTitle).lowercased()
+            return words.allSatisfy { haystack.contains($0) }
+        }
+    }
+
+    static func visible(_ matches: [IDEInspectionRuleInfo]) -> [IDEInspectionRuleInfo] {
+        Array(matches.prefix(visibleLimit))
     }
 }

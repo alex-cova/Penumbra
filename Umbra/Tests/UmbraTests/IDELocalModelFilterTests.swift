@@ -80,4 +80,20 @@ final class IDELocalModelFilterTests: XCTestCase {
         XCTAssertEqual(IDELocalModelFilter.sizeLabel(billions: 1.7), "1.7B")
         XCTAssertEqual(IDELocalModelFilter.sizeLabel(billions: 0.135), "135M")
     }
+
+    func testSearchOrderKeepsHubHitsThatMatchTheFilter() {
+        let fourBit = HFModelSummary(id: "mlx-community/Qwen3-4B-4bit", tags: ["4-bit"])
+        let eightBit = HFModelSummary(id: "mlx-community/Qwen3-8B-8bit", tags: ["8-bit"])
+        var filter = IDELocalModelFilter()
+        XCTAssertEqual(
+            IDELocalModelSearchOrder.ids([fourBit, eightBit], filter: filter),
+            [fourBit.id, eightBit.id]
+        )
+        filter.precision = .fourBit
+        XCTAssertEqual(IDELocalModelSearchOrder.ids([fourBit, eightBit], filter: filter), [fourBit.id])
+        XCTAssertEqual(
+            IDEListNeighbor.move(nil, in: IDELocalModelSearchOrder.ids([fourBit, eightBit], filter: filter), by: 1),
+            fourBit.id
+        )
+    }
 }

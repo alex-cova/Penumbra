@@ -92,6 +92,25 @@ final class IDECoverageControllerTests: XCTestCase {
         XCTAssertEqual(controller.summary, "70% lines · 66% branches · 50% methods · 1 classes")
     }
 
+    func testFlattenedCoverageRowsFollowExpansion() throws {
+        let controller = IDECoverageController()
+        try controller.publish(snapshot())
+        let packages = controller.packageRows
+        let open = IDECoverageTree.flatten(packages: packages, collapsed: [])
+        XCTAssertEqual(open.map(\.title), ["app", "Calc"])
+        XCTAssertTrue(open[0].canDisclose)
+        XCTAssertTrue(open[0].isExpanded)
+        XCTAssertFalse(open[1].canDisclose)
+        if case .klass(let binary) = open[1].kind {
+            XCTAssertEqual(binary, packages.first?.classes.first?.binaryName)
+        } else {
+            XCTFail("second row is the class")
+        }
+        let shut = IDECoverageTree.flatten(packages: packages, collapsed: ["app"])
+        XCTAssertEqual(shut.map(\.title), ["app"])
+        XCTAssertFalse(shut[0].isExpanded)
+    }
+
     func testLineBackgroundsMergeLikeBands() {
         let bands = [
             JavaCoverageBand(lines: 4...6, status: .covered),

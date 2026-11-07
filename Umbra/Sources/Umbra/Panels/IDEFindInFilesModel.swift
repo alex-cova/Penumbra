@@ -20,7 +20,24 @@ final class IDEFindInFilesModel {
     /// Whether the drawer shows its replacement row (⇧⌘R opens it that way).
     var isReplaceVisible = false
     var hits: [ProjectSearchResult] = []
+    /// The keyboard-selected hit, kept by identity across a re-run that still contains it.
+    var selectedHitID: String?
     var status = ""
+    /// Bumped on every search start so a superseded result cannot replace a newer one.
+    private(set) var searchGeneration: UInt64 = 0
+    /// Bumped when results or a failure land, even if the hit identities did not change.
+    private(set) var resultsVersion: UInt64 = 0
+    /// Set when Return starts a search; the drawer consumes it when results land so the list can take focus.
+    var wantsResultsFocus = false
+    /// Set when Escape from the editor should land on the query field.
+    var wantsQueryFocus = false
+    /// True after a hit was opened from the drawer, until the drawer takes the keyboard back, a new
+    /// search starts or the drawer closes. Only then does Escape in the editor return to the drawer;
+    /// otherwise (the user clicked into the editor on their own) it is left to the editor.
+    var editorEscapeReturnsToDrawer = false
+    /// Bumped when the editor asks the drawer to take the keyboard, so a second Escape still
+    /// fires after the first request was consumed.
+    private(set) var focusGeneration: UInt64 = 0
 
     /// The query the drawer's field and option toggles describe.
     var searchQuery: WorkspaceSearchQuery {
@@ -83,8 +100,58 @@ final class IDEFindInFilesModel {
         }
     }
 
-    func setResults(_ results: [ProjectSearchResult]) {
+    /// Starts a search and returns the generation the matching `setResults` / `fail` must carry.
+    @discardableResult
+    func beginSearch() -> UInt64 {
+        searchGeneration += 1
+        editorEscapeReturnsToDrawer = false
+        status = "Searching…"
+        return searchGeneration
+    }
+
+    var selectedHit: ProjectSearchResult? {
+        guard let selectedHitID else { return nil }
+        return hits.first { $0.id == selectedHitID }
+    }
+
+    /// Escape from the editor while this drawer is showing: the selected hit's list, or the query.
+    @discardableResult
+    func requestFocusFromEditor() -> Bool {
+        guard isVisible, editorEscapeReturnsToDrawer else { return false }
+        editorEscapeReturnsToDrawer = false
+        if selectedHitID != nil {
+            wantsQueryFocus = false
+            wantsResultsFocus = true
+        } else {
+            wantsResultsFocus = false
+            wantsQueryFocus = true
+        }
+        focusGeneration += 1
+        return true
+    }
+
+    /// Moves the keyboard selection by `delta` hits. With none selected, down picks the first and
+    /// up the last. Returns whether a hit is now selected.
+    @discardableResult
+    func moveSelection(_ delta: Int) -> Bool {
+        guard !hits.isEmpty else { return false }
+        let current = selectedHitID.flatMap { id in hits.firstIndex { $0.id == id } }
+        let next: Int
+        if let current {
+            next = min(max(current + delta, 0), hits.count - 1)
+        } else {
+            next = delta > 0 ? 0 : hits.count - 1
+        }
+        selectedHitID = hits[next].id
+        return true
+    }
+
+    func setResults(_ results: [ProjectSearchResult], generation: UInt64? = nil) {
+        if let generation, generation != searchGeneration { return }
         hits = results
+        clampSelection()
+        resultsVersion += 1
+        if results.isEmpty { wantsResultsFocus = false }
         switch results.count {
         case 0: status = "No results"
         case 1: status = "1 result"
@@ -93,8 +160,19 @@ final class IDEFindInFilesModel {
     }
 
     /// Clears the hits and says why there is nothing to show.
-    func fail(_ message: String) {
+    func fail(_ message: String, generation: UInt64? = nil) {
+        if let generation, generation != searchGeneration { return }
         hits = []
+        selectedHitID = nil
+        wantsResultsFocus = false
+        wantsQueryFocus = false
+        resultsVersion += 1
         status = message
+    }
+
+    /// Keeps the current selection when that hit is still in `hits`; otherwise selects the first.
+    private func clampSelection() {
+        if let selectedHitID, hits.contains(where: { $0.id == selectedHitID }) { return }
+        selectedHitID = hits.first?.id
     }
 }

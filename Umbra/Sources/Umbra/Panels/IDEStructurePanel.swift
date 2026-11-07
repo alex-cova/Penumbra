@@ -4,6 +4,7 @@ import SwiftUI
 /// The sidebar's Structure tab, listing the type at the caret and its members.
 struct IDEStructurePanel: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @State private var typeahead = IDETypeaheadBuffer()
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -19,6 +20,7 @@ struct IDEStructurePanel: View {
         .background(IDEAppearance.ColorToken.panel)
         // Edits and caret moves do nothing while this tab is hidden; the tree is built when it appears.
         .onAppear { workspace.refreshStructure() }
+        .ideSidebarFocus(.structure, on: $isFocused)
     }
 
     private func tree(_ store: IDEStructureStore, root: StructureNode) -> some View {
@@ -50,33 +52,60 @@ struct IDEStructurePanel: View {
         .focusable()
         .focused($isFocused)
         .focusEffectDisabled()
-        .onKeyPress(.return) {
+        .onKeyPress(phases: [.down, .repeat]) { press in
+            handleKey(press, store: store, rows: rows)
+        }
+        .accessibilityLabel("Structure of \(root.title)")
+    }
+
+    private func handleKey(
+        _ press: KeyPress,
+        store: IDEStructureStore,
+        rows: [IDEStructureStore.Row]
+    ) -> KeyPress.Result {
+        switch press.key {
+        case .return:
+            typeahead.reset()
             if let id = store.selectedID, let node = store.node(withID: id) {
                 workspace.selectStructureNode(node)
             }
             return .handled
-        }
-        .onKeyPress(.downArrow) {
+        case .downArrow:
+            typeahead.reset()
             store.moveSelection(by: 1)
             return .handled
-        }
-        .onKeyPress(.upArrow) {
+        case .upArrow:
+            typeahead.reset()
             store.moveSelection(by: -1)
             return .handled
-        }
-        .onKeyPress(.rightArrow) {
+        case .rightArrow:
+            typeahead.reset()
             if let id = store.selectedID, let row = rows.first(where: { $0.id == id }), !row.isExpanded {
                 store.toggle(row.node)
             }
             return .handled
-        }
-        .onKeyPress(.leftArrow) {
+        case .leftArrow:
+            typeahead.reset()
             if let id = store.selectedID, let row = rows.first(where: { $0.id == id }), row.isExpanded {
                 store.toggle(row.node)
             }
             return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let id = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: rows.map(\.id),
+                selected: store.selectedID,
+                title: { id in rows.first { $0.id == id }?.node.title ?? "" }
+            ) {
+                store.select(id)
+            }
+            return .handled
         }
-        .accessibilityLabel("Structure of \(root.title)")
     }
 
     private func emptyState(_ text: String) -> some View {
@@ -91,6 +120,13 @@ struct IDEStructurePanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, IDEAppearance.Spacing.md)
+        .focusable()
+        .focused($isFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.escape) {
+            workspace.focusActiveEditor()
+            return .handled
+        }
         .accessibilityElement(children: .combine)
     }
 }

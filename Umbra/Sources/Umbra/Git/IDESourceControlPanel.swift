@@ -21,6 +21,11 @@ struct IDESourceControlPanel: View {
     }
 
     @State private var subTab: SubTab = .log
+    @State private var typeahead = IDETypeaheadBuffer()
+    @State private var fileTypeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
+    @FocusState private var isSearchFocused: Bool
+    @FocusState private var isCommitFilesFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -118,33 +123,49 @@ struct IDESourceControlPanel: View {
     }
 
     private func lineHistoryList(_ history: IDEGitLineHistory) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if history.entries.isEmpty {
-                    Text("No commits touched these lines")
-                        .font(IDEAppearance.Typography.body)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .padding(IDEAppearance.Spacing.md)
-                }
-                ForEach(history.entries) { entry in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(entry.commit.subject)
-                            .font(IDEAppearance.Typography.tabLabel)
-                            .lineLimit(1)
-                        Text("\(entry.commit.shortHash)  \(entry.commit.author)")
-                            .font(IDEAppearance.Typography.caption)
+        let hashes = history.entries.map(\.commit.hash)
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if history.entries.isEmpty {
+                        Text("No commits touched these lines")
+                            .font(IDEAppearance.Typography.body)
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .padding(IDEAppearance.Spacing.md)
                     }
-                    .padding(.horizontal, IDEAppearance.Spacing.md)
-                    .padding(.vertical, IDEAppearance.Spacing.xs)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(history.selectedHash == entry.commit.hash ? IDEAppearance.ColorToken.selection : Color.clear)
-                    .contentShape(Rectangle())
-                    .accessibilityAddTraits(.isButton)
-                    .onTapGesture { gitStatus.lineHistory?.selectedHash = entry.commit.hash }
+                    ForEach(history.entries) { entry in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.commit.subject)
+                                .font(IDEAppearance.Typography.tabLabel)
+                                .lineLimit(1)
+                            Text("\(entry.commit.shortHash)  \(entry.commit.author)")
+                                .font(IDEAppearance.Typography.caption)
+                                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        }
+                        .padding(.horizontal, IDEAppearance.Spacing.md)
+                        .padding(.vertical, IDEAppearance.Spacing.xs)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(history.selectedHash == entry.commit.hash ? IDEAppearance.ColorToken.selection : Color.clear)
+                        .contentShape(Rectangle())
+                        .accessibilityAddTraits(.isButton)
+                        .onTapGesture {
+                            isListFocused = true
+                            gitStatus.lineHistory?.selectedHash = entry.commit.hash
+                        }
+                        .id(entry.commit.hash)
+                    }
                 }
+                .padding(.vertical, IDEAppearance.Spacing.xs)
             }
-            .padding(.vertical, IDEAppearance.Spacing.xs)
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleLineHistoryKey(press, hashes: hashes, subjects: history.entries.map(\.commit.subject))
+            }
+            .onChange(of: history.selectedHash) { _, hash in
+                if let hash { proxy.scrollTo(hash) }
+            }
         }
     }
 
@@ -218,6 +239,19 @@ struct IDESourceControlPanel: View {
                     .textFieldStyle(.plain)
                     .font(IDEAppearance.Typography.body)
                     .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .focused($isSearchFocused)
+                    .onKeyPress(.downArrow) {
+                        isListFocused = true
+                        if gitStatus.selectedCommitHash == nil {
+                            gitStatus.moveCommitSelection(by: 1, in: gitStatus.commits.map(\.hash))
+                        }
+                        return .handled
+                    }
+                    .onKeyPress(.escape) {
+                        if gitStatus.historySearch.isEmpty { return .ignored }
+                        gitStatus.historySearch = ""
+                        return .handled
+                    }
                 if !gitStatus.historySearch.isEmpty {
                     Button { gitStatus.historySearch = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain)
@@ -308,23 +342,74 @@ struct IDESourceControlPanel: View {
     /// The selected commit's files; a click opens one against the commit's parent in a diff tab.
     private var commitFiles: some View {
         let files = gitStatus.selectedCommitFiles
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                IDECommitAllChangesRow(isSelected: gitStatus.selectedCommitFile == nil) {
-                    gitStatus.selectedCommitFile = nil
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    IDECommitAllChangesRow(isSelected: gitStatus.selectedCommitFile == nil) {
+                        isCommitFilesFocused = true
+                        gitStatus.selectedCommitFile = nil
+                    }
+                    .id("all")
+                    ForEach(files) { file in
+                        IDECommitFileRow(
+                            file: file,
+                            isSelected: gitStatus.selectedCommitFile == file.path,
+                            onSelect: {
+                                isCommitFilesFocused = true
+                                gitStatus.selectedCommitFile = file.path
+                            },
+                            onOpenInTab: { openCommitFile(file, in: files) }
+                        )
+                        .id(file.path)
+                    }
                 }
-                ForEach(files) { file in
-                    IDECommitFileRow(
-                        file: file,
-                        isSelected: gitStatus.selectedCommitFile == file.path,
-                        onSelect: { gitStatus.selectedCommitFile = file.path },
-                        onOpenInTab: { openCommitFile(file, in: files) }
-                    )
-                }
+                .padding(.vertical, IDEAppearance.Spacing.xs)
             }
-            .padding(.vertical, IDEAppearance.Spacing.xs)
+            .focusable()
+            .focused($isCommitFilesFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleCommitFilesKey(press, files: files)
+            }
+            .onChange(of: gitStatus.selectedCommitFile) { _, path in
+                proxy.scrollTo(path ?? "all")
+            }
         }
         .frame(maxHeight: min(CGFloat(files.count) * 22 + 8, 140))
+    }
+
+    private func handleCommitFilesKey(_ press: KeyPress, files: [GitChangedFile]) -> KeyPress.Result {
+        let paths = files.map(\.path)
+        switch press.key {
+        case .upArrow, .downArrow:
+            fileTypeahead.reset()
+            gitStatus.moveCommitFileSelection(by: press.key == .downArrow ? 1 : -1, in: paths)
+            isCommitFilesFocused = true
+            return .handled
+        case .return:
+            fileTypeahead.reset()
+            if let path = gitStatus.selectedCommitFile, let file = files.first(where: { $0.path == path }) {
+                openCommitFile(file, in: files)
+            }
+            return .handled
+        case .escape:
+            fileTypeahead.reset()
+            isListFocused = true
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            let items = [""] + paths
+            if let path = IDEListTypeahead.match(
+                query: fileTypeahead.typed(character),
+                in: items,
+                selected: gitStatus.selectedCommitFile ?? "",
+                title: { $0.isEmpty ? "All changes" : ($0 as NSString).lastPathComponent }
+            ) {
+                gitStatus.selectedCommitFile = path.isEmpty ? nil : path
+                isCommitFilesFocused = true
+            }
+            return .handled
+        }
     }
 
     private func openCommitFile(_ file: GitChangedFile, in files: [GitChangedFile]) {
@@ -404,32 +489,122 @@ struct IDESourceControlPanel: View {
     }
 
     private var historyList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if gitStatus.commits.isEmpty {
-                    Text(gitStatus.historyFilePath == nil ? "No commits" : "No commits touched this file")
-                        .font(IDEAppearance.Typography.body)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .padding(.horizontal, IDEAppearance.Spacing.md)
-                        .padding(.top, IDEAppearance.Spacing.sm)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if gitStatus.commits.isEmpty {
+                        Text(gitStatus.historyFilePath == nil ? "No commits" : "No commits touched this file")
+                            .font(IDEAppearance.Typography.body)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .padding(.horizontal, IDEAppearance.Spacing.md)
+                            .padding(.top, IDEAppearance.Spacing.sm)
+                    }
+                    ForEach(gitStatus.commits) { commit in
+                        IDESourceControlCommitRow(
+                            commit: commit,
+                            isSelected: gitStatus.selectedCommitHashes.contains(commit.hash),
+                            onSelect: {
+                                isListFocused = true
+                                selectCommitRow(commit)
+                            }
+                        )
+                        .id(commit.hash)
+                        .contextMenu { commitMenu(commit) }
+                    }
+                    if gitStatus.hasMoreHistory {
+                        Button("Load More…") { gitStatus.loadMoreHistory() }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(IDEAppearance.ColorToken.accent)
+                            .font(IDEAppearance.Typography.caption)
+                            .padding(IDEAppearance.Spacing.md)
+                    }
                 }
-                ForEach(gitStatus.commits) { commit in
-                    IDESourceControlCommitRow(
-                        commit: commit,
-                        isSelected: gitStatus.selectedCommitHashes.contains(commit.hash),
-                        onSelect: { selectCommitRow(commit) }
-                    )
-                    .contextMenu { commitMenu(commit) }
-                }
-                if gitStatus.hasMoreHistory {
-                    Button("Load More…") { gitStatus.loadMoreHistory() }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(IDEAppearance.ColorToken.accent)
-                        .font(IDEAppearance.Typography.caption)
-                        .padding(IDEAppearance.Spacing.md)
-                }
+                .padding(.vertical, IDEAppearance.Spacing.xs)
             }
-            .padding(.vertical, IDEAppearance.Spacing.xs)
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleHistoryKey(press)
+            }
+            .onChange(of: gitStatus.selectedCommitHash) { _, hash in
+                if let hash { proxy.scrollTo(hash) }
+            }
+        }
+    }
+
+    private func handleHistoryKey(_ press: KeyPress) -> KeyPress.Result {
+        let hashes = gitStatus.commits.map(\.hash)
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            guard let next = IDEListNeighbor.move(gitStatus.selectedCommitHash, in: hashes, by: delta) else {
+                return .handled
+            }
+            if press.modifiers.contains(.shift) {
+                gitStatus.extendCommitSelection(to: next)
+            } else {
+                gitStatus.selectCommit(next)
+            }
+            isListFocused = true
+            return .handled
+        case .return:
+            typeahead.reset()
+            return .handled
+        case .escape:
+            typeahead.reset()
+            if isSearchFocused {
+                isSearchFocused = false
+                return .handled
+            }
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let hash = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: hashes,
+                selected: gitStatus.selectedCommitHash,
+                title: { hash in gitStatus.commits.first { $0.hash == hash }?.subject ?? "" }
+            ) {
+                gitStatus.selectCommit(hash)
+                isListFocused = true
+            }
+            return .handled
+        }
+    }
+
+    private func handleLineHistoryKey(_ press: KeyPress, hashes: [String], subjects: [String]) -> KeyPress.Result {
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            if let next = IDEListNeighbor.move(gitStatus.lineHistory?.selectedHash, in: hashes, by: delta) {
+                gitStatus.lineHistory?.selectedHash = next
+                isListFocused = true
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            let titles = Dictionary(uniqueKeysWithValues: zip(hashes, subjects))
+            if let hash = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: hashes,
+                selected: gitStatus.lineHistory?.selectedHash,
+                title: { titles[$0] ?? "" }
+            ) {
+                gitStatus.lineHistory?.selectedHash = hash
+                isListFocused = true
+            }
+            return .handled
         }
     }
 }
@@ -444,7 +619,9 @@ struct IDEChangesPanel: View {
     @State private var creatingBranch = false
     @State private var newBranchName = ""
     @State private var changedFilesExpanded = true
+    @State private var typeahead = IDETypeaheadBuffer()
     @FocusState private var messageFocused: Bool
+    @FocusState private var isListFocused: Bool
 
     init(gitStatus: IDEGitStatusModel) {
         self._gitStatus = Bindable(wrappedValue: gitStatus)
@@ -505,6 +682,7 @@ struct IDEChangesPanel: View {
         } message: {
             Text("Create a branch at the current commit and switch to it.")
         }
+        .ideSidebarFocus(.changes, on: $messageFocused)
     }
 
     private var messageField: some View {
@@ -522,6 +700,18 @@ struct IDEChangesPanel: View {
         .onKeyPress(keys: [.return], phases: .down) { press in
             guard press.modifiers.contains(.command) else { return .ignored }
             if canCommit { gitStatus.commit() }
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            guard visibleChangePaths.first != nil else { return .ignored }
+            if gitStatus.selectedChangePath == nil {
+                gitStatus.moveChangeSelection(by: 1, in: visibleChangePaths)
+            }
+            isListFocused = true
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            workspace.focusActiveEditor()
             return .handled
         }
         .padding(.horizontal, IDEAppearance.Spacing.sm)
@@ -573,7 +763,11 @@ struct IDEChangesPanel: View {
 
     /// Amend, sign-off, hooks, recent messages and the fixup!/squash! prefixes.
     private var commitOptionsMenu: some View {
-        Menu {
+        IDEIconMenu(
+            systemImage: "checklist",
+            help: "Commit options: amend, sign off, hooks, recent messages",
+            isActive: gitStatus.commitOptions.amend || gitStatus.commitOptions.signoff || gitStatus.commitOptions.skipHooks
+        ) {
             Toggle("Amend Last Commit", isOn: Binding(
                 get: { gitStatus.commitOptions.amend },
                 set: { gitStatus.setAmend($0) }
@@ -610,24 +804,13 @@ struct IDEChangesPanel: View {
                 }
             }
             .disabled(gitStatus.prefixCandidates.isEmpty)
-        } label: {
-            Image(systemName: "checklist")
-                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                .foregroundStyle(gitStatus.commitOptions.amend || gitStatus.commitOptions.signoff || gitStatus.commitOptions.skipHooks
-                    ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
-                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
-                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Commit options: amend, sign off, hooks, recent messages")
         .accessibilityLabel("Commit options")
     }
 
     /// Everything that is not the common path: staging in bulk, revert, refresh and the branch.
     private var optionsMenu: some View {
-        Menu {
+        IDEIconMenu(systemImage: "slider.horizontal.3", help: "Stage, revert and branch actions") {
             Button("Stage All") { gitStatus.stageAll() }
             Button("Unstage All") { gitStatus.unstageAll() }
             Button("Revert All…") {
@@ -661,18 +844,8 @@ struct IDEChangesPanel: View {
             }
             Divider()
             Button("Refresh") { gitStatus.refresh() }
-        } label: {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: IDEAppearance.IconSize.toolbarGlyph, weight: .medium))
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .frame(width: IDEAppearance.Spacing.iconButton, height: IDEAppearance.Spacing.iconButton)
-                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
         .disabled(gitStatus.isBusy)
-        .help("Stage, revert and branch actions")
         .accessibilityLabel("Changes options")
     }
 
@@ -776,63 +949,140 @@ struct IDEChangesPanel: View {
         .background(IDEAppearance.ColorToken.editor)
     }
 
+    /// Conflicts, then staged, then unstaged — the order the list paints.
+    private var visibleChangePaths: [String] {
+        conflictedChanges.map(\.path) + stagedChanges.map(\.path) + unstagedChanges.map(\.path)
+    }
+
     private var changeList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
-                if !conflictedChanges.isEmpty {
-                    sectionHeader("Conflicts", count: conflictedChanges.count)
-                    ForEach(conflictedChanges) { change in
-                        IDEConflictRow(
-                            change: change,
-                            onMerge: { workspace.openMergeTool(forPath: change.path) },
-                            onTakeYours: { gitStatus.resolve(paths: [change.path], taking: .ours) },
-                            onTakeTheirs: { gitStatus.resolve(paths: [change.path], taking: .theirs) },
-                            onOpenFile: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } }
-                        )
-                    }
-                }
-                if stagedChanges.isEmpty && unstagedChanges.isEmpty && conflictedChanges.isEmpty {
-                    Text("No changes")
-                        .font(IDEAppearance.Typography.body)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .padding(.horizontal, IDEAppearance.Spacing.md)
-                        .padding(.top, IDEAppearance.Spacing.sm)
-                } else {
-                    if !stagedChanges.isEmpty {
-                        sectionHeader("Staged Changes", count: stagedChanges.count)
-                        ForEach(stagedChanges) { change in
-                            IDESourceControlChangeRow(
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+                    if !conflictedChanges.isEmpty {
+                        sectionHeader("Conflicts", count: conflictedChanges.count)
+                        ForEach(conflictedChanges) { change in
+                            IDEConflictRow(
                                 change: change,
                                 isSelected: gitStatus.selectedChangePaths.contains(change.path),
-                                showsStage: false,
-                                onSelect: { select(change, in: stagedChanges) },
-                                onOpen: { workspace.openChangeDiff(path: change.path, staged: true) },
-                                onOpenFile: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } },
-                                onStage: {},
-                                onUnstage: { gitStatus.unstage(path: change.path) },
-                                onRevert: { revert(from: change) }
+                                onSelect: {
+                                    isListFocused = true
+                                    select(change, in: conflictedChanges)
+                                },
+                                onMerge: { workspace.openMergeTool(forPath: change.path) },
+                                onTakeYours: { gitStatus.resolve(paths: [change.path], taking: .ours) },
+                                onTakeTheirs: { gitStatus.resolve(paths: [change.path], taking: .theirs) },
+                                onOpenFile: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } }
                             )
+                            .id(change.path)
                         }
                     }
-                    if !unstagedChanges.isEmpty {
-                        sectionHeader("Changes", count: unstagedChanges.count)
-                        ForEach(unstagedChanges) { change in
-                            IDESourceControlChangeRow(
-                                change: change,
-                                isSelected: gitStatus.selectedChangePaths.contains(change.path),
-                                showsStage: true,
-                                onSelect: { select(change, in: unstagedChanges) },
-                                onOpen: { workspace.openChangeDiff(path: change.path, staged: false) },
-                                onOpenFile: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } },
-                                onStage: { gitStatus.stage(path: change.path) },
-                                onUnstage: {},
-                                onRevert: { revert(from: change) }
-                            )
+                    if stagedChanges.isEmpty && unstagedChanges.isEmpty && conflictedChanges.isEmpty {
+                        Text("No changes")
+                            .font(IDEAppearance.Typography.body)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .padding(.horizontal, IDEAppearance.Spacing.md)
+                            .padding(.top, IDEAppearance.Spacing.sm)
+                    } else {
+                        if !stagedChanges.isEmpty {
+                            sectionHeader("Staged Changes", count: stagedChanges.count)
+                            ForEach(stagedChanges) { change in
+                                IDESourceControlChangeRow(
+                                    change: change,
+                                    isSelected: gitStatus.selectedChangePaths.contains(change.path),
+                                    showsStage: false,
+                                    onSelect: {
+                                        isListFocused = true
+                                        select(change, in: stagedChanges)
+                                    },
+                                    onOpen: { workspace.openChangeDiff(path: change.path, staged: true) },
+                                    onOpenFile: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } },
+                                    onStage: {},
+                                    onUnstage: { gitStatus.unstage(path: change.path) },
+                                    onRevert: { revert(from: change) }
+                                )
+                                .id(change.path)
+                            }
+                        }
+                        if !unstagedChanges.isEmpty {
+                            sectionHeader("Changes", count: unstagedChanges.count)
+                            ForEach(unstagedChanges) { change in
+                                IDESourceControlChangeRow(
+                                    change: change,
+                                    isSelected: gitStatus.selectedChangePaths.contains(change.path),
+                                    showsStage: true,
+                                    onSelect: {
+                                        isListFocused = true
+                                        select(change, in: unstagedChanges)
+                                    },
+                                    onOpen: { workspace.openChangeDiff(path: change.path, staged: false) },
+                                    onOpenFile: { Task { await workspace.openDocument(from: URL(fileURLWithPath: change.path)) } },
+                                    onStage: { gitStatus.stage(path: change.path) },
+                                    onUnstage: {},
+                                    onRevert: { revert(from: change) }
+                                )
+                                .id(change.path)
+                            }
                         }
                     }
                 }
+                .padding(.vertical, IDEAppearance.Spacing.sm)
             }
-            .padding(.vertical, IDEAppearance.Spacing.sm)
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleListKey(press)
+            }
+            .onChange(of: gitStatus.selectedChangePath) { _, path in
+                if let path { proxy.scrollTo(path) }
+            }
+        }
+    }
+
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        let paths = visibleChangePaths
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            guard let next = IDEListNeighbor.move(gitStatus.selectedChangePath, in: paths, by: delta) else {
+                return .handled
+            }
+            if press.modifiers.contains(.shift) {
+                gitStatus.extendChangeSelection(to: next, in: paths)
+            } else {
+                gitStatus.selectChange(next)
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            activateSelectedChange()
+            return .handled
+        case .escape:
+            typeahead.reset()
+            messageFocused = true
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let path = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: paths,
+                selected: gitStatus.selectedChangePath,
+                title: { ($0 as NSString).lastPathComponent }
+            ) {
+                gitStatus.selectChange(path)
+            }
+            return .handled
+        }
+    }
+
+    private func activateSelectedChange() {
+        guard let path = gitStatus.selectedChangePath,
+              let change = gitStatus.changes.first(where: { $0.path == path }) else { return }
+        if change.unstaged == .conflicted || change.staged == .conflicted {
+            workspace.openMergeTool(forPath: path)
+        } else {
+            workspace.openChangeDiff(path: path, staged: change.unstaged == nil)
         }
     }
 
@@ -1446,14 +1696,15 @@ struct IDESourceControlControls: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        Button(action: { workspace.gitStatus.refresh(); workspace.gitStatus.loadHistory() }) {
-            Image(systemName: "arrow.clockwise")
+        IDEIconButton(
+            systemImage: "arrow.clockwise",
+            help: "Refresh",
+            isDisabled: workspace.gitStatus.isBusy
+        ) {
+            workspace.gitStatus.refresh()
+            workspace.gitStatus.loadHistory()
         }
-        .buttonStyle(.borderless)
-        .foregroundStyle(IDEAppearance.ColorToken.muted)
-        .help("Refresh")
         .accessibilityLabel("Refresh History")
-        .disabled(workspace.gitStatus.isBusy)
     }
 }
 

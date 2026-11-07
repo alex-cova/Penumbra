@@ -76,8 +76,11 @@ struct IDEDebugValueRow: View {
     let session: JavaDebugSession
     let value: JavaDebugValue
     var onAddWatch: ((String) -> Void)?
+    /// Off in the flattened Variables list: the parent walks children with arrow keys.
+    var embedsChildren = true
+    var isExpanded = false
 
-    @State private var isExpanded = false
+    @State private var isLocallyExpanded = false
     @State private var loaded: [JavaDebugValue]?
     @State private var loadError: String?
     @State private var isEditing = false
@@ -86,11 +89,12 @@ struct IDEDebugValueRow: View {
     @State private var shown: JavaDebugValue?
 
     private var current: JavaDebugValue { shown ?? value }
+    private var showsOpen: Bool { embedsChildren ? isLocallyExpanded : isExpanded }
 
     var body: some View {
         Group {
-            if current.hasChildren {
-                DisclosureGroup(isExpanded: $isExpanded) {
+            if embedsChildren, current.hasChildren {
+                DisclosureGroup(isExpanded: $isLocallyExpanded) {
                     if let children = loaded ?? current.children {
                         ForEach(children) { IDEDebugValueRow(session: session, value: $0, onAddWatch: onAddWatch) }
                     } else if let loadError {
@@ -101,7 +105,7 @@ struct IDEDebugValueRow: View {
                 } label: {
                     label
                 }
-                .onChange(of: isExpanded) { _, expanded in
+                .onChange(of: isLocallyExpanded) { _, expanded in
                     guard expanded, loaded == nil, current.children == nil else { return }
                     Task { await load() }
                 }
@@ -123,6 +127,14 @@ struct IDEDebugValueRow: View {
 
     private var label: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
+            if !embedsChildren {
+                if current.hasChildren {
+                    IDEDisclosureChevron(isExpanded: showsOpen, size: 10, width: 12)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                } else {
+                    Spacer().frame(width: 12)
+                }
+            }
             if let name = current.name {
                 Text(name).font(IDEAppearance.Typography.body.weight(.medium))
             }
@@ -210,9 +222,13 @@ private struct IDEQuickEvaluateView: View {
             case nil:
                 ProgressView().controlSize(.small)
             case .value(let value)?:
-                ScrollView {
-                    IDEDebugValueRow(session: session, value: value)
-                }
+                IDEDebugValueList(
+                    session: session,
+                    groups: [.init(roots: [value])],
+                    resetID: value.id,
+                    emptyMessage: "No value.",
+                    escapesToEditor: false
+                )
                 .frame(maxHeight: 260)
             case .failure(let message)?:
                 Text(message)
@@ -232,13 +248,15 @@ private struct IDEQuickEvaluateView: View {
 final class IDEQuickEvaluatePopover: NSObject, NSPopoverDelegate {
     private var popover: NSPopover?
 
-    func present(expression: String, session: JavaDebugSession, in textView: TextView, at location: Int) {
+    func present(expression: String, session: JavaDebugSession, workspace: IDEWorkspace, in textView: TextView, at location: Int) {
         dismiss()
         let popover = NSPopover()
         popover.behavior = .transient
         popover.delegate = self
         popover.contentViewController = NSHostingController(
-            rootView: IDEQuickEvaluateView(session: session, expression: expression).preferredColorScheme(IDEAppearance.preferredColorScheme)
+            rootView: IDEQuickEvaluateView(session: session, expression: expression)
+                .environment(workspace)
+                .preferredColorScheme(IDEAppearance.preferredColorScheme)
         )
         self.popover = popover
         let caret = textView.caretRectInViewport(at: location)

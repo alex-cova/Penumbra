@@ -47,14 +47,9 @@ struct IDEDiagramRootView: View {
             layoutMenu
             routingMenu
             optionsMenu
-            Button {
+            IDEIconButton(systemImage: "arrow.clockwise", help: "Reload diagram", isDisabled: session.isLoading) {
                 session.refresh()
-            } label: {
-                Label("Reload Diagram", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
             }
-            .buttonStyle(.borderless)
-            .disabled(session.isLoading)
-            .help("Reload diagram")
             exportMenu
             DiagramZoomControls(
                 zoomPercent: Int((session.host.viewport.zoom * 100).rounded()),
@@ -66,48 +61,38 @@ struct IDEDiagramRootView: View {
                 onFit: { session.fit() }
             )
         }
+        .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .frame(height: 32)
         .background(IDEAppearance.ColorToken.tabBar)
     }
 
     private var layoutMenu: some View {
-        Menu {
+        IDEIconMenu(
+            systemImage: "rectangle.3.group",
+            help: "Arrange the diagram",
+            isDisabled: session.document.nodes.isEmpty
+        ) {
             Picker("Layout", selection: $session.settings.layout) {
                 ForEach(IDEDiagramLayoutKind.allCases, id: \.self) { Text($0.title).tag($0) }
             }
             .pickerStyle(.inline)
-        } label: {
-            Label("Layout", systemImage: "rectangle.3.group")
-                .labelStyle(.iconOnly)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Arrange the diagram")
-        .disabled(session.document.nodes.isEmpty)
     }
 
     private var routingMenu: some View {
-        Menu {
+        IDEIconMenu(systemImage: "point.topleft.down.to.point.bottomright.curvepath", help: "Edge routing") {
             Picker("Edge Routing", selection: $session.settings.routing) {
                 ForEach(EdgeRoutingStyle.allCases) { Text($0.displayName).tag($0) }
             }
             .pickerStyle(.inline)
-        } label: {
-            Label("Edge Routing", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                .labelStyle(.iconOnly)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Edge routing")
     }
 
     @ViewBuilder
     private var optionsMenu: some View {
         if session.request.isClassDiagram {
-            Menu {
+            IDEIconMenu(systemImage: "slider.horizontal.3", help: "What the diagram shows") {
                 Toggle("Members", isOn: $session.settings.showMembers)
                 Toggle("Private Members", isOn: $session.settings.showPrivateMembers)
                     .disabled(!session.settings.showMembers)
@@ -119,13 +104,7 @@ struct IDEDiagramRootView: View {
                     Text("2 Levels").tag(2)
                 }
                 .pickerStyle(.inline)
-            } label: {
-                Label("Options", systemImage: "slider.horizontal.3").labelStyle(.iconOnly)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("What the diagram shows")
         } else if let configuration = session.libraryConfiguration {
             Menu {
                 Picker("Configuration", selection: Binding(
@@ -147,18 +126,15 @@ struct IDEDiagramRootView: View {
     }
 
     private var exportMenu: some View {
-        Menu {
+        IDEIconMenu(
+            systemImage: "square.and.arrow.up",
+            help: "Export the diagram",
+            isDisabled: session.document.nodes.isEmpty
+        ) {
             ForEach(IDEDiagramExportFormat.allCases, id: \.self) { format in
                 Button(format.title) { IDEDiagramExporter.export(session, as: format, window: window()) }
             }
-        } label: {
-            Label("Export", systemImage: "square.and.arrow.up").labelStyle(.iconOnly)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Export the diagram")
-        .disabled(session.document.nodes.isEmpty)
     }
 
     // MARK: - Overlays

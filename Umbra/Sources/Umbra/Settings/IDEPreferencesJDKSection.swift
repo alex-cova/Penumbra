@@ -142,26 +142,20 @@ private struct IDEJDKSettingsRow: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: IDEAppearance.Spacing.sm)
-            Button {
+            IDEIconButton(
+                systemImage: "magnifyingglass",
+                help: "Reveal \(installation.displayName) in Finder",
+                isDisabled: missing
+            ) {
                 NSWorkspace.shared.activateFileViewerSelecting([installation.home])
-            } label: {
-                Image(systemName: "magnifyingglass")
             }
-            .buttonStyle(.borderless)
-            .help("Reveal in Finder")
-            .accessibilityLabel("Reveal \(installation.displayName) in Finder")
-            .disabled(missing)
             if isUserAdded {
-                Button {
+                IDEIconButton(systemImage: "minus.circle", help: "Remove \(installation.displayName)") {
                     onRemoveRequest(installation)
-                } label: {
-                    Image(systemName: "minus.circle")
                 }
-                .buttonStyle(.borderless)
-                .help("Remove from the list")
-                .accessibilityLabel("Remove \(installation.displayName)")
             }
         }
+        .ideIconButtonSize(.compact)
         .contextMenu {
             Button("Use as Default") { jdk.chooseAsDefault(installation) }
                 .disabled(isDefault)

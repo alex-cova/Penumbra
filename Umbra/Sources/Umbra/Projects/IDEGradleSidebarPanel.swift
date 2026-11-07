@@ -207,7 +207,10 @@ struct IDEGradleSidebarPanel: View {
                     filter: filterNeedle,
                     isBusy: gradle.isBusy,
                     runningTaskPaths: Set(gradle.runningTasks),
-                    actions: treeActions
+                    actions: treeActions,
+                    focusRequestID: workspace.projectSidebarFocusRequestID,
+                    consumeFocus: { workspace.consumeProjectSidebarFocusIfNeeded() },
+                    onEscape: { workspace.focusActiveEditor() }
                 )
             } else {
                 IDEGradleSidebarPlaceholder(
@@ -324,6 +327,10 @@ struct IDEGradleTreeView: View {
     var isBusy = false
     var runningTaskPaths: Set<String> = []
     var actions = IDEGradleTreeActions()
+    var focusRequestID: UInt64 = 0
+    var consumeFocus: (() -> Bool)?
+    var onEscape: (() -> Void)?
+    @State private var typeahead = IDETypeaheadBuffer()
 
     var body: some View {
         let rows = IDEGradleTree.flatten(
@@ -362,6 +369,7 @@ struct IDEGradleTreeView: View {
                         .frame(minWidth: proxy.size.width, minHeight: proxy.size.height, alignment: .topLeading)
                     }
                     .focusable()
+                    .ideFocus(onRequest: focusRequestID, consume: { consumeFocus?() ?? false })
                     .focusEffectDisabled()
                     .onKeyPress(phases: [.down, .repeat]) { press in
                         handleKey(press, rows: rows, scroller: scroller)
@@ -436,16 +444,20 @@ struct IDEGradleTreeView: View {
 
         switch press.key {
         case .upArrow:
+            typeahead.reset()
             select(index.map { max($0 - 1, 0) } ?? 0)
             return .handled
         case .downArrow:
+            typeahead.reset()
             select(index.map { min($0 + 1, rows.count - 1) } ?? 0)
             return .handled
         case .rightArrow:
+            typeahead.reset()
             guard let current, current.canDisclose, !current.isExpanded else { return .ignored }
             toggle(current)
             return .handled
         case .leftArrow:
+            typeahead.reset()
             guard let current, let index else { return .ignored }
             if current.canDisclose, current.isExpanded {
                 toggle(current)
@@ -454,6 +466,7 @@ struct IDEGradleTreeView: View {
             }
             return .handled
         case .return:
+            typeahead.reset()
             guard let current else { return .ignored }
             if case .task = current.node.kind {
                 activate(current.node)
@@ -463,8 +476,24 @@ struct IDEGradleTreeView: View {
                 activate(current.node)
             }
             return .handled
+        case .escape:
+            typeahead.reset()
+            guard let onEscape else { return .ignored }
+            onEscape()
+            return .handled
         default:
-            return .ignored
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            let ids = rows.map(\.id)
+            if let id = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: ids,
+                selected: selectedID,
+                title: { id in rows.first { $0.id == id }?.node.title ?? "" }
+            ) {
+                selectedID = id
+                scroller.scrollTo(id)
+            }
+            return .handled
         }
     }
 

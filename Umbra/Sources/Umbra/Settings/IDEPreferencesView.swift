@@ -7,6 +7,7 @@ public struct IDEPreferencesView: View {
     @State private var selectedDomain: IDEPreferencesDomain = .editor
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    @FocusState private var sidebarFocused: Bool
 
     public init(preferences: IDEPreferences) {
         self.preferences = preferences
@@ -49,7 +50,9 @@ public struct IDEPreferencesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(IDEAppearance.ColorToken.workbench)
         .id(preferences.uiColorSchemeID)
-        .onExitCommand(perform: workspace.hideSettings)
+        .focusSection()
+        .task { searchFocused = true }
+        .onExitCommand(perform: handleEscape)
         .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
         .tint(IDEAppearance.ColorToken.accent)
@@ -67,6 +70,14 @@ public struct IDEPreferencesView: View {
                 .focused($searchFocused)
                 .onSubmit {
                     if let first = visibleDomains.first { selectedDomain = first }
+                }
+                .onKeyPress(.downArrow) {
+                    sidebarFocused = true
+                    return .handled
+                }
+                .onKeyPress(.tab) {
+                    sidebarFocused = true
+                    return .handled
                 }
             if !query.isEmpty {
                 Button {
@@ -117,7 +128,41 @@ public struct IDEPreferencesView: View {
             }
             .padding(IDEAppearance.Spacing.sm)
         }
+        .focusable()
+        .focused($sidebarFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.upArrow) {
+            selectedDomain = IDEPreferencesDomain.moving(from: shownDomain, in: visibleDomains, by: -1)
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            selectedDomain = IDEPreferencesDomain.moving(from: shownDomain, in: visibleDomains, by: 1)
+            return .handled
+        }
+        .onKeyPress(.tab) {
+            searchFocused = true
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            searchFocused = true
+            return .handled
+        }
         .ideSettingsScrollSurface()
+    }
+
+    /// Search with text clears first; an empty search or the sidebar returns to the field; empty
+    /// field closes Settings.
+    private func handleEscape() {
+        if sidebarFocused {
+            searchFocused = true
+            return
+        }
+        if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+            query = ""
+            searchFocused = true
+            return
+        }
+        workspace.hideSettings()
     }
 
     @ViewBuilder

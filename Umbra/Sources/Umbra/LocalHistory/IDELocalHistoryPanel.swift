@@ -8,6 +8,8 @@ struct IDELocalHistoryPanel: View {
     @State private var selection: UUID?
     @State private var agentOnly = false
     @State private var isLoaded = false
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
     private var recorder: IDELocalHistoryRecorder { workspace.localHistory }
     private var scope: IDELocalHistoryScope { workspace.localHistoryScope }
@@ -44,6 +46,14 @@ struct IDELocalHistoryPanel: View {
         }
         .task(id: ReloadKey(revision: recorder.revision, path: trackedPath, scope: scope, hasStore: recorder.store != nil)) {
             await reload()
+        }
+        .ideSidebarFocus(.history, on: $isListFocused)
+    }
+
+    private var keyboardEventIDs: [UUID] {
+        switch scope {
+        case .project: IDELocalHistoryPresentation.keyboardEventIDs(projectEvents: visibleEvents)
+        case .file, .folder: IDELocalHistoryPresentation.keyboardEventIDs(fileEvents: visibleEvents)
         }
     }
 
@@ -120,15 +130,12 @@ struct IDELocalHistoryPanel: View {
                     .toggleStyle(.checkbox)
                     .font(IDEAppearance.Typography.caption)
                 Spacer()
-                Button {
-                    workspace.putLocalHistoryLabel()
-                } label: {
-                    Image(systemName: "tag")
-                }
-                .buttonStyle(.borderless)
-                .help("Put Label on This Version…")
-                .accessibilityLabel("Put Label")
-                .disabled(activePath == nil)
+                IDEIconButton(
+                    systemImage: "tag",
+                    help: "Put Label on This Version…",
+                    isDisabled: activePath == nil,
+                    action: { workspace.putLocalHistoryLabel() }
+                )
             }
         }
         .padding(IDEAppearance.Spacing.sm)
@@ -170,40 +177,107 @@ struct IDELocalHistoryPanel: View {
             .multilineTextAlignment(.center)
             .padding(IDEAppearance.Spacing.lg)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(.escape) {
+                workspace.focusActiveEditor()
+                return .handled
+            }
     }
 
     private func fileList(showsPath: Bool) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
-                ForEach(IDELocalHistoryPresentation.byDay(visibleEvents, time: \.time), id: \.heading) { section in
-                    Text(section.heading)
-                        .font(IDEAppearance.Typography.sectionHeader)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .padding(.horizontal, IDEAppearance.Spacing.sm)
-                        .padding(.top, IDEAppearance.Spacing.sm)
-                    ForEach(section.items) { event in
-                        row(event, showsPath: showsPath)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
+                    ForEach(IDELocalHistoryPresentation.byDay(visibleEvents, time: \.time), id: \.heading) { section in
+                        Text(section.heading)
+                            .font(IDEAppearance.Typography.sectionHeader)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .padding(.horizontal, IDEAppearance.Spacing.sm)
+                            .padding(.top, IDEAppearance.Spacing.sm)
+                        ForEach(section.items) { event in
+                            row(event, showsPath: showsPath)
+                        }
                     }
                 }
+            }
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleListKey(press)
+            }
+            .onChange(of: selection) { _, id in
+                if let id { proxy.scrollTo(id) }
             }
         }
     }
 
     private var projectList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(IDELocalHistoryPresentation.byDay(IDELocalHistoryPresentation.groups(visibleEvents), time: \.time), id: \.heading) { section in
-                    Text(section.heading)
-                        .font(IDEAppearance.Typography.sectionHeader)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .padding(.horizontal, IDEAppearance.Spacing.sm)
-                        .padding(.top, IDEAppearance.Spacing.sm)
-                    ForEach(section.items) { group in
-                        groupRow(group)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(IDELocalHistoryPresentation.byDay(IDELocalHistoryPresentation.groups(visibleEvents), time: \.time), id: \.heading) { section in
+                        Text(section.heading)
+                            .font(IDEAppearance.Typography.sectionHeader)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                            .padding(.horizontal, IDEAppearance.Spacing.sm)
+                            .padding(.top, IDEAppearance.Spacing.sm)
+                        ForEach(section.items) { group in
+                            groupRow(group)
+                        }
                     }
                 }
             }
+            .focusable()
+            .focused($isListFocused)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in
+                handleListKey(press)
+            }
+            .onChange(of: selection) { _, id in
+                if let id { proxy.scrollTo(id) }
+            }
         }
+    }
+
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        let ids = keyboardEventIDs
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            if let next = IDEListNeighbor.move(selection, in: ids, by: delta) {
+                selection = next
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            if let event = selectedEvent {
+                workspace.localHistoryOpenDiff(event, against: .current)
+            }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            if let id = IDEListTypeahead.match(
+                query: typeahead.typed(character), in: ids, selected: selection, title: typeaheadTitle(for:)
+            ) {
+                selection = id
+            }
+            return .handled
+        }
+    }
+
+    private func typeaheadTitle(for id: UUID) -> String {
+        guard let event = events.first(where: { $0.id == id }) else { return "" }
+        let name = (event.path as NSString).lastPathComponent
+        let source = IDELocalHistoryPresentation.title(for: event.source, label: event.label)
+        return "\(name) \(source)"
     }
 
     // MARK: - Rows
@@ -240,7 +314,11 @@ struct IDELocalHistoryPanel: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { workspace.localHistoryOpenDiff(event, against: .current) }
         .accessibilityAddTraits(.isButton)
-        .onTapGesture { selection = event.id }
+        .onTapGesture {
+            isListFocused = true
+            selection = event.id
+        }
+        .id(event.id)
         .contextMenu { menu(for: event) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? .isSelected : [])

@@ -84,12 +84,10 @@ private struct IDEAIOllamaTab: View {
                     if settings.isLoadingOllamaModels {
                         ProgressView().controlSize(.small)
                     } else {
-                        Button { Task { await settings.refreshOllamaModels(adjustSelection: false) } } label: {
-                            Image(systemName: "arrow.clockwise")
+                        IDEIconButton(systemImage: "arrow.clockwise", help: "Reload the installed models") {
+                            Task { await settings.refreshOllamaModels(adjustSelection: false) }
                         }
-                        .buttonStyle(.borderless)
-                        .help("Reload the installed models")
-                        .accessibilityLabel("Reload the installed models")
+                        .ideIconButtonSize(.compact)
                     }
                 }
                 if settings.ollamaModels.isEmpty {
@@ -167,10 +165,11 @@ private struct IDEAIOllamaTab: View {
             if store.deletingName == model.name {
                 ProgressView().controlSize(.small)
             } else {
-                Button { deleting = model; isConfirmingDelete = true } label: { Image(systemName: "trash") }
-                    .buttonStyle(.borderless)
-                    .help("Delete \(model.name)")
-                    .accessibilityLabel("Delete \(model.name)")
+                IDEIconButton(systemImage: "trash", help: "Delete \(model.name)") {
+                    deleting = model
+                    isConfirmingDelete = true
+                }
+                .ideIconButtonSize(.compact)
             }
         }
         .padding(IDEAppearance.Spacing.sm)

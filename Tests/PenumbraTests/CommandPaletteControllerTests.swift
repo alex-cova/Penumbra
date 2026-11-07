@@ -359,6 +359,12 @@ final class CommandPaletteControllerTests: XCTestCase {
         }
     }
 
+    private func waitUntil(_ condition: () -> Bool) async {
+        for _ in 0..<100 where !condition() {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
     func testTabsOnlyOfferSourcesTheHostWired() {
         let textView = makeFocusedTextView(text: "x")
         let controller = CommandPaletteController(textView: textView)
@@ -462,6 +468,85 @@ final class CommandPaletteControllerTests: XCTestCase {
         XCTAssertNil(controller.flatItems.first?.alternateAction)
         controller.activateSelection(alternate: true)
         XCTAssertTrue(controller.isPresented, "⇧↩ on a row without a secondary action does nothing")
+    }
+
+    func testEnterWhileAQueryIsInFlightActivatesTheNewFirstRow() async {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["Alpha.swift", "Beta.swift", "Gamma.swift"])
+        var opened: [String] = []
+        controller.onOpenFile = { opened.append($0.lastPathComponent) }
+
+        controller.presentQuickOpen()
+        await waitForRows(controller)
+        XCTAssertGreaterThanOrEqual(controller.flatItems.count, 3)
+        controller.paletteView.onMoveSelection?(2)
+        XCTAssertEqual(controller.paletteModel.selectedIndex, 2)
+
+        controller.paletteView.onQueryChange?("Alpha.swift")
+        controller.activateSelection()
+        XCTAssertTrue(controller.isPresented, "Return waits for the in-flight query")
+        XCTAssertTrue(opened.isEmpty)
+
+        await waitUntil { !opened.isEmpty }
+        XCTAssertEqual(opened, ["Alpha.swift"], "must not confirm Gamma, the previous selection")
+        XCTAssertFalse(controller.isPresented)
+    }
+
+    func testEnterOnSettledResultsActivatesTheSelectedRow() async {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["Alpha.swift", "Beta.swift", "Gamma.swift"])
+        var opened: [String] = []
+        controller.onOpenFile = { opened.append($0.lastPathComponent) }
+
+        controller.presentQuickOpen()
+        await waitForRows(controller)
+        XCTAssertGreaterThan(controller.flatItems.count, 1)
+        controller.paletteView.onMoveSelection?(1)
+        let expected = controller.flatItems[1].title
+        controller.activateSelection()
+
+        XCTAssertEqual(opened, [expected])
+        XCTAssertFalse(controller.isPresented)
+    }
+
+    func testDismissingCancelsAPendingEnter() async {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["Alpha.swift", "Beta.swift"])
+        var opened: [String] = []
+        controller.onOpenFile = { opened.append($0.lastPathComponent) }
+
+        controller.presentQuickOpen()
+        await waitForRows(controller)
+        controller.paletteView.onQueryChange?("Alpha.swift")
+        controller.activateSelection()
+        controller.dismiss()
+        XCTAssertFalse(controller.isPresented)
+
+        // Presenting again and waiting for its rows is a positive wait that the cancelled run's
+        // answer cannot sit behind, so there is nothing left in flight to confirm the old row.
+        controller.presentQuickOpen()
+        await waitForRows(controller)
+        controller.dismiss()
+        XCTAssertTrue(opened.isEmpty, "Escape must not confirm the row Return had queued")
+    }
+
+    func testANewQuerySelectsTheFirstRow() async {
+        let textView = makeFocusedTextView(text: "x")
+        let controller = CommandPaletteController(textView: textView)
+        controller.fileIndex = makeFileIndex(["Alpha.swift", "Beta.swift", "Gamma.swift"])
+
+        controller.presentQuickOpen()
+        await waitForRows(controller)
+        controller.paletteView.onMoveSelection?(2)
+        XCTAssertEqual(controller.paletteModel.selectedIndex, 2)
+
+        controller.paletteView.onQueryChange?("Alpha.swift")
+        await waitUntil { controller.flatItems.map(\.title) == ["Alpha.swift"] }
+        XCTAssertEqual(controller.flatItems.map(\.title), ["Alpha.swift"])
+        XCTAssertEqual(controller.paletteModel.selectedIndex, 0)
     }
 
     func testLineSuffixOpensTheFileAtThatLine() async {

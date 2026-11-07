@@ -5,6 +5,9 @@ import SwiftUI
 /// and a row can be dragged onto another list's header.
 struct IDEBookmarksPanel: View {
     @Environment(IDEWorkspace.self) private var workspace
+    @State private var selectedID: UUID?
+    @State private var typeahead = IDETypeaheadBuffer()
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -12,18 +15,77 @@ struct IDEBookmarksPanel: View {
             if workspace.bookmarks.isEmpty {
                 emptyState
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(workspace.bookmarkLists) { list in
-                            IDEBookmarkListSection(list: list, bookmarks: bookmarks(in: list))
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(workspace.bookmarkLists) { list in
+                                IDEBookmarkListSection(
+                                    list: list,
+                                    bookmarks: bookmarks(in: list),
+                                    selectedID: selectedID,
+                                    onSelect: { id in
+                                        isListFocused = true
+                                        selectedID = id
+                                    }
+                                )
+                            }
                         }
+                        .padding(.vertical, IDEAppearance.Spacing.xs)
                     }
-                    .padding(.vertical, IDEAppearance.Spacing.xs)
+                    .focusable()
+                    .focused($isListFocused)
+                    .focusEffectDisabled()
+                    .onKeyPress(phases: [.down, .repeat]) { press in
+                        handleListKey(press)
+                    }
+                    .onChange(of: selectedID) { _, id in
+                        if let id { proxy.scrollTo(id) }
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(IDEAppearance.ColorToken.panel)
+        .ideSidebarFocus(.bookmarks, on: $isListFocused)
+    }
+
+    private var displayedBookmarkIDs: [UUID] {
+        workspace.bookmarkLists.flatMap { list in bookmarks(in: list).map(\.id) }
+    }
+
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        let ids = displayedBookmarkIDs
+        switch press.key {
+        case .upArrow, .downArrow:
+            typeahead.reset()
+            let delta = press.key == .downArrow ? 1 : -1
+            if let next = IDEListNeighbor.move(selectedID, in: ids, by: delta) {
+                selectedID = next
+            }
+            return .handled
+        case .return:
+            typeahead.reset()
+            if let selectedID, let bookmark = workspace.bookmarks.first(where: { $0.id == selectedID }) {
+                workspace.openBookmark(bookmark)
+            }
+            return .handled
+        case .escape:
+            typeahead.reset()
+            workspace.focusActiveEditor()
+            return .handled
+        default:
+            guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
+            let bookmarks = workspace.bookmarkLists.flatMap(bookmarks(in:))
+            if let bookmark = IDEListTypeahead.match(
+                query: typeahead.typed(character),
+                in: bookmarks,
+                selected: bookmarks.first { $0.id == selectedID },
+                title: \.title
+            ) {
+                selectedID = bookmark.id
+            }
+            return .handled
+        }
     }
 
     private func bookmarks(in list: IDEBookmarkList) -> [IDEBookmark] {
@@ -67,6 +129,13 @@ struct IDEBookmarksPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, IDEAppearance.Spacing.md)
+        .focusable()
+        .focused($isListFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.escape) {
+            workspace.focusActiveEditor()
+            return .handled
+        }
         .accessibilityElement(children: .combine)
     }
 }
@@ -76,6 +145,8 @@ private struct IDEBookmarkListSection: View {
     @Environment(IDEWorkspace.self) private var workspace
     let list: IDEBookmarkList
     let bookmarks: [IDEBookmark]
+    let selectedID: UUID?
+    let onSelect: (UUID) -> Void
 
     @State private var isDropTarget = false
 
@@ -84,7 +155,12 @@ private struct IDEBookmarkListSection: View {
     var body: some View {
         header
         ForEach(bookmarks) { bookmark in
-            IDEBookmarkRow(bookmark: bookmark)
+            IDEBookmarkRow(
+                bookmark: bookmark,
+                isSelected: selectedID == bookmark.id,
+                onSelect: { onSelect(bookmark.id) }
+            )
+            .id(bookmark.id)
         }
     }
 
@@ -142,6 +218,8 @@ private struct IDEBookmarkListSection: View {
 private struct IDEBookmarkRow: View {
     @Environment(IDEWorkspace.self) private var workspace
     let bookmark: IDEBookmark
+    var isSelected = false
+    var onSelect: (() -> Void)?
 
     @State private var isHovering = false
     @State private var preview: String?
@@ -180,9 +258,10 @@ private struct IDEBookmarkRow: View {
         .padding(.leading, IDEAppearance.Spacing.sm + IDEAppearance.Spacing.md)
         .padding(.trailing, IDEAppearance.Spacing.sm)
         .padding(.vertical, 3)
-        .background(isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear)
+        .background(isSelected ? IDEAppearance.ColorToken.selection : (isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear))
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { workspace.openBookmark(bookmark) }
+        .onTapGesture { onSelect?() }
         .onHover { isHovering = $0 }
         .draggable(bookmark.id.uuidString)
         .task(id: PreviewKey(id: bookmark.id, line: bookmark.line, path: bookmark.filePath)) {

@@ -25,18 +25,35 @@ extension IDEGitStatusModel {
         } else {
             selectedCommitHashes.insert(hash)
             selectedCommitHash = hash
+            commitSelectionAnchor = hash
         }
     }
 
-    /// ⇧-click selects the rows between the primary commit and `hash`.
+    /// ⇧-click and ⇧-arrow select exactly the rows between the anchor and `hash`, so extending back
+    /// toward the anchor shrinks the range. The anchor stays where the last plain or ⌘ selection put it.
     func extendCommitSelection(to hash: String) {
-        guard let anchor = selectedCommitHash,
+        guard let anchor = commitSelectionAnchor ?? selectedCommitHash,
               let from = commits.firstIndex(where: { $0.hash == anchor }),
               let to = commits.firstIndex(where: { $0.hash == hash }) else {
             selectCommit(hash)
             return
         }
-        selectedCommitHashes.formUnion(commits[min(from, to)...max(from, to)].map(\.hash))
+        selectedCommitHashes = Set(commits[min(from, to)...max(from, to)].map(\.hash))
+        commitSelectionAnchor = anchor
+        selectCommit(hash, replacingSelection: false)
+    }
+
+    /// Arrow keys in the Log: one commit, replacing the selection. `visible` is display order.
+    func moveCommitSelection(by delta: Int, in visible: [String]) {
+        guard let next = IDEListNeighbor.move(selectedCommitHash, in: visible, by: delta) else { return }
+        selectCommit(next)
+    }
+
+    /// Arrow keys in the commit's file list. `nil` is the All Changes row. `paths` is display order.
+    func moveCommitFileSelection(by delta: Int, in paths: [String]) {
+        let items = [""] + paths
+        let next = IDEListNeighbor.move(selectedCommitFile ?? "", in: items, by: delta)
+        selectedCommitFile = next?.isEmpty == true ? nil : next
     }
 
     // MARK: - Filters

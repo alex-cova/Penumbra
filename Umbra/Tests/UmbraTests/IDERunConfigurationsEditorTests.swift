@@ -160,4 +160,27 @@ final class IDERunConfigurationsEditorTests: XCTestCase {
         editor.resetTemplate(.javaFile)
         XCTAssertFalse(editor.hasChanges)
     }
+
+    func testKeyboardOrderFollowsPaintedRowsThenTemplates() {
+        var a = app("A"), b = app("B", file: "B")
+        a.folder = "Servers"
+        let file = JavaRunConfiguration(name: "F", target: .singleFile(path: "/p/F.java"))
+        let editor = editor([a, b, file])
+        let order = editor.keyboardOrder
+        XCTAssertEqual(order.prefix(3).map { selection in editor.title(for: selection) }, ["B", "A", "F"])
+        XCTAssertEqual(
+            Array(order.suffix(JavaRunConfiguration.Kind.allCases.count)),
+            JavaRunConfiguration.Kind.allCases.map { .template($0) }
+        )
+        editor.selection = .configuration(b.id)
+        editor.moveSelection(by: 1)
+        XCTAssertEqual(editor.selection, .configuration(a.id))
+        editor.moveSelection(by: 1)
+        XCTAssertEqual(editor.selection, .configuration(file.id))
+        editor.moveSelection(by: 1)
+        XCTAssertEqual(editor.selection, .template(JavaRunConfiguration.Kind.allCases[0]))
+        editor.moveSelection(by: -1)
+        XCTAssertEqual(editor.selection, .configuration(file.id))
+        XCTAssertEqual(editor.title(for: .template(.junit)), "JUnit")
+    }
 }
