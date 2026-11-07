@@ -21,10 +21,10 @@ public final class SkillTool: AgentTool, @unchecked Sendable {
         lock.withLock { touched.append(path) }
     }
 
-    /// Skills with no `paths`, plus skills whose `paths` match a file a file tool has touched.
+    /// Skills the model may load, with no `paths` or with `paths` that match a file a file tool has touched.
     private var listedSkills: [Skill] {
         let touched = lock.withLock { self.touched }
-        return catalog.skills.filter { skill in
+        return catalog.modelSkills.filter { skill in
             if skill.paths.isEmpty { return true }
             return skill.paths.contains { pattern in
                 guard let glob = try? GlobPattern(pattern) else { return false }
@@ -55,25 +55,39 @@ public final class SkillTool: AgentTool, @unchecked Sendable {
             \(listing)
             """,
             parameters: [
-                ToolParameter("name", .string, "The skill's name."),
+                // Every skill the model may load, including ones the list above still hides behind `paths`: the
+                // schema is part of the cached request prefix and must not change when a file is touched.
+                ToolParameter("name", nameType, "The skill's name."),
                 ToolParameter("file", .string, "A file inside the skill's folder, such as references/api.md.", optional: true),
             ])
+    }
+
+    private var nameType: ToolParameterType {
+        let names = catalog.modelSkills.map(\.name)
+        return names.isEmpty ? .string : .enumeration(names)
+    }
+
+    public func activationText(forSkillNamed name: String) -> String? {
+        guard let skill = catalog.skill(named: name), skill.modelInvocable else { return nil }
+        return skill.activationText()
     }
 
     public func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
         let name = try arguments.string("name")
         guard let skill = catalog.skill(named: name) else {
-            throw ToolError("No skill named \"\(name)\". Available: \(catalog.skills.map(\.name).joined(separator: ", ")).")
+            throw ToolError("No skill named \"\(name)\". Available: \(catalog.modelSkills.map(\.name).joined(separator: ", ")).")
+        }
+        guard skill.modelInvocable else {
+            throw ToolError("The skill \"\(skill.name)\" can only be started by the user, with /\(skill.name).")
         }
         if let file = try arguments.optionalString("file"), !file.isEmpty {
             return try Self.readFile(file, in: skill)
         }
-        var text = skill.body
-        let others = Self.listFiles(in: skill.directory)
-        if !others.isEmpty {
-            text += "\n\n[Files in this skill's folder: \(others.joined(separator: ", ")). Read one with skill(name: \"\(skill.name)\", file: …).]"
+        if let isLoaded = context.isSkillLoaded, await isLoaded(skill.name) {
+            return "The skill \"\(skill.name)\" is already loaded earlier in this conversation. Follow those instructions; "
+                + "read a file from its folder with skill(name: \"\(skill.name)\", file: …)."
         }
-        return text
+        return skill.activationText()
     }
 
     /// A file inside the skill's folder, after symlinks and `..` are resolved.
@@ -93,13 +107,13 @@ public final class SkillTool: AgentTool, @unchecked Sendable {
         return text
     }
 
-    /// Files other than SKILL.md, relative to the folder, a few levels deep.
-    static func listFiles(in directory: URL) -> [String] {
+    /// Files other than SKILL.md, relative to the folder, a few levels deep, at most `limit`.
+    static func listFiles(in directory: URL, limit: Int = maxListedFiles) -> [String] {
         var found: [String] = []
         let base = directory.standardizedFileURL.path
         guard let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
         for case let url as URL in enumerator {
-            guard found.count < maxListedFiles else { break }
+            guard found.count < limit else { break }
             let relative = String(url.standardizedFileURL.path.dropFirst(base.count + 1))
             if relative.split(separator: "/").contains(where: { $0.hasPrefix(".") }) {
                 enumerator.skipDescendants()

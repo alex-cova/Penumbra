@@ -11,6 +11,9 @@ private final class FakeAgentHost: IDEAgentHost {
     /// What the user answers when asked about the project's MCP servers; nothing by default.
     var mcpAnswer: ([MCPServerConfig]) -> Set<String> = { _ in [] }
     var mcpQuestions = 0
+    /// What the user answers when asked whether a project's skill may pre-approve its tools; no by default.
+    var skillToolsAnswer: (String) -> Bool = { _ in false }
+    var skillToolsQuestions: [String] = []
     var navigator: (any IDEAgentNavigating)?
     var symbolSearch: (any IDEAgentSymbolSearching)?
     var hoverEngine: HoverEngine?
@@ -26,6 +29,11 @@ private final class FakeAgentHost: IDEAgentHost {
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> {
         mcpQuestions += 1
         return mcpAnswer(servers)
+    }
+
+    func agentConfirmSkillTools(kind: String, name: String, source: String, tools: [String]) async -> Bool {
+        skillToolsQuestions.append("\(kind):\(name)")
+        return skillToolsAnswer(name)
     }
 
     func agentUnsavedBuffers() -> [String: String] { unsaved }
@@ -661,5 +669,264 @@ final class IDEAgentControllerTests: XCTestCase {
         }
         await eventually("the workspace is freed") { weakWorkspace == nil }
         XCTAssertNil(weakWorkspace)
+    }
+}
+
+@MainActor
+final class IDEAgentSkillConsentTests: XCTestCase {
+    private var hosts: [FakeAgentHost] = []
+
+    private func write(_ text: String, _ root: URL, _ path: String) throws {
+        let url = root.appendingPathComponent(path)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func makeController(
+        turns: [MockTurn], root: URL, settings: IDEAgentSettings? = nil, home: URL? = nil, appSupport: URL? = nil
+    ) -> (IDEAgentController, MockLLMClient, FakeAgentHost, IDEAgentSettings) {
+        let client = MockLLMClient(turns: turns)
+        let host = FakeAgentHost(root: root)
+        let settings = settings ?? makeSettings()
+        let controller = IDEAgentController(
+            settings: settings, commandsHome: home, commandsAppSupport: appSupport, clientFactory: { _ in client })
+        controller.attach(host: host)
+        controller.newConversation()
+        hosts.append(host)
+        return (controller, client, host, settings)
+    }
+
+    /// A command that waits for the user's answer sends from a task, so wait for the message to appear, then for the run.
+    private func say(_ controller: IDEAgentController, _ text: String) async {
+        let before = controller.entries.filter { $0.kind == .user }.count
+        controller.draft = text
+        controller.submit()
+        await eventually("the message should be sent and its run finish") {
+            controller.entries.filter { $0.kind == .user }.count > before && !controller.isRunning
+        }
+    }
+
+    private let echoSkill = "---\ndescription: Say hi\nallowed-tools: Bash(echo:*)\n---\nSay hi with echo."
+    private let echoCall = MockTurn.toolCalls((id: "c1", name: "run_command", arguments: #"{"command":"echo hi"}"#))
+
+    func testAProjectsSkillAsksOnceBeforeItsToolsSkipApprovalAndAChangeAsksAgain() async throws {
+        let project = try tempProject()
+        try write(echoSkill, project, ".claude/skills/hi/SKILL.md")
+        let (controller, _, host, _) = makeController(turns: [echoCall, .text("done"), echoCall, .text("done")], root: project)
+        host.skillToolsAnswer = { _ in true }
+
+        await say(controller, "/hi")
+        XCTAssertEqual(host.skillToolsQuestions, ["skill:hi"])
+        XCTAssertNil(controller.entries.first { $0.approval != nil || $0.approvalOutcome != nil }, "the tool did not ask: the skill's rule applied")
+
+        await say(controller, "/hi")
+        XCTAssertEqual(host.skillToolsQuestions, ["skill:hi"], "the answer is remembered")
+
+        try write(echoSkill + "\nAnd also push.", project, ".claude/skills/hi/SKILL.md")
+        controller.commandCatalog.invalidate()
+        await say(controller, "/hi")
+        XCTAssertEqual(host.skillToolsQuestions, ["skill:hi", "skill:hi"], "an edited skill is a different skill")
+    }
+
+    func testDecliningStillRunsTheSkillButEveryToolAsksAndTheAnswerIsRemembered() async throws {
+        let project = try tempProject()
+        try write(echoSkill, project, ".claude/skills/hi/SKILL.md")
+        let (controller, client, host, _) = makeController(turns: [echoCall, .text("done")], root: project)
+
+        controller.draft = "/hi"
+        controller.submit()
+        await eventually("the command asks for approval") { controller.entries.contains { $0.callID == "c1" && $0.approval != nil } }
+        XCTAssertEqual(host.skillToolsQuestions, ["skill:hi"])
+        XCTAssertTrue(controller.entries.contains { $0.kind == .notice && $0.text.contains("pre-approved tools were not allowed") })
+        guard case .user(let sent) = try XCTUnwrap(client.requests.first).items.first else { return XCTFail("no user item") }
+        XCTAssertTrue(sent.contains("Say hi with echo."), "the skill itself still reached the model")
+        controller.decide(callID: "c1", .deny(note: nil))
+        await eventually("the run ends") { !controller.isRunning }
+
+        await say(controller, "/hi")
+        XCTAssertEqual(host.skillToolsQuestions, ["skill:hi"], "a declined skill is not asked about again")
+        XCTAssertTrue(controller.entries.filter { $0.kind == .notice && $0.text.contains("pre-approved tools were not allowed") }.count == 2)
+    }
+
+    func testYourOwnSkillsAndOnesWithoutToolsNeverAsk() async throws {
+        let project = try tempProject()
+        let home = try tempProject()
+        try write(echoSkill, home, ".claude/skills/mine/SKILL.md")
+        try write("---\ndescription: No tools\n---\nJust read.", project, ".claude/skills/plain/SKILL.md")
+        let (controller, _, host, _) = makeController(turns: [echoCall, .text("done"), .text("ok")], root: project, home: home)
+
+        await say(controller, "/mine")
+        await say(controller, "/plain")
+        XCTAssertTrue(host.skillToolsQuestions.isEmpty)
+        XCTAssertNil(controller.entries.first { $0.callID == "c1" }?.approval, "the user's own skill pre-approved its tool")
+    }
+
+    func testAProjectCommandIsGatedLikeASkill() async throws {
+        let project = try tempProject()
+        try write("---\nallowed-tools: Bash(echo:*)\n---\nSay hi with echo.", project, ".claude/commands/hi.md")
+        let (controller, _, host, _) = makeController(turns: [echoCall, .text("done")], root: project)
+        host.skillToolsAnswer = { _ in true }
+        await say(controller, "/hi")
+        XCTAssertEqual(host.skillToolsQuestions, ["command:hi"])
+        XCTAssertNil(controller.entries.first { $0.approval != nil || $0.approvalOutcome != nil })
+    }
+
+    func testRevokingAnAnswerMakesItAskAgain() async throws {
+        let project = try tempProject()
+        try write(echoSkill, project, ".claude/skills/hi/SKILL.md")
+        let (controller, _, host, settings) = makeController(turns: [echoCall, .text("done"), echoCall, .text("done")], root: project)
+        host.skillToolsAnswer = { _ in true }
+        await say(controller, "/hi")
+
+        controller.commandCatalog.invalidate()
+        let skill = try XCTUnwrap(controller.commandCatalog.allSkillsCatalog.skill(named: "hi"))
+        XCTAssertEqual(IDEAgentSkillConsent.state(of: skill, trust: settings.skillTrust), .trusted)
+        settings.skillTrust.forget(IDEAgentSkillTrust.fingerprint(of: skill))
+        XCTAssertEqual(IDEAgentSkillConsent.state(of: skill, trust: settings.skillTrust), .unknown)
+        await say(controller, "/hi")
+        XCTAssertEqual(host.skillToolsQuestions.count, 2)
+    }
+
+    func testTheModelSeesWhatTheUserTypedAndThenTheSkillBlock() async throws {
+        let project = try tempProject()
+        try write("---\ndescription: Review\n---\nRead the diff.", project, ".claude/skills/review/SKILL.md")
+        try write("notes", project, ".claude/skills/review/notes.md")
+        let (controller, client, _, _) = makeController(turns: [.text("ok")], root: project)
+        await say(controller, "/review the last commit")
+
+        guard case .user(let sent) = try XCTUnwrap(client.requests.first).items.first else { return XCTFail("no user item") }
+        let body = try XCTUnwrap(sent.range(of: "/review the last commit"))
+        XCTAssertTrue(sent[body.upperBound...].hasPrefix("\n\n<skill_content name=\"review\">\nRead the diff."))
+        XCTAssertTrue(sent.contains("Skill directory: \(project.standardizedFileURL.path)/.claude/skills/review"))
+        XCTAssertTrue(sent.contains("<file>notes.md</file>"))
+        XCTAssertEqual(UserText.typed(sent), "/review the last commit", "a title and a summary keep only what was typed")
+        XCTAssertTrue(SkillActivations.loaded(in: try XCTUnwrap(client.requests.first).items).contains("review"), "so the tool answers already loaded")
+    }
+
+    // MARK: - Folders, flags and the switch
+
+    func testASkillInAnAgentsFolderAndOneAboveTheProjectAreFound() async throws {
+        let repo = try tempProject()
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        let project = repo.appendingPathComponent("apps/web", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try write("---\ndescription: shared\n---\nb", project, ".agents/skills/shared/SKILL.md")
+        try write("---\ndescription: from the repository\n---\nb", repo, ".claude/skills/top/SKILL.md")
+        let (controller, _, _, _) = makeController(turns: [.text("ok")], root: project)
+        let found = controller.commandCatalog.allSkillsCatalog.skills
+        XCTAssertEqual(found.map(\.name), ["shared", "top"])
+        XCTAssertEqual(found.map(\.scope), [.project, .ancestor])
+    }
+
+    func testAUserInvocableFalseSkillIsNotOfferedAfterASlashButTheModelHasIt() async throws {
+        let project = try tempProject()
+        try write("---\ndescription: bg\nuser-invocable: false\n---\nb", project, ".claude/skills/background/SKILL.md")
+        try write("---\ndescription: fg\n---\nb", project, ".claude/skills/foreground/SKILL.md")
+        let (controller, client, _, _) = makeController(turns: [.text("ok")], root: project)
+        let rows = controller.suggestions(for: .slash(query: "", range: NSRange(location: 0, length: 1)))
+        XCTAssertTrue(rows.contains { $0.title == "/foreground" } && !rows.contains { $0.title == "/background" })
+        let mentions = controller.suggestions(for: .mention(query: "skill", range: NSRange(location: 0, length: 6)))
+        XCTAssertTrue(mentions.contains { $0.title == "@skill:foreground" } && !mentions.contains { $0.title == "@skill:background" })
+
+        await say(controller, "hello")
+        let tool = try XCTUnwrap(try XCTUnwrap(client.requests.first).tools.first { $0.name == "skill" })
+        XCTAssertTrue(tool.description.contains("- background:") && tool.description.contains("- foreground:"))
+    }
+
+    func testADisableModelInvocationSkillIsForTheUserOnly() async throws {
+        let project = try tempProject()
+        try write("---\ndescription: manual\ndisable-model-invocation: true\n---\nb", project, ".claude/skills/manual/SKILL.md")
+        let (controller, client, _, _) = makeController(turns: [.text("ok")], root: project)
+        XCTAssertTrue(controller.suggestions(for: .slash(query: "", range: NSRange(location: 0, length: 1))).contains { $0.title == "/manual" })
+        await say(controller, "hello")
+        XCTAssertFalse(try XCTUnwrap(client.requests.first).tools.map(\.name).contains("skill"), "the only skill is not the model's, so no tool")
+    }
+
+    func testSwitchingASkillOffHidesItEverywhereAndStartsANewSession() async throws {
+        let project = try tempProject()
+        try write("---\ndescription: one\n---\nb", project, ".claude/skills/one/SKILL.md")
+        try write("---\ndescription: two\n---\nb", project, ".claude/skills/two/SKILL.md")
+        let (controller, client, _, settings) = makeController(turns: [.text("a"), .text("b")], root: project)
+        await say(controller, "first")
+        let session = try XCTUnwrap(controller.currentSessionForTesting)
+        XCTAssertTrue(try XCTUnwrap(client.requests.last).tools.first { $0.name == "skill" }?.description.contains("- two:") == true)
+
+        settings.setSkill("Two", enabled: false)
+        XCTAssertFalse(settings.isSkillEnabled("two"))
+        controller.commandCatalog.invalidate()
+        XCTAssertFalse(controller.suggestions(for: .slash(query: "", range: NSRange(location: 0, length: 1))).contains { $0.title == "/two" })
+        XCTAssertEqual(controller.commandCatalog.allSkillsCatalog.skills.map(\.name), ["one", "two"], "Settings still lists it, to switch it back on")
+        await say(controller, "second")
+        XCTAssertFalse(controller.currentSessionForTesting === session, "the model's skill list changed")
+        let description = try XCTUnwrap(try XCTUnwrap(client.requests.last).tools.first { $0.name == "skill" }).description
+        XCTAssertTrue(description.contains("- one:") && !description.contains("- two:"))
+
+        settings.setSkill("two", enabled: true)
+        XCTAssertTrue(settings.disabledSkills.isEmpty)
+    }
+
+    func testSwitchedOffSkillsAreRememberedAcrossLaunches() {
+        let defaults = UserDefaults(suiteName: "umbra.agent.tests.\(UUID().uuidString)")!
+        let first = IDEAgentSettings(defaults: defaults, keyStore: IDEAgentMemoryKeyStore())
+        first.setSkill("Review", enabled: false)
+        let second = IDEAgentSettings(defaults: defaults, keyStore: IDEAgentMemoryKeyStore())
+        XCTAssertFalse(second.isSkillEnabled("review"))
+        XCTAssertTrue(second.isSkillEnabled("other"))
+    }
+
+    // MARK: - The consent logic on its own
+
+    func testConsentStatesAndTheQuestionIsAskedOnlyForAnUnansweredRepositorySkill() async {
+        let defaults = UserDefaults(suiteName: "umbra.agent.tests.\(UUID().uuidString)")!
+        let trust = IDEAgentSkillTrust(defaults: defaults)
+        let tools = ["Bash(echo:*)"]
+        let fingerprint = IDEAgentSkillTrust.fingerprint(kind: "skill", name: "x", source: ".claude/skills", tools: tools, body: "b")
+        XCTAssertEqual(IDEAgentSkillConsent.state(scope: .user, tools: tools, fingerprint: fingerprint, trust: trust), .notNeeded)
+        XCTAssertEqual(IDEAgentSkillConsent.state(scope: .app, tools: tools, fingerprint: fingerprint, trust: trust), .notNeeded)
+        XCTAssertEqual(IDEAgentSkillConsent.state(scope: .project, tools: [], fingerprint: fingerprint, trust: trust), .notNeeded)
+        XCTAssertEqual(IDEAgentSkillConsent.state(scope: .ancestor, tools: tools, fingerprint: fingerprint, trust: trust), .unknown)
+
+        var asked = 0
+        let no = await IDEAgentSkillConsent.allowedTools(
+            state: .unknown, fingerprint: fingerprint, tools: tools, trust: trust, confirm: { asked += 1; return false })
+        XCTAssertEqual(no.tools, []); XCTAssertTrue(no.declined); XCTAssertEqual(asked, 1)
+        XCTAssertEqual(IDEAgentSkillConsent.state(scope: .project, tools: tools, fingerprint: fingerprint, trust: trust), .declined)
+
+        trust.trust(fingerprint)
+        XCTAssertEqual(IDEAgentSkillConsent.state(scope: .project, tools: tools, fingerprint: fingerprint, trust: trust), .trusted)
+        XCTAssertFalse(trust.isDeclined(fingerprint), "a yes replaces an earlier no")
+
+        let reloaded = IDEAgentSkillTrust(defaults: defaults)
+        XCTAssertTrue(reloaded.isTrusted(fingerprint), "kept across launches")
+        reloaded.forget(fingerprint)
+        XCTAssertFalse(reloaded.isTrusted(fingerprint) || reloaded.isDeclined(fingerprint))
+    }
+
+    func testTheFingerprintFollowsWhatTheUserWasShown() {
+        let base = IDEAgentSkillTrust.fingerprint(kind: "skill", name: "x", source: "s", tools: ["a", "b"], body: "text")
+        XCTAssertEqual(base, IDEAgentSkillTrust.fingerprint(kind: "skill", name: "X", source: "s", tools: ["b", "a"], body: "text"), "case and tool order do not matter")
+        for changed in [
+            IDEAgentSkillTrust.fingerprint(kind: "command", name: "x", source: "s", tools: ["a", "b"], body: "text"),
+            IDEAgentSkillTrust.fingerprint(kind: "skill", name: "y", source: "s", tools: ["a", "b"], body: "text"),
+            IDEAgentSkillTrust.fingerprint(kind: "skill", name: "x", source: "t", tools: ["a", "b"], body: "text"),
+            IDEAgentSkillTrust.fingerprint(kind: "skill", name: "x", source: "s", tools: ["a"], body: "text"),
+            IDEAgentSkillTrust.fingerprint(kind: "skill", name: "x", source: "s", tools: ["a", "b"], body: "text!"),
+        ] {
+            XCTAssertNotEqual(changed, base)
+        }
+    }
+
+    func testSettingsRowsNameWhatNeedsAttention() {
+        let plain = Skill(name: "p", description: "d", body: "b", directory: URL(fileURLWithPath: "/tmp/p"))
+        XCTAssertEqual(IDEAgentSkillsSection.badges(for: plain), [])
+        let odd = Skill(
+            name: "o", description: "d", body: "b", directory: URL(fileURLWithPath: "/tmp/o"), paths: ["**/*.java"],
+            modelInvocable: false, userInvocable: false)
+        XCTAssertEqual(IDEAgentSkillsSection.badges(for: odd), ["Only you", "Only the agent", "Conditional"])
+        let catalog = SkillCatalog(diagnostics: [
+            SkillDiagnostic(kind: .warning, path: "/a/SKILL.md", skillName: "a", message: "Shadowed by the skill of the same name in .claude/skills, which is read first."),
+            SkillDiagnostic(kind: .skipped, path: "/b/SKILL.md", message: "Not loaded: x"),
+        ])
+        XCTAssertEqual(IDEAgentSkillsSection.problems(in: catalog).map(\.path), ["/b/SKILL.md"], "shadowing has a group of its own")
     }
 }

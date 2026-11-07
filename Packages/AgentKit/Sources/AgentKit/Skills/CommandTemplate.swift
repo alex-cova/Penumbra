@@ -12,9 +12,12 @@ public struct CommandTemplate: Sendable, Equatable {
     public var body: String
     /// Where it came from, for the list: `.claude/commands`, `~/.claude/commands`.
     public var source: String
+    /// Whether it travels with a repository, which a host may want to ask about before honoring `allowed-tools`.
+    public var scope: SkillScope
 
     public init(
-        name: String, description: String, argumentHint: String? = nil, allowedTools: [String] = [], body: String, source: String = ""
+        name: String, description: String, argumentHint: String? = nil, allowedTools: [String] = [], body: String, source: String = "",
+        scope: SkillScope = .project
     ) {
         self.name = name
         self.description = description
@@ -22,10 +25,11 @@ public struct CommandTemplate: Sendable, Equatable {
         self.allowedTools = allowedTools
         self.body = body
         self.source = source
+        self.scope = scope
     }
 
     /// `relativePath` is the file's path inside the commands folder, `frontend/lint.md`.
-    public init(relativePath: String, contents: String, source: String) {
+    public init(relativePath: String, contents: String, source: String, scope: SkillScope = .project) {
         let document = MarkdownFrontmatter.parse(contents)
         var name = relativePath
         if name.lowercased().hasSuffix(".md") { name = String(name.dropLast(3)) }
@@ -35,7 +39,7 @@ public struct CommandTemplate: Sendable, Equatable {
             description: document.text("description") ?? Self.firstLine(of: document.body),
             argumentHint: document.text("argument-hint"),
             allowedTools: document.list("allowed-tools"),
-            body: document.body, source: source)
+            body: document.body, source: source, scope: scope)
     }
 
     static func firstLine(of text: String) -> String {

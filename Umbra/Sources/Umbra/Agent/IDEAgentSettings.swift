@@ -177,8 +177,18 @@ final class IDEAgentSettings {
     var commandEnvironmentText: String { didSet { defaults.set(commandEnvironmentText, forKey: Keys.commandEnvironment) } }
     /// Whether the chat covers the editor (true) or sits docked beside it (false, the default).
     var opensAsPage: Bool { didSet { defaults.set(opensAsPage, forKey: Keys.page) } }
-    /// Whether commands and skills in `~/.claude` are offered, besides the project's and Umbra's own.
+    /// Whether commands and skills in `~/.claude` and `~/.agents` are offered, besides the project's and Umbra's own.
     var loadsUserSkills: Bool { didSet { defaults.set(loadsUserSkills, forKey: Keys.userSkills) } }
+    /// Names (lowercased) of skills the user switched off. They are neither offered after `/` nor told to the model.
+    var disabledSkills: Set<String> { didSet { defaults.set(disabledSkills.sorted(), forKey: Keys.disabledSkills) } }
+    /// Answers about letting a repository's skills pre-approve tools (`allowed-tools`).
+    @ObservationIgnored let skillTrust: IDEAgentSkillTrust
+
+    func isSkillEnabled(_ name: String) -> Bool { !disabledSkills.contains(name.lowercased()) }
+
+    func setSkill(_ name: String, enabled: Bool) {
+        if enabled { disabledSkills.remove(name.lowercased()) } else { disabledSkills.insert(name.lowercased()) }
+    }
     /// Whether `~/.claude/CLAUDE.md` and Umbra's own instruction file are put in the system prompt.
     var loadsUserInstructions: Bool { didSet { defaults.set(loadsUserInstructions, forKey: Keys.userInstructions) } }
     /// Whether the agent may call `web_search`. Off until the user turns it on; a key is also required.
@@ -385,6 +395,7 @@ final class IDEAgentSettings {
         static let mode = "umbra.agent.mode"
         static let page = "umbra.agent.opensAsPage"
         static let userSkills = "umbra.agent.loadsUserSkills"
+        static let disabledSkills = "umbra.agent.disabledSkills"
         static let userInstructions = "umbra.agent.loadsUserInstructions"
         static let webSearch = "umbra.agent.webSearch"
         static let webFetch = "umbra.agent.webFetch"
@@ -422,6 +433,7 @@ final class IDEAgentSettings {
         self.defaults = defaults
         self.keyStore = keyStore
         self.mcp = IDEMCPStore(defaults: defaults, keyStore: keyStore)
+        self.skillTrust = IDEAgentSkillTrust(defaults: defaults)
         self.transport = transport
         self.installedModels = installedModels
         provider = defaults.string(forKey: Keys.provider).flatMap(IDEAgentProvider.init(rawValue:)) ?? .openAIResponses
@@ -438,6 +450,7 @@ final class IDEAgentSettings {
         commandEnvironmentText = defaults.string(forKey: Keys.commandEnvironment) ?? ""
         opensAsPage = defaults.bool(forKey: Keys.page)
         loadsUserSkills = defaults.object(forKey: Keys.userSkills) as? Bool ?? true
+        disabledSkills = Set((defaults.stringArray(forKey: Keys.disabledSkills) ?? []).map { $0.lowercased() })
         loadsUserInstructions = defaults.bool(forKey: Keys.userInstructions)
         webSearchEnabled = defaults.bool(forKey: Keys.webSearch)
         webFetchEnabled = defaults.bool(forKey: Keys.webFetch)

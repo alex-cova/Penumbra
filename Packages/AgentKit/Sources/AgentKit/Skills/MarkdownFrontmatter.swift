@@ -33,6 +33,16 @@ public struct MarkdownDocument: Sendable, Equatable {
     }
 
     public func list(_ key: String) -> [String] { metadata[key]?.items ?? [] }
+
+    /// A yes/no header value: `true`, `yes`, `1` and `on` are yes, `false`, `no`, `0` and `off` are no, and a key
+    /// that is missing or says anything else is `default`.
+    public func flag(_ key: String, default fallback: Bool = false) -> Bool {
+        switch text(key)?.lowercased() {
+        case "true", "yes", "1", "on": true
+        case "false", "no", "0", "off": false
+        default: fallback
+        }
+    }
 }
 
 /// The small part of YAML that skill and command files use: `key: value` lines between two `---`
