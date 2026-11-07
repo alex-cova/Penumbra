@@ -939,6 +939,51 @@ public actor AgentSession {
 
     static func editorNote(_ text: String) -> String { "[Note from the editor, not from the user] " + text }
 
+    /// For the `skill` tool: whether this conversation already holds the skill's instructions.
+    func skillIsLoaded(_ name: String) -> Bool {
+        SkillActivations.loaded(in: items).contains(name.lowercased())
+    }
+
+    /// The skills (newest first) loaded before item `cut` that no later item holds again: a summary replaces
+    /// those items, so their instructions would be gone.
+    func skillsLoaded(before cut: Int, in items: [ConversationItem]) -> [String] {
+        let kept = SkillActivations.loaded(in: Array(items[cut...]))
+        var seen = Set<String>()
+        var names: [String] = []
+        for block in SkillActivations.blocks(in: items).reversed() where block.index < cut {
+            let key = block.name.lowercased()
+            if !kept.contains(key), seen.insert(key).inserted { names.append(block.name) }
+        }
+        return names
+    }
+
+    /// The most a summary's reminder of skills carries; a skill past it is named so the model can load it again.
+    static let maxSkillReminderBytes = 32_000
+
+    /// The instructions of `names` (newest first), asked of the skill tool and so taken from the catalog, never
+    /// from what the history happens to contain.
+    func skillReminder(for names: [String]) -> String? {
+        var blocks: [String] = []
+        var omitted: [String] = []
+        var used = 0
+        for name in names {
+            guard let text = tools.lazy.compactMap({ $0.activationText(forSkillNamed: name) }).first else { continue }
+            if used + text.utf8.count > Self.maxSkillReminderBytes {
+                omitted.append(name)
+            } else {
+                used += text.utf8.count
+                blocks.append(text)
+            }
+        }
+        guard !blocks.isEmpty || !omitted.isEmpty else { return nil }
+        var note = "Skills loaded earlier in this conversation, kept across the summary:"
+        if !blocks.isEmpty { note += "\n\n" + blocks.joined(separator: "\n\n") }
+        if !omitted.isEmpty {
+            note += "\n\nNot repeated here (load again with the skill tool if needed): \(omitted.joined(separator: ", "))."
+        }
+        return note
+    }
+
     /// What the model is told when a call it wrote could not be read.
     static func unreadableCallNote(_ calls: [(detail: String, raw: String)]) -> String {
         let first = calls[0]
@@ -1056,9 +1101,13 @@ public actor AgentSession {
             let prepared = ConversationSummary.source(from: older, maximumCharacters: budgetCharacters)
             if let summary = await summarize(prepared, focus: focus, force: force) {
                 report.summarizedItems = cut
+                let swallowedSkills = skillsLoaded(before: cut, in: items)
                 items = ConversationSummary.replacing(items, upTo: cut, with: summary, verbatim: prepared.verbatim)
                 await projectNotes.reset()
                 if let note = await instructionState?.summarized(itemCount: items.count) {
+                    items.append(.user(Self.editorNote(note)))
+                }
+                if let note = skillReminder(for: swallowedSkills) {
                     items.append(.user(Self.editorNote(note)))
                 }
             } else {
@@ -1955,7 +2004,8 @@ public actor AgentSession {
                             delegate: { request in await self.delegate(request, out) },
                             preapproved: preapproved,
                             outputStore: outputStore,
-                            redactOutput: redact)
+                            redactOutput: redact,
+                            isSkillLoaded: { name in await self.skillIsLoaded(name) })
                         let output = await Self.run(tool, arguments: arguments, context: context, timeout: timeout)
                         guard let note else { return (index, output) }
                         return (index, ToolOutput(note + "\n" + output.text, isError: output.isError))

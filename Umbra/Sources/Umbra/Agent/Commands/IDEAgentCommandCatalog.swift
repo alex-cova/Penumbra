@@ -11,6 +11,7 @@ final class IDEAgentCommandCatalog {
 
     private let root: () -> URL?
     private let loadsUserFolders: () -> Bool
+    private let disabledSkills: () -> Set<String>
     private let home: URL?
     private let appSupport: URL?
     private var cached: (catalog: SkillCatalog, at: Date, key: String)?
@@ -21,38 +22,37 @@ final class IDEAgentCommandCatalog {
     /// none (tests, which must not read the real ones).
     init(
         root: @escaping () -> URL?, loadsUserFolders: @escaping () -> Bool, home: URL?, appSupport: URL?,
+        disabledSkills: @escaping () -> Set<String> = { [] },
         now: @escaping () -> Date = Date.init
     ) {
         self.root = root
         self.loadsUserFolders = loadsUserFolders
+        self.disabledSkills = disabledSkills
         self.home = home
         self.appSupport = appSupport
         self.now = now
     }
 
-    /// Folders in the order they win: the project's before the user's.
+    /// Folders in the order they win: the project's, the folders above it up to its repository, the user's, Umbra's
+    /// own (`SkillCatalog.standardLocations`, shared with the headless runs).
     func folders(_ kind: String) -> [SkillCatalog.Location] {
-        var folders: [SkillCatalog.Location] = []
-        if let root = root() {
-            folders.append(.init(url: root.appendingPathComponent(".umbra/\(kind)"), label: ".umbra/\(kind)"))
-            folders.append(.init(url: root.appendingPathComponent(".claude/\(kind)"), label: ".claude/\(kind)"))
-        }
-        if loadsUserFolders(), let home {
-            folders.append(.init(url: home.appendingPathComponent(".claude/\(kind)"), label: "~/.claude/\(kind)"))
-        }
-        if let appSupport {
-            folders.append(.init(url: appSupport.appendingPathComponent(kind), label: "Umbra \(kind)"))
-        }
-        return folders
+        SkillCatalog.standardLocations(
+            kind: kind, projectRoot: root(), home: home, includeUserFolders: loadsUserFolders(), appSupport: appSupport,
+            appLabel: "Umbra")
     }
 
-    var skillCatalog: SkillCatalog {
+    /// Everything found, including the skills the user switched off, with what the read had to say about each
+    /// file. Settings lists this; nothing else should.
+    var allSkillsCatalog: SkillCatalog {
         let key = (root()?.path ?? "") + "|\(loadsUserFolders())"
         if let cached, cached.key == key, now().timeIntervalSince(cached.at) < Self.lifetime { return cached.catalog }
         let catalog = SkillCatalog.load(skillFolders: folders("skills"), commandFolders: folders("commands"))
         cached = (catalog, now(), key)
         return catalog
     }
+
+    /// What the model and the `/` list use: the skills the user has not switched off.
+    var skillCatalog: SkillCatalog { allSkillsCatalog.excluding(disabledSkills()) }
 
     /// The subagents the `task` tool offers, from the same folders (`agents`), the built-in `general` last.
     var agentCatalog: AgentCatalog {
@@ -78,7 +78,7 @@ final class IDEAgentCommandCatalog {
         for command in catalog.commands where taken.insert(command.name.lowercased()).inserted {
             list.append(IDEAgentCommandDescriptor(name: command.name, kind: .custom(command)))
         }
-        for skill in catalog.skills where taken.insert(skill.name.lowercased()).inserted {
+        for skill in catalog.skills where skill.userInvocable && taken.insert(skill.name.lowercased()).inserted {
             list.append(IDEAgentCommandDescriptor(name: skill.name, kind: .skill(skill)))
         }
         return list

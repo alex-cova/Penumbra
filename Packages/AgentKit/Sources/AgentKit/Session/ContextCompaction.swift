@@ -105,7 +105,9 @@ public enum ToolOutputStubs {
         var stubbed = 0
         for index in candidates {
             guard needed > 0, case .toolOutput(let callID, let output) = items[index],
-                  output.utf8.count >= policy.minimumStubbableBytes, !isStub(output)
+                  output.utf8.count >= policy.minimumStubbableBytes, !isStub(output),
+                  // A skill's instructions are guidance for the rest of the conversation, not data to ask for again.
+                  !SkillActivations.isActivationOutput(at: index, in: items)
             else { continue }
             let stub = describe(callID: callID, output: output, in: items, before: index)
             guard stub.utf8.count < output.utf8.count else { continue }

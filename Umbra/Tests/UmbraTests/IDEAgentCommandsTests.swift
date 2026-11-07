@@ -593,10 +593,14 @@ final class IDEAgentCommandRunTests: XCTestCase {
 
     func testACommandsAllowedToolsAreRulesForThatRunOnly() async throws {
         try write("---\nallowed-tools: Bash(echo:*)\n---\nSay hi with echo.", ".claude/commands/hi.md")
+        // This is the project's command, so its tools wait for a yes (IDEAgentSkillConsentTests asks); here it was given.
         let (controller, _) = makeController([
             .toolCalls((id: "c1", name: "run_command", arguments: #"{"command":"echo hi"}"#)), .text("done"),
             .toolCalls((id: "c2", name: "run_command", arguments: #"{"command":"echo again"}"#)), .text("done"),
         ])
+        controller.commandCatalog.invalidate()
+        let hi = try XCTUnwrap(controller.commandCatalog.allSkillsCatalog.command(named: "hi"))
+        controller.settings.skillTrust.trust(IDEAgentSkillTrust.fingerprint(of: hi))
         type(controller, "/hi")
         await waitFor("the first run ends") { !controller.isRunning }
         XCTAssertNil(controller.entries.first { $0.approvalOutcome != nil || $0.approval != nil }, "the command's tool did not ask")
@@ -617,8 +621,9 @@ final class IDEAgentCommandRunTests: XCTestCase {
 
         let user = try XCTUnwrap(controller.entries.first { $0.kind == .user })
         XCTAssertEqual(user.text, "/review the last commit")
-        XCTAssertTrue(user.detail?.hasPrefix("[Skill: review]\nRead the diff and list risks.") == true)
-        XCTAssertTrue(user.detail?.hasSuffix("Arguments: the last commit") == true)
+        XCTAssertTrue(user.detail?.hasPrefix("/review the last commit\n\n<skill_content name=\"review\">\nRead the diff and list risks.") == true)
+        XCTAssertTrue(user.detail?.contains("<file>notes.md</file>") == true)
+        XCTAssertTrue(user.detail?.hasSuffix("follow its instructions.") == true)
         let request = try XCTUnwrap(client.requests.first)
         XCTAssertTrue(request.tools.map(\.name).contains("skill"), "the model is offered the skill tool")
         XCTAssertTrue(try XCTUnwrap(request.tools.first { $0.name == "skill" }).description.contains("- review: Review a diff"))

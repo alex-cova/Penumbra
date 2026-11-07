@@ -410,6 +410,18 @@ extension IDEWorkspace: IDEAgentHost {
         return await alert.confirms(in: window)
     }
 
+    /// One question for the tools a project's skill or command pre-approves, listing each, because for the run it
+    /// starts those calls no longer ask.
+    func agentConfirmSkillTools(kind: String, name: String, source: String, tools: [String]) async -> Bool {
+        guard !tools.isEmpty else { return true }
+        let listing = tools.prefix(10).map { "• \($0)" }.joined(separator: "\n") + (tools.count > 10 ? "\n… and \(tools.count - 10) more" : "")
+        var alert = IDEAlert.confirm(
+            "This project's /\(name) \(kind) wants to pre-approve tools for the agent.",
+            detail: "From \(source):\n\(listing)\n\nWhile it runs, matching tool calls (commands included) go ahead without asking. Allow it only if you trust this project. \"Run Without Them\" still runs it, with every tool asking as usual.",
+            confirm: "Allow", cancel: "Run Without Them")
+        return await alert.confirms(in: window)
+    }
+
     func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? {
         // Only an open file the editor already analyses has anything to report: a file written to disk,
         // or a language with no analysis, would only make this wait out its timeout.

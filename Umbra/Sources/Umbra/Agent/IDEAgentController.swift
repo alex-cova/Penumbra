@@ -112,7 +112,7 @@ final class IDEAgentController {
         IDEAgentBundledSkills.seed(appSupport: commandsAppSupport)
         commandCatalog = IDEAgentCommandCatalog(
             root: { [weak self] in self?.host?.agentProjectRoot }, loadsUserFolders: { settings.loadsUserSkills },
-            home: commandsHome, appSupport: commandsAppSupport)
+            home: commandsHome, appSupport: commandsAppSupport, disabledSkills: { settings.disabledSkills })
         wire(first)
     }
 

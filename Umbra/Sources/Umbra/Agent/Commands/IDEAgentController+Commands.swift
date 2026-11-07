@@ -95,7 +95,7 @@ extension IDEAgentController {
             special("notes", "pin", "Your notes on the Browser tab's page, with the elements they name")
             special("element", "cursorarrow.rays", "The element you picked last in the Browser tab")
         }
-        for skill in commandCatalog.skillCatalog.skills {
+        for skill in commandCatalog.skillCatalog.skills where skill.userInvocable {
             let name = "skill:" + skill.name
             guard query.isEmpty || FuzzyMatcher.match(query: query, in: name) != nil else { continue }
             rows.append(IDEAgentSuggestion(id: "mention:" + name, icon: "sparkles", title: "@" + name, detail: skill.description, insertion: "@" + name + " "))
@@ -177,20 +177,66 @@ extension IDEAgentController {
                 selected.appendNotice("Lines like !`command` in /\(template.name) are sent as text: Umbra does not run them.")
             }
             let typed = ("/" + descriptor.name + " " + arguments).trimmingCharacters(in: .whitespaces)
-            selected.submit(text: typed, modelText: template.expand(arguments: arguments), allowedTools: template.allowedTools)
+            submitWithToolGrant(
+                typed: typed, modelText: template.expand(arguments: arguments), kind: "command", name: template.name,
+                source: template.source, tools: template.allowedTools,
+                state: IDEAgentSkillConsent.state(of: template, trust: settings.skillTrust),
+                fingerprint: IDEAgentSkillTrust.fingerprint(of: template))
         case .skill(let skill):
             guard selected.canRunCommands else { return }
             let typed = ("/" + descriptor.name + " " + arguments).trimmingCharacters(in: .whitespaces)
-            selected.submit(text: typed, modelText: Self.skillMessage(skill, arguments: arguments), allowedTools: skill.allowedTools)
+            submitWithToolGrant(
+                typed: typed, modelText: Self.skillMessage(skill, arguments: arguments), kind: "skill", name: skill.name,
+                source: skill.source, tools: skill.allowedTools,
+                state: IDEAgentSkillConsent.state(of: skill, trust: settings.skillTrust),
+                fingerprint: IDEAgentSkillTrust.fingerprint(of: skill))
         }
     }
 
-    /// What the model is sent when the user runs a skill themselves.
+    /// Sends a command or skill. Its `allowed-tools` pre-approve tools for the run; for something a repository
+    /// ships that waits for the user's yes the first time (and again when it changes), and a "no" still runs it,
+    /// with every tool asking as usual.
+    private func submitWithToolGrant(
+        typed: String, modelText: String, kind: String, name: String, source: String, tools: [String],
+        state: IDEAgentSkillConsent.State, fingerprint: String
+    ) {
+        let conversation = selected
+        let declinedNotice = "/\(name) is from \(source) in this project. Its pre-approved tools were not allowed, so every tool asks as usual. "
+            + "Settings ▸ Agent ▸ Skills can ask again."
+        switch state {
+        case .notNeeded, .trusted:
+            conversation.submit(text: typed, modelText: modelText, allowedTools: tools)
+        case .declined:
+            conversation.submit(text: typed, modelText: modelText, allowedTools: [])
+            conversation.appendNotice(declinedNotice)
+        case .unknown:
+            guard let host else {
+                conversation.submit(text: typed, modelText: modelText, allowedTools: [])
+                return
+            }
+            let trust = settings.skillTrust
+            Task { @MainActor [weak conversation] in
+                let result = await IDEAgentSkillConsent.allowedTools(
+                    state: state, fingerprint: fingerprint, tools: tools, trust: trust,
+                    confirm: { await host.agentConfirmSkillTools(kind: kind, name: name, source: source, tools: tools) })
+                guard let conversation else { return }
+                guard conversation.canRunCommands else {
+                    conversation.appendNotice("\(typed) was not sent: a run started while you were deciding.")
+                    return
+                }
+                conversation.submit(text: typed, modelText: modelText, allowedTools: result.tools)
+                if result.declined { conversation.appendNotice(declinedNotice) }
+            }
+        }
+    }
+
+    /// What the model is sent when the user runs a skill themselves: what they typed, then the skill's
+    /// instructions in the same block the `skill` tool returns (so a second load is refused and a summary keeps
+    /// it).
     static func skillMessage(_ skill: Skill, arguments: String) -> String {
-        var message = "[Skill: \(skill.name)]\n\(skill.body)"
-        message += "\n\nFiles next to these instructions can be read with the skill tool: skill(name: \"\(skill.name)\", file: \"path/inside/the/skill\")."
-        if !arguments.isEmpty { message += "\n\nArguments: \(arguments)" }
-        return message
+        let typed = ("/" + skill.name + " " + arguments).trimmingCharacters(in: .whitespaces)
+        return typed + "\n\n" + skill.activationText()
+            + "\n\nThe user started this skill themselves; follow its instructions."
     }
 
     func runBuiltIn(_ command: IDEAgentBuiltInCommand, arguments: String = "") {

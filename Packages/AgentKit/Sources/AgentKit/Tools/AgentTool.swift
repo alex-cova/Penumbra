@@ -231,6 +231,9 @@ public struct ToolContext: Sendable {
     /// Scrubs text the way this call's output is scrubbed before it enters the history (the configured
     /// shaper, with this call's tool name and risk). A copy saved to disk goes through it first.
     public let redactOutput: (@Sendable (String) async -> String)?
+    /// Whether the conversation already holds this skill's instructions (`skill` answers "already loaded"
+    /// instead of sending them again). `nil`: unknown, so the tool sends them.
+    public let isSkillLoaded: (@Sendable (String) async -> Bool)?
 
     public init(
         workspace: any AgentWorkspace,
@@ -250,8 +253,10 @@ public struct ToolContext: Sendable {
         delegate: (@Sendable (DelegationRequest) async -> DelegationResult)? = nil,
         preapproved: Bool = false,
         outputStore: (any ToolOutputStore)? = nil,
-        redactOutput: (@Sendable (String) async -> String)? = nil
+        redactOutput: (@Sendable (String) async -> String)? = nil,
+        isSkillLoaded: (@Sendable (String) async -> Bool)? = nil
     ) {
+        self.isSkillLoaded = isSkillLoaded
         self.outputStore = outputStore
         self.redactOutput = redactOutput
         self.workspace = workspace
@@ -383,6 +388,9 @@ public protocol AgentTool: Sendable {
     var untrustedAskNote: String { get }
     /// A file tool touched `path`. Skills with a `paths` filter use this; other tools ignore it.
     func noteFileTouched(_ path: String)
+    /// For the `skill` tool: the instructions of the skill called `name`, as a start would send them. A summary
+    /// uses it to bring back skills it swallowed, from the catalog and never from text found in the history.
+    func activationText(forSkillNamed name: String) -> String?
     /// True for a tool that is bounded by something else (a child's iteration cap, and Stop), so the
     /// session's per-tool timeout would only cut off work that is going well (`task`).
     var runsWithoutTimeout: Bool { get }
@@ -414,6 +422,7 @@ extension AgentTool {
     public func asksAfterUntrustedContent(for arguments: ToolArguments) -> Bool { asksAfterUntrustedContent }
     public var untrustedAskNote: String { "This run used web search or read untrusted content, so saving asks first." }
     public func noteFileTouched(_ path: String) {}
+    public func activationText(forSkillNamed name: String) -> String? { nil }
     public var runsWithoutTimeout: Bool { false }
     public var asksUnlessAllowed: Bool { false }
     public func refusalBeforeAsking(for arguments: ToolArguments) -> String? { nil }

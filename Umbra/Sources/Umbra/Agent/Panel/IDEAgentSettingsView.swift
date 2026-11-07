@@ -206,6 +206,8 @@ struct IDEAgentSettingsView: View {
 
             IDEMCPSettingsSection(store: settings.mcp, manager: agent?.mcp, projectRoot: agent?.projectRoot)
 
+            IDEAgentSkillsSection(settings: settings, agent: agent)
+
             Section("Behavior") {
                 Picker("Mode for new chats", selection: $settings.mode) {
                     ForEach(PermissionMode.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -216,8 +218,8 @@ struct IDEAgentSettingsView: View {
                 Text("Each chat can change its own with the chip under the message field, or ⇧Tab.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
-                Toggle("Offer commands and skills from ~/.claude", isOn: $settings.loadsUserSkills)
-                Text("Commands (/name) and skills are also read from .umbra and .claude in the project, and from Umbra's own folder. Turn this off if a sandboxed build cannot read your home folder.")
+                Toggle("Offer commands and skills from ~/.claude and ~/.agents", isOn: $settings.loadsUserSkills)
+                Text("Commands (/name) and skills are also read from the project (.umbra, .claude, and .agents for skills) and from Umbra's own folder. Turn this off if a sandboxed build cannot read your home folder. The list is under Skills below.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Toggle("Load instructions from ~/.claude and Umbra's folder", isOn: $settings.loadsUserInstructions)

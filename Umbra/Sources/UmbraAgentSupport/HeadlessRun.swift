@@ -221,22 +221,15 @@ public enum UmbraAgentHeadlessRun {
 
         var tools: [any AgentTool] = ReadOnlyTools.all() + EditingTools.all()
         tools.append(UmbraAgentRunCommandTool(host: host, sandbox: sandbox))
+        // The same folders the app reads (`standardLocations`); a headless run has no user folders or app folder.
         let catalog = SkillCatalog.load(
-            skillFolders: [
-                SkillCatalog.Location(url: root.appendingPathComponent(".umbra/skills"), label: ".umbra/skills"),
-                SkillCatalog.Location(url: root.appendingPathComponent(".claude/skills"), label: ".claude/skills"),
-            ],
-            commandFolders: [
-                SkillCatalog.Location(url: root.appendingPathComponent(".umbra/commands"), label: ".umbra/commands"),
-                SkillCatalog.Location(url: root.appendingPathComponent(".claude/commands"), label: ".claude/commands"),
-            ])
-        if !catalog.skills.isEmpty { tools.append(SkillTool(catalog: catalog)) }
+            skillFolders: SkillCatalog.standardLocations(kind: "skills", projectRoot: root, home: nil, includeUserFolders: false, appSupport: nil),
+            commandFolders: SkillCatalog.standardLocations(kind: "commands", projectRoot: root, home: nil, includeUserFolders: false, appSupport: nil))
+        if !catalog.modelSkills.isEmpty { tools.append(SkillTool(catalog: catalog)) }
         tools += [TodoTool(), AskUserTool(), ExitPlanModeTool(), ExploreTool()]
         // Subagent definitions from the same folders as the app (`agents`), built-ins last.
-        let agents = AgentCatalog.load(folders: [
-            SkillCatalog.Location(url: root.appendingPathComponent(".umbra/agents"), label: ".umbra/agents"),
-            SkillCatalog.Location(url: root.appendingPathComponent(".claude/agents"), label: ".claude/agents"),
-        ])
+        let agents = AgentCatalog.load(
+            folders: SkillCatalog.standardLocations(kind: "agents", projectRoot: root, home: nil, includeUserFolders: false, appSupport: nil))
         tools.append(TaskTool(catalog: agents))
         if let memoryDirectory = memoryDirectory(store: store, root: root) {
             tools.append(RememberTool(memoryDirectory: memoryDirectory))

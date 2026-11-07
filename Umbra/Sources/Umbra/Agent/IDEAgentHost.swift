@@ -65,6 +65,10 @@ protocol IDEAgentHost: AnyObject {
     /// their shell commands on this Mac. `true` approves exactly this block; a changed block asks
     /// again. Hooks from an unapproved block never run.
     func agentConfirmToolHooks(_ hooks: [IDEAgentHookEntry]) async -> Bool
+    /// Asks the user whether a skill or command from this project's own folders may pre-approve `tools` (its
+    /// `allowed-tools`) for the run they start with it. `true` approves exactly this text; a changed one asks
+    /// again. `false` still runs it, with every tool asking as usual.
+    func agentConfirmSkillTools(kind: String, name: String, source: String, tools: [String]) async -> Bool
 
     // Navigation. All optional (see the extension below).
     /// Java symbol navigation, or `nil` when the project has no Java to resolve.
@@ -128,6 +132,7 @@ extension IDEAgentHost {
     func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? { nil }
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> { [] }
     func agentConfirmToolHooks(_ hooks: [IDEAgentHookEntry]) async -> Bool { false }
+    func agentConfirmSkillTools(kind: String, name: String, source: String, tools: [String]) async -> Bool { false }
     func agentJavaNavigator() -> (any IDEAgentNavigating)? { nil }
     func agentSymbolSearch() -> (any IDEAgentSymbolSearching)? { nil }
     func agentHoverEngine() -> HoverEngine? { nil }

@@ -215,9 +215,12 @@ import Testing
         let (catalog, _) = try fixture()
         let output = await run(SkillTool(catalog: catalog), #"{"name":"API"}"#)
         #expect(!output.isError)
-        #expect(output.text.hasPrefix("Call the API like this."))
-        #expect(output.text.contains("references/endpoints.md") && output.text.contains("run.sh"))
-        #expect(!output.text.contains("SKILL.md,"), "the skill's own file is not listed")
+        #expect(output.text.hasPrefix("<skill_content name=\"api\">\nCall the API like this."))
+        #expect(output.text.hasSuffix("</skill_content>"))
+        #expect(output.text.contains("<file>references/endpoints.md</file>") && output.text.contains("<file>run.sh</file>"))
+        #expect(!output.text.contains("<file>SKILL.md</file>"), "the skill's own file is not listed")
+        let directory = catalog.skill(named: "api")!.directory.standardizedFileURL.path
+        #expect(output.text.contains("Skill directory: \(directory)"), "the model needs the absolute folder to run a script")
     }
 
     @Test func aFileInsideTheFolderCanBeRead() async throws {

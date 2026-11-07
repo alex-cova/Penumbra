@@ -1318,7 +1318,7 @@ final class IDEAgentConversation: Identifiable {
 
     private func currentSession(root: URL, host: any IDEAgentHost) async throws -> AgentSession {
         // Skills are in the tool list, so a changed one starts a new session (which keeps the conversation).
-        let skills = commandCatalog.map(\.skillCatalog).flatMap { $0.skills.isEmpty ? nil : $0 }
+        let skills = commandCatalog.map(\.skillCatalog).flatMap { $0.modelSkills.isEmpty ? nil : $0 }
         // Likewise the subagents `task` offers: the list is in the tool's description. The
         // built-in helper agents (`local-explore`, `local-digest`) join only when a helper model
         // is set and passes the gate; their `model: helper` then resolves.
