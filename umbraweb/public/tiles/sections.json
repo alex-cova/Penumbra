@@ -1,0 +1,132 @@
+{
+ "url": "http://localhost:4173/",
+ "views": {
+  "desktop": {
+   "width": 1440,
+   "height": 900,
+   "navH": 72,
+   "scrollHeight": 7200,
+   "screens": 8,
+   "sections": [
+    {
+     "n": 1,
+     "tag": "section",
+     "id": "",
+     "cls": "hero hero--collage is-still is-entered",
+     "top": 0,
+     "h": 900,
+     "hScreens": 1,
+     "offGrid": 0,
+     "tiles": [
+      {
+       "file": "desktop-sec-01-a.jpg",
+       "scrollY": 0
+      }
+     ]
+    },
+    {
+     "n": 2,
+     "tag": "section",
+     "id": "editor",
+     "cls": "section",
+     "top": 900,
+     "h": 900,
+     "hScreens": 1,
+     "offGrid": 0,
+     "tiles": [
+      {
+       "file": "desktop-sec-02-a.jpg",
+       "scrollY": 900
+      }
+     ]
+    },
+    {
+     "n": 3,
+     "tag": "section",
+     "id": "features",
+     "cls": "section g2 bg-band",
+     "top": 1800,
+     "h": 1800,
+     "hScreens": 2,
+     "offGrid": 0,
+     "tiles": [
+      {
+       "file": "desktop-sec-03-a.jpg",
+       "scrollY": 1800
+      },
+      {
+       "file": "desktop-sec-03-b.jpg",
+       "scrollY": 2700
+      }
+     ]
+    },
+    {
+     "n": 4,
+     "tag": "section",
+     "id": "jobs",
+     "cls": "section",
+     "top": 3600,
+     "h": 900,
+     "hScreens": 1,
+     "offGrid": 0,
+     "tiles": [
+      {
+       "file": "desktop-sec-04-a.jpg",
+       "scrollY": 3600
+      }
+     ]
+    },
+    {
+     "n": 5,
+     "tag": "section",
+     "id": "stack",
+     "cls": "section bg-dots",
+     "top": 4500,
+     "h": 900,
+     "hScreens": 1,
+     "offGrid": 0,
+     "tiles": [
+      {
+       "file": "desktop-sec-05-a.jpg",
+       "scrollY": 4500
+      }
+     ]
+    },
+    {
+     "n": 6,
+     "tag": "section",
+     "id": "questions",
+     "cls": "section",
+     "top": 5400,
+     "h": 900,
+     "hScreens": 1,
+     "offGrid": 0,
+     "tiles": [
+      {
+       "file": "desktop-sec-06-a.jpg",
+       "scrollY": 5400
+      }
+     ]
+    },
+    {
+     "n": 7,
+     "tag": "footer",
+     "id": "contact",
+     "cls": "footer closing footer--dark ground-inverse",
+     "top": 6300,
+     "h": 900,
+     "hScreens": 1,
+     "offGrid": 0,
+     "tiles": [
+      {
+       "file": "desktop-sec-07-a.jpg",
+       "scrollY": 6300
+      }
+     ]
+    }
+   ],
+   "consoleErrors": []
+  }
+ },
+ "at": "2026-11-08T14:58:10.756Z"
+}

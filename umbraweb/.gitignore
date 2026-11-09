@@ -5,3 +5,5 @@ next-env.d.ts
 /dist/
 .vinext/
 .cloudflare/
+.taste-skill/
+tsconfig.tsbuildinfo
