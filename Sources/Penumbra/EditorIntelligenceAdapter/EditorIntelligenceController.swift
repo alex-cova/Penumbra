@@ -2382,7 +2382,12 @@ public final class EditorIntelligenceController {
             length += identifierSuffixLength(after: caret)
         }
         let nsRange = NSRange(location: anchor, length: max(0, length))
-        if item.isSnippet {
+        // Text the developer already has after the caret (`foo|(x)`, `new Foo|<T>()`, `(Foo|)`) is
+        // never written a second time; see `CompletionInsertion`.
+        let nextCharacter = textView.text(in: NSRange(location: nsRange.upperBound, length: min(1, max(0, textView.documentLength - nsRange.upperBound))))
+        let following = textView.text(in: NSRange(location: nsRange.upperBound, length: min(16, max(0, textView.documentLength - nsRange.upperBound)))) ?? ""
+        let insertion = CompletionInsertion.resolve(item, nextCharacter: nextCharacter, following: following)
+        if insertion.isSnippet {
             let parser = SnippetParser()
             let nodes = parser.parse(item.insertText)
             let expander = SnippetExpander(
@@ -2411,14 +2416,8 @@ public final class EditorIntelligenceController {
             return
         }
 
-        var insertText = item.insertText
-        var caretOffset = item.caretOffset
-        // `foo|(x)`: don't add a second pair of parentheses; step into the existing one.
-        let nextCharacter = textView.text(in: NSRange(location: nsRange.upperBound, length: min(1, max(0, textView.documentLength - nsRange.upperBound))))
-        if insertText.hasSuffix("()"), nextCharacter == "(" {
-            insertText.removeLast(2)
-            caretOffset = (insertText as NSString).length + 1
-        }
+        let insertText = insertion.text
+        let caretOffset = insertion.caretOffset
 
         textView.undoManager?.beginUndoGrouping()
         if textView.isMultiCursorActive {

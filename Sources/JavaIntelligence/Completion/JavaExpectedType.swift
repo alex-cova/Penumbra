@@ -36,6 +36,10 @@ enum JavaExpectedType {
         if JavaCompletionContextClassifier.word(endingAt: before, in: bytes) == "return" {
             return await enclosingReturnType(at: prefixStart, request: request).map { [$0] } ?? []
         }
+        // JLS 14.18: the operand of `throw` is a `Throwable`, so after `throw new |` exceptions lead.
+        if JavaCompletionContextClassifier.word(endingAt: before, in: bytes) == "throw" {
+            return [.classType(qualifiedName: "java.lang.Throwable", arguments: [], outer: nil)]
+        }
         if previous == UInt8(ascii: "(") || previous == UInt8(ascii: ",") {
             if let keyword = keywordBeforeParenthesis(at: before - 1, bytes: bytes), previous == UInt8(ascii: "(") {
                 return ["if", "while"].contains(keyword) ? [.primitive(.boolean)] : []
@@ -53,6 +57,30 @@ enum JavaExpectedType {
             return resolved
         }
         return await structuralExpectation(at: prefixStart, request: request)
+    }
+
+    /// Whether the identifier starting at `start` is followed by something that makes it only the
+    /// head of a longer expression: a member access or index (`.`, `[`), a comparison or arithmetic
+    /// operator, or `instanceof`. `&&`, `||`, `?`, `)`, `,` and `;` end an operand and do not count.
+    static func continuesAsLargerExpression(from start: Int, bytes: [UInt8]) -> Bool {
+        var index = start
+        func isIdentifier(_ byte: UInt8) -> Bool {
+            byte == UInt8(ascii: "_") || byte == UInt8(ascii: "$") || (byte >= 0x30 && byte <= 0x39)
+                || (byte | 0x20 >= UInt8(ascii: "a") && byte | 0x20 <= UInt8(ascii: "z")) || byte >= 0x80
+        }
+        while index < bytes.count, isIdentifier(bytes[index]) { index += 1 }
+        while index < bytes.count, [0x20, 0x09, 0x0A, 0x0D].contains(bytes[index]) { index += 1 }
+        guard index < bytes.count else { return false }
+        let next: UInt8 = index + 1 < bytes.count ? bytes[index + 1] : 0
+        switch bytes[index] {
+        case UInt8(ascii: "."): return next != UInt8(ascii: ".")
+        case UInt8(ascii: "["), UInt8(ascii: "<"), UInt8(ascii: ">"), UInt8(ascii: "%"): return true
+        case UInt8(ascii: "+"), UInt8(ascii: "-"), UInt8(ascii: "*"): return true
+        case UInt8(ascii: "/"): return next != UInt8(ascii: "/") && next != UInt8(ascii: "*")
+        case UInt8(ascii: "="), UInt8(ascii: "!"): return next == UInt8(ascii: "=")
+        case UInt8(ascii: "i"): return bytes[index...].starts(with: Array("instanceof".utf8))
+        default: return false
+        }
     }
 
     /// Node types that extend an expression rightward from the same start (`user.get|`), climbed

@@ -207,7 +207,12 @@ public enum JavaExpressionTyper {
         if raw.packageName != nil { return raw }
         let resolvedType = await JavaTypeResolver.resolve(raw.type, context: context, index: index)
         if !raw.isTypeReference, case .typeVariable(let name) = resolvedType {
-            // A value of type `T` has the members of `T`'s leftmost bound (`Object` when unbounded).
+            // `T extends A & B` has the members of both (JLS 4.9): keep the variable, and member
+            // lookup unites its bounds. With one bound (or none) the value is typed as that bound.
+            if (context.typeParameterBounds[name]?.count ?? 0) > 1 {
+                return Typed(type: resolvedType, isTypeReference: false)
+            }
+            // A value of type `T` has the members of `T`'s only bound (`Object` when unbounded).
             let bound = context.typeParameterBounds[name]?.first ?? .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
             let resolvedBound = await JavaTypeResolver.resolve(bound, context: context, index: index)
             if case .typeVariable = resolvedBound { return Typed(type: resolvedType, isTypeReference: false) }

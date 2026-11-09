@@ -1,4 +1,4 @@
-//! receiver: java.lang.Number
+//! receiver: typeVariable T
 //! contains: intValue
 package com.acme.cases;
 

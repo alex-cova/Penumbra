@@ -90,8 +90,8 @@ public enum JavaMemberLookup {
         return result
     }
 
-    /// Members of a type variable: the members of its bounds, intersected by signature when
-    /// there are several (`T extends A & B` only has what both offer, JLS 4.4). Bounds are
+    /// Members of a type variable: the members of its bounds, united when there are several
+    /// (`T extends A & B` has what either offers, JLS 4.9). Bounds are
     /// resolved in the variable's scope first — a bound written as a bare name usually needs
     /// it — and a bound that is itself a variable recurses with `seen` cutting cycles.
     private static func members(
@@ -118,12 +118,15 @@ public enum JavaMemberLookup {
             }
         }
         guard perBound.count > 1 else { return perBound.first ?? [] }
-        // Intersection by signature: the leftmost bound's members that every other bound has
-        // too. Order follows the leftmost bound, mirroring lookup on a single bound.
-        let rest = perBound.dropFirst().map { Set($0.map { signatureKey(of: $0) }) }
-        return perBound[0].filter { member in
-            rest.allSatisfy { $0.contains(signatureKey(of: member)) }
+        // The members of an intersection type are the members of every component (JLS 4.9): a
+        // variable `T extends Number & Comparable<T>` has `intValue()` and `compareTo(T)`, which
+        // javac accepts. A signature both bounds declare is listed once, the leftmost bound's.
+        var seen = Set<String>()
+        var union: [JavaResolvedMember] = []
+        for member in perBound.joined() where seen.insert(signatureKey(of: member)).inserted {
+            union.append(member)
         }
+        return union
     }
 
     /// The same override key the member walk deduplicates on: fields by name, methods by

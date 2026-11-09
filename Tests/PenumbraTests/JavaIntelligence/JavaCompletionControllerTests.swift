@@ -29,10 +29,14 @@ final class JavaCompletionControllerTests: XCTestCase {
     }
 
     /// A Java file whose caret sits where `marker` ends.
-    private func openSession(_ text: String, caretAfter marker: String, otherDocumentText: String? = nil) async throws -> Session {
+    private func openSession(
+        _ text: String, caretAfter marker: String, otherDocumentText: String? = nil,
+        configure: ((JavaCompletionProvider) async -> Void)? = nil
+    ) async throws -> Session {
         let corpus = try await JavaCompletionCorpusTests.sharedIndex()
         await corpus.index.setOverlay([:])
         let provider = JavaCompletionProvider(index: corpus.index)
+        await configure?(provider)
         let url = URL(fileURLWithPath: "/virtual/Controller\(UUID().uuidString.prefix(6)).java")
 
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 700, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
@@ -104,6 +108,114 @@ final class JavaCompletionControllerTests: XCTestCase {
 
     private func labels(_ session: Session) -> [String] {
         session.controller.visibleCompletionItems.map(\.label)
+    }
+
+    // MARK: - What accepting an item writes, through the real controller
+
+    private struct InsertionScenario {
+        var name: String
+        /// Java statements placed in `run(List<String> names, String text)`; the caret sits after `caretAfter`.
+        var body: String
+        var caretAfter: String
+        var pick: String
+        /// The statements after acceptance; `|` marks where the caret must be.
+        var expected: String
+        var imports = "import java.util.*;\n"
+        var requiredText: [String] = []
+        /// Classes whose static members are offered with an import (opt-in: `JavaImportPolicy.staticMemberClasses`).
+        var staticOwners: [String] = []
+    }
+
+    private func program(_ scenario: InsertionScenario, body: String) -> String {
+        "package app;\n\(scenario.imports)class Demo {\n    void run(List<String> names, String text) {\n        \(body)\n    }\n}\n"
+    }
+
+    /// Opens the file with the caret mid-identifier (text after it stays, as when editing existing code), asks for
+    /// completion, selects `pick`, accepts it with Enter semantics, and returns the document, the caret and the item.
+    private func accept(_ scenario: InsertionScenario) async throws -> (before: String, after: String, caret: Int, item: CompletionItem) {
+        let source = program(scenario, body: scenario.body)
+        let owners = scenario.staticOwners
+        let session = try await openSession(source, caretAfter: scenario.caretAfter) { provider in
+            if !owners.isEmpty { await provider.setImportPolicy(JavaImportPolicy(staticMemberClasses: owners)) }
+        }
+        session.controller.triggerCompletion()
+        await waitForCondition("\(scenario.name): `\(scenario.pick)` offered; popup has \(self.labels(session).count) rows, first \(self.labels(session).prefix(12)), showing=\(session.controller.isShowingCompletion), document now: \(session.textView.text.replacingOccurrences(of: "\n", with: " ⏎ "))") { self.labels(session).contains(scenario.pick) }
+        var guardCount = 0
+        while session.controller.selectedCompletionItem?.label != scenario.pick, guardCount < 3000 {
+            session.controller.moveCompletionSelection(by: 1)
+            guardCount += 1
+        }
+        let item = try XCTUnwrap(session.controller.selectedCompletionItem, scenario.name)
+        XCTAssertEqual(item.label, scenario.pick, scenario.name)
+        session.controller.acceptSelectedCompletion(replacingIdentifier: false)
+        return (source, session.textView.text, session.textView.selectedRange.location, item)
+    }
+
+    func testAcceptingAnItemWritesWhatTheHarnessPredictsAndPlacesTheCaret() async throws {
+        let scenarios: [InsertionScenario] = [
+            .init(name: "constructor, existing parentheses", body: "Object o = new Thread(\"x\");", caretAfter: "new Thread", pick: "Thread",
+                  expected: "Object o = new Thread(|\"x\");"),
+            .init(name: "constructor, existing type arguments", body: "List<String> l = new ArrayList<String>();", caretAfter: "new ArrayList", pick: "ArrayList",
+                  expected: "List<String> l = new ArrayList|<String>();"),
+            .init(name: "generic constructor, existing parentheses", body: "List<String> l = new ArrayList(16);", caretAfter: "new ArrayList", pick: "ArrayList",
+                  expected: "List<String> l = new ArrayList<>(|16);"),
+            .init(name: "anonymous class, existing parentheses and body", body: "Runnable r = new Runnable() { public void run() {} };", caretAfter: "new Runnable", pick: "Runnable",
+                  expected: "Runnable r = new Runnable(|) { public void run() {} };"),
+            .init(name: "cast, closing parenthesis exists", body: "Object o = text; String s = (Stri) o;", caretAfter: "(Stri", pick: "String",
+                  expected: "Object o = text; String s = (String|) o;"),
+            .init(name: "method, existing parentheses", body: "int n = text.subs(1);", caretAfter: "text.subs", pick: "substring",
+                  expected: "int n = text.substring(|1);"),
+            .init(name: "method with parameters, none written", body: "int n = text.indexO;", caretAfter: "text.indexO", pick: "indexOf",
+                  expected: "int n = text.indexOf(|);"),
+            .init(name: "method without parameters, none written", body: "String u = text.to;", caretAfter: "text.to", pick: "toString",
+                  expected: "String u = text.toString()|;"),
+            .init(name: "method reference", body: "names.forEach(System.out::prin);", caretAfter: "System.out::prin", pick: "println",
+                  expected: "names.forEach(System.out::println|);"),
+            .init(name: "overloaded static method, existing arguments", body: "int m = Math.ma(1, 2);", caretAfter: "Math.ma", pick: "max",
+                  expected: "int m = Math.max(|1, 2);"),
+            .init(name: "nested class", body: "java.util.Map.Entr<String, String> f = null;", caretAfter: "Map.Entr", pick: "Entry",
+                  expected: "java.util.Map.Entry|<String, String> f = null;"),
+            .init(name: "non-ASCII text before the caret", body: "String e = \"😀é ☃\"; String u = e.to();", caretAfter: "e.to", pick: "toString",
+                  expected: "String e = \"😀é ☃\"; String u = e.toString(|);"),
+            .init(name: "incomplete statement", body: "text.subs", caretAfter: "text.subs", pick: "substring",
+                  expected: "text.substring(|)"),
+            .init(name: "unclosed call", body: "System.out.println(text.subs", caretAfter: "text.subs", pick: "substring",
+                  expected: "System.out.println(text.substring(|)"),
+            .init(name: "static import added for a static member", body: "Object o = requireNon(text);", caretAfter: "requireNon", pick: "requireNonNull",
+                  expected: "Object o = requireNonNull(|text);", imports: "", requiredText: ["import static java.util.Objects.requireNonNull;"], staticOwners: ["java.util.Objects"]),
+            .init(name: "annotation attribute, equals already written", body: "@Deprecated( = \"1\") Object o = text;", caretAfter: "@Deprecated(", pick: "since",
+                  expected: "@Deprecated(since| = \"1\") Object o = text;"),
+            .init(name: "annotation attribute, nothing written yet", body: "@Deprecated() Object o = text;", caretAfter: "@Deprecated(", pick: "since",
+                  expected: "@Deprecated(since = |) Object o = text;"),
+            .init(name: "import added for a constructor", body: "Object l = new ArrayLis(16);", caretAfter: "new ArrayLis", pick: "ArrayList",
+                  expected: "Object l = new ArrayList<>(|16);", imports: "", requiredText: ["import java.util.ArrayList;"]),
+        ]
+        let only = ProcessInfo.processInfo.environment["JAVA_INSERTION_ONLY"]
+        for scenario in scenarios where only == nil || scenario.name.contains(only!) {
+            let result = try await accept(scenario)
+            let caretMarker = (scenario.expected as NSString).range(of: "|").location
+            let expectedBody = scenario.expected.replacingOccurrences(of: "|", with: "")
+            let expectedText = program(scenario, body: expectedBody)
+            if scenario.requiredText.isEmpty {
+                XCTAssertEqual(result.after, expectedText, "\(scenario.name): document")
+                let header = ("package app;\n\(scenario.imports)class Demo {\n    void run(List<String> names, String text) {\n        " as NSString).length
+                XCTAssertEqual(result.caret, header + caretMarker, "\(scenario.name): caret")
+            } else {
+                for needle in scenario.requiredText {
+                    XCTAssertTrue(result.after.contains(needle), "\(scenario.name): missing `\(needle)` in\n\(result.after)")
+                }
+                XCTAssertTrue(result.after.contains(expectedBody), "\(scenario.name): body in\n\(result.after)")
+            }
+            // The harness's prediction of the same acceptance must be what the editor wrote.
+            if !result.item.isSnippet {
+                XCTAssertEqual(
+                    JavaCompletionQualityHarness.apply(result.item, to: result.before), result.after,
+                    "\(scenario.name): the quality harness predicts a different document than the editor wrote"
+                )
+            }
+            // And the result is Java the parser accepts.
+            XCTAssertEqual(JavaSyntaxParser().parse(result.after)?.rootNode.hasError, ["incomplete statement", "unclosed call", "annotation attribute, nothing written yet"].contains(scenario.name), "\(scenario.name): syntax of the result (only the scenarios left unfinished on purpose may have errors)")
+        }
     }
 
     func testDotAfterAReceiverOpensThePopupWithItsMembers() async throws {

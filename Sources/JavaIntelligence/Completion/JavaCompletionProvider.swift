@@ -893,8 +893,13 @@ public actor JavaCompletionProvider: CompletionProvider {
             }
             return items
         }
-        for stub in await index.classes(inPackage: qualifier) where stub.outerQualifiedName == nil {
-            items.append(request.factory.classItem(stub, importDecision: .none, priority: JavaCompletionPriority.classInScope))
+        let packageClasses = await index.classes(inPackage: qualifier).filter { $0.outerQualifiedName == nil }
+        let usage = await usageProfile(for: packageClasses)
+        for stub in packageClasses {
+            items.append(request.factory.classItem(
+                stub, importDecision: .none,
+                priority: JavaCompletionPriority.classInScope + usage.bonus(for: stub, cap: JavaCompletionPriority.usageCap)
+            ))
         }
         items.append(request.factory.keywordItem("*"))
         return items
@@ -968,6 +973,13 @@ public actor JavaCompletionProvider: CompletionProvider {
             }
         } else {
             for stub in await inScopeClassStubs(request: request) {
+                // With no expected type (`throw new I|`, `var x = new I|`) nothing can be filtered
+                // out, so every in-scope class is a candidate; leaving them to the capped
+                // classpath search lost `java.lang` and imported classes for short prefixes.
+                if expected.isEmpty {
+                    add(stub)
+                    continue
+                }
                 let classType = JavaTypeRef.classType(qualifiedName: stub.qualifiedName, arguments: [], outer: nil)
                 if await Self.matchesExpected(classType, expected: expected, assignability: assignability) {
                     add(stub)
@@ -1275,7 +1287,11 @@ public actor JavaCompletionProvider: CompletionProvider {
         let rawLocals = request.tree.visibleLocals(atByteOffset: request.cursor)
         let locals = await JavaExpressionTyper.resolvingVarLocals(rawLocals, context: request.context, index: index)
         let semantic = JavaSemanticRequest(source: request.text, bytes: request.bytes, tree: request.tree, locals: locals, context: request.context, index: index)
-        let expected = await JavaExpectedType.infer(at: request.prefixStart, request: semantic)
+        // An expected type belongs to the whole expression: when this identifier only starts a
+        // longer one (`if (t|ype == x)`, `String s = us|er.getName()`), it constrains nothing here.
+        let expected = JavaExpectedType.continuesAsLargerExpression(from: request.prefixStart, bytes: request.bytes)
+            ? []
+            : await JavaExpectedType.infer(at: request.prefixStart, request: semantic)
         let assignedName = JavaExpectedType.assignedName(at: request.prefixStart, bytes: request.bytes)
         let assignability = JavaAssignability(index: index, context: request.context)
         var items: [CompletionItem] = []

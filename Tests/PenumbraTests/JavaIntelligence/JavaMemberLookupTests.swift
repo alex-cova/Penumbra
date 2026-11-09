@@ -391,8 +391,9 @@ final class JavaMemberLookupTests: XCTestCase {
         XCTAssertTrue(members.contains { $0.name == "baseOp" }, "bound member missing: \(members.map(\.name))")
     }
 
-    /// `T extends A & B` only has what both bounds offer (JLS 4.4 intersection).
-    func testIntersectionBoundIntersectsMembers() async throws {
+    /// `T extends A & B` has what either bound offers (JLS 4.9), each shared signature once; javac accepts
+    /// `a.intValue()` and `a.compareTo(b)` on `X extends Number & Comparable<X>`.
+    func testIntersectionBoundUnitesMembers() async throws {
         func stub(_ name: String, methods: [String]) -> JavaClassStub {
             JavaClassStub(
                 binaryName: name, qualifiedName: name, simpleName: name, packageName: "",
@@ -413,8 +414,9 @@ final class JavaMemberLookupTests: XCTestCase {
         )
         let names = Set(members.map(\.name))
         XCTAssertTrue(names.contains("shared"), "common member missing: \(names)")
-        XCTAssertFalse(names.contains("onlyA"), "A-only member leaks into the intersection: \(names)")
-        XCTAssertFalse(names.contains("onlyB"), "B-only member leaks into the intersection: \(names)")
+        XCTAssertTrue(names.contains("onlyA"), "first bound's member missing: \(names)")
+        XCTAssertTrue(names.contains("onlyB"), "second bound's member missing: \(names)")
+        XCTAssertEqual(members.filter { $0.name == "shared" }.count, 1, "a shared signature is listed once")
     }
 
     /// An unbounded variable still falls back to `Object`.
