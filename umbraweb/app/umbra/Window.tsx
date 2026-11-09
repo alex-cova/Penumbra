@@ -58,6 +58,21 @@ export function UmbraWindow() {
     setOpened(next);
     if (active === id) setActive(next[next.length - 1]);
   }
+  function closeOthers(id: string) {
+    if (!opened.includes(id)) return;
+    setOpened([id]);
+    setActive(id);
+  }
+  function closeToRight(id: string) {
+    const index = opened.indexOf(id);
+    if (index === -1 || index === opened.length - 1) return;
+    const next = opened.slice(0, index + 1);
+    setOpened(next);
+    if (!next.includes(active)) setActive(id);
+  }
+  function closeAll() {
+    setOpened([]);
+  }
   function show(p: Phone) {
     setPhone(p);
     if (p === "files") setSide(true);
@@ -158,6 +173,9 @@ export function UmbraWindow() {
           preview={preview}
           onSelect={setActive}
           onClose={close}
+          onCloseOthers={closeOthers}
+          onCloseToRight={closeToRight}
+          onCloseAll={closeAll}
           onText={(v) => setTexts((t) => ({ ...t, [active]: v }))}
           onCursor={(c) => setCursors((cs) => ({ ...cs, [active]: c }))}
         />

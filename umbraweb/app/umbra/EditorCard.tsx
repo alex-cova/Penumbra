@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { Buffer, type Cursor } from "./Buffer";
 import { fileById, type FileSpec } from "./data";
 import { Close, FileIcon } from "./icons";
@@ -16,6 +17,9 @@ export function EditorCard({
   preview,
   onSelect,
   onClose,
+  onCloseOthers,
+  onCloseToRight,
+  onCloseAll,
   onText,
   onCursor,
 }: {
@@ -27,9 +31,38 @@ export function EditorCard({
   preview: boolean;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
+  onCloseOthers: (id: string) => void;
+  onCloseToRight: (id: string) => void;
+  onCloseAll: () => void;
   onText: (v: string) => void;
   onCursor: (c: Cursor) => void;
 }) {
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const onPointer = (e: PointerEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenu(null);
+    };
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  const menuIndex = menu ? opened.indexOf(menu.id) : -1;
+
+  function act(fn: () => void) {
+    fn();
+    setMenu(null);
+  }
+
   return (
     <div className="umbra-editor umbra-card">
       <div className="umbra-tabs" role="tablist" aria-label="Open files">
@@ -37,7 +70,14 @@ export function EditorCard({
           const item = fileById(id);
           const on = id === file.id;
           return (
-            <span key={id} className={on ? "umbra-tab is-on" : "umbra-tab"}>
+            <span
+              key={id}
+              className={on ? "umbra-tab is-on" : "umbra-tab"}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setMenu({ id, x: e.clientX, y: e.clientY });
+              }}
+            >
               <button type="button" role="tab" aria-selected={on} className="umbra-tab__name" onClick={() => onSelect(id)}>
                 <FileIcon kind={item.kind} lang={item.lang} />
                 {item.id}
@@ -52,11 +92,41 @@ export function EditorCard({
           );
         })}
       </div>
+      {menu && menuIndex !== -1 ? (
+        <div
+          ref={menuRef}
+          className="umbra-tabmenu"
+          role="menu"
+          aria-label={`Tab actions for ${menu.id}`}
+          style={{ left: Math.min(menu.x, window.innerWidth - 208), top: menu.y }}
+        >
+          <button type="button" role="menuitem" disabled={opened.length < 2} onClick={() => act(() => onClose(menu.id))}>
+            Close
+          </button>
+          <button type="button" role="menuitem" disabled={opened.length < 2} onClick={() => act(() => onCloseOthers(menu.id))}>
+            Close Other Tabs
+          </button>
+          <button type="button" role="menuitem" disabled={menuIndex === opened.length - 1} onClick={() => act(() => onCloseToRight(menu.id))}>
+            Close Tabs to the Right
+          </button>
+          <button type="button" role="menuitem" onClick={() => act(onCloseAll)}>
+            Close All
+          </button>
+        </div>
+      ) : null}
       <div className="umbra-body">
-        {file.kind === "code" || (file.kind === "md" && !preview) ? <Buffer key={file.id} file={file} text={text} cursor={cursor} onText={onText} onCursor={onCursor} /> : null}
-        {file.kind === "md" && preview ? <Markdown text={text} /> : null}
-        {file.kind === "hex" ? <Hex /> : null}
-        {file.kind === "jfr" ? <Flame /> : null}
+        {opened.includes(file.id) ? (
+          <>
+            {file.kind === "code" || (file.kind === "md" && !preview) ? <Buffer key={file.id} file={file} text={text} cursor={cursor} onText={onText} onCursor={onCursor} /> : null}
+            {file.kind === "md" && preview ? <Markdown text={text} /> : null}
+            {file.kind === "hex" ? <Hex /> : null}
+            {file.kind === "jfr" ? <Flame /> : null}
+          </>
+        ) : (
+          <div className="umbra-empty-tabs">
+            <p>No files open. Open a file from the explorer to continue.</p>
+          </div>
+        )}
       </div>
     </div>
   );

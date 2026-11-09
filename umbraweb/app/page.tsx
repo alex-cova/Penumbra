@@ -1,4 +1,7 @@
 import { UmbraWindow } from "./editor";
+import { InstallCmd } from "./install-cmd";
+import { CloseWord } from "./close-word";
+import { HeroHeadline } from "./hero-headline";
 
 const releases = "https://github.com/alex-cova/Penumbra/releases";
 const repo = "https://github.com/alex-cova/Penumbra";
@@ -165,10 +168,11 @@ export default function Home() {
           <div className="wrap">
             <div className="hero-text grid hero__grid">
               <div className="hero__text span-5">
-                <h1 id="hero-h">Code editor for macOS developers</h1>
+                <HeroHeadline />
                 <p className="hero__lead">
-                  Umbra is an AppKit editor on Penumbra. Open a folder, edit with a Sublime keymap, and keep Java
-                  intelligence and a coding agent in one window.
+                  Umbra is a high-performance, memory-efficient AI code editor built for modern development. Designed
+                  for Markdown, Java, Swift, and TypeScript, it combines intelligent coding assistance with a
+                  lightweight, responsive editing experience.
                 </p>
                 <div className="btn-row">
                   <a className="btn btn--primary" href={releases}>
@@ -179,6 +183,7 @@ export default function Home() {
                     See the repository
                   </a>
                 </div>
+                <InstallCmd />
                 <p className="hero__proof">Requires macOS 26.</p>
               </div>
             </div>
@@ -186,8 +191,7 @@ export default function Home() {
               <UmbraWindow />
               <div className="hero__note">
                 <p>
-                  This is a working copy of the window. Type in a buffer, preview README.md, open ledger.bin and app.jfr,
-                  run a command in the terminal, ask the agent, or stage and commit a change.
+                  Umbra terminal is powered by libghostty
                 </p>
                 <a className="link" href={`${repo}#highlights`}>
                   Read the editing notes
@@ -611,7 +615,7 @@ export default function Home() {
                   </div>
                   <div className="faq__item">
                     <h3>Is Umbra on Homebrew?</h3>
-                    <p>No formula or tap is published, so the zip is the install.</p>
+                    <p>Yes, from the tap: brew install --cask alex-cova/umbra/umbra.</p>
                   </div>
                   <div className="faq__item">
                     <h3>How do I build Umbra?</h3>
@@ -659,9 +663,7 @@ export default function Home() {
                 <Arrow />
               </a>
             </div>
-            <p className="close__word" aria-hidden="true">
-              Umbra
-            </p>
+            <CloseWord />
           </div>
           <div className="closing__links">
             <div className="grid">

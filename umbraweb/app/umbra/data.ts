@@ -252,9 +252,18 @@ export const GRADLE: { name: string; count?: number; tasks?: string[] }[] = [
 ];
 
 /* ---- terminal ---- */
-export const TERMINAL_HELP = ["ls", "pwd", "git status", "./gradlew run", "clear"];
+export const TERMINAL_HELP = ["ls", "pwd", "cat <file>", "git status", "./gradlew run", "clear"];
 export function terminal(cmd: string): string[] | "clear" {
-  switch (cmd.trim()) {
+  const input = cmd.trim();
+  if (input === "cat" || input.startsWith("cat ")) {
+    const arg = input.slice(3).trim();
+    if (!arg) return ["usage: cat <file>"];
+    const found = FILES.find((f) => f.id === arg || f.path === arg);
+    if (!found) return [`cat: ${arg}: No such file or directory`];
+    if (found.kind !== "code" && found.kind !== "md") return [`cat: ${arg}: Binary file, not shown on this terminal`];
+    return found.body.split("\n");
+  }
+  switch (input) {
     case "":
       return [];
     case "ls":

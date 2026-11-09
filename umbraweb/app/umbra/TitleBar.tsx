@@ -1,4 +1,4 @@
-import { Bell, Bolt, Branch, Brain, Eye, Gear, Hammer, PaneBottom, PaneLeft, PaneRight, Search, Stop } from "./icons";
+import { Bell, Bolt, Branch, Brain, Eye, Gear, Hammer, PaneBottom, PaneLeft, PaneRight, Play, Search, Stop } from "./icons";
 
 export function TitleBar({
   side,
@@ -53,7 +53,7 @@ export function TitleBar({
         <span className="umbra-dec"><Bolt /></span>
         <span className="umbra-dec"><Search /></span>
         <span className="umbra-dec"><Bell /></span>
-        {swift ? toggle(right && mode === "preview", right && mode === "preview" ? "Hide SwiftUI preview" : "Show SwiftUI preview", onSwiftPreview, <Stop />) : null}
+        {swift ? toggle(right && mode === "preview", right && mode === "preview" ? "Hide SwiftUI preview" : "Show SwiftUI preview", onSwiftPreview, right && mode === "preview" ? <Stop /> : <Play />) : null}
         {toggle(right && mode === "agent", right && mode === "agent" ? "Hide agent" : "Show agent", onAgent, <Brain />)}
         <span className="umbra-dec"><Gear /></span>
       </span>

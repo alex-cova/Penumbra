@@ -167,6 +167,30 @@
 .umbra-tab__x { display: inline-flex; align-items: center; height: 100%; padding: 0 8px 0 4px; border: 0; background: transparent; color: var(--uw-dim); }
 .umbra-tab__x:hover { color: var(--uw-ink); }
 .umbra-dirty { display: inline-block; width: 6px; height: 6px; margin-left: 4px; border-radius: 50%; background: var(--uw-blue); }
+.umbra-tabmenu {
+  position: fixed;
+  z-index: 60;
+  min-width: 196px;
+  padding: 4px;
+  background: var(--uw-card-2);
+  border: 1px solid var(--uw-line);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.5);
+}
+.umbra-tabmenu button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--uw-ink);
+  font: 400 12.5px/1.4 system-ui, sans-serif;
+  text-align: left;
+}
+.umbra-tabmenu button:hover:not(:disabled) { background: rgb(255 255 255 / 0.08); }
+.umbra-tabmenu button:disabled { opacity: 0.4; cursor: default; }
+.umbra-empty-tabs { flex: 1; display: grid; place-items: center; padding: 24px; color: var(--uw-dim); font: 400 12.5px/1.5 system-ui, sans-serif; text-align: center; }
 .umbra-body { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 
 .umbra-bottom { flex: 0 0 38%; display: flex; flex-direction: column; }
