@@ -47,7 +47,7 @@ public actor JavaIndex {
     /// Sorted by lowercased simple name for binary-search prefix scans. `precedence` lets
     /// `classes(simpleNamePrefix:)` prefer the higher-priority definition when several sources
     /// define the same qualified name.
-    private struct NameEntry {
+    private struct NameEntry: Sendable {
         let lowerSimpleName: String
         let simpleName: String
         let qualifiedName: String
@@ -61,11 +61,13 @@ public actor JavaIndex {
     private var baseNameBuckets = [[Int32]](repeating: [], count: JavaWordBuckets.count)
     /// Qualified name → position in ``sortedSources`` of the first shard that defines it.
     private var winningSource: [String: Int32] = [:]
-    private var basePackages: Set<String> = []
+    private var basePackages: Set<String> = [] { didSet { baseParents = nil } }
+    private var baseParents: Set<String>?
     /// Names from the open-document overlay (precedence -1). Small, and rebuilt from `overlay` on
     /// every overlay change, which is what keeps typing cheap on a large classpath.
     private var overlayNameIndex: [NameEntry] = []
-    private var overlayPackages: Set<String> = []
+    private var overlayPackages: Set<String> = [] { didSet { overlayParents = nil } }
+    private var overlayParents: Set<String>?
     /// Base entries by the name-derived owner: a top-level class under its package, a nested class
     /// under its outer class (`java.util.Map.Entry` under `java.util.Map`). Lets
     /// ``classes(inPackage:)`` touch one package's names instead of the whole classpath.
@@ -195,18 +197,42 @@ public actor JavaIndex {
 
     // MARK: - Mutation
 
-    public func setSources(_ sources: [Source]) {
+    /// Replaces every source. The name tables (about 4 µs per name: 0.2 s for a 46,000-name classpath, 0.65 s for
+    /// 146,000) are built off the actor from the new sources, then swapped in with the rest of the state in one
+    /// step, so a completion asked meanwhile is answered from the previous sources instead of waiting for the
+    /// rebuild; this used to hold the actor, and every save stalled the next completion by that long. Returns once
+    /// the new sources are in effect. A call overtaken by a newer one (the actor is re-entrant) returns without
+    /// applying: the newer one applies its own sources.
+    public func setSources(_ sources: [Source]) async {
+        let sorted = sources.sorted { $0.precedence < $1.precedence }
+        sourcesBuildToken += 1
+        let token = sourcesBuildToken
+        let built = await Task.detached(priority: .userInitiated) {
+            await Self.sourcesBuildHook?()
+            return Self.buildBase(sortedSources: sorted)
+        }.value
+        guard token == sourcesBuildToken else { return }
         baseMembers = nil
         baseMembersBuild = nil
         baseInheritors = nil
         baseInheritorsBuild = nil
         sourcesVersion += 1
         self.sources = sources
-        self.sortedSources = sources.sorted { $0.precedence < $1.precedence }
+        self.sortedSources = sorted
         decodedStubs.removeAll()
-        rebuildBaseIndex()
+        baseNameIndex = built.entries
+        baseNameBuckets = built.buckets
+        winningSource = built.winners
+        basePackages = built.packages
+        baseEntriesByOwner = built.byOwner
         bumpGeneration()
     }
+
+    /// Test seam: awaited by the off-actor build before it starts, so a test can hold a rebuild in flight.
+    nonisolated(unsafe) static var sourcesBuildHook: (@Sendable () async -> Void)?
+
+    /// Which ``setSources(_:)`` call is the newest: only it may apply its tables.
+    private var sourcesBuildToken = 0
 
     public func setOverlay(_ stubs: [String: JavaClassStub]) {
         self.overlay = stubs
@@ -234,7 +260,15 @@ public actor JavaIndex {
         bumpGeneration()
     }
 
-    private func rebuildBaseIndex() {
+    private struct BuiltBase: Sendable {
+        let entries: [NameEntry]
+        let buckets: [[Int32]]
+        let winners: [String: Int32]
+        let packages: Set<String>
+        let byOwner: [String: [NameEntry]]
+    }
+
+    private static func buildBase(sortedSources: [Source]) -> BuiltBase {
         var entries: [NameEntry] = []
         var pkgs: Set<String> = []
         var winners: [String: Int32] = [:]
@@ -258,9 +292,9 @@ public actor JavaIndex {
                     shardPath: source.shardPath
                 ))
                 if let lastDot = qualifiedName.range(of: ".", options: .backwards) {
-                    insertPackages(of: String(qualifiedName[..<lastDot.lowerBound]), into: &pkgs)
+                    Self.insertPackages(of: String(qualifiedName[..<lastDot.lowerBound]), into: &pkgs)
                 } else {
-                    insertPackages(of: "", into: &pkgs)
+                    Self.insertPackages(of: "", into: &pkgs)
                 }
             }
         }
@@ -273,11 +307,7 @@ public actor JavaIndex {
             let owner = entry.qualifiedName.range(of: ".", options: .backwards).map { String(entry.qualifiedName[..<$0.lowerBound]) } ?? ""
             byOwner[owner, default: []].append(entry)
         }
-        self.baseNameIndex = entries
-        self.baseNameBuckets = buckets
-        self.winningSource = winners
-        self.basePackages = pkgs
-        self.baseEntriesByOwner = byOwner
+        return BuiltBase(entries: entries, buckets: buckets, winners: winners, packages: pkgs, byOwner: byOwner)
     }
 
     private func rebuildOverlayIndex() {
@@ -286,7 +316,7 @@ public actor JavaIndex {
         entries.reserveCapacity(overlay.count)
         for (name, stub) in overlay {
             entries.append(NameEntry(lowerSimpleName: stub.simpleName.lowercased(), simpleName: stub.simpleName, qualifiedName: name, precedence: -1, shardPath: ""))
-            insertPackages(of: stub.packageName, into: &pkgs)
+            Self.insertPackages(of: stub.packageName, into: &pkgs)
         }
         entries.sort { $0.lowerSimpleName < $1.lowerSimpleName }
         self.overlayNameIndex = entries
@@ -298,18 +328,60 @@ public actor JavaIndex {
     /// test-only package from `src/main`.
     private func visiblePackagePools() -> [Set<String>] {
         guard Self.queryScope != nil || Self.queryModules != nil else { return [basePackages, overlayPackages] }
+        return [scopedPackages().packages]
+    }
+
+    /// The packages visible under the current query scope, and the ones among them that have a
+    /// subpackage. Rebuilt from every name only when the scope, the modules or the ``generation``
+    /// changed, not on each query (the typer asks once per unresolved receiver name).
+    private func scopedPackages() -> (packages: Set<String>, parents: Set<String>) {
+        let scope = Self.queryScope
+        let modules = Self.queryModules
+        if let cached = scopedPackageCache, cached.generation == generation, cached.scope == scope, cached.modules == modules {
+            return (cached.packages, cached.parents)
+        }
         var scoped = Set<String>()
         for table in [baseNameIndex, overlayNameIndex] {
             for entry in table where isNameVisible(entry) {
                 if let lastDot = entry.qualifiedName.range(of: ".", options: .backwards) {
-                    insertPackages(of: String(entry.qualifiedName[..<lastDot.lowerBound]), into: &scoped)
+                    Self.insertPackages(of: String(entry.qualifiedName[..<lastDot.lowerBound]), into: &scoped)
                 }
             }
         }
-        return [scoped]
+        let parents = Self.parents(of: scoped)
+        scopedPackageCache = (generation, scope, modules, scoped, parents)
+        return (scoped, parents)
     }
 
-    private func insertPackages(of packageName: String, into set: inout Set<String>) {
+    private var scopedPackageCache: (generation: Int, scope: Set<String>?, modules: JavaModuleVisibility?, packages: Set<String>, parents: Set<String>)?
+
+    /// Packages in `pool` that are the strict leading part of another one (`java` and `java.util`
+    /// when `java.util.concurrent` is there). A pool already holds every dotted prefix.
+    private static func parents(of pool: Set<String>) -> Set<String> {
+        var result = Set<String>()
+        for package in pool {
+            var end = package.endIndex
+            while let dot = package[..<end].lastIndex(of: ".") {
+                if !result.insert(String(package[..<dot])).inserted { break }
+                end = dot
+            }
+        }
+        return result
+    }
+
+    /// Whether some visible package lives strictly below `name`: the same answer as
+    /// `!subpackages(of: name).isEmpty` without walking the pool.
+    public func hasSubpackages(of name: String) -> Bool {
+        guard !name.isEmpty else { return !visiblePackagePools().allSatisfy(\.isEmpty) }
+        guard Self.queryScope != nil || Self.queryModules != nil else {
+            if baseParents == nil { baseParents = Self.parents(of: basePackages) }
+            if overlayParents == nil { overlayParents = Self.parents(of: overlayPackages) }
+            return baseParents!.contains(name) || overlayParents!.contains(name)
+        }
+        return scopedPackages().parents.contains(name)
+    }
+
+    private static func insertPackages(of packageName: String, into set: inout Set<String>) {
         guard !packageName.isEmpty else { return }
         let components = packageName.split(separator: ".").map(String.init)
         var prefix = ""

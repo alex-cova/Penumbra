@@ -277,6 +277,7 @@ public final class CompletionPanelView: NSView {
     // MARK: - Drawing
 
     public override func draw(_ dirtyRect: NSRect) {
+        CompletionLatencyTrace.noteDraw()
         super.draw(dirtyRect)
         NSColor.controlBackgroundColor.setFill()
         bounds.fill()

@@ -8,7 +8,7 @@ import Foundation
 /// that should be replaced by the chosen completion.
 public func makeCompletionContext(
     document: Document, trigger: RequestTrigger, invocationCount: Int = 1, mode: CompletionMode = .basic,
-    filter: CompletionContext.Filter = .all, commandMode: CompletionContext.CommandMode? = nil
+    filter: CompletionContext.Filter = .all, commandMode: CompletionContext.CommandMode? = nil, traceID: Int = 0
 ) -> CompletionContext {
     let cursor = document.cursor
     let offset = cursor.position.utf16Offset
@@ -31,7 +31,8 @@ public func makeCompletionContext(
         invocationCount: invocationCount,
         mode: mode,
         filter: filter,
-        commandMode: commandMode
+        commandMode: commandMode,
+        traceID: traceID
     )
 }
 

@@ -27,6 +27,9 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
     /// knows them (Java's expected type, `String` for `String s = …`). The ranker boosts items
     /// whose `detail` names one of these. Empty when unknown — no item is boosted then.
     public let expectedTypeNames: Set<String>
+    /// Correlates this request across the controller, the engine and the providers in
+    /// ``CompletionLatencyTrace``; `0` when the caller does not trace.
+    public let traceID: Int
 
     /// How command completion was triggered.
     public enum CommandMode: Hashable, Sendable {
@@ -56,7 +59,8 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
         mode: CompletionMode = .basic,
         filter: Filter = .all,
         commandMode: CommandMode? = nil,
-        expectedTypeNames: Set<String> = []
+        expectedTypeNames: Set<String> = [],
+        traceID: Int = 0
     ) {
         self.document = document
         self.cursor = cursor
@@ -68,6 +72,7 @@ public struct CompletionContext: Sendable, CustomStringConvertible {
         self.filter = filter
         self.commandMode = commandMode
         self.expectedTypeNames = expectedTypeNames
+        self.traceID = traceID
     }
 
     /// The character just before the prefix is a member-access `.` (or `::`).

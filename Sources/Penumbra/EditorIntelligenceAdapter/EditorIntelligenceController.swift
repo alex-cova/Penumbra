@@ -191,6 +191,13 @@ public final class EditorIntelligenceController {
     private var frozenCompletionKeys: [String] = []
     private var frozenPrefix: String?
     private var completionGeneration = 0
+    /// The document the open popup, or the request in flight, belongs to. A pane host swaps documents in
+    /// one `TextView` (a tab switch is `setState`), so the view alone cannot say the popup is for another file.
+    private var completionDocumentID: DocumentID?
+    /// ``CompletionLatencyTrace`` bookkeeping: when the typing observer last ran, and the newest request that reached the screen.
+    private var traceTypedAt: UInt64?
+    private var traceRefilteredAt: UInt64?
+    private var traceLastPresented = 0
     private var completionAdvertisement: String?
     private var completionIsComputing = false
     private var completionEmptyText: String?
@@ -1849,7 +1856,12 @@ public final class EditorIntelligenceController {
     }
 
     private func handleEditorEvent(_ event: EditorEvent) {
+        CompletionLatencyTrace.record(0, "editorEvent")
         guard adapterMatchesActiveTextView() else { return }
+        if completionDocumentID != nil, completionOwnerChanged() {
+            CompletionLatencyTrace.record(completionGeneration, "documentSwitched")
+            dismissCompletion()
+        }
         switch event {
         case .documentChanged, .documentEdited:
             refreshDiagnostics()
@@ -1930,6 +1942,7 @@ public final class EditorIntelligenceController {
         commandMode: CompletionContext.CommandMode? = nil,
         expansion: (key: PostfixExpansionKey, word: String, caret: Int)? = nil
     ) {
+        let traceBegin = CompletionLatencyTrace.isEnabled ? CompletionLatencyTrace.now() : 0
         guard let document = makeLiveDocument() else {
             completionLog.debug("request skipped: adapter has no current document")
             return
@@ -1940,8 +1953,25 @@ public final class EditorIntelligenceController {
             frozenCompletionKeys = []
             frozenPrefix = nil
         }
+        completionDocumentID = document.id
         completionGeneration += 1
         let generation = completionGeneration
+        if CompletionLatencyTrace.isEnabled {
+            if generation > 1, traceLastPresented != generation - 1 {
+                CompletionLatencyTrace.record(generation - 1, "superseded", "by=\(generation)")
+            }
+            if let typedAt = traceTypedAt, traceBegin >= typedAt, traceBegin - typedAt < 1_000_000_000 {
+                CompletionLatencyTrace.record(generation, "typed", at: typedAt)
+            }
+            traceTypedAt = nil
+            // An open popup was already re-filtered for this keystroke, before the request: that is what the user saw.
+            if let refilteredAt = traceRefilteredAt, traceBegin >= refilteredAt, traceBegin - refilteredAt < 1_000_000_000 {
+                CompletionLatencyTrace.record(generation, "localRefilter", at: refilteredAt)
+                CompletionLatencyTrace.expectDraw(for: generation)
+            }
+            traceRefilteredAt = nil
+            CompletionLatencyTrace.record(generation, "requestBegin", at: traceBegin)
+        }
         if let expansion {
             postfixExpansionRequest = PostfixExpansionRequest(
                 generation: generation, key: expansion.key, word: expansion.word, caret: expansion.caret
@@ -1962,20 +1992,25 @@ public final class EditorIntelligenceController {
                 document: document, cursor: document.cursor, trigger: trigger, prefix: "",
                 range: EditorIntelligence.TextRange(start: caret, end: caret),
                 invocationCount: completionInvocationCount, mode: completionMode,
-                filter: filter, commandMode: commandMode
+                filter: filter, commandMode: commandMode, traceID: generation
             )
         } else {
             context = makeCompletionContext(
                 document: document, trigger: trigger, invocationCount: completionInvocationCount, mode: completionMode,
-                filter: filter, commandMode: commandMode
+                filter: filter, commandMode: commandMode, traceID: generation
             )
         }
+        CompletionLatencyTrace.record(
+            generation, "scheduled",
+            "\(trigger == .manual ? "explicit" : "automatic") \(isCompletionVisible ? "update" : "first-popup") prefix=\(context.prefix.utf16.count)"
+        )
         completionLog.debug("request \(String(describing: trigger), privacy: .public) language=\(document.languageIdentifier ?? "nil", privacy: .public) prefix='\(context.prefix, privacy: .public)' memberAccess=\(context.isMemberAccess)")
         completionTask?.cancel()
         emptyCompletionHintTask?.cancel()
         let started = Date()
         completionTask = Task { [weak self] in
             guard let self else { return }
+            CompletionLatencyTrace.record(generation, "taskStart")
             do {
                 for try await update in await self.completionEngine.completeUpdates(context: context) {
                     let elapsed = Date().timeIntervalSince(started)
@@ -1989,8 +2024,25 @@ public final class EditorIntelligenceController {
         }
     }
 
+    /// Whether the document the adapter now reports is not the one the popup or request was made for.
+    /// Cheap enough for every editor event: it reads a cached document, and only while a session is open.
+    private func completionOwnerChanged() -> Bool {
+        guard let owner = completionDocumentID, let current = adapter.currentDocument?.id else { return false }
+        return owner != current
+    }
+
     private func ingestCompletion(_ update: CompletionUpdate, context: CompletionContext, generation: Int, elapsed: TimeInterval) {
-        guard generation == completionGeneration else { return }
+        guard generation == completionGeneration else {
+            CompletionLatencyTrace.record(generation, "ingest", "stale items=\(update.items.count)")
+            return
+        }
+        if completionOwnerChanged() {
+            // A tab switch that nothing else reported (the new caret is inside an identifier that starts at the same
+            // offset, so the caret rules keep the popup): what arrives belongs to the file that was left.
+            CompletionLatencyTrace.record(generation, "ingest", "stale-document items=\(update.items.count)")
+            dismissCompletion()
+            return
+        }
         if let pending = postfixExpansionRequest, pending.generation == generation {
             guard let textView, textView.selectedRange == NSRange(location: pending.caret, length: 0) else {
                 postfixExpansionRequest = nil
@@ -2023,6 +2075,10 @@ public final class EditorIntelligenceController {
         if let emptyText = update.emptyText { completionEmptyText = emptyText }
         completionIsComputing = !update.isFinished
         let ready = update.isFinished || completionPainted || isCompletionVisible || elapsed >= 0.3
+        CompletionLatencyTrace.record(
+            generation, "ingest",
+            "items=\(update.items.count) finished=\(update.isFinished) \(ready ? "present" : (update.items.isEmpty ? "ignore-empty" : "hold"))"
+        )
         if !ready {
             if update.items.isEmpty { return }
             pendingCompletionUpdate = update
@@ -2033,6 +2089,7 @@ public final class EditorIntelligenceController {
                     await MainActor.run {
                         guard let self, generation == self.completionGeneration, !self.completionPainted,
                               let pending = self.pendingCompletionUpdate else { return }
+                        CompletionLatencyTrace.record(generation, "holdRelease")
                         self.presentCompletion(pending, context: context)
                     }
                 }
@@ -2082,6 +2139,11 @@ public final class EditorIntelligenceController {
         unfilteredCompletionItems = items
         completionAnchor = context.range.start.utf16Offset
         refilterCompletion()
+        if CompletionLatencyTrace.isEnabled, isCompletionVisible {
+            CompletionLatencyTrace.record(context.traceID, "presented", "items=\(completionItems.count)")
+            traceLastPresented = context.traceID
+            CompletionLatencyTrace.expectDraw(for: context.traceID)
+        }
     }
 
     /// Re-filters and re-ranks the session's items for the prefix now in the buffer, keeping the
@@ -2138,6 +2200,7 @@ public final class EditorIntelligenceController {
         currentReplacementRange = EditorIntelligence.TextRange(start: start, end: end)
         isCompletionVisible = true
         updateCompletionPanel(prefix: prefix, reposition: true)
+        if CompletionLatencyTrace.isEnabled { traceRefilteredAt = CompletionLatencyTrace.now() }
     }
 
     private func updateCompletionPanel(prefix: String? = nil, reposition: Bool = false) {
@@ -2253,6 +2316,7 @@ public final class EditorIntelligenceController {
             completionEmptyText = nil
             completionHoldTask?.cancel()
             completionHoldTask = nil
+            completionDocumentID = nil
             commandSession = nil
             readOnlyFilter = nil
         }
@@ -3302,6 +3366,7 @@ public final class EditorIntelligenceController {
     }
 
     private func handleTypingEvent(_ event: TextViewTypingEvent) {
+        if CompletionLatencyTrace.isEnabled { traceTypedAt = CompletionLatencyTrace.now() }
         switch event {
         case .inserted(let text):
             handleTextInsertion(text)

@@ -1,8 +1,8 @@
 import Foundation
 import EditorIntelligence
-import JavaIntelligence
+@_spi(Benchmarks) import JavaIntelligence
 
-/// Release-mode latency for `JavaCompletionProvider` (docs/JAVA_COMPLETION_PLAN.md §4.5).
+/// Release-mode latency for `JavaCompletionProvider` (docs/JAVA_COMPLETION_BASELINE.md).
 ///
 /// Indexes the JDK's `ct.sym` plus a generated project, then times the first and the last
 /// `CompletionUpdate` for a set of representative sites, in a small file and in a 5k-line file.
@@ -11,6 +11,12 @@ import JavaIntelligence
 ///   swift run -c release PerfHarness java-completion synthetic [--jars N]
 enum JavaCompletionProfile {
     private static let samples = 12
+    /// Filler methods per nested class in the large file; 0 keeps them all in the one class.
+    nonisolated(unsafe) static var fillerPerClass = 0
+    /// A comment with non-ASCII characters at the top of the large file: Swift's fast paths for
+    /// UTF-16 offsets and string equality exist only for ASCII, so real files (a `©`, an accent) differ.
+    nonisolated(unsafe) static var unicodeHeader = false
+    static var header: String { unicodeHeader ? "// café 日本語 ✓\n" : "" }
     private static let packageCount = 20
     private static let classesPerPackage = 25
     /// A few hundred classes per synthetic JAR shard. `--jars 200` is a Spring Boot-sized classpath.
@@ -36,8 +42,10 @@ enum JavaCompletionProfile {
         Site(name: "statement_expected", before: "String s = ", after: "")
     ]
 
-    static func run(jars: Int = 0) throws {
-        let result = try runBlocking { try await measure(jars: jars) }
+    static func run(jars: Int = 0, largeMethods: Int = 1_000, largePerClass: Int = 0, unicode: Bool = false) throws {
+        fillerPerClass = largePerClass
+        unicodeHeader = unicode
+        let result = try runBlocking { try await measure(jars: jars, largeMethods: largeMethods) }
         var firstAll: [Double] = []
         var finalAll: [Double] = []
         for (name, band) in result.small {
@@ -68,14 +76,14 @@ enum JavaCompletionProfile {
         var large: [(String, Band)] = []
     }
 
-    private static func measure(jars: Int) async throws -> Result {
+    /// The synthetic JDK + project (+ jar) index the profiles complete against, and the directory it
+    /// lives in (the caller removes it).
+    static func prepareIndex(jars: Int) async throws -> (index: JavaIndex, directory: URL, jdkVersion: Int) {
         guard let jdk = JDKLocator().select() else {
             throw ProfileFailure(message: "java-completion needs an installed JDK")
         }
-        note("=== java completion profile (JDK \(jdk.featureVersion), jars=\(jars)) ===")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("perf-java-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
 
         let index = JavaIndex()
         let jdkShard = directory.appendingPathComponent("jdk.idx")
@@ -92,6 +100,13 @@ enum JavaCompletionProfile {
         await index.setSources(sources)
         let setSources = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9
         note("  names=\(nameCount) sources=\(sources.count) set_sources_s=\(format(setSources))")
+        return (index, directory, jdk.featureVersion)
+    }
+
+    private static func measure(jars: Int, largeMethods: Int) async throws -> Result {
+        let (index, directory, jdkVersion) = try await prepareIndex(jars: jars)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        note("=== java completion profile (JDK \(jdkVersion), jars=\(jars), large file \(largeMethods * 5) lines) ===")
 
         var result = Result()
         for site in sites {
@@ -99,12 +114,12 @@ enum JavaCompletionProfile {
         }
         for site in sites where site.name == "member_access" || site.name == "class_name_short" || site.name == "lambda_chain" {
             // Roughly 5k lines: each filler method is 5 lines.
-            result.large.append((site.name, try await sample(site: site, fillerMethods: 1_000, index: index, directory: directory)))
+            result.large.append((site.name, try await sample(site: site, fillerMethods: largeMethods, index: index, directory: directory)))
         }
         // Typing: one provider across requests while the document changes a little each time,
         // which is what the editor does and what the incremental reparse is for.
         let typing = sites.first { $0.name == "member_access" }!
-        result.large.append(("member_access_typing", try await sample(site: typing, fillerMethods: 1_000, index: index, directory: directory, reuseProvider: true)))
+        result.large.append(("member_access_typing", try await sample(site: typing, fillerMethods: largeMethods, index: index, directory: directory, reuseProvider: true)))
         return result
     }
 
@@ -114,7 +129,7 @@ enum JavaCompletionProfile {
         for iteration in 0..<(samples + 2) {
             let typed = reuseProvider ? "int typed\(iteration) = \(iteration);\n        " : ""
             let before = """
-        package com.perf.app;
+        \(header)package com.perf.app;
 
         import com.perf.p0.*;
         import java.util.*;
@@ -143,6 +158,11 @@ enum JavaCompletionProfile {
                 viewport: Viewport(x: 0, y: 0, width: 100, height: 100), languageIdentifier: "java"
             )
             let context = makeCompletionContext(document: document, trigger: .keystroke(String(site.before.last ?? " ")))
+            // Stage shares only for the large file, and only once caches are warm.
+            if fillerMethods > 0 {
+                JavaCompletionStageTimer.enable(iteration >= 2)
+                if iteration == 2 { JavaCompletionStageTimer.reset() }
+            }
             let start = DispatchTime.now().uptimeNanoseconds
             var first: Double?
             var last = 0.0
@@ -156,11 +176,21 @@ enum JavaCompletionProfile {
             band.first.append(first ?? last)
             band.final.append(last)
         }
+        if fillerMethods > 0 {
+            JavaCompletionStageTimer.enable(false)
+            let total = LatencyDistributionReducer.reduce(band.final).median
+            let stages = JavaCompletionStageTimer.snapshot().sorted { $0.value > $1.value }
+            let label = reuseProvider ? "\(site.name)_typing" : site.name
+            for (stage, seconds) in stages {
+                let mean = seconds / Double(samples)
+                print("detail java_completion_large_file \(label) stage=\(stage) mean_s=\(format(mean)) share_of_median=\(String(format: "%.0f", total > 0 ? mean / total * 100 : 0))%")
+            }
+        }
         return band
     }
 
-    private static func filler(_ count: Int) -> String {
-        (0..<count).map { index in
+    static func filler(_ count: Int) -> String {
+        let methods = (0..<count).map { index in
             """
                 int filler\(index)(int value) {
                     int doubled = value * 2;
@@ -168,6 +198,10 @@ enum JavaCompletionProfile {
                 }
 
             """
+        }
+        guard fillerPerClass > 0 else { return methods.joined() }
+        return stride(from: 0, to: count, by: fillerPerClass).map { start in
+            "    static class Part\(start / fillerPerClass) {\n" + methods[start..<min(count, start + fillerPerClass)].joined() + "    }\n"
         }.joined()
     }
 
@@ -211,7 +245,7 @@ enum JavaCompletionProfile {
     }
 
     /// Precedence-2 shards, each a few hundred classes under its own packages. Some names are nested.
-    private static func writeJarShards(count: Int, in directory: URL) throws -> [JavaIndex.Source] {
+    static func writeJarShards(count: Int, in directory: URL) throws -> [JavaIndex.Source] {
         guard count > 0 else { return [] }
         var sources: [JavaIndex.Source] = []
         sources.reserveCapacity(count)

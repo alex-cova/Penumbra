@@ -3,7 +3,7 @@ import EditorIntelligence
 @testable import JavaIntelligence
 
 /// Runs the golden completion corpus (`Fixtures/JavaCompletionCorpus/cases`) against the real JDK
-/// plus the fixture project, and prints a scorecard. See `docs/JAVA_COMPLETION_PLAN.md` §4.
+/// plus the fixture project, and prints a scorecard. See `docs/JAVA_COMPLETION_BASELINE.md`.
 ///
 /// Each case file marks the caret with `/*|*/` and states its expectations in `//! key: value`
 /// lines. Hard checks (`site`, `receiver`, `receiverKind`, `expected`, `excludes`, `excludes_top5`,
@@ -15,15 +15,24 @@ import EditorIntelligence
 /// `UPDATE_JAVA_COMPLETION_BASELINE=1 swift test --filter JavaCompletionCorpusTests` rewrites the
 /// baseline with the cases that pass now.
 final class JavaCompletionCorpusTests: XCTestCase {
-    private static let indexTask = Task { try await CorpusIndex.build() }
+    static let indexTask = Task { try await CorpusIndex.build() }
 
-    func testCorpus() async throws {
-        let corpus: CorpusIndex
+    /// The shared index, or a skip. CI sets `UMBRA_REQUIRE_JDK=1` (Scripts/ci-java-tests.sh): a
+    /// missing JDK is then a failure, because a silent skip is how this suite once ran nothing.
+    static func sharedIndex() async throws -> CorpusIndex {
         do {
-            corpus = try await Self.indexTask.value
+            return try await indexTask.value
         } catch is CorpusIndex.NoJDK {
+            if ProcessInfo.processInfo.environment["UMBRA_REQUIRE_JDK"] == "1" {
+                XCTFail("UMBRA_REQUIRE_JDK=1 but no JDK with ct.sym was found")
+                throw CorpusIndex.NoJDK()
+            }
             throw XCTSkip("No JDK with ct.sym found on this machine")
         }
+    }
+
+    func testCorpus() async throws {
+        let corpus = try await Self.sharedIndex()
         var cases = try CompletionCorpusRunner.Case.load(from: corpus.casesDirectory, extension: "java")
         let only = ProcessInfo.processInfo.environment["JAVA_COMPLETION_CASE"]
         if let only { let names = only.split(separator: ",").map(String.init); cases = cases.filter { name in names.contains { name.name.hasPrefix($0) } } } else { XCTAssertGreaterThan(cases.count, 100) }
@@ -302,7 +311,7 @@ final class JavaCompletionCorpusTests: XCTestCase {
 // MARK: - Corpus
 
 /// The shared index: the JDK's `ct.sym` plus the fixture project's sources, built once per run.
-private struct CorpusIndex: Sendable {
+struct CorpusIndex: Sendable {
     struct NoJDK: Error {}
 
     let index: JavaIndex
@@ -433,5 +442,164 @@ private struct Scorecard {
             lines.append("NEW PASS \(result.name): run with UPDATE_JAVA_COMPLETION_BASELINE=1 to ratchet")
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - Through the engine
+
+/// The corpus again, through the path the editor takes: `CompletionEngine` with the providers
+/// Umbra registers (`IDEIntelligenceServices`: Symbol, Word, Snippet, then the language's own).
+/// `JavaCompletionCorpusTests` calls the provider directly, so it cannot see the engine dropping
+/// items (the merge keeps only items whose `source` is a primary provider's `name`).
+final class JavaCompletionEnginePipelineTests: XCTestCase {
+    /// Runs one case both ways: the provider alone, and the engine.
+    private func run(_ corpusCase: CorpusCase, corpus: CorpusIndex) async throws -> (name: String, provider: [CompletionItem], engine: [CompletionItem]) {
+        let context = corpusCase.completionContext()
+        let parseable = JavaCompletionProvider.repairedText(corpusCase.text, insertingDummyAt: corpusCase.caretUTF16Offset)
+        let ownStubs = JavaSourceStubBuilder.build(source: parseable, url: corpusCase.url).classes
+        await corpus.index.setOverlay(Dictionary(ownStubs.map { ($0.qualifiedName, $0) }, uniquingKeysWith: { first, _ in first }))
+        let provider = JavaCompletionProvider(index: corpus.index)
+        let symbols = SymbolIndex()
+        let engine = CompletionEngine(
+            providers: [
+                SymbolCompletionProvider(index: symbols), WordCompletionProvider(index: symbols),
+                SnippetCompletionProvider(), provider
+            ],
+            debounceInterval: 0
+        )
+        return (corpusCase.name, await provider.provide(context: context), try await engine.complete(context: context))
+    }
+
+    private func loadCases(_ corpus: CorpusIndex) throws -> [CorpusCase] {
+        var cases = try CompletionCorpusRunner.Case.load(from: corpus.casesDirectory, extension: "java")
+        if let only = ProcessInfo.processInfo.environment["JAVA_COMPLETION_CASE"] {
+            let names = only.split(separator: ",").map(String.init)
+            cases = cases.filter { item in names.contains { item.name.hasPrefix($0) } }
+        }
+        return cases
+    }
+
+    /// The engine filters on `item.source == provider.name`, so an item with any other spelling
+    /// never reaches the popup. Command-section items are exempt: they are layered over the list.
+    func testEveryJavaItemCarriesTheProviderName() async throws {
+        let corpus = try await JavaCompletionCorpusTests.sharedIndex()
+        var offenders: [String: Set<String>] = [:]
+        for corpusCase in try loadCases(corpus) {
+            let result = try await run(corpusCase, corpus: corpus)
+            for item in result.provider where item.source != "Java" && item.section != .commands {
+                offenders["\(item.source)", default: []].insert("\(item.label) (\(result.name))")
+            }
+        }
+        for (source, labels) in offenders.sorted(by: { $0.key < $1.key }) {
+            XCTFail("items with source \"\(source)\" are dropped by CompletionEngine, e.g. \(labels.sorted().prefix(5).joined(separator: ", ")) (\(labels.count) total)")
+        }
+    }
+
+    /// Whatever the provider offers for a `contains:` expectation must survive the engine.
+    func testEngineKeepsWhatTheCorpusExpects() async throws {
+        let corpus = try await JavaCompletionCorpusTests.sharedIndex()
+        var lost: [String] = []
+        for corpusCase in try loadCases(corpus) {
+            guard let contains = corpusCase.directives["contains"] else { continue }
+            let result = try await run(corpusCase, corpus: corpus)
+            let offered = Set(result.provider.map(\.label))
+            let kept = Set(result.engine.map(\.label))
+            let missing = JavaCompletionCorpusTests.list(contains).filter { offered.contains($0) && !kept.contains($0) }
+            if !missing.isEmpty { lost.append("\(result.name): \(missing.joined(separator: ", "))") }
+        }
+        XCTAssertTrue(lost.isEmpty, "the engine dropped items the provider offered:\n\(lost.joined(separator: "\n"))")
+    }
+
+    /// The fast update must reach the stream while the slow phase is still running. The slow phase
+    /// is held on a latch: if the first update only arrived after it, this would never get past
+    /// the first `await` and the timeout would fail the test, with no clock involved in passing.
+    func testFastUpdateIsPublishedBeforeTheSlowPhaseRuns() async throws {
+        let corpus = try await JavaCompletionCorpusTests.sharedIndex()
+        let text = "package com.acme.cases;\nclass LatchProbe {\n    void test(String name) {\n        na\n    }\n}\n"
+        let caret = (text as NSString).range(of: "na\n").location + 2
+        let url = URL(fileURLWithPath: "/virtual/LatchProbe.java")
+        let corpusCase = CorpusCase(name: "LatchProbe", url: url, text: text, caretUTF16Offset: caret, directives: [:])
+        await corpus.index.setOverlay([:])
+        let provider = JavaCompletionProvider(index: corpus.index)
+        let latch = Latch()
+        await provider.setSlowPhaseHook { await latch.wait() }
+
+        let stream = provider.provideUpdates(context: corpusCase.completionContext())
+        let collector = UpdateCollector()
+        let reader = Task { for await update in stream { await collector.add(update) } }
+
+        // Only a failure waits out the deadline; passing means the update arrived with the latch closed.
+        let deadline = ContinuousClock.now + .seconds(20)
+        while await collector.updates.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let earlyUpdates = await collector.updates
+        let early = try XCTUnwrap(earlyUpdates.first, "no update before the slow phase was released")
+        XCTAssertFalse(early.isFinished)
+        XCTAssertTrue(early.items.contains { $0.label == "name" }, "the fast update should carry the local")
+
+        await latch.open()
+        await reader.value
+        let allUpdates = await collector.updates
+        let final = try XCTUnwrap(allUpdates.last)
+        XCTAssertTrue(final.isFinished)
+        XCTAssertTrue(Set(early.items.map(\.label)).isSubset(of: Set(final.items.map(\.label))), "the final list keeps everything already shown")
+    }
+
+    /// A request that is superseded while its slow phase is pending must not run that phase.
+    func testSupersededRequestSkipsItsSlowPhase() async throws {
+        let corpus = try await JavaCompletionCorpusTests.sharedIndex()
+        let text = "package com.acme.cases;\nclass CancelProbe {\n    void test(String name) {\n        na\n    }\n}\n"
+        let caret = (text as NSString).range(of: "na\n").location + 2
+        let corpusCase = CorpusCase(
+            name: "CancelProbe", url: URL(fileURLWithPath: "/virtual/CancelProbe.java"), text: text, caretUTF16Offset: caret, directives: [:]
+        )
+        await corpus.index.setOverlay([:])
+        let provider = JavaCompletionProvider(index: corpus.index)
+        let latch = Latch()
+        await provider.setSlowPhaseHook { await latch.wait() }
+
+        let stream = provider.provideUpdates(context: corpusCase.completionContext())
+        let collector = UpdateCollector()
+        let reader = Task { for await update in stream { await collector.add(update) } }
+        let deadline = ContinuousClock.now + .seconds(20)
+        while await collector.updates.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        // The consumer goes away (a newer keystroke): the stream terminates and cancels the request.
+        reader.cancel()
+        await reader.value
+        await latch.open()
+
+        var skipped = 0
+        var ran = 0
+        while skipped + ran == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+            skipped = await provider.slowPhaseSkipCount
+            ran = await provider.slowPhaseRunCount
+        }
+        XCTAssertEqual(ran, 0, "the slow phase of a superseded request ran")
+        XCTAssertEqual(skipped, 1)
+    }
+}
+
+private actor UpdateCollector {
+    private(set) var updates: [CompletionUpdate] = []
+    func add(_ update: CompletionUpdate) { updates.append(update) }
+}
+
+private actor Latch {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
     }
 }

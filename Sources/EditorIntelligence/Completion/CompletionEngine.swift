@@ -18,6 +18,8 @@ public actor CompletionEngine {
     public nonisolated let ranker: Ranker
     public let debounceInterval: TimeInterval
     private var currentTask: Task<Void, Never>?
+    /// When the previous request arrived, to tell a burst of keystrokes from a single one.
+    private var previousArrival: UInt64?
 
     public init(
         providers: [CompletionProvider],
@@ -40,19 +42,39 @@ public actor CompletionEngine {
         return items
     }
 
-    /// Ranked snapshots as providers yield. Explicit requests are not debounced.
+    /// How long a request waits before the providers start. A debounce exists to turn a burst of keystrokes
+    /// into one request, so only a request that follows another within `interval` is part of a burst and
+    /// waits (for the burst to go quiet). The first request after a pause has nothing to coalesce with and
+    /// starts at once; waiting `interval` for it was most of the time between typing `.` and seeing the
+    /// popup (53 of 59 ms at 20,000 lines). An explicit request never waits.
+    static func debounce(
+        interval: TimeInterval, isExplicit: Bool, previousArrival: UInt64?, arrival: UInt64
+    ) -> TimeInterval {
+        guard !isExplicit, interval > 0, let previousArrival else { return 0 }
+        let sincePrevious = Double(arrival &- previousArrival) / 1_000_000_000
+        return sincePrevious < interval ? interval : 0
+    }
+
+    /// Ranked snapshots as providers yield. Explicit requests are not debounced, and neither is the first
+    /// request after a pause (see ``debounce(interval:isExplicit:previousArrival:arrival:)``).
     public func completeUpdates(context: CompletionContext) -> AsyncThrowingStream<CompletionUpdate, Error> {
         currentTask?.cancel()
         let providers = self.providers
         let ranker = self.ranker
-        let debounce = context.trigger == .manual ? 0 : debounceInterval
+        let arrival = DispatchTime.now().uptimeNanoseconds
+        let debounce = Self.debounce(
+            interval: debounceInterval, isExplicit: context.trigger == .manual, previousArrival: previousArrival, arrival: arrival
+        )
+        previousArrival = arrival
         let (stream, continuation) = AsyncThrowingStream<CompletionUpdate, Error>.makeStream()
+        CompletionLatencyTrace.record(context.traceID, "engineQueued", "debounce=\(Int(debounce * 1000))ms")
         let task = Task {
             do {
                 if debounce > 0 {
                     try await Task.sleep(for: .seconds(debounce))
                 }
                 try Task.checkCancellation()
+                CompletionLatencyTrace.record(context.traceID, "engineStart")
                 let started = DispatchTime.now().uptimeNanoseconds
                 try await emit(context: context, providers: providers, ranker: ranker, continuation: continuation)
                 let seconds = Double(DispatchTime.now().uptimeNanoseconds &- started) / 1_000_000_000
@@ -92,6 +114,7 @@ private func emit(
                 var sawFinished = false
                 for await update in provider.provideUpdates(context: context) {
                     try Task.checkCancellation()
+                    CompletionLatencyTrace.record(context.traceID, "provider:\(provider.name)", "items=\(update.items.count) finished=\(update.isFinished)")
                     let snapshot = await state.absorb(
                         name: provider.name,
                         items: update.items,
@@ -102,7 +125,7 @@ private func emit(
                         context: context,
                         ranker: ranker
                     )
-                    state.publish(snapshot, to: continuation)
+                    state.publish(snapshot, to: continuation, traceID: context.traceID)
                     if update.isFinished {
                         sawFinished = true
                     }
@@ -119,7 +142,7 @@ private func emit(
                         ranker: ranker,
                         keepExistingItems: true
                     )
-                    state.publish(snapshot, to: continuation)
+                    state.publish(snapshot, to: continuation, traceID: context.traceID)
                 }
             }
         }
@@ -192,12 +215,14 @@ private final class CompletionMergeState: @unchecked Sendable {
     /// carries `isFinished` that the newer one lacks: finished providers only accumulate.
     func publish(
         _ snapshot: VersionedUpdate,
-        to continuation: AsyncThrowingStream<CompletionUpdate, Error>.Continuation
+        to continuation: AsyncThrowingStream<CompletionUpdate, Error>.Continuation,
+        traceID: Int = 0
     ) {
         lock.lock()
         defer { lock.unlock() }
         guard snapshot.version > publishedVersion else { return }
         publishedVersion = snapshot.version
+        CompletionLatencyTrace.record(traceID, "snapshot", "items=\(snapshot.update.items.count) finished=\(snapshot.update.isFinished)")
         continuation.yield(snapshot.update)
     }
 

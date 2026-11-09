@@ -78,5 +78,10 @@ jobs:
       - name: Build the libraries
         run: swift build --build-tests
 
+      # Java completion goldens plus the engine path the editor takes. Fails when no JDK is present
+      # (a skipped corpus would pass while testing nothing).
+      - name: Java completion tests
+        run: bash Scripts/ci-java-tests.sh
+
       - name: Build Umbra
         run: swift build --package-path Umbra -c release --product Umbra

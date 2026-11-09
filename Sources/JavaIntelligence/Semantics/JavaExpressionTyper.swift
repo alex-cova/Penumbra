@@ -53,10 +53,14 @@ public enum JavaExpressionTyper {
     /// receiver is a type reference (`Foo.`, only static members make sense) or a value (`foo.`,
     /// everything else) -- callers driving member completion (rather than just wanting a type)
     /// need this to pick ``JavaMemberLookupMode`` correctly.
+    ///
+    /// `bytes` is `source`'s UTF-8 when the caller already has it (a completion request does: it is
+    /// the tree's own array); passing it spares copying the whole document to find a receiver.
     public static func receiverInfo(
-        source: String, realTree: JavaSyntaxTree, dotOffset: Int, context: JavaResolutionContext, index: JavaIndex
+        source: String, bytes knownBytes: [UInt8]? = nil, realTree: JavaSyntaxTree, dotOffset: Int,
+        context: JavaResolutionContext, index: JavaIndex
     ) async -> JavaReceiverInfo? {
-        let bytes = Array(source.utf8)
+        let bytes = knownBytes ?? Array(source.utf8)
         guard let range = treeReceiverRange(in: realTree, dotOffset: dotOffset) ?? JavaReceiverScanner.receiverRange(in: bytes, dotOffset: dotOffset) else { return nil }
         let receiverText = String(decoding: bytes[range], as: UTF8.self)
         if receiverText == "super" {
@@ -526,7 +530,7 @@ public enum JavaExpressionTyper {
         guard case .unresolved = resolved else {
             return .typeReference(resolved)
         }
-        if await !index.subpackages(of: name).isEmpty {
+        if await index.hasSubpackages(of: name) {
             return .package(name)
         }
         return nil

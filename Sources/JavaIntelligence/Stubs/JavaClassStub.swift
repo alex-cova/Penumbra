@@ -168,3 +168,16 @@ public struct JavaClassStub: Hashable, Sendable {
 
     public var isDeprecated: Bool { modifiers.contains(.deprecatedFlag) }
 }
+
+extension JavaClassStub {
+    /// This stub with another origin, every other field shared. Used when a source stub's byte
+    /// range moves because text before it was edited (``JavaStubReuse``).
+    func withOrigin(_ origin: JavaStubOrigin) -> JavaClassStub {
+        JavaClassStub(
+            binaryName: binaryName, qualifiedName: qualifiedName, simpleName: simpleName, packageName: packageName,
+            outerQualifiedName: outerQualifiedName, kind: kind, modifiers: modifiers, typeParameters: typeParameters,
+            superclass: superclass, interfaces: interfaces, fields: fields, methods: methods, innerTypeNames: innerTypeNames,
+            origin: origin, javadoc: javadoc
+        )
+    }
+}

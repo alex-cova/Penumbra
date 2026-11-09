@@ -47,6 +47,17 @@ final class JavaParseMemo: @unchecked Sendable {
     private var totalBytes = 0
     private var pendingParses: [Key: PendingParse] = [:]
     private var parses = 0
+    /// What the memo did, for judging its capacity (`@_spi(Benchmarks)`): lookups that hit, parses made, entries
+    /// pushed out, and the parses that were of text an eviction had pushed out a moment ago (the avoidable ones).
+    private var hits = 0
+    private var evictions = 0
+    private var evictedKeys: Set<Key> = []
+    private var evictedOrder: [Key] = []
+    private var avoidableMisses = 0
+    private var parseNanoseconds: UInt64 = 0
+    private var avoidableNanoseconds: UInt64 = 0
+    private var peakBytes = 0
+    private var seenKeys: Set<Key> = []
     private let maximumEntries: Int
     private let maximumBytes: Int
     /// A source past this size is parsed but not kept: one very large file would push out everything else.
@@ -82,6 +93,7 @@ final class JavaParseMemo: @unchecked Sendable {
     private func entry(for source: String, key: Key) -> Entry? {
         lock.lock()
         if let cached = lookup(key) {
+            hits += 1
             lock.unlock()
             return cached
         }
@@ -92,10 +104,17 @@ final class JavaParseMemo: @unchecked Sendable {
         let pending = PendingParse()
         pendingParses[key] = pending
         parses += 1
+        if seenKeys.count < 4_096 { seenKeys.insert(key) }
+        let wasEvicted = evictedKeys.contains(key)
+        if wasEvicted { avoidableMisses += 1 }
         lock.unlock()
 
+        let parseStart = DispatchTime.now().uptimeNanoseconds
         let entry = JavaSyntaxParser().parse(source).map { Entry(key: key, tree: $0, bytes: source.utf8.count) }
+        let parseTime = DispatchTime.now().uptimeNanoseconds &- parseStart
         lock.lock()
+        parseNanoseconds &+= parseTime
+        if wasEvicted { avoidableNanoseconds &+= parseTime }
         if let entry { insert(entry) }
         pendingParses[key] = nil
         lock.unlock()
@@ -147,8 +166,41 @@ final class JavaParseMemo: @unchecked Sendable {
         entries.append(entry)
         totalBytes += entry.bytes
         // The newest entry stays even when it alone is over a cap.
+        peakBytes = max(peakBytes, totalBytes)
         while entries.count > maximumEntries || totalBytes > maximumBytes, entries.count > 1 {
-            totalBytes -= entries.removeFirst().bytes
+            let removed = entries.removeFirst()
+            totalBytes -= removed.bytes
+            evictions += 1
+            if evictedKeys.insert(removed.key).inserted {
+                evictedOrder.append(removed.key)
+                if evictedOrder.count > 512 { evictedKeys.remove(evictedOrder.removeFirst()) }
+            }
+        }
+    }
+
+    struct Statistics: Sendable {
+        var hits = 0, parses = 0, evictions = 0, avoidableParses = 0
+        var parseSeconds = 0.0, avoidableSeconds = 0.0
+        var entries = 0, bytes = 0, peakBytes = 0
+        /// Different texts that had to be parsed (the working set of the workload, bounded at 4,096).
+        var distinctTexts = 0
+        var hitRate: Double { hits + parses == 0 ? 0 : Double(hits) / Double(hits + parses) }
+    }
+
+    var statistics: Statistics {
+        lock.withLock {
+            Statistics(
+                hits: hits, parses: parses, evictions: evictions, avoidableParses: avoidableMisses,
+                parseSeconds: Double(parseNanoseconds) / 1e9, avoidableSeconds: Double(avoidableNanoseconds) / 1e9,
+                entries: entries.count, bytes: totalBytes, peakBytes: peakBytes, distinctTexts: seenKeys.count
+            )
+        }
+    }
+
+    func resetStatistics() {
+        lock.withLock {
+            hits = 0; parses = 0; evictions = 0; avoidableMisses = 0; parseNanoseconds = 0; avoidableNanoseconds = 0
+            evictedKeys = []; evictedOrder = []; peakBytes = totalBytes; seenKeys = []
         }
     }
 

@@ -478,7 +478,7 @@ public enum JavaMemberLookup {
 
     private static func resolvedDeclaration(_ type: JavaTypeRef, in context: JavaResolutionContext?, index: JavaIndex) async -> JavaTypeRef {
         guard let context, containsUnresolved(type) else { return type }
-        return await JavaTypeResolver.resolve(type, context: context, index: index)
+        return await JavaCompletionStageTimer.measure("members.resolve") { await JavaTypeResolver.resolve(type, context: context, index: index) }
     }
 
     private static func containsUnresolved(_ type: JavaTypeRef) -> Bool {
@@ -504,8 +504,13 @@ public enum JavaMemberLookup {
         if let cached = cache.files[key] {
             file = cached
         } else {
-            guard let text = await sourceText(at: url) else { return nil }
-            file = JavaSourceStubBuilder.build(source: text, url: url)
+            guard let text = await JavaCompletionStageTimer.measure("members.declFileRead", { await sourceText(at: url) }) else { return nil }
+            // The shared memo, not a parse of its own: resolving one simple name can walk the supertypes of
+            // the class around it, and each walk used to parse every ancestor's file again (a 500-line
+            // class cost ~110 ms the first time a file completed on it). Same text, same tree and stubs.
+            file = JavaCompletionStageTimer.measure("members.declFileBuild") {
+                JavaParseMemo.shared.parsed(source: text, url: url)?.stubs ?? JavaSourceFileStubs(packageName: "", imports: [], classes: [])
+            }
             cache.files[key] = file
         }
         // A nested type sees the types declared in the classes around it (`Outer.Handler` from

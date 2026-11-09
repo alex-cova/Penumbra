@@ -36,7 +36,8 @@ public actor JavaCompletionProvider: CompletionProvider {
     private var classpathPaths: JavaIndexPaths?
     /// The last parse, reused when the same text is completed again (re-filtering, a second
     /// Ctrl+Space).
-    private var cachedParse: (text: String, tree: JavaSyntaxTree, stubs: JavaSourceFileStubs)?
+    /// The last parse: its tree keeps the text's UTF-8 bytes, which is what a new text is compared with.
+    private var cachedParse: (tree: JavaSyntaxTree, stubs: JavaSourceFileStubs)?
     private var lastParseURL: URL?
     /// Owned by this actor, so never used by two parses at once.
     private let parser = JavaSyntaxParser()
@@ -77,6 +78,23 @@ public actor JavaCompletionProvider: CompletionProvider {
     }
 
     /// Postfix templates, their per-key toggles, and custom templates.
+    /// Test seam: awaited between a phased request's fast update and its slow work, so a test can
+    /// hold the slow phase and observe what the popup would already have.
+    private var slowPhaseHook: (@Sendable () async -> Void)?
+
+    /// How many slow phases ran, and how many were skipped because their request was superseded.
+    private(set) var slowPhaseRunCount = 0
+    private(set) var slowPhaseSkipCount = 0
+    /// Requests for a Java document that reached the provider's actor (a counter for tests).
+    private(set) var requestCount = 0
+    /// How many update streams were ended by their consumer going away (a counter for tests: it is how a test
+    /// knows a cancellation has reached the provider before it lets a held request go on).
+    nonisolated let terminationCount = OSAllocatedUnfairLock(initialState: 0)
+
+    func setSlowPhaseHook(_ hook: (@Sendable () async -> Void)?) {
+        slowPhaseHook = hook
+    }
+
     public func setPostfixConfiguration(_ configuration: JavaPostfixConfiguration) {
         postfixConfiguration = configuration
     }
@@ -94,31 +112,45 @@ public actor JavaCompletionProvider: CompletionProvider {
     }
 
     public nonisolated func provideUpdates(context: CompletionContext) -> AsyncStream<CompletionUpdate> {
-        AsyncStream { continuation in
+        CompletionLatencyTrace.record(context.traceID, "java:called")
+        return AsyncStream { continuation in
             let task = Task {
-                let updates = await self.updates(for: context)
+                CompletionLatencyTrace.record(context.traceID, "java:taskStart")
+                // Phased handlers publish their fast update through this as soon as they have it;
+                // the array `updates(for:)` returns then holds only what was not yet published.
+                let sink: @Sendable (CompletionUpdate) -> Void = { update in
+                    if !Task.isCancelled { continuation.yield(update) }
+                }
+                let updates = await JavaCompletionStreaming.$emit.withValue(sink) { await self.updates(for: context) }
                 for update in updates {
                     if Task.isCancelled { break }
                     continuation.yield(update)
                 }
                 continuation.finish()
             }
-            continuation.onTermination = { _ in task.cancel() }
+            continuation.onTermination = { [terminationCount] _ in
+                task.cancel()
+                terminationCount.withLock { $0 += 1 }
+            }
         }
     }
 
     private func updates(for context: CompletionContext) async -> [CompletionUpdate] {
+        CompletionLatencyTrace.record(context.traceID, "java:actor")
         guard context.document.languageIdentifier == "java" else {
             return [CompletionUpdate(items: [], isFinished: true)]
         }
+        requestCount += 1
         // Anonymous class bodies become types for the length of this request (`this.` inside
         // `new Runnable() { … }`, `var o = new Object() { int x; }`).
         return await withAnonymousClasses(for: context) {
             // A second Ctrl+Space looks past the source set's classpath, like IntelliJ's second
             // basic-completion invocation.
             if context.invocationCount < 2, let scope = self.scope(for: context.document.url) {
+                CompletionLatencyTrace.record(context.traceID, "java:scopeComputed", "shards=\(scope.count)")
                 // In a named module, only the exported packages of the modules it reads (F16).
                 let modules = self.moduleVisibility(for: context.document.url)
+                CompletionLatencyTrace.record(context.traceID, "java:modulesComputed")
                 return await JavaIndex.$queryModules.withValue(modules) {
                     await JavaIndex.$queryScope.withValue(scope) {
                         await self.provideInScope(context: context)
@@ -143,33 +175,48 @@ public actor JavaCompletionProvider: CompletionProvider {
         index
     }
 
+    /// Whether `text` is, byte for byte, what `tree` was parsed from. Not `String ==`: that compares
+    /// canonical equivalence, so it can call two different byte strings equal (and a tree is only
+    /// good for the bytes it was parsed from), and for any text with a non-ASCII character it walks
+    /// normalized scalars instead of comparing memory (0.07 ms for ASCII, 0.8 ms with a single `é`,
+    /// on a 120,000-line file).
+    private static func text(_ text: String, hasTheBytesOf tree: JavaSyntaxTree) -> Bool {
+        var text = text
+        return text.withUTF8 { buffer in
+            buffer.count == tree.sourceBytes.count && tree.sourceBytes.withUnsafeBufferPointer { bytes in
+                buffer.count == 0 || memcmp(buffer.baseAddress!, bytes.baseAddress!, buffer.count) == 0
+            }
+        }
+    }
+
     /// Parses `text`, reusing the previous tree for `url` when one exists so only the changed
     /// region is reparsed. `caching` is false for a speculative buffer (an inline suggestion
     /// spliced in) that must not replace the document's cached tree.
     func parse(_ text: String, url: URL, caching: Bool = true) -> (tree: JavaSyntaxTree, stubs: JavaSourceFileStubs)? {
-        if let cachedParse, cachedParse.text == text {
+        if let cachedParse, Self.text(text, hasTheBytesOf: cachedParse.tree) {
             return (cachedParse.tree, cachedParse.stubs)
         }
-        guard let tree = incrementalParse(text, url: url) ?? parser.parse(text) else { return nil }
-        let stubs = JavaSourceStubBuilder.build(tree: tree, url: url)
+        let tree: JavaSyntaxTree
+        let stubs: JavaSourceFileStubs
+        // Consecutive requests in one document differ by what was typed plus where the dummy
+        // identifier sits, so the previous tree is reused: the difference becomes one tree-sitter
+        // edit on a copy of it (an earlier request suspended mid-lookup may still be reading the
+        // original) and only the changed region is reparsed. When that edit is inside one method
+        // body the previous stubs are reused too, moved past it (``JavaStubReuse``).
+        if let cachedParse, lastParseURL == url,
+           let result = JavaStubReuse.reparse(previous: (cachedParse.tree, cachedParse.stubs), to: text, parser: parser, url: url) {
+            tree = result.tree
+            stubs = result.stubs
+        } else {
+            guard let parsed = JavaCompletionStageTimer.measure("parse", { parser.parse(text) }) else { return nil }
+            tree = parsed
+            stubs = JavaCompletionStageTimer.measure("stubs") { JavaSourceStubBuilder.build(tree: parsed, url: url) }
+        }
         if caching {
-            cachedParse = (text, tree, stubs)
+            cachedParse = (tree, stubs)
             lastParseURL = url
         }
         return (tree, stubs)
-    }
-
-    /// Consecutive requests in one document differ by what was typed plus where the dummy
-    /// identifier sits, so the previous tree is reused: the difference becomes one tree-sitter
-    /// edit on a copy of it (an earlier request suspended mid-lookup may still be reading the
-    /// original) and only the changed region is reparsed.
-    private func incrementalParse(_ text: String, url: URL) -> JavaSyntaxTree? {
-        guard let cachedParse, lastParseURL == url else { return nil }
-        let newBytes = Array(text.utf8)
-        guard let edit = JavaParseEdit.diff(from: cachedParse.tree.sourceBytes, to: newBytes) else { return cachedParse.tree }
-        let edited = cachedParse.tree.copy()
-        edited.apply(edit)
-        return parser.parseIncremental(oldTree: edited, source: text)
     }
 
     // MARK: - Request
@@ -193,6 +240,8 @@ public actor JavaCompletionProvider: CompletionProvider {
         let commandMode: CompletionContext.CommandMode?
         let range: EditorIntelligence.TextRange
         let fileURL: URL
+        /// Correlates this request with ``CompletionLatencyTrace``.
+        let traceID: Int
 
         var semantic: JavaSemanticRequest {
             JavaSemanticRequest(source: text, bytes: bytes, tree: tree, locals: [], context: context, index: index)
@@ -206,160 +255,10 @@ public actor JavaCompletionProvider: CompletionProvider {
     /// unchanged, which is all completion looks at.
     static let dummyIdentifier = "__penumbra__"
 
-    /// `text` with ``dummyIdentifier`` inserted at `utf16Offset`. When nothing but whitespace
-    /// follows the caret on its line (typing `products.` at the end of a line), a `;` closes the
-    /// statement too: otherwise `products.__penumbra__` runs into the next line's statement and
-    /// tree-sitter's error recovery can re-shape the surrounding methods, putting the caret in
-    /// the wrong one.
+    /// `text` with ``dummyIdentifier`` inserted at `utf16Offset`, and the repairs described on
+    /// ``JavaCompletionRepair``.
     static func repairedText(_ text: String, insertingDummyAt utf16Offset: Int) -> String {
-        let ns = text as NSString
-        let location = min(max(0, utf16Offset), ns.length)
-        let restOfLine = ns.substring(from: location).prefix { $0 != "\n" && $0 != "\r\n" }
-        let closesStatement = restOfLine.allSatisfy { $0 == " " || $0 == "\t" } && isInsideMethodBody(ns.substring(to: location))
-        let closers = closesStatement ? unclosedParentheses(onLineEndingAt: location, in: ns) : 0
-        let before = blankingBrokenStatements(in: ns, before: location)
-        return before + dummyIdentifier + String(repeating: ")", count: closers) + (closesStatement ? ";" : "") + ns.substring(from: location)
-    }
-
-    /// How many lines above the caret's are looked at for a broken statement.
-    private static let brokenStatementWindow = 40
-
-    /// `ns` up to `location`, with the unmatched `(` of an earlier statement that ended in `;`
-    /// without closing them (`println(x.length(;`) replaced by `+`. Left as written, those
-    /// parentheses are still open at the caret, so the grammar reads the caret's line as one more
-    /// argument and statement completion has nothing to offer. A one-character replacement keeps every
-    /// offset before the caret where it was, which the request relies on (positions come from the
-    /// original text). It has to be `+`, not a space: `System.out.println itemKept.length ;` reads
-    /// as a declaration of a local `itemKept` and shadows the real one, whereas `a+b+;` is an
-    /// expression missing its operand, a syntax error that stays inside the statement. A line that opens a `for (` header
-    /// legitimately ends in `;` with its parenthesis open and is left alone, as are lines whose
-    /// parentheses balance or close more than they open.
-    static func blankingBrokenStatements(in text: NSString, before location: Int) -> String {
-        // Only the lines near the caret are read: a completion runs per keystroke, and this must not
-        // grow with the file. The window starts at a line start, `brokenStatementWindow` lines above
-        // the caret's own line.
-        var windowStart = location
-        var lineBreaks = 0
-        while windowStart > 0 {
-            if text.character(at: windowStart - 1) == 0x0A {
-                lineBreaks += 1
-                if lineBreaks > brokenStatementWindow { break }
-            }
-            windowStart -= 1
-        }
-        let window = text.substring(with: NSRange(location: windowStart, length: location - windowStart))
-        guard window.contains(";") else { return text.substring(to: location) }
-        var utf16 = Array(window.utf16)
-        // The caret's own line is repaired by `unclosedParentheses`; start at the line above it.
-        var lineEnd = utf16.count
-        while lineEnd > 0, utf16[lineEnd - 1] != 0x0A { lineEnd -= 1 }
-        var changed = false
-        while lineEnd > 0 {
-            let end = lineEnd - 1                       // the line break before the line below
-            var start = end
-            while start > 0, utf16[start - 1] != 0x0A { start -= 1 }
-            lineEnd = start
-            if let positions = unmatchedOpeningParentheses(in: utf16, from: start, to: end) {
-                for position in positions { utf16[position] = 0x2B }
-                changed = true
-            }
-        }
-        guard changed else { return text.substring(to: location) }
-        return text.substring(to: windowStart) + String(decoding: utf16, as: UTF16.self)
-    }
-
-    /// The offsets of `(` that the line `start..<end` leaves open, when it ends in `;` and is not a
-    /// `for` header; `nil` otherwise. Strings, character literals and `//` comments are skipped.
-    private static func unmatchedOpeningParentheses(in text: [UInt16], from start: Int, to end: Int) -> [Int]? {
-        func isIdentifierCharacter(_ c: UInt16) -> Bool {
-            (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A) || (c >= 0x30 && c <= 0x39) || c == 0x5F || c == 0x24
-        }
-        /// Whether the token just before `position` is the keyword `for`.
-        func followsFor(_ position: Int) -> Bool {
-            var cursor = position
-            while cursor > start, text[cursor - 1] == 0x20 || text[cursor - 1] == 0x09 { cursor -= 1 }
-            guard cursor - start >= 3, String(decoding: text[(cursor - 3)..<cursor], as: UTF16.self) == "for" else { return false }
-            return cursor - 3 == start || !isIdentifierCharacter(text[cursor - 4])
-        }
-        var open: [Int] = []
-        var quote: UInt16?
-        var lastSignificant: UInt16 = 0x20
-        var isForHeader = false
-        var index = start
-        while index < end {
-            let character = text[index]
-            if let delimiter = quote {
-                if character == 0x5C { index += 1 } else if character == delimiter { quote = nil }
-                lastSignificant = character
-            } else if character == 0x22 || character == 0x27 {
-                quote = character
-                lastSignificant = character
-            } else if character == 0x2F, index + 1 < end, text[index + 1] == 0x2F {
-                break
-            } else {
-                if character == 0x28 {
-                    if open.isEmpty, followsFor(index) { isForHeader = true }
-                    open.append(index)
-                } else if character == 0x29, !open.isEmpty {
-                    open.removeLast()
-                }
-                if character != 0x20 && character != 0x09 && character != 0x0D { lastSignificant = character }
-            }
-            index += 1
-        }
-        guard lastSignificant == 0x3B, !open.isEmpty, !isForHeader else { return nil }
-        return open
-    }
-
-    /// How many `(` the caret's line leaves open (`if (a instanceof B b && b.__penumbra__`).
-    /// Without the closing parentheses the grammar's error recovery reads the tail as a type and
-    /// drops the pattern variable. Strings and character literals are skipped; a line that closes
-    /// more than it opens counts as balanced.
-    private static func unclosedParentheses(onLineEndingAt location: Int, in text: NSString) -> Int {
-        var lineStart = location
-        while lineStart > 0, text.character(at: lineStart - 1) != 0x0A { lineStart -= 1 }
-        var depth = 0
-        var quote: unichar?
-        var index = lineStart
-        while index < location {
-            let character = text.character(at: index)
-            if let open = quote {
-                if character == 0x5C { index += 1 } else if character == open { quote = nil }
-            } else if character == 0x22 || character == 0x27 {
-                quote = character
-            } else if character == 0x28 {
-                depth += 1
-            } else if character == 0x29, depth > 0 {
-                depth -= 1
-            }
-            index += 1
-        }
-        return depth
-    }
-
-    /// Cheap check that the caret is inside a block rather than at class-body level, where a
-    /// stray `;` would be harmless anyway but a member declaration (`private Str|`) must not end.
-    private static func isInsideMethodBody(_ before: String) -> Bool {
-        var depth = 0
-        var methodDepths: [Int] = []
-        var previousSignificant: Character = " "
-        for character in before {
-            switch character {
-            case "{":
-                depth += 1
-                // `) {` / `-> {` / `else {` open code blocks; `class X {` opens a type body.
-                if previousSignificant == ")" || previousSignificant == ">" || !methodDepths.isEmpty {
-                    methodDepths.append(depth)
-                }
-            case "}":
-                if methodDepths.last == depth { methodDepths.removeLast() }
-                depth -= 1
-            default:
-                break
-            }
-            if !character.isWhitespace { previousSignificant = character }
-        }
-        return !methodDepths.isEmpty
+        JavaCompletionRepair.repair(text, insertingDummyAtUTF16Offset: utf16Offset).text
     }
 
     /// Runs `body` with anonymous class bodies resolvable as types (see ``JavaAnonymousClass``).
@@ -372,6 +271,7 @@ public actor JavaCompletionProvider: CompletionProvider {
     /// innermost types, outermost body first. Needs a registry in scope.
     private func makeScopedRequest(context: CompletionContext) async -> Request? {
         guard var request = makeRequest(context: context) else { return nil }
+        CompletionLatencyTrace.record(context.traceID, "java:textParsed")
         for creation in JavaAnonymousClass.enclosingCreations(in: request.tree, atByteOffset: request.cursor).reversed() {
             if let anonymous = await JavaAnonymousClass.stub(for: creation, context: request.context, index: index) {
                 request.context = request.context.entering(type: anonymous)
@@ -383,15 +283,24 @@ public actor JavaCompletionProvider: CompletionProvider {
     private func makeRequest(context: CompletionContext) -> Request? {
         // Open project files are file-backed: the snapshot keeps the bytes behind a range reader
         // and `text` is nil. Completion still has to parse the buffer the caret is in.
-        let originalText = JavaNavigationText.fullText(of: context.document)
-        let text = Self.repairedText(originalText, insertingDummyAt: context.cursor.position.utf16Offset)
+        let originalText = JavaCompletionStageTimer.measure("fullText") { JavaNavigationText.fullText(of: context.document) }
+        let repaired = JavaCompletionStageTimer.measure("repair") {
+            JavaCompletionRepair.repair(originalText, insertingDummyAtUTF16Offset: context.cursor.position.utf16Offset)
+        }
+        let text = repaired.text
         let fileURL = context.document.url ?? URL(fileURLWithPath: "/unsaved/\(context.document.id).java")
+        CompletionLatencyTrace.record(context.traceID, "java:repaired")
         guard let (tree, fileStubs) = parse(text, url: fileURL) else { return nil }
+        CompletionLatencyTrace.record(context.traceID, "java:parsed")
 
-        let bytes = Array(text.utf8)
-        let prefixStart = Self.utf8ByteOffset(forUTF16Offset: context.range.start.utf16Offset, in: text)
-        let cursor = Self.utf8ByteOffset(forUTF16Offset: context.cursor.position.utf16Offset, in: text)
-        let resolutionContext = Self.resolutionContext(in: tree, fileStubs: fileStubs, atByteOffset: min(prefixStart, cursor))
+        // The tree keeps the text's UTF-8 bytes; this is a reference to that array, not a copy.
+        let bytes = tree.sourceBytes
+        let (prefixStart, cursor) = JavaCompletionStageTimer.measure("offsets") {
+            Self.requestOffsets(for: context, repaired: repaired, bytes: bytes, text: text)
+        }
+        let resolutionContext = JavaCompletionStageTimer.measure("resolutionContext") {
+            Self.resolutionContext(in: tree, fileStubs: fileStubs, atByteOffset: min(prefixStart, cursor))
+        }
         return Request(
             text: text, bytes: bytes, tree: tree, fileStubs: fileStubs, prefix: context.prefix,
             prefixStart: prefixStart, cursor: cursor, context: resolutionContext,
@@ -404,8 +313,25 @@ public actor JavaCompletionProvider: CompletionProvider {
             commandMode: context.commandMode,
             range: context.range,
             fileURL: fileURL,
+            traceID: context.traceID,
             index: index
         )
+    }
+
+    /// The UTF-8 offsets of the range start and the caret. Repairing the text already found the caret,
+    /// and the range starts a few units before it, so nothing is converted from the beginning again.
+    private static func requestOffsets(
+        for context: CompletionContext, repaired: JavaCompletionRepair.Result, bytes: [UInt8], text: String
+    ) -> (prefixStart: Int, cursor: Int) {
+        let cursorUTF16 = context.cursor.position.utf16Offset
+        let startUTF16 = context.range.start.utf16Offset
+        if repaired.reachedRequestedOffset, startUTF16 >= 0, startUTF16 <= cursorUTF16 {
+            let start = bytes.withUnsafeBufferPointer {
+                JavaUTF8Offsets.byteOffset(movingBackUTF16Units: cursorUTF16 - startUTF16, from: repaired.caretByteOffset, in: $0)
+            }
+            return (start, repaired.caretByteOffset)
+        }
+        return (Self.utf8ByteOffset(forUTF16Offset: startUTF16, in: text), Self.utf8ByteOffset(forUTF16Offset: cursorUTF16, in: text))
     }
 
     /// What one request classified and resolved, without building items: the completion corpus
@@ -465,6 +391,7 @@ public actor JavaCompletionProvider: CompletionProvider {
 
     private func provideInScope(context: CompletionContext) async -> [CompletionUpdate] {
         guard let request = await makeScopedRequest(context: context) else { return finished([]) }
+        CompletionLatencyTrace.record(context.traceID, "java:requestBuilt")
         let bytes = request.bytes
         let tree = request.tree
         let text = request.text
@@ -474,7 +401,10 @@ public actor JavaCompletionProvider: CompletionProvider {
         if request.commandMode == .dotDot {
             return finished(await commandItems(request: request))
         }
-        let site = JavaCompletionContextClassifier.classify(bytes: bytes, tree: tree, prefixStart: prefixStart)
+        let site = JavaCompletionStageTimer.measure("classify") {
+            JavaCompletionContextClassifier.classify(bytes: bytes, tree: tree, prefixStart: prefixStart)
+        }
+        CompletionLatencyTrace.record(context.traceID, "java:classified", "\(String(describing: site).prefix(24))")
         javaCompletionLog.debug("java site=\(String(describing: site), privacy: .public) enclosing=\(resolutionContext.enclosingTypeQualifiedNames, privacy: .public)")
         if request.filter == .templates {
             switch site {
@@ -493,8 +423,10 @@ public actor JavaCompletionProvider: CompletionProvider {
             return finished([])
         case .memberAccess(let dotOffset):
             var items = await memberAccessItems(dotOffset: dotOffset, source: text, request: request)
+            CompletionLatencyTrace.record(request.traceID, "java:memberAccessDone")
             if request.commandMode == .singleDot {
                 items += await commandItems(request: request)
+                CompletionLatencyTrace.record(request.traceID, "java:commandsBuilt")
             }
             return finished(items)
         case .methodReference(let colonOffset):
@@ -582,22 +514,30 @@ public actor JavaCompletionProvider: CompletionProvider {
     }
 
     private func memberAccessItems(dotOffset: Int, source: String, request: Request) async -> [CompletionItem] {
-        guard let receiver = await JavaExpressionTyper.receiverInfo(
-            source: source, realTree: request.tree, dotOffset: dotOffset, context: request.context, index: index
-        ) else {
+        guard let receiver = await JavaCompletionStageTimer.measure("receiver", {
+            await JavaExpressionTyper.receiverInfo(
+                source: source, bytes: request.bytes,
+                realTree: request.tree, dotOffset: dotOffset, context: request.context, index: index
+            )
+        }) else {
             // Unresolved, not empty: a receiver that does not type is the usual reason for "no
             // suggestions", and it should be told apart from a type that simply has no members.
             javaCompletionLog.debug("java receiver could not be typed: \(Self.receiverSnippet(before: dotOffset, in: request.bytes), privacy: .private)")
             return []
         }
+        CompletionLatencyTrace.record(request.traceID, "java:receiverTyped")
         javaCompletionLog.debug("java receiver=\(String(describing: receiver.type), privacy: .public) static=\(receiver.isTypeReference)")
         if let packageName = receiver.packageName {
             return await packageMemberItems(packageName: packageName, request: request)
         }
         let expected = await JavaExpectedType.infer(at: Self.expressionStart(beforeDot: dotOffset, bytes: request.bytes, source: source), request: request.semantic)
+        CompletionLatencyTrace.record(request.traceID, "java:expectedTyped")
         let assignability = JavaAssignability(index: index, context: request.context)
         let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
-        let members = await JavaMemberLookup.members(of: receiver.type, mode: mode, context: request.context, index: index)
+        let members = await JavaCompletionStageTimer.measure("members") {
+            await JavaMemberLookup.members(of: receiver.type, mode: mode, context: request.context, index: index)
+        }
+        CompletionLatencyTrace.record(request.traceID, "java:membersLooked", "n=\(members.count) \(receiver.type.erasedQualifiedName)")
         let receiverName = receiver.type.erasedQualifiedName
         var items: [CompletionItem] = []
         items.reserveCapacity(members.count + 4)
@@ -613,8 +553,10 @@ public actor JavaCompletionProvider: CompletionProvider {
                     - (!receiver.isTypeReference && member.modifiers.contains(.staticFlag) ? 1 : 0)
             ))
         }
+        CompletionLatencyTrace.record(request.traceID, "java:memberItemsBuilt")
         if receiver.packageName == nil {
             items += await postfixItems(dotOffset: dotOffset, source: source, request: request, knownReceiver: receiver)
+            CompletionLatencyTrace.record(request.traceID, "java:postfixBuilt")
         }
         if receiver.isTypeReference, let receiverName, let stub = await index.classStub(qualifiedName: receiverName) {
             for inner in stub.innerTypeNames {
@@ -664,7 +606,8 @@ public actor JavaCompletionProvider: CompletionProvider {
         guard !candidates.isEmpty else { return [] }
         let imports = await postfixImports(request)
         let templates = JavaPostfixTemplates(
-            bytes: request.bytes, dotOffset: dotOffset, factory: request.factory, source: name,
+            bytes: request.bytes, dotOffset: dotOffset, positions: JavaBytePositions(bytes: request.bytes),
+            factory: request.factory, source: name,
             takenNames: Set(request.tree.visibleLocals(atByteOffset: request.cursor).map(\.name)),
             configuration: postfixConfiguration, prefix: request.prefix, importer: request.importer
         )
@@ -762,14 +705,10 @@ public actor JavaCompletionProvider: CompletionProvider {
         while firstDot > 0, bytes[firstDot - 1] == UInt8(ascii: ".") { firstDot -= 1 }
         guard firstDot < request.prefixStart else { return [] }
 
-        func position(ofByte offset: Int) -> TextPosition {
-            let prefix = String(decoding: bytes[0..<min(max(0, offset), bytes.count)], as: UTF8.self)
-            let ns = prefix as NSString
-            let line = prefix.reduce(0) { $1 == "\n" ? $0 + 1 : $0 }
-            let lineStart = (ns.range(of: "\n", options: .backwards).location)
-            let column = lineStart == NSNotFound ? ns.length : ns.length - (lineStart + 1)
-            return TextPosition(line: line, column: column, utf16Offset: ns.length)
-        }
+        // Positions come from the bytes: decoding the whole prefix as a `String` and counting its
+        // `Character`s, four times per request, cost 7 ms at 20,000 lines and 44 ms at 120,000.
+        let positions = JavaBytePositions(bytes: bytes)
+        func position(ofByte offset: Int) -> TextPosition { positions.position(ofByte: offset) }
         func range(_ bytes: Range<Int>) -> EditorIntelligence.TextRange {
             TextRange(start: position(ofByte: bytes.lowerBound), end: position(ofByte: bytes.upperBound))
         }
@@ -1045,7 +984,8 @@ public actor JavaCompletionProvider: CompletionProvider {
         let leader = Self.preferredImplementation(expected: expected, candidates: fastStubs + slowStubs, usage: usage)
         let fast = await constructorItems(fastStubs, expected: expected, assignability: assignability, request: request, usage: usage, leader: leader)
         let slow = await constructorItems(slowStubs, expected: expected, assignability: assignability, request: request, usage: usage, leader: leader)
-        return phased(fast: fast, slow: slow, request: request, expected: expected, offersClasses: false)
+        // The leader above is chosen over both phases, so these fast items cannot go out before `slow` exists.
+        return await phased(fast: fast, request: request, expected: expected, offersClasses: false) { slow }
     }
 
     /// The implementation offered first after `new`: the candidate the project uses most when at
@@ -1158,9 +1098,10 @@ public actor JavaCompletionProvider: CompletionProvider {
     private func typeOnlyUpdates(keyword: String, request: Request) async -> [CompletionUpdate] {
         let inScope = await inScopeClassStubs(request: request)
         let fast = await typeOnlyItems(keyword: keyword, request: request, stubs: inScope)
-        let extra = await extraClassStubs(request: request, existing: fast)
-        let slow = await typeOnlyClassItems(keyword: keyword, request: request, stubs: extra)
-        return phased(fast: fast, slow: slow, request: request, expected: [], offersClasses: true)
+        return await phased(fast: fast, request: request, expected: [], offersClasses: true) {
+            let extra = await self.extraClassStubs(request: request, existing: fast)
+            return await self.typeOnlyClassItems(keyword: keyword, request: request, stubs: extra)
+        }
     }
 
     private func typeOnlyItems(keyword: String, request: Request, stubs: [JavaClassStub]) async -> [CompletionItem] {
@@ -1226,8 +1167,9 @@ public actor JavaCompletionProvider: CompletionProvider {
     private func classBodyUpdates(request: Request) async -> [CompletionUpdate] {
         let base = await classBodyItems(request: request, classes: [])
         let inScope = await inScopeClassNameItems(request: request)
-        let extra = await extraClassNameItems(request: request, existing: base + inScope)
-        return phased(fast: base + inScope, slow: extra, request: request, expected: [], offersClasses: true)
+        return await phased(fast: base + inScope, request: request, expected: [], offersClasses: true) {
+            await self.extraClassNameItems(request: request, existing: base + inScope)
+        }
     }
 
     private func classBodyItems(request: Request, classes: [CompletionItem]) async -> [CompletionItem] {
@@ -1313,8 +1255,9 @@ public actor JavaCompletionProvider: CompletionProvider {
 
     private func statementUpdates(request: Request) async -> [CompletionUpdate] {
         let draft = await statementDraft(request: request)
-        let extras = await statementExtras(request: request, draft: draft)
-        return phased(fast: draft.items, slow: extras, request: request, expected: draft.expected, offersClasses: draft.expected.isEmpty)
+        return await phased(fast: draft.items, request: request, expected: draft.expected, offersClasses: draft.expected.isEmpty) {
+            await self.statementExtras(request: request, draft: draft)
+        }
     }
 
     private struct StatementDraft {
@@ -1567,10 +1510,11 @@ public actor JavaCompletionProvider: CompletionProvider {
         let fast = await classItems(
             stubs: await inScopeClassStubs(request: request).filter { $0.kind == .annotationKind }, request: request
         )
-        let slow = await classItems(
-            stubs: await extraClassStubs(request: request, existing: fast).filter { $0.kind == .annotationKind }, request: request
-        )
-        return phased(fast: fast, slow: slow, request: request, expected: [], offersClasses: true)
+        return await phased(fast: fast, request: request, expected: [], offersClasses: true) {
+            await self.classItems(
+                stubs: await self.extraClassStubs(request: request, existing: fast).filter { $0.kind == .annotationKind }, request: request
+            )
+        }
     }
 
     private func castUpdates(request: Request) async -> [CompletionUpdate] {
@@ -1583,31 +1527,51 @@ public actor JavaCompletionProvider: CompletionProvider {
         let expected = await JavaExpectedType.infer(at: paren, request: semantic)
         let casts = JavaCompletionSuggestions.casts(expected: expected, factory: request.factory)
         guard !request.prefix.isEmpty else {
-            return phased(fast: casts, slow: [], request: request, expected: expected, offersClasses: false)
+            return await phased(fast: casts, request: request, expected: expected, offersClasses: false) { [] }
         }
         // `(us|` may be a parenthesized value as well as a cast: offer what a statement would.
         let draft = await statementDraft(request: request)
-        let extras = await statementExtras(request: request, draft: draft)
-        return phased(fast: casts + draft.items, slow: extras, request: request, expected: expected, offersClasses: true)
+        return await phased(fast: casts + draft.items, request: request, expected: expected, offersClasses: true) {
+            await self.statementExtras(request: request, draft: draft)
+        }
     }
 
+    /// The fast items go out first, then the merged list. Within a streamed request (`provideUpdates`)
+    /// the fast update is published before `slow` runs, so the popup does not wait for the index
+    /// scans; the returned array then holds only the final update. Without a sink (`updates(for:)`
+    /// called directly) the caller gets both, as before.
     private func phased(
-        fast: [CompletionItem], slow: [CompletionItem], request: Request, expected: [JavaTypeRef], offersClasses: Bool
-    ) -> [CompletionUpdate] {
+        fast: [CompletionItem], request: Request, expected: [JavaTypeRef], offersClasses: Bool,
+        slow: () async -> [CompletionItem]
+    ) async -> [CompletionUpdate] {
         let advertisement = JavaCompletionSuggestions.advertisement(
             mode: request.mode, prefix: request.prefix, invocationCount: request.invocationCount,
             expected: expected, offersClasses: offersClasses
         )
         let emptyText = request.mode == .smart ? JavaCompletionSuggestions.smartEmptyText(expected: expected) : nil
         let first = applyMode(fast, request: request, expected: expected)
-        if slow.isEmpty {
+        let firstUpdate = CompletionUpdate(items: first, isFinished: false, advertisement: advertisement)
+        var published = false
+        if let emit = JavaCompletionStreaming.emit, !first.isEmpty {
+            emit(firstUpdate)
+            published = true
+        }
+        await slowPhaseHook?()
+        // A newer request cancels this one (the engine, and the stream's termination). The slow
+        // phase is the bulk of the work and nothing downstream reads its result, so it is skipped.
+        // This is a phase boundary, not a loop: nothing has been cached from this request yet.
+        guard !Task.isCancelled else {
+            slowPhaseSkipCount += 1
+            return []
+        }
+        slowPhaseRunCount += 1
+        let slowItems = await slow()
+        if slowItems.isEmpty {
             return [CompletionUpdate(items: first, isFinished: true, advertisement: advertisement, emptyText: emptyText)]
         }
-        let merged = applyMode(fast + slow, request: request, expected: expected)
-        return [
-            CompletionUpdate(items: first, isFinished: false, advertisement: advertisement),
-            CompletionUpdate(items: merged, isFinished: true, advertisement: advertisement, emptyText: emptyText)
-        ]
+        let merged = applyMode(fast + slowItems, request: request, expected: expected)
+        let final = CompletionUpdate(items: merged, isFinished: true, advertisement: advertisement, emptyText: emptyText)
+        return published ? [final] : [firstUpdate, final]
     }
 
     private func applyMode(_ items: [CompletionItem], request: Request, expected: [JavaTypeRef]) -> [CompletionItem] {
@@ -1789,11 +1753,8 @@ public actor JavaCompletionProvider: CompletionProvider {
     /// EIP addresses text); everything in `JavaIntelligence` works in UTF-8 byte offsets (matching
     /// tree-sitter). This converts between the two for one position.
     static func utf8ByteOffset(forUTF16Offset utf16Offset: Int, in text: String) -> Int {
-        guard let utf16Index = text.utf16.index(text.utf16.startIndex, offsetBy: utf16Offset, limitedBy: text.utf16.endIndex),
-              let stringIndex = utf16Index.samePosition(in: text) else {
-            return text.utf8.count
-        }
-        return text.utf8.distance(from: text.utf8.startIndex, to: stringIndex.samePosition(in: text.utf8)!)
+        var text = text
+        return text.withUTF8 { JavaUTF8Offsets.byteOffset(forUTF16Offset: utf16Offset, in: $0) }
     }
 
     /// Kept for callers that list Java keywords; completion now offers them by context.
@@ -1909,4 +1870,11 @@ struct JavaKeywordPosition {
         default: return true
         }
     }
+}
+
+/// How a streamed request reaches the stream: ``JavaCompletionProvider/provideUpdates(context:)``
+/// binds `emit` to the stream's continuation for the duration of one request. A task-local, not
+/// actor state, because the provider is re-entrant and several requests are in flight at once.
+enum JavaCompletionStreaming {
+    @TaskLocal static var emit: (@Sendable (CompletionUpdate) -> Void)?
 }

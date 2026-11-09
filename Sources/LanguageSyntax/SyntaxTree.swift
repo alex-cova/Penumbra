@@ -105,13 +105,24 @@ public final class SyntaxParser {
 
     /// Re-parses `source` incrementally after `oldTree` has been edited with ``SyntaxTree/apply(_:)``.
     package func parseIncremental(oldTree: SyntaxTree, source: String) -> SyntaxTree? {
+        parseIncremental(oldTree: oldTree, bytes: Array(source.utf8))
+    }
+
+    /// ``parseIncremental(oldTree:source:)`` from the text's UTF-8 bytes, which the new tree then keeps as
+    /// its `sourceBytes` (the array is shared, not copied). A caller that has the bytes already, because
+    /// it needed them to find the edit, avoids making them again. tree-sitter reads the buffer only for
+    /// the duration of the call.
+    package func parseIncremental(oldTree: SyntaxTree, bytes: [UInt8]) -> SyntaxTree? {
         SyntaxParseStatistics.noteIncrementalParse()
-        let bytes = Array(source.utf8)
-        guard let tsTree = source.withCString({ cString in
-            ts_parser_parse_string(parser, oldTree.treeForParsing, cString, UInt32(bytes.count))
-        }) else {
-            return nil
+        let tsTree: OpaquePointer? = bytes.withUnsafeBufferPointer { buffer in
+            guard let base = buffer.baseAddress else {
+                return "".withCString { ts_parser_parse_string(parser, oldTree.treeForParsing, $0, 0) }
+            }
+            return base.withMemoryRebound(to: CChar.self, capacity: buffer.count) {
+                ts_parser_parse_string(parser, oldTree.treeForParsing, $0, UInt32(buffer.count))
+            }
         }
+        guard let tsTree else { return nil }
         return SyntaxTree(tree: tsTree, sourceBytes: bytes)
     }
 }

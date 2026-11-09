@@ -135,7 +135,7 @@ enum JavaCompletionSuggestions {
             let call = callQualifier ? "\(qualifier)()" : qualifier
             let label = "\(call).\(method.name)"
             items.append(CompletionItem(
-                label: label, insertText: "\(label)()", kind: .method, range: factory.range, source: "java",
+                label: label, insertText: "\(label)()", kind: .method, range: factory.range, source: factory.source,
                 filterText: label, detail: JavaCompletionItemFactory.display(method.returnType),
                 priority: JavaCompletionPriority.inheritedMember, preselect: true, allowsAutoInsert: false
             ))
@@ -155,7 +155,7 @@ enum JavaCompletionSuggestions {
                 let label = "\(local.name).toArray"
                 items.append(CompletionItem(
                     label: label, insertText: "\(local.name).toArray(new \(simple)[0])", kind: .method,
-                    range: factory.range, source: "java", filterText: label, detail: "\(simple)[]",
+                    range: factory.range, source: factory.source, filterText: label, detail: "\(simple)[]",
                     labelDetail: "(new \(simple)[0])", priority: JavaCompletionPriority.inheritedMember,
                     preselect: true, allowsAutoInsert: false
                 ))
@@ -196,7 +196,7 @@ enum JavaCompletionSuggestions {
             let takesArguments = needsPrefix
             let insert = "Collections.\(name)()"
             items.append(CompletionItem(
-                label: name, insertText: insert, kind: .method, range: factory.range, source: "java",
+                label: name, insertText: insert, kind: .method, range: factory.range, source: factory.source,
                 filterText: name,
                 detail: JavaCompletionItemFactory.display(.classType(qualifiedName: typeName, arguments: [], outer: nil)),
                 labelDetail: "()", additionalEdits: edits,
@@ -234,7 +234,7 @@ enum JavaCompletionSuggestions {
             let head = names.count == 1 ? names[0] : "(\(names.joined(separator: ", ")))"
             let simple = JavaCompletionItemFactory.display(type)
             items.append(CompletionItem(
-                label: "\(head) -> {}", insertText: "\(head) -> ", kind: .snippet, range: factory.range, source: "java",
+                label: "\(head) -> {}", insertText: "\(head) -> ", kind: .snippet, range: factory.range, source: factory.source,
                 filterText: "\(head) ->", detail: simple,
                 priority: JavaCompletionPriority.ownMember + JavaCompletionPriority.expectedTypeBonus,
                 preselect: true, allowsAutoInsert: false
@@ -245,7 +245,7 @@ enum JavaCompletionSuggestions {
                 guard await returnMatches(method.returnType, signature.returnType, context: context, index: index) else { continue }
                 items.append(CompletionItem(
                     label: "this::\(method.name)", insertText: "this::\(method.name)", kind: .method, range: factory.range,
-                    source: "java", detail: simple, priority: JavaCompletionPriority.ownMember, preselect: true, allowsAutoInsert: false
+                    source: factory.source, detail: simple, priority: JavaCompletionPriority.ownMember, preselect: true, allowsAutoInsert: false
                 ))
             }
             if let produced = signature.returnType.erasedQualifiedName,
@@ -256,7 +256,7 @@ enum JavaCompletionSuggestions {
                 if hasConstructor {
                     let name = stub.simpleName
                     items.append(CompletionItem(
-                        label: "\(name)::new", insertText: "\(name)::new", kind: .method, range: factory.range, source: "java",
+                        label: "\(name)::new", insertText: "\(name)::new", kind: .method, range: factory.range, source: factory.source,
                         detail: simple, priority: JavaCompletionPriority.classInScope, preselect: true, allowsAutoInsert: false
                     ))
                 }
@@ -272,7 +272,7 @@ enum JavaCompletionSuggestions {
             let simple = JavaCompletionItemFactory.display(type)
             guard seen.insert(simple).inserted, simple != "void" else { continue }
             items.append(CompletionItem(
-                label: simple, insertText: "\(simple)) ", kind: .type, range: factory.range, source: "java",
+                label: simple, insertText: "\(simple)) ", kind: .type, range: factory.range, source: factory.source,
                 detail: "cast", priority: JavaCompletionPriority.classInScope + JavaCompletionPriority.expectedTypeBonus,
                 preselect: true, allowsAutoInsert: false
             ))

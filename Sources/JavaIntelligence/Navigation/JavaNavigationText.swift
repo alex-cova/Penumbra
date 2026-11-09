@@ -8,7 +8,32 @@ enum JavaNavigationText {
         }
         let length = document.contentSnapshot.utf16Length
         guard length > 0 else { return "" }
-        return document.substring(utf16Offset: 0, length: length)
+        return nativeUTF8(document.substring(utf16Offset: 0, length: length))
+    }
+
+    /// `text` as a Swift string whose UTF-8 is directly addressable. A string that came from `NSString`
+    /// (`String(utf16CodeUnits:count:)`, `NSString.substring(with:)`) is foreign: with any non-ASCII
+    /// character `withUTF8`, `Array(text.utf8)` and every other byte walk read it one UTF-16 unit at a
+    /// time through `characterAtIndex` (about 40 ms for a 120,000-line file, on every request). One bulk
+    /// conversion here costs about 1 ms. A string that is already native is returned as it is; one that
+    /// cannot be encoded (a lone surrogate) is left alone and keeps its old, slower, path.
+    static func nativeUTF8(_ text: String) -> String {
+        if text.utf8.withContiguousStorageIfAvailable({ _ in () }) != nil { return text }
+        let ns = text as NSString
+        let encoding = String.Encoding.utf8.rawValue
+        let count = ns.lengthOfBytes(using: encoding)
+        guard count > 0 else { return text }
+        var failed = false
+        let converted = String(unsafeUninitializedCapacity: count) { buffer in
+            var used = 0
+            let ok = ns.getBytes(
+                buffer.baseAddress!, maxLength: count, usedLength: &used, encoding: encoding, options: [],
+                range: NSRange(location: 0, length: ns.length), remaining: nil
+            )
+            failed = !ok || used != count
+            return failed ? 0 : used
+        }
+        return failed ? text : converted
     }
 
     static func sameFile(_ lhs: URL?, _ rhs: URL?) -> Bool {

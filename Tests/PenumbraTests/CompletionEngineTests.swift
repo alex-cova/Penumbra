@@ -1,5 +1,5 @@
 import XCTest
-import EditorIntelligence
+@testable import EditorIntelligence
 
 final class CompletionEngineTests: XCTestCase {
     func testWordAtUTF16OffsetInsideEmojiDoesNotTrap() {
@@ -110,6 +110,9 @@ final class CompletionEngineTests: XCTestCase {
     func testCancellation() async throws {
         let provider = MockCompletionProvider(name: "Test", items: [])
         let engine = CompletionEngine(providers: [provider], debounceInterval: 0.1)
+        // The first request after a pause starts at once; one that follows within the interval waits for the
+        // burst to end, and that is the request a cancel finds still waiting.
+        _ = await engine.completeUpdates(context: makeContext(prefix: "f"))
         let context = makeContext(prefix: "fo")
         let task = Task {
             try await engine.complete(context: context)
@@ -122,6 +125,87 @@ final class CompletionEngineTests: XCTestCase {
         } catch is CancellationError {
             // expected
         }
+    }
+
+    // MARK: - Debounce
+
+    func testDebounceDecisions() {
+        let interval = 0.05
+        let ms: UInt64 = 1_000_000
+        func delay(previous: UInt64?, arrival: UInt64, explicit: Bool = false, interval: TimeInterval = interval) -> TimeInterval {
+            CompletionEngine.debounce(interval: interval, isExplicit: explicit, previousArrival: previous, arrival: arrival)
+        }
+        XCTAssertEqual(delay(previous: nil, arrival: 1_000 * ms), 0, "the first request ever")
+        XCTAssertEqual(delay(previous: 1_000 * ms, arrival: 1_049 * ms), interval, "49 ms after the previous: part of a burst")
+        XCTAssertEqual(delay(previous: 1_000 * ms, arrival: 1_001 * ms), interval, "the next keystroke of a fast burst")
+        XCTAssertEqual(delay(previous: 1_000 * ms, arrival: 1_050 * ms), 0, "exactly one interval after: a pause")
+        XCTAssertEqual(delay(previous: 1_000 * ms, arrival: 1_400 * ms), 0, "a long pause")
+        XCTAssertEqual(delay(previous: 1_000 * ms, arrival: 1_001 * ms, explicit: true), 0, "an explicit request never waits")
+        XCTAssertEqual(delay(previous: 1_000 * ms, arrival: 1_001 * ms, interval: 0), 0, "no debounce configured")
+    }
+
+    func testTheFirstRequestAfterAPauseStartsWithoutWaiting() async throws {
+        let log = CallLog()
+        let engine = CompletionEngine(providers: [RecordingProvider(log: log)], debounceInterval: 5)
+        // With a five second debounce, the only way the provider runs within a second is by not waiting.
+        _ = try await withTimeout(seconds: 2) { try await engine.complete(context: makeContext(prefix: "f")) }
+        let calls = await log.count
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testAFollowUpWithinTheIntervalWaitsForTheBurstToEnd() async throws {
+        let log = CallLog()
+        let engine = CompletionEngine(providers: [RecordingProvider(log: log)], debounceInterval: 0.4)
+        _ = try await engine.complete(context: makeContext(prefix: "f"))
+        let started = DispatchTime.now().uptimeNanoseconds
+        _ = try await engine.complete(context: makeContext(prefix: "fo"))
+        let waited = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9
+        // A lower bound only: running late cannot fail this, running early can.
+        XCTAssertGreaterThanOrEqual(waited, 0.35, "the second keystroke ran after \(waited) s; it should wait out the burst")
+        let calls = await log.count
+        XCTAssertEqual(calls, 2)
+    }
+
+    func testAnExplicitRequestInsideABurstStillStartsAtOnce() async throws {
+        let log = CallLog()
+        let engine = CompletionEngine(providers: [RecordingProvider(log: log)], debounceInterval: 5)
+        _ = try await withTimeout(seconds: 2) { try await engine.complete(context: makeContext(prefix: "f")) }
+        _ = try await withTimeout(seconds: 2) { try await engine.complete(context: makeContext(prefix: "fo", trigger: .manual)) }
+        let calls = await log.count
+        XCTAssertEqual(calls, 2)
+    }
+}
+
+private actor CallLog {
+    private(set) var count = 0
+    func note() { count += 1 }
+}
+
+private struct RecordingProvider: CompletionProvider {
+    let name = "Recording"
+    let log: CallLog
+
+    func provide(context: CompletionContext) async -> [CompletionItem] {
+        await log.note()
+        return []
+    }
+}
+
+private struct TimedOut: Error, CustomStringConvertible {
+    let seconds: TimeInterval
+    var description: String { "the request did not start within \(seconds) s" }
+}
+
+/// Fails with a timeout instead of hanging, so a request that should have started at once fails the test.
+private func withTimeout<T: Sendable>(seconds: TimeInterval, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await body() }
+        group.addTask {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            throw TimedOut(seconds: seconds)
+        }
+        defer { group.cancelAll() }
+        return try await group.next()!
     }
 }
 
@@ -159,7 +243,7 @@ private struct MockCompletionProvider: CompletionProvider {
     }
 }
 
-private func makeContext(prefix: String) -> CompletionContext {
+private func makeContext(prefix: String, trigger: RequestTrigger? = nil) -> CompletionContext {
     let snapshot = TextSnapshot(version: 0, text: "\(prefix)")
     let position = TextPosition(line: 0, column: prefix.count, utf16Offset: prefix.count)
     let document = Document(
@@ -174,7 +258,7 @@ private func makeContext(prefix: String) -> CompletionContext {
     return CompletionContext(
         document: document,
         cursor: Cursor(position: position),
-        trigger: .keystroke(prefix),
+        trigger: trigger ?? .keystroke(prefix),
         prefix: prefix,
         range: TextRange(start: position, end: position)
     )

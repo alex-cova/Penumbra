@@ -11,6 +11,8 @@ import Foundation
 struct JavaPostfixTemplates {
     let bytes: [UInt8]
     let dotOffset: Int
+    /// Each position the templates ask for, worked out once (see ``JavaBytePositions``).
+    let positions: JavaBytePositions
     let factory: JavaCompletionItemFactory
     let source: String
     let takenNames: Set<String>
@@ -467,15 +469,7 @@ struct JavaPostfixTemplates {
     }
 
     private func position(ofByte offset: Int) -> TextPosition {
-        let prefix = String(decoding: bytes[0..<min(offset, bytes.count)], as: UTF8.self)
-        let utf16 = (prefix as NSString).length
-        var line = 0
-        var lineStart = prefix.startIndex
-        for index in prefix.indices where prefix[index] == "\n" {
-            line += 1
-            lineStart = prefix.index(after: index)
-        }
-        return TextPosition(line: line, column: prefix[lineStart...].utf16.count, utf16Offset: utf16)
+        positions.position(ofByte: offset)
     }
 
     static func startsStatement(bytes: [UInt8], at offset: Int) -> Bool {

@@ -270,6 +270,95 @@ final class JavaIndexTests: XCTestCase {
         XCTAssertNil(missingScoped)
     }
 
+    /// `hasSubpackages(of:)` must answer exactly what `!subpackages(of:).isEmpty` does, for every
+    /// candidate name, unscoped and under scopes, before and after an overlay change.
+    func testHasSubpackagesMatchesSubpackagesEverywhere() async throws {
+        let project = try writeShard([stub("com.example.api.Foo"), stub("com.example.Bar"), stub("org.leaf.Thing")])
+        let tests = try writeShard([stub("com.example.testonly.deep.Helper"), stub("junit.Assert")])
+        let jdk = try writeShard([stub("java.util.concurrent.atomic.AtomicInteger"), stub("java.lang.String")])
+        let index = JavaIndex()
+        await index.setSources([
+            .init(precedence: 1, reader: project, shardPath: "/main"),
+            .init(precedence: 1, reader: tests, shardPath: "/test"),
+            .init(precedence: 3, reader: jdk, shardPath: "/jdk")
+        ])
+        let candidates = [
+            "", "com", "com.example", "com.example.api", "com.example.testonly", "com.example.testonly.deep",
+            "org", "org.leaf", "junit", "java", "java.util", "java.util.concurrent", "java.util.concurrent.atomic",
+            "java.lang", "nothing", "com.exam", "overlay", "overlay.pkg"
+        ]
+        func check(_ label: String) async {
+            for name in candidates {
+                let expected = await !index.subpackages(of: name).isEmpty
+                let actual = await index.hasSubpackages(of: name)
+                XCTAssertEqual(actual, expected, "\(label): \(name)")
+            }
+        }
+        await check("unscoped")
+        for scope: Set<String> in [["/main"], ["/test"], ["/main", "/test"], []] {
+            await JavaIndex.$queryScope.withValue(scope) { await check("scope \(scope.sorted())") }
+        }
+        await index.replaceOverlay(removing: [], adding: [stub("overlay.pkg.Mine")])
+        await check("unscoped after overlay")
+        await JavaIndex.$queryScope.withValue(["/main"]) { await check("scoped after overlay") }
+        await index.replaceOverlay(removing: ["overlay.pkg.Mine"], adding: [])
+        await check("unscoped after overlay removal")
+        await JavaIndex.$queryScope.withValue(["/test"]) { await check("scoped after overlay removal") }
+    }
+
+    /// A rebuild of the name tables must not hold the index: a query asked while it runs is answered from the
+    /// previous sources, and once `setSources` returns the new ones are in effect.
+    func testQueriesAreAnsweredFromTheOldSourcesWhileANewSetIsBuilding() async throws {
+        let oldReader = try writeShard([stub("com.old.Before")])
+        let newReader = try writeShard([stub("com.fresh.After")])
+        let index = JavaIndex()
+        await index.setSources([.init(precedence: 1, reader: oldReader)])
+
+        let gate = BuildGate()
+        JavaIndex.sourcesBuildHook = { await gate.wait() }
+        defer { JavaIndex.sourcesBuildHook = nil }
+        let rebuild = Task { await index.setSources([.init(precedence: 1, reader: newReader)]) }
+        await gate.waitUntilHeld()
+
+        // The build is in flight and cannot finish: these would never return if the actor were held.
+        let during = await index.classStub(qualifiedName: "com.old.Before")
+        XCTAssertNotNil(during, "the old sources are still answering")
+        let notYet = await index.classStub(qualifiedName: "com.fresh.After")
+        XCTAssertNil(notYet)
+        let packages = await index.subpackages(of: "com")
+        XCTAssertEqual(packages, ["com.old"])
+
+        await gate.open()
+        await rebuild.value
+        let afterOld = await index.classStub(qualifiedName: "com.old.Before")
+        let afterNew = await index.classStub(qualifiedName: "com.fresh.After")
+        XCTAssertNil(afterOld)
+        XCTAssertNotNil(afterNew)
+        let after = await index.subpackages(of: "com")
+        XCTAssertEqual(after, ["com.fresh"])
+    }
+
+    /// Two rebuilds in flight: the newer one wins whichever finishes first.
+    func testTheNewestSetSourcesWinsWhenTwoOverlap() async throws {
+        let first = try writeShard([stub("p.First")])
+        let second = try writeShard([stub("p.Second")])
+        let index = JavaIndex()
+        let gate = BuildGate()
+        JavaIndex.sourcesBuildHook = { await gate.wait() }
+        defer { JavaIndex.sourcesBuildHook = nil }
+        let older = Task { await index.setSources([.init(precedence: 1, reader: first)]) }
+        await gate.waitUntilHeld()
+        let newer = Task { await index.setSources([.init(precedence: 1, reader: second)]) }
+        await gate.waitUntilHeld(count: 2)
+        await gate.open()
+        await older.value
+        await newer.value
+        let gotFirst = await index.classStub(qualifiedName: "p.First")
+        let gotSecond = await index.classStub(qualifiedName: "p.Second")
+        XCTAssertNil(gotFirst, "an overtaken rebuild applied its sources")
+        XCTAssertNotNil(gotSecond)
+    }
+
     func testExactSimpleNameSkipsPrefixNeighbours() async throws {
         let reader = try writeShard([
             stub("java.util.List"), stub("java.util.ListIterator"), stub("java.util.UUID"), stub("com.example.List")
@@ -440,4 +529,25 @@ private func referenceCamelHump(_ pattern: String, _ name: String) -> Bool {
         }
     }
     return patternIndex == pattern.endIndex
+}
+
+private actor BuildGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func waitUntilHeld(count: Int = 1) async {
+        // Bounded: a rebuild that never reaches the gate fails the assertions after this instead of hanging the run.
+        for _ in 0..<10_000 where waiters.count < count { try? await Task.sleep(nanoseconds: 1_000_000) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
 }

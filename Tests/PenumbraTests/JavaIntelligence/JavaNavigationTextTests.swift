@@ -93,4 +93,44 @@ final class JavaNavigationTextTests: XCTestCase {
         }
         return TextPosition(line: line, column: column, utf16Offset: clamped)
     }
+
+    // MARK: - nativeUTF8
+
+    /// A string the way `String(utf16CodeUnits:count:)` hands it out: backed by an `NSString`, so its UTF-8 is not
+    /// directly addressable.
+    private func foreign(_ text: String) -> String {
+        let units = Array(text.utf16)
+        return units.withUnsafeBufferPointer { String(utf16CodeUnits: $0.baseAddress!, count: $0.count) }
+    }
+
+    private func isNative(_ text: String) -> Bool {
+        text.utf8.withContiguousStorageIfAvailable { _ in () } != nil
+    }
+
+    func testNativeUTF8KeepsTheTextAndMakesItAddressable() {
+        let withNUL = "a\u{0}b é"
+        for sample in samples.filter({ !$0.isEmpty }) + [withNUL, String(repeating: "é日😀 line\r\n", count: 5_000)] {
+            let source = foreign(sample)
+            let converted = JavaNavigationText.nativeUTF8(source)
+            XCTAssertEqual(Array(converted.utf8), Array(sample.utf8), "bytes of \(sample.prefix(20).debugDescription)")
+            XCTAssertEqual(converted.utf16.count, sample.utf16.count)
+            XCTAssertTrue(isNative(converted), "\(sample.prefix(20).debugDescription) is still foreign")
+        }
+    }
+
+    func testNativeUTF8ReturnsANativeStringUntouched() {
+        let native = "package a;\nclass Ä {}\n"
+        XCTAssertTrue(isNative(native))
+        XCTAssertEqual(JavaNavigationText.nativeUTF8(native), native)
+        XCTAssertEqual(JavaNavigationText.nativeUTF8(""), "")
+    }
+
+    /// A lone surrogate cannot be written as UTF-8. Swift already reads it as U+FFFD, and the conversion must
+    /// give the same text back, not drop or reorder anything.
+    func testNativeUTF8GivesTheSameTextForALoneSurrogate() {
+        let units: [UInt16] = [0x61, 0xD800, 0x62]
+        let source = units.withUnsafeBufferPointer { String(utf16CodeUnits: $0.baseAddress!, count: $0.count) }
+        let result = JavaNavigationText.nativeUTF8(source)
+        XCTAssertEqual(Array(result.utf16), Array(source.utf16))
+    }
 }

@@ -56,6 +56,17 @@ public struct JavaIndexPaths: Sendable {
 
     private func sha256(_ string: String) -> String {
         let digest = SHA256.hash(data: Data(string.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        // Lower-case hex, the same text `String(format: "%02x", $0)` per byte gave (it names the shard
+        // files, so it must not change), without 32 `String(format:)` calls: completion names every
+        // dependency jar's shard on every request (5 ms for 93 jars, about 18 ms for 337).
+        var hex: [UInt8] = []
+        hex.reserveCapacity(64)
+        for byte in digest {
+            hex.append(Self.hexDigits[Int(byte >> 4)])
+            hex.append(Self.hexDigits[Int(byte & 0x0F)])
+        }
+        return String(decoding: hex, as: UTF8.self)
     }
+
+    private static let hexDigits = Array("0123456789abcdef".utf8)
 }

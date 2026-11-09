@@ -38,10 +38,15 @@ func printUsageAndExit() -> Never {
       typeset-long synthetic [--samples N]
       index-parse <path|synthetic> [--lang java] [--lines N] [--samples N]
       metal-waits <path|synthetic> [--lines N] [--frames N] [--no-deferred] [--discrete-atlas]
-      java-completion synthetic [--jars N]
+      java-completion synthetic [--jars N] [--large-methods N] [--large-per-class N] [--unicode]
       java-name-index <java-source-directory|synthetic> [--files N]
       java-members <java-source-directory>
       java-inheritors synthetic [--files N]
+      java-stub-reuse synthetic [--samples N]
+      java-parse-edit synthetic [--samples N] [--per-class N]
+      java-allocations synthetic [--samples N]
+      java-completion-latency (synthetic [--lines N] [--per-class N] [--unicode] | project <name> [--files N]) [--samples N] [--timelines] [--stalls] [--no-minimap]
+      java-completion-latency save (synthetic [--files N] [--modules N] [--jars N] [--large-lines N] | project <name>) [--saves N] [--syntax-error] [--unchanged]
       java-inspections <path|synthetic> [--lines N] [--samples N] [--jdk]
       java-diagnostics (survival|latency|typing) <path|synthetic> [--lines N] [--samples N]
       java-analysis-server <path|synthetic> [--lines N] [--samples N]
@@ -84,6 +89,16 @@ if let command = arguments.first, command == "hex-scroll" || command == "hex-sea
     }
     exit(0)
 }
+if let command = arguments.first, command == "java-completion-latency" {
+    // Its second word is a mode (`synthetic` or `project <name>`), not a path.
+    do {
+        try MainActor.assumeIsolated { try CompletionLatencyProfile.run(arguments: Array(arguments.dropFirst())) }
+    } catch {
+        FileHandle.standardError.write("java-completion-latency: \(error)\n".data(using: .utf8)!)
+        exit(1)
+    }
+    exit(0)
+}
 guard arguments.count >= 2 else { printUsageAndExit() }
 
 let command = arguments[0]
@@ -101,7 +116,7 @@ let options = Commands.Options(
 
 let allowsSyntheticPath = command == "scroll-frames" || command == "metal-waits" || command == "typeset-long" || command == "index-parse" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
     || command == "java-profile-import" || command == "java-coverage-bands"
-    || command == "enter-session" || command == "markdown-preview" || command == "java-name-index" || command == "java-inheritors"
+    || command == "enter-session" || command == "markdown-preview" || command == "java-name-index" || command == "java-inheritors" || command == "java-stub-reuse" || command == "java-parse-edit" || command == "java-allocations"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
 guard usesSynthetic || command == "java-diagnostics" || FileManager.default.fileExists(atPath: path) else {
@@ -134,7 +149,13 @@ do {
     case "snapshot-metal":
         MetalCommands.snapshotMetal(pathOrSynthetic: path, outputDir: flagValue("--out", in: rest), discreteAtlas: hasFlag("--discrete-atlas", in: rest))
     case "java-completion":
-        try JavaCompletionProfile.run(jars: Int(flagValue("--jars", in: rest) ?? "") ?? 0)
+        try JavaCompletionProfile.run(jars: Int(flagValue("--jars", in: rest) ?? "") ?? 0, largeMethods: Int(flagValue("--large-methods", in: rest) ?? "") ?? 1_000, largePerClass: Int(flagValue("--large-per-class", in: rest) ?? "") ?? 0, unicode: hasFlag("--unicode", in: rest))
+    case "java-allocations":
+        try JavaAllocationProfile.run(samples: Int(flagValue("--samples", in: rest) ?? "") ?? 8)
+    case "java-parse-edit":
+        JavaParseEditProfile.run(samples: Int(flagValue("--samples", in: rest) ?? "") ?? 15, perClass: Int(flagValue("--per-class", in: rest) ?? "") ?? 0)
+    case "java-stub-reuse":
+        JavaStubReuseProfile.run(samples: Int(flagValue("--samples", in: rest) ?? "") ?? 20)
     case "java-inheritors":
         try JavaInheritorsProfile.run(files: Int(flagValue("--files", in: rest) ?? "") ?? 5_000)
     case "java-name-index":

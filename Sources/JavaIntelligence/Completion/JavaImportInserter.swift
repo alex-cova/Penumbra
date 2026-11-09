@@ -87,15 +87,7 @@ struct JavaImportInserter {
 
     /// Line, UTF-16 column and UTF-16 offset for a UTF-8 byte offset.
     static func textPosition(forByteOffset byteOffset: Int, in bytes: [UInt8]) -> TextPosition {
-        let clamped = min(max(0, byteOffset), bytes.count)
-        var line = 0
-        var lineStart = 0
-        for index in 0..<clamped where bytes[index] == 10 {
-            line += 1
-            lineStart = index + 1
-        }
-        let lineText = String(decoding: bytes[lineStart..<clamped], as: UTF8.self)
-        let beforeText = String(decoding: bytes[0..<clamped], as: UTF8.self)
-        return TextPosition(line: line, column: lineText.utf16.count, utf16Offset: beforeText.utf16.count)
+        let found = bytes.withUnsafeBufferPointer { JavaUTF8Offsets.position(ofByte: byteOffset, in: $0) }
+        return TextPosition(line: found.line, column: found.column, utf16Offset: found.utf16Offset)
     }
 }

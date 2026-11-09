@@ -1,12 +1,12 @@
 import XCTest
 @testable import JavaIntelligence
 
-/// `JavaCompletionProvider.blankingBrokenStatements`: an earlier statement that ends in `;` with a
+/// `JavaCompletionRepair.blankingBrokenStatements`: an earlier statement that ends in `;` with a
 /// parenthesis still open would swallow the caret's line as one more argument.
 final class JavaBrokenStatementRepairTests: XCTestCase {
     /// Repairs everything before the end of `text` (the caret is at its end).
     private func repaired(_ text: String) -> String {
-        JavaCompletionProvider.blankingBrokenStatements(in: text as NSString, before: (text as NSString).length)
+        JavaCompletionRepair.blankingBrokenStatements(in: text, beforeUTF16Offset: text.utf16.count)
     }
 
     func testUnmatchedParenthesesOfAStatementThatEndsInASemicolonAreReplaced() {

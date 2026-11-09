@@ -28,6 +28,11 @@ final class JavaNavigationCorpusTests: XCTestCase {
         do {
             corpus = try await Self.indexTask.value
         } catch is NavigationCorpusIndex.NoJDK {
+            // CI sets UMBRA_REQUIRE_JDK=1 (Scripts/ci-java-tests.sh): a skipped corpus tests nothing.
+            if ProcessInfo.processInfo.environment["UMBRA_REQUIRE_JDK"] == "1" {
+                XCTFail("UMBRA_REQUIRE_JDK=1 but no JDK with ct.sym was found")
+                return
+            }
             throw XCTSkip("No JDK with ct.sym found on this machine")
         }
         var cases = try CompletionCorpusRunner.Case.load(from: corpus.casesDirectory, extension: "java")
