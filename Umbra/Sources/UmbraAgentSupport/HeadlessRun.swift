@@ -326,7 +326,7 @@ public enum UmbraAgentHeadlessRun {
             exitCode = .approvalRefused
         case .completed:
             exitCode = .finished
-        case .budget, .iterationCap where refusals.isEmpty:
+        case .budget where refusals.isEmpty, .iterationCap where refusals.isEmpty:
             exitCode = .budget
         case .budget, .iterationCap:
             exitCode = .approvalRefused
