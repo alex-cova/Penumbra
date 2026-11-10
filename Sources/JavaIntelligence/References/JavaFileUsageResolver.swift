@@ -91,7 +91,8 @@ public enum JavaFileUsageResolver {
         )
         guard let typed = await JavaExpressionTyper.typed(receiverNode, locals: locals, context: session.context, index: session.index),
               typed.packageName == nil else { return nil }
-        let methods = await session.allMethods(named: node.text, on: typed.type, mode: .instance)
+        let qualifier: JavaMemberQualifier = receiverNode.type == "super" ? .viaSuper : .expression
+        let methods = await session.allMethods(named: node.text, on: typed.type, mode: .instance, qualifier: qualifier)
         var ids: [JavaSymbolID] = []
         for method in methods {
             let id = session.methodID(await session.declaredMethod(method), declaringClass: method.declaringClass)

@@ -118,4 +118,47 @@ final class JavaVisibleLocalsTests: XCTestCase {
         XCTAssertEqual(result, [])
     }
 
+    /// A local of a static or instance initializer is in scope inside an anonymous class declared
+    /// there. The completion query builds only the outermost member; that member is the initializer,
+    /// not the anonymous method.
+    func testInitializerLocalIsVisibleInsideAnAnonymousClass() {
+        let captured = locals("""
+        class Foo {
+          static {
+            final String canAccessMethod = null;
+            Object o = new Object() { void run() { canAccessMethod€.length(); } };
+          }
+        }
+        """)
+        XCTAssertTrue(names(captured).contains("canAccessMethod"))
+        XCTAssertEqual(
+            captured.first { $0.name == "canAccessMethod" }?.type,
+            .unresolved(simpleName: "String", arguments: [])
+        )
+
+        let instance = locals("""
+        class Foo {
+          {
+            final String label = "x";
+            Object o = new Object() { void run() { label€.length(); } };
+          }
+        }
+        """)
+        XCTAssertTrue(names(instance).contains("label"))
+    }
+
+    func testInitializerLocalStaysInsideTheInitializer() {
+        let inBlock = locals("class Foo { static { int n = 1; €x; } }")
+        XCTAssertTrue(names(inBlock).contains("n"))
+
+        let inMethod = locals("class Foo { static { int hidden = 1; } void m() { €x; } }")
+        XCTAssertFalse(names(inMethod).contains("hidden"))
+
+        let staticHiddenFromInstance = locals("class Foo { static { int hidden = 1; } { €x; } }")
+        XCTAssertFalse(names(staticHiddenFromInstance).contains("hidden"))
+
+        let instanceHiddenFromStatic = locals("class Foo { { int hidden = 1; } static { €x; } }")
+        XCTAssertFalse(names(instanceHiddenFromStatic).contains("hidden"))
+    }
+
 }

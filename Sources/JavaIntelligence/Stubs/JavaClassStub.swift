@@ -167,6 +167,17 @@ public struct JavaClassStub: Hashable, Sendable {
     }
 
     public var isDeprecated: Bool { modifiers.contains(.deprecatedFlag) }
+
+    /// The same stub with a different immediate owner. Local-class stubs are built under a
+    /// site-keyed prefix; private access needs the real enclosing type on this chain.
+    func withOuterQualifiedName(_ outerQualifiedName: String?) -> JavaClassStub {
+        JavaClassStub(
+            binaryName: binaryName, qualifiedName: qualifiedName, simpleName: simpleName, packageName: packageName,
+            outerQualifiedName: outerQualifiedName, kind: kind, modifiers: modifiers, typeParameters: typeParameters,
+            superclass: superclass, interfaces: interfaces, fields: fields, methods: methods, innerTypeNames: innerTypeNames,
+            origin: origin, javadoc: javadoc
+        )
+    }
 }
 
 extension JavaClassStub {

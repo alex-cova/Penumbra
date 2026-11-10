@@ -38,7 +38,9 @@ enum JavaAccessStaticViaInstanceInspection: JavaTypedInspection {
     private static func onlyStaticOverloads(of invocation: SyntaxNode, nameNode: SyntaxNode, arity: Int, context: JavaInspectionContext) async -> Bool {
         let session = JavaInspectionSupport.session(for: context, at: invocation.startByte)
         guard let receiver = await session.receiverInfo(of: invocation, nameNode: nameNode), !receiver.isTypeReference else { return false }
-        let candidates = await session.allMethods(named: nameNode.text, on: receiver.type, mode: .instance).map(\.method).filter {
+        let candidates = await session.allMethods(
+            named: nameNode.text, on: receiver.type, mode: .instance, qualifier: receiver.memberQualifier
+        ).map(\.method).filter {
             $0.parameters.count == arity || ($0.modifiers.contains(.varargs) && arity >= $0.parameters.count - 1)
         }
         return !candidates.isEmpty && candidates.allSatisfy { $0.modifiers.contains(.staticFlag) }

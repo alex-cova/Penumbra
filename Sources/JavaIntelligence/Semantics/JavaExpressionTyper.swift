@@ -8,12 +8,18 @@ public struct JavaReceiverInfo: Sendable, Equatable {
     public let isTypeReference: Bool
     /// Set when the receiver is a package prefix (`java.util.`), not a type or a value.
     public let packageName: String?
+    /// The receiver text was the keyword `super` (`super.m`, `super::m`).
+    public let isSuper: Bool
 
-    public init(type: JavaTypeRef, isTypeReference: Bool, packageName: String? = nil) {
+    public init(type: JavaTypeRef, isTypeReference: Bool, packageName: String? = nil, isSuper: Bool = false) {
         self.type = type
         self.isTypeReference = isTypeReference
         self.packageName = packageName
+        self.isSuper = isSuper
     }
+
+    /// Qualifier for a member lookup through this receiver.
+    public var memberQualifier: JavaMemberQualifier { isSuper ? .viaSuper : .expression }
 }
 
 /// Infers the type of the expression immediately before a `.` (or other member-access trigger) in
@@ -63,11 +69,19 @@ public enum JavaExpressionTyper {
         let bytes = knownBytes ?? Array(source.utf8)
         guard let range = treeReceiverRange(in: realTree, dotOffset: dotOffset) ?? JavaReceiverScanner.receiverRange(in: bytes, dotOffset: dotOffset) else { return nil }
         let receiverText = String(decoding: bytes[range], as: UTF8.self)
+        if let qualifierText = qualifierPrecedingSuper(receiverText) {
+            // `Outer.super;` is not an expression in this grammar (it is a scoped type with a
+            // missing name). Type the qualifier, then apply the two `TypeName.super` forms.
+            return await qualifiedSuperInfo(
+                qualifierText: qualifierText, locals: realTree.visibleLocals(atByteOffset: dotOffset),
+                context: context, index: index, tree: realTree, dotOffset: dotOffset
+            )
+        }
         if receiverText == "super" {
             // `super;` alone isn't a statement tree-sitter will parse as an expression.
             guard let selfName = context.enclosingTypeQualifiedNames.first,
                   let superclass = await JavaMemberLookup.directSuperclass(of: selfName, context: context, index: index) else { return nil }
-            return JavaReceiverInfo(type: superclass, isTypeReference: false)
+            return JavaReceiverInfo(type: superclass, isTypeReference: false, isSuper: true)
         }
         guard let syntheticTree = JavaSyntaxParser().parse("class __Synthetic__ { void __m__() { \(receiverText); } }"),
               let exprNode = outermostExpression(in: syntheticTree.rootNode) else {
@@ -78,7 +92,11 @@ public enum JavaExpressionTyper {
         if let packageName = result.packageName {
             return JavaReceiverInfo(type: .unresolved(simpleName: packageName, arguments: []), isTypeReference: true, packageName: packageName)
         }
-        return JavaReceiverInfo(type: result.type, isTypeReference: result.isTypeReference)
+        // The synthetic wrapper is an instance method, so it cannot see a static method or an
+        // intervening static type. Those checks use the real tree. A qualified `super` that fails
+        // them is not a receiver: it must not fall through as an ordinary value.
+        guard qualifiedSuperIsLegal(result, tree: realTree, dotOffset: dotOffset) else { return nil }
+        return JavaReceiverInfo(type: result.type, isTypeReference: result.isTypeReference, isSuper: result.isSuper)
     }
 
     /// The receiver's byte range read off the parse tree: completion parses with a dummy
@@ -97,6 +115,11 @@ public enum JavaExpressionTyper {
                     : node.child(byFieldName: node.type == "field_access" ? "field" : "name")
                 guard let object, let name, object.startByte != name.startByte else { return nil }
                 if object.endByte <= dotOffset, name.startByte > dotOffset {
+                    // `Outer.super.m`: tree-sitter keeps `super` as a sibling between the qualifier
+                    // and the member, not as the field. The receiver is `Outer.super`, not `Outer`.
+                    if let superNode = superBetween(object: object, and: name, in: node), superNode.endByte <= dotOffset {
+                        return object.startByte..<superNode.endByte
+                    }
                     return object.hasError || object.isMissing ? nil : object.byteRange
                 }
                 current = node.parent
@@ -124,13 +147,20 @@ public enum JavaExpressionTyper {
 
     /// Types a standalone expression written in the file (e.g. a `var` initializer, the left-hand
     /// side of an assignment), with `locals` in scope. `nil` when it can't be parsed or typed.
+    ///
+    /// `rejectingVariableName`, set for a `var` that is not an enhanced-`for` variable, makes a use
+    /// of that name in the expression untypable. `var n = n` and `var n = n + 1` mention the
+    /// variable under inference (JLS 14.4.1); giving them the type of a field `n` would invent a
+    /// type javac rejects. A method name (`n()`) or a member after a dot (`this.n`) is not a use.
     public static func typeOfExpression(
-        _ expressionText: String, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
+        _ expressionText: String, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex,
+        rejectingVariableName: String? = nil
     ) async -> JavaReceiverInfo? {
         guard let syntheticTree = JavaSyntaxParser().parse("class __Synthetic__ { void __m__() { \(expressionText); } }"),
               let exprNode = outermostExpression(in: syntheticTree.rootNode) else {
             return nil
         }
+        if let rejectingVariableName, expressionUsesVariable(exprNode, named: rejectingVariableName) { return nil }
         guard let result = await typed(exprNode, locals: locals, context: context, index: index), result.packageName == nil else { return nil }
         return JavaReceiverInfo(type: result.type, isTypeReference: result.isTypeReference)
     }
@@ -144,38 +174,63 @@ public enum JavaExpressionTyper {
         var result = locals
         for (position, local) in locals.enumerated() where local.lambdaOrigin != nil {
             if let typed = await typedIdentifier(local.name, locals: Array(locals[position...]), context: context, index: index), !typed.isTypeReference {
-                result[position] = JavaLocalVariable(name: local.name, type: typed.type)
+                result[position] = JavaLocalVariable(name: local.name, type: typed.type, declarationEnd: local.declarationEnd)
             }
         }
-        // `locals` lists an inner block's variables before an outer block's, but the variables of one
-        // block in source order, so a `var` can depend on one listed after it (`var b = a;` in an inner
-        // block) or before it (`var a = f(); var b = a;`). Resolve in passes, each against every other
-        // local as resolved so far, until a pass resolves nothing. A name is declared once per scope,
-        // so seeing a later declaration cannot change what an initializer means in valid code.
+        // Each initializer sees locals whose names have already ended, with earlier `var`s as
+        // resolved so far. A chain (`var a = Optional.of("x"); var b = a.get()`) settles in one
+        // pass when `a` is listed first, and on the next pass when an inner block lists `b`
+        // before the outer `a`. A later declaration is not in scope, so it is not consulted.
         for _ in 0 ..< 3 {
             var progressed = false
             for (position, local) in locals.enumerated() where local.isVarDeclaration && result[position].isVarDeclaration {
-                guard let initializer = local.initializerText else { continue }
-                var visible = result
-                visible.remove(at: position)
-                guard let info = await typeOfExpression(initializer, locals: visible, context: context, index: index),
-                      !info.isTypeReference else { continue }
-                if local.isIterationVariable {
-                    if let element = await iteratedElementType(of: info.type, context: context, index: index) {
-                        result[position] = JavaLocalVariable(name: local.name, type: element)
-                        progressed = true
-                    }
-                } else if let varType = JavaTypeSystem.inferredVarType(initializerType: info.type) {
-                    result[position] = JavaLocalVariable(name: local.name, type: varType)
-                    progressed = true
-                }
+                guard let varType = await inferredLocalType(of: local, among: result, context: context, index: index) else { continue }
+                result[position] = JavaLocalVariable(name: local.name, type: varType, declarationEnd: local.declarationEnd)
+                progressed = true
             }
             if !progressed { break }
+        }
+        // Multi-catch parameters keep every alternative, and their primary type becomes the same
+        // answer `typedIdentifier` computes. Statement matching, chains, inlays and local display
+        // read `type`; dot completion reads the alternatives. One function, so they cannot disagree.
+        for (position, local) in result.enumerated() where local.alternativeTypes.count > 1 {
+            let effective = await effectiveType(of: local, context: context, index: index)
+            result[position] = JavaLocalVariable(
+                name: local.name, type: effective, initializerText: local.initializerText,
+                lambdaOrigin: local.lambdaOrigin, isIterationVariable: local.isIterationVariable,
+                alternativeTypes: local.alternativeTypes, declarationEnd: local.declarationEnd
+            )
         }
         return result
     }
 
+    /// The type a local has when an expression names it. A multi-catch parameter is
+    /// `effectiveCatchType` (already resolved). Every other local keeps the type the scope tree
+    /// stored, still unresolved, so a later `typed` resolves it once.
+    static func effectiveType(
+        of local: JavaLocalVariable, context: JavaResolutionContext, index: JavaIndex
+    ) async -> JavaTypeRef {
+        guard local.alternativeTypes.count > 1 else { return local.type }
+        var alternatives: [JavaTypeRef] = []
+        alternatives.reserveCapacity(local.alternativeTypes.count)
+        for alternative in local.alternativeTypes {
+            alternatives.append(await JavaTypeResolver.resolve(alternative, context: context, index: index))
+        }
+        return await JavaTypeSystem.effectiveCatchType(alternatives: alternatives, index: index)
+    }
+
     // MARK: - Node typing
+
+    /// Which legal `TypeName.super` was resolved. The two forms are not the same expression
+    /// (JLS 15.11.2, 15.12.1): an enclosing class names that class's superclass, and a direct
+    /// superinterface names the interface. Unqualified `super` is the innermost type's superclass.
+    enum QualifiedSuper: Equatable {
+        case none
+        /// `owner` is the qualified name of the lexically enclosing class or interface.
+        case enclosing(owner: String)
+        /// The qualifier is a direct superinterface of the innermost type.
+        case superinterface
+    }
 
     /// A typed node result also says whether it's a *value* (an instance the `.` would offer
     /// instance members on) or a *type reference* (a bare class name like `Foo` used as a
@@ -188,6 +243,21 @@ public enum JavaExpressionTyper {
         /// Set when `type` is the bound standing in for a value of type variable `T`, so callers
         /// that want the parameter itself (Go to Type Declaration) can still reach it.
         var typeVariable: String?
+        /// `super` or `TypeName.super`: protected instance members skip the receiver restriction.
+        var isSuper: Bool = false
+        var superForm: QualifiedSuper = .none
+
+        init(
+            type: JavaTypeRef, isTypeReference: Bool, packageName: String? = nil, typeVariable: String? = nil,
+            isSuper: Bool = false, superForm: QualifiedSuper = .none
+        ) {
+            self.type = type
+            self.isTypeReference = isTypeReference
+            self.packageName = packageName
+            self.typeVariable = typeVariable
+            self.isSuper = isSuper
+            self.superForm = superForm
+        }
 
         static func value(_ type: JavaTypeRef) -> Typed { Typed(type: type, isTypeReference: false) }
         static func typeReference(_ type: JavaTypeRef) -> Typed { Typed(type: type, isTypeReference: true) }
@@ -210,15 +280,26 @@ public enum JavaExpressionTyper {
             // `T extends A & B` has the members of both (JLS 4.9): keep the variable, and member
             // lookup unites its bounds. With one bound (or none) the value is typed as that bound.
             if (context.typeParameterBounds[name]?.count ?? 0) > 1 {
-                return Typed(type: resolvedType, isTypeReference: false)
+                return preserving(raw, type: resolvedType, isTypeReference: false)
             }
             // A value of type `T` has the members of `T`'s only bound (`Object` when unbounded).
             let bound = context.typeParameterBounds[name]?.first ?? .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
             let resolvedBound = await JavaTypeResolver.resolve(bound, context: context, index: index)
-            if case .typeVariable = resolvedBound { return Typed(type: resolvedType, isTypeReference: false) }
-            return Typed(type: resolvedBound, isTypeReference: false, typeVariable: name)
+            if case .typeVariable = resolvedBound { return preserving(raw, type: resolvedType, isTypeReference: false) }
+            return preserving(raw, type: resolvedBound, isTypeReference: false, typeVariable: name)
         }
-        return Typed(type: resolvedType, isTypeReference: raw.isTypeReference)
+        return preserving(raw, type: resolvedType, isTypeReference: raw.isTypeReference)
+    }
+
+    /// `typed` re-resolves the type. `super` and a qualified superclass have to survive that,
+    /// or `Outer.super.secret` is checked as an ordinary expression and the protected member disappears.
+    private static func preserving(
+        _ raw: Typed, type: JavaTypeRef, isTypeReference: Bool, typeVariable: String? = nil
+    ) -> Typed {
+        Typed(
+            type: type, isTypeReference: isTypeReference, packageName: raw.packageName,
+            typeVariable: typeVariable ?? raw.typeVariable, isSuper: raw.isSuper, superForm: raw.superForm
+        )
     }
 
     private static let stringType = JavaTypeRef.classType(qualifiedName: "java.lang.String", arguments: [], outer: nil)
@@ -235,7 +316,7 @@ public enum JavaExpressionTyper {
         case "super":
             guard let selfName = context.enclosingTypeQualifiedNames.first,
                   let superclass = await JavaMemberLookup.directSuperclass(of: selfName, context: context, index: index) else { return nil }
-            return .value(superclass)
+            return Typed(type: superclass, isTypeReference: false, isSuper: true, superForm: .enclosing(owner: selfName))
 
         case "identifier":
             return await typedIdentifier(node.text, locals: locals, context: context, index: index)
@@ -470,6 +551,8 @@ public enum JavaExpressionTyper {
         guard let objectNode = node.child(byFieldName: "object"), let fieldNode = node.child(byFieldName: "field") else { return nil }
         guard let object = await typed(objectNode, locals: locals, context: context, index: index) else { return nil }
         if let packageName = object.packageName {
+            // `java.super` is not a package and not a superclass.
+            if isSuperSelection(fieldNode) { return nil }
             let candidate = "\(packageName).\(fieldNode.text)"
             if await index.classStub(qualifiedName: candidate) != nil {
                 return .typeReference(.classType(qualifiedName: candidate, arguments: [], outer: nil))
@@ -479,8 +562,26 @@ public enum JavaExpressionTyper {
         if fieldNode.type == "this" {
             return .value(object.type)
         }
+        if isSuperSelection(fieldNode) {
+            return await typedQualifiedSuper(objectNode: objectNode, object: object, context: context, index: index)
+        }
+        if let superNode = superBetween(object: objectNode, and: fieldNode, in: node) {
+            guard let superTyped = await typedQualifiedSuper(objectNode: objectNode, object: object, context: context, index: index),
+                  qualifiedSuperIsLegal(superTyped, tree: node.tree, dotOffset: superNode.startByte) else { return nil }
+            let members = await JavaMemberLookup.members(
+                of: superTyped.type, mode: .instance, context: context, index: index, qualifier: .viaSuper
+            )
+            if case .field(let field, _)? = members.first(where: {
+                if case .field(let candidate, _) = $0 { return candidate.name == fieldNode.text }
+                return false
+            }) {
+                return .value(field.type)
+            }
+            return nil
+        }
         let mode: JavaMemberLookupMode = object.isTypeReference ? .staticOnly : .instance
-        let members = await JavaMemberLookup.members(of: object.type, mode: mode, context: context, index: index)
+        let qualifier = memberQualifier(objectNode: objectNode, object: object)
+        let members = await JavaMemberLookup.members(of: object.type, mode: mode, context: context, index: index, qualifier: qualifier)
         if case .field(let field, _)? = members.first(where: {
             if case .field(let f, _) = $0 { return f.name == fieldNode.text }
             return false
@@ -496,6 +597,198 @@ public enum JavaExpressionTyper {
         return nil
     }
 
+    /// `super.m` and `Outer.super.m` are superclass accesses. A member named `super` is not.
+    ///
+    /// tree-sitter-java does not make `super` the field of `TypeName.super`. The qualifier and
+    /// the keyword are siblings: `object: (identifier) (super) field: (member)`.
+    private static func superBetween(object: SyntaxNode, and name: SyntaxNode, in node: SyntaxNode) -> SyntaxNode? {
+        var sawObject = false
+        var found: SyntaxNode?
+        node.enumerateChildren { child, _ in
+            if child.byteRange == object.byteRange {
+                sawObject = true
+            } else if sawObject, found == nil, child.type == "super", child.endByte <= name.startByte {
+                found = child
+            }
+        }
+        return found
+    }
+
+    /// `Outer.super` and `com.acme.Outer.super`, with the whitespace this grammar allows around
+    /// the dot. `super` alone and an identifier that merely ends in those letters are not this.
+    private static func qualifierPrecedingSuper(_ receiver: String) -> String? {
+        let trimmed = receiver.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasSuffix("super"), trimmed.count > "super".count else { return nil }
+        var text = trimmed.dropLast("super".count)
+        guard let boundary = text.last else { return nil }
+        if boundary.isLetter || boundary.isNumber || boundary == "_" || boundary == "$" { return nil }
+        while let last = text.last, last.isWhitespace { text = text.dropLast() }
+        guard text.hasSuffix(".") else { return nil }
+        text = text.dropLast()
+        while let last = text.last, last.isWhitespace { text = text.dropLast() }
+        guard !text.isEmpty else { return nil }
+        return String(text)
+    }
+
+    /// The receiver `qualifierText.super`, typed from the qualifier alone.
+    private static func qualifiedSuperInfo(
+        qualifierText: String, locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex,
+        tree: JavaSyntaxTree, dotOffset: Int
+    ) async -> JavaReceiverInfo? {
+        guard let syntheticTree = JavaSyntaxParser().parse("class __Synthetic__ { void __m__() { \(qualifierText); } }"),
+              let exprNode = outermostExpression(in: syntheticTree.rootNode),
+              let qualifier = await typed(exprNode, locals: locals, context: context, index: index),
+              qualifier.packageName == nil,
+              let result = await typedQualifiedSuper(objectNode: exprNode, object: qualifier, context: context, index: index),
+              qualifiedSuperIsLegal(result, tree: tree, dotOffset: dotOffset) else { return nil }
+        return JavaReceiverInfo(type: result.type, isTypeReference: false, isSuper: true)
+    }
+
+    private static func isSuperSelection(_ field: SyntaxNode) -> Bool {
+        field.type == "super" || (field.type == "identifier" && field.text == "super")
+    }
+
+    /// Qualifier for a member reached through `objectNode`. Qualified `super` is a field access
+    /// whose field is the keyword, so the node type alone is not enough.
+    private static func memberQualifier(objectNode: SyntaxNode, object: Typed) -> JavaMemberQualifier {
+        objectNode.type == "super" || object.isSuper ? .viaSuper : .expression
+    }
+
+    /// `TypeName.super` (JLS 15.11.2, 15.12.1). Two forms, and they are not interchangeable.
+    ///
+    /// A lexically enclosing class, enum or record — including the class that directly contains
+    /// the expression, which javac accepts — names that class's superclass. Inside the class
+    /// itself that is the same type as unqualified `super`; inside a nested class it is not.
+    /// javac still attributes this when no enclosing instance exists — a static nested class, a
+    /// static method, an enum — and reports the error separately, so the receiver stays the
+    /// superclass. An enclosing interface is not this form: `I.super` is only the
+    /// direct-superinterface form.
+    ///
+    /// A direct superinterface of the innermost type names that interface, type arguments included.
+    /// An indirect superinterface, the superclass written by name, a sibling, and the innermost
+    /// type itself are not receivers. A variable that reuses the type's simple name does not hide
+    /// it: `TypeName` is resolved as a type.
+    private static func typedQualifiedSuper(
+        objectNode: SyntaxNode, object: Typed, context: JavaResolutionContext, index: JavaIndex
+    ) async -> Typed? {
+        guard let qualifier = await superQualifierType(objectNode: objectNode, object: object, context: context, index: index),
+              let qualifierName = qualifier.erasedQualifiedName else { return nil }
+        let enclosing = context.enclosingTypeQualifiedNames
+        if let ownerIndex = enclosing.firstIndex(of: qualifierName), ownerIndex >= 0,
+           let stub = await index.classStub(qualifiedName: qualifierName),
+           stub.kind == .classKind || stub.kind == .enumKind || stub.kind == .recordKind,
+           let superclass = await JavaMemberLookup.directSuperclass(of: qualifierName, context: context, index: index) {
+            return Typed(type: superclass, isTypeReference: false, isSuper: true, superForm: .enclosing(owner: qualifierName))
+        }
+        guard let innermost = enclosing.first else { return nil }
+        let interfaces = await JavaMemberLookup.directSuperinterfaces(of: innermost, context: context, index: index)
+        guard let match = interfaces.first(where: { $0.erasedQualifiedName == qualifierName }) else { return nil }
+        return Typed(type: match, isTypeReference: false, isSuper: true, superForm: .superinterface)
+    }
+
+    /// The type `TypeName` names. A local or field of the same simple name is not that type, but
+    /// it also does not hide it in a type-name position.
+    private static func superQualifierType(
+        objectNode: SyntaxNode, object: Typed, context: JavaResolutionContext, index: JavaIndex
+    ) async -> JavaTypeRef? {
+        if object.isTypeReference, object.packageName == nil { return object.type }
+        guard objectNode.type == "identifier" else { return nil }
+        let resolved = await JavaTypeResolver.resolve(
+            .unresolved(simpleName: objectNode.text, arguments: []), context: context, index: index
+        )
+        if case .classType = resolved { return resolved }
+        return nil
+    }
+
+    /// A direct-superinterface `I.super` in a static method or static initializer is not attributed
+    /// (javac: "not an enclosing class"). An enclosing-class `Outer.super` still is.
+    private static func qualifiedSuperIsLegal(_ result: Typed, tree: JavaSyntaxTree, dotOffset: Int) -> Bool {
+        guard result.isSuper, result.superForm == .superinterface else { return true }
+        return !occursInStaticContext(tree: tree, offset: dotOffset)
+    }
+
+    /// Innermost method, field or initializer. A static nested class's instance method is not static.
+    private static func occursInStaticContext(tree: JavaSyntaxTree, offset: Int) -> Bool {
+        var current: SyntaxNode? = tree.node(atByteOffset: offset)
+        while let node = current {
+            switch node.type {
+            case "static_initializer":
+                return true
+            case "method_declaration", "field_declaration":
+                return hasStaticModifier(node)
+            case "class_body", "constructor_declaration", "enum_body", "interface_body", "annotation_type_body":
+                return false
+            default:
+                current = node.parent
+            }
+        }
+        return false
+    }
+
+    private static func hasStaticModifier(_ node: SyntaxNode) -> Bool {
+        node.firstNamedChild(ofType: "modifiers")?.children.contains { $0.type == "static" } == true
+    }
+
+    /// Names currently being inferred from a `var` initializer. A cycle (`var a = b; var b = a`,
+    /// or a hand-built list that can see both) stops here instead of recursing.
+    @TaskLocal private static var varsBeingInferred: Set<String> = []
+
+    /// The type of a `var` local, from its initializer, using the same substitution the expression
+    /// typer already applies to generic calls. `nil` when the initializer cannot be typed, names
+    /// the variable itself, or is a poly expression with no standalone type (a bare lambda or
+    /// method reference): those are programs javac rejects, and they stay untyped.
+    private static func inferredLocalType(
+        of local: JavaLocalVariable, among locals: [JavaLocalVariable], context: JavaResolutionContext, index: JavaIndex
+    ) async -> JavaTypeRef? {
+        guard local.isVarDeclaration, let initializer = local.initializerText else { return nil }
+        if varsBeingInferred.contains(local.name) { return nil }
+        let rejectsOwnName = local.isIterationVariable ? nil : local.name
+        return await JavaExpressionTyper.$varsBeingInferred.withValue(varsBeingInferred.union([local.name])) {
+            let environment = local.initializerEnvironment(among: locals)
+            guard let info = await typeOfExpression(
+                initializer, locals: environment, context: context, index: index, rejectingVariableName: rejectsOwnName
+            ), !info.isTypeReference else { return nil }
+            if local.isIterationVariable {
+                return await iteratedElementType(of: info.type, context: context, index: index)
+            }
+            return JavaTypeSystem.inferredVarType(initializerType: info.type)
+        }
+    }
+
+    /// Whether `node` uses `name` as a value. Declaration names, method names and the identifier
+    /// after a `.` are not uses: `var n = n()` and `var n = this.n` are legal, `var n = n` is not.
+    private static func expressionUsesVariable(_ node: SyntaxNode, named name: String) -> Bool {
+        var stack = [node]
+        while let current = stack.popLast() {
+            if current.type == "identifier", current.text == name, !isDeclaredOrMemberName(current) {
+                return true
+            }
+            stack.append(contentsOf: current.namedChildren)
+        }
+        return false
+    }
+
+    private static func isDeclaredOrMemberName(_ identifier: SyntaxNode) -> Bool {
+        guard let parent = identifier.parent else { return false }
+        switch parent.type {
+        case "variable_declarator", "formal_parameter", "spread_parameter", "catch_formal_parameter", "resource",
+             "enhanced_for_statement", "method_declaration", "constructor_declaration":
+            return parent.child(byFieldName: "name")?.startByte == identifier.startByte
+        case "method_invocation":
+            return parent.child(byFieldName: "name")?.startByte == identifier.startByte
+        case "field_access":
+            return parent.child(byFieldName: "field")?.startByte == identifier.startByte
+        case "inferred_parameters":
+            return true
+        case "lambda_expression":
+            return parent.child(byFieldName: "parameters")?.startByte == identifier.startByte
+        case "marker_annotation", "annotation", "type_identifier", "scoped_type_identifier", "generic_type":
+            return true
+        default:
+            return false
+        }
+    }
+
     /// `foo` alone: a local/parameter first (shadows everything else, matching Java's own scoping),
     /// then an instance/static field of an enclosing type (implicit `this.foo`, including outer
     /// classes), then a statically imported field, then a type name, and finally -- when nothing
@@ -508,13 +801,14 @@ public enum JavaExpressionTyper {
                     return .value(type)
                 }
             }
-            if local.isVarDeclaration, let initializer = local.initializerText {
-                let earlier = Array(locals.drop { $0.name != name }.dropFirst())
-                guard let initialized = await typeOfExpression(initializer, locals: earlier, context: context, index: index) else { return nil }
-                if local.isIterationVariable {
-                    return await iteratedElementType(of: initialized.type, context: context, index: index).map(Typed.value)
-                }
-                return .value(initialized.type)
+            if local.isVarDeclaration {
+                guard let inferred = await inferredLocalType(of: local, among: locals, context: context, index: index) else { return nil }
+                return .value(inferred)
+            }
+            // `catch (A | B e)`: the parameter's type is the lub of the alternatives, not the
+            // first one written. A single catch keeps the type the scope tree stored.
+            if local.alternativeTypes.count > 1 {
+                return .value(await effectiveType(of: local, context: context, index: index))
             }
             return .value(local.type)
         }
@@ -952,13 +1246,30 @@ public enum JavaExpressionTyper {
         guard let nameNode = node.child(byFieldName: "name") else { return [] }
         var candidates: [JavaMethodStub] = []
         if let objectNode = node.child(byFieldName: "object") {
+            if let superNode = superBetween(object: objectNode, and: nameNode, in: node) {
+                guard let qualifier = await typed(objectNode, locals: locals, context: context, index: index), qualifier.packageName == nil,
+                      let superTyped = await typedQualifiedSuper(objectNode: objectNode, object: qualifier, context: context, index: index),
+                      qualifiedSuperIsLegal(superTyped, tree: node.tree, dotOffset: superNode.startByte) else { return [] }
+                candidates = await methods(
+                    named: nameNode.text, on: superTyped.type, mode: .instance, context: context, index: index, qualifier: .viaSuper
+                )
+                candidates = await specializingGetClass(candidates, searched: superTyped.type, context: context, index: index)
+                return candidates
+            }
             guard let receiver = await typed(objectNode, locals: locals, context: context, index: index), receiver.packageName == nil else { return [] }
             let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
-            candidates = await methods(named: nameNode.text, on: receiver.type, mode: mode, context: context, index: index)
+            let qualifier = memberQualifier(objectNode: objectNode, object: receiver)
+            candidates = await methods(named: nameNode.text, on: receiver.type, mode: mode, context: context, index: index, qualifier: qualifier)
+            if !receiver.isTypeReference {
+                candidates = await specializingGetClass(candidates, searched: receiver.type, context: context, index: index)
+            }
         } else {
             for enclosing in context.enclosingTypeQualifiedNames where candidates.isEmpty {
                 let selfType = JavaTypeRef.classType(qualifiedName: enclosing, arguments: [], outer: nil)
                 candidates = await methods(named: nameNode.text, on: selfType, mode: .instance, context: context, index: index)
+                if !candidates.isEmpty {
+                    candidates = await specializingGetClass(candidates, searched: selfType, context: context, index: index)
+                }
             }
             if candidates.isEmpty {
                 candidates = await JavaStaticImports.members(context: context, index: index).compactMap {
@@ -968,6 +1279,65 @@ public enum JavaExpressionTyper {
             }
         }
         return candidates
+    }
+
+    /// `Object.getClass()` is declared `Class<?>`, but an invocation of it has type
+    /// `Class<? extends |T|>`, where `T` is the type searched for the method (JLS 4.3.2, 15.12.2.6):
+    /// the receiver's static type, or the enclosing class for an unqualified call. javac then
+    /// captures that wildcard; the engine keeps the wildcard itself, which member lookup already
+    /// reads through its bound (`readSubstitution`), so `cast` returns `T`'s erasure and
+    /// `getComponentType()` stays `Class<?>`. No capture variable is introduced. Only the
+    /// zero-argument instance method changes; a receiver whose erasure is not known keeps `Class<?>`.
+    private static func specializingGetClass(
+        _ candidates: [JavaMethodStub], searched: JavaTypeRef, context: JavaResolutionContext, index: JavaIndex
+    ) async -> [JavaMethodStub] {
+        guard candidates.contains(where: isObjectGetClass),
+              let erased = await erasureOfStaticType(searched, context: context, index: index) else { return candidates }
+        let specialized = JavaTypeRef.classType(
+            qualifiedName: "java.lang.Class", arguments: [.wildcard(.extends(erased))], outer: nil
+        )
+        return candidates.map { method in
+            guard isObjectGetClass(method) else { return method }
+            return JavaMethodStub(
+                name: method.name, typeParameters: method.typeParameters, parameters: method.parameters,
+                returnType: specialized, thrownTypes: method.thrownTypes, modifiers: method.modifiers,
+                isConstructor: method.isConstructor, javadoc: method.javadoc
+            )
+        }
+    }
+
+    private static func isObjectGetClass(_ method: JavaMethodStub) -> Bool {
+        guard method.name == "getClass", method.parameters.isEmpty, method.typeParameters.isEmpty,
+              !method.isConstructor, !method.modifiers.contains(.staticFlag) else { return false }
+        if case .classType("java.lang.Class", _, _) = method.returnType { return true }
+        return false
+    }
+
+    /// `|T|` (JLS 4.6) for an expression's static type: a type variable erases to the erasure of its
+    /// leftmost bound (read from the context, at most eight variables deep), an array recurses into
+    /// its element. `nil` for what cannot be erased with confidence (an unresolved name, a primitive).
+    static func erasureOfStaticType(
+        _ type: JavaTypeRef, context: JavaResolutionContext, index: JavaIndex, depth: Int = 0
+    ) async -> JavaTypeRef? {
+        switch type {
+        case .classType:
+            return JavaTypeSystem.erasure(of: type)
+        case .array(let element):
+            if case .primitive = element { return type }
+            return await erasureOfStaticType(element, context: context, index: index, depth: depth).map { .array(element: $0) }
+        case .typeVariable(let name):
+            guard depth < 8, let leftmost = context.typeParameterBounds[name]?.first else {
+                return .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
+            }
+            let resolved = await JavaTypeResolver.resolve(leftmost, context: context, index: index)
+            return await erasureOfStaticType(resolved, context: context, index: index, depth: depth + 1)
+        case .wildcard(.extends(let bound)):
+            return await erasureOfStaticType(bound, context: context, index: index, depth: depth)
+        case .wildcard:
+            return .classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
+        case .primitive, .void, .unresolved:
+            return nil
+        }
     }
 
     // MARK: - Lambdas and method references
@@ -1064,8 +1434,19 @@ public enum JavaExpressionTyper {
     ) async -> JavaTypeRef? {
         let arity = parameters.count
         let named = node.namedChildren
-        guard let objectNode = named.first,
-              let object = await typed(objectNode, locals: locals, context: context, index: index), object.packageName == nil else { return nil }
+        guard let objectNode = named.first, let nameNode = named.last else { return nil }
+        if let superNode = superBetween(object: objectNode, and: nameNode, in: node) {
+            guard let qualifier = await typed(objectNode, locals: locals, context: context, index: index), qualifier.packageName == nil,
+                  let superTyped = await typedQualifiedSuper(objectNode: objectNode, object: qualifier, context: context, index: index),
+                  qualifiedSuperIsLegal(superTyped, tree: node.tree, dotOffset: superNode.startByte) else { return nil }
+            if node.text.hasSuffix("::new") { return superTyped.type }
+            let candidates = await methods(
+                named: nameNode.text, on: superTyped.type, mode: .instance, context: context, index: index, qualifier: .viaSuper
+            )
+            let chosen = candidates.first { $0.parameters.count == arity }
+            return (chosen ?? candidates.first).map { inferMethodTypeVariables($0, argumentTypes: []) }
+        }
+        guard let object = await typed(objectNode, locals: locals, context: context, index: index), object.packageName == nil else { return nil }
         if node.text.hasSuffix("::new") || named.count < 2 {
             return object.type
         }
@@ -1076,7 +1457,8 @@ public enum JavaExpressionTyper {
            let viewed = await JavaMemberLookup.asSupertype(first, named: referenced, index: index) {
             receiver = viewed
         }
-        let candidates = await methods(named: name, on: receiver, mode: .instance, context: context, index: index)
+        let qualifier = memberQualifier(objectNode: objectNode, object: object)
+        let candidates = await methods(named: name, on: receiver, mode: .instance, context: context, index: index, qualifier: qualifier)
         let chosen: JavaMethodStub?
         if object.isTypeReference {
             chosen = candidates.first { $0.modifiers.contains(.staticFlag) && $0.parameters.count == arity }
@@ -1193,9 +1575,10 @@ public enum JavaExpressionTyper {
     }
 
     static func methods(
-        named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode, context: JavaResolutionContext, index: JavaIndex
+        named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode, context: JavaResolutionContext, index: JavaIndex,
+        qualifier: JavaMemberQualifier = .expression
     ) async -> [JavaMethodStub] {
-        await JavaMemberLookup.members(of: type, mode: mode, context: context, index: index).compactMap { member in
+        await JavaMemberLookup.members(of: type, mode: mode, context: context, index: index, qualifier: qualifier).compactMap { member in
             guard case .method(let method, _) = member, method.name == name else { return nil }
             return method
         }
@@ -1207,6 +1590,11 @@ public enum JavaExpressionTyper {
     /// lambda, something that didn't type) are compatible with any reference parameter. Several
     /// results mean the call is ambiguous from what is known. When no candidate is applicable at
     /// all (an unindexed type, a half-typed call), falls back to ``bestOverloads(_:argumentTypes:)``.
+    ///
+    /// Applicability and specificity see a renamed-apart copy (`T` → `T#`) so a wildcard bound
+    /// that is a method type parameter stays open. The stubs returned are the originals:
+    /// ``infer(_:argumentNodes:argumentTypes:node:target:excluded:locals:context:index:)`` renames
+    /// them once, and a second rename would look up `T##`.
     static func resolveOverloads(
         _ candidates: [JavaMethodStub], argumentTypes: [JavaTypeRef?], shapes: [FunctionalShape?] = [],
         context: JavaResolutionContext, index: JavaIndex
@@ -1221,7 +1609,8 @@ public enum JavaExpressionTyper {
             var applicable: [(method: JavaMethodStub, parameters: [JavaTypeRef])] = []
             for method in candidates {
                 guard let parameters = await applicableParameters(
-                    method, arguments: resolvedArguments, shapes: shapes, phase: phase, assignability: assignability, context: context, index: index
+                    renamedApart(method), arguments: resolvedArguments, shapes: shapes, phase: phase,
+                    assignability: assignability, context: context, index: index
                 ) else { continue }
                 applicable.append((method, parameters))
             }

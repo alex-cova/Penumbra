@@ -194,6 +194,37 @@ Recall@8 92.7 → 93.7, MRR 0.681 → 0.704. Constructor Recall@8 66.7 → 93.0,
 The held-out gains (+4.6 Recall@1) are not smaller than the development gains (+2.9): the fixes are not fitted to gson
 and jackson-core.
 
+## Receiver-fidelity change (JDK 27, ranking weights unchanged)
+
+Measured after the scope and overload-applicability fixes in `docs/JAVA_GENERIC_TYPE_AUDIT.md`. Same harness,
+`JAVA_QUALITY_SET=all JAVA_QUALITY_STATS=1`, prefix length 1. This is JDK 27. The table above is JDK 25, and the
+held-out project set is not the same one (sxb-product scored 0 sites here: every oracle attribute request failed, so
+it is absent from the aggregate). Do not read the two tables as one A/B.
+
+Development, 1,779 scored sites (the same count as the JDK 25 row): Recall@1 56.0 %, Recall@3 83.3 %, Recall@8 94.2 %,
+MRR 0.708, empty 0.2 %, incorrect insertions 0 / 1,766, invalid candidates 0 / 281 with validation coverage 240 / 240.
+The JDK 25 "after" row was 55.6 / 82.9 / 93.7 / 0.704.
+
+Held-out, 3,676 scored sites over commons-collections, jOOL, sxb-agent, Balatro4j, and sxb-conciliator:
+
+| | R@1 | R@3 | R@8 | MRR | empty | insertions | invalid (coverage) |
+|---|---|---|---|---|---|---|---|
+| complete | 67.5 % | 86.2 % | 92.0 % | 0.774 | 0.4 % | 0 / 3,551 | 0 / 522 (448 / 451 = 99.3 %) |
+| broken line | 65.0 % | 84.8 % | 91.1 % | 0.755 | 0.4 % | — | — |
+| files that compile | 68.7 % | 90.5 % | 95.0 % | 0.796 | 0.0 % | 0 / 1,210 | 0 / 171 |
+
+Member completion on that held-out set (R@1 / R@8 / MRR): field 71.9 / 97.2 / 0.833, method 61.1 / 86.8 / 0.718,
+static member 75.3 / 94.7 / 0.826. Inherited interface fields are covered by the receiver audit (`field-path` exact
+100 %) and by `JavaMemberLookupTests/testInterfaceFieldHidingAndSiblingAmbiguity`; this harness did not change
+ranking, so a field that is ambiguous between sibling interfaces is omitted rather than ranked.
+
+Release A/B against `HEAD` (`java-completion synthetic`, `java-scope-tree synthetic --lines 2000`,
+`java-allocations synthetic --samples 3`), three alternating rounds for completion and the scope tree, two for
+allocations. Final-update medians, before → after: member access 0.118 → 0.121 ms, a prefixed member 0.138 → 0.142 ms,
+generic invocation 0.491 → 0.520 ms, member access in a 5,000-line file 6.78 → 6.81 ms. Scope-tree construction on
+2,004 lines 4.63 → 4.80 ms. One 5,000-line completion allocates 342.1 KB (686 allocations) before and 343.6 KB
+(695) after. At 120,000 lines both sides allocate 4.95 MB. The extra allocations do not scale with the file.
+
 ## Oracle reliability
 
 Expected candidate = the developer's choice at a site where javac resolves the identifier to a symbol of the same

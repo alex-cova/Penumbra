@@ -39,6 +39,7 @@ func printUsageAndExit() -> Never {
       index-parse <path|synthetic> [--lang java] [--lines N] [--samples N]
       metal-waits <path|synthetic> [--lines N] [--frames N] [--no-deferred] [--discrete-atlas]
       java-completion synthetic [--jars N] [--large-methods N] [--large-per-class N] [--unicode]
+      java-anonymous synthetic [--samples N] [--edits N]
       java-name-index <java-source-directory|synthetic> [--files N]
       java-members <java-source-directory>
       java-inheritors synthetic [--files N]
@@ -116,7 +117,7 @@ let options = Commands.Options(
 
 let allowsSyntheticPath = command == "scroll-frames" || command == "metal-waits" || command == "typeset-long" || command == "index-parse" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
     || command == "java-profile-import" || command == "java-coverage-bands"
-    || command == "enter-session" || command == "markdown-preview" || command == "java-name-index" || command == "java-inheritors" || command == "java-stub-reuse" || command == "java-parse-edit" || command == "java-allocations"
+    || command == "enter-session" || command == "markdown-preview" || command == "java-name-index" || command == "java-inheritors" || command == "java-stub-reuse" || command == "java-parse-edit" || command == "java-allocations" || command == "java-anonymous"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
 guard usesSynthetic || command == "java-diagnostics" || FileManager.default.fileExists(atPath: path) else {
@@ -207,6 +208,11 @@ do {
         try JavaGoToDefinitionProfile.run(
             lines: Int(flagValue("--lines", in: rest) ?? "") ?? 3_000,
             samples: Int(flagValue("--samples", in: rest) ?? "") ?? 7
+        )
+    case "java-anonymous":
+        try JavaAnonymousProfile.run(
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 15,
+            edits: Int(flagValue("--edits", in: rest) ?? "") ?? 200
         )
     case "java-scope-tree":
         try JavaScopeTreeProfile.run(

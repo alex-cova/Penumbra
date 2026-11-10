@@ -39,8 +39,9 @@ extension JavaSyntaxTree {
     }
 
     /// The locals visible at `offset`: the scope tree's (JLS 6.3 scopes, pattern bindings in
-    /// `switch` rules and negated `instanceof` included) for the outermost method or constructor
-    /// around it, plus what ``JavaErrorRecoveredLocals`` reads back from a collapsed `ERROR` region.
+    /// `switch` rules and negated `instanceof` included) for the outermost method, constructor, or
+    /// initializer around it, plus what ``JavaErrorRecoveredLocals`` reads back from a collapsed
+    /// `ERROR` region.
     /// No file URL is involved: callers need the variables, not declaration sites.
     ///
     /// The tree puts a local in scope inside its own initializer (JLS 6.3), which is right for the
@@ -53,6 +54,16 @@ extension JavaSyntaxTree {
         let merged = fromTree + JavaErrorRecoveredLocals.locals(in: self, atByteOffset: offset).filter { !known.contains($0.name) }
         let initializing = namesBeingInitialized(atByteOffset: offset)
         return initializing.isEmpty ? merged : merged.filter { !initializing.contains($0.name) }
+    }
+
+    /// Local classes visible at `offset`, from the same tree ``visibleLocals(atByteOffset:)`` uses:
+    /// the enclosing method, constructor, or initializer when there is one, otherwise the whole
+    /// file. Empty when none are in scope.
+    func visibleLocalTypeSites(atByteOffset offset: Int) -> [JavaScopeTree.LocalTypeSite] {
+        if let sites = JavaScopeTree.localTypeSites(in: self, enclosingExecutableAtByteOffset: offset) {
+            return sites
+        }
+        return scopeTree(for: Self.localsOnlyURL).localTypeSites(atByteOffset: offset)
     }
 
     /// Variables whose declarator contains `offset` after the name, i.e. the caret is in their

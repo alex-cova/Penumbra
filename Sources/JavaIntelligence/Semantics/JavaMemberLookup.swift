@@ -42,6 +42,19 @@ public enum JavaMemberLookupMode: Sendable {
     case staticOnly
 }
 
+/// How the member is reached, for JLS 6.6.2.1. A protected instance member of `C` is accessible
+/// from a subclass `S` in another package only when the qualifying type is `S` or a subclass of `S`.
+/// Same-package access, static members, `super`, and a simple name have no such restriction.
+public enum JavaMemberQualifier: Sendable {
+    /// `expr.m`, `Type.m`, or the members of the enclosing class itself (`this`).
+    case expression
+    /// `super.m` and `super::m`. The qualifying type is the superclass; the restriction does not apply.
+    case viaSuper
+    /// A simple name searched on a supertype of the class that contains the use. There is no
+    /// qualifying expression, so the receiver restriction does not apply.
+    case simpleName
+}
+
 /// Walks a type's superclass/interface chain (substituting generic type arguments through each
 /// level) to answer "what members does `.` offer here" -- the equivalent of resolving overload
 /// sets and inherited members that a real `javac`/IDE symbol table would give you, built from
@@ -56,34 +69,53 @@ public enum JavaMemberLookup {
     /// erased parameter list) and filtered by ``JavaMemberLookupMode`` and access.
     public static func members(
         of type: JavaTypeRef, mode: JavaMemberLookupMode, context: JavaResolutionContext, index: JavaIndex,
-        checkAccess: Bool = true
+        checkAccess: Bool = true, qualifier: JavaMemberQualifier = .expression
     ) async -> [JavaResolvedMember] {
         if case .array(let element) = type {
-            return arrayMembers(elementType: element)
+            // JLS 10.7: `length`, a public `clone()` returning the array type, and every member of
+            // `Object` except `clone`. Without `Object`'s, `array.getClass()`, `equals`,
+            // `hashCode` and `toString` neither complete nor type. Only the public ones: an array
+            // type is never a subclass of the accessing class, so `Object`'s protected members are
+            // not accessible through it (JLS 6.6.2.1). The `Object` lookup is an expression
+            // receiver even when the caller asked about `super` — an array has no superclass access.
+            let object = JavaTypeRef.classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
+            let inherited = mode == .staticOnly ? [] : await members(
+                of: object, mode: .instance, context: context, index: index,
+                checkAccess: checkAccess, qualifier: .expression
+            ).filter { member in
+                guard case .method(let method, _) = member else { return false }
+                return method.modifiers.contains(.publicFlag) && !method.modifiers.contains(.staticFlag) && method.name != "clone"
+            }
+            return arrayMembers(elementType: element) + inherited
         }
         if case .typeVariable(let name) = type {
             return await members(
                 ofVariable: name, mode: mode, context: context, index: index,
-                checkAccess: checkAccess, seen: [name]
+                checkAccess: checkAccess, qualifier: qualifier, seen: [name]
             )
         }
         guard case .classType(let qualifiedName, let arguments, let outer) = type else {
             return []
         }
         // Everything the walk reads: the type, the mode, what access is checked against, the
-        // resolution fallbacks, and which shards are visible. The index clears the cache whenever
-        // its sources or overlay change.
+        // qualifier (a protected instance member depends on it), the resolution fallbacks, and
+        // which shards are visible. The index clears the cache whenever its sources or overlay change.
+        // `viaSuper` and `simpleName` allow the same members, so they share a cache entry.
         let scope = JavaIndex.queryScope.map { $0.sorted().joined(separator: ",") } ?? "*"
-        let cacheKey = "\(type)|\(mode)|\(checkAccess)|\(context.packageName)|\(context.enclosingTypeQualifiedNames)|\(context.imports)|\(scope)"
+        let accessKey = checkAccess ? (qualifier == .expression ? "expression" : "subclass") : "unchecked"
+        let cacheKey = "\(type)|\(mode)|\(accessKey)|\(context.packageName)|\(context.enclosingTypeQualifiedNames)|\(context.imports)|\(scope)"
         // A request that sees the buffer's own classes (`JavaIndex.liveStubs`) must not read or fill
         // a cache that other requests share.
         let isCacheable = sourceTextProvider == nil && JavaIndex.liveStubs == nil
-            && !JavaAnonymousClass.isAnonymous(qualifiedName)
-            && !context.enclosingTypeQualifiedNames.contains(where: JavaAnonymousClass.isAnonymous)
+            && !JavaAnonymousClass.isSynthetic(qualifiedName)
+            && !context.enclosingTypeQualifiedNames.contains(where: JavaAnonymousClass.isSynthetic)
         if isCacheable, let cached = await index.cachedMemberSet(cacheKey) {
             return cached
         }
-        let result = await walkMembers(of: qualifiedName, arguments: arguments, outer: outer, mode: mode, context: context, index: index, checkAccess: checkAccess)
+        let result = await walkMembers(
+            of: qualifiedName, arguments: arguments, outer: outer, mode: mode, context: context, index: index,
+            checkAccess: checkAccess, qualifier: qualifier
+        )
         if isCacheable {
             await index.storeMemberSet(result, for: cacheKey)
         }
@@ -96,11 +128,11 @@ public enum JavaMemberLookup {
     /// it — and a bound that is itself a variable recurses with `seen` cutting cycles.
     private static func members(
         ofVariable name: String, mode: JavaMemberLookupMode, context: JavaResolutionContext, index: JavaIndex,
-        checkAccess: Bool, seen: Set<String>
+        checkAccess: Bool, qualifier: JavaMemberQualifier, seen: Set<String>
     ) async -> [JavaResolvedMember] {
         let object = JavaTypeRef.classType(qualifiedName: "java.lang.Object", arguments: [], outer: nil)
         guard let bounds = context.typeParameterBounds[name], !bounds.isEmpty else {
-            return await members(of: object, mode: mode, context: context, index: index, checkAccess: checkAccess)
+            return await members(of: object, mode: mode, context: context, index: index, checkAccess: checkAccess, qualifier: qualifier)
         }
         var perBound: [[JavaResolvedMember]] = []
         for bound in bounds {
@@ -109,12 +141,14 @@ public enum JavaMemberLookup {
             case .typeVariable(let inner) where inner != name && !seen.contains(inner):
                 perBound.append(await members(
                     ofVariable: inner, mode: mode, context: context, index: index,
-                    checkAccess: checkAccess, seen: seen.union([inner])
+                    checkAccess: checkAccess, qualifier: qualifier, seen: seen.union([inner])
                 ))
             case .typeVariable:
-                return await members(of: object, mode: mode, context: context, index: index, checkAccess: checkAccess)
+                return await members(of: object, mode: mode, context: context, index: index, checkAccess: checkAccess, qualifier: qualifier)
             default:
-                perBound.append(await members(of: resolved, mode: mode, context: context, index: index, checkAccess: checkAccess))
+                perBound.append(await members(
+                    of: resolved, mode: mode, context: context, index: index, checkAccess: checkAccess, qualifier: qualifier
+                ))
             }
         }
         guard perBound.count > 1 else { return perBound.first ?? [] }
@@ -142,29 +176,54 @@ public enum JavaMemberLookup {
 
     private static func walkMembers(
         of qualifiedName: String, arguments: [JavaTypeArgument], outer: JavaTypeRef?, mode: JavaMemberLookupMode,
-        context: JavaResolutionContext, index: JavaIndex, checkAccess: Bool
+        context: JavaResolutionContext, index: JavaIndex, checkAccess: Bool, qualifier: JavaMemberQualifier
     ) async -> [JavaResolvedMember] {
-        let selfHierarchy = await enclosingHierarchy(of: context, index: index)
         let fileCache = DeclaringFileCache()
+        var ancestorMemo: [String: Set<String>] = [:]
+        let sites = await protectedSites(of: context, index: index, memo: &ancestorMemo)
+        let receiverAncestors = await memoizedAncestors(of: qualifiedName, memo: &ancestorMemo, index: index)
 
         var seenSignatures = Set<String>()
         var result: [JavaResolvedMember] = []
+        var fieldSlots: [String: Int] = [:]
+        var ambiguousFields = Set<String>()
         var visitedClasses = Set<String>()
-        var queue: [(qualifiedName: String, substitution: [String: JavaTypeRef], lowerOnly: Set<String>)] = [
+        // `implicitObject` marks `Object` queued by JLS 9.2 (an interface's public instance methods
+        // only). A class that reaches `Object` as its superclass does not set it. That implicit
+        // visit must not *consume* `Object`: an interface queued before a superclass is processed
+        // first (the walk is a FIFO), and marking `Object` visited there used to drop `clone` and
+        // `finalize` for a class receiver that can legally see them (JLS 6.6.2.1).
+        var objectImplicitOnly = false
+        var queue: [(qualifiedName: String, substitution: [String: JavaTypeRef], lowerOnly: Set<String>, implicitObject: Bool)] = [
             (qualifiedName,
              await substitutionMap(forTypeArguments: arguments, appliedTo: qualifiedName, index: index)
                 .merging(await outerSubstitution(of: outer, index: index)) { own, _ in own },
-             await lowerBoundedParameters(forTypeArguments: arguments, appliedTo: qualifiedName, index: index))
+             await lowerBoundedParameters(forTypeArguments: arguments, appliedTo: qualifiedName, index: index),
+             false)
         ]
         // Processed as a FIFO queue (not a stack) so the class itself and its direct supertypes
         // are visited -- and their members recorded as "more derived" -- before Object/deeper
         // ancestors, which is what the dedup-by-override logic below relies on.
         var queueIndex = 0
         while queueIndex < queue.count {
-            let (currentName, substitution, lowerOnly) = queue[queueIndex]
+            let (currentName, substitution, lowerOnly, implicitObject) = queue[queueIndex]
             queueIndex += 1
-            guard visitedClasses.insert(currentName).inserted else { continue }
+            // A public-only `Object` visit leaves the name unvisited so the class chain can add
+            // the protected members. A later full visit skips the public members already recorded,
+            // so `toString` and `wait` are not built twice. With access checks off, the implicit
+            // visit already keeps `clone` and `finalize`, and one visit is enough.
+            var upgradingObject = false
+            if currentName == "java.lang.Object", implicitObject, checkAccess {
+                if visitedClasses.contains(currentName) || objectImplicitOnly { continue }
+                objectImplicitOnly = true
+            } else {
+                if currentName == "java.lang.Object", objectImplicitOnly, !implicitObject {
+                    upgradingObject = true
+                }
+                guard visitedClasses.insert(currentName).inserted else { continue }
+            }
             guard let stub = await index.classStub(qualifiedName: currentName) else { continue }
+            let implicitPublic = implicitObject && checkAccess
             // What a *read* of a type variable gives. `? super X` accepts an X going in, but only
             // its upper bound comes out (`List<? super Integer>.get(0)` is an `Object`, JLS 5.1.10).
             var readSubstitution = substitution
@@ -174,17 +233,32 @@ public enum JavaMemberLookup {
             }
             // Source stubs keep type names as written (`List<StockSet>`); they must be resolved
             // against the *declaring* file's imports, not the file asking for completion.
-            let declaringContext = await sourceDeclarationContext(of: stub, cache: fileCache)
+            var declaringContext = await sourceDeclarationContext(of: stub, cache: fileCache)
+            if JavaAnonymousClass.isLocal(currentName), let base = declaringContext {
+                declaringContext = base.addingUnshadowedTypeParameters(from: context)
+            }
 
             for field in stub.fields where !field.modifiers.contains(.synthetic) {
                 guard mode == .instance || field.modifiers.contains(.staticFlag) || field.modifiers.contains(.enumConstant) else { continue }
+                if implicitPublic, !field.modifiers.contains(.publicFlag) { continue }
+                // The implicit visit already recorded every public field.
+                if upgradingObject, field.modifiers.contains(.publicFlag) { continue }
                 if checkAccess {
-                    guard await isAccessible(field.modifiers, declaringClass: currentName, declaringPackage: stub.packageName, context: context, selfHierarchy: selfHierarchy, index: index) else { continue }
+                    guard await isAccessible(
+                        field.modifiers, declaringClass: currentName, declaringPackage: stub.packageName,
+                        context: context, index: index, sites: sites, qualifier: qualifier,
+                        receiverAncestors: receiverAncestors, restrictProtectedInstance: true
+                    ) else { continue }
                 }
-                let key = "field:\(field.name)"
-                guard seenSignatures.insert(key).inserted else { continue }
                 let substituted = substitute(await attachingOuter(await resolvedDeclaration(field.type, in: declaringContext, index: index), declaredIn: stub, index: index), using: readSubstitution)
-                result.append(.field(JavaFieldStub(name: field.name, type: substituted, modifiers: field.modifiers, javadoc: field.javadoc), declaringClass: currentName))
+                let member = JavaResolvedMember.field(
+                    JavaFieldStub(name: field.name, type: substituted, modifiers: field.modifiers, javadoc: field.javadoc),
+                    declaringClass: currentName
+                )
+                await absorbField(
+                    member, name: field.name, declaringClass: currentName, stubKind: stub.kind,
+                    into: &result, slots: &fieldSlots, ambiguous: &ambiguousFields, index: index
+                )
             }
             for method in stub.methods where !method.isConstructor && !method.modifiers.contains(.synthetic) && !method.modifiers.contains(.bridge) && !method.name.hasPrefix("lambda$") {
                 guard mode == .instance || method.modifiers.contains(.staticFlag) else { continue }
@@ -192,8 +266,17 @@ public enum JavaMemberLookup {
                 // instance: `List.of(…)` only, never `users.of(…)` or `ArrayList.of(…)`.
                 if stub.kind == .interfaceKind, method.modifiers.contains(.staticFlag),
                    mode == .instance || currentName != qualifiedName { continue }
+                // JLS 9.2: an interface has `Object`'s public instance methods, not `clone` or `finalize`.
+                if implicitPublic, !method.modifiers.contains(.publicFlag) || method.modifiers.contains(.staticFlag) { continue }
+                // Public instance methods were recorded on the implicit visit. A public static
+                // method was not (JLS 9.2 is instance methods only), so the full visit still sees it.
+                if upgradingObject, method.modifiers.contains(.publicFlag), !method.modifiers.contains(.staticFlag) { continue }
                 if checkAccess {
-                    guard await isAccessible(method.modifiers, declaringClass: currentName, declaringPackage: stub.packageName, context: context, selfHierarchy: selfHierarchy, index: index) else { continue }
+                    guard await isAccessible(
+                        method.modifiers, declaringClass: currentName, declaringPackage: stub.packageName,
+                        context: context, index: index, sites: sites, qualifier: qualifier,
+                        receiverAncestors: receiverAncestors, restrictProtectedInstance: true
+                    ) else { continue }
                 }
                 let methodContext = declaringContext?.entering(methodTypeParameters: method.typeParameters)
                 var substitutedParams: [JavaParameterStub] = []
@@ -224,12 +307,13 @@ public enum JavaMemberLookup {
                     queue.append((
                         superName,
                         await substitutionMap(forTypeArguments: superArgs, appliedTo: superName, index: index),
-                        await inheritedLowerBounded(declared: superclass, lowerOnly: lowerOnly, appliedTo: superName, index: index)
+                        await inheritedLowerBounded(declared: superclass, lowerOnly: lowerOnly, appliedTo: superName, index: index),
+                        false
                     ))
                 }
             } else if (stub.kind == .classKind || stub.kind == .enumKind || stub.kind == .recordKind),
                       stub.superclass == nil, currentName != "java.lang.Object" {
-                queue.append(("java.lang.Object", [:], []))
+                queue.append(("java.lang.Object", [:], [], false))
             }
             for iface in stub.interfaces {
                 let substitutedIface = substitute(iface, using: substitution)
@@ -238,7 +322,8 @@ public enum JavaMemberLookup {
                     queue.append((
                         ifaceName,
                         await substitutionMap(forTypeArguments: ifaceArgs, appliedTo: ifaceName, index: index),
-                        await inheritedLowerBounded(declared: iface, lowerOnly: lowerOnly, appliedTo: ifaceName, index: index)
+                        await inheritedLowerBounded(declared: iface, lowerOnly: lowerOnly, appliedTo: ifaceName, index: index),
+                        false
                     ))
                 }
             }
@@ -246,11 +331,48 @@ public enum JavaMemberLookup {
                 // An interface has the public methods of `Object` as implicit members (JLS 9.2):
                 // `runnable.toString()` and `comparable.equals(x)` are legal and complete. Queued
                 // after the superinterfaces, so a declaration of `equals` or `toString` on any
-                // interface above wins.
-                queue.append(("java.lang.Object", [:], []))
+                // interface above wins. `clone` and `finalize` are not members; with access checks
+                // off they stay, so an inspection can still tell "inaccessible" from "no such member".
+                queue.append(("java.lang.Object", [:], [], true))
+            }
+        }
+        // Two sibling interfaces declaring the same field are ambiguous (JLS 9.3). Drop the name
+        // rather than keeping whichever interface was visited first.
+        if !ambiguousFields.isEmpty {
+            result.removeAll { member in
+                if case .field(let field, _) = member { return ambiguousFields.contains(field.name) }
+                return false
             }
         }
         return result
+    }
+
+    /// One field of `name`. The walk visits a class before its superinterfaces, so the first field
+    /// is the one a class declares, and it hides an interface field of the same name. A
+    /// subinterface redeclaration hides the superinterface field. Neither relationship means the
+    /// two interfaces are siblings: the name is ambiguous and omitted.
+    private static func absorbField(
+        _ member: JavaResolvedMember, name: String, declaringClass: String, stubKind: JavaTypeKind,
+        into result: inout [JavaResolvedMember], slots: inout [String: Int], ambiguous: inout Set<String>,
+        index: JavaIndex
+    ) async {
+        if ambiguous.contains(name) { return }
+        guard let slot = slots[name] else {
+            slots[name] = result.count
+            result.append(member)
+            return
+        }
+        guard case .field(_, let existingClass) = result[slot] else { return }
+        let existingKind = await index.classStub(qualifiedName: existingClass)?.kind
+        let existingIsInterface = existingKind == .interfaceKind || existingKind == .annotationKind
+        let newIsInterface = stubKind == .interfaceKind || stubKind == .annotationKind
+        guard existingIsInterface && newIsInterface else { return }
+        if await ancestorQualifiedNames(of: existingClass, index: index).contains(declaringClass) { return }
+        if await ancestorQualifiedNames(of: declaringClass, index: index).contains(existingClass) {
+            result[slot] = member
+            return
+        }
+        ambiguous.insert(name)
     }
 
     /// Constructors declared on `type` itself (they are not inherited), visible from `context`.
@@ -262,12 +384,15 @@ public enum JavaMemberLookup {
         guard case .classType(let qualifiedName, _, _) = type else { return [] }
         guard let stub = await index.classStub(qualifiedName: qualifiedName) else { return [] }
         if stub.kind == .interfaceKind || stub.kind == .annotationKind { return [] }
-        let selfHierarchy = await enclosingHierarchy(of: context, index: index)
+        var ancestorMemo: [String: Set<String>] = [:]
+        let sites = await protectedSites(of: context, index: index, memo: &ancestorMemo)
         var visible: [JavaMethodStub] = []
         for method in stub.methods where method.isConstructor {
+            // A protected constructor has no qualifying expression (JLS 6.6.2, not 6.6.2.1).
             if await isAccessible(
                 method.modifiers, declaringClass: qualifiedName, declaringPackage: stub.packageName,
-                context: context, selfHierarchy: selfHierarchy, index: index
+                context: context, index: index, sites: sites, qualifier: .expression,
+                receiverAncestors: [], restrictProtectedInstance: false
             ) {
                 visible.append(method)
             }
@@ -296,6 +421,22 @@ public enum JavaMemberLookup {
         return nil
     }
 
+    /// The interfaces `qualifiedName` directly implements or extends, simple names resolved
+    /// against the declaring file. Type arguments written on the clause are kept. Indirect
+    /// superinterfaces are not included: `I.super` is legal only for a direct one (JLS 15.12.1).
+    public static func directSuperinterfaces(
+        of qualifiedName: String, context: JavaResolutionContext, index: JavaIndex
+    ) async -> [JavaTypeRef] {
+        guard let stub = await index.classStub(qualifiedName: qualifiedName) else { return [] }
+        let cache = DeclaringFileCache()
+        var resolved: [JavaTypeRef] = []
+        for interface in stub.interfaces {
+            let supertype = await resolveSupertype(interface, declaredOn: stub, context: context, index: index, cache: cache)
+            if case .classType = supertype { resolved.append(supertype) }
+        }
+        return resolved
+    }
+
     private static func arrayMembers(elementType: JavaTypeRef) -> [JavaResolvedMember] {
         [
             .field(JavaFieldStub(name: "length", type: .primitive(.int), modifiers: [.publicFlag, .finalFlag]), declaringClass: "<array>"),
@@ -307,7 +448,8 @@ public enum JavaMemberLookup {
 
     private static func isAccessible(
         _ modifiers: JavaModifiers, declaringClass: String, declaringPackage: String,
-        context: JavaResolutionContext, selfHierarchy: Set<String>, index: JavaIndex
+        context: JavaResolutionContext, index: JavaIndex, sites: [ProtectedSite],
+        qualifier: JavaMemberQualifier, receiverAncestors: Set<String>, restrictProtectedInstance: Bool
     ) async -> Bool {
         if modifiers.contains(.publicFlag) {
             return true
@@ -319,10 +461,53 @@ public enum JavaMemberLookup {
         }
         let samePackage = declaringPackage == context.packageName
         if modifiers.contains(.protectedFlag) {
-            return samePackage || selfHierarchy.contains(declaringClass)
+            if samePackage { return true }
+            // Static protected members, `super`, simple names and constructors need only that some
+            // enclosing class is a subclass of the declaring class. An instance member through an
+            // expression also needs the receiver to be that class or a subclass of it: `sub.secret`
+            // is legal from `Sub`, `base.secret` is not (JLS 6.6.2.1). Enclosing classes are
+            // innermost first, so an inner class that extends the declarer wins before its outer.
+            let skipReceiver = !restrictProtectedInstance || modifiers.contains(.staticFlag) || qualifier != .expression
+            for site in sites where !site.isInterface {
+                guard site.ancestors.contains(declaringClass) else { continue }
+                if skipReceiver || receiverAncestors.contains(site.name) { return true }
+            }
+            return false
         }
         // Package-private (none of public/private/protected).
         return samePackage
+    }
+
+    /// One enclosing class the access is attempted from, innermost first in the list that holds it.
+    private struct ProtectedSite {
+        var name: String
+        var ancestors: Set<String>
+        var isInterface: Bool
+    }
+
+    /// Enclosing types, innermost first. A missing stub is treated as a class: skipping it would
+    /// hide a protected member of a source type the index has not finished. The ancestor set still
+    /// contains the name itself.
+    private static func protectedSites(
+        of context: JavaResolutionContext, index: JavaIndex, memo: inout [String: Set<String>]
+    ) async -> [ProtectedSite] {
+        var sites: [ProtectedSite] = []
+        for name in context.enclosingTypeQualifiedNames {
+            let ancestors = await memoizedAncestors(of: name, memo: &memo, index: index)
+            let kind = await index.classStub(qualifiedName: name)?.kind
+            let isInterface = kind == .interfaceKind || kind == .annotationKind
+            sites.append(ProtectedSite(name: name, ancestors: ancestors, isInterface: isInterface))
+        }
+        return sites
+    }
+
+    private static func memoizedAncestors(
+        of name: String, memo: inout [String: Set<String>], index: JavaIndex
+    ) async -> Set<String> {
+        if let cached = memo[name] { return cached }
+        let computed = await ancestorQualifiedNames(of: name, index: index)
+        memo[name] = computed
+        return computed
     }
 
     /// Walks `outerQualifiedName` up to the enclosing type with no further outer -- the real
@@ -348,21 +533,12 @@ public enum JavaMemberLookup {
         return closure
     }
 
-    /// The ancestors of every type the query stands in, not only the top-level one: a protected
-    /// member is reachable from a nested class that extends the declaring class even when the
-    /// class around it does not.
-    private static func enclosingHierarchy(of context: JavaResolutionContext, index: JavaIndex) async -> Set<String> {
-        var hierarchy = await ancestorQualifiedNames(of: context.topLevelTypeQualifiedName, index: index)
-        for enclosing in context.enclosingTypeQualifiedNames {
-            hierarchy.formUnion(await ancestorQualifiedNames(of: enclosing, index: index))
-        }
-        return hierarchy
-    }
-
     /// Every ancestor (superclass chain + interfaces, transitively) of `qualifiedName`, used only
     /// to decide protected-member visibility ("is the querying type a subclass of the declaring
     /// type"). Cycles are guarded; this only needs class identity, not member types, so it doesn't
-    /// substitute generics.
+    /// substitute generics. A class, enum or record with no recorded superclass is a subclass of
+    /// `Object` (JLS 8.1.4); source stubs omit that implicit clause, and without it `this.clone()`
+    /// would be invisible in a class that does not write `extends`.
     private static func ancestorQualifiedNames(of qualifiedName: String?, index: JavaIndex) async -> Set<String> {
         guard let qualifiedName else { return [] }
         let cache = DeclaringFileCache()
@@ -375,6 +551,9 @@ public enum JavaMemberLookup {
             if let superclass = stub.superclass {
                 let resolved = await resolveSupertype(superclass, declaredOn: stub, context: fallback, index: index, cache: cache)
                 if let name = resolved.erasedQualifiedName { queue.append(name) }
+            } else if next != "java.lang.Object",
+                      stub.kind == .classKind || stub.kind == .enumKind || stub.kind == .recordKind {
+                queue.append("java.lang.Object")
             }
             for interface in stub.interfaces {
                 let resolved = await resolveSupertype(interface, declaredOn: stub, context: fallback, index: index, cache: cache)

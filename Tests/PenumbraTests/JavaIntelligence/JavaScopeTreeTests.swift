@@ -145,6 +145,45 @@ final class JavaScopeTreeTests: XCTestCase {
 
     // MARK: - multi-catch, local types, labels
 
+    func testVarargsParameterIsAnArrayVisibleInTheBody() {
+        let (_, tree, offset) = scopes("class Foo { void m(String... values) { values€; } }")
+        let values = tree.locals(atByteOffset: offset).first { $0.name == "values" }
+        XCTAssertEqual(values?.type, .array(element: .unresolved(simpleName: "String", arguments: [])))
+    }
+
+    func testCStyleArrayParameterAndLocalKeepTheirDimensions() {
+        let parameter = scopes("class Foo { void m(byte buffer[]) { buffer€; } }")
+        let buffer = parameter.1.locals(atByteOffset: parameter.2).first { $0.name == "buffer" }
+        XCTAssertEqual(buffer?.type, .array(element: .primitive(.byte)))
+
+        let local = scopes("class Foo { void m() { byte buffer[] = null; buffer€; } }")
+        let declared = local.1.locals(atByteOffset: local.2).first { $0.name == "buffer" }
+        XCTAssertEqual(declared?.type, .array(element: .primitive(.byte)))
+    }
+
+    func testForHeaderVariableScopesConditionAndUpdateButNotTheCodeAfter() {
+        let condition = scopes("class Foo { void m() { for (java.util.Iterator<String> it = xs.iterator(); it.hasNext€(); ) { } } }")
+        XCTAssertTrue(names(condition.1, at: condition.2).contains("it"))
+
+        let update = scopes("class Foo { void m() { for (int i = 0; i < n; i€++) { } } }")
+        XCTAssertTrue(names(update.1, at: update.2).contains("i"))
+
+        let after = scopes("class Foo { void m() { for (int i = 0; i < n; i++) { } €x; } }")
+        XCTAssertFalse(names(after.1, at: after.2).contains("i"))
+    }
+
+    func testEnhancedForVariableScopesTheBodyOnly() {
+        let body = scopes("class Foo { void m(java.util.List<String> list) { for (String s : list) { s€; } } }")
+        XCTAssertTrue(names(body.1, at: body.2).contains("s"))
+
+        let iterated = scopes("class Foo { void m(java.util.List<String> list) { for (String s : list€) { } } }")
+        XCTAssertFalse(names(iterated.1, at: iterated.2).contains("s"))
+        XCTAssertTrue(names(iterated.1, at: iterated.2).contains("list"))
+
+        let after = scopes("class Foo { void m(java.util.List<String> list) { for (String s : list) { } €x; } }")
+        XCTAssertFalse(names(after.1, at: after.2).contains("s"))
+    }
+
     func testMultiCatchRecordsAlternativeTypes() {
         let (_, tree, offset) = scopes(
             "class Foo { void m() { try { work(); } catch (java.io.IOException | RuntimeException e) { €x; } } }")
@@ -153,6 +192,77 @@ final class JavaScopeTreeTests: XCTestCase {
             .filter { $0.symbol.name == "e" }
         XCTAssertEqual(declarations.count, 1)
         XCTAssertEqual(declarations.first?.alternativeTypes.count, 2)
+    }
+
+    func testForVariableShadowsTheParameterInsideTheLoopOnly() {
+        let inside = scopes("class Foo { void m(String i) { for (int i = 0; i < 1; i++) { i€; } } }")
+        let shadowed = inside.1.locals(atByteOffset: inside.2).filter { $0.name == "i" }
+        XCTAssertEqual(shadowed.count, 1)
+        XCTAssertEqual(shadowed.first?.type, .primitive(.int))
+
+        let after = scopes("class Foo { void m(String i) { for (int i = 0; i < 1; i++) { } i€; } }")
+        let parameter = after.1.locals(atByteOffset: after.2).filter { $0.name == "i" }
+        XCTAssertEqual(parameter.count, 1)
+        XCTAssertEqual(parameter.first?.type, .unresolved(simpleName: "String", arguments: []))
+    }
+
+    func testEnhancedForVariableShadowsOnlyInsideTheBody() {
+        let body = scopes("class Foo { void m(String s) { for (int s : xs) { s€; } } }")
+        let shadowed = body.1.locals(atByteOffset: body.2).filter { $0.name == "s" }
+        XCTAssertEqual(shadowed.count, 1)
+        XCTAssertEqual(shadowed.first?.type, .primitive(.int))
+
+        let after = scopes("class Foo { void m(String s) { for (int s : xs) { } s€; } }")
+        let parameter = after.1.locals(atByteOffset: after.2).filter { $0.name == "s" }
+        XCTAssertEqual(parameter.count, 1)
+        XCTAssertEqual(parameter.first?.type, .unresolved(simpleName: "String", arguments: []))
+    }
+
+    func testCatchParameterDoesNotEscapeTheCatch() {
+        let inside = scopes("class Foo { void m(String e) { try { } catch (Exception e) { e€; } } }")
+        let caught = inside.1.locals(atByteOffset: inside.2).filter { $0.name == "e" }
+        XCTAssertEqual(caught.count, 1)
+        XCTAssertEqual(caught.first?.type, .unresolved(simpleName: "Exception", arguments: []))
+
+        let after = scopes("class Foo { void m(String e) { try { } catch (Exception e) { } e€; } }")
+        let parameter = after.1.locals(atByteOffset: after.2).filter { $0.name == "e" }
+        XCTAssertEqual(parameter.count, 1)
+        XCTAssertEqual(parameter.first?.type, .unresolved(simpleName: "String", arguments: []))
+    }
+
+    func testVarargsParameterDoesNotEscapeItsMethod() {
+        let body = scopes("class Foo { java.util.List values; void m(String... values) { values€; } }")
+        let parameter = body.1.locals(atByteOffset: body.2).first { $0.name == "values" }
+        XCTAssertEqual(parameter?.type, .array(element: .unresolved(simpleName: "String", arguments: [])))
+
+        let other = scopes("class Foo { java.util.List values; void m(String... values) { } void n() { values€; } }")
+        XCTAssertFalse(names(other.1, at: other.2).contains("values"))
+    }
+
+    func testCStyleArrayLocalDoesNotEscapeItsBlock() {
+        let inside = scopes("class Foo { void m() { { byte buffer[] = null; buffer€; } } }")
+        let buffer = inside.1.locals(atByteOffset: inside.2).first { $0.name == "buffer" }
+        XCTAssertEqual(buffer?.type, .array(element: .primitive(.byte)))
+
+        let outside = scopes("class Foo { void m() { { byte buffer[] = null; } buffer€; } }")
+        XCTAssertFalse(names(outside.1, at: outside.2).contains("buffer"))
+
+        let otherMethod = scopes("class Foo { void m(byte buffer[]) { } void n() { buffer€; } }")
+        XCTAssertFalse(names(otherMethod.1, at: otherMethod.2).contains("buffer"))
+    }
+
+    func testLocalClassIsVisibleThroughItsBlockOnly() {
+        let inside = scopes("class Foo { void m() { class Acc { } Acc €a; } }")
+        XCTAssertNotNil(inside.1.symbol(named: "Acc", atByteOffset: inside.2))
+
+        let sibling = scopes("class Foo { void m() { { class Acc { } } { Acc €a; } } }")
+        XCTAssertNil(sibling.1.symbol(named: "Acc", atByteOffset: sibling.2))
+
+        let later = scopes("class Foo { void m() { { class Acc { } } Acc €a; } }")
+        XCTAssertNil(later.1.symbol(named: "Acc", atByteOffset: later.2))
+
+        let other = scopes("class Foo { void m() { class Acc { } } void n() { Acc €a; } }")
+        XCTAssertNil(other.1.symbol(named: "Acc", atByteOffset: other.2))
     }
 
     func testLocalTypeIdentifiedBySite() {

@@ -16,8 +16,8 @@ import Foundation
 ///   flips) and flow out past the statement when the taken branch cannot complete normally
 ///   (`if (!(o instanceof Foo f)) return; f.…`);
 /// - record patterns bind their components (typed from the pattern itself);
-/// - multi-catch alternatives are all recorded (`alternativeTypes`; the primary type stays the
-///   first until `JavaTypes` computes the lub).
+/// - multi-catch alternatives are all recorded (`alternativeTypes`, copied onto the local);
+///   the primary type stays the first alternative until the typer asks for the lub.
 ///
 /// Out of v1, documented at each site: qualifier resolution (`unknown` in `unknown.Known`),
 /// single-static-import names, do-while pattern flow, `var` resources naming an existing
@@ -84,22 +84,41 @@ public final class JavaScopeTree: Sendable {
         self.root = root
     }
 
-    /// The locals visible at `offset`, built from only the outermost method or constructor that
-    /// contains it (outermost, so locals captured by an anonymous or local class body are seen).
-    /// Cost follows that one member, not the file: this is the completion-path query. `nil` when
-    /// the offset is not inside such a member (a field initializer, an initializer block, an
-    /// `ERROR` region), where the caller uses the whole-file tree or another source.
+    /// The locals visible at `offset`, built from only the outermost method, constructor, or
+    /// initializer block that contains it (outermost, so locals captured by an anonymous or local
+    /// class body are seen, including a local of a static or instance initializer). Cost follows
+    /// that one member, not the file: this is the completion-path query. `nil` when the offset is
+    /// not inside such a member (a field initializer, an `ERROR` region), where the caller uses
+    /// the whole-file tree or another source.
     public static func locals(in tree: JavaSyntaxTree, enclosingExecutableAtByteOffset offset: Int) -> [JavaLocalVariable]? {
         executableTree(in: tree, atByteOffset: offset)?.locals(atByteOffset: offset)
     }
 
-    /// The scope tree of the outermost method or constructor containing `offset`, memoized per
-    /// parse by the member's start.
+    /// A method, constructor, static initializer, or instance-initializer block: the members whose
+    /// locals a nested anonymous class can capture. An ordinary block is not one of these.
+    private static func isExecutableMember(_ node: SyntaxNode) -> Bool {
+        switch node.type {
+        case "method_declaration", "constructor_declaration", "static_initializer":
+            return true
+        case "block":
+            switch node.parent?.type {
+            case "class_body", "enum_body_declarations", "interface_body", "annotation_type_body":
+                return true
+            default:
+                return false
+            }
+        default:
+            return false
+        }
+    }
+
+    /// The scope tree of the outermost method, constructor, or initializer containing `offset`,
+    /// memoized per parse by the member's start.
     private static func executableTree(in tree: JavaSyntaxTree, atByteOffset offset: Int) -> JavaScopeTree? {
         var executable: SyntaxNode?
         var current: SyntaxNode? = tree.node(atByteOffset: offset)
         while let node = current {
-            if node.type == "method_declaration" || node.type == "constructor_declaration" { executable = node }
+            if isExecutableMember(node) { executable = node }
             current = node.parent
         }
         guard let executable else { return nil }
@@ -109,7 +128,7 @@ public final class JavaScopeTree: Sendable {
         return cache.tree(forExecutableStartingAt: executable.startByte) {
             let url = URL(fileURLWithPath: "/__umbra_locals_only__.java")
             let builder = ScopeBuilder(tree: tree, url: url, withoutStubs: ())
-            return builder.buildExecutable(executable, owner: "").map { JavaScopeTree(url: url, root: $0) }
+            return builder.buildQueriedMember(executable).map { JavaScopeTree(url: url, root: $0) }
         }
     }
 
@@ -138,16 +157,22 @@ public final class JavaScopeTree: Sendable {
             for declaration in Self.localsBeforeParameters(scope.declarations) where declaration.visibleRange.contains(offset) {
                 let variable: JavaLocalVariable
                 switch declaration.symbol {
-                case .local(let name, _, _, let type):
+                case .local(let name, _, let declarationRange, let type):
                     variable = JavaLocalVariable(
                         name: name, type: type,
                         initializerText: declaration.initializerText, lambdaOrigin: declaration.lambdaOrigin,
-                        isIterationVariable: declaration.isIterationVariable
+                        isIterationVariable: declaration.isIterationVariable,
+                        alternativeTypes: declaration.alternativeTypes,
+                        declarationEnd: declarationRange.upperBound
                     )
-                case .parameter(let name, _, _, let type):
+                case .parameter(let name, _, let declarationRange, let type):
                     // Inferred lambda parameters are parameters here; their origin is how the typer
                     // reads the real type off the called method's functional-interface parameter.
-                    variable = JavaLocalVariable(name: name, type: type, lambdaOrigin: declaration.lambdaOrigin)
+                    variable = JavaLocalVariable(
+                        name: name, type: type, lambdaOrigin: declaration.lambdaOrigin,
+                        alternativeTypes: declaration.alternativeTypes,
+                        declarationEnd: declarationRange.upperBound
+                    )
                 default:
                     continue
                 }
@@ -166,7 +191,7 @@ public final class JavaScopeTree: Sendable {
     }
 
     /// Where the local or parameter `name` visible at `offset` is declared (the byte range of its
-    /// name), from only the outermost method or constructor around the offset, like
+    /// name), from only the outermost method, constructor, or initializer around the offset, like
     /// ``locals(in:enclosingExecutableAtByteOffset:)``. `nil` when no such member contains the
     /// offset or the name is not a local there. Sees pattern bindings, `for` variables, catch
     /// parameters and `switch` bindings, which the older ancestor walk in
@@ -184,6 +209,33 @@ public final class JavaScopeTree: Sendable {
             }
         }
         return nil
+    }
+
+    /// Local classes visible at `offset`, innermost first. A name redeclared in an inner block
+    /// hides the outer one. Member types are not included: they have a qualified name.
+    public struct LocalTypeSite: Sendable {
+        public let name: String
+        /// Byte range of the declaring simple name.
+        public let declarationRange: Range<Int>
+    }
+
+    public func localTypeSites(atByteOffset offset: Int) -> [LocalTypeSite] {
+        var result: [LocalTypeSite] = []
+        var seen = Set<String>()
+        for scope in scopeChain(atByteOffset: offset).reversed() {
+            for declaration in scope.declarations where declaration.visibleRange.contains(offset) {
+                guard case .localType(let name, _, let range) = declaration.symbol, seen.insert(name).inserted else { continue }
+                result.append(LocalTypeSite(name: name, declarationRange: range))
+            }
+        }
+        return result
+    }
+
+    /// Local classes of the outermost method, constructor, or initializer around `offset`. `nil`
+    /// when the offset is not inside one, so the caller can fall back to the whole-file tree (a
+    /// field initializer).
+    public static func localTypeSites(in tree: JavaSyntaxTree, enclosingExecutableAtByteOffset offset: Int) -> [LocalTypeSite]? {
+        executableTree(in: tree, atByteOffset: offset)?.localTypeSites(atByteOffset: offset)
     }
 
     /// The innermost declaration of `name` visible at the offset: locals, parameters, pattern
@@ -288,7 +340,7 @@ private struct ScopeBuilder {
         let scopeEnd = body.byteRange.upperBound
         for member in body.namedChildren {
             switch member.type {
-            case "field_declaration":
+            case "field_declaration", "constant_declaration":
                 buildField(member, owner: qualifiedName, scopeEnd: scopeEnd,
                            declarations: &declarations, children: &children)
             case "method_declaration", "constructor_declaration", "compact_constructor_declaration":
@@ -381,6 +433,21 @@ private struct ScopeBuilder {
         node.child(byFieldName: "name")?.text
     }
 
+    /// The member `executableTree` selected: a method or constructor, a static initializer, or an
+    /// instance-initializer block. `nil` when a method declaration is too broken to name.
+    func buildQueriedMember(_ node: SyntaxNode) -> JavaScopeTree.Scope? {
+        switch node.type {
+        case "static_initializer":
+            return buildExecutableBody(
+                node, parameters: [], methodName: nil, isConstructor: false, owner: "", kind: .initializer
+            )
+        case "block":
+            return buildBlock(node)
+        default:
+            return buildExecutable(node, owner: "")
+        }
+    }
+
     /// A method, constructor or compact constructor scope, or `nil` when the declaration is too
     /// broken to name. Parameters and type parameters declare in the scope; the body builds
     /// beneath it. An ERROR node where a body should be still yields its parameters.
@@ -395,18 +462,31 @@ private struct ScopeBuilder {
 
     func executableParameters(of node: SyntaxNode, owner: String, isConstructor: Bool) -> [JavaScopeTree.Declaration] {
         guard let parameters = node.child(byFieldName: "parameters") else { return [] }
-        var declarations: [JavaScopeTree.Declaration] = []
         let scopeEnd = node.byteRange.upperBound
-        for parameter in parameters.namedChildren
-            where parameter.type == "formal_parameter" || parameter.type == "spread_parameter" {
-            guard let typeNode = parameter.child(byFieldName: "type"),
-                  let nameNode = parameter.child(byFieldName: "name") else { continue }
-            declarations.append(JavaScopeTree.Declaration(
-                symbol: .parameter(name: nameNode.text, file: url, declarationRange: nameNode.byteRange,
-                                   type: JavaTypeNodeConverter.convert(typeNode)),
-                visibleRange: nameNode.byteRange.upperBound..<scopeEnd))
-        }
-        return declarations
+        return parameters.namedChildren.compactMap { parameterDeclaration(from: $0, scopeEnd: scopeEnd) }
+    }
+
+    /// A `formal_parameter` or `spread_parameter`. Varargs are arrays (`T... values` is `T[]`),
+    /// and a C-style `byte buffer[]` keeps the dimensions that follow the name. `nil` when the
+    /// node is not a parameter or is too broken to name.
+    func parameterDeclaration(from parameter: SyntaxNode, scopeEnd: Int) -> JavaScopeTree.Declaration? {
+        let isSpread = parameter.type == "spread_parameter"
+        guard parameter.type == "formal_parameter" || isSpread else { return nil }
+        let declarator = parameter.firstNamedChild(ofType: "variable_declarator")
+        guard let nameNode = parameter.child(byFieldName: "name") ?? declarator?.child(byFieldName: "name") else { return nil }
+        // `spread_parameter` leaves the element type unlabeled: `(spread_parameter <type> (variable_declarator ...))`.
+        let typeNode = parameter.child(byFieldName: "type")
+            ?? parameter.namedChildren.first {
+                $0.type != "modifiers" && $0.type != "variable_declarator" && $0.type != "identifier"
+            }
+        guard let typeNode else { return nil }
+        var type = JavaTypeNodeConverter.convert(typeNode)
+        if isSpread { type = .array(element: type) }
+        let dimensions = parameter.child(byFieldName: "dimensions") ?? declarator?.child(byFieldName: "dimensions")
+        type = JavaTypeNodeConverter.applying(dimensions, to: type)
+        return JavaScopeTree.Declaration(
+            symbol: .parameter(name: nameNode.text, file: url, declarationRange: nameNode.byteRange, type: type),
+            visibleRange: nameNode.byteRange.upperBound..<scopeEnd)
     }
 
     func buildExecutableBody(
@@ -439,13 +519,10 @@ private struct ScopeBuilder {
             // Corrupt body: recover whatever parameters survived inside (`JavaErrorRecoveredLocals`
             // also reads back the locals declared before the damage).
             for descendant in errorDescendants(of: node) {
-                for parameter in descendant.namedChildren where parameter.type == "formal_parameter" {
-                    guard let typeNode = parameter.child(byFieldName: "type"),
-                          let nameNode = parameter.child(byFieldName: "name") else { continue }
-                    declarations.append(JavaScopeTree.Declaration(
-                        symbol: .parameter(name: nameNode.text, file: url, declarationRange: nameNode.byteRange,
-                                           type: JavaTypeNodeConverter.convert(typeNode)),
-                        visibleRange: nameNode.byteRange.upperBound..<node.byteRange.upperBound))
+                for parameter in descendant.namedChildren {
+                    if let declaration = parameterDeclaration(from: parameter, scopeEnd: node.byteRange.upperBound) {
+                        declarations.append(declaration)
+                    }
                 }
             }
         }
@@ -551,13 +628,10 @@ private struct ScopeBuilder {
         case "ERROR":
             // A corrupted statement still yields whatever parameters survived inside it.
             for descendant in errorDescendants(of: statement) {
-                for parameter in descendant.namedChildren where parameter.type == "formal_parameter" {
-                    guard let typeNode = parameter.child(byFieldName: "type"),
-                          let nameNode = parameter.child(byFieldName: "name") else { continue }
-                    declarations.append(JavaScopeTree.Declaration(
-                        symbol: .parameter(name: nameNode.text, file: url, declarationRange: nameNode.byteRange,
-                                           type: JavaTypeNodeConverter.convert(typeNode)),
-                        visibleRange: nameNode.byteRange.upperBound..<scopeEnd))
+                for parameter in descendant.namedChildren {
+                    if let declaration = parameterDeclaration(from: parameter, scopeEnd: scopeEnd) {
+                        declarations.append(declaration)
+                    }
                 }
             }
             children += expressionScopes(in: statement)
@@ -578,9 +652,11 @@ private struct ScopeBuilder {
         for declarator in node.namedChildren(ofType: "variable_declarator") {
             guard let nameNode = declarator.child(byFieldName: "name") else { continue }
             let initializer = isVar ? declarator.child(byFieldName: "value")?.text : nil
+            let declared = isVar
+                ? JavaTypeRef.unresolved(simpleName: "var", arguments: [])
+                : JavaTypeNodeConverter.applying(declarator.child(byFieldName: "dimensions"), to: type)
             declarations.append(JavaScopeTree.Declaration(
-                symbol: .local(name: nameNode.text, file: url, declarationRange: nameNode.byteRange,
-                               type: isVar ? .unresolved(simpleName: "var", arguments: []) : type),
+                symbol: .local(name: nameNode.text, file: url, declarationRange: nameNode.byteRange, type: declared),
                 visibleRange: nameNode.byteRange.upperBound..<scopeEnd,
                 initializerText: initializer))
             if let value = declarator.child(byFieldName: "value") {
@@ -728,20 +804,27 @@ private struct ScopeBuilder {
 
     // MARK: - Loops, try, switch
 
+    /// The init variable scopes the condition, the update and the body (JLS 6.3), and nothing
+    /// after the statement. It is not seeded into the body a second time: the `for` scope is
+    /// what makes it visible there.
     func buildFor(_ node: SyntaxNode, children: inout [JavaScopeTree.Scope]) {
         var declarations: [JavaScopeTree.Declaration] = []
-        if let initializer = node.child(byFieldName: "init"),
-           initializer.type == "local_variable_declaration" {
-            var nested: [JavaScopeTree.Scope] = []
-            buildLocalVariables(initializer, scopeEnd: node.byteRange.upperBound,
-                                declarations: &declarations, children: &nested)
-            children += nested
+        var nested: [JavaScopeTree.Scope] = []
+        if let initializer = node.child(byFieldName: "init") {
+            if initializer.type == "local_variable_declaration" {
+                buildLocalVariables(initializer, scopeEnd: node.byteRange.upperBound,
+                                    declarations: &declarations, children: &nested)
+            } else {
+                nested += expressionScopes(in: initializer)
+            }
         }
         if let body = node.child(byFieldName: "body"),
-           let bodyScope = buildBranch(body, seeds: declarations) { children.append(bodyScope) }
+           let bodyScope = buildBranch(body, seeds: []) { nested.append(bodyScope) }
         for field in ["condition", "update"] {
-            if let part = node.child(byFieldName: field) { children += expressionScopes(in: part) }
+            if let part = node.child(byFieldName: field) { nested += expressionScopes(in: part) }
         }
+        children.append(JavaScopeTree.Scope(
+            kind: .forLoop, range: node.byteRange, declarations: declarations, children: nested))
     }
 
     func buildEnhancedFor(_ node: SyntaxNode, children: inout [JavaScopeTree.Scope]) {
@@ -757,9 +840,11 @@ private struct ScopeBuilder {
                         visibleRange: nameNode.byteRange.upperBound..<node.byteRange.upperBound,
                         initializerText: iterated.text, isIterationVariable: true))
                 } else {
+                    let declared = JavaTypeNodeConverter.applying(
+                        node.child(byFieldName: "dimensions"), to: JavaTypeNodeConverter.convert(typeNode))
                     declarations.append(JavaScopeTree.Declaration(
                         symbol: .local(name: nameNode.text, file: url, declarationRange: nameNode.byteRange,
-                                       type: JavaTypeNodeConverter.convert(typeNode)),
+                                       type: declared),
                         visibleRange: nameNode.byteRange.upperBound..<node.byteRange.upperBound))
                 }
             }
@@ -776,10 +861,20 @@ private struct ScopeBuilder {
             for resource in spec.namedChildren where resource.type == "resource" {
                 guard let nameNode = resource.child(byFieldName: "name") else { continue }
                 if let typeNode = resource.child(byFieldName: "type") {
-                    resources.append(JavaScopeTree.Declaration(
-                        symbol: .local(name: nameNode.text, file: url, declarationRange: nameNode.byteRange,
-                                       type: JavaTypeNodeConverter.convert(typeNode)),
-                        visibleRange: nameNode.byteRange.upperBound..<node.byteRange.upperBound))
+                    let isVar = typeNode.text == "var"
+                        || (typeNode.text == "val" && JavaLombokMembers.importsLombok(node))
+                    if isVar, let value = resource.child(byFieldName: "value") {
+                        resources.append(JavaScopeTree.Declaration(
+                            symbol: .local(name: nameNode.text, file: url, declarationRange: nameNode.byteRange,
+                                           type: .unresolved(simpleName: "var", arguments: [])),
+                            visibleRange: nameNode.byteRange.upperBound..<node.byteRange.upperBound,
+                            initializerText: value.text))
+                    } else {
+                        resources.append(JavaScopeTree.Declaration(
+                            symbol: .local(name: nameNode.text, file: url, declarationRange: nameNode.byteRange,
+                                           type: JavaTypeNodeConverter.convert(typeNode)),
+                            visibleRange: nameNode.byteRange.upperBound..<node.byteRange.upperBound))
+                    }
                 }
                 // A bare name (`try (in)`) binds nothing new: it must be definite already.
             }
@@ -1009,7 +1104,7 @@ private struct ScopeBuilder {
                           declarations: &declarations, children: &children)
             case "method_declaration", "constructor_declaration", "compact_constructor_declaration":
                 if let methodScope = buildExecutable(current, owner: qualifiedName) { children.append(methodScope) }
-            case "field_declaration":
+            case "field_declaration", "constant_declaration":
                 buildField(current, owner: qualifiedName, scopeEnd: scopeEnd,
                            declarations: &declarations, children: &children)
             case "ERROR":
@@ -1025,13 +1120,10 @@ private struct ScopeBuilder {
         let scopeEnd = node.byteRange.upperBound
         if let parameters = node.child(byFieldName: "parameters") {
             if parameters.type == "formal_parameters" {
-                for parameter in parameters.namedChildren where parameter.type == "formal_parameter" {
-                    guard let typeNode = parameter.child(byFieldName: "type"),
-                          let nameNode = parameter.child(byFieldName: "name") else { continue }
-                    declarations.append(JavaScopeTree.Declaration(
-                        symbol: .parameter(name: nameNode.text, file: url, declarationRange: nameNode.byteRange,
-                                           type: JavaTypeNodeConverter.convert(typeNode)),
-                        visibleRange: nameNode.byteRange.upperBound..<scopeEnd))
+                for parameter in parameters.namedChildren {
+                    if let declaration = parameterDeclaration(from: parameter, scopeEnd: scopeEnd) {
+                        declarations.append(declaration)
+                    }
                 }
             } else {
                 let names: [SyntaxNode]

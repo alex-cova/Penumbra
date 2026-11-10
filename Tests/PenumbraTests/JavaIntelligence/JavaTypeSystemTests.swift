@@ -42,6 +42,46 @@ final class JavaTypeSystemTests: XCTestCase {
         .classType(qualifiedName: name, arguments: arguments, outer: nil)
     }
 
+    // MARK: - wildcard containment during overload applicability
+
+    /// `Map<String, Long>` is a `Map<? extends K#, ? extends V#>`: the bounds are inference
+    /// variables. `List<String>` is not a `List<? extends Integer>`, and a class type variable
+    /// or an unresolved name is not an inference variable.
+    func testInferenceVariableWildcardBoundsStayApplicable() async {
+        let index = JavaIndex()
+        let context = JavaResolutionContext(packageName: "", imports: [])
+        let assignability = JavaAssignability(index: index, context: context)
+        let map = classType("java.util.Map", [
+            .type(classType("java.lang.String")),
+            .type(classType("java.lang.Long")),
+        ])
+        let extendsVariables = classType("java.util.Map", [
+            .wildcard(.extends(.typeVariable(name: "K#"))),
+            .wildcard(.extends(.typeVariable(name: "V#"))),
+        ])
+        let comparator = classType("java.util.Comparator", [.type(classType("java.lang.String"))])
+        let superVariable = classType("java.util.Comparator", [
+            .wildcard(.superBound(.typeVariable(name: "T#"))),
+        ])
+        let listString = classType("java.util.List", [.type(classType("java.lang.String"))])
+        let mapFits = await assignability.isAssignable(map, to: extendsVariables)
+        let comparatorFits = await assignability.isAssignable(comparator, to: superVariable)
+        let integerBound = await assignability.isAssignable(
+            listString,
+            to: classType("java.util.List", [.wildcard(.extends(classType("java.lang.Integer")))]))
+        let classVariable = await assignability.isAssignable(
+            listString,
+            to: classType("java.util.List", [.wildcard(.extends(.typeVariable(name: "T")))]))
+        let unresolvedName = await assignability.isAssignable(
+            listString,
+            to: classType("java.util.List", [.wildcard(.extends(.unresolved(simpleName: "Integer", arguments: [])))]))
+        XCTAssertTrue(mapFits)
+        XCTAssertTrue(comparatorFits)
+        XCTAssertFalse(integerBound)
+        XCTAssertFalse(classVariable)
+        XCTAssertFalse(unresolvedName)
+    }
+
     // MARK: - substitution
 
     func testSubstituteReplacesTypeVariables() {
@@ -150,6 +190,260 @@ final class JavaTypeSystemTests: XCTestCase {
         XCTAssertEqual(effective, .unresolved(simpleName: "Throwable", arguments: []))
     }
 
+    /// `JsonProcessingException | JsonPatchException` when the index is missing one or both
+    /// alternatives. A closure of a missing class is `{itself, Object}`, so the meet is `Object`
+    /// without this guard. That is not a lub, and the catch parameter is not `Object`: it is
+    /// `Throwable`, which every catch alternative is below (JLS 14.20), and not the first written
+    /// alternative, whose own members need not belong to the lub (and which has none when it is the
+    /// missing one). Two indexed classes that share nothing but `Object` still lub to `Object`. Both
+    /// indexed and meeting at `Exception` still lub to `Exception` (the complete-classpath case).
+    func testLubOfAMissingClassIsNotObject() async throws {
+        let missingJackson = classType("com.fasterxml.jackson.core.JsonProcessingException")
+        let missingPatch = classType("com.github.fge.jsonpatch.JsonPatchException")
+        let present = classType("com.example.Present")
+        let throwable = classType("java.lang.Throwable")
+        let incomplete = try await makeIndex(withStubs: [
+            stub("java.lang.Throwable"),
+            stub("java.lang.Exception", superclass: "java.lang.Throwable"),
+            stub("com.example.Present", superclass: "java.lang.Exception"),
+        ])
+        let oneMissing = await JavaTypeSystem.lub(of: [missingJackson, present], index: incomplete)
+        XCTAssertNil(oneMissing)
+        let catchOne = await JavaTypeSystem.effectiveCatchType(
+            alternatives: [missingJackson, present], index: incomplete)
+        XCTAssertEqual(catchOne, throwable)
+        XCTAssertNotEqual(catchOne, classType("java.lang.Object"))
+        XCTAssertNotEqual(catchOne, missingJackson)
+
+        let bothMissing = await JavaTypeSystem.lub(of: [missingJackson, missingPatch], index: incomplete)
+        XCTAssertNil(bothMissing)
+        let catchBoth = await JavaTypeSystem.effectiveCatchType(
+            alternatives: [missingJackson, missingPatch], index: incomplete)
+        XCTAssertEqual(catchBoth, throwable)
+        XCTAssertNotEqual(catchBoth, classType("java.lang.Object"))
+
+        let onlyObject = try await makeIndex(withStubs: [
+            stub("java.lang.Object"),
+            stub("com.example.Left", superclass: "java.lang.Object"),
+            stub("com.example.Right", superclass: "java.lang.Object"),
+        ])
+        let unrelated = await JavaTypeSystem.lub(
+            of: [classType("com.example.Left"), classType("com.example.Right")], index: onlyObject)
+        XCTAssertEqual(unrelated, classType("java.lang.Object"))
+
+        let complete = try await makeIndex(withStubs: [
+            stub("java.lang.Throwable"),
+            stub("java.lang.Exception", superclass: "java.lang.Throwable"),
+            stub("com.fasterxml.jackson.core.JacksonException", superclass: "java.lang.Exception"),
+            stub("com.fasterxml.jackson.core.JsonProcessingException", superclass: "com.fasterxml.jackson.core.JacksonException"),
+            stub("com.github.fge.jsonpatch.JsonPatchException", superclass: "java.lang.Exception"),
+        ])
+        let lub = await JavaTypeSystem.lub(of: [missingJackson, missingPatch], index: complete)
+        XCTAssertEqual(lub, classType("java.lang.Exception"))
+        let catchComplete = await JavaTypeSystem.effectiveCatchType(alternatives: [missingJackson, missingPatch], index: complete)
+        XCTAssertEqual(catchComplete, classType("java.lang.Exception"))
+    }
+
+    /// The classpath shapes javac was run on (`Tools/JavaReceiverOracle`, Jackson 2.19.4 core and
+    /// json-patch 1.13): both present, javac's parameter is `Exception`; only one present, javac prints
+    /// the lub of the alternatives it could resolve (`JsonPatchException`, or `JsonProcessingException`)
+    /// and reports `package … does not exist`; neither, no type. The engine answers `Exception` with the
+    /// complete classpath and `Throwable` whenever the index cannot prove more, in either written order.
+    /// The first written alternative was the old fallback: in `SQLException | NotIndexed` it offered
+    /// `getSQLState()`, which the real lub (here `Exception`) does not have.
+    func testIncompleteMultiCatchIsThrowableInEitherOrder() async throws {
+        let sql = classType("java.sql.SQLException")
+        let missing = classType("com.example.NotIndexed")
+        let throwable = classType("java.lang.Throwable")
+        let index = try await makeIndex(withStubs: [
+            stub("java.lang.Object"),
+            stub("java.lang.Throwable", superclass: "java.lang.Object"),
+            stub("java.lang.Exception", superclass: "java.lang.Throwable"),
+            stub("java.lang.RuntimeException", superclass: "java.lang.Exception"),
+            stub("java.io.IOException", superclass: "java.lang.Exception"),
+            stub("java.sql.SQLException", superclass: "java.lang.Exception"),
+            stub("java.lang.String", superclass: "java.lang.Object", interfaces: ["java.io.Serializable"]),
+            stub("java.io.Serializable", kind: .interfaceKind),
+            // A library exception whose superclass's jar is missing, and which implements an interface
+            // `Throwable` also has: the meet climbs to `Serializable`, above every catch type.
+            stub("com.example.LibraryException", superclass: "com.example.MissingBase", interfaces: ["java.io.Serializable"]),
+        ])
+        let first = await JavaTypeSystem.effectiveCatchType(alternatives: [sql, missing], index: index)
+        let second = await JavaTypeSystem.effectiveCatchType(alternatives: [missing, sql], index: index)
+        XCTAssertEqual(first, throwable)
+        XCTAssertEqual(second, throwable)
+
+        let cut = await JavaTypeSystem.effectiveCatchType(
+            alternatives: [classType("java.io.IOException"), classType("com.example.LibraryException")], index: index)
+        XCTAssertEqual(cut, throwable)
+
+        // Invalid code (`String` is not a `Throwable`): javac reports it and recovers; the engine stays at `Throwable`.
+        let invalid = await JavaTypeSystem.effectiveCatchType(
+            alternatives: [classType("java.io.IOException"), classType("java.lang.String")], index: index)
+        XCTAssertEqual(invalid, throwable)
+
+        // Fully indexed alternatives keep their lub.
+        let indexed = await JavaTypeSystem.effectiveCatchType(
+            alternatives: [classType("java.io.IOException"), classType("java.lang.RuntimeException")], index: index)
+        XCTAssertEqual(indexed, classType("java.lang.Exception"))
+        let subclassPair = await JavaTypeSystem.effectiveCatchType(alternatives: [sql, classType("java.lang.Exception")], index: index)
+        XCTAssertEqual(subclassPair, classType("java.lang.Exception"))
+    }
+
+    /// No `Throwable` in the index (no JDK yet): nothing can be proved, so the lub, else the first
+    /// written alternative, stands as before.
+    func testMultiCatchWithoutAnIndexedThrowableKeepsTheOldFallback() async throws {
+        let index = try await makeIndex(withStubs: [
+            stub("java.lang.Exception"),
+            stub("java.io.IOException", superclass: "java.lang.Exception"),
+            stub("java.lang.RuntimeException", superclass: "java.lang.Exception"),
+        ])
+        let missing = classType("com.example.NotIndexed")
+        let fallback = await JavaTypeSystem.effectiveCatchType(alternatives: [missing, classType("java.io.IOException")], index: index)
+        XCTAssertEqual(fallback, missing)
+        let lub = await JavaTypeSystem.effectiveCatchType(
+            alternatives: [classType("java.io.IOException"), classType("java.lang.RuntimeException")], index: index)
+        XCTAssertEqual(lub, classType("java.lang.Exception"))
+    }
+
+    func testWildcardApplicabilityRejectsClosedBoundsAndKeepsRawTypes() async throws {
+        let index = JavaIndex()
+        let assignability = JavaAssignability(index: index, context: JavaResolutionContext(packageName: "", imports: []))
+        let listString = classType("java.util.List", [.type(classType("java.lang.String"))])
+        let unbounded = await assignability.isAssignable(
+            listString, to: classType("java.util.List", [.wildcard(nil)]))
+        let lowerRejects = await assignability.isAssignable(
+            classType("java.util.Comparator", [.type(classType("java.lang.Integer"))]),
+            to: classType("java.util.Comparator", [.wildcard(.superBound(classType("java.lang.String")))]))
+        let lowerAcceptsObject = await assignability.isAssignable(
+            classType("java.util.Comparator", [.type(classType("java.lang.Object"))]),
+            to: classType("java.util.Comparator", [.wildcard(.superBound(classType("java.lang.String")))]))
+        let upperRejects = await assignability.isAssignable(
+            listString,
+            to: classType("java.util.List", [.wildcard(.extends(classType("java.lang.Number")))]))
+        let rawToParameterized = await assignability.isAssignable(classType("java.util.List"), to: listString)
+        let parameterizedToRaw = await assignability.isAssignable(listString, to: classType("java.util.List"))
+        XCTAssertTrue(unbounded)
+        XCTAssertFalse(lowerRejects)
+        XCTAssertTrue(lowerAcceptsObject)
+        XCTAssertFalse(upperRejects)
+        XCTAssertTrue(rawToParameterized)
+        XCTAssertTrue(parameterizedToRaw)
+    }
+
+    /// `Class<? extends String>` is the engine's type of `getClass()` on a `String` (JLS 4.3.2, before
+    /// capture). It converts to `Class<? extends CharSequence>` and `Class<?>`, and not to `Class<String>`
+    /// or `Class<? super String>`. An inference variable on the extends side stays applicable.
+    func testGetClassWildcardIsNotContainedBySuperOrExactClass() async throws {
+        let index = try await makeIndex(withStubs: [
+            stub("java.lang.CharSequence", kind: .interfaceKind),
+            stub("java.lang.String", interfaces: ["java.lang.CharSequence"]),
+        ])
+        let assignability = JavaAssignability(index: index, context: JavaResolutionContext(packageName: "", imports: []))
+        func classOf(_ argument: JavaTypeArgument) -> JavaTypeRef {
+            classType("java.lang.Class", [argument])
+        }
+        let getClass = classOf(.wildcard(.extends(classType("java.lang.String"))))
+        let toExact = await assignability.isAssignable(getClass, to: classOf(.type(classType("java.lang.String"))))
+        let toSuper = await assignability.isAssignable(
+            getClass, to: classOf(.wildcard(.superBound(classType("java.lang.String")))))
+        let toUpper = await assignability.isAssignable(
+            getClass, to: classOf(.wildcard(.extends(classType("java.lang.CharSequence")))))
+        let toObject = await assignability.isAssignable(
+            getClass, to: classOf(.wildcard(.extends(classType("java.lang.Object")))))
+        let toUnbounded = await assignability.isAssignable(getClass, to: classOf(.wildcard(nil)))
+        let inference = await assignability.isAssignable(
+            classOf(.wildcard(.extends(.typeVariable(name: "T#")))),
+            to: classOf(.wildcard(.superBound(classType("java.lang.String"))))
+        )
+        XCTAssertFalse(toExact)
+        XCTAssertFalse(toSuper)
+        XCTAssertTrue(toUpper)
+        XCTAssertTrue(toObject)
+        XCTAssertTrue(toUnbounded)
+        XCTAssertTrue(inference)
+    }
+
+    /// The inapplicable overload is declared first. Selection follows applicability
+    /// (`Collection<?>` accepts `List<String>`; `List<? extends Integer>` does not), then
+    /// specificity, in either declaration order. An inherited `<T> pick(Collection<? extends T>)`
+    /// stays applicable because `T` is renamed to an inference variable.
+    func testApplicableOverloadIsNotChosenByDeclarationOrder() async throws {
+        let collection = stub("java.util.Collection", typeParameters: ["E"], kind: .interfaceKind)
+        let list = stub("java.util.List", interfaces: ["java.util.Collection"], typeParameters: ["E"], kind: .interfaceKind)
+        let base = JavaClassStub(
+            binaryName: "p.Base", qualifiedName: "p.Base", simpleName: "Base", packageName: "p",
+            kind: .classKind, modifiers: [.publicFlag],
+            methods: [method(
+                "pick",
+                parameters: [classType("java.util.Collection", [.wildcard(.extends(.typeVariable(name: "T")))])],
+                result: classType("java.lang.String"),
+                typeParameters: ["T"]
+            )],
+            origin: .jdkModule("test")
+        )
+        let sub = JavaClassStub(
+            binaryName: "p.Sub", qualifiedName: "p.Sub", simpleName: "Sub", packageName: "p",
+            kind: .classKind, modifiers: [.publicFlag],
+            superclass: classType("p.Base"),
+            methods: [method(
+                "pick",
+                parameters: [classType("java.util.List", [.wildcard(.extends(classType("java.lang.Integer")))])],
+                result: classType("java.lang.Integer")
+            )],
+            origin: .jdkModule("test")
+        )
+        let index = try await makeIndex(withStubs: [collection, list, base, sub])
+        let context = JavaResolutionContext(packageName: "p", imports: [])
+        let members = await JavaMemberLookup.members(
+            of: classType("p.Sub"), mode: .instance, context: context, index: index)
+        let inherited = members.compactMap { member -> JavaMethodStub? in
+            guard case .method(let method, _) = member, method.name == "pick",
+                  method.typeParameters.contains(where: { $0.name == "T" }) else { return nil }
+            return method
+        }
+        XCTAssertEqual(inherited.count, 1)
+        let inapplicable = method(
+            "pick",
+            parameters: [classType("java.util.List", [.wildcard(.extends(classType("java.lang.Integer")))])],
+            result: classType("java.lang.Integer")
+        )
+        let applicable = try XCTUnwrap(inherited.first)
+        let argument = classType("java.util.List", [.type(classType("java.lang.String"))])
+        let badFirst = await JavaExpressionTyper.resolveOverloads(
+            [inapplicable, applicable], argumentTypes: [argument], context: context, index: index)
+        let goodFirst = await JavaExpressionTyper.resolveOverloads(
+            [applicable, inapplicable], argumentTypes: [argument], context: context, index: index)
+        XCTAssertEqual(badFirst.map(\.returnType), [classType("java.lang.String")])
+        XCTAssertEqual(goodFirst.map(\.returnType), [classType("java.lang.String")])
+
+        let objectString = method(
+            "m", parameters: [classType("java.lang.Object"), classType("java.lang.String")],
+            result: classType("java.lang.Integer"))
+        let stringObject = method(
+            "m", parameters: [classType("java.lang.String"), classType("java.lang.Object")],
+            result: classType("java.lang.Long"))
+        let ambiguous = await JavaExpressionTyper.resolveOverloads(
+            [objectString, stringObject],
+            argumentTypes: [classType("java.lang.String"), classType("java.lang.String")],
+            context: context, index: index)
+        XCTAssertEqual(
+            Set(ambiguous.compactMap(\.returnType.erasedQualifiedName)),
+            ["java.lang.Integer", "java.lang.Long"])
+    }
+
+    private func method(
+        _ name: String, parameters: [JavaTypeRef], result: JavaTypeRef, typeParameters: [String] = []
+    ) -> JavaMethodStub {
+        JavaMethodStub(
+            name: name,
+            typeParameters: typeParameters.map { JavaTypeParameter(name: $0, bounds: []) },
+            parameters: parameters.enumerated().map { JavaParameterStub(name: "p\($0.offset)", type: $0.element) },
+            returnType: result,
+            modifiers: [.publicFlag]
+        )
+    }
+
     // MARK: - var seam
 
     func testInferredVarTypePassesConcreteTypesThrough() {
@@ -159,6 +453,8 @@ final class JavaTypeSystemTests: XCTestCase {
         XCTAssertNil(JavaTypeSystem.inferredVarType(initializerType: nil))
         XCTAssertNil(JavaTypeSystem.inferredVarType(
             initializerType: .unresolved(simpleName: "var", arguments: [])))
+        XCTAssertNil(JavaTypeSystem.inferredVarType(
+            initializerType: .unresolved(simpleName: "null", arguments: [])))
     }
 
     // MARK: - lub with arguments, conditional typing (F01)

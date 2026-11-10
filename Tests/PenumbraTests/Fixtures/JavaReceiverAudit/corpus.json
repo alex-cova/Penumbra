@@ -1,0 +1,228 @@
+{
+  "purpose": "Immutable identity of the Java receiver-type audit corpus. A later A/B comparison matches these commits, source hashes, and classpath fingerprints.",
+  "recordedAt": "2026-11-10",
+  "measurement": {
+    "jdkFeature": 27,
+    "set": "all",
+    "filesPerProject": 120,
+    "sitesPerFile": 150,
+    "sites": 16436,
+    "valueReceivers": 11454,
+    "exact": 14673,
+    "genuineMismatches": 10,
+    "conciliatorCommit": "762066fdb50fd0a1b552e5a8691396934772060d"
+  },
+  "jdk": {
+    "vendor": "Corretto",
+    "version": "27.0.1",
+    "distribution": "27.0.1.0+10-amzn",
+    "ctSymSha256": "1d0c1599dfdffc06566de2c04a634a40a419dfd70319925a4e6cbf27a4e65f10",
+    "ctSymSize": 11399006
+  },
+  "algorithms": {
+    "sources": "SHA-256 of sorted lines relativePath + NUL + SHA-256 of the file bytes, for every .java file under the main source roots.",
+    "classpath": "SHA-256 of sorted lines basename + NUL + size + NUL + SHA-256 of the jar bytes, for compile-classpath jars that exist on disk. Missing jars are excluded, matching the harness, and pinned by missingJarNamesSha256.",
+    "model": "SHA-256 of the raw model.json bytes."
+  },
+  "projects": [
+    {
+      "name": "gson",
+      "group": "development",
+      "membership": "pinned-tag",
+      "remote": "https://github.com/google/gson.git",
+      "tag": "gson-parent-2.11.0",
+      "commit": "828a97be0f8d58108b140b77df8dc76b657f4a87",
+      "sourceRoot": "gson/src/main/java",
+      "worktreeClean": true,
+      "sources": {
+        "fileCount": 83,
+        "sha256": "ed377cb67b92d2fbdeec18ca1a5169810a1f5592c939f38949615f2d8777ed86",
+        "algorithm": "sha256 of sorted lines 'relativePath\\0fileSha256'"
+      }
+    },
+    {
+      "name": "jackson-core",
+      "group": "development",
+      "membership": "pinned-tag",
+      "remote": "https://github.com/FasterXML/jackson-core.git",
+      "tag": "jackson-core-2.17.2",
+      "commit": "a6f49caedcb398efe14c06c4e9abf6e672c412f5",
+      "sourceRoot": "src/main/java",
+      "worktreeClean": true,
+      "sources": {
+        "fileCount": 134,
+        "sha256": "72c79c7c866a3e8243dbdc5c0fcefeb421bab556d87f2aeae02ff1ca345ddfc9",
+        "algorithm": "sha256 of sorted lines 'relativePath\\0fileSha256'"
+      }
+    },
+    {
+      "name": "commons-collections",
+      "group": "held-out",
+      "membership": "pinned-tag",
+      "remote": "https://github.com/apache/commons-collections.git",
+      "tag": "rel/commons-collections-4.5.0",
+      "commit": "7f7fb0244abc940a2e9dd28b67508c0483a58c3e",
+      "sourceRoot": "src/main/java",
+      "worktreeClean": true,
+      "sources": {
+        "fileCount": 359,
+        "sha256": "e5104b36b4b720a793da2f5dbae0ed0645f4ccf6a713ba49a9b30cac4774293b",
+        "algorithm": "sha256 of sorted lines 'relativePath\\0fileSha256'"
+      }
+    },
+    {
+      "name": "jOOL",
+      "group": "held-out",
+      "membership": "pinned-tag",
+      "remote": "https://github.com/jOOQ/jOOL.git",
+      "tag": "version-0.9.15",
+      "commit": "1c943c5aebef301e1169e4315d6c0a7cc317af4c",
+      "sourceRoot": "jOOL-java-8/src/main/java",
+      "worktreeClean": true,
+      "sources": {
+        "fileCount": 129,
+        "sha256": "3e04ea9e617198d9d3344e19a037a1d2be55655c6505ac67dc0b0725977723dc",
+        "algorithm": "sha256 of sorted lines 'relativePath\\0fileSha256'"
+      }
+    },
+    {
+      "name": "sxb-agent",
+      "group": "held-out",
+      "membership": "gradle-model",
+      "modelId": "15ef497ab463bb017d6c67f082c88f1ab1290650ca5b4c871942e8eff892e751",
+      "modelSha256": "ec7184af80e2fa36a353274cbe677a8ab984afe6ee129fb95730c580a1ca013f",
+      "modelFormatVersion": 5,
+      "gradleVersion": "8.14.3",
+      "commit": "6ea7fb9cb5b8f40c2c90851b38457eb2275fb89c",
+      "branch": "development",
+      "worktreeClean": false,
+      "sources": {
+        "fileCount": 466,
+        "sha256": "e44eba6cf5fd53a220b607c55600f60ee7052c106a2cc3ef622c923930518974",
+        "algorithm": "sha256 of sorted lines 'relativePath\\0fileSha256'"
+      },
+      "classpath": {
+        "presentJars": 172,
+        "missingJars": 256,
+        "sha256": "0c2e9c12a820231e9f42c4da4729e81b0c0fcb6e67dbd06f48bca473e4f897f8"
+      },
+      "annotationProcessors": {
+        "jarCount": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "nonSourceDirt": [
+        ".DS_Store",
+        "scripts/"
+      ],
+      "missingJarNamesSha256": "703469c3a8839ea6e964f92a426bc2b545b1fb9f1c66e072f6bb6f00756ad27b"
+    },
+    {
+      "name": "Balatro4j",
+      "group": "held-out",
+      "membership": "gradle-model",
+      "modelId": "aec0fb72a05fa43ad30e119af4f4762a27e7c07440f65dfc360a8590ec50ef23",
+      "modelSha256": "052fec226c52a077239fc1c0a6b5ffdd63666802e994a30da598165518dbda9a",
+      "modelFormatVersion": 8,
+      "gradleVersion": "9.4.1",
+      "commit": "ac8a2f5a5e517028e8573b436c4527c030072127",
+      "branch": "main",
+      "worktreeClean": false,
+      "sources": {
+        "fileCount": 103,
+        "sha256": "c6868a535ef45c20d5407a4a8c3136d7af77379dee51660e9170650a5814b38a",
+        "algorithm": "sha256 of sorted lines 'relativePath\\0fileSha256'",
+        "note": "Worktree hash, including the uncommitted AnteScorerImpl.java. sourcesAtCommit is a clean checkout of commit."
+      },
+      "classpath": {
+        "presentJars": 15,
+        "missingJars": 0,
+        "sha256": "63cbb2cc792b53eab3efa399d97bd6a7b65772e92caebb055edcd02dd0dde3e4"
+      },
+      "annotationProcessors": {
+        "jarCount": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "sourcesAtCommit": {
+        "fileCount": 103,
+        "sha256": "09278e0f0c7124d3d3365c2f7a2b5991d65b356545baaba85163484b4a742ef0"
+      },
+      "mainSourceDrift": [
+        "perkeo/src/main/java/com/balatro/impl/AnteScorerImpl.java"
+      ],
+      "otherDirt": [
+        ".idea/workspace.xml",
+        "README.md",
+        "perkeo/src/test/java/tests/AnteScorerImprovementsTest.java"
+      ]
+    },
+    {
+      "name": "sxb-conciliator",
+      "group": "held-out",
+      "membership": "gradle-model",
+      "modelId": "f7c39215e9071e0c96a2d2d502f87410c17a82eb6aaa9622f652f3d9bdc980cc",
+      "modelSha256": "c1b198566a788f360a3f0d8d4738567115f50ecd1c94dd03399ae879d71fd6e5",
+      "modelFormatVersion": 6,
+      "gradleVersion": "9.6.1",
+      "commit": "aa1d878ce11a515b1ce7b4425c1ff7f2854cff62",
+      "branch": "development",
+      "worktreeClean": true,
+      "classpath": {
+        "presentJars": 351,
+        "missingJars": 0,
+        "sha256": "d02f755aad5c0b3a1e904793a2fc2bdeca030fd65d5530f912d490613de2b6c4"
+      },
+      "annotationProcessors": {
+        "jarCount": 22,
+        "sha256": "ded2d088d12921a265113988ef4ef00eb809829118b4f64826948043cf0a8ed0"
+      },
+      "measuredRevision": {
+        "commit": "762066fdb50fd0a1b552e5a8691396934772060d",
+        "committedAt": "2026-11-07T10:49:20-0600",
+        "subject": "bug fixes",
+        "sources": {
+          "fileCount": 798,
+          "sha256": "86b9937711060a0ec441f98480e0bd65bc68e2c77831b1d9b52ee89ace878154"
+        },
+        "note": "development before Merge branch 'poliza' into development. This is the tree of the 16,436-site audit."
+      },
+      "laterRevision": {
+        "commit": "aa1d878ce11a515b1ce7b4425c1ff7f2854cff62",
+        "committedAt": "2026-11-10T09:42:42-0600",
+        "subject": "Merge branch 'poliza' into development",
+        "sources": {
+          "fileCount": 802,
+          "sha256": "269cb9ae1e95f89ea4d38afbc870de9af9d74c3fe2e3365d071c72941cf5ca5a"
+        },
+        "note": "Landed after the 16,436-site audit. A run on this tree kept the same mismatch sites. Value receivers on this project were 206, all exact."
+      }
+    },
+    {
+      "name": "sxb-product",
+      "group": "held-out",
+      "membership": "gradle-model",
+      "modelId": "03cf193c3415532487a9859439c2ddb02c96150d1683812025c99ac37d1a4cbb",
+      "modelSha256": "4c5ff20341fdfd8adac857210e4bf0ebeff78f612771b85c71d345f9953943e5",
+      "modelFormatVersion": 5,
+      "gradleVersion": "9.6.1",
+      "commit": "c0e2c0bebfdc2a562d94c8a9fcd6a6fc6b42be60",
+      "branch": "master",
+      "worktreeClean": true,
+      "sources": {
+        "fileCount": 666,
+        "sha256": "101c057c05edb1a0e1a0880d5270b45c0a922c24f6d0ded0532929f90a375e42",
+        "algorithm": "sha256 of sorted lines 'relativePath\\0fileSha256'"
+      },
+      "classpath": {
+        "presentJars": 328,
+        "missingJars": 0,
+        "sha256": "263006e2ec050da05c01f41000c4c6ebec8aabdd2704838417df4322f5cb719c"
+      },
+      "annotationProcessors": {
+        "jarCount": 25,
+        "sha256": "2c92ed753041f476254a622e86849c07019c15851b160812d19307ce2e8f2f6f"
+      },
+      "valueReceiversInAuditTable": 0,
+      "note": "Loaded with the other Gradle models. Absent from the value-receiver table of the 14,671-exact and 14,673-exact audits."
+    }
+  ]
+}

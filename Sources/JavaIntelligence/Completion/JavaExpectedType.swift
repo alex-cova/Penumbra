@@ -263,7 +263,10 @@ enum JavaExpectedType {
                 source: request.source, realTree: request.tree, dotOffset: nameStart - 1, context: request.context, index: request.index
             ), receiver.packageName == nil else { return nil }
             let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
-            candidates = await JavaExpressionTyper.methods(named: simpleName, on: receiver.type, mode: mode, context: request.context, index: request.index)
+            candidates = await JavaExpressionTyper.methods(
+                named: simpleName, on: receiver.type, mode: mode, context: request.context, index: request.index,
+                qualifier: receiver.memberQualifier
+            )
         } else if simpleName == "this" || simpleName == "super" {
             var owner: JavaTypeRef?
             if let enclosing = request.context.enclosingTypeQualifiedNames.first {
@@ -404,14 +407,39 @@ actor JavaAssignability {
             return true
         case .wildcard(.extends(let bound)?):
             guard let actualType else { return true }
-            return await isAssignable(await resolve(actualType), to: await resolve(bound))
+            let resolvedBound = await resolve(bound)
+            let resolvedActual = await resolve(actualType)
+            // `Collection<? extends T#>` is still applicable: `T#` is an inference variable, not a
+            // class. A class type variable (`T` of the enclosing type) and an unresolved name stay
+            // closed, so `List<String>` is not a `List<? extends Integer>`.
+            if Self.isInferenceVariable(resolvedBound) || Self.isInferenceVariable(resolvedActual) { return true }
+            return await isAssignable(resolvedActual, to: resolvedBound)
         case .wildcard(.superBound(let bound)?):
+            // JLS 4.5.1 has no rule that `? extends T` is contained in `? super S`. Treating the
+            // extends bound as a plain type made `Class<? extends String>` (the type of
+            // `getClass()`) assignable to `Class<? super String>`. An inference variable stays
+            // open; a captured wildcard is not introduced.
+            if case .wildcard(.extends(let extended)) = actual {
+                let resolved = await resolve(extended)
+                if Self.isInferenceVariable(resolved) { return true }
+                return false
+            }
             guard let actualType else { return true }
-            return await isAssignable(await resolve(bound), to: await resolve(actualType))
+            let resolvedBound = await resolve(bound)
+            let resolvedActual = await resolve(actualType)
+            if Self.isInferenceVariable(resolvedBound) || Self.isInferenceVariable(resolvedActual) { return true }
+            return await isAssignable(resolvedBound, to: resolvedActual)
         case .type(let type):
             guard case .type(let actualPlain) = actual else { return false }
             return Self.isSameType(await resolve(type), await resolve(actualPlain))
         }
+    }
+
+    /// `T#` from ``JavaExpressionTyper/renamedApart(_:)``. A plain type variable is a specific
+    /// type whose bound is already known; an inference variable is not.
+    private static func isInferenceVariable(_ type: JavaTypeRef) -> Bool {
+        if case .typeVariable(let name) = type { return JavaExpressionTyper.isInferenceVariable(name) }
+        return false
     }
 
     private static func isSameType(_ lhs: JavaTypeRef, _ rhs: JavaTypeRef) -> Bool {

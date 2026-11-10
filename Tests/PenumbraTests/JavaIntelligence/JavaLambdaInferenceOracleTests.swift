@@ -1,7 +1,8 @@
 import XCTest
 @testable import JavaIntelligence
 
-/// javac as the independent oracle for the lambda inference corpus (`cases/Lam*.java`).
+/// javac as the independent oracle for the lambda inference corpus (`cases/Lam*.java`) and for the known-gap cases
+/// the generic type audit proposed (`cases/Gap*.java`, tagged `gap:` until their change lands).
 ///
 /// A case states the receiver's full type in `//! receiverType:`. Here each case is compiled with the
 /// caret replaced by a member that does not exist (`zzProbe()`); javac's `cannot find symbol` names
@@ -20,7 +21,7 @@ final class JavaLambdaInferenceOracleTests: XCTestCase {
         let javac = try XCTUnwrap(jdk.javac)
         let root = CorpusIndex.directory
         let cases = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("cases"), includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix("Lam") && $0.pathExtension == "java" }
+            .filter { ($0.lastPathComponent.hasPrefix("Lam") || $0.lastPathComponent.hasPrefix("Gap")) && $0.pathExtension == "java" }
             .sorted { $0.path < $1.path }
 
         var checked = 0

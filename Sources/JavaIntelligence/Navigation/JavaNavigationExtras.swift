@@ -133,7 +133,7 @@ extension JavaNavigationSession {
         if qualifier.type == "super" {
             guard let enclosing = context.enclosingTypeQualifiedNames.first,
                   let superclass = await JavaMemberLookup.directSuperclass(of: enclosing, context: context, index: index) else { return [] }
-            receiver = JavaReceiverInfo(type: superclass, isTypeReference: false)
+            receiver = JavaReceiverInfo(type: superclass, isTypeReference: false, isSuper: true)
         } else {
             receiver = await JavaExpressionTyper.receiverInfo(
                 source: source, realTree: tree, dotOffset: separator.startByte, context: context, index: index
@@ -141,7 +141,7 @@ extension JavaNavigationSession {
         }
         guard let receiver else { return [] }
         // `Dog::getName` names an instance method through its type, so both kinds qualify.
-        let targets = await allMethods(named: nameNode.text, on: receiver.type, mode: .instance)
+        let targets = await allMethods(named: nameNode.text, on: receiver.type, mode: .instance, qualifier: receiver.memberQualifier)
         return await methodHits(targets)
     }
 

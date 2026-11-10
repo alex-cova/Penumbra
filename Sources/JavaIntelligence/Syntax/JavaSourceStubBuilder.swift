@@ -224,8 +224,8 @@ public enum JavaSourceStubBuilder {
     /// (or implements it, for an interface) and declares the body's fields and methods.
     static func anonymousStub(
         body: SyntaxNode, qualifiedName: String, supertype: JavaTypeRef, supertypeIsInterface: Bool,
-        packageName: String, url: URL, nameRange: Range<Int>
-    ) -> JavaClassStub {
+        packageName: String, outerQualifiedName: String?, url: URL, nameRange: Range<Int>
+    ) -> (primary: JavaClassStub, nested: [JavaClassStub]) {
         var fields: [JavaFieldStub] = []
         var methods: [JavaMethodStub] = []
         var innerTypeNames: [String] = []
@@ -233,13 +233,25 @@ public enum JavaSourceStubBuilder {
         collectMembers(body.namedChildren, packageName: packageName, outerQualifiedName: qualifiedName, url: url,
                         declaringKind: .classKind, fields: &fields, methods: &methods, innerTypeNames: &innerTypeNames,
                         nestedTypes: &nestedTypes)
-        return JavaClassStub(
+        let primary = JavaClassStub(
             binaryName: qualifiedName, qualifiedName: qualifiedName, simpleName: "", packageName: packageName,
-            kind: .classKind, modifiers: [],
+            outerQualifiedName: outerQualifiedName, kind: .classKind, modifiers: [],
             superclass: supertypeIsInterface ? nil : supertype, interfaces: supertypeIsInterface ? [supertype] : [],
             fields: fields, methods: methods, innerTypeNames: innerTypeNames,
             origin: .source(url, nameRange: nameRange)
         )
+        return (primary, nestedTypes)
+    }
+
+    /// Stubs for a local or anonymous-nested class declaration, including the member types inside it.
+    /// `outerQualifiedName` is the synthetic owner (`Outer.$Local<start>`), so the qualified name is
+    /// site-keyed and does not collide with another class of the same simple name.
+    static func localClassStubs(
+        _ node: SyntaxNode, packageName: String, outerQualifiedName: String, url: URL
+    ) -> [JavaClassStub] {
+        var classes: [JavaClassStub] = []
+        buildType(node, packageName: packageName, outerQualifiedName: outerQualifiedName, javadoc: nil, url: url, into: &classes)
+        return classes
     }
 
     /// The kind of the type declaration `node` is directly nested in, if any.
@@ -263,7 +275,7 @@ public enum JavaSourceStubBuilder {
         for (index, member) in members.enumerated() {
             let javadoc = javadocText(precedingSiblingOf: index, in: members)
             switch member.type {
-            case "field_declaration":
+            case "field_declaration", "constant_declaration":
                 fields.append(contentsOf: parseFields(member, declaringKind: declaringKind, javadoc: javadoc))
             case "method_declaration":
                 if let method = parseMethod(member, declaringKind: declaringKind, javadoc: javadoc) {
@@ -295,7 +307,8 @@ public enum JavaSourceStubBuilder {
         }
         return node.namedChildren(ofType: "variable_declarator").compactMap { declarator in
             guard let nameNode = declarator.child(byFieldName: "name") else { return nil }
-            return JavaFieldStub(name: nameNode.text, type: type, modifiers: modifiers, javadoc: javadoc)
+            let fieldType = JavaTypeNodeConverter.applying(declarator.child(byFieldName: "dimensions"), to: type)
+            return JavaFieldStub(name: nameNode.text, type: fieldType, modifiers: modifiers, javadoc: javadoc)
         }
     }
 
@@ -349,16 +362,22 @@ public enum JavaSourceStubBuilder {
             switch child.type {
             case "formal_parameter":
                 guard let typeNode = child.child(byFieldName: "type"), let nameNode = child.child(byFieldName: "name") else { continue }
-                result.append(JavaParameterStub(name: nameNode.text, type: JavaTypeNodeConverter.convert(typeNode)))
+                let declarator = child.firstNamedChild(ofType: "variable_declarator")
+                let dimensions = child.child(byFieldName: "dimensions") ?? declarator?.child(byFieldName: "dimensions")
+                let type = JavaTypeNodeConverter.applying(dimensions, to: JavaTypeNodeConverter.convert(typeNode))
+                result.append(JavaParameterStub(name: nameNode.text, type: type))
             case "spread_parameter":
                 // (spread_parameter <elementType> (variable_declarator name: (identifier))) -- both
                 // positional, no field labels (see JavaTypeNodeConverter's doc comment).
-                guard let elementTypeNode = child.namedChild(at: 0),
+                guard let elementTypeNode = child.namedChildren.first(where: {
+                    $0.type != "modifiers" && $0.type != "variable_declarator" && $0.type != "identifier"
+                }),
                       let declarator = child.firstNamedChild(ofType: "variable_declarator"),
                       let nameNode = declarator.child(byFieldName: "name") else { continue }
                 hasVarargs = true
-                let elementType = JavaTypeNodeConverter.convert(elementTypeNode)
-                result.append(JavaParameterStub(name: nameNode.text, type: .array(element: elementType)))
+                let dimensions = child.child(byFieldName: "dimensions") ?? declarator.child(byFieldName: "dimensions")
+                let elementType = JavaTypeNodeConverter.applying(dimensions, to: .array(element: JavaTypeNodeConverter.convert(elementTypeNode)))
+                result.append(JavaParameterStub(name: nameNode.text, type: elementType))
             default:
                 break
             }

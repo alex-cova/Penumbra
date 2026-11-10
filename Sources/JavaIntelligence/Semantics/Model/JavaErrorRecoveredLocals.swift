@@ -25,7 +25,7 @@ enum JavaErrorRecoveredLocals {
                     for parameter in parameters.namedChildren where parameter.type == "formal_parameter" {
                         guard let typeNode = parameter.child(byFieldName: "type"),
                               let nameNode = parameter.child(byFieldName: "name") else { continue }
-                        add(nameNode.text, JavaTypeNodeConverter.convert(typeNode), to: &result, seen: &seen)
+                        add(nameNode.text, JavaTypeNodeConverter.convert(typeNode), declarationEnd: nameNode.endByte, to: &result, seen: &seen)
                     }
                 }
                 collectFlatDeclarations(in: node, before: offset, into: &result, seen: &seen)
@@ -68,13 +68,16 @@ enum JavaErrorRecoveredLocals {
             result.append(JavaLocalVariable(
                 name: nameNode.text,
                 type: isVar ? .unresolved(simpleName: "var", arguments: []) : type,
-                initializerText: isVar ? declarator.child(byFieldName: "value")?.text : nil
+                initializerText: isVar ? declarator.child(byFieldName: "value")?.text : nil,
+                declarationEnd: nameNode.endByte
             ))
         }
     }
 
-    private static func add(_ name: String, _ type: JavaTypeRef, to result: inout [JavaLocalVariable], seen: inout Set<String>) {
+    private static func add(
+        _ name: String, _ type: JavaTypeRef, declarationEnd: Int, to result: inout [JavaLocalVariable], seen: inout Set<String>
+    ) {
         guard seen.insert(name).inserted else { return }
-        result.append(JavaLocalVariable(name: name, type: type))
+        result.append(JavaLocalVariable(name: name, type: type, declarationEnd: declarationEnd))
     }
 }

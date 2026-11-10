@@ -314,11 +314,12 @@ struct JavaNavigationSession {
         if invocation.child(byFieldName: "object") == nil {
             // Inside `new Named() { ... }` the anonymous class is the innermost scope.
             for supertype in await anonymousClassSupertypes(of: invocation) where primary.isEmpty {
-                primary = await allMethods(named: nameNode.text, on: supertype, mode: .instance)
+                // A simple name inside `new Base() { }` is not a qualified `Base` receiver.
+                primary = await allMethods(named: nameNode.text, on: supertype, mode: .instance, qualifier: .simpleName)
             }
         }
         if primary.isEmpty {
-            primary = await allMethods(named: nameNode.text, on: receiver.type, mode: mode)
+            primary = await allMethods(named: nameNode.text, on: receiver.type, mode: mode, qualifier: receiver.memberQualifier)
         }
         if primary.isEmpty, invocation.child(byFieldName: "object") == nil {
             // An unqualified call may name a method of an enclosing class.
@@ -360,14 +361,14 @@ struct JavaNavigationSession {
                   let superclass = await JavaMemberLookup.directSuperclass(of: enclosing, context: context, index: index) else {
                 return nil
             }
-            return await fieldTarget(named: fieldNode.text, on: superclass, mode: .instance)
+            return await fieldTarget(named: fieldNode.text, on: superclass, mode: .instance, qualifier: .viaSuper)
         }
         guard let dot = dotOffset(before: fieldNode),
               let receiver = await JavaExpressionTyper.receiverInfo(
                 source: source, realTree: tree, dotOffset: dot, context: context, index: index
               ) else { return nil }
         let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
-        return await fieldTarget(named: fieldNode.text, on: receiver.type, mode: mode)
+        return await fieldTarget(named: fieldNode.text, on: receiver.type, mode: mode, qualifier: receiver.memberQualifier)
     }
 
     /// The types named by the anonymous classes around `node`, innermost first (`Named` for the
@@ -395,7 +396,7 @@ struct JavaNavigationSession {
         }
         if let node = bareNameNode(atByteOffset: byteOffset) {
             for supertype in await anonymousClassSupertypes(of: node) {
-                let fields = await fieldHits(named: name, on: supertype, mode: .instance)
+                let fields = await fieldHits(named: name, on: supertype, mode: .instance, qualifier: .simpleName)
                 if !fields.isEmpty { return fields }
             }
         }
@@ -442,7 +443,7 @@ struct JavaNavigationSession {
                   let superclass = await JavaMemberLookup.directSuperclass(of: enclosing, context: context, index: index) else {
                 return nil
             }
-            return JavaReceiverInfo(type: superclass, isTypeReference: false)
+            return JavaReceiverInfo(type: superclass, isTypeReference: false, isSuper: true)
         }
         if invocation.child(byFieldName: "object") == nil {
             guard let enclosing = context.enclosingTypeQualifiedNames.first else { return nil }
@@ -456,8 +457,10 @@ struct JavaNavigationSession {
         )
     }
 
-    func allMethods(named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode) async -> [MethodTarget] {
-        let members = await JavaMemberLookup.members(of: type, mode: mode, context: context, index: index)
+    func allMethods(
+        named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode, qualifier: JavaMemberQualifier = .expression
+    ) async -> [MethodTarget] {
+        let members = await JavaMemberLookup.members(of: type, mode: mode, context: context, index: index, qualifier: qualifier)
         return members.compactMap { member in
             guard case .method(let method, let declaringClass) = member, method.name == name else { return nil }
             return MethodTarget(declaringClass: declaringClass, method: method)
@@ -478,15 +481,20 @@ struct JavaNavigationSession {
         return targets
     }
 
-    func fieldHits(named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode) async -> [JavaDefinitionHit] {
-        guard let target = await fieldTarget(named: name, on: type, mode: mode) else { return [] }
+    func fieldHits(
+        named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode, qualifier: JavaMemberQualifier = .expression
+    ) async -> [JavaDefinitionHit] {
+        guard let target = await fieldTarget(named: name, on: type, mode: mode, qualifier: qualifier) else { return [] }
         return await fieldHits(of: target)
     }
 
     func fieldTarget(
-        named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode, checkAccess: Bool = true
+        named name: String, on type: JavaTypeRef, mode: JavaMemberLookupMode, checkAccess: Bool = true,
+        qualifier: JavaMemberQualifier = .expression
     ) async -> FieldTarget? {
-        let members = await JavaMemberLookup.members(of: type, mode: mode, context: context, index: index, checkAccess: checkAccess)
+        let members = await JavaMemberLookup.members(
+            of: type, mode: mode, context: context, index: index, checkAccess: checkAccess, qualifier: qualifier
+        )
         for member in members {
             if case .field(let field, let declaringClass) = member, field.name == name {
                 return FieldTarget(declaringClass: declaringClass, field: field)

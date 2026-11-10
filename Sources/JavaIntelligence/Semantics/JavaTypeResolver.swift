@@ -81,6 +81,10 @@ public enum JavaTypeResolver {
         if context.typeParameterNames.contains(simpleName) {
             return .typeVariable(name: simpleName)
         }
+        // A local class in scope shadows member types (JLS 6.5.5.1, after type parameters).
+        if let local = context.localTypes[simpleName] {
+            return .classType(qualifiedName: local, arguments: arguments, outer: nil)
+        }
 
         for enclosingQualifiedName in context.enclosingTypeQualifiedNames {
             if let enclosing = await index.classStub(qualifiedName: enclosingQualifiedName) {

@@ -188,6 +188,71 @@ final class JavaCompletionProviderContextTests: XCTestCase {
         XCTAssertTrue(labels(items).contains("baseMethod"))
     }
 
+    /// `Outer.super` is the named class's superclass. The innermost type, a sibling and an indirect
+    /// superinterface are not. A direct superinterface is, and its static methods are not values.
+    func testQualifiedSuperIsNotUnqualifiedSuper() async throws {
+        let source = """
+        package p;
+        class Base { public void fromBase() {} }
+        class Mid extends Base { @Override public void action() {} }
+        class Outer extends Mid {
+            class Inner { void run() { Outer.super. } }
+            class Middle { class Deep { void run() { Middle.super. } } }
+            static class Nested { void run() { Outer.super. } }
+            void own() { Outer.super. }
+        }
+        class Sibling { void run() { Outer.super. } }
+        interface Speak { default void say() {} static void shout() {} }
+        class Talker implements Speak {
+            void run() { Speak.super. }
+            static void stat() { Speak.super. }
+        }
+        interface Indirect extends Speak {}
+        class OnlyIndirect implements Indirect { void run() { Speak.super. } }
+        """
+        let index = try await makeIndex(stubs: [], indexedSource: source)
+        let provider = JavaCompletionProvider(index: index)
+        func at(_ unique: String) async -> (type: String?, labels: Set<String>) {
+            let range = try! XCTUnwrap(source.range(of: unique))
+            let caret = source.replacingCharacters(in: range, with: unique + "€")
+            let diagnosis = await provider.diagnose(context: context(caret))
+            let items = await provider.provide(context: context(caret))
+            return (diagnosis?.receiverType?.erasedQualifiedName, labels(items))
+        }
+        let outer = await at("class Inner { void run() { Outer.super.")
+        XCTAssertEqual(outer.type, "p.Mid")
+        XCTAssertTrue(outer.labels.contains("action"))
+        XCTAssertTrue(outer.labels.contains("fromBase"))
+
+        let middle = await at("class Deep { void run() { Middle.super.")
+        XCTAssertEqual(middle.type, "java.lang.Object")
+
+        let nested = await at("static class Nested { void run() { Outer.super.")
+        XCTAssertEqual(nested.type, "p.Mid", "javac still attributes Outer.super from a static nested class")
+        XCTAssertTrue(nested.labels.contains("action"))
+
+        let own = await at("void own() { Outer.super.")
+        XCTAssertEqual(own.type, "p.Mid", "javac attributes Outer.super inside Outer as the superclass")
+        XCTAssertTrue(own.labels.contains("action"))
+
+        let sibling = await at("class Sibling { void run() { Outer.super.")
+        XCTAssertNil(sibling.type)
+        XCTAssertFalse(sibling.labels.contains("action"))
+
+        let speak = await at("void run() { Speak.super.")
+        XCTAssertEqual(speak.type, "p.Speak")
+        XCTAssertTrue(speak.labels.contains("say"))
+        XCTAssertFalse(speak.labels.contains("shout"))
+
+        let staticSpeak = await at("static void stat() { Speak.super.")
+        XCTAssertNil(staticSpeak.type)
+        XCTAssertFalse(staticSpeak.labels.contains("say"))
+
+        let onlyIndirect = await at("class OnlyIndirect implements Indirect { void run() { Speak.super.")
+        XCTAssertNil(onlyIndirect.type)
+        XCTAssertFalse(onlyIndirect.labels.contains("say"))
+    }
+
     func testVarLocalIsTypedFromInitializer() async throws {
         let bar = stub("Bar", methods: [method("getValue", returns: .primitive(.int))])
         let index = try await makeIndex(stubs: [bar])

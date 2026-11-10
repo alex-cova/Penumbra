@@ -70,6 +70,17 @@ enum JavaTypeNodeConverter {
         }
     }
 
+    /// C-style declarators (`byte buffer[]`, `String... names[]`) add a dimension after the name.
+    /// The type node itself (`byte[]`) is already an array; these are extra.
+    static func applying(_ dimensions: SyntaxNode?, to type: JavaTypeRef) -> JavaTypeRef {
+        guard let dimensions else { return type }
+        let count = dimensions.text.filter { $0 == "[" }.count
+        guard count > 0 else { return type }
+        var result = type
+        for _ in 0..<count { result = .array(element: result) }
+        return result
+    }
+
     private static func convertTypeArgument(_ node: SyntaxNode) -> JavaTypeArgument {
         if node.type == "wildcard" {
             return .wildcard(convertWildcardBound(node))

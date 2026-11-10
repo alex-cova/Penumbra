@@ -97,8 +97,13 @@ public enum JavaTypeSystem {
     /// The least upper bound of `alternatives`, erased: alternatives with one erasure yield it
     /// (the original reference, arguments preserved); otherwise the most specific common
     /// supertype found through the index, raw. `nil` when an alternative is not a resolvable
-    /// class type or the hierarchies do not meet — callers keep today's behavior then (for
-    /// multi-catch, the first alternative).
+    /// class type, when a class type has no stub (its hierarchy is unknown), or when the
+    /// hierarchies do not meet — callers keep today's behavior then (for multi-catch, the
+    /// first alternative).
+    ///
+    /// A missing stub's closure is only `{itself, Object}`. Intersecting those closures always
+    /// yields `Object`, which would invent a lub the index cannot support. Two indexed classes
+    /// that really share nothing but `Object` still lub to `Object`.
     ///
     /// Not a full JLS lub: no type arguments on the result (capture conversion is Phase 4),
     /// no interfacean lub cocktail beyond the erased meet. Sound for member lookup on the
@@ -128,6 +133,13 @@ public enum JavaTypeSystem {
             common = common.map { $0.intersection(closure) } ?? closure
         }
         guard let meeting = common, !meeting.isEmpty else { return nil }
+        // `{Object}` is a real lub only when every hierarchy was indexed. Otherwise the meet
+        // collapsed because a stub was missing, not because the types were proven unrelated.
+        if meeting.subtracting(["java.lang.Object"]).isEmpty {
+            for name in names {
+                if await index.classStub(qualifiedName: name) == nil { return nil }
+            }
+        }
         // Prefer an alternative's own reference when the winner is among them.
         if let winner = await mostSpecific(in: meeting, index: index) {
             if let position = names.firstIndex(of: winner) { return alternatives[position] }
@@ -207,14 +219,31 @@ public enum JavaTypeSystem {
         return .classType(qualifiedName: name, arguments: merged, outer: outer)
     }
 
-    /// The effective type of a multi-catch parameter: the lub of its alternatives, or the
-    /// first alternative when the lub is unavailable. Empty alternatives read as
+    /// The effective type of a multi-catch parameter (JLS 14.20). Empty alternatives read as
     /// `Throwable`, mirroring the scope tree's fallback for a missing `catch_type`.
+    ///
+    /// When the index can prove a lub that is `Throwable` or a subtype, that lub is the parameter's
+    /// type. When it cannot (an alternative has no stub, or a missing supertype lets the meet climb
+    /// past `Throwable`), the parameter is read as `java.lang.Throwable`. That is a conservative
+    /// completion receiver, not a verified lub: every legal alternative is a subtype of `Throwable`,
+    /// so every member offered here is a member of the real type, but a use that needs a tighter
+    /// alternative is not accepted. The first written alternative is not that receiver — its own
+    /// members (`SQLException.getSQLState()` in `SQLException | NotIndexed`) need not belong to the
+    /// lub, and a missing alternative has none. javac's recovery (the lub of whichever alternatives
+    /// it could resolve) is not copied; it changes with which jar is missing. Without a `Throwable`
+    /// stub nothing can be proved, and the lub, else the first alternative, stands.
     public static func effectiveCatchType(alternatives: [JavaTypeRef], index: JavaIndex) async -> JavaTypeRef {
         guard !alternatives.isEmpty else {
             return .unresolved(simpleName: "Throwable", arguments: [])
         }
-        return await lub(of: alternatives, index: index) ?? alternatives[0]
+        let throwableName = "java.lang.Throwable"
+        let bound = await lub(of: alternatives, index: index)
+        guard await index.classStub(qualifiedName: throwableName) != nil else { return bound ?? alternatives[0] }
+        let throwable = JavaTypeRef.classType(qualifiedName: throwableName, arguments: [], outer: nil)
+        guard let bound else { return throwable }
+        if bound.erasedQualifiedName == throwableName { return bound }
+        if await JavaMemberLookup.asSupertype(erasure(of: bound), named: throwableName, index: index) == nil { return throwable }
+        return bound
     }
 
     /// The member of `candidates` that is a subtype of every other member, or `nil` when the
@@ -240,12 +269,16 @@ public enum JavaTypeSystem {
     // MARK: - `var` inference seam
 
     /// The declared type of a `var` local once its initializer is typed: the initializer type,
-    /// unless it is still unknown. `JavaExpressionTyper.resolvingVarLocals` assigns through
-    /// here, so Phase 4 attribution plugs richer inference (denotability, anonymous-class
-    /// supertypes, poly expressions) in one place.
+    /// unless it is still unknown or the null type (JLS 14.4.1 rejects `var x = null`).
+    /// `JavaExpressionTyper` assigns through here from both member completion and
+    /// ``JavaExpressionTyper/resolvingVarLocals(_:context:index:)``.
     public static func inferredVarType(initializerType: JavaTypeRef?) -> JavaTypeRef? {
         guard let initializerType else { return nil }
-        if case .unresolved("var", _) = initializerType { return nil }
-        return initializerType
+        switch initializerType {
+        case .unresolved("var", _), .unresolved("null", _):
+            return nil
+        default:
+            return initializerType
+        }
     }
 }

@@ -32,16 +32,47 @@ public struct JavaLocalVariable: Sendable, Equatable {
     /// `for (var x : items)`: ``initializerText`` is the iterated expression, and the local has
     /// its element type rather than its type.
     public let isIterationVariable: Bool
+    /// Every alternative of a multi-catch parameter (`catch (A | B e)`). Empty for every other local.
+    /// The lub is computed when the name is typed, where an index is available.
+    public let alternativeTypes: [JavaTypeRef]
+    /// UTF-8 offset where the declaring name ends. An initializer may name a local only when that
+    /// local's name has already ended (JLS 6.3). `nil` for a local built by hand, which stays
+    /// visible to other hand-built locals.
+    public let declarationEnd: Int?
 
     public init(
         name: String, type: JavaTypeRef, initializerText: String? = nil, lambdaOrigin: JavaLambdaOrigin? = nil,
-        isIterationVariable: Bool = false
+        isIterationVariable: Bool = false, alternativeTypes: [JavaTypeRef] = [], declarationEnd: Int? = nil
     ) {
         self.name = name
         self.type = type
         self.initializerText = initializerText
         self.lambdaOrigin = lambdaOrigin
         self.isIterationVariable = isIterationVariable
+        self.alternativeTypes = alternativeTypes
+        self.declarationEnd = declarationEnd
+    }
+
+    /// The locals an initializer of this variable may name. Earlier declarations only: a local
+    /// declared later in the block is not in scope yet, and this variable is omitted so a
+    /// self-reference is not given a type from a field of the same name. An enhanced-`for`
+    /// variable is not in scope in the iterated expression either (JLS 6.3), which is the same
+    /// omission, so `for (var item : items)` still sees `items`.
+    func initializerEnvironment(among locals: [JavaLocalVariable]) -> [JavaLocalVariable] {
+        if let end = declarationEnd {
+            return locals.filter { other in
+                guard let otherEnd = other.declarationEnd else { return false }
+                return otherEnd < end
+            }
+        }
+        var skippedSelf = false
+        return locals.filter { other in
+            if !skippedSelf, other.declarationEnd == nil, other.name == name {
+                skippedSelf = true
+                return false
+            }
+            return true
+        }
     }
 
     /// Declared with `var`, so ``type`` carries no information until the initializer is typed.

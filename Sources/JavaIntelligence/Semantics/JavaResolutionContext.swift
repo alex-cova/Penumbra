@@ -18,19 +18,24 @@ public struct JavaResolutionContext: Sendable {
     /// (`T extends A & B` keeps both), unresolved as written. A value of type `T` has the
     /// members common to all its bounds (`Object`'s when unbounded).
     public let typeParameterBounds: [String: [JavaTypeRef]]
+    /// Local classes in scope: simple name to the site-keyed synthetic qualified name.
+    /// Innermost declaration wins. Empty outside a completion request that registered them.
+    public let localTypes: [String: String]
 
     public init(
         packageName: String,
         imports: [JavaImportDeclaration],
         enclosingTypeQualifiedNames: [String] = [],
         typeParameterNames: Set<String> = [],
-        typeParameterBounds: [String: [JavaTypeRef]] = [:]
+        typeParameterBounds: [String: [JavaTypeRef]] = [:],
+        localTypes: [String: String] = [:]
     ) {
         self.packageName = packageName
         self.imports = imports
         self.enclosingTypeQualifiedNames = enclosingTypeQualifiedNames
         self.typeParameterNames = typeParameterNames
         self.typeParameterBounds = typeParameterBounds
+        self.localTypes = localTypes
     }
 
     /// The outermost enclosing type, e.g. `"Outer"` from `["Outer.Inner", "Outer"]`, used for
@@ -52,7 +57,40 @@ public struct JavaResolutionContext: Sendable {
             imports: imports,
             enclosingTypeQualifiedNames: [stub.qualifiedName] + enclosingTypeQualifiedNames,
             typeParameterNames: typeParameterNames.union(stub.typeParameters.map(\.name)),
-            typeParameterBounds: Self.bounds(stub.typeParameters, over: typeParameterBounds)
+            typeParameterBounds: Self.bounds(stub.typeParameters, over: typeParameterBounds),
+            localTypes: localTypes
+        )
+    }
+
+    /// Local classes visible at the caret, and the enclosing-type list with those classes
+    /// rewritten to their synthetic names. `enclosing` nil leaves the list alone.
+    public func withLocalClasses(_ localTypes: [String: String], enclosing: [String]?) -> JavaResolutionContext {
+        JavaResolutionContext(
+            packageName: packageName,
+            imports: imports,
+            enclosingTypeQualifiedNames: enclosing ?? enclosingTypeQualifiedNames,
+            typeParameterNames: typeParameterNames,
+            typeParameterBounds: typeParameterBounds,
+            localTypes: localTypes
+        )
+    }
+
+    /// Type parameters from `other` that this context does not already define. A local class's
+    /// own `<T>` stays; an enclosing method's `<T>` becomes visible for its field types.
+    public func addingUnshadowedTypeParameters(from other: JavaResolutionContext) -> JavaResolutionContext {
+        var names = typeParameterNames
+        var bounds = typeParameterBounds
+        var changed = false
+        for name in other.typeParameterNames where !names.contains(name) {
+            names.insert(name)
+            changed = true
+            if let bound = other.typeParameterBounds[name] { bounds[name] = bound }
+        }
+        guard changed else { return self }
+        return JavaResolutionContext(
+            packageName: packageName, imports: imports,
+            enclosingTypeQualifiedNames: enclosingTypeQualifiedNames,
+            typeParameterNames: names, typeParameterBounds: bounds, localTypes: localTypes
         )
     }
 
@@ -64,7 +102,8 @@ public struct JavaResolutionContext: Sendable {
             imports: imports,
             enclosingTypeQualifiedNames: enclosingTypeQualifiedNames,
             typeParameterNames: typeParameterNames.union(methodTypeParameters.map(\.name)),
-            typeParameterBounds: Self.bounds(methodTypeParameters, over: typeParameterBounds)
+            typeParameterBounds: Self.bounds(methodTypeParameters, over: typeParameterBounds),
+            localTypes: localTypes
         )
     }
 

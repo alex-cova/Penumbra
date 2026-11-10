@@ -272,6 +272,15 @@ public actor JavaCompletionProvider: CompletionProvider {
     private func makeScopedRequest(context: CompletionContext) async -> Request? {
         guard var request = makeRequest(context: context) else { return nil }
         CompletionLatencyTrace.record(context.traceID, "java:textParsed")
+        // Local classes share the anonymous registry. Bind them before anonymous bodies so a
+        // `new` inside a local class resolves against that class, and so `Acc::new` sees `Acc`.
+        if JavaAnonymousClass.registry != nil {
+            let bound = JavaAnonymousClass.bindLocalClasses(
+                in: request.tree, atByteOffset: min(request.prefixStart, request.cursor),
+                context: request.context, fileURL: request.fileURL
+            )
+            request.context = request.context.withLocalClasses(bound.localTypes, enclosing: bound.enclosing)
+        }
         for creation in JavaAnonymousClass.enclosingCreations(in: request.tree, atByteOffset: request.cursor).reversed() {
             if let anonymous = await JavaAnonymousClass.stub(for: creation, context: request.context, index: index) {
                 request.context = request.context.entering(type: anonymous)
@@ -535,7 +544,9 @@ public actor JavaCompletionProvider: CompletionProvider {
         let assignability = JavaAssignability(index: index, context: request.context)
         let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
         let members = await JavaCompletionStageTimer.measure("members") {
-            await JavaMemberLookup.members(of: receiver.type, mode: mode, context: request.context, index: index)
+            await JavaMemberLookup.members(
+                of: receiver.type, mode: mode, context: request.context, index: index, qualifier: receiver.memberQualifier
+            )
         }
         CompletionLatencyTrace.record(request.traceID, "java:membersLooked", "n=\(members.count) \(receiver.type.erasedQualifiedName)")
         let receiverName = receiver.type.erasedQualifiedName
@@ -851,7 +862,9 @@ public actor JavaCompletionProvider: CompletionProvider {
         }
         // `Type::instanceMethod` is legal (the receiver becomes the first argument), so a type
         // reference offers instance methods too.
-        let members = await JavaMemberLookup.members(of: receiver.type, mode: .instance, context: request.context, index: index)
+        let members = await JavaMemberLookup.members(
+            of: receiver.type, mode: .instance, context: request.context, index: index, qualifier: receiver.memberQualifier
+        )
         var seen = Set<String>()
         var items: [CompletionItem] = []
         for member in members {
