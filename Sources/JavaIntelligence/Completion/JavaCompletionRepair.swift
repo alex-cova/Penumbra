@@ -24,7 +24,9 @@ enum JavaCompletionRepair {
     /// whitespace follows the caret on its line (typing `products.` at the end of a line), a `;` closes
     /// the statement too: otherwise `products.__penumbra__` runs into the next line's statement and
     /// tree-sitter's error recovery can re-shape the surrounding methods, putting the caret in the
-    /// wrong one. An earlier statement that ended in `;` with a parenthesis still open has that
+    /// wrong one. A lambda block or anonymous class body opened on the caret's line inside a call that is
+    /// still open (`build(s, (l, v) -> { l.`) is closed too, in nesting order (see
+    /// ``closingSequence(_:onLineEndingAt:)``). An earlier statement that ended in `;` with a parenthesis still open has that
     /// parenthesis replaced by `+` (see ``brokenStatementWindow(in:before:)``).
     static func repair(_ text: String, insertingDummyAtUTF16Offset utf16Offset: Int) -> Result {
         var source = text
@@ -32,7 +34,7 @@ enum JavaCompletionRepair {
             var caret = 0
             var reached = true
             var closesStatement = false
-            var closers = 0
+            var closing: [UInt8] = []
             var window: (start: Int, replacement: String)?
         }
         let plan = source.withUTF8 { bytes -> Plan in
@@ -41,7 +43,7 @@ enum JavaCompletionRepair {
             plan.caret = scan.byteOffset
             plan.reached = scan.utf16Units == max(0, utf16Offset)
             plan.closesStatement = restOfLineIsBlank(bytes, from: plan.caret) && isInsideMethodBody(bytes, before: plan.caret)
-            plan.closers = plan.closesStatement ? unclosedParentheses(bytes, onLineEndingAt: plan.caret) : 0
+            plan.closing = plan.closesStatement ? closingSequence(bytes, onLineEndingAt: plan.caret) : []
             plan.window = brokenStatementWindow(in: bytes, before: plan.caret)
             return plan
         }
@@ -50,7 +52,7 @@ enum JavaCompletionRepair {
         let utf8 = source.utf8
         let caretIndex = utf8.index(utf8.startIndex, offsetBy: plan.caret)
         var result = String()
-        result.reserveCapacity(utf8.count + JavaCompletionProvider.dummyIdentifier.utf8.count + plan.closers + 1)
+        result.reserveCapacity(utf8.count + JavaCompletionProvider.dummyIdentifier.utf8.count + plan.closing.count + 1)
         if let window = plan.window {
             result.append(contentsOf: source[..<utf8.index(utf8.startIndex, offsetBy: window.start)])
             result.append(window.replacement)
@@ -58,7 +60,7 @@ enum JavaCompletionRepair {
             result.append(contentsOf: source[..<caretIndex])
         }
         result.append(JavaCompletionProvider.dummyIdentifier)
-        if plan.closers > 0 { result.append(String(repeating: ")", count: plan.closers)) }
+        if !plan.closing.isEmpty { result.append(String(decoding: plan.closing, as: UTF8.self)) }
         if plan.closesStatement { result.append(";") }
         result.append(contentsOf: source[caretIndex...])
         return Result(text: result, caretByteOffset: plan.caret, reachedRequestedOffset: plan.reached)
@@ -117,6 +119,95 @@ enum JavaCompletionRepair {
             index += 1
         }
         return depth
+    }
+
+    /// What closes the brackets the caret's line leaves open, innermost first, so the statement parses
+    /// whole: `)` for each `(`, and `;}` for a `{` that is a lambda block or a class or method body
+    /// (the `{` follows `->` or `)`) **and** sits inside a `(` that is still open on this line.
+    ///
+    /// The second condition is what keeps this from being brace insertion in general. A block that
+    /// stands on its own (`if (a) { foo.`, `void m() { x.`) is not closed, as before: the file's own `}`
+    /// below the caret does that. A brace inside an open call has to be closed *before* the call's `)`,
+    /// or tree-sitter reads `build(s, (l, v) -> { if (l.__penumbra__));` as an unterminated block and
+    /// turns the call into a flat `ERROR` with no argument list; `n -> { n.__penumbra__);` loses the
+    /// lambda altogether. The `;` before `}` ends the statement under the caret (`if (c) ;` is a valid
+    /// empty statement; in a class body a stray `;` is a valid empty member). Braces that are not a
+    /// body (array initializers, `{` after `=`) are left alone.
+    ///
+    /// A line without `{` takes the old path: one pass counting `(`. Strings and character literals are
+    /// skipped; a `)` or `}` with nothing on this line to close is ignored.
+    static func closingSequence(_ bytes: UnsafeBufferPointer<UInt8>, onLineEndingAt caret: Int) -> [UInt8] {
+        var lineStart = caret
+        while lineStart > 0, bytes[lineStart - 1] != 0x0A { lineStart -= 1 }
+        var depth = 0
+        var sawBrace = false
+        var quote: UInt8?
+        var index = lineStart
+        while index < caret {
+            let byte = bytes[index]
+            if let open = quote {
+                if byte == 0x5C { index += 1 } else if byte == open { quote = nil }
+            } else if byte == 0x22 || byte == 0x27 {
+                quote = byte
+            } else if byte == 0x28 {
+                depth += 1
+            } else if byte == 0x29, depth > 0 {
+                depth -= 1
+            } else if byte == 0x7B {
+                sawBrace = true
+                break
+            }
+            index += 1
+        }
+        guard sawBrace else { return depth > 0 ? Array(repeating: 0x29, count: depth) : [] }
+
+        // `(` is a paren, `{` a body brace (closable), `.` any other brace.
+        var stack: [UInt8] = []
+        stack.reserveCapacity(8)
+        quote = nil
+        index = lineStart
+        while index < caret {
+            let byte = bytes[index]
+            if let open = quote {
+                if byte == 0x5C { index += 1 } else if byte == open { quote = nil }
+            } else if byte == 0x22 || byte == 0x27 {
+                quote = byte
+            } else if byte == 0x28 {
+                stack.append(0x28)
+            } else if byte == 0x29 {
+                if let paren = stack.lastIndex(of: 0x28) { stack.removeSubrange(paren...) }
+            } else if byte == 0x7B {
+                stack.append(opensBody(bytes, at: index, lineStart: lineStart) ? 0x7B : 0x2E)
+            } else if byte == 0x7D {
+                if let top = stack.last, top != 0x28 { stack.removeLast() }
+            }
+            index += 1
+        }
+        var closing: [UInt8] = []
+        var parenthesesBelow = stack.reduce(0) { $1 == 0x28 ? $0 + 1 : $0 }
+        for opener in stack.reversed() {
+            switch opener {
+            case 0x28:
+                closing.append(0x29)
+                parenthesesBelow -= 1
+            case 0x7B where parenthesesBelow > 0:
+                closing.append(0x3B)
+                closing.append(0x7D)
+            default:
+                break
+            }
+        }
+        return closing
+    }
+
+    /// Whether the `{` at `index` opens a lambda block or a class or method body: the last thing
+    /// before it on the line is `->` or `)`.
+    private static func opensBody(_ bytes: UnsafeBufferPointer<UInt8>, at index: Int, lineStart: Int) -> Bool {
+        var before = index - 1
+        while before >= lineStart, bytes[before] == 0x20 || bytes[before] == 0x09 { before -= 1 }
+        guard before >= lineStart else { return false }
+        if bytes[before] == 0x29 { return true }
+        return bytes[before] == 0x3E && before - 1 >= lineStart && bytes[before - 1] == 0x2D
     }
 
     // MARK: - Broken statements above the caret

@@ -34,6 +34,16 @@ enum JavaCompletionProfile {
         Site(name: "member_access", before: "user.getAddress().", after: ""),
         Site(name: "member_prefix", before: "user.getN", after: ""),
         Site(name: "lambda_chain", before: "users.stream().filter(u -> u.isActive()).map(u -> u.", after: ")"),
+        // The parameter of a lambda is typed by another lambda of the same generic call.
+        Site(name: "lambda_sibling", before: "Collector.of(() -> new ArrayList<String>(), (l, v) -> l.", after: ", (a, b) -> a, Collections::unmodifiableList)"),
+        // A generic method whose type variable the other arguments bind.
+        Site(name: "generic_invocation", before: "Collections.max(users, Comparator.comparing(u -> u.", after: "))"),
+        // Incomplete code: a lambda block opened and never closed, inside a call that is still open. The caret is at the
+        // end of its line, so the repair closes `;}` and `)` (one level, then two).
+        Site(name: "lambda_unclosed", before: "Collector.of(() -> new ArrayList<String>(), (l, v) -> { l.", after: ""),
+        Site(name: "lambda_unclosed_nested", before: "users.forEach(u -> { Stream.of(u.getName()).forEach(n -> { n.", after: ""),
+        // Nested generic invocation, complete around the caret.
+        Site(name: "generic_nested", before: "Stream.of(\"a\").collect(Collectors.groupingBy(String::length, Collectors.mapping(s -> s.", after: ", Collectors.toList())))"),
         Site(name: "class_name_one", before: "S", after: ""),
         Site(name: "class_name_short", before: "Str", after: ""),
         Site(name: "class_name_long", before: "ArrayLi", after: ""),

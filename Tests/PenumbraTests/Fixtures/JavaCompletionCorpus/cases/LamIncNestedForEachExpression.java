@@ -1,0 +1,18 @@
+//! receiver: com.acme.model.Role
+//! receiverType: com.acme.model.Role
+//! contains: name
+//! oracle-completion: zzProbe();}));
+package com.acme.cases;
+
+import com.acme.model.*;
+import com.acme.service.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class LamIncNestedForEachExpression {
+    void test(List<User> users) {
+        users.forEach(u -> u.getRoles().forEach(r -> { r./*|*/
+    }
+}

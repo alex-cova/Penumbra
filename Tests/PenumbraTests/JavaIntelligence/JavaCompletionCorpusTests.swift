@@ -118,6 +118,12 @@ final class JavaCompletionCorpusTests: XCTestCase {
             let actual = diagnosis?.receiverType.map(Self.erasedName) ?? "nil"
             if actual != receiver { result.hardFailures.append("receiver \(actual), expected \(receiver)") }
         }
+        // The receiver with its type arguments (`java.util.ArrayList<T>`): the erased check above
+        // cannot tell `List<String>` from `List<Object>`, which is the whole point of inference.
+        if let receiverType = directives["receiverType"] {
+            let actual = diagnosis?.receiverType.map(Self.describe) ?? "nil"
+            if actual != receiverType { result.hardFailures.append("receiverType \(actual), expected \(receiverType)") }
+        }
         if let kind = directives["receiverKind"] {
             let actual = diagnosis.map { $0.receiverIsTypeReference ? "type" : "value" } ?? "nil"
             if actual != kind { result.hardFailures.append("receiverKind \(actual), expected \(kind)") }

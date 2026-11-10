@@ -461,3 +461,25 @@ Unchanged within noise: warm 9.9–12.6 ms, cold 23–28 ms.
 Resident memory with a real classpath and the size of retained syntax trees in the memo; compositor presentation
 time; a save while a Gradle sync is running; per-file stub-shard updates and a layered base index (recommended
 above, not built).
+
+## Lambda parameter inference (A/B, release, this machine's load 5-6)
+
+Added with the contextual-inference change (`docs/JAVA_COMPLETION_QUALITY.md`, "Contextual inference for lambdas
+and generic calls"). `java-completion synthetic` has two new sites, `lambda_sibling` and `generic_invocation`. Three
+binaries (`HEAD~1`, `HEAD`, the change) alternated for six rounds, final-update medians: member access 0.118 /
+0.118 / 0.120 ms, 3-character class name 0.727 / 0.726 / 0.736, `new` with expected type 0.562 / 0.564 / 0.565,
+lambda chain 0.343 / 0.346 / 0.352, generic invocation 0.583 / 0.581 / 0.500, lambda parameter bound by a sibling
+lambda 0.284 / 0.281 / 1.367. The earlier `new`/class-name 3-6 % slowdown was not reproduced (`HEAD` vs `HEAD~1`
++0.2 % / -0.2 %). Per typing request the change allocates a constant 16 KB more (325 → 342 KB at 5,000 lines).
+The machine was loaded (not a quiet baseline); read the ratios, not the absolute times.
+
+## Incomplete-code inference (A/B, release, load 2.5)
+
+Added with the unclosed-lambda change (`docs/JAVA_COMPLETION_QUALITY.md`, "Inference while the code is incomplete"). New
+`java-completion synthetic` sites: `lambda_unclosed`, `lambda_unclosed_nested`, `generic_nested`. Six alternating runs of the
+previous binary and this one, final-update medians: member access 0.118 / 0.117 ms, 3-character class name 0.740 / 0.732,
+`new` with expected type 0.567 / 0.566, lambda chain 0.345 / 0.351, sibling-lambda parameter 1.385 / 1.381, nested generic
+invocation 1.179 / 1.183, 5,000-line file typing 0.478 / 0.474; **unclosed lambda block 0.110 / 0.295, two levels 0.143 / 0.427**
+(they used to give up with the wrong answer; now they infer). Per typing request: 341.6 KB, 683 allocations before; 342.1 KB,
+686 after.
+

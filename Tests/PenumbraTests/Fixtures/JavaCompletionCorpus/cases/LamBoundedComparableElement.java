@@ -1,0 +1,18 @@
+//! receiver: java.lang.String
+//! receiverType: java.lang.String
+//! contains: length
+package com.acme.cases;
+
+import com.acme.model.*;
+import com.acme.service.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+class LamBoundedComparableElement {
+    static <T extends Comparable<T>> T maxBy(List<T> l, Function<? super T, String> f) { return null; }
+    void test(List<String> names) {
+        maxBy(names, s -> { s./*|*/ });
+    }
+}

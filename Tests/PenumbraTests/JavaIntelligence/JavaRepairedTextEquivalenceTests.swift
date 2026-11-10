@@ -51,6 +51,7 @@ final class JavaRepairedTextEquivalenceTests: XCTestCase {
         var generator = Generator(state: 0xFEED)
         var closed = 0
         var blanked = 0
+        var bodiesClosed = 0
         for round in 0..<500 {
             let text = generatedText(&generator)
             for caret in caretOffsets(text) {
@@ -61,10 +62,12 @@ final class JavaRepairedTextEquivalenceTests: XCTestCase {
                 XCTAssertTrue(repaired.reachedRequestedOffset)
                 if expected.contains(");__penumbra__") || expected.hasSuffix(";") { closed += 1 }
                 if repaired.text.utf8.count == expected.utf8.count, expected.contains("+") { blanked += 1 }
+                if expected.contains(";}") { bodiesClosed += 1 }
             }
         }
         XCTAssertGreaterThan(closed, 100, "too few cases that close the statement for this to mean much")
         XCTAssertGreaterThan(blanked, 100, "too few cases with a blanked parenthesis for this to mean much")
+        XCTAssertGreaterThan(bodiesClosed, 20, "too few cases that close a lambda or body brace for this to mean much (\(bodiesClosed))")
     }
 
     func testOffsetsOutsideTheTextAreClamped() {
@@ -102,6 +105,31 @@ final class JavaRepairedTextEquivalenceTests: XCTestCase {
         XCTAssertEqual(repaired("class A { void m() {\n  products."), "class A { void m() {\n  products.\(dummy);")
         // An open parenthesis on the line is closed first.
         XCTAssertEqual(repaired("class A { void m() {\n  if (a instanceof B b && b."), "class A { void m() {\n  if (a instanceof B b && b.\(dummy));")
+        // A lambda block (or a class or method body) opened inside a call that is still open on the line is
+        // closed before the call's `)`, innermost first; each brace gets `;}` so the statement under the caret ends.
+        let open = "class A { void m() {\n  "
+        XCTAssertEqual(repaired(open + "build(s, (l, v) -> { if (l."), open + "build(s, (l, v) -> { if (l.\(dummy));});")
+        XCTAssertEqual(repaired(open + "pipe(\"x\", s -> s.length(), n -> { n."), open + "pipe(\"x\", s -> s.length(), n -> { n.\(dummy);});")
+        XCTAssertEqual(
+            repaired(open + "users.forEach(u -> { u.getRoles().forEach(r -> { r."),
+            open + "users.forEach(u -> { u.getRoles().forEach(r -> { r.\(dummy);});});"
+        )
+        XCTAssertEqual(
+            repaired(open + "foo(new Runnable() { public void run() { x."), open + "foo(new Runnable() { public void run() { x.\(dummy);};});"
+        )
+        // CRLF line endings and non-ASCII text on the caret's line do not change what is closed.
+        XCTAssertEqual(
+            repaired("// é日本😀\r\nclass A { void m() {\r\n  build(\"é日本😀\", (l, v) -> { l."),
+            "// é日本😀\r\nclass A { void m() {\r\n  build(\"é日本😀\", (l, v) -> { l.\(dummy);});"
+        )
+        // What stays as it was: a block that stands on its own, a brace that is not a body, brackets in
+        // literals, and a lambda block already closed on the line.
+        XCTAssertEqual(repaired(open + "if (a) { foo(x."), open + "if (a) { foo(x.\(dummy));")
+        XCTAssertEqual(repaired(open + "for (int i = 0; i < n; i++) { foo."), open + "for (int i = 0; i < n; i++) { foo.\(dummy);")
+        XCTAssertEqual(repaired(open + "foo(new int[] {1, x."), open + "foo(new int[] {1, x.\(dummy));")
+        XCTAssertEqual(repaired(open + "foo(\"{\", x."), open + "foo(\"{\", x.\(dummy));")
+        XCTAssertEqual(repaired(open + "foo('{', x."), open + "foo('{', x.\(dummy));")
+        XCTAssertEqual(repaired(open + "foo(x -> { a(); }, y."), open + "foo(x -> { a(); }, y.\(dummy));")
         // Not inside a method body (a member declaration), and not at the end of the line: nothing extra.
         XCTAssertEqual(repaired("class A {\n  private Str"), "class A {\n  private Str\(dummy)")
         XCTAssertEqual(repaired("class A { void m() {\n  foo.", "bar\n}}"), "class A { void m() {\n  foo.\(dummy)bar\n}}")

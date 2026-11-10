@@ -587,6 +587,12 @@ private struct ScopeBuilder {
                 children += expressionScopes(in: value)
             }
         }
+        // `String r = flag ? pipe("x", s -> s.length(), n -> n.` : the `?` without its `:` makes
+        // tree-sitter keep the call, lambdas and all, as an `ERROR` beside the declarator instead of
+        // under its `value`. The lambdas in it still bind their parameters.
+        for remnant in node.namedChildren(ofType: "ERROR") {
+            children += expressionScopes(in: remnant)
+        }
     }
 
     // MARK: - Branches and flow

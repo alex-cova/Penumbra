@@ -134,8 +134,9 @@ enum CompletionCorpusRunner {
         for line in raw.components(separatedBy: "\n") where line.hasPrefix("//! ") {
             let body = line.dropFirst(4)
             guard let colon = body.firstIndex(of: ":") else { continue }
-            directives[String(body[..<colon]).trimmingCharacters(in: .whitespaces)] =
-                String(body[body.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            // `.whitespacesAndNewlines`: a case file may use CRLF line endings, whose `\r` stays on the line.
+            directives[String(body[..<colon]).trimmingCharacters(in: .whitespacesAndNewlines)] =
+                String(body[body.index(after: colon)...]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return directives
     }

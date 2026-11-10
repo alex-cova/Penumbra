@@ -181,6 +181,11 @@ final class JavaCompletionControllerTests: XCTestCase {
                   expected: "text.substring(|)"),
             .init(name: "unclosed call", body: "System.out.println(text.subs", caretAfter: "text.subs", pick: "substring",
                   expected: "System.out.println(text.substring(|)"),
+            // A lambda block opened and never closed, inside a call that is still open: the parameter is still a `String`.
+            .init(name: "unclosed lambda block", body: "names.forEach(n -> { n.subs", caretAfter: "n.subs", pick: "substring",
+                  expected: "names.forEach(n -> { n.substring(|)"),
+            .init(name: "unclosed nested lambda blocks", body: "names.forEach(n -> { names.forEach(m -> { m.subs", caretAfter: "m.subs", pick: "substring",
+                  expected: "names.forEach(n -> { names.forEach(m -> { m.substring(|)"),
             .init(name: "static import added for a static member", body: "Object o = requireNon(text);", caretAfter: "requireNon", pick: "requireNonNull",
                   expected: "Object o = requireNonNull(|text);", imports: "", requiredText: ["import static java.util.Objects.requireNonNull;"], staticOwners: ["java.util.Objects"]),
             .init(name: "annotation attribute, equals already written", body: "@Deprecated( = \"1\") Object o = text;", caretAfter: "@Deprecated(", pick: "since",
@@ -214,7 +219,7 @@ final class JavaCompletionControllerTests: XCTestCase {
                 )
             }
             // And the result is Java the parser accepts.
-            XCTAssertEqual(JavaSyntaxParser().parse(result.after)?.rootNode.hasError, ["incomplete statement", "unclosed call", "annotation attribute, nothing written yet"].contains(scenario.name), "\(scenario.name): syntax of the result (only the scenarios left unfinished on purpose may have errors)")
+            XCTAssertEqual(JavaSyntaxParser().parse(result.after)?.rootNode.hasError, ["incomplete statement", "unclosed call", "unclosed lambda block", "unclosed nested lambda blocks", "annotation attribute, nothing written yet"].contains(scenario.name), "\(scenario.name): syntax of the result (only the scenarios left unfinished on purpose may have errors)")
         }
     }
 

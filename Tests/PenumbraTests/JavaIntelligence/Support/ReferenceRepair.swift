@@ -2,16 +2,18 @@ import Foundation
 
 /// The completion repair as it was before it moved to UTF-8 bytes (`JavaCompletionRepair`): `NSString`
 /// and `String +`, with the `Character`-based method-body check. Copied from the last commit that had
-/// it, unchanged but for the names, and used only as the oracle in `JavaRepairedTextEquivalenceTests`.
+/// it, and used only as the oracle in `JavaRepairedTextEquivalenceTests`. The one specification change
+/// since is the closing of a lambda or body brace inside a call that is still open on the caret's line
+/// (`closingSequence`), written here separately, in the simple style: mask the literals, then simulate.
 enum ReferenceRepair {
     static func repairedText(_ text: String, insertingDummyAt utf16Offset: Int) -> String {
         let ns = text as NSString
         let location = min(max(0, utf16Offset), ns.length)
         let restOfLine = ns.substring(from: location).prefix { $0 != "\n" && $0 != "\r\n" }
         let closesStatement = restOfLine.allSatisfy { $0 == " " || $0 == "\t" } && isInsideMethodBody(ns.substring(to: location))
-        let closers = closesStatement ? unclosedParentheses(onLineEndingAt: location, in: ns) : 0
+        let closing = closesStatement ? closingSequence(onLineEndingAt: location, in: ns) : ""
         let before = blankingBrokenStatements(in: ns, before: location)
-        return before + "__penumbra__" + String(repeating: ")", count: closers) + (closesStatement ? ";" : "") + ns.substring(from: location)
+        return before + "__penumbra__" + closing + (closesStatement ? ";" : "") + ns.substring(from: location)
     }
 
     /// How many lines above the caret's are looked at for a broken statement.
@@ -128,6 +130,64 @@ enum ReferenceRepair {
             index += 1
         }
         return depth
+    }
+
+    /// What closes the brackets the caret's line leaves open: `)` for a `(`, and `;}` for a `{` that
+    /// follows `->` or `)` while a `(` below it is also open. A line with no `{` before the caret is
+    /// just the old count of unclosed `(`.
+    static func closingSequence(onLineEndingAt location: Int, in text: NSString) -> String {
+        var lineStart = location
+        while lineStart > 0, text.character(at: lineStart - 1) != 0x0A { lineStart -= 1 }
+        var line = Array(text.substring(with: NSRange(location: lineStart, length: location - lineStart)).utf16)
+        // Literals cannot hold a bracket that counts: blank their contents out.
+        var quote: unichar?
+        var position = 0
+        while position < line.count {
+            if let open = quote {
+                if line[position] == 0x5C {
+                    line[position] = 0x20
+                    if position + 1 < line.count { line[position + 1] = 0x20 }
+                    position += 1
+                } else if line[position] == open {
+                    quote = nil
+                } else {
+                    line[position] = 0x20
+                }
+            } else if line[position] == 0x22 || line[position] == 0x27 {
+                quote = line[position]
+            }
+            position += 1
+        }
+        if !line.contains(0x7B) { return String(repeating: ")", count: unclosedParentheses(onLineEndingAt: location, in: text)) }
+
+        enum Open { case paren, body, other }
+        var open: [Open] = []
+        for (position, character) in line.enumerated() {
+            switch character {
+            case 0x28:
+                open.append(.paren)
+            case 0x29:
+                if let paren = open.lastIndex(of: .paren) { open.removeSubrange(paren...) }
+            case 0x7B:
+                let before = line[..<position].reversed().first { $0 != 0x20 && $0 != 0x09 }
+                let previous = line[..<position].reversed().drop { $0 == 0x20 || $0 == 0x09 }.dropFirst().first
+                let isBody = before == 0x29 || (before == 0x3E && previous == 0x2D)
+                open.append(isBody ? .body : .other)
+            case 0x7D:
+                if let last = open.last, last != .paren { open.removeLast() }
+            default:
+                break
+            }
+        }
+        var result = ""
+        for (level, opener) in open.enumerated().reversed() {
+            switch opener {
+            case .paren: result += ")"
+            case .body: if open[..<level].contains(.paren) { result += ";}" }
+            case .other: break
+            }
+        }
+        return result
     }
 
     /// Cheap check that the caret is inside a block rather than at class-body level, where a

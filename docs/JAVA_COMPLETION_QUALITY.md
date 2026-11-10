@@ -317,3 +317,333 @@ Keep the changes, with one open item (the small `new`/class-name latency differe
 on the development projects, the editor writes exactly what the harness predicts in 18 real-controller scenarios,
 no incorrect insertions remain in 4,908 held-out sites, allocations are identical, and member-access, statement and large-file latency are flat; `new` and class-name completion are 3-6% (0.06-0.07 ms) slower in the median, within overlapping ranges. Conditions: do not cite the first pass's 51.8% → 55.6% (it mixed settings); read the zero-invalid results with the
 coverage denominators above; and treat lambda inference across several lambdas of one generic call as the next semantic gap.
+
+
+# Contextual inference for lambdas and generic calls
+
+The open item above ("lambda parameter bound by another lambda's result") was the only defect the validity
+metric found. This section is its root cause, an audit of what the engine infers, the change, and how it was
+checked. Code: `Sources/JavaIntelligence/Semantics/JavaExpressionTyper.swift` (`inferInvocation`, `infer`,
+`applyFunctional`, `resolveOverloads`). Specification: corpus cases `Lam*` (83 cases, 81 pass, 2 documented gaps).
+
+## Root cause of the jOOL failure
+
+`Agg.taking` in jOOL 0.9.15:
+
+```java
+return Collector.of(
+    () -> new ArrayList<T>(),
+    (l, v) -> { if (l.size() < n) l.add(v); },
+    (l1, l2) -> { l1.addAll(l2); return l1; },
+    Seq::seq);
+```
+
+1. **Signature.** `Collector.of` has two overloads that take four arguments here:
+   `of(Supplier<R>, BiConsumer<R,T>, BinaryOperator<R>, Characteristics...)` and
+   `of(Supplier<A>, BiConsumer<A,T>, BinaryOperator<A>, Function<A,R>, Characteristics...)`.
+2. **Functional interface at the caret.** `BiConsumer<A,T>`. `A` is bound by nothing but the *supplier lambda's
+   return value* (`ArrayList<T>`); `Seq::seq` is the finisher.
+3. **Where substitution was lost, three independent defects.**
+   - *Overload chosen by parameter count.* The lambda-parameter query kept overloads whose parameter count equals the
+     argument count: the 4-parameter overload won, so `Seq::seq` sat in the `Characteristics...` slot. Nothing asked
+     whether a method reference can be passed to an enum array at all.
+   - *Target type won over everything.* The enclosing `return` supplies `Collector<T,?,Seq<T>>`; against the wrong
+     overload's `Collector<T,R,R>` that bound `R := Seq<T>` before any argument was looked at.
+   - *Sibling lambdas contributed nothing.* The query bound type variables from plain arguments only, so the supplier's
+     `ArrayList<T>` was never used even on the right overload.
+4. **Receiver.** Not unresolved: wrongly *substituted* (`Seq<T>`). A wrong binding looks exactly like a right one.
+5. **Why unrelated members.** They were the members of `Seq<T>` (`skip`, `slice`, `sorted`, `crossJoin`…), valid
+   members of a type the variable does not have; `size` is not one of them. javac attributes `l` as `ArrayList<T>`.
+
+Reproduced on the real source (`JavaLambdaContextInferenceJOOLTests`) and independently by the quality harness:
+`method skip/slice/sorted instead of size in jOOL/Agg.java@3488`.
+
+## Capability audit
+
+| Area | Before | Now |
+|---|---|---|
+| Explicit type arguments | applied | unchanged |
+| Plain-argument constraints, several args meet in their lub | applied | unchanged |
+| Target type | bound first, equality for every shape | type arguments as equality; a *bare* return variable (`<R> R f(…)`) is an upper bound only, so it is applied after arguments and lambda results (JLS 18.4), but before an input is defaulted |
+| Overload applicability for lambdas / method refs | argument count only (query), "unknown is compatible" (call typing) | JLS 15.12.2.1 potential compatibility: functional interface with the lambda's arity, or a method type variable |
+| Result of another lambda / method reference | used when typing the call, **not** when typing a lambda parameter | shared by both: one routine (`inferInvocation`) |
+| Order of lambdas | argument order, inputs typed even when unresolved | pertinent ones first (zero-arg, explicit, method refs), implicit ones when their inputs are known, last ones with inputs resolved to their bounds |
+| Explicitly typed lambda parameters | ignored | bind the interface's parameter types |
+| Method reference inputs | only the result | `Type::instanceMethod` binds the receiver (when `Type` is complete without type arguments); the single static method of that arity binds its parameters |
+| Callee `<T>` vs the caller's own `<T>` | one variable (bound by name) | callee type parameters renamed apart (`T#`); in-scope type variables are real types |
+| `T[]` against `User[]` | not applicable, so `Stream.of(users)` was `Stream<User[]>` | applicable; a primitive array still is not |
+| Wildcards, intersection bounds, nested generic calls | handled | unchanged |
+
+Defects by kind: *incorrect substitution* (target priority, name capture), *missing constraint* (sibling lambda
+results, explicit lambda parameters, method reference inputs), *unresolved overload* (count-only applicability,
+`T[]`), *parser recovery* (below). Not an inference defect: none of the remaining failures.
+
+## Design
+
+One inference routine for the call (`inferInvocation`), used by `typedMethodInvocation` (the call's own type) and by the
+lambda-parameter query (`functionalTargets`), which differs only in leaving the asked-about lambda out: its body holds
+the caret and is usually unfinished, so it must not constrain itself. No solver: a single pass in javac's order with a
+bounded retry loop over the lambdas (at most one round per lambda), deterministic first-wins bindings, and the old
+behaviour as the fallback (a parameter nothing could type is `Object`).
+
+**Bounds.** A lambda parameter used inside sibling lambdas of nested calls asks its own call the same question, and
+each answer types those siblings. Measured on nests where every level names every outer parameter, the cost
+doubled per level (depth 14: ~3 s in a debug build). A per-question memo (`LambdaParameterMemo`, scoped to the
+outermost question) makes it linear (depth 14: 47 ms single, 11 ms sibling; `JavaLambdaInferenceBoundsTests`), and
+a nesting cap of 8 stays as a backstop.
+
+## Verification
+
+- **Corpus.** 71 new `Lam*` cases state the receiver's *full* type (`//! receiverType:`; the older `receiver:`
+  compares the erased name only and cannot tell `List<String>` from `List<Object>`). Before the change 53 of the 83
+  `Lam*` cases pass (28 real failures, 2 gaps); after, 81 pass and the same 2 gaps remain. All 452 older cases
+  still pass. The full corpus is 523 cases, 521 pass.
+- **javac as oracle.** `JavaLambdaInferenceOracleTests` replaces the caret by a member that does not exist and reads the
+  receiver out of javac's `cannot find symbol … location:`. Every case with a `receiverType` and no `oracle:` note
+  (about 50) must agree with javac. That is how the expectations were written, not just checked. Cases with an
+  `oracle:` note are excluded with a reason: unfinished code javac cannot parse (its complete twin is checked), and
+  two cases where javac prints the variable `T` and the engine reports its single bound, as `Cap15BoundedTypeVar`
+  already does.
+- **The jOOL site itself.** `JavaLambdaContextInferenceJOOLTests` pins the original site: receiver `ArrayList<T>`,
+  `size`/`add`/`addAll` offered, `skip`/`slice`/`sorted` not.
+- Covered shapes: streams (`map`, `flatMap`, `reduce` two and three arguments, three-argument `collect`),
+  `Collectors` (`toMap` with merge, `groupingBy`+`mapping`, `collectingAndThen`), `Comparator` (explicit parameter,
+  method reference), `Function.andThen`, `BiFunction`, `BiConsumer`, `Map.forEach/merge/computeIfAbsent/replaceAll`,
+  `CompletableFuture.thenApply/thenCombine`, user generic methods with one to three lambdas, wildcard and bounded
+  type variables, overloads that differ by lambda arity or by a varargs enum, nested lambdas, incomplete bodies.
+
+## Quality harness (Phase 5)
+
+Same harness, same projects, `HEAD` worktree vs. the working tree, statistics on, 1-character prefix, JDK 27.
+**Caveat on the held-out set:** the four Gradle models cached on this machine are not the four of the earlier
+validation (`sxb-product` yields no scored sites; `sxb-agent`, `Balatro4j`, `sxb-conciliator` were not in it). Only
+commons-collections and jOOL are the same. Absolute numbers therefore differ from the tables above; before/after is
+like for like. Development (gson, jackson-core) is identical to the digit.
+
+| held-out, 3,676 scored sites | before | after |
+|---|---|---|
+| Recall@1 / @3 / @8 | 66.9 / 85.5 / 91.2 % | 66.9 / 85.6 / 91.3 % |
+| MRR | 0.768 | 0.768 |
+| expected candidate absent | 4.2 % | 4.1 % |
+| duplicates in the top 8 | 0.0 % | 0.0 % |
+| incorrect insertions (chosen candidate parses) | 0 / 3,522 | 0 / 3,524 |
+| invalid alternatives, validation coverage 99.3 % (448 of 451 eligible) | **3 / 506** | **0 / 505** |
+
+The 3 invalid before are the defect above (`skip`, `slice`, `sorted` for `size`, jOOL `Agg.java@3488`).
+
+By context (R@1 / R@8 / MRR), held-out aggregate. Only `method` moved:
+
+| context | sites | before | after |
+|---|---|---|---|
+| lambda | 176 | 84.1 / 97.7 / 0.909 | same |
+| method | 409 | 60.9 / 86.3 / 0.714 (5.6 % absent) | 61.1 / 86.8 / 0.717 (5.1 % absent) |
+| method chain | 73 | 43.8 / 94.5 / 0.614 | same |
+| field, static (ordinary member) | 363, 150 | 68.9 / 93.4, 75.3 / 90.7 | same |
+| generic (`List<▮>`) | 83 | 49.4 / 85.5 / 0.646 | same |
+
+jOOL alone, `method`: R@1 53.6 → 55.4 %, R@8 87.5 → 91.1 %, absent 3.6 → 0.0 %. The harness has no "generic
+method call" context (`generic` means a type-argument position), and its metric is the developer's own identifier at a
+one-character prefix, so it changes only where a wrong receiver hid the member. The 0 vs 3 invalid candidates and the
+javac-checked corpus are the evidence that matters here; ranking weights were not touched.
+
+## Performance (Phase 6)
+
+`PerfHarness java-completion synthetic` (release, provider only), three binaries built from `HEAD~1` (before the
+earlier quality work), `HEAD`, and this change, run alternately, six rounds each, medians of the final update in ms
+with the min-max range over the six runs. Two new sites measure the paths this change touches
+(`lambda_sibling`: `Collector.of(() -> new ArrayList<String>(), (l, v) -> l.▮ …)`; `generic_invocation`:
+`Collections.max(users, Comparator.comparing(u -> u.▮))`).
+
+**Conditions, honestly:** the machine was not idle. Load averages were 5-6 (a Discord helper at ~40 % CPU, and
+`mediaanalysisd` in the earlier rounds), a first set of rounds ran at load 6-7. Absolute times are therefore
+contended and this is a *paired* comparison, not a quiet-machine baseline. Within one binary the six runs differ by
+1-3 %, which is the resolution.
+
+| site | HEAD~1 | HEAD | this change | change vs HEAD |
+|---|---|---|---|---|
+| member access | 0.118 [0.116-0.128] | 0.118 [0.114-0.125] | 0.120 [0.115-0.127] | +1.3 % |
+| member prefix | 0.139 | 0.139 | 0.141 | +0.7 % |
+| class name, 1 char | 1.177 | 1.179 | 1.188 | +0.8 % |
+| class name, 3 chars | 0.727 | 0.726 | 0.736 | +1.4 % |
+| `new` with expected type | 0.562 | 0.564 | 0.565 | +0.3 % |
+| statement | 0.204 | 0.204 | 0.206 | +0.7 % |
+| 5,000-line file, member access | 6.611 | 6.762 | 6.694 | -1.0 % |
+| 5,000-line file, typing | 0.471 | 0.466 | 0.472 | +1.2 % |
+| lambda chain (`filter(u -> …).map(u -> u.▮)`) | 0.343 | 0.346 | 0.352 [0.339-0.362] | +1.7 %, ranges overlap |
+| generic invocation | 0.583 | 0.581 | 0.500 [0.495-0.531] | **-13.9 %** |
+| lambda parameter bound by a sibling lambda | 0.284 | 0.281 | 1.367 [1.338-1.447] | **+1.09 ms** |
+
+- **Ordinary typing is unchanged**: member access, prefix, class names, `new`, statement and the large file are
+  within ±1.7 % and inside the run-to-run spread. The inference only runs when the caret is in a lambda whose
+  parameter is being asked for.
+- **The earlier "3-6 % slower `new` and class-name" item did not reproduce.** `HEAD` vs `HEAD~1`: `new` +0.2 %,
+  class name -0.2 % to +1.4 %, over six alternating rounds. At this load that does not prove there is nothing under
+  ~2 %, but the earlier gap (0.06-0.07 ms) is not visible, and `new` is +0.3 % between `HEAD` and this change.
+- **`lambda_sibling` is slower because it now does the work.** It used to answer in 0.28 ms with the wrong
+  receiver; correct inference reads two `Collector.of` overloads, the functional interfaces, the supplier's result
+  and the method reference. 1.4 ms against budgets of 50 ms (first) and 150 ms (final).
+- **The first version of this change cost `lambda_chain` +8-10 %** (~30 µs): the functional interface's signature was
+  read twice per lambda and the memo key was built by interpolating an enum. Both were removed; the figure above is
+  after them. Why `generic_invocation` got 14 % faster was not investigated (the old query bound every
+  arity-matching overload; this one resolves overloads first).
+- **Allocation per typing request** (`java-allocations synthetic`, member access): 325.2 KB / 680 allocations
+  before, 341.6 KB / 683 after at 5,000 lines (934.5 → 950.8 KB at 20,000). A constant +16 KB, three allocations, in
+  the 4 KB+ class, independent of file size: most likely a larger async frame for the inference function, not
+  investigated further.
+- The nested-lambda stress (`JavaLambdaInferenceBoundsTests`, debug build, depth 14): 47 ms single-lambda nest,
+  11 ms sibling nest, against ~3 s each without the memo.
+
+## Limitations
+
+- ~~**A lambda block opened and never closed** still types the parameter `Object`.~~ *Superseded:* see "Inference
+  while the code is incomplete" below; the one-line and the single-level multi-line forms are fixed, the doubly
+  nested multi-line form is the remaining gap (`gap: R2`).
+- ~~**Block bodies are not looked at for applicability**~~ *Superseded:* a *finished* lambda body now selects between
+  `void` and value interfaces (`Consumer` vs `Function`, `Runnable` vs `Callable`); an unfinished one stays
+  compatible with both. A block lambda's result is still its first `return`.
+- No inference-variable bounds (`T extends Comparable<T>` is used only as the fallback for an unbound input), no
+  capture conversion, no generic method references, no `lub` of several returns.
+- `Characteristics...`-style rejection relies on `functionalSignature`, which takes the first abstract method: a
+  non-functional interface passed a lambda is still "potentially compatible", as before.
+- ~~The corpus ratchet (`baseline.json`) is bound to JDK 25 and skipped on any other JDK.~~ *Superseded:* it was run
+  on JDK 25 and the new cases are ratcheted (below).
+
+
+# Inference while the code is incomplete
+
+The previous section left one known failure: a lambda block that is opened and not closed
+(`LamIncompleteBlockUnclosed`, `LamIncompleteLaterArguments`) typed its parameters `Object`. This section traces both,
+compares recovery strategies, and records what was changed. Code: `Completion/JavaCompletionRepair.swift`
+(`closingSequence`), `Semantics/JavaLocalVariable.swift` (`recoveredCallArgumentTarget`),
+`Semantics/Model/JavaScopeTree.swift` (`buildLocalVariables`), `Semantics/JavaExpressionTyper.swift` (`lambdaBody`).
+
+## Root cause: three different places, not one
+
+Each failure was traced through source text, repair output, tree-sitter tree, locals, call discovery, target typing,
+receiver and candidates. The first point where context is lost differs:
+
+| Case | What the tree is | First point of loss |
+|---|---|---|
+| `build(s, (l, v) -> { if (l.` (one line) | repaired to `…{ if (l.__penumbra__));`: the second `)` closes the call while the lambda block is open. Tree-sitter keeps both `lambda_expression`s but flattens the call into an `ERROR` of `identifier, lambda, lambda`: no `method_invocation`, no `argument_list` | **lambda target discovery** (`JavaExpressionTarget.target(of:)` accepted only a lambda under an `argument_list`), caused by the **repair text** |
+| `pipe("x", s -> s.length(), n -> { n.` | repaired to `…{ n.__penumbra__);`: no lambda node exists at all, `n.__penumbra__` is an `ERROR(scoped_type_identifier)`, no locals | the **repair text** (the `)` is placed before the `}` it needs) |
+| `String r = flag ? pipe("x", s -> s.length(), n -> n.` | repair is fine; the call and lambdas are well formed, but inside an `ERROR` that is a *child of the declaration, beside the declarator* | **scope construction**: `buildLocalVariables` only scoped each declarator's `value`, never the `ERROR` remnant |
+| `build(s, (l, v) -> {` + newline + `l.` (no closer anywhere) | repair cannot help (the caret line has no brackets); same flattened `ERROR` as the first row | **lambda target discovery** |
+
+Not responsible in any case: generic substitution, overload selection, receiver typing. Once the lambda had a correct
+target they worked unchanged.
+
+## Strategies compared
+
+- **A, recover the lambda's context from the existing tree.** Works for rows 1 and 4 only if the call is rebuilt from
+  the flat `ERROR` children, and cannot work for row 2 (no lambda node exists). It also depends on the shape tree-sitter
+  happens to recover into.
+- **B, repair the text.** One scan of the caret line that the repair already does. Closing a brace is the risk: global
+  brace insertion changes every request. So only a `{` that follows `->` or `)` **and sits inside a `(` still open on
+  that line** is closed (`;}` before the call's `)`), in nesting order. A block that stands on its own (`if (a) { foo.`)
+  is not touched, nor an array initializer or a brace in a string. Fixes rows 1 and 2; a line without `{` takes the old
+  path. Measured reach: the rule fires at 8 of 1.02 million identifier positions in 872 source files.
+- **C, scan the text for the enclosing call, leave the repaired text alone.** The only strategy that helps row 4
+  (nothing on the caret line to repair).
+
+Chosen: **B for rows 1-2, plus a bounded form of C for row 4 and the `ERROR` remnant for row 3.** C reads only the
+damaged region's bytes (statement start to the lambda, at most 4 KB), only when a lambda's parent is an `ERROR`, and
+rebuilds `callee(earlier arguments, <parameters> -> {})`; a clean tree never reaches it. A was rejected.
+
+## What changed
+
+1. `JavaCompletionRepair.closingSequence` replaces the count of unclosed `(`: `)` for each, `;}` for a body brace nested
+   in an open `(`. The `;` ends the statement under the caret (`if (c) ;` is valid; in a class body `;` is an empty
+   member). `ReferenceRepair` (the equivalence oracle) was extended separately, in its own simple style.
+2. `JavaExpressionTarget.recoveredCallArgumentTarget`: the call of a lambda under an `ERROR`, from the bytes. Skips
+   strings, characters and comments; reads `a.b(c).<T>d(` callees; refuses `new X(` and anything where the innermost open
+   bracket is not a `(`.
+3. `buildLocalVariables` scopes the lambdas in a declaration's `ERROR` remnant.
+4. **Finished lambda bodies select overloads** (the "incomplete block-bodied lambdas" limitation). JLS 15.27.2: a body
+   is `void`-only, value-only or either. Applied to every lambda except the one holding the caret and any body that has a
+   syntax error or contains the dummy identifier, which stay compatible with all overloads (an unfinished body must not
+   exclude the overload being typed towards). `each(s -> { return s.length(); })` picked `Consumer` (receiver `void`),
+   javac picks `Function`.
+5. Test infrastructure: the corpus loader trimmed `.whitespaces`, leaving the `\r` of a CRLF case on the directive.
+
+## Verification
+
+- **Corpus**, every `Lam*` case, previous task's exact state vs now: **101 → 123 of 124** (the 124th is a documented gap).
+  `LamInc*` (41 incomplete-code cases): **20 → 40**. `LamShape*` (7): 5 → 7. The rest of the corpus is unchanged:
+  564 cases on JDK 27 and on JDK 25, 563 pass, 1 gap.
+- **Shapes covered**: unclosed lambda blocks (call argument, local initializer, nested `if`, explicit first parameter,
+  Unicode, CRLF), nested lambdas on one line, nested anonymous classes, a lambda inside an anonymous class inside a
+  lambda, unclosed and nested `forEach`/stream chains, missing closing parentheses, an unfinished conditional, a call
+  missing later arguments, explicit type arguments, partially typed chains and `Collectors`, constructor completion
+  inside an unclosed lambda, and the same shapes with the closers already present below the caret (the usual state).
+- **javac as oracle for unfinished code.** `//! oracle-completion: <text>` is what is compiled in place of the caret
+  (for example `zzProbe(); });`), so javac attributes the very code being typed. `JavaLambdaInferenceOracleTests`
+  checks all 108 cases that state a `receiverType` (40 of them with an `oracle-completion`), now also under JDK 25's javac.
+- `JavaRecoveredLambdaTargetTests` (7): what the recovery rebuilds, what it refuses, and that a clean call is untouched;
+  each asserts the lambda really is under an `ERROR`, so a grammar change cannot make it pass vacuously.
+- `JavaRepairedTextEquivalenceTests`: the new closers against the independent reference at every caret of generated
+  text (a counter asserts the generated text reaches the new branch), plus spelled-out expectations including CRLF and
+  non-ASCII on the caret's line. Two controller scenarios (`unclosed lambda block`, `unclosed nested lambda blocks`):
+  the editor writes what the harness predicts.
+- **Ratchet on JDK 25.** `JAVA_HOME` = JDK 25: the committed baseline is enforced and holds; the baseline was then
+  regenerated **on JDK 25** (+111 cases, 0 removed, `jdkVersion` unchanged at 25), never on 27.
+- Suites: `Scripts/ci-java-tests.sh` 153 / 0 failures; controller and insertion tests 25 / 0; full root suite 5,263
+  tests, 6 failures, all the pre-existing ones (`JavaGoToImplementationTests` 4 assertions, `RecentFilesSwitcherTests` 2);
+  Umbra suite 2,834 tests, 15 failures in 8 tests that fail identically on untouched `HEAD`. One Umbra run hung for
+  hours in `IDEAgentCheckpointBlobsTests` (0 % CPU) and was stopped; the rerun completed in 541 s with that test passing.
+
+## Real-project quality harness
+
+Same harness and projects as above, previous task's tree vs this one: **all 120 context rows identical in both variants**
+(`complete` and `broken-line`); held-out 3,676 sites, R@1 66.9 %, R@8 91.3 %, MRR 0.768; invalid candidates 0 / 505,
+incorrect insertions 0 / 3,524, duplicates 0.0 %. This is not evidence of benefit: the harness cannot reach the case.
+Real code puts a lambda body on its own lines, so the caret line almost never has an open `{` inside an open call;
+counted over 1.02 million identifier positions the new closers fire at 8. It is evidence of no regression, and the
+small reach is also why the blast radius on existing behaviour is small. The benefit shows in the corpus above, which
+is what the developer sees at the moment of typing a lambda inline.
+
+## Performance
+
+`java-completion synthetic`, release, six alternating runs of the previous task's binary and this one, medians in ms
+[min-max]. Load average steady at 2.5 (better than last time's 5-6, still not idle); spreads are under 3 %.
+
+| site | before | after |
+|---|---|---|
+| member access | 0.118 [0.116-0.123] | 0.117 [0.115-0.131] |
+| member prefix | 0.142 | 0.137 |
+| class name, 3 chars | 0.740 | 0.732 |
+| `new` with expected type | 0.567 | 0.566 |
+| statement | 0.206 | 0.209 |
+| 5,000-line file, member access / typing | 6.816 / 0.478 | 6.784 / 0.474 |
+| lambda chain | 0.345 | 0.351 |
+| lambda parameter bound by a sibling lambda | 1.385 | 1.381 |
+| generic invocation / nested generic invocation | 0.512 / 1.179 | 0.517 / 1.183 |
+| **unclosed lambda block, one level** | 0.110 | **0.295** |
+| **unclosed lambda blocks, two levels** | 0.143 | **0.427** |
+
+- Ordinary completion is unchanged (all within ±1.7 %, ranges overlapping). The new work only runs when the caret
+  line has an open `{` inside an open `(`, or a lambda sits under an `ERROR`.
+- The unclosed-lambda sites cost 0.2-0.3 ms more because they now **infer** (like the sibling-lambda site, 1.4 ms) where
+  they used to give up at once with the wrong answer. Budgets: 50 ms first update, 150 ms final.
+- Allocation per typing request: 341.6 KB / 683 allocations before, 342.1 KB / 686 after (+0.5 KB, +3), the same at
+  20,000 lines.
+- Worst-case inference depth is unchanged and bounded: 14 nested levels with every level naming every outer parameter
+  take 47 ms (single) and 11 ms (sibling) in a debug build; the call recovery adds one pass over at most 4 KB per
+  lambda under an `ERROR`.
+
+## Remaining limitations
+
+- **Doubly nested, multi-line, never closed** (`LamIncMultiLineUnclosedNested`, `gap: R2`): the *outer* lambda is not a
+  node in the recovered tree, only loose tokens, so its parameter is not a local and the inner call cannot be typed.
+  Fixing it means recovering lambda parameters from raw `->` tokens in the scope tree.
+- The call recovery cannot see arguments after the lambda (they are not in the damaged region), and reads only the
+  last 4 KB before the lambda (from a line start): a call that opens further back is not found and the parameters stay
+  `Object`.
+- An unfinished lambda body is compatible with every overload by design; two overloads that differ only by body shape
+  stay ambiguous until the body is finished. A block that only `throw`s fits both, and javac's choice there (functional
+  interface specificity) is not reproduced.
+- Still absent: inference-variable bounds, capture conversion (`Future<CAP#1>` reads `Future<Object>`), generic method
+  references, the `lub` of several `return`s.
+- The shape the repair handles is the transient one: a developer typing a lambda inline. Once the file has its closing
+  braces (the usual state) the old path was already correct, and the closers it adds are harmless (four corpus cases
+  pin that).
+
