@@ -24,6 +24,7 @@ final class TextViewSmokeTests: XCTestCase {
         XCTAssertEqual(blue, 246 / 255, accuracy: 0.02)
     }
 
+    @MainActor
     func testApplyingThemeSetsSelectionHighlightColor() {
         let textView = TextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
         textView.selectionHighlightColor = .systemRed
@@ -47,6 +48,7 @@ final class TextViewSmokeTests: XCTestCase {
         XCTAssertEqual(actualAlpha, expectedAlpha, accuracy: 0.01)
     }
 
+    @MainActor
     func testSetStateWithSelectionDoesNotCrashWhenApplyingTheme() {
         let textView = TextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
         textView.setState(TextViewState(text: "short", theme: DefaultTheme()))

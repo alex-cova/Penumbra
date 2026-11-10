@@ -1,6 +1,7 @@
 import XCTest
 @testable import Penumbra
 
+@MainActor
 final class TimedUndoManagerTests: XCTestCase {
     private func makeTextView(text: String = "") -> TextView {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))

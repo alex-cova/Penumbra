@@ -6,7 +6,7 @@ import AppKit
 /// and clicked without disturbing the host's handlers.
 @MainActor
 final class GutterBookmarkTests: XCTestCase {
-    private var window: NSWindow!
+    nonisolated(unsafe) private var window: NSWindow!
 
     override func tearDown() {
         window = nil

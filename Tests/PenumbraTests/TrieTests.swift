@@ -41,22 +41,19 @@ final class TrieTests: XCTestCase {
 
     /// A recursive walk overflowed the 544 KB stack of a cooperative-pool thread on a ~1,150-character key.
     func testPrefixSearchOnVeryLongKeyDoesNotOverflowSmallStack() {
-        let trie = Trie<String>()
-        let key = String(repeating: "a", count: 5_000)
-        trie.insert(key, value: "long")
-        trie.insert("ab", value: "short")
-
-        var results: [String] = []
         let done = expectation(description: "search finished")
         let thread = Thread {
-            results = trie.search(prefix: "a")
+            let trie = Trie<String>()
+            let key = String(repeating: "a", count: 5_000)
+            trie.insert(key, value: "long")
+            trie.insert("ab", value: "short")
+            XCTAssertEqual(trie.search(prefix: "a").sorted(), ["long", "short"])
             done.fulfill()
         }
         thread.stackSize = 544 * 1024
         thread.start()
         wait(for: [done], timeout: 10)
 
-        XCTAssertEqual(results.sorted(), ["long", "short"])
     }
 
     func testExactSearchExcludesLongerKeysAndPrefixes() {

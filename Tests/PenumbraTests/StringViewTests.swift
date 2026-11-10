@@ -166,7 +166,10 @@ final class StringViewTests: XCTestCase {
         let stringView = StringView(string: text)
         XCTAssertTrue(stringView.usesPieceTree)
         let stop = ManagedAtomicFlag()
+        // The test deliberately exercises StringView's synchronization from two threads.
+        let shared = ConcurrentStringView(value: stringView)
         let reader = Thread {
+            let stringView = shared.value
             var offset = 0
             while !stop.isSet {
                 let length = stringView.length
@@ -225,4 +228,8 @@ private final class ManagedAtomicFlag: @unchecked Sendable {
     func waitUntilFinished() {
         finished.wait()
     }
+}
+
+private struct ConcurrentStringView: @unchecked Sendable {
+    let value: StringView
 }

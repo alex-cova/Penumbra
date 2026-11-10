@@ -8,7 +8,7 @@ import EditorIntelligence
 /// typing, instant local re-filtering, Enter vs Tab, caret placement, and closing rules.
 @MainActor
 final class EditorIntelligenceControllerCompletionTests: XCTestCase {
-    private var window: NSWindow?
+    nonisolated(unsafe) private var window: NSWindow?
 
     override func tearDown() {
         window = nil

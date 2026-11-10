@@ -118,6 +118,7 @@ final class MarkdownPreviewTests: XCTestCase {
         return (window, textView, controller)
     }
 
+    @MainActor
     private func visibleViews(ofType name: String, in view: NSView) -> [NSView] {
         var found: [NSView] = []
         if String(describing: type(of: view)) == name, !view.isHidden { found.append(view) }
@@ -125,12 +126,14 @@ final class MarkdownPreviewTests: XCTestCase {
         return found
     }
 
+    @MainActor
     private func findTextInputView(in view: NSView) -> NSView? {
         if String(describing: type(of: view)) == "TextInputView" { return view }
         for sub in view.subviews { if let f = findTextInputView(in: sub) { return f } }
         return nil
     }
 
+    @MainActor
     private func mouseEvent(_ type: NSEvent.EventType, at point: CGPoint, in window: NSWindow) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
                            windowNumber: window.windowNumber, context: nil, eventNumber: 0,

@@ -211,7 +211,7 @@ final class SelfDefinitionRedirectTests: XCTestCase {
 
     func testHoverDoesNotRunReferencesSearch() async throws {
         let selfRange = NSRange(location: 22, length: 3)
-        let (controller, textView, provider) = try await makeController(
+        let (controller, _, provider) = try await makeController(
             text: "int count = Box;\n",
             stub: StubResult(
                 definition: .single(makeLocation(range: selfRange)),

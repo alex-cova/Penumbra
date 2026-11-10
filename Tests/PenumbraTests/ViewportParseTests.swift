@@ -129,8 +129,8 @@ final class ViewportParseWindowTests: XCTestCase {
 
 @MainActor
 final class TextViewStateViewportParseTests: XCTestCase {
-    private var originalFullParseLimit = 0
-    private var originalWindowLimit = 0
+    nonisolated(unsafe) private var originalFullParseLimit = 0
+    nonisolated(unsafe) private var originalWindowLimit = 0
 
     override func setUp() {
         super.setUp()

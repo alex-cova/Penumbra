@@ -8,7 +8,7 @@ import XCTest
 /// edited, and the index says which files it skipped for size.
 @MainActor
 final class LargeFileModeTests: XCTestCase {
-    private var directory: URL!
+    nonisolated(unsafe) private var directory: URL!
 
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("LargeFileMode-\(UUID().uuidString)")

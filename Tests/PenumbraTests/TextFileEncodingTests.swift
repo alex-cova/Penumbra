@@ -63,6 +63,7 @@ final class TextFileEncodingTests: XCTestCase {
 
     // MARK: - Documents
 
+    @MainActor
     func testDocumentOpensLatin1AndSavesItBack() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("enc-\(UUID().uuidString).txt")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -73,8 +74,8 @@ final class TextFileEncodingTests: XCTestCase {
         XCTAssertEqual(document.encoding, .windows1252)
         XCTAssertEqual(document.pendingState?.stringView.string as String?, "caf\u{E9} cr\u{E8}me\n")
 
-        let textView = await MainActor.run { TextView() }
-        await MainActor.run { textView.setState(document.pendingState!) }
+        let textView = TextView()
+        textView.setState(document.pendingState!)
         _ = try await document.save(from: textView)
         XCTAssertEqual(try Data(contentsOf: url), original)
     }
@@ -105,14 +106,15 @@ final class TextFileEncodingTests: XCTestCase {
         }
     }
 
+    @MainActor
     func testUTF8BOMIsKeptAcrossASave() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("enc-\(UUID().uuidString).txt")
         defer { try? FileManager.default.removeItem(at: url) }
         try Data([0xEF, 0xBB, 0xBF] + Array("hi\n".utf8)).write(to: url)
         let document = try await WorkbenchDocument.load(contentsOf: url)
         XCTAssertEqual(document.encoding, .utf8WithBOM)
-        let textView = await MainActor.run { TextView() }
-        await MainActor.run { textView.setState(document.pendingState!) }
+        let textView = TextView()
+        textView.setState(document.pendingState!)
         _ = try await document.save(from: textView)
         XCTAssertEqual(try Data(contentsOf: url), Data([0xEF, 0xBB, 0xBF] + Array("hi\n".utf8)))
     }

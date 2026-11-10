@@ -216,7 +216,7 @@ final class CommandCompletionTests: XCTestCase {
 /// both dots and the filter text instead of inserting anything.
 @MainActor
 final class CommandCompletionControllerTests: XCTestCase {
-    private var window: NSWindow?
+    nonisolated(unsafe) private var window: NSWindow?
 
     override func tearDown() {
         window = nil

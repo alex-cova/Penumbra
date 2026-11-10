@@ -311,7 +311,7 @@ final class InlineCompletionTests: XCTestCase {
 /// accept action inserts it.
 @MainActor
 final class InlineCompletionControllerTests: XCTestCase {
-    private var window: NSWindow?
+    nonisolated(unsafe) private var window: NSWindow?
 
     override func tearDown() {
         window = nil

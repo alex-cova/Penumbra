@@ -12,7 +12,7 @@ import EditorIntelligence
 /// does so with a latch the test opens.
 @MainActor
 final class JavaCompletionControllerTests: XCTestCase {
-    private var window: NSWindow?
+    nonisolated(unsafe) private var window: NSWindow?
 
     override func tearDown() {
         window = nil

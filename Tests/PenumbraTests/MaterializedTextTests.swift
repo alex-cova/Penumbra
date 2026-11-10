@@ -31,10 +31,10 @@ final class MaterializedTextTests: XCTestCase {
         let view = makeView(large)
         let before = DocumentTextExport.materializedExportCount
 
-        async let first = view.materializedText()
-        async let second = view.materializedText()
-        async let third = view.materializedText()
-        let all = await [first, second, third]
+        let first = Task { @MainActor in await view.materializedText() }
+        let second = Task { @MainActor in await view.materializedText() }
+        let third = Task { @MainActor in await view.materializedText() }
+        let all = await [first.value, second.value, third.value]
         let later = await view.materializedText()
 
         XCTAssertEqual(DocumentTextExport.materializedExportCount - before, 1, "the buffer was turned into a string more than once")

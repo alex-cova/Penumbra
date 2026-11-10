@@ -38,7 +38,7 @@ final class RecentLocationsPaletteProviderTests: XCTestCase {
         )
 
         let items = await provider.items(matching: "A.java", limit: 10)
-        await items.first?.action()
+        items.first?.action()
 
         XCTAssertEqual(opened.values.first?.0, url)
         XCTAssertEqual(opened.values.first?.1, PaletteLineTarget(line: 7, column: 3))

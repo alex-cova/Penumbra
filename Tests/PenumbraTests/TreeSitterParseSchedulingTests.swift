@@ -61,11 +61,11 @@ final class TreeSitterParserTimeoutTests: XCTestCase {
 
     func testBackgroundParseIgnoresMainThreadTimeout() {
         TreeSitterPerformanceConstants.parserTimeout = 0
-        let parser = TreeSitterParser(encoding: .treeSitterUTF16)
-        parser.language = TreeSitterLanguagePointer(tree_sitter_javascript())
-        let text = String(repeating: "let name = \"value\";\n", count: 2_000) as NSString
         let finished = expectation(description: "background parse")
         DispatchQueue.global(qos: .userInitiated).async {
+            let parser = TreeSitterParser(encoding: .treeSitterUTF16)
+            parser.language = TreeSitterLanguagePointer(tree_sitter_javascript())
+            let text = String(repeating: "let name = \"value\";\n", count: 2_000) as NSString
             let tree = parser.parse(text)
             XCTAssertNotNil(tree)
             XCTAssertFalse(parser.lastParseAborted)
@@ -212,7 +212,7 @@ final class TreeSitterCaptureSnapshotTests: XCTestCase {
 
 @MainActor
 final class TreeSitterMaxSyncEditLengthTests: XCTestCase {
-    private var originalMaxSyncEditLength = 0
+    nonisolated(unsafe) private var originalMaxSyncEditLength = 0
 
     override func setUp() {
         super.setUp()

@@ -4,6 +4,7 @@ import XCTest
 /// Exercises `TextView.replaceText(in:)` (batch/"Replace All") undo/redo through the real
 /// `NSUndoManager`, backed by the delta-based inverse computed in `TextEditHelper.apply(_:)`
 /// instead of a full-document snapshot. See PERFORMANCE_AUDIT.md Phase 2 #7.
+@MainActor
 final class BatchReplaceUndoTests: XCTestCase {
     private func makeTextView(text: String) -> TextView {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))

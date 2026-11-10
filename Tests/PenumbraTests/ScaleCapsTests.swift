@@ -93,7 +93,7 @@ final class ScaleCapsTests: XCTestCase {
         for query in queries {
             let symbols = await Set(index.symbols(matching: query, limit: .max).map(\.name))
             var expected = Set<String>()
-            for name in typeNames + typeNames.filter { $0.first!.isUppercase }.map({ "run\($0)" }) where CompletionMatcher.matches(query, name) {
+            for name in typeNames + typeNames.filter({ $0.first!.isUppercase }).map({ "run\($0)" }) where CompletionMatcher.matches(query, name) {
                 expected.insert(name)
             }
             XCTAssertEqual(symbols, expected, "symbols for \(query)")

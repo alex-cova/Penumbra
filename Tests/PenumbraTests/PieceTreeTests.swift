@@ -157,7 +157,7 @@ final class PieceTreeTests: XCTestCase {
         var rng = SplitMix64(seed: 0xC0FFEE)
         let alphabet = Array("abcé\r\n\t ")
         for round in 0..<8 {
-            var text = randomString(length: 24 + round, alphabet: alphabet, rng: &rng)
+            let text = randomString(length: 24 + round, alphabet: alphabet, rng: &rng)
             let url = try writeTemp(text)
             let view = try awaitLoad(url)
             let contiguous = StringView(string: text)

@@ -4,7 +4,7 @@ import AppKit
 
 @MainActor
 final class GutterLineClickTests: XCTestCase {
-    private var window: NSWindow!
+    nonisolated(unsafe) private var window: NSWindow!
 
     override func tearDown() {
         window = nil

@@ -142,6 +142,7 @@ final class MinimapViewTests: XCTestCase {
         assertMinimapChromeCollapsed(minimap)
     }
 
+    @MainActor
     private func assertMinimapChromeCollapsed(_ minimap: MinimapView, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(minimap.isHidden, "minimap should be hidden when disabled", file: file, line: line)
         XCTAssertEqual(minimap.frame, .zero, "disabled minimap must not keep a trailing-edge frame", file: file, line: line)

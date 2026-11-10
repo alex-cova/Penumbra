@@ -4,7 +4,7 @@ import AppKit
 
 @MainActor
 final class LineNumberViewTests: XCTestCase {
-    private var window: NSWindow!
+    nonisolated(unsafe) private var window: NSWindow!
 
     override func tearDown() {
         window = nil

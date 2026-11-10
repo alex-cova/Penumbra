@@ -5,6 +5,7 @@ import XCTest
 @MainActor
 final class ToolWindowPaletteTests: XCTestCase {
     private var opened: [String] = []
+    private var available = ["Project"]
 
     private func entries() -> [ToolWindowEntry] {
         ["Project", "Terminal", "Problems", "Source Control"].map { title in
@@ -40,9 +41,9 @@ final class ToolWindowPaletteTests: XCTestCase {
     }
 
     func testTheListIsAskedForOnEveryQuery() async {
-        var available = ["Project"]
+        available = ["Project"]
         let provider = ToolWindowsPaletteProvider(entries: {
-            available.map { title in ToolWindowEntry(id: title, title: title) {} }
+            self.available.map { title in ToolWindowEntry(id: title, title: title) {} }
         })
 
         let before = await provider.items(matching: "", limit: 50)
