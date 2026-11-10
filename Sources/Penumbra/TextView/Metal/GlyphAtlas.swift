@@ -399,7 +399,7 @@ final class GlyphAtlas {
                 completion?()
             }
         }
-        Self.prewarmQueue.async {
+        Self.prewarmQueue.async { [fresh] in
             var bitmaps: [GlyphBitmap] = []
             bitmaps.reserveCapacity(fresh.count)
             for request in fresh {

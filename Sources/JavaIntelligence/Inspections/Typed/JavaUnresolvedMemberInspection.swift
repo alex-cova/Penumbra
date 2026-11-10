@@ -116,8 +116,6 @@ enum JavaUnresolvedMemberInspection: JavaTypedInspection {
         else { return nil }
         let indexed = Set(stub.fields.filter { $0.modifiers.contains(.enumConstant) }.map(\.name))
         return indexed.isEmpty ? nil : indexed
-        let constants = Set(stub.fields.filter { $0.modifiers.contains(.enumConstant) }.map(\.name))
-        return constants.isEmpty ? nil : constants
     }
 
     // MARK: - Qualified accesses

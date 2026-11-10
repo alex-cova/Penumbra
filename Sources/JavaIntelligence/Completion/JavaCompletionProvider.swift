@@ -548,7 +548,7 @@ public actor JavaCompletionProvider: CompletionProvider {
                 of: receiver.type, mode: mode, context: request.context, index: index, qualifier: receiver.memberQualifier
             )
         }
-        CompletionLatencyTrace.record(request.traceID, "java:membersLooked", "n=\(members.count) \(receiver.type.erasedQualifiedName)")
+        CompletionLatencyTrace.record(request.traceID, "java:membersLooked", "n=\(members.count) \(String(describing: receiver.type.erasedQualifiedName))")
         let receiverName = receiver.type.erasedQualifiedName
         var items: [CompletionItem] = []
         items.reserveCapacity(members.count + 4)

@@ -108,7 +108,7 @@ public actor TreeSitterLanguageParser: LanguageParser {
     }
 
     private func parsedTree(for text: String, documentID: DocumentID) -> TreeSitterTree? {
-        if var entry = entries[documentID] {
+        if let entry = entries[documentID] {
             if entry.text == text {
                 touch(documentID)
                 return entry.tree
