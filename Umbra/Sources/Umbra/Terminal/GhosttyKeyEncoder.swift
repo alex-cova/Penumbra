@@ -42,7 +42,7 @@ final class GhosttyKeystrokeEncoder {
 
     /// Refreshes cursor-key/keypad/Kitty/modifyOtherKeys modes from the
     /// terminal, then applies Umbra's Option-as-Meta preference on top
-    /// (`setopt_from_terminal` always resets it to false).
+    /// (`set_from_terminal` always resets it to false).
     func syncToTerminal(_ terminal: GhosttyTerminal?, optionAsMeta: Bool) {
         syncToTerminal(terminal, optionAsAlt: optionAsMeta ? .both : .off)
     }
@@ -50,14 +50,14 @@ final class GhosttyKeystrokeEncoder {
     /// Same, with `macos-option-as-alt` choosing which Option key acts as Meta.
     func syncToTerminal(_ terminal: GhosttyTerminal?, optionAsAlt: IDETerminalOptionAsAlt) {
         guard let encoder, let terminal else { return }
-        ghostty_key_encoder_setopt_from_terminal(encoder, terminal)
+        ghostty_key_encoder_set_from_terminal(encoder, terminal)
         var asAlt: GhosttyOptionAsAlt = switch optionAsAlt {
         case .off: GHOSTTY_OPTION_AS_ALT_FALSE
         case .both: GHOSTTY_OPTION_AS_ALT_TRUE
         case .left: GHOSTTY_OPTION_AS_ALT_LEFT
         case .right: GHOSTTY_OPTION_AS_ALT_RIGHT
         }
-        ghostty_key_encoder_setopt(encoder, GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, &asAlt)
+        ghostty_key_encoder_set(encoder, GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, &asAlt)
     }
 
     /// Encodes one keystroke. Returns nil when the keystroke produces no
@@ -82,38 +82,40 @@ final class GhosttyKeystrokeEncoder {
 
         // set_utf8 borrows the pointer (no copy): the bytes must outlive
         // encode, so they live in this scope. C0 controls, DEL and macOS
-        // PUA function-key codes pass as NULL and let the logical key
-        // drive the encoding.
-        let textBytes: [CChar] = Self.transferBytes(for: keystroke.text)
+        // PUA function-key codes pass as an empty string and let the logical
+        // key drive the encoding.
+        let textBytes = Self.transferBytes(for: keystroke.text)
         return textBytes.withUnsafeBufferPointer { textPtr in
-            ghostty_key_event_set_utf8(event, textPtr.baseAddress, textPtr.count)
+            let utf8 = GhosttyString(ptr: textPtr.baseAddress, len: textPtr.count)
+            ghostty_key_event_set_utf8(event, utf8)
 
-            var stack = [CChar](repeating: 0, count: 256)
+            var stack = [UInt8](repeating: 0, count: 256)
             var written = 0
             let result: GhosttyResult = stack.withUnsafeMutableBufferPointer { ptr in
                 ghostty_key_encoder_encode(encoder, event, ptr.baseAddress, ptr.count, &written)
             }
             if result == GHOSTTY_OUT_OF_SPACE {
-                var heap = [CChar](repeating: 0, count: written)
+                var heap = [UInt8](repeating: 0, count: written)
                 let retry: GhosttyResult = heap.withUnsafeMutableBufferPointer { ptr in
                     ghostty_key_encoder_encode(encoder, event, ptr.baseAddress, ptr.count, &written)
                 }
                 guard retry == GHOSTTY_SUCCESS else { return nil }
-                return Data(heap.prefix(written).map { UInt8(bitPattern: $0) })
+                return Data(heap.prefix(written))
             }
             guard result == GHOSTTY_SUCCESS, written > 0 else { return nil }
-            return Data(stack.prefix(written).map { UInt8(bitPattern: $0) })
+            return Data(stack.prefix(written))
         }
     }
 
-    /// Transfer bytes for `set_utf8`, or empty (NULL) when the text must be
+    /// Transfer bytes for `set_utf8`, or empty when the text must be
     /// derived from the logical key: C0 controls, DEL, PUA function-key
-    /// codes, and empty text.
-    private static func transferBytes(for text: String) -> [CChar] {
+    /// codes, and empty text. A zero length clears the text; the pointer
+    /// may be NULL.
+    private static func transferBytes(for text: String) -> [UInt8] {
         guard !text.isEmpty, text.unicodeScalars.allSatisfy({ scalar in
             let v = scalar.value
             return v >= 0x20 && v != 0x7F && !(0xF700...0xF8FF).contains(v)
         }) else { return [] }
-        return Array(text.utf8CString.dropLast())
+        return Array(text.utf8)
     }
 }

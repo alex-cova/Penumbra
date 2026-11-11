@@ -43,9 +43,10 @@ let package = Package(
         .package(url: "https://github.com/apple/xcode-project-format", from: "0.1.0")
     ],
     targets: [
-        // Prebuilt libghostty-vt (Ghostty commit 4a4fc017940bec38c93b278c10c6a18c591f3e63,
-        // Zig 0.17.0, macOS arm64+x86_64 only). Rebuild procedure and gate
-        // resolutions live in .agents/plans/2026-10-27-ghostty-terminal.md (G1).
+        // Prebuilt libghostty-vt 1.0.1 (tag vt-1.0.1, commit
+        // 108cacb17ed8990840cd14abfce43d8ed8503ca1). Official XCFramework from
+        // release.files.ghostty.org, macOS arm64+x86_64 plus the iOS slices
+        // Umbra does not link. See THIRD_PARTY_NOTICES.md.
         .binaryTarget(name: "GhosttyVt", path: "Vendor/GhosttyVt.xcframework"),
         // Headless agent pieces shared by the app, the CLI and the ACP agent
         // (docs/harness/agent-harness-6.md Phase 1): the provider factory, permission

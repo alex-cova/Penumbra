@@ -22,7 +22,7 @@ enum GhosttyCellWidth: Equatable, Sendable {
     case spacerHead
 }
 
-/// Cursor shape, mirroring `GhosttyRenderStateCursorVisualStyle`.
+/// Cursor shape, mirroring `GhosttyCursorStyle`.
 enum GhosttyCursorShape: Equatable, Sendable {
     case block
     case bar
@@ -205,17 +205,17 @@ extension GhosttyVtTerminal {
            styled
         {
             var style = GhosttyStyle()
-            style.size = MemoryLayout<GhosttyStyle>.size
             if ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style) == GHOSTTY_SUCCESS {
-                cell.bold = style.bold
-                cell.italic = style.italic
-                cell.faint = style.faint
-                cell.blink = style.blink
-                cell.inverse = style.inverse
-                cell.invisible = style.invisible
-                cell.strikethrough = style.strikethrough
-                cell.overline = style.overline
-                cell.underline = Int(style.underline)
+                let flags = style.flags
+                cell.bold = GhosttyStyleBits.isSet(flags, GhosttyStyleBits.bold)
+                cell.italic = GhosttyStyleBits.isSet(flags, GhosttyStyleBits.italic)
+                cell.faint = GhosttyStyleBits.isSet(flags, GhosttyStyleBits.faint)
+                cell.blink = GhosttyStyleBits.isSet(flags, GhosttyStyleBits.blink)
+                cell.inverse = GhosttyStyleBits.isSet(flags, GhosttyStyleBits.inverse)
+                cell.invisible = GhosttyStyleBits.isSet(flags, GhosttyStyleBits.invisible)
+                cell.strikethrough = GhosttyStyleBits.isSet(flags, GhosttyStyleBits.strikethrough)
+                cell.overline = GhosttyStyleBits.isSet(flags, GhosttyStyleBits.overline)
+                cell.underline = GhosttyStyleBits.underline(flags)
             }
         }
 
@@ -242,12 +242,34 @@ private extension GhosttyCellWidth {
     }
 }
 
+/// `GhosttyStyleFlags` from `style.h`. The `GHOSTTY_STYLE_FLAG_*` macros are
+/// casts, so Swift does not import them. Bits 0–7 are attributes; bits 8–10
+/// are the `GhosttySgrUnderline` value (zero means none).
+private enum GhosttyStyleBits {
+    static let bold: GhosttyStyleFlags = 1 << 0
+    static let italic: GhosttyStyleFlags = 1 << 1
+    static let faint: GhosttyStyleFlags = 1 << 2
+    static let blink: GhosttyStyleFlags = 1 << 3
+    static let inverse: GhosttyStyleFlags = 1 << 4
+    static let invisible: GhosttyStyleFlags = 1 << 5
+    static let strikethrough: GhosttyStyleFlags = 1 << 6
+    static let overline: GhosttyStyleFlags = 1 << 7
+
+    static func isSet(_ flags: GhosttyStyleFlags, _ bit: GhosttyStyleFlags) -> Bool {
+        (flags & bit) != 0
+    }
+
+    static func underline(_ flags: GhosttyStyleFlags) -> Int {
+        Int((flags & (0x7 << 8)) >> 8)
+    }
+}
+
 private extension GhosttyCursorShape {
-    init(_ style: GhosttyRenderStateCursorVisualStyle) {
+    init(_ style: GhosttyCursorStyle) {
         switch style {
-        case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR: self = .bar
-        case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE: self = .underline
-        case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW: self = .hollow
+        case GHOSTTY_CURSOR_STYLE_BAR: self = .bar
+        case GHOSTTY_CURSOR_STYLE_UNDERLINE: self = .underline
+        case GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW: self = .hollow
         default: self = .block
         }
     }

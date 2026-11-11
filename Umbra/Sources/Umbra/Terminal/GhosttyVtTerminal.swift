@@ -174,11 +174,11 @@ final class GhosttyVtTerminal: @unchecked Sendable {
                 }
             }
 
-            var style: GhosttyTerminalCursorStyle = switch config.cursorStyle {
-            case .block: GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK
-            case .bar: GHOSTTY_TERMINAL_CURSOR_STYLE_BAR
-            case .underline: GHOSTTY_TERMINAL_CURSOR_STYLE_UNDERLINE
-            case .hollow: GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK_HOLLOW
+            var style: GhosttyCursorStyle = switch config.cursorStyle {
+            case .block: GHOSTTY_CURSOR_STYLE_BLOCK
+            case .bar: GHOSTTY_CURSOR_STYLE_BAR
+            case .underline: GHOSTTY_CURSOR_STYLE_UNDERLINE
+            case .hollow: GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW
             }
             ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE, &style)
             var blinks = config.cursorBlinks
@@ -254,15 +254,18 @@ final class GhosttyVtTerminal: @unchecked Sendable {
     func plainText() -> String? {
         queue.sync {
             guard let term = self.terminal else { return nil }
-            var options = GhosttyFormatterTerminalOptions()
-            options.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
-            options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
-            options.trim = true
             var formatter: GhosttyFormatter?
-            guard ghostty_formatter_terminal_new(nil, &formatter, term, options) == GHOSTTY_SUCCESS,
+            guard ghostty_formatter_terminal_new(nil, &formatter, term) == GHOSTTY_SUCCESS,
                   let formatter
             else { return nil }
             defer { ghostty_formatter_free(formatter) }
+            // Defaults are already plain text with trimming. Set them so a later
+            // default change cannot silently alter recentText.
+            var emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
+            var trim = true
+            guard ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_EMIT, &emit) == GHOSTTY_SUCCESS,
+                  ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_TRIM, &trim) == GHOSTTY_SUCCESS
+            else { return nil }
             var buf: UnsafeMutablePointer<UInt8>?
             var len = 0
             guard ghostty_formatter_format_alloc(formatter, nil, &buf, &len) == GHOSTTY_SUCCESS,
@@ -276,7 +279,7 @@ final class GhosttyVtTerminal: @unchecked Sendable {
     /// Runs `body` with the raw terminal handle on the terminal queue.
     ///
     /// Encoder configuration and encoding must happen here: the C terminal
-    /// is not thread-safe, and `setopt_from_terminal` reads live modes that
+    /// is not thread-safe, and `set_from_terminal` reads live modes that
     /// `vt_write` on the PTY thread may be changing.
     func withTerminal<T>(_ body: (GhosttyTerminal?) -> T) -> T {
         queue.sync { body(terminal) }
@@ -330,7 +333,7 @@ final class GhosttyVtTerminal: @unchecked Sendable {
         queue.sync {
             guard let term = self.terminal else { return }
             var behavior = GhosttyTerminalScrollViewport(
-                tag: GHOSTTY_SCROLL_VIEWPORT_DELTA,
+                tag: GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA,
                 value: GhosttyTerminalScrollViewportValue())
             behavior.value.delta = lines
             ghostty_terminal_scroll_viewport(term, behavior)
@@ -344,7 +347,7 @@ final class GhosttyVtTerminal: @unchecked Sendable {
         queue.sync {
             guard let term = self.terminal else { return }
             var behavior = GhosttyTerminalScrollViewport(
-                tag: GHOSTTY_SCROLL_VIEWPORT_ROW,
+                tag: GHOSTTY_TERMINAL_SCROLL_VIEWPORT_ROW,
                 value: GhosttyTerminalScrollViewportValue())
             behavior.value.row = numericCast(row)
             ghostty_terminal_scroll_viewport(term, behavior)
@@ -356,7 +359,7 @@ final class GhosttyVtTerminal: @unchecked Sendable {
         queue.sync {
             guard let term = self.terminal else { return }
             let behavior = GhosttyTerminalScrollViewport(
-                tag: GHOSTTY_SCROLL_VIEWPORT_BOTTOM,
+                tag: GHOSTTY_TERMINAL_SCROLL_VIEWPORT_BOTTOM,
                 value: GhosttyTerminalScrollViewportValue())
             ghostty_terminal_scroll_viewport(term, behavior)
         }

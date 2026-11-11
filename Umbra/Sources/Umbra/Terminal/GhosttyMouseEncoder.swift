@@ -61,16 +61,16 @@ final class GhosttyMouseReportEncoder {
         anyButtonPressed: Bool
     ) {
         guard let encoder, let terminal else { return }
-        ghostty_mouse_encoder_setopt_from_terminal(encoder, terminal)
+        ghostty_mouse_encoder_set_from_terminal(encoder, terminal)
         var size = GhosttyMouseEncoderSize()
         size.size = MemoryLayout<GhosttyMouseEncoderSize>.size
         size.screen_width = screenWidth
         size.screen_height = screenHeight
         size.cell_width = max(cellWidth, 1)
         size.cell_height = max(cellHeight, 1)
-        ghostty_mouse_encoder_setopt(encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size)
+        ghostty_mouse_encoder_set(encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size)
         var pressed = anyButtonPressed
-        ghostty_mouse_encoder_setopt(encoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, &pressed)
+        ghostty_mouse_encoder_set(encoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, &pressed)
     }
 
     /// Encodes one report. Returns nil when the event produces no output
@@ -99,20 +99,20 @@ final class GhosttyMouseReportEncoder {
         let position = GhosttyMousePosition(x: report.x, y: report.y)
         ghostty_mouse_event_set_position(event, position)
 
-        var stack = [CChar](repeating: 0, count: 128)
+        var stack = [UInt8](repeating: 0, count: 128)
         var written = 0
         let result: GhosttyResult = stack.withUnsafeMutableBufferPointer { ptr in
             ghostty_mouse_encoder_encode(encoder, event, ptr.baseAddress, ptr.count, &written)
         }
         if result == GHOSTTY_OUT_OF_SPACE {
-            var heap = [CChar](repeating: 0, count: written)
+            var heap = [UInt8](repeating: 0, count: written)
             let retry: GhosttyResult = heap.withUnsafeMutableBufferPointer { ptr in
                 ghostty_mouse_encoder_encode(encoder, event, ptr.baseAddress, ptr.count, &written)
             }
             guard retry == GHOSTTY_SUCCESS else { return nil }
-            return Data(heap.prefix(written).map { UInt8(bitPattern: $0) })
+            return Data(heap.prefix(written))
         }
         guard result == GHOSTTY_SUCCESS, written > 0 else { return nil }
-        return Data(stack.prefix(written).map { UInt8(bitPattern: $0) })
+        return Data(stack.prefix(written))
     }
 }

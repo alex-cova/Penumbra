@@ -78,12 +78,15 @@ Umbra's terminal backend links `libghostty-vt`, the VT parser/emulator core of
 [ghostty-org/ghostty](https://github.com/ghostty-org/ghostty) (MIT, (c) 2024
 Mitchell Hashimoto and Ghostty contributors), as a prebuilt
 `Umbra/Vendor/GhosttyVt.xcframework` binary target of the `Umbra` target only —
-never of `Penumbra` or `EditorIntelligence`. Build: Ghostty commit
-`4a4fc017940bec38c93b278c10c6a18c591f3e63` with Zig 0.17.0
-(`zig build -Demit-lib-vt`, macOS arm64 + x86_64 slices only; see
-`.agents/plans/2026-10-27-ghostty-terminal.md` for the rebuild procedure and
-the iOS-slice note). PTY spawning, grid rendering and key encoding are Umbra's
-own code (`Umbra/Sources/Umbra/Terminal/`).
+never of `Penumbra` or `EditorIntelligence`. The binary is the official
+libghostty-vt 1.0.1 XCFramework
+([ghostty-vt-1.0.1.xcframework.zip](https://release.files.ghostty.org/libghostty-vt/1.0.1/ghostty-vt-1.0.1.xcframework.zip),
+SHA256 `c0f9631277f726154c8f521954d17cdc41aac4626fc0df8cf925a19ee58e829b`,
+tag `vt-1.0.1`, commit `108cacb17ed8990840cd14abfce43d8ed8503ca1`), with the
+bundle directory renamed to `GhosttyVt.xcframework`. Umbra links the macOS
+arm64 + x86_64 slice. The zip's iOS slices are kept so the tree matches the
+release. PTY spawning, grid rendering and key encoding are Umbra's own code
+(`Umbra/Sources/Umbra/Terminal/`).
 
 ## Umbra project wizard (Xcode project format)
 
