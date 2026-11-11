@@ -303,9 +303,11 @@ extension IDEGitStatusModel {
             do {
                 let repo = try await IDEGitSupport.repository(for: rootURL, existing: existing)
                 let entries = try await repo.lineHistory(path: relative, start: startLine, end: endLine)
-                guard let self, self.lineHistory?.path == path, self.lineHistory?.startLine == startLine else { return }
-                self.lineHistory?.entries = entries
-                self.lineHistory?.selectedHash = entries.first?.commit.hash
+                guard let self, var history = self.lineHistory, history.path == path, history.startLine == startLine else { return }
+                history.entries = entries
+                history.hasLoaded = true
+                history.selectedHash = entries.first?.commit.hash
+                self.lineHistory = history
             } catch {
                 self?.lineHistory = nil
                 self?.fail(IDEGitSupport.describe(error))

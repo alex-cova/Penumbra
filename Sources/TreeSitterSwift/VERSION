@@ -12,3 +12,5 @@ local patches in grammar.js and src/scanner.c, on top of that commit:
 - `/*` and `*/` inside a line string stay string text (`line_str_text` is scanned externally)
 - a raw string may nest inside another raw string's interpolation
 - `(T?, Array<U>).self` is a metatype of a tuple type
+- `nonisolated` (optional `unsafe` or `nonsending`) is allowed on a local declaration, not only a member
+- `open` is a contextual identifier, and a switch case takes attributes (`@unknown`) but not a visibility modifier, so `open.append` inside a case stays a statement

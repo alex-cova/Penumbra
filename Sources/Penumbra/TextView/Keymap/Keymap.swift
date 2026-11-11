@@ -108,8 +108,19 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord(code: 0x76 /* F4 */)), to: .goToNextProblem)
         map.bind(KeyStroke(KeyChord(code: 0x76 /* F4 */, .shift)), to: .goToPreviousProblem)
         bindFoldingChords(&map)
+        bindSourceChangeKeys(&map)
         return map
     }()
+
+    /// F7 and ⇧F7 walk the gutter's change stripes.
+    ///
+    /// These are keymap bindings, not menu shortcuts. A menu key equivalent runs before the diff
+    /// view, and that view already uses F7 to move between its own hunks. IntelliJ's menu uses F7
+    /// for Step Into and ⇧F7 for Smart Step Into, so that preset keeps ⌃⌥⇧↓ and ⌃⌥⇧↑.
+    private static func bindSourceChangeKeys(_ map: inout Keymap) {
+        map.bind(KeyStroke(KeyChord(code: 0x62 /* F7 */)), to: .nextChange)
+        map.bind(KeyStroke(KeyChord(code: 0x62 /* F7 */, .shift)), to: .previousChange)
+    }
 
     /// Fold and unfold: ⌥⌘[ / ⌥⌘] for the region at the caret (Sublime, VS Code), and ⌘K chords for
     /// the rest.
@@ -329,6 +340,7 @@ public extension Keymap {
         map.bind(KeyStroke(KeyChord("v", [.command, .shift])), to: .toggleMarkdownPreview)
         // Folding: ⌥⌘[ / ⌥⌘] at the caret, ⌘K chords for the rest.
         bindFoldingChords(&map, vsCodeChords: true)
+        bindSourceChangeKeys(&map)
         return map
     }()
 }

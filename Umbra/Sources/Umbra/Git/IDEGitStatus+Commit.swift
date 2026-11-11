@@ -43,7 +43,7 @@ extension IDEGitStatusModel {
                 message: message, amend: options.amend, signoff: options.signoff, skipHooks: options.skipHooks
             ))
             return options.amend ? "Amended the last commit" : "Committed"
-        }, credentials: true, onSuccess: { [weak self] in
+        }, credentials: true, activity: "Committing…", onSuccess: { [weak self] in
             if let root { IDEGitRecentMessages().record(message, for: root) }
             self?.resetAfterCommit()
             if options.pushAfter { self?.requestPush() }

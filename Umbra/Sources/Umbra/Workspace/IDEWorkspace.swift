@@ -332,6 +332,8 @@ public final class IDEWorkspace {
     var selectedSidebarTab = IDESidebarTab.explorer
     /// Bumped when a shortcut or Go to Tool Window wants the visible sidebar pane to take the keyboard.
     var sidebarFocusRequestID: UInt64 = 0
+    /// The Changes file list has the keyboard. ⌘S then stages. The commit field does not set this.
+    var isChangesListFocused = false
     /// The tab that should consume ``sidebarFocusRequestID``; nil after the pane focuses or the sidebar hides.
     var pendingSidebarFocusTab: IDESidebarTab?
     /// Bumped when the Gradle / project sidebar should take the keyboard.
@@ -705,9 +707,10 @@ public final class IDEWorkspace {
     /// The Problems tab belongs to a project: it is offered while a folder is open (and shows an
     /// empty state when there is nothing to report), not for loose files or an Untitled buffer.
     var showsProblemsTab: Bool { hasOpenProject }
-    /// Whether the "Source Control" tab should appear for the open git repository.
+    /// Whether Changes and History should appear. A failed or still-running first status is a
+    /// repository Umbra has not finished reading, not a folder with no Git chrome.
     var showsSourceControlTab: Bool {
-        gitStatus.isRepository
+        IDEGitChrome.isVisible(gitStatus.refreshState)
     }
 
     var editorLayout: EditorLayout { workbench.layout }
@@ -1592,6 +1595,20 @@ public final class IDEWorkspace {
     /// panel was cancelled, or the write failed).
     @discardableResult
     public func saveActiveDocument() async -> Bool {
+        if IDEGitSaveIntercept.shouldStage(
+            changesListFocused: isChangesListFocused,
+            command: .save,
+            preset: IDEPreferences.shared.keymapPreset
+        ) {
+            stageSelectedChanges()
+            return false
+        }
+        return await writeActiveDocument()
+    }
+
+    /// Writes the active document. Callers that are not the ⌘S Save command use this directly.
+    @discardableResult
+    func writeActiveDocument() async -> Bool {
         guard let document = workbench.activePane.selectedDocument else { return false }
         return await saveDocument(document, reason: .explicit) == .saved
     }
@@ -1603,7 +1620,7 @@ public final class IDEWorkspace {
         guard let document = workbench.activePane.selectedDocument, document.contentKind == .text else { return }
         let previous = document.encoding
         document.encoding = encoding
-        if await saveActiveDocument() {
+        if await writeActiveDocument() {
             statusEncoding = encoding
         } else {
             document.encoding = previous
@@ -2193,7 +2210,7 @@ public final class IDEWorkspace {
     }
 
     /// The file behind the active editor, when it is inside the open git repository.
-    private func activeFileInRepository() -> URL? {
+    func activeFileInRepository() -> URL? {
         guard gitStatus.isRepository, let root = gitStatus.repositoryRootPath,
               let url = workbench.activePane.selectedDocument?.url?.standardizedFileURL,
               url.path.hasPrefix(root + "/") else { return nil }
@@ -2281,29 +2298,27 @@ public final class IDEWorkspace {
     /// Staged and unstaged changes and unsaved edits are all discarded; nothing can bring them back.
     func revertActiveFile() {
         guard let url = activeFileInRepository() else {
-            showGitNotice("Nothing to Revert", "The active file is not in a git repository.")
+            showGitNotice("Nothing to Discard", "The active file is not in a git repository.")
             return
         }
         let name = url.lastPathComponent
         let isDirty = workbench.activePane.selectedDocument?.isDirty == true
         let status = gitStatus.status(for: url, isDirectory: false)
         if status == nil, !isDirty {
-            showGitNotice("Nothing to Revert", "\(name) has no changes since the last commit.")
+            showGitNotice("Nothing to Discard", "\(name) has no changes since the last commit.")
             return
         }
         if status == .untracked {
-            showGitNotice("Nothing to Revert", "\(name) is not under version control yet, so there is no earlier version to go back to.")
+            showGitNotice("Nothing to Discard", "\(name) is not under version control yet, so there is no earlier version to go back to.")
             return
         }
-        var alert = IDEAlert.confirm(
-            "Revert changes to \(name)?",
-            detail: "This discards every change to \(name) since the last commit, including unsaved edits. It cannot be undone.",
-            confirm: "Revert", isDestructive: true)
+        let prompt = IDEGitDiscardPrompt.activeFile(name: name)
+        var alert = IDEAlert.confirm(prompt.title, detail: prompt.detail, confirm: prompt.confirm, isDestructive: true)
         guard alert.confirms() else { return }
         gitStatus.revert(
             path: url.path,
             then: { [weak self] in self?.reloadOpenEditorsAfterGitChange(discardingEditsIn: [url.path]) },
-            onFailure: { [weak self] message in self?.showGitNotice("Could Not Revert", message) }
+            onFailure: { [weak self] message in self?.showGitNotice("Could Not Discard", message) }
         )
     }
 
@@ -2325,44 +2340,28 @@ public final class IDEWorkspace {
             }
         }
         guard !revertable.isEmpty else {
-            showGitNotice("Nothing to Revert", skipped.isEmpty
-                ? "The selected files have no changes."
-                : "The selected files are not in the last commit, so there is no earlier version to go back to.")
+            let notice = IDEGitDiscardPrompt.nothingToDiscard(skipped: !skipped.isEmpty)
+            showGitNotice(notice.title, notice.detail)
             return
         }
-        let names = Self.nameList(revertable.map(\.relativePath))
-        var detail = "This discards every change to \(revertable.count == 1 ? names : "these files") since the last commit, staged or not. It cannot be undone.\n\n\(revertable.count == 1 ? "" : names)"
         let revertablePaths = Set(revertable.map(\.path))
         var seenDocuments = Set<ObjectIdentifier>()
         let unsaved = workbench.panes.flatMap(\.documents).filter { document in
             guard document.isDirty, let path = document.url?.standardizedFileURL.path, revertablePaths.contains(path) else { return false }
             return seenDocuments.insert(ObjectIdentifier(document)).inserted
         }.count
-        if unsaved > 0 {
-            detail += "\n\n\(unsaved) of them \(unsaved == 1 ? "has" : "have") unsaved edits in an open editor; those are discarded too."
-        }
-        if !skipped.isEmpty {
-            detail += "\n\nNot reverted (not in the last commit): \(Self.nameList(skipped.map(\.relativePath), limit: 5))"
-        }
-        var alert = IDEAlert.confirm(
-            revertable.count == 1
-                ? "Revert changes to \(revertable[0].relativePath)?"
-                : "Revert changes to \(revertable.count) files?",
-            detail: detail.trimmingCharacters(in: .whitespacesAndNewlines),
-            confirm: "Revert", isDestructive: true)
+        let prompt = IDEGitDiscardPrompt.changes(
+            revertable: revertable.map(\.relativePath),
+            skipped: skipped.map(\.relativePath),
+            unsavedEditors: unsaved
+        )
+        var alert = IDEAlert.confirm(prompt.title, detail: prompt.detail, confirm: prompt.confirm, isDestructive: true)
         guard alert.confirms() else { return }
         gitStatus.revert(
             paths: revertable.map(\.path),
             then: { [weak self] reverted in self?.reloadOpenEditorsAfterGitChange(discardingEditsIn: reverted) },
-            onFailure: { [weak self] message in self?.showGitNotice("Could Not Revert", message) }
+            onFailure: { [weak self] message in self?.showGitNotice("Could Not Discard", message) }
         )
-    }
-
-    /// The first `limit` names one per line, then "and N more".
-    private static func nameList(_ names: [String], limit: Int = 10) -> String {
-        var lines = names.prefix(limit).map { "• \($0)" }
-        if names.count > limit { lines.append("and \(names.count - limit) more") }
-        return lines.joined(separator: "\n")
     }
 
     /// Update Project (⌘T in the IntelliJ keymap): fetches and merges or rebases the current branch
@@ -4883,8 +4882,24 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.quickEvaluate() }),
             EditorCommand(id: "app.git.blame", title: "Git: Toggle Blame (Annotate)", group: "Git",
                           action: { [weak self] in self?.toggleGitBlame() }),
-            EditorCommand(id: "app.git.revert", title: "Git: Revert File…", group: "Git",
+            EditorCommand(id: "app.git.revert", title: "Git: Discard Changes in File…", group: "Git",
                           action: { [weak self] in self?.revertActiveFile() }),
+            EditorCommand(id: "app.git.stage", title: "Git: Stage", group: "Git",
+                          action: { [weak self] in self?.stageSelectedChanges() }),
+            EditorCommand(id: "app.git.unstage", title: "Git: Unstage", group: "Git",
+                          action: { [weak self] in self?.unstageSelectedChanges() }),
+            EditorCommand(id: "app.git.openDiff", title: "Git: Show Diff", group: "Git",
+                          action: { [weak self] in self?.showSelectedChangeDiff() }),
+            EditorCommand(id: "app.git.focusCommit", title: "Git: Focus Commit Message", group: "Git",
+                          action: { [weak self] in self?.focusCommitMessage() }),
+            EditorCommand(id: "app.git.commit", title: "Git: Commit Staged", group: "Git",
+                          action: { [weak self] in self?.commitStagedChanges() }),
+            EditorCommand(id: "app.git.nextChange", title: "Git: Next Change", group: "Git",
+                          action: { [weak self] in self?.performEditorAction(.nextChange) }),
+            EditorCommand(id: "app.git.previousChange", title: "Git: Previous Change", group: "Git",
+                          action: { [weak self] in self?.performEditorAction(.previousChange) }),
+            EditorCommand(id: "app.git.nextConflict", title: "Git: Next Conflict", group: "Git",
+                          action: { [weak self] in self?.openNextConflict() }),
             EditorCommand(id: "app.view.nextTab", title: "View: Next Tab", group: "View",
                           action: { [weak self] in self?.selectAdjacentTab(forward: true) }),
             EditorCommand(id: "app.view.previousTab", title: "View: Previous Tab", group: "View",

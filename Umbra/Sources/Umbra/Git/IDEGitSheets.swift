@@ -188,6 +188,8 @@ struct IDEGitLineHistory: Equatable {
     let endLine: Int
     var entries: [GitLineHistoryEntry]
     var selectedHash: String?
+    /// False until this range's log has applied, including an empty result.
+    var hasLoaded = false
 }
 
 struct IDEGitStashRequest: Identifiable {

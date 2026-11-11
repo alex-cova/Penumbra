@@ -3,13 +3,32 @@ import XCTest
 @testable import JavaIntelligence
 
 /// Runs a real JVM with the JaCoCo agent and with Flight Recorder, then reads what they wrote.
-/// Skipped without a JDK, without `jfr`, or (coverage) without the jars `fetch.sh` downloads.
+/// Skipped without a JDK or without `jfr`. Coverage fetches the pinned jars with `fetch.sh`
+/// when they are not already in the source tree (`build/` is not committed).
 final class JavaInstrumentationRealJDKTests: XCTestCase {
     private var directory: URL!
 
     override func setUpWithError() throws {
+        try Self.ensureJaCoCoJars()
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("instr-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    /// `fetch.sh` checks the SHA-256 and is a no-op once the jars match.
+    private static func ensureJaCoCoJars() throws {
+        let script = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh")
+        var request = SubprocessRequest(executable: "/bin/bash", arguments: [script.path])
+        request.timeout = .seconds(180)
+        let result = try SubprocessRunner.runBlocking(request)
+        guard result.exit.succeeded else {
+            struct FetchFailed: Error, CustomStringConvertible {
+                var description: String
+            }
+            let output = result.stderr.text.isEmpty ? result.stdout.text : result.stderr.text
+            throw FetchFailed(description: "JaCoCo fetch.sh failed: \(output)")
+        }
     }
 
     override func tearDown() {
@@ -51,7 +70,10 @@ final class JavaInstrumentationRealJDKTests: XCTestCase {
 
     func testCoverageOfAPlainMainEndToEnd() async throws {
         let jdk = try requireJDK()
-        guard let toolchain else { throw XCTSkip("JaCoCo jars unavailable; run Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh") }
+        guard let toolchain else {
+            XCTFail("JaCoCo jars are still missing after Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh")
+            return
+        }
         if let reason = JavaCoverageToolchain.unsupportedLanguageLevel(jdk.featureVersion) { throw XCTSkip(reason) }
         let classes = try await compile("""
         package app;
@@ -99,7 +121,10 @@ final class JavaInstrumentationRealJDKTests: XCTestCase {
 
     func testReportWithoutExecutionDataSaysSo() async throws {
         let jdk = try requireJDK()
-        guard let toolchain else { throw XCTSkip("JaCoCo jars unavailable; run Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh") }
+        guard let toolchain else {
+            XCTFail("JaCoCo jars are still missing after Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh")
+            return
+        }
         let classes = directory.appendingPathComponent("classes", isDirectory: true)
         try FileManager.default.createDirectory(at: classes, withIntermediateDirectories: true)
         do {

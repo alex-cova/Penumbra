@@ -17,9 +17,11 @@ struct IDEDiffSettings: Equatable {
     var collapsesUnchanged = false
     var synchronizesScrolling = true
 
-    /// The keys of the diff tabs; the History pane's embedded viewer keeps its own (`embeddedPrefix`).
+    /// The keys of the diff tabs. History and the Changes preview keep their own
+    /// (`embeddedPrefix`, `changesPrefix`) so a layout pick in one does not move the others.
     static let tabPrefix = "umbra.diff."
     static let embeddedPrefix = "umbra.diff.history."
+    static let changesPrefix = "umbra.diff.changes."
 
     /// `defaultLayout` applies until the user picked one under `prefix`.
     static func load(
@@ -285,6 +287,10 @@ final class IDEDiffSession {
               let path = request.repositoryRelativePath, let applyIndexPatch else { return }
         if isRightDirty || request.workingTreePath.flatMap({ readOnlyReasonProvider?($0) }) != nil {
             message = "Save the file before staging hunks. Unsaved editor text is not written to the index."
+            return
+        }
+        if request.comparesDistinctPaths {
+            message = "This change renames or copies the file. Stage or unstage the whole file."
             return
         }
         guard IDEDiffPatchBuilder.headerPath(path) != nil else {

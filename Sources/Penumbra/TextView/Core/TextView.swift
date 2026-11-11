@@ -3195,11 +3195,13 @@ private extension TextView {
 
     // Typewriter anchoring: see TypewriterScrollingPolicy.
     private func justScrollRangeToVisible(_ range: NSRange, animateTypewriter: Bool = false) {
+        // Layout publishes `contentSize` on the next turn, so a reveal in the same
+        // turn would clamp against an empty document and stay at the top.
+        syncContentSizeIfNeeded()
         if TypewriterScrollingPolicy.shouldAnchor(isTypewriterScrollingEnabled: isTypewriterScrollingEnabled,
                                                   isAutomaticScrollEnabled: isAutomaticScrollEnabled,
                                                   isSuspendedByUser: isTypewriterScrollingSuspendedByUser,
                                                   rangeLength: range.length) {
-            syncContentSizeIfNeeded()
             if let offset = contentOffsetForTypewriterAnchor(at: range.lowerBound) {
                 let now = ProcessInfo.processInfo.systemUptime
                 let isRapidMove = now - lastTypewriterCaretMoveTime < 0.12

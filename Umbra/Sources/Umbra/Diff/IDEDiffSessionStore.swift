@@ -59,7 +59,8 @@ final class IDEDiffSessionStore {
     func reload(relativePaths: Set<String>) {
         guard !relativePaths.isEmpty else { return }
         for session in diffs.values where !session.isRightDirty {
-            guard let path = session.request.repositoryRelativePath, relativePaths.contains(path) else { continue }
+            let paths = session.request.revisionPaths
+            guard !paths.isDisjoint(with: relativePaths) else { continue }
             session.reload()
         }
     }

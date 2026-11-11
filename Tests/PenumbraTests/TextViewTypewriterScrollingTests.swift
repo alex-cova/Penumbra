@@ -179,7 +179,16 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
         textView.scrollRangeToVisible(NSRange(location: line25, length: 0))
         textView.layoutIfNeeded()
 
-        XCTAssertEqual(textView.contentOffset.y, 0, accuracy: 1)
+        // Anchoring is off, so this is the ordinary reveal: line 25 was below the
+        // fold and must scroll into view, but it must not sit on the typewriter pin.
+        guard let relativeMidY = caretMidYRelativeToViewport(in: textView, at: line25) else {
+            return XCTFail("Missing caret position")
+        }
+        let viewport = viewportHeight(in: textView)
+        XCTAssertGreaterThan(textView.contentOffset.y, 1)
+        XCTAssertGreaterThanOrEqual(relativeMidY, -1)
+        XCTAssertLessThanOrEqual(relativeMidY, viewport + 1)
+        XCTAssertNotEqual(relativeMidY, viewport * textView.typewriterAnchorFraction, accuracy: 2)
     }
 
     func testEnablingTypewriterMidDocumentReanchors() {

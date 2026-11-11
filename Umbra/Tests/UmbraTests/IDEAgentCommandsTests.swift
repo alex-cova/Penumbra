@@ -581,6 +581,12 @@ final class IDEAgentCommandRunTests: XCTestCase {
     func testACustomCommandSendsItsExpansionAndShowsWhatWasTyped() async throws {
         try write("---\ndescription: Fix something\nallowed-tools: Bash(echo:*)\n---\nPlease fix $1 in the $2 module.", ".claude/commands/fix.md")
         let (controller, client) = makeController([.text("on it")])
+        // A project command's allowed-tools ask the first time. This test is about the
+        // expansion, so the answer is already given; otherwise the host's confirm dialog
+        // would wait forever.
+        controller.commandCatalog.invalidate()
+        let fix = try XCTUnwrap(controller.commandCatalog.allSkillsCatalog.command(named: "fix"))
+        controller.settings.skillTrust.trust(IDEAgentSkillTrust.fingerprint(of: fix))
         type(controller, "/fix parser core")
         await waitFor("sent") { !controller.isRunning && !client.requests.isEmpty }
 
@@ -589,6 +595,10 @@ final class IDEAgentCommandRunTests: XCTestCase {
         XCTAssertEqual(user.detail, "Please fix parser in the core module.")
         guard case .user(let sent) = try XCTUnwrap(client.requests.first).items.first else { return XCTFail("no user item") }
         XCTAssertTrue(sent.hasSuffix("Please fix parser in the core module."))
+        XCTAssertNil(
+            controller.entries.first { $0.kind == .notice && $0.text.contains("pre-approved tools were not allowed") },
+            "the command was trusted, so its tools are pre-approved"
+        )
     }
 
     func testACommandsAllowedToolsAreRulesForThatRunOnly() async throws {

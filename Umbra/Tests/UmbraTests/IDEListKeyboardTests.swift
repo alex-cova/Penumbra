@@ -33,7 +33,7 @@ final class IDEListKeyboardTests: XCTestCase {
         model.selectChange(nil)
         model.moveChangeSelection(by: -1, in: visible)
         XCTAssertEqual(model.selectedChangePath, "/c")
-        model.moveChangeSelection(by: 1, in: [])
+        model.moveChangeSelection(by: 1, in: [] as [String])
         XCTAssertEqual(model.selectedChangePath, "/c")
     }
 

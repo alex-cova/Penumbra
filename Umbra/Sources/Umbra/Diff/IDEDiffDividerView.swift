@@ -101,11 +101,52 @@ final class IDEDiffDividerView: NSView {
             super.mouseDown(with: event)
             return
         }
-        switch button.action {
+        perform(button.action, chunk: button.chunk, append: event.modifierFlags.contains(.option))
+    }
+
+    private func perform(_ action: Action, chunk: Int, append: Bool) {
+        switch action {
         case .applyLeft:
-            viewer?.applyLeftToRight(chunk: button.chunk, append: event.modifierFlags.contains(.option))
+            viewer?.applyLeftToRight(chunk: chunk, append: append)
         case .index:
-            viewer?.session?.applyToIndex(chunkAt: button.chunk)
+            viewer?.session?.applyToIndex(chunkAt: chunk)
+        }
+    }
+
+    override func isAccessibilityElement() -> Bool { false }
+
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+
+    override func accessibilityLabel() -> String? { "Diff changes" }
+
+    /// One button per hit rect. Rebuilt on each query so the frames follow scrolling.
+    override func accessibilityChildren() -> [Any]? {
+        buttons.map { button in
+            let element = IDEDiffDividerButtonElement()
+            element.setAccessibilityRole(.button)
+            element.setAccessibilityLabel(Self.label(for: button.action))
+            element.setAccessibilityParent(self)
+            element.setAccessibilityFrame(screenFrame(of: button.rect))
+            let action = button.action
+            let chunk = button.chunk
+            element.onPress = { [weak self] in
+                self?.perform(action, chunk: chunk, append: false)
+            }
+            return element
+        }
+    }
+
+    private func screenFrame(of rect: CGRect) -> CGRect {
+        guard let window else { return convert(rect, to: nil) }
+        return window.convertToScreen(convert(rect, to: nil))
+    }
+
+    /// Tooltip and VoiceOver use the same words. Option-click still appends; the label stays the
+    /// primary action.
+    private static func label(for action: Action) -> String {
+        switch action {
+        case .applyLeft: IDEDiffDividerLabels.replaceWithLeftSide
+        case .index(let indexAction): IDEDiffDividerLabels.hunk(indexAction)
         }
     }
 
@@ -116,15 +157,34 @@ final class IDEDiffDividerView: NSView {
     }
 }
 
+/// The words on a divider button. The tooltip and the accessibility label both use these.
+enum IDEDiffDividerLabels {
+    static let replaceWithLeftSide = "Replace with the left side"
+
+    static func hunk(_ action: IDEDiffRequest.IndexAction) -> String {
+        switch action {
+        case .stage: "Stage Hunk"
+        case .unstage: "Unstage Hunk"
+        }
+    }
+}
+
+/// A VoiceOver button over one divider hit rect. Press runs the primary action (not option-append).
+private final class IDEDiffDividerButtonElement: NSAccessibilityElement {
+    var onPress: (@MainActor () -> Void)?
+
+    override func accessibilityPerformPress() -> Bool {
+        let press = onPress
+        MainActor.assumeIsolated { press?() }
+        return true
+    }
+}
+
 extension IDEDiffDividerView: NSViewToolTipOwner {
     nonisolated func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
         MainActor.assumeIsolated {
             guard let button = buttons.first(where: { $0.rect.contains(point) }) else { return "" }
-            switch button.action {
-            case .applyLeft: return "Replace with the left side (⌥-click to append)"
-            case .index(.stage): return "Stage this change"
-            case .index(.unstage): return "Unstage this change"
-            }
+            return IDEDiffDividerView.label(for: button.action)
         }
     }
 }

@@ -195,6 +195,14 @@ extension IDEWorkspace {
     /// `namingActive` is for a keymap that puts Save on ⌘S as Save All (IntelliJ's): the active
     /// buffer, when untitled, gets the save panel first, so ⌘S still names a new file.
     func saveAllDocuments(namingActive: Bool = false) async {
+        if IDEGitSaveIntercept.shouldStage(
+            changesListFocused: isChangesListFocused,
+            command: .saveAll,
+            preset: IDEPreferences.shared.keymapPreset
+        ) {
+            stageSelectedChanges()
+            return
+        }
         if namingActive, let document = workbench.activePane.selectedDocument, document.url == nil {
             await saveDocument(document, reason: .explicit)
         }

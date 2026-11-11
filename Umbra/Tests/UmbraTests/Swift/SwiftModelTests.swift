@@ -234,6 +234,37 @@ final class SwiftModelTests: XCTestCase {
         XCTAssertEqual(declaration("e", in: a.members)?.typeName, "[Int]")
     }
 
+    func testLocalIsolationModifiersParse() {
+        let source = """
+        func work() {
+            nonisolated(unsafe) var result = 0
+            nonisolated(nonsending) func inner() { result += 1 }
+            _ = result
+            _ = inner
+        }
+        """
+        let parsed = SwiftAnalysis.parseModel(source)
+        XCTAssertNotNil(parsed)
+        XCTAssertTrue(parsed?.errors.isEmpty == true, "\(parsed?.errors ?? [])")
+    }
+
+    /// `open` is a visibility modifier. Inside a case it is also a legal variable name,
+    /// and `@unknown` is the attribute a case may carry.
+    func testASwitchCaseMayCallOpenAndMarkDefaultUnknown() {
+        let source = """
+        func f(open: [String], flag: Bool, x: Int) {
+            switch x {
+            case 0:
+                open.append(flag ? .body : .other)
+            @unknown default:
+                break
+            }
+        }
+        """
+        let parsed = SwiftAnalysis.parseModel(source)
+        XCTAssertTrue(parsed?.errors.isEmpty == true, "\(parsed?.errors ?? [])")
+    }
+
     func testBrokenSourceReportsErrorsAndStillFindsDeclarations() {
         let m = model("struct Broken {\n    func a( {\n    var x: = \n}\nlet y = \n")
         XCTAssertFalse(m.errors.isEmpty)

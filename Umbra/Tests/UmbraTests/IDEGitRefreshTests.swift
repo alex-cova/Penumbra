@@ -78,6 +78,23 @@ final class IDEGitRefreshTests: XCTestCase {
         }
         XCTAssertFalse(model.isRepository)
         XCTAssertNil(model.currentBranch)
+        XCTAssertFalse(IDEGitChrome.isVisible(model.refreshState))
+    }
+
+    func testAFirstStatusFailureShowsTheErrorWithoutARepository() async throws {
+        let failing = StatusFailingRunner()
+        let model = IDEGitStatusModel(runner: failing)
+        model.setRoot(directory)
+        try await waitUntil("the first failure") {
+            if case .failed = model.refreshState { return true }
+            return false
+        }
+        XCTAssertFalse(model.isRepository)
+        XCTAssertEqual(model.refreshError, "index is corrupt")
+        XCTAssertNil(model.workspaceSnapshot)
+        XCTAssertTrue(IDEGitChrome.isVisible(model.refreshState))
+        XCTAssertFalse(IDEGitChrome.showsCommitControls(model.refreshState))
+        XCTAssertTrue(model.changes.isEmpty)
     }
 
     func testCancellingARefreshDoesNotPublishAFailure() async throws {
@@ -140,6 +157,21 @@ final class IDEGitRefreshTests: XCTestCase {
         let firstStatus = recording.commands.first { $0.contains("status") }
         XCTAssertNotNil(firstStatus)
         XCTAssertFalse(firstStatus?.contains("--ignored") ?? true, "hot status walked ignored files: \(firstStatus ?? [])")
+    }
+}
+
+/// Discover succeeds. `git status` fails, so the model never opens a repository.
+final class StatusFailingRunner: GitRunning, @unchecked Sendable {
+    private let base = SystemGitRunner()
+
+    func run(
+        _ arguments: [String], in directory: URL, stdin: Data?, environment: [String: String]?,
+        onProgress: GitProgressHandler?
+    ) async throws -> GitOutput {
+        if arguments.contains("status") {
+            throw GitError.failed(status: 128, stderr: "index is corrupt", stdout: Data())
+        }
+        return try await base.run(arguments, in: directory, stdin: stdin, environment: environment, onProgress: onProgress)
     }
 }
 

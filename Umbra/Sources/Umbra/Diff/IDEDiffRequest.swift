@@ -24,6 +24,13 @@ struct IDEDiffRequest: Hashable, Sendable, Identifiable {
     var filePath: String?
     /// Tab title.
     var title: String
+    /// True when the two sides are different paths (a rename or a copy). A hunk patch names one
+    /// path, so those comparisons are staged or unstaged as a whole file.
+    var comparesDistinctPaths = false
+    /// Repository-relative paths this comparison reads that are not already a `.revision` source.
+    /// An unstaged rename's working-tree file is one: the left revision names the old path, and a
+    /// refresh reports the new path.
+    var additionalRevisionPaths: Set<String> = []
 
     /// Opening the same comparison again selects its tab.
     var id: String { "\(left.source)|\(right.source)" }
@@ -44,12 +51,27 @@ struct IDEDiffRequest: Hashable, Sendable, Identifiable {
         }
     }
 
-    /// The path git knows the file by, for a hunk patch.
+    /// The path a hunk patch names: the file as it sits in the index. A rename's other revision
+    /// uses `sourcePath` and is not this path.
     var repositoryRelativePath: String? {
+        if case .revision(.index, let path) = right.source { return path }
+        if case .revision(.index, let path) = left.source { return path }
         for source in [left.source, right.source] {
             if case .revision(_, let path) = source { return path }
         }
         return nil
+    }
+
+    /// Every repository-relative path this comparison reads. A refresh reloads the tab when any
+    /// of them changed. An unstaged rename also lists its working-tree path here; that side is
+    /// not a `.revision`, and `filePath` is the absolute path.
+    var revisionPaths: Set<String> {
+        var paths = Set<String>()
+        for source in [left.source, right.source] {
+            if case .revision(_, let path) = source { paths.insert(path) }
+        }
+        paths.formUnion(additionalRevisionPaths)
+        return paths
     }
 
     /// Only the working tree can be edited (and reverted hunk by hunk).
@@ -72,27 +94,37 @@ struct IDEDiffRequest: Hashable, Sendable, Identifiable {
 
     /// A changed file from the Changes list: unstaged changes compare the index with the working
     /// tree, staged ones HEAD with the index (as `git diff` and `git diff --cached` do).
-    static func change(path: String, relativePath: String, staged: Bool, isNew: Bool) -> IDEDiffRequest {
+    ///
+    /// `sourcePath` is the old path of a rename or copy on this side, taken from porcelain.
+    /// Nil compares `relativePath` with itself. Callers do not invent a source path.
+    static func change(
+        path: String, relativePath: String, staged: Bool, isNew: Bool, sourcePath: String? = nil
+    ) -> IDEDiffRequest {
         let name = fileName(path)
+        let historical = sourcePath.flatMap { $0.isEmpty || $0 == relativePath ? nil : $0 } ?? relativePath
         if staged {
             let left = isNew
                 ? IDEDiffSide(source: .text(""), title: "Not in HEAD")
-                : IDEDiffSide(source: .revision(.head, relativePath: relativePath), title: "HEAD")
+                : IDEDiffSide(source: .revision(.head, relativePath: historical), title: "HEAD")
             return IDEDiffRequest(
                 left: left,
                 right: IDEDiffSide(source: .revision(.index, relativePath: relativePath), title: "Staged"),
                 filePath: path,
-                title: "\(name) (Staged)"
+                title: "\(name) (Staged)",
+                comparesDistinctPaths: historical != relativePath
             )
         }
         let left = isNew
             ? IDEDiffSide(source: .text(""), title: "Untracked")
-            : IDEDiffSide(source: .revision(.index, relativePath: relativePath), title: "Staged")
+            : IDEDiffSide(source: .revision(.index, relativePath: historical), title: "Staged")
+        let renamed = !isNew && historical != relativePath
         return IDEDiffRequest(
             left: left,
             right: IDEDiffSide(source: .workingTree(path: path), title: "Your Version"),
             filePath: path,
-            title: "\(name) (Changes)"
+            title: "\(name) (Changes)",
+            comparesDistinctPaths: renamed,
+            additionalRevisionPaths: renamed ? [relativePath] : []
         )
     }
 

@@ -10,4 +10,14 @@ final class IDEDiffDividerViewTests: XCTestCase {
         XCTAssertTrue(IDEDiffDividerView().clipsToBounds)
         XCTAssertTrue(IDEDiffDividerView(frame: CGRect(x: 0, y: 0, width: 44, height: 200)).clipsToBounds)
     }
+
+    func testDividerButtonLabelsMatchTheTooltipAndTheAccessibilityName() {
+        XCTAssertEqual(IDEDiffDividerLabels.replaceWithLeftSide, "Replace with the left side")
+        XCTAssertEqual(IDEDiffDividerLabels.hunk(.stage), "Stage Hunk")
+        XCTAssertEqual(IDEDiffDividerLabels.hunk(.unstage), "Unstage Hunk")
+        let divider = IDEDiffDividerView()
+        XCTAssertEqual(divider.accessibilityRole(), .group)
+        XCTAssertEqual(divider.accessibilityLabel(), "Diff changes")
+        XCTAssertEqual(divider.accessibilityChildren()?.count, 0)
+    }
 }

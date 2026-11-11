@@ -338,10 +338,14 @@ private struct ScopeBuilder {
         var declarations: [JavaScopeTree.Declaration] = []
         var children: [JavaScopeTree.Scope] = []
         let scopeEnd = body.byteRange.upperBound
+        // One index for the type. Scanning `stub.fields` per declarator, then scanning
+        // `declarations` per stub field, is quadratic and a 2,000-member type spends about
+        // a second on it in Debug.
+        let fieldIndex = fieldsByName(owner: qualifiedName)
         for member in body.namedChildren {
             switch member.type {
             case "field_declaration", "constant_declaration":
-                buildField(member, owner: qualifiedName, scopeEnd: scopeEnd,
+                buildField(member, owner: qualifiedName, scopeEnd: scopeEnd, fieldsByName: fieldIndex,
                            declarations: &declarations, children: &children)
             case "method_declaration", "constructor_declaration", "compact_constructor_declaration":
                 if let methodScope = buildExecutable(member, owner: qualifiedName) { children.append(methodScope) }
@@ -362,11 +366,12 @@ private struct ScopeBuilder {
             case "ERROR":
                 // Garbled member text: recover whatever member declarations survived inside.
                 recoverMembers(in: member, qualifiedName: qualifiedName, scopeEnd: scopeEnd,
-                               declarations: &declarations, children: &children)
+                               fieldsByName: fieldIndex, declarations: &declarations, children: &children)
             default:
                 // Enum constants are fields in the file stubs; anything else holds no bindings.
                 if member.type == "enum_constant" {
-                    buildEnumConstant(member, owner: qualifiedName, scopeEnd: scopeEnd, declarations: &declarations)
+                    buildEnumConstant(member, owner: qualifiedName, scopeEnd: scopeEnd, fieldsByName: fieldIndex,
+                                      declarations: &declarations)
                 } else {
                     children += expressionScopes(in: member)
                 }
@@ -384,30 +389,37 @@ private struct ScopeBuilder {
                     symbol: .constructor(declaringClass: qualifiedName, stub: constructor),
                     visibleRange: body.byteRange.lowerBound..<scopeEnd))
             }
-            for field in stub.fields {
+            // Methods were just appended, so a missed field still yields to a same-named method.
+            var seen = Set(declarations.map(\.symbol.name))
+            for field in stub.fields where seen.insert(field.name).inserted {
                 // Fields declared above cover the common case; the stub pass catches whatever
                 // the scope walk missed (erroneous trees) without duplicating names.
-                if !declarations.contains(where: { $0.symbol.name == field.name }) {
-                    declarations.append(JavaScopeTree.Declaration(
-                        symbol: .field(declaringClass: qualifiedName, stub: field),
-                        visibleRange: body.byteRange.lowerBound..<scopeEnd))
-                }
+                declarations.append(JavaScopeTree.Declaration(
+                    symbol: .field(declaringClass: qualifiedName, stub: field),
+                    visibleRange: body.byteRange.lowerBound..<scopeEnd))
             }
         }
         return JavaScopeTree.Scope(kind: kind, range: body.byteRange, declarations: declarations, children: children)
     }
 
+    /// `nil` when the type has no stub. The first stub field of a repeated name wins, matching
+    /// the old left-to-right scan.
+    func fieldsByName(owner: String) -> [String: JavaFieldStub]? {
+        guard let stub = stubsByName[owner] else { return nil }
+        return Dictionary(stub.fields.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
     func buildField(
-        _ node: SyntaxNode, owner: String, scopeEnd: Int,
+        _ node: SyntaxNode, owner: String, scopeEnd: Int, fieldsByName: [String: JavaFieldStub]?,
         declarations: inout [JavaScopeTree.Declaration], children: inout [JavaScopeTree.Scope]
     ) {
-        guard let stub = stubsByName[owner] else {
+        guard let fieldsByName else {
             children += expressionScopes(in: node)
             return
         }
         for declarator in node.namedChildren(ofType: "variable_declarator") {
             guard let nameNode = declarator.child(byFieldName: "name"),
-                  let field = stub.fields.first(where: { $0.name == nameNode.text }) else { continue }
+                  let field = fieldsByName[nameNode.text] else { continue }
             declarations.append(JavaScopeTree.Declaration(
                 symbol: .field(declaringClass: owner, stub: field),
                 visibleRange: nameNode.byteRange.upperBound..<scopeEnd))
@@ -418,10 +430,11 @@ private struct ScopeBuilder {
     }
 
     func buildEnumConstant(
-        _ node: SyntaxNode, owner: String, scopeEnd: Int, declarations: inout [JavaScopeTree.Declaration]
+        _ node: SyntaxNode, owner: String, scopeEnd: Int, fieldsByName: [String: JavaFieldStub]?,
+        declarations: inout [JavaScopeTree.Declaration]
     ) {
         guard let nameNode = node.child(byFieldName: "name"),
-              let field = stubsByName[owner]?.fields.first(where: { $0.name == nameNode.text }) else { return }
+              let field = fieldsByName?[nameNode.text] else { return }
         declarations.append(JavaScopeTree.Declaration(
             symbol: .field(declaringClass: owner, stub: field),
             visibleRange: nameNode.byteRange.upperBound..<scopeEnd))
@@ -1092,6 +1105,7 @@ private struct ScopeBuilder {
     /// types still nest, executable signatures still yield their scopes, plain fields still bind.
     func recoverMembers(
         in node: SyntaxNode, qualifiedName: String, scopeEnd: Int,
+        fieldsByName: [String: JavaFieldStub]?,
         declarations: inout [JavaScopeTree.Declaration], children: inout [JavaScopeTree.Scope]
     ) {
         var stack = node.namedChildren
@@ -1105,7 +1119,7 @@ private struct ScopeBuilder {
             case "method_declaration", "constructor_declaration", "compact_constructor_declaration":
                 if let methodScope = buildExecutable(current, owner: qualifiedName) { children.append(methodScope) }
             case "field_declaration", "constant_declaration":
-                buildField(current, owner: qualifiedName, scopeEnd: scopeEnd,
+                buildField(current, owner: qualifiedName, scopeEnd: scopeEnd, fieldsByName: fieldsByName,
                            declarations: &declarations, children: &children)
             case "ERROR":
                 stack += current.namedChildren

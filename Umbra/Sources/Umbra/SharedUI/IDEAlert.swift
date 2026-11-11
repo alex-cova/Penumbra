@@ -58,6 +58,7 @@ struct IDEAlert {
     /// The index of the clicked button.
     @discardableResult
     mutating func runModal() -> Int {
+        if let declined = declineUnderTest() { return declined }
         let alert = makeAlert()
         let response = alert.runModal()
         suppressionIsChecked = alert.suppressionButton?.state == .on
@@ -83,6 +84,7 @@ struct IDEAlert {
 
     /// The index of the clicked button, from a sheet on `window` or a modal alert without one.
     mutating func present(in window: NSWindow?) async -> Int {
+        if let declined = declineUnderTest() { return declined }
         let alert = makeAlert()
         let response: NSApplication.ModalResponse
         if let window {
@@ -112,6 +114,25 @@ struct IDEAlert {
     }
 
     // MARK: Internals
+
+    /// XCTest loads this module into the test process. A modal alert there has nobody to click
+    /// it, and `runModal` nests a run loop that never returns, so the suite hangs. Decline
+    /// instead (the button that is not `confirmIndex`). A real Umbra process is unchanged.
+    private func declineUnderTest() -> Int? {
+        guard Self.isRunningUnderXCTest else { return nil }
+        let line = "IDEAlert declined without a modal under XCTest: \(title)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+        guard buttons.count > 1 else { return 0 }
+        return confirmIndex == 0 ? 1 : 0
+    }
+
+    private static var isRunningUnderXCTest: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["XCTestConfigurationFilePath"] != nil || environment["XCTestBundlePath"] != nil {
+            return true
+        }
+        return NSClassFromString("XCTestCase") != nil
+    }
 
     private func makeAlert() -> NSAlert {
         let alert = NSAlert()

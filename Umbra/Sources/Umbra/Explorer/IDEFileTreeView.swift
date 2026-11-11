@@ -97,6 +97,7 @@ struct IDEFileTreeView: View {
                                     actions: actions,
                                     filterQuery: filterNeedle,
                                     gitStatus: gitStatus?.status(for: item.node.url, isDirectory: item.node.isDirectory),
+                                    gitNoun: gitStatus?.explorerNoun(for: item.node.url, isDirectory: item.node.isDirectory),
                                     folderRole: item.node.isDirectory
                                         ? IDEFlattenedPackages.folderRole(for: item.node.url, sourceRootPaths: javaSourceRootPaths)
                                         : .plain,
@@ -497,6 +498,8 @@ private struct IDEFileTreeRow: View {
     var actions: IDEFileTreeActions?
     var filterQuery = ""
     var gitStatus: IDEGitFileStatus?
+    /// Spoken status. Nil when the row has no git status. The tint stays `gitStatus`.
+    var gitNoun: String?
     var folderRole: IDEFlattenedPackages.FolderRole = .plain
     let onToggle: () -> Void
     let onSelect: () -> Void
@@ -518,6 +521,14 @@ private struct IDEFileTreeRow: View {
             Image(systemName: iconName)
                 .foregroundStyle(iconColor)
                 .frame(width: 14)
+                .accessibilityHidden(true)
+
+            if gitStatus == .conflicted {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(IDEAppearance.ColorToken.gitConflict)
+                    .accessibilityHidden(true)
+            }
 
             if isRenaming, let actions {
                 IDEInlineRenameField(
@@ -528,10 +539,7 @@ private struct IDEFileTreeRow: View {
                 )
                 .frame(width: 200, height: 18)
             } else {
-                title
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .accessibilityLabel(displayName)
+                titledName
             }
 
             Spacer(minLength: 0)
@@ -616,6 +624,21 @@ private struct IDEFileTreeRow: View {
 
     private var displayName: String {
         node.isDirectory && depth == 0 ? node.url.lastPathComponent : node.displayName ?? node.name
+    }
+
+    /// The name keeps its label. The value is the git noun, so VoiceOver does not rely on the tint.
+    private var titledName: some View {
+        let named = title
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityLabel(displayName)
+        return Group {
+            if let gitNoun {
+                named.accessibilityValue(gitNoun)
+            } else {
+                named
+            }
+        }
     }
 
     private var title: Text {

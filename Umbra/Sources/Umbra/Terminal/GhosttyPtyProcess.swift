@@ -62,8 +62,13 @@ final class GhosttyPtyProcess: @unchecked Sendable {
     ///   - execName: `argv[0]` (e.g. `-zsh`) so rc files load like Terminal.app.
     ///   - currentDirectory: The shell's starting directory.
     ///   - arguments: `argv[1…]`, after `execName`.
-    ///   - environment: Merged over the parent environment. `TERM` defaults
-    ///     to `xterm-256color`, `COLORTERM` to `truecolor` when absent.
+    ///   - environment: Extra variables for the child. A non-empty `TERM` or
+    ///     `COLORTERM` here names this terminal; otherwise they are
+    ///     `xterm-256color` and `truecolor`.
+    ///   - parentEnvironment: Everything else the child inherits. Defaults to
+    ///     this process. `TERM` and `COLORTERM` in it are ignored: they name
+    ///     the parent's terminal, which is often `dumb` for a non-interactive
+    ///     host, not this PTY.
     @discardableResult
     func start(
         executable: String,
@@ -71,6 +76,7 @@ final class GhosttyPtyProcess: @unchecked Sendable {
         currentDirectory: String,
         arguments: [String] = [],
         environment: [String: String]? = nil,
+        parentEnvironment: [String: String] = ProcessInfo.processInfo.environment,
         cols: Int = 80,
         rows: Int = 24
     ) -> Bool {
@@ -82,6 +88,7 @@ final class GhosttyPtyProcess: @unchecked Sendable {
                 currentDirectory: currentDirectory,
                 arguments: arguments,
                 environment: environment,
+                parentEnvironment: parentEnvironment,
                 cols: cols,
                 rows: rows
             ) else { return false }
@@ -327,6 +334,7 @@ final class GhosttyPtyProcess: @unchecked Sendable {
         currentDirectory: String,
         arguments: [String],
         environment: [String: String]?,
+        parentEnvironment: [String: String],
         cols: Int,
         rows: Int
     ) -> (master: Int32, pid: pid_t)? {
@@ -364,12 +372,17 @@ final class GhosttyPtyProcess: @unchecked Sendable {
         posix_spawn_file_actions_addclose(&actions, 3)
         posix_spawn_file_actions_addchdir(&actions, currentDirectory)
 
-        var merged = ProcessInfo.processInfo.environment
-        merged["TERM"] = environment?["TERM"] ?? merged["TERM"] ?? "xterm-256color"
-        merged["COLORTERM"] = environment?["COLORTERM"] ?? merged["COLORTERM"] ?? "truecolor"
+        var merged = parentEnvironment
+        // This PTY draws xterm-256color / truecolor. The parent's TERM names a
+        // different terminal and must not leak in (an agent shell is often `dumb`).
+        // A non-empty value in `environment` is an explicit override.
+        merged.removeValue(forKey: "TERM")
+        merged.removeValue(forKey: "COLORTERM")
         if let environment {
             for (key, value) in environment { merged[key] = value }
         }
+        if merged["TERM"]?.isEmpty != false { merged["TERM"] = "xterm-256color" }
+        if merged["COLORTERM"]?.isEmpty != false { merged["COLORTERM"] = "truecolor" }
         let envStrings = merged.map { "\($0.key)=\($0.value)" }
         let argv: [String] = [execName] + arguments
 

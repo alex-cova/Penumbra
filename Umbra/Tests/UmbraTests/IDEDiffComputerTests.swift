@@ -276,6 +276,34 @@ final class IDEDiffHunkSafetyTests: XCTestCase {
         )
     }
 
+    func testARenameComparisonDoesNotApplyAHunk() async throws {
+        let request = IDEDiffRequest.change(
+            path: "/repo/new.txt", relativePath: "new.txt", staged: true, isNew: false, sourcePath: "old.txt"
+        )
+        XCTAssertTrue(request.comparesDistinctPaths)
+        XCTAssertEqual(request.left.source, .revision(.head, relativePath: "old.txt"))
+        let session = IDEDiffSession(
+            request: request, siblings: [], settings: IDEDiffSettings(), settingsPrefix: "test-\(UUID().uuidString)"
+        )
+        session.loadContent = { source in
+            switch source {
+            case .revision(.head, _): return .text("before\n")
+            case .revision(.index, _): return .text("before\nedited\n")
+            default: return .text("")
+            }
+        }
+        var applied = false
+        session.applyIndexPatch = { _ in
+            applied = true
+            return nil
+        }
+        session.reload()
+        try await waitUntilReady(session)
+        session.applyToIndex(chunkAt: 0)
+        XCTAssertFalse(applied)
+        XCTAssertEqual(session.message, "This change renames or copies the file. Stage or unstage the whole file.")
+    }
+
     func testACleanHunkStagesTheLoadedTextAndTheIndexBlob() async throws {
         let session = session()
         var request: GitHunkApply?

@@ -68,4 +68,33 @@ final class IDEDiffSessionStoreTests: XCTestCase {
         XCTAssertEqual(dirty.right.string, "b", "a dirty session keeps its edited text")
         XCTAssertTrue(dirty.isRightDirty)
     }
+
+    func testARenameTabReloadsWhenEitherPathChangesAndATextTabDoesNot() async throws {
+        let store = IDEDiffSessionStore()
+        let rename = IDEDiffRequest.change(
+            path: "/repo/moved.txt", relativePath: "moved.txt", staged: false, isNew: false, sourcePath: "old.txt"
+        )
+        XCTAssertEqual(rename.revisionPaths, ["old.txt", "moved.txt"])
+        var renameLoads = 0
+        let renameSession = IDEDiffSession(request: rename, siblings: [])
+        renameSession.loadContent = { _ in
+            renameLoads += 1
+            return .text("line\n")
+        }
+        var plainLoads = 0
+        let plainSession = IDEDiffSession(request: request(title: "plain"), siblings: [])
+        plainSession.loadContent = { _ in
+            plainLoads += 1
+            return .text("a")
+        }
+        store.register(renameSession, for: UUID())
+        store.register(plainSession, for: UUID())
+
+        store.reload(relativePaths: ["moved.txt"])
+        await waitForCondition("the rename tab reloads from the new path") { renameLoads >= 2 }
+        store.reload(relativePaths: ["old.txt"])
+        await waitForCondition("the rename tab reloads from the old path") { renameLoads >= 4 }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(plainLoads, 0, "a comparison with no revision path stays put")
+    }
 }

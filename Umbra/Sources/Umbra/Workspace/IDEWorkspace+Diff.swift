@@ -25,17 +25,9 @@ extension IDEWorkspace {
     }
 
     /// A row of the Changes list: index ↔ working tree when unstaged, HEAD ↔ index when staged.
-    /// Previous/Next File walk the rows of the same section.
+    /// Previous/Next File walk the rows of the same section. The sidebar preview builds this same request.
     func openChangeDiff(path: String, staged: Bool) {
-        let section = gitStatus.changes.filter { staged ? $0.staged != nil : $0.unstaged != nil }
-        let requests = section.map { change in
-            IDEDiffRequest.change(
-                path: change.path,
-                relativePath: change.relativePath,
-                staged: staged,
-                isNew: staged ? change.staged == .added : change.unstaged == .untracked
-            )
-        }
+        let requests = IDEGitChangeDiff.requests(in: gitStatus.changes, staged: staged)
         guard let request = requests.first(where: { $0.filePath == path }) else { return }
         openDiff(request, siblings: requests)
     }
@@ -141,15 +133,21 @@ extension IDEWorkspace {
 
     // MARK: - Sessions
 
-    /// A session for a viewer that is not a tab: the History pane's. Nothing retitles, and it keeps
-    /// its own options (unified until the user picks another layout).
-    func makeEmbeddedDiffSession(_ request: IDEDiffRequest, siblings: [IDEDiffRequest]) -> IDEDiffSession {
+    /// A session for a viewer that is not a tab. Nothing retitles. History passes `embeddedPrefix`
+    /// and starts unified; the Changes preview passes `changesPrefix` and starts side-by-side.
+    /// The caller reloads this session: it is not registered in `IDEDiffSessionStore`.
+    func makeEmbeddedDiffSession(
+        _ request: IDEDiffRequest,
+        siblings: [IDEDiffRequest],
+        settingsPrefix: String = IDEDiffSettings.embeddedPrefix,
+        defaultLayout: IDEDiffLayout = .unified
+    ) -> IDEDiffSession {
         makeDiffSession(
             request,
             siblings: siblings,
             documentID: nil,
-            settings: .load(prefix: IDEDiffSettings.embeddedPrefix, defaultLayout: .unified),
-            settingsPrefix: IDEDiffSettings.embeddedPrefix
+            settings: .load(prefix: settingsPrefix, defaultLayout: defaultLayout),
+            settingsPrefix: settingsPrefix
         )
     }
 

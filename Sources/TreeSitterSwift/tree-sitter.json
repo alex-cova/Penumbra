@@ -1,0 +1,20 @@
+{
+  "grammars": [
+    {
+      "name": "swift",
+      "camelcase": "Swift",
+      "scope": "source.swift",
+      "path": ".",
+      "file-types": ["swift"],
+      "injection-regex": "^swift$"
+    }
+  ],
+  "metadata": {
+    "version": "0.7.4",
+    "license": "MIT",
+    "description": "Swift grammar used by Penumbra, with local patches recorded in VERSION",
+    "links": {
+      "repository": "https://github.com/alex-pinkus/tree-sitter-swift"
+    }
+  }
+}

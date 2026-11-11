@@ -42,8 +42,9 @@ cd Penumbra
 ./run.sh                      # build and run Umbra (swift run --package-path Umbra Umbra)
 ```
 
-Run Java features against a real JDK if you have one; tests that need a JDK, or the JaCoCo
-jars (`Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh` downloads them), skip when it is missing.
+Run Java features against a real JDK if you have one; tests that need a JDK skip when it is
+missing. Coverage tests run `Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh` themselves (pinned jars,
+SHA-256 checked, not committed). That download needs a network the first time.
 
 ## Building and testing
 

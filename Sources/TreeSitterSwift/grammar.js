@@ -199,6 +199,18 @@ module.exports = grammar({
     [$._lambda_type_declaration, $._attributed_macro, $._local_property_declaration, $._local_typealias_declaration, $._local_function_declaration, $._local_class_declaration],
     [$._attributed_macro, $._local_property_declaration, $._local_typealias_declaration, $._local_function_declaration, $._local_class_declaration],
     [$._attributed_macro, $._local_property_declaration, $._local_typealias_declaration, $._local_function_declaration, $._local_class_declaration, $.computed_getter, $.computed_modify, $.computed_setter],
+    // `{ @attr` inside `switch expr {` can be a case attribute (`@unknown default`) or the
+    // start of a closure / local declaration. A case does not take visibility modifiers, so
+    // `open.append` stays a statement.
+    [
+      $._lambda_type_declaration,
+      $.switch_entry,
+      $._attributed_macro,
+      $._local_property_declaration,
+      $._local_typealias_declaration,
+      $._local_function_declaration,
+      $._local_class_declaration,
+    ],
     // `(T, U).self` and `{ (a, b) in` share a prefix. Keep both until `.self` or `in`.
     [$._simple_user_type, $._expression, $.lambda_parameter],
   ],
@@ -316,6 +328,8 @@ module.exports = grammar({
         "lazy",
         "repeat",
         "package",
+        // `open` is contextual: `open class` is a modifier, `open.append` is a variable.
+        "open",
         "unsafe",
         $._parameter_ownership_modifier
       ),
@@ -1233,9 +1247,11 @@ module.exports = grammar({
           "}"
         )
       ),
+    // Only attributes. Visibility and member modifiers are not legal on a case label;
+    // allowing them makes `open.append` inside a case look like the next case.
     switch_entry: ($) =>
       seq(
-        optional($.modifiers),
+        repeat($.attribute),
         choice(
           seq(
             "case",
@@ -2179,7 +2195,12 @@ module.exports = grammar({
       choice(
         $.ownership_modifier,
         $.inheritance_modifier,
-        $.property_behavior_modifier
+        $.property_behavior_modifier,
+        // `nonisolated(unsafe)` is legal on a local variable (SE-0434) and
+        // `nonisolated(nonsending)` on a local function (SE-0461). Same node as a member.
+        // Lower precedence than `member_modifier`, which also matches this token
+        // wherever `modifiers` allows both.
+        prec(1, alias($._isolation_modifier, $.member_modifier))
       ),
     property_behavior_modifier: ($) => "lazy",
     type_modifiers: ($) => repeat1($.attribute),
@@ -2190,10 +2211,12 @@ module.exports = grammar({
         "required",
         // `nonisolated` may optionally take a parenthesized argument: `nonisolated(unsafe)`
         // (SE-0414-style escape hatch) or `nonisolated(nonsending)` (SE-0461).
-        seq(
-          "nonisolated",
-          optional(seq("(", choice("unsafe", "nonsending"), ")"))
-        )
+        prec(2, $._isolation_modifier)
+      ),
+    _isolation_modifier: ($) =>
+      seq(
+        "nonisolated",
+        optional(seq("(", choice("unsafe", "nonsending"), ")"))
       ),
     visibility_modifier: ($) =>
       seq(

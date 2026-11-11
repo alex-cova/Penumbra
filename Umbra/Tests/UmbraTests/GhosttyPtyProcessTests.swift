@@ -142,6 +142,65 @@ final class GhosttyPtyProcessTests: XCTestCase {
         XCTAssertTrue(waitForOutput(sink, containing: "xterm-256color"))
     }
 
+    /// The host's TERM describes the host, not this PTY. `dumb` (what a
+    /// non-interactive agent shell exports) must not become the child's TERM.
+    func testTermIgnoresAnInheritedDumbTerminal() {
+        assertTerm(
+            parent: ["TERM": "dumb", "COLORTERM": "24bit"],
+            environment: [:],
+            expecting: "TERM=xterm-256color COLORTERM=truecolor"
+        )
+    }
+
+    func testTermDefaultsWhenTheParentDoesNotSetOne() {
+        assertTerm(
+            parent: [:],
+            environment: [:],
+            expecting: "TERM=xterm-256color COLORTERM=truecolor"
+        )
+    }
+
+    func testTermHonorsAnExplicitOverride() {
+        assertTerm(
+            parent: ["TERM": "dumb", "COLORTERM": "truecolor"],
+            environment: ["TERM": "xterm-kitty", "COLORTERM": "24bit"],
+            expecting: "TERM=xterm-kitty COLORTERM=24bit"
+        )
+    }
+
+    func testAnEmptyTermOverrideFallsBackToTheDefault() {
+        assertTerm(
+            parent: ["TERM": "dumb"],
+            environment: ["TERM": "", "COLORTERM": ""],
+            expecting: "TERM=xterm-256color COLORTERM=truecolor"
+        )
+    }
+
+    private func assertTerm(
+        parent: [String: String],
+        environment: [String: String],
+        expecting: String
+    ) {
+        let sink = Sink()
+        let process = GhosttyPtyProcess()
+        process.onOutput = { [weak sink] in sink?.append($0) }
+        process.onExit = { [weak sink] in sink?.recordExit($0) }
+        var parentEnvironment = shellEnv.merging(parent) { _, override in override }
+        parentEnvironment["PATH"] = parentEnvironment["PATH"] ?? "/bin:/usr/bin"
+        let childEnvironment = shellEnv.merging(environment) { _, override in override }
+        let started = process.start(
+            executable: "/bin/zsh",
+            execName: "-zsh",
+            currentDirectory: workdir!,
+            environment: childEnvironment,
+            parentEnvironment: parentEnvironment
+        )
+        XCTAssertTrue(started, "shell must spawn")
+        defer { process.terminate() }
+        process.write(Data("printf 'TERM=%s COLORTERM=%s\\n' \"$TERM\" \"$COLORTERM\"\r".utf8))
+        XCTAssertTrue(waitForOutput(sink, containing: expecting), "expected \(expecting)")
+    }
+
     func testStdinIsATty() {
         let sink = Sink()
         let process = startedProcess(sink: sink)

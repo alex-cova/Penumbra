@@ -5470,6 +5470,10 @@
           "named": true
         },
         {
+          "type": "member_modifier",
+          "named": true
+        },
+        {
           "type": "modifiers",
           "named": true
         },
@@ -13076,6 +13080,10 @@
         },
         {
           "type": "inheritance_modifier",
+          "named": true
+        },
+        {
+          "type": "member_modifier",
           "named": true
         },
         {
@@ -22845,6 +22853,10 @@
           "named": true
         },
         {
+          "type": "member_modifier",
+          "named": true
+        },
+        {
           "type": "modifiers",
           "named": true
         },
@@ -26649,6 +26661,10 @@
           "named": true
         },
         {
+          "type": "attribute",
+          "named": true
+        },
+        {
           "type": "await_expression",
           "named": true
         },
@@ -26762,10 +26778,6 @@
         },
         {
           "type": "macro_invocation",
-          "named": true
-        },
-        {
-          "type": "modifiers",
           "named": true
         },
         {
@@ -30147,6 +30159,10 @@
         },
         {
           "type": "inheritance_modifier",
+          "named": true
+        },
+        {
+          "type": "member_modifier",
           "named": true
         },
         {

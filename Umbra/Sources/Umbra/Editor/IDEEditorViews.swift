@@ -417,6 +417,7 @@ struct IDEEditorPaneView: View {
             IDELargeFileBanner(paneID: paneID)
 
             IDEExternalChangeBanner(paneID: paneID)
+            IDEGitConflictBanner(paneID: paneID)
 
             IDETextViewRepresentable(paneID: paneID, workspace: workspace)
                 .overlay(alignment: .topTrailing) { IDEInspectionWidget(paneID: paneID) }

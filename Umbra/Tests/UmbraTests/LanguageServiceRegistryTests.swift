@@ -369,9 +369,9 @@ final class LanguageServiceRegistryTests: XCTestCase {
     @MainActor
     func testUmbraRegistryOptsOutOfTheSameGenericFeaturesAsBefore() {
         let languages = IDEIntelligenceServices().languages
-        XCTAssertEqual(languages.identifiers(disabling: .snippets), ["http", "java", "javascript", "swift", "typescript"])
-        XCTAssertEqual(languages.identifiers(disabling: .symbolHover), ["java", "javascript", "swift", "typescript"])
-        XCTAssertEqual(languages.identifiers(disabling: .symbolNavigation), ["java", "javascript", "swift", "typescript"])
+        XCTAssertEqual(languages.identifiers(disabling: .snippets), ["http", "java", "javascript", "python", "swift", "typescript"])
+        XCTAssertEqual(languages.identifiers(disabling: .symbolHover), ["java", "javascript", "python", "swift", "typescript"])
+        XCTAssertEqual(languages.identifiers(disabling: .symbolNavigation), ["java", "javascript", "python", "swift", "typescript"])
         XCTAssertEqual(languages.identifiers(disabling: .duplicateSymbolDiagnostics), ["http", "swift"])
     }
 
@@ -379,18 +379,18 @@ final class LanguageServiceRegistryTests: XCTestCase {
     func testUmbraRegistryKeepsTheEngineProviderOrder() {
         let languages = IDEIntelligenceServices().languages
         XCTAssertEqual(
-            languages.completionProviders.map(\.name), ["java", "javascript", "typescript", "swift", "markdown", "sql", "http"],
+            languages.completionProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python", "markdown", "sql", "http"],
             "one tiered completion provider per language, in registration order"
         )
         XCTAssertEqual(
-            languages.hoverProviders.map(\.name), ["java", "javascript", "typescript", "swift", "http"],
+            languages.hoverProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python", "http"],
             "`.http` adds the state of a `###@scheme:` line"
         )
         XCTAssertEqual(
-            languages.diagnosticProviders.map(\.name), ["java", "javascript", "typescript", "swift"],
+            languages.diagnosticProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"],
             "Java's javac and inspection providers share one tiered provider"
         )
-        XCTAssertEqual(languages.navigationProviders.map(\.name), ["java", "javascript", "typescript", "swift"])
+        XCTAssertEqual(languages.navigationProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"])
     }
 
     @MainActor

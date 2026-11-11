@@ -54,7 +54,9 @@ final class IDEHTTPDeleteSelectionTests: XCTestCase {
         try await Task.sleep(nanoseconds: 800_000_000)
         XCTAssertEqual(textView.text as String, String(request.dropFirst(3)))
         XCTAssertEqual(textView.selectedRange, NSRange(location: 0, length: 0))
+        #if DEBUG
         XCTAssertTrue(textView.selectionRectsForTesting.isEmpty)
+        #endif
         XCTAssertEqual(textView.emphasisManager.getEmphases(for: EmphasisGroup.occurrences), [])
     }
 }

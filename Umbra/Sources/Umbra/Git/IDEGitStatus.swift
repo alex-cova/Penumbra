@@ -18,6 +18,10 @@ struct IDEGitChange: Identifiable, Equatable, Sendable {
     var unstaged: IDEGitFileStatus?
     /// The old path of a rename or copy. Nil for every other change.
     var originalPath: String? = nil
+    /// Porcelain index code. The explorer tint in `staged` collapses `D`, `R`, and `C`.
+    var indexCode: Character = " "
+    /// Porcelain work-tree code. The row's letter is read from this, not from `unstaged`.
+    var worktreeCode: Character = " "
 
     var id: String { path }
 }
@@ -54,7 +58,12 @@ final class IDEGitStatusModel {
     private(set) var dirtyDirectories: Set<String> = []
     private(set) var currentBranch: String?
     private(set) var changes: [IDEGitChange] = []
-    private(set) var diffText: String?
+    /// Absolute path to that path's change. Rebuilt only when `changes` changes, so an explorer
+    /// row can speak Deleted or Renamed with a dictionary lookup.
+    private(set) var changeByPath: [String: IDEGitChange] = [:]
+    /// Absolute paths in conflict, from the same snapshot as `changes`. The editor banner reads
+    /// this set. It does not call `status(for:)` and it does not scan the buffer.
+    private(set) var conflictedPaths: Set<String> = []
     private(set) var commits: [IDEGitCommit] = []
     private(set) var commitDetailText: String?
     /// The files the selected commit changed (all of them, also in a file's history).
@@ -77,6 +86,9 @@ final class IDEGitStatusModel {
     var historyPathFilter = ""
     /// How many commits the log asks for; "Load more" raises it.
     private(set) var historyLimit = 300
+    /// True after a history load for the current list has applied. False until then, and again
+    /// when the list is cleared, so an empty log says "Loading history…" instead of "No commits".
+    private(set) var historyDidLoad = false
     /// Every selected commit in the Log (⌘/⇧-click); `selectedCommitHash` is the primary one.
     var selectedCommitHashes: Set<String> = []
     /// Where ⇧-click and ⇧-arrow ranges start. Unlike `selectedCommitHash` (the commit whose detail
@@ -123,10 +135,16 @@ final class IDEGitStatusModel {
     /// Inspects the given staged Java and Swift files for the commit check ("Analyze Code"); set by the window,
     /// which owns the Java index and the inspection profile.
     @ObservationIgnored var codeAnalysisProvider: (@MainActor (_ files: [URL]) async -> IDEGitCommitFacts.CodeAnalysis?)?
-    /// The row that drives the diff. It is always a member of `selectedChangePaths` when set.
-    var selectedChangePath: String?
-    /// Every selected row, for actions that take several files (Revert…).
-    private(set) var selectedChangePaths: Set<String> = []
+    /// The Changes selection. One owner: the repository root, the section (the side), and the path.
+    private var changeSelection = IDEGitChangeSelection()
+    /// The row that drives the diff. It is always a member of `selectedChanges` when set.
+    var selectedChange: IDEGitListedChange? { changeSelection.primary }
+    /// Every selected row. A path in two sections is two rows.
+    var selectedChanges: Set<IDEGitListedChange> { changeSelection.rows }
+    /// The primary row's path. Actions that take files use `selectedChangePaths`.
+    var selectedChangePath: String? { changeSelection.primary?.path }
+    /// The paths of the selected rows, one entry when both sections of a file are selected.
+    var selectedChangePaths: Set<String> { changeSelection.paths }
     var selectedCommitHash: String?
     var isRepository: Bool { repositoryRoot != nil }
     var repositoryRootPath: String? { repositoryRoot }
@@ -177,7 +195,6 @@ final class IDEGitStatusModel {
     @ObservationIgnored private var ignoredTask: Task<Void, Never>?
     @ObservationIgnored private var syncTask: Task<Void, Never>?
     @ObservationIgnored private var pendingInvalidations: Set<String> = []
-    @ObservationIgnored private var diffTask: Task<Void, Never>?
     @ObservationIgnored private var mutationTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var networkBusyCount = 0
     @ObservationIgnored private var historyTask: Task<Void, Never>?
@@ -215,8 +232,6 @@ final class IDEGitStatusModel {
         ignoredTask = nil
         syncTask?.cancel()
         syncTask = nil
-        diffTask?.cancel()
-        diffTask = nil
         for task in mutationTasks.values { task.cancel() }
         mutationTasks.removeAll()
         networkBusyCount = 0
@@ -239,6 +254,7 @@ final class IDEGitStatusModel {
         pendingInvalidations = []
         publishGitDirectory(nil)
         commits = []
+        historyDidLoad = false
         selectedCommitHash = nil
         commitSelectionAnchor = nil
         selectedCommitFile = nil
@@ -250,9 +266,7 @@ final class IDEGitStatusModel {
         authorsStale = true
         rootURL = url?.standardizedFileURL
         commitMessage = ""
-        selectedChangePath = nil
-        selectedChangePaths = []
-        diffText = nil
+        changeSelection = IDEGitChangeSelection()
         actionStatus = ""
         actionFailed = false
         apply(GitSnapshot())
@@ -350,6 +364,7 @@ final class IDEGitStatusModel {
         refreshedRelativePaths = []
         pendingInvalidations = []
         apply(GitSnapshot())
+        changeSelection = IDEGitChangeSelection()
         refreshState = .unavailable
         publishGitDirectory(nil)
         onRefreshed?()
@@ -361,6 +376,9 @@ final class IDEGitStatusModel {
         infos: [GitBranch], epoch: UInt64, token: UUID
     ) {
         let oldPaths = Set(changes.map(\.relativePath))
+        // Captured before `apply` replaces `changes`. An unstaged rename's tab is keyed by the
+        // old path, which is gone from the next snapshot once the rename is committed or reverted.
+        let previousOriginalPaths = changes.compactMap(\.originalPath)
         let headChanged = state.head != repositoryState.head
         repository = repo
         publishGitDirectory(repo.gitDirectory)
@@ -369,6 +387,9 @@ final class IDEGitStatusModel {
         apply(published)
         headMoved = headChanged
         var affected = Set(published.changes.map(\.relativePath)).symmetricDifference(oldPaths)
+        // A rename's diff reads the old path as well as the new one.
+        for path in previousOriginalPaths where !path.isEmpty { affected.insert(path) }
+        for path in published.changes.compactMap(\.originalPath) where !path.isEmpty { affected.insert(path) }
         affected.formUnion(relativeInvalidations(repositoryRoot: repo.root.standardizedFileURL.path))
         if let selected = selectedChangePath, let relative = relativePath(for: selected) {
             affected.insert(relative)
@@ -382,13 +403,10 @@ final class IDEGitStatusModel {
         workspaceSnapshot = workspace
         refreshState = .idle(workspace)
         lastAppliedRefreshEpoch = epoch
-        let remaining = Set(published.changes.map(\.path))
-        selectedChangePaths.formIntersection(remaining)
-        if let selected = selectedChangePath, !remaining.contains(selected) {
-            selectChange(selectedChangePaths.sorted().first)
-        } else if let selected = selectedChangePath {
-            loadDiff(for: selected)
-        }
+        changeSelection = changeSelection.reconciled(
+            with: IDEGitChangeRows.listed(in: changes),
+            repositoryRoot: published.repositoryRoot
+        )
         offerCommitTemplate()
         if historyStale {
             historyStale = false
@@ -503,6 +521,7 @@ final class IDEGitStatusModel {
         historyFilePath = path
         selectCommit(nil)
         commits = []
+        historyDidLoad = false
         loadHistory()
     }
 
@@ -527,12 +546,14 @@ final class IDEGitStatusModel {
         historyFilePath = nil
         selectCommit(nil)
         commits = []
+        historyDidLoad = false
         loadHistory()
     }
 
     func loadHistory(debounced: Bool = false) {
         guard let rootURL else { return }
         historyTask?.cancel()
+        if commits.isEmpty { historyDidLoad = false }
         let branch = historyBranch
         let author = historyAuthor
         let search = historySearch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -561,6 +582,7 @@ final class IDEGitStatusModel {
                 if loaded.history.authors != self.authors { self.authors = loaded.history.authors }
             }
             if commits != self.commits { self.commits = commits }
+            self.historyDidLoad = true
             if let selected = self.selectedCommitHash, !commits.contains(where: { $0.hash == selected }) {
                 self.selectCommit(nil)
             }
@@ -596,60 +618,103 @@ final class IDEGitStatusModel {
         }
     }
 
+    func selectChange(row: IDEGitListedChange) {
+        changeSelection = changeSelection.selecting(row, repositoryRoot: repositoryRoot)
+    }
+
+    /// Replaces the selection with one path. A path that is already the primary row keeps its
+    /// section. Otherwise the first listed section wins (conflict, then staged, then unstaged).
     func selectChange(_ path: String?) {
-        selectedChangePath = path
-        selectedChangePaths = path.map { [$0] } ?? []
-        loadDiff(for: path)
+        guard let path else {
+            changeSelection = changeSelection.selecting(nil, repositoryRoot: repositoryRoot)
+            return
+        }
+        selectChange(row: row(forPath: path))
     }
 
     /// Arrow keys in the Changes list: one row, replacing the selection. `visible` is display order.
+    func moveChangeSelection(by delta: Int, in visible: [IDEGitListedChange]) {
+        guard let next = IDEListNeighbor.move(changeSelection.primary, in: visible, by: delta) else { return }
+        selectChange(row: next)
+    }
+
     func moveChangeSelection(by delta: Int, in visible: [String]) {
-        guard let next = IDEListNeighbor.move(selectedChangePath, in: visible, by: delta) else { return }
-        selectChange(next)
+        moveChangeSelection(by: delta, in: visible.map { row(forPath: $0) })
     }
 
-    /// ⌘-click: adds or removes one row, keeping the others.
+    /// ⌘-click: adds or removes one row, keeping the others. The other section of the same path stays.
+    func toggleChangeSelection(row: IDEGitListedChange) {
+        changeSelection = changeSelection.toggling(row)
+    }
+
     func toggleChangeSelection(_ path: String) {
-        if selectedChangePaths.remove(path) != nil {
-            if selectedChangePath == path {
-                selectedChangePath = selectedChangePaths.sorted().first
-                loadDiff(for: selectedChangePath)
-            }
-        } else {
-            selectedChangePaths.insert(path)
-            selectedChangePath = path
-            loadDiff(for: path)
-        }
-    }
-
-    /// ⇧-click: selects the rows of `visible` (a list in display order) from the primary row to `path`.
-    func extendChangeSelection(to path: String, in visible: [String]) {
-        guard let anchor = selectedChangePath, let from = visible.firstIndex(of: anchor),
-              let to = visible.firstIndex(of: path) else {
-            selectChange(path)
+        if let existing = changeSelection.rows.first(where: { $0.path == path }) {
+            toggleChangeSelection(row: existing)
             return
         }
-        selectedChangePaths.formUnion(visible[min(from, to)...max(from, to)])
-        selectedChangePath = path
-        loadDiff(for: path)
+        toggleChangeSelection(row: row(forPath: path))
+    }
+
+    /// ⇧-click or ⇧-arrow. `visible` is the range that may grow: one section, or the whole list.
+    func extendChangeSelection(to row: IDEGitListedChange, in visible: [IDEGitListedChange]) {
+        changeSelection = changeSelection.extending(to: row, in: visible)
+    }
+
+    func extendChangeSelection(to path: String, in visible: [String]) {
+        extendChangeSelection(to: row(forPath: path), in: visible.map { row(forPath: $0) })
+    }
+
+    /// The listed row for `path`, or an unstaged row when status has not arrived yet.
+    private func row(forPath path: String) -> IDEGitListedChange {
+        let listed = IDEGitChangeRows.listed(in: changes)
+        if let current = changeSelection.primary, current.path == path, listed.isEmpty || listed.contains(current) {
+            return current
+        }
+        let section = listed.first { $0.path == path }?.section ?? .unstaged
+        return IDEGitListedChange(section: section, path: path)
     }
 
     func stage(path: String) {
-        guard let relative = relativePath(for: path) else { return }
-        runGitAction { try await $0.stage(paths: [relative]); return "" }
+        stage(paths: [path])
+    }
+
+    /// Stages every absolute path that still has an unstaged side, as one command.
+    func stage(paths: [String]) {
+        let relative = relativePaths(paths, keeping: { $0.unstaged != nil && $0.unstaged != .conflicted })
+        guard !relative.isEmpty else { return }
+        runGitAction({ try await $0.stage(paths: relative); return "" }, activity: "Staging…")
     }
 
     func unstage(path: String) {
-        guard let relative = relativePath(for: path) else { return }
-        runGitAction { try await $0.unstage(paths: [relative]); return "" }
+        unstage(paths: [path])
+    }
+
+    /// Unstages every absolute path that has a staged side, as one command.
+    func unstage(paths: [String]) {
+        let relative = relativePaths(paths, keeping: { $0.staged != nil && $0.staged != .conflicted })
+        guard !relative.isEmpty else { return }
+        runGitAction({ try await $0.unstage(paths: relative); return "" }, activity: "Unstaging…")
     }
 
     func stageAll() {
-        runGitAction { try await $0.stageAll(); return "" }
+        runGitAction({ try await $0.stageAll(); return "" }, activity: "Staging…")
     }
 
     func unstageAll() {
-        runGitAction { try await $0.unstageAll(); return "" }
+        runGitAction({ try await $0.unstageAll(); return "" }, activity: "Unstaging…")
+    }
+
+    /// Absolute paths in `paths` that are changes and pass `keeping`, as repository-relative paths.
+    private func relativePaths(_ paths: [String], keeping: (IDEGitChange) -> Bool) -> [String] {
+        let byPath = Dictionary(changes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = Set<String>()
+        var relative: [String] = []
+        for path in paths {
+            guard seen.insert(path).inserted, let change = byPath[path], keeping(change) else { continue }
+            guard let rel = relativePath(for: path) else { continue }
+            relative.append(rel)
+        }
+        return relative
     }
 
     /// Commit with the options in `commitOptions`, after the pre-commit checks.
@@ -698,7 +763,7 @@ final class IDEGitStatusModel {
                 line += "; skipped \(result.skipped.count) not in the last commit"
             }
             return line
-        }, onSuccess: { then?(outcome.value) }, onFailure: onFailure)
+        }, activity: "Discarding…", onSuccess: { then?(outcome.value) }, onFailure: onFailure)
     }
 
     func revert(path: String, then: (@MainActor () -> Void)? = nil, onFailure: (@MainActor (String) -> Void)? = nil) {
@@ -748,6 +813,20 @@ final class IDEGitStatusModel {
         return nil
     }
 
+    /// The change row for an absolute path, if the last snapshot has one.
+    func change(for url: URL) -> IDEGitChange? {
+        changeByPath[url.standardizedFileURL.path]
+    }
+
+    /// What VoiceOver reads for an explorer row. Folders use the collapsed noun. A file with a
+    /// change row uses that row's porcelain noun.
+    func explorerNoun(for url: URL, isDirectory: Bool) -> String? {
+        IDEGitExplorerNoun.spoken(
+            status: status(for: url, isDirectory: isDirectory),
+            change: isDirectory ? nil : change(for: url)
+        )
+    }
+
     private func apply(_ snapshot: GitSnapshot) {
         if snapshot.statuses != statuses { statuses = snapshot.statuses }
         if snapshot.dirtyDirectories != dirtyDirectories { dirtyDirectories = snapshot.dirtyDirectories }
@@ -755,7 +834,13 @@ final class IDEGitStatusModel {
         if snapshot.currentBranch != currentBranch { currentBranch = snapshot.currentBranch }
         if snapshot.localBranches != localBranches { localBranches = snapshot.localBranches }
         if snapshot.branchInfos != branchInfos { branchInfos = snapshot.branchInfos }
-        if snapshot.changes != changes { changes = snapshot.changes }
+        if snapshot.changes != changes {
+            changes = snapshot.changes
+            changeByPath = Self.index(changes: snapshot.changes)
+            conflictedPaths = Set(snapshot.changes.lazy.compactMap { change in
+                change.staged == .conflicted || change.unstaged == .conflicted ? change.path : nil
+            })
+        }
         if snapshot.sync != sync { sync = snapshot.sync }
         if snapshot.state != repositoryState { repositoryState = snapshot.state }
     }
@@ -779,21 +864,6 @@ final class IDEGitStatusModel {
                 return
             }
             proceed()
-        }
-    }
-
-    private func loadDiff(for path: String?) {
-        diffTask?.cancel()
-        guard let path, let rootURL else {
-            diffText = nil
-            return
-        }
-        let change = changes.first(where: { $0.path == path })
-        let existing = repository
-        diffTask = Task { [weak self] in
-            let text = await Self.loadDiff(root: rootURL, existing: existing, path: path, change: change)
-            guard let self, !Task.isCancelled, self.selectedChangePath == path else { return }
-            self.diffText = text
         }
     }
 
@@ -878,6 +948,7 @@ final class IDEGitStatusModel {
         _ action: @escaping @Sendable (GitRepository) async throws -> String,
         network: Bool = false,
         credentials: Bool = false,
+        activity: String? = nil,
         onSuccess: (@MainActor () -> Void)? = nil,
         onFailure: (@MainActor (String) -> Void)? = nil
     ) {
@@ -888,7 +959,8 @@ final class IDEGitStatusModel {
         }
         busyCount += 1
         isBusy = true
-        actionStatus = ""
+        let activityCaption = activity
+        actionStatus = activityCaption ?? ""
         actionFailed = false
         let existing = repository
         let runner = gitRunner
@@ -931,6 +1003,8 @@ final class IDEGitStatusModel {
                     self.actionStatus = line
                     self.actionFailed = false
                     onActionReport?(line, false)
+                } else if let activityCaption, self.actionStatus == activityCaption {
+                    self.actionStatus = ""
                 }
                 onSuccess?()
                 self.refresh()
@@ -953,9 +1027,7 @@ final class IDEGitStatusModel {
     /// What a successful commit leaves behind in the panel.
     func resetAfterCommit() {
         commitMessage = ""
-        selectedChangePath = nil
-        selectedChangePaths = []
-        diffText = nil
+        changeSelection = changeSelection.selecting(nil, repositoryRoot: repositoryRoot)
         commitOptions.amend = false
         commitOptions.pushAfter = false
     }
@@ -1136,27 +1208,6 @@ final class IDEGitStatusModel {
         return (try? await repo.show(hash: hash)) ?? "Could not load commit."
     }
 
-    nonisolated private static func loadDiff(root: URL, existing: GitRepository?, path: String, change: IDEGitChange?) async -> String {
-        guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing) else {
-            return "Could not resolve path for diff."
-        }
-        let toplevel = repo.root.standardizedFileURL.path
-        guard let relative = IDEGitSupport.relativePath(for: path, repositoryRoot: toplevel) else {
-            return "Could not resolve path for diff."
-        }
-        var sections: [String] = []
-        if change?.unstaged != nil, let diff = try? await repo.unstagedDiff(path: relative), !diff.isEmpty {
-            sections.append("--- Unstaged changes ---\n\(diff)")
-        }
-        if change?.staged != nil, let diff = try? await repo.stagedDiff(path: relative), !diff.isEmpty {
-            sections.append("--- Staged changes ---\n\(diff)")
-        }
-        if sections.isEmpty {
-            return "No diff available."
-        }
-        return sections.joined(separator: "\n\n")
-    }
-
     nonisolated static func parse(entries: [GitStatusEntry], toplevel: String, branch: String?) -> GitSnapshot {
         var snapshot = GitSnapshot(repositoryRoot: toplevel, currentBranch: branch)
         var changeMap: [String: IDEGitChange] = [:]
@@ -1182,7 +1233,9 @@ final class IDEGitStatusModel {
                             relativePath: relative,
                             staged: staged,
                             unstaged: unstaged,
-                            originalPath: entry.originalPath
+                            originalPath: entry.originalPath,
+                            indexCode: entry.indexCode,
+                            worktreeCode: entry.worktreeCode
                         )
                     }
                 }
@@ -1192,6 +1245,13 @@ final class IDEGitStatusModel {
             $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
         }
         return snapshot
+    }
+
+    nonisolated private static func index(changes: [IDEGitChange]) -> [String: IDEGitChange] {
+        var index: [String: IDEGitChange] = [:]
+        index.reserveCapacity(changes.count)
+        for change in changes { index[change.path] = change }
+        return index
     }
 
     nonisolated private static func statusFromIndexChar(_ char: Character) -> IDEGitFileStatus? {

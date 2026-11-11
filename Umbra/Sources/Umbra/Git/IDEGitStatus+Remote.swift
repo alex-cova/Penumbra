@@ -164,7 +164,7 @@ extension IDEGitStatusModel {
     }
 
     func switchToLocal(_ name: String) {
-        runGitAction({ try await $0.switchBranch(name) }, onSuccess: { [weak self] in
+        runGitAction({ try await $0.switchBranch(name) }, activity: "Switching branch…", onSuccess: { [weak self] in
             self?.onWorkingTreeChanged?()
         }, onFailure: { [weak self] message in
             self?.offerSmartCheckout(branch: name, isRemote: false, message: message)

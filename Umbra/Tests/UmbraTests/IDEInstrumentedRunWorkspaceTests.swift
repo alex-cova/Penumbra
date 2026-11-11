@@ -5,7 +5,8 @@ import XCTest
 @testable import Umbra
 
 /// Run with Coverage and Profile through a real `IDEWorkspace`, a real JDK and the real JaCoCo and
-/// `jfr` tools. Skipped without a JDK, and (coverage) without the jars `fetch.sh` downloads.
+/// `jfr` tools. Skipped without a JDK. Coverage fetches the pinned jars with `fetch.sh` when they
+/// are not already in the source tree (`build/` is not committed).
 @MainActor
 final class IDEInstrumentedRunWorkspaceTests: XCTestCase {
     private var base: URL!
@@ -13,6 +14,7 @@ final class IDEInstrumentedRunWorkspaceTests: XCTestCase {
     private var workspace: IDEWorkspace!
 
     override func setUpWithError() throws {
+        try Self.ensureJaCoCoJars()
         IDEWorkspace.isSessionPersistenceEnabled = false
         base = FileManager.default.temporaryDirectory.appendingPathComponent("instr-workspace-\(UUID().uuidString)", isDirectory: true)
             .resolvingSymlinksInPath()
@@ -33,6 +35,26 @@ final class IDEInstrumentedRunWorkspaceTests: XCTestCase {
         IDEJavaRunProvider.artifactsRootOverride = nil
         IDEWorkspace.isSessionPersistenceEnabled = true
         try? FileManager.default.removeItem(at: base)
+    }
+
+    /// Downloads the pinned agent and CLI when `build/` does not already hold them.
+    /// `fetch.sh` checks the SHA-256 and is a no-op once the jars match.
+    nonisolated private static func ensureJaCoCoJars() throws {
+        let script = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Umbra/Tools/JaCoCo/fetch.sh")
+        var request = SubprocessRequest(executable: "/bin/bash", arguments: [script.path])
+        request.timeout = .seconds(180)
+        let result = try SubprocessRunner.runBlocking(request)
+        guard result.exit.succeeded else {
+            struct FetchFailed: Error, CustomStringConvertible {
+                var description: String
+            }
+            let output = result.stderr.text.isEmpty ? result.stdout.text : result.stderr.text
+            throw FetchFailed(description: "JaCoCo fetch.sh failed: \(output)")
+        }
     }
 
     private func requireJDK() throws -> JDKInstallation {
