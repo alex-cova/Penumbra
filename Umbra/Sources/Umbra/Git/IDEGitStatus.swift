@@ -16,6 +16,8 @@ struct IDEGitChange: Identifiable, Equatable, Sendable {
     let relativePath: String
     var staged: IDEGitFileStatus?
     var unstaged: IDEGitFileStatus?
+    /// The old path of a rename or copy. Nil for every other change.
+    var originalPath: String? = nil
 
     var id: String { path }
 }
@@ -128,6 +130,22 @@ final class IDEGitStatusModel {
     var selectedCommitHash: String?
     var isRepository: Bool { repositoryRoot != nil }
     var repositoryRootPath: String? { repositoryRoot }
+    /// The latest status attempt. A failure keeps the previous snapshot. Cancellation does not change this.
+    private(set) var refreshState: GitRefreshState = .unavailable
+    /// Git's message when the latest status failed. Nil after a success, and nil when the folder is not a repository.
+    var refreshError: String? { refreshState.failureMessage }
+    /// The snapshot from the last successful status. Nil until one succeeds, and nil when the folder is not a repository.
+    private(set) var workspaceSnapshot: GitWorkspaceSnapshot?
+    /// Bumped when a refresh is requested, a mutation starts, or the root changes.
+    /// A load applies only when this is still the value it captured.
+    private(set) var refreshEpoch: UInt64 = 0
+    /// The epoch of the snapshot now showing. Older loads record ``lastDroppedRefreshEpoch`` instead.
+    private(set) var lastAppliedRefreshEpoch: UInt64 = 0
+    private(set) var lastDroppedRefreshEpoch: UInt64?
+    /// True when the last successful refresh saw `HEAD` move. The gutter cache uses this.
+    private(set) var headMoved = false
+    /// Relative paths whose diff should reload after the last successful refresh.
+    private(set) var refreshedRelativePaths: Set<String> = []
 
     /// True when an open editor inside the repository still has unsaved edits. Switch, pull and the
     /// other operations that read or rewrite the working tree save them first (`saveUnsavedEditors`).
@@ -148,13 +166,22 @@ final class IDEGitStatusModel {
 
     @ObservationIgnored private(set) var rootURL: URL?
     @ObservationIgnored private(set) var repository: GitRepository?
+    /// Runner used for discovery. Tests replace it before `setRoot`. The repository keeps the runner it was discovered with.
+    @ObservationIgnored var gitRunner: any GitRunning
+    /// The workspace watches this directory. Nil when the project is not a repository.
+    @ObservationIgnored var onGitDirectory: ((URL?) -> Void)?
+    @ObservationIgnored private var lastGitDirectoryPath: String?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshToken: UUID?
     @ObservationIgnored private var needsAnotherPass = false
+    @ObservationIgnored private var ignoredTask: Task<Void, Never>?
+    @ObservationIgnored private var syncTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingInvalidations: Set<String> = []
     @ObservationIgnored private var diffTask: Task<Void, Never>?
-    @ObservationIgnored private var actionTask: Task<Void, Never>?
+    @ObservationIgnored private var mutationTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var networkBusyCount = 0
     @ObservationIgnored private var historyTask: Task<Void, Never>?
     @ObservationIgnored private var commitDetailTask: Task<Void, Never>?
-    @ObservationIgnored private var networkTask: Task<Void, Never>?
     @ObservationIgnored var autoFetchTask: Task<Void, Never>?
     @ObservationIgnored private var busyCount = 0
     /// Names this window's credential prompts to the askpass server.
@@ -165,7 +192,8 @@ final class IDEGitStatusModel {
     /// New commits may have new authors; typing in the search box must not re-read them.
     @ObservationIgnored private var authorsStale = true
 
-    init() {
+    init(runner: any GitRunning = IDEGitSupport.runner) {
+        gitRunner = runner
         // Lives as long as the workspace (the app), so the observer is never removed.
         NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
@@ -182,16 +210,20 @@ final class IDEGitStatusModel {
     func setRoot(_ url: URL?) {
         refreshTask?.cancel()
         refreshTask = nil
+        refreshToken = nil
+        ignoredTask?.cancel()
+        ignoredTask = nil
+        syncTask?.cancel()
+        syncTask = nil
         diffTask?.cancel()
         diffTask = nil
-        actionTask?.cancel()
-        actionTask = nil
+        for task in mutationTasks.values { task.cancel() }
+        mutationTasks.removeAll()
+        networkBusyCount = 0
         historyTask?.cancel()
         historyTask = nil
         commitDetailTask?.cancel()
         commitDetailTask = nil
-        networkTask?.cancel()
-        networkTask = nil
         autoFetchTask?.cancel()
         autoFetchTask = nil
         isNetworkBusy = false
@@ -199,6 +231,13 @@ final class IDEGitStatusModel {
         sheets.cancelAll()
         registerAskPass(active: url != nil)
         repository = nil
+        refreshEpoch &+= 1
+        refreshState = .unavailable
+        workspaceSnapshot = nil
+        headMoved = false
+        refreshedRelativePaths = []
+        pendingInvalidations = []
+        publishGitDirectory(nil)
         commits = []
         selectedCommitHash = nil
         commitSelectionAnchor = nil
@@ -222,38 +261,228 @@ final class IDEGitStatusModel {
         startAutoFetch()
     }
 
-    func refresh() {
+    /// `invalidating` lists absolute paths a watcher saw change. Their diffs reload even when the
+    /// status letters stayed the same (a second edit of a file that was already modified).
+    func refresh(invalidating paths: Set<String> = []) {
         guard let rootURL else { return }
+        pendingInvalidations.formUnion(paths)
+        refreshEpoch &+= 1
+        let epoch = refreshEpoch
         if refreshTask != nil {
             needsAnotherPass = true
             return
         }
+        beginRefresh(epoch: epoch, rootURL: rootURL)
+    }
+
+    /// A mutation has started. An in-flight status from before it must not apply.
+    func invalidateForMutation() {
+        refreshEpoch &+= 1
+        if refreshTask != nil { needsAnotherPass = true }
+        if let snapshot = workspaceSnapshot {
+            refreshState = .stale(last: snapshot)
+        }
+    }
+
+    private func beginRefresh(epoch: UInt64, rootURL: URL) {
+        let previousState = refreshState
+        if let snapshot = workspaceSnapshot {
+            refreshState = .stale(last: snapshot)
+        } else {
+            refreshState = .loading(last: nil)
+        }
         let existing = repository
+        let runner = gitRunner
+        ignoredTask?.cancel()
+        let token = UUID()
+        refreshToken = token
         refreshTask = Task { [weak self] in
-            let loaded = await Self.loadSnapshot(root: rootURL, existing: existing)
-            guard let self, !Task.isCancelled, self.rootURL == rootURL else { return }
-            self.repository = loaded.repository
-            self.apply(loaded.snapshot)
-            let remaining = Set(loaded.snapshot.changes.map(\.path))
-            self.selectedChangePaths.formIntersection(remaining)
-            if let selected = self.selectedChangePath, !remaining.contains(selected) {
-                self.selectChange(self.selectedChangePaths.sorted().first)
-            } else if let selected = self.selectedChangePath {
-                self.loadDiff(for: selected)
+            let loaded = await Self.loadSnapshot(root: rootURL, existing: existing, runner: runner)
+            guard let self else { return }
+            guard self.refreshToken == token else { return }
+            let superseded = self.refreshEpoch != epoch
+            let cancelled = Task.isCancelled || self.rootURL != rootURL
+            if cancelled {
+                if self.refreshEpoch == epoch { self.refreshState = previousState }
+                self.endRefresh(token: token)
+                return
             }
-            self.refreshTask = nil
-            self.offerCommitTemplate()
-            if self.historyStale {
-                self.historyStale = false
-                self.loadHistory()
-                self.loadStashes()
+            if superseded {
+                self.lastDroppedRefreshEpoch = epoch
+                self.endRefresh(token: token)
+                return
             }
-            self.onRefreshed?()
-            if self.needsAnotherPass {
-                self.needsAnotherPass = false
-                self.refresh()
+            switch loaded {
+            case .cancelled:
+                self.refreshState = previousState
+                self.endRefresh(token: token)
+            case .unavailable:
+                self.applyUnavailable(token: token)
+            case .failed(let message):
+                self.refreshState = .failed(last: self.workspaceSnapshot, message: message)
+                self.endRefresh(token: token)
+            case .loaded(let repo, let snapshot, let entries, let state, let infos):
+                self.applyLoaded(
+                    repo: repo, snapshot: snapshot, entries: entries, state: state, infos: infos, epoch: epoch,
+                    token: token
+                )
             }
         }
+    }
+
+    private func endRefresh(token: UUID) {
+        guard refreshToken == token else { return }
+        refreshTask = nil
+        refreshToken = nil
+        kickQueuedRefresh()
+    }
+
+    private func kickQueuedRefresh() {
+        guard needsAnotherPass, let rootURL else { return }
+        needsAnotherPass = false
+        beginRefresh(epoch: refreshEpoch, rootURL: rootURL)
+    }
+
+    private func applyUnavailable(token: UUID) {
+        repository = nil
+        workspaceSnapshot = nil
+        headMoved = repositoryRoot != nil
+        refreshedRelativePaths = []
+        pendingInvalidations = []
+        apply(GitSnapshot())
+        refreshState = .unavailable
+        publishGitDirectory(nil)
+        onRefreshed?()
+        endRefresh(token: token)
+    }
+
+    private func applyLoaded(
+        repo: GitRepository, snapshot: GitSnapshot, entries: [GitStatusEntry], state: GitRepositoryState,
+        infos: [GitBranch], epoch: UInt64, token: UUID
+    ) {
+        let oldPaths = Set(changes.map(\.relativePath))
+        let headChanged = state.head != repositoryState.head
+        repository = repo
+        publishGitDirectory(repo.gitDirectory)
+        var published = snapshot
+        published.sync = syncKeepingLists(from: infos, previous: sync)
+        apply(published)
+        headMoved = headChanged
+        var affected = Set(published.changes.map(\.relativePath)).symmetricDifference(oldPaths)
+        affected.formUnion(relativeInvalidations(repositoryRoot: repo.root.standardizedFileURL.path))
+        if let selected = selectedChangePath, let relative = relativePath(for: selected) {
+            affected.insert(relative)
+        }
+        refreshedRelativePaths = affected
+        pendingInvalidations = []
+        let workspace = GitWorkspaceSnapshot(
+            id: repo.id, generation: epoch, state: state, branchName: published.currentBranch,
+            entries: entries, upstream: Self.upstream(from: infos), fetchedAt: Date()
+        )
+        workspaceSnapshot = workspace
+        refreshState = .idle(workspace)
+        lastAppliedRefreshEpoch = epoch
+        let remaining = Set(published.changes.map(\.path))
+        selectedChangePaths.formIntersection(remaining)
+        if let selected = selectedChangePath, !remaining.contains(selected) {
+            selectChange(selectedChangePaths.sorted().first)
+        } else if let selected = selectedChangePath {
+            loadDiff(for: selected)
+        }
+        offerCommitTemplate()
+        if historyStale {
+            historyStale = false
+            loadHistory()
+            loadStashes()
+        }
+        startIgnoredPass(repo: repo, epoch: epoch)
+        fillSyncCommitsIfNeeded()
+        onRefreshed?()
+        endRefresh(token: token)
+    }
+
+    private func publishGitDirectory(_ url: URL?) {
+        let path = url?.standardizedFileURL.path
+        guard path != lastGitDirectoryPath else { return }
+        lastGitDirectoryPath = path
+        onGitDirectory?(url)
+    }
+
+    private func relativeInvalidations(repositoryRoot: String) -> Set<String> {
+        var relative: Set<String> = []
+        for path in pendingInvalidations {
+            if let rel = IDEGitSupport.relativePath(for: path, repositoryRoot: repositoryRoot), rel != "." {
+                relative.insert(rel)
+            }
+        }
+        return relative
+    }
+
+    private static func upstream(from infos: [GitBranch]) -> GitUpstream? {
+        guard let current = infos.first(where: \.isCurrent), let name = current.upstream else { return nil }
+        return GitUpstream(name: name, ahead: current.ahead, behind: current.behind, gone: current.upstreamIsGone)
+    }
+
+    /// Counts come from `branchList`, which already prints ahead/behind. Commit lists stay until those counts change.
+    private func syncKeepingLists(from infos: [GitBranch], previous: GitSyncStatus?) -> GitSyncStatus? {
+        guard let upstream = Self.upstream(from: infos), !upstream.gone else { return nil }
+        let keep = previous?.upstream == upstream.name && previous?.ahead == upstream.ahead && previous?.behind == upstream.behind
+        return GitSyncStatus(
+            upstream: upstream.name, ahead: upstream.ahead, behind: upstream.behind,
+            outgoing: keep ? (previous?.outgoing ?? []) : [],
+            incoming: keep ? (previous?.incoming ?? []) : []
+        )
+    }
+
+    private func fillSyncCommitsIfNeeded() {
+        guard let sync, (sync.ahead > 0 || sync.behind > 0), sync.outgoing.isEmpty, sync.incoming.isEmpty else { return }
+        guard let rootURL, let repository else { return }
+        let epoch = refreshEpoch
+        let ahead = sync.ahead
+        let behind = sync.behind
+        let upstream = sync.upstream
+        syncTask?.cancel()
+        syncTask = Task { [weak self] in
+            let lists = await repository.upstreamCommitLists()
+            guard let self, !Task.isCancelled, self.refreshEpoch == epoch, self.rootURL == rootURL else { return }
+            guard var current = self.sync, current.upstream == upstream, current.ahead == ahead, current.behind == behind else { return }
+            current = GitSyncStatus(
+                upstream: current.upstream, ahead: current.ahead, behind: current.behind,
+                outgoing: lists.outgoing, incoming: lists.incoming
+            )
+            self.sync = current
+        }
+    }
+
+    private func startIgnoredPass(repo: GitRepository, epoch: UInt64) {
+        ignoredTask?.cancel()
+        let root = rootURL
+        ignoredTask = Task { [weak self] in
+            let entries: [GitStatusEntry]
+            do {
+                entries = try await repo.status(includingIgnored: true)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, self.refreshEpoch == epoch, self.rootURL == root else { return }
+            self.mergeIgnored(entries, toplevel: repo.root.standardizedFileURL.path)
+        }
+    }
+
+    /// Adds ignored paths without replacing the staged and unstaged rows from the hot snapshot.
+    private func mergeIgnored(_ entries: [GitStatusEntry], toplevel: String) {
+        var next = statuses
+        var changed = false
+        for entry in entries where entry.isIgnored {
+            var relative = entry.path
+            if relative.hasSuffix("/") { relative.removeLast() }
+            let path = (toplevel as NSString).appendingPathComponent(relative)
+            if next[path] != .ignored {
+                next[path] = .ignored
+                changed = true
+            }
+        }
+        if changed { statuses = next }
     }
 
     /// A branch, tag, HEAD or remote ref moved (the project watcher saw `.git/refs`, `packed-refs`,
@@ -586,13 +815,30 @@ final class IDEGitStatusModel {
         }
     }
 
+    /// The index blob id of `relativePath`, captured when a diff is loaded and checked again at apply.
+    func indexBlobID(relativePath: String) async -> String? {
+        guard let rootURL else { return nil }
+        guard let repo = try? await IDEGitSupport.repository(for: rootURL, existing: repository, runner: gitRunner) else {
+            return nil
+        }
+        return await repo.indexBlobID(relativePath)
+    }
+
     /// Stages one hunk (or, with `reverse`, unstages it) and refreshes. Returns git's complaint, or nil.
-    func applyHunk(_ patch: String, reverse: Bool) async -> String? {
+    /// Refuses when the index blob is no longer the one the diff was built from.
+    func applyHunk(_ request: GitHunkApply) async -> String? {
         guard let rootURL else { return "This folder is not a git repository." }
         do {
-            let repo = try await IDEGitSupport.repository(for: rootURL, existing: repository)
-            try await repo.applyPatch(patch, toIndex: true, reverse: reverse)
+            let repo = try await IDEGitSupport.repository(for: rootURL, existing: repository, runner: gitRunner)
+            let gitDirectory = repo.gitDirectory
+            try await GitMutationLane.shared.perform(gitDirectory: gitDirectory) {
+                await self.invalidateForMutation()
+                try Task.checkCancellation()
+                try await repo.applyHunk(request)
+            }
             refresh()
+            return nil
+        } catch is CancellationError {
             return nil
         } catch {
             return IDEGitSupport.describe(error)
@@ -637,19 +883,15 @@ final class IDEGitStatusModel {
     ) {
         guard let rootURL else { return }
         if network {
-            guard networkTask == nil else {
-                fail("Another remote operation is still running.")
-                return
-            }
+            networkBusyCount += 1
             isNetworkBusy = true
-        } else {
-            actionTask?.cancel()
         }
         busyCount += 1
         isBusy = true
         actionStatus = ""
         actionFailed = false
         let existing = repository
+        let runner = gitRunner
         let environment = (network || credentials) ? IDEGitAskPassServer.shared.environment(session: askPassSession) : nil
         var progress: GitProgressHandler?
         if network {
@@ -657,23 +899,30 @@ final class IDEGitStatusModel {
                 Task { @MainActor in self?.networkProgress = value }
             }
         }
+        let taskID = UUID()
         let task = Task { [weak self] in
             guard let self else { return }
             defer {
+                self.mutationTasks[taskID] = nil
                 self.busyCount -= 1
                 self.isBusy = self.busyCount > 0
                 if network {
-                    self.networkTask = nil
-                    self.isNetworkBusy = false
-                    self.networkProgress = nil
+                    self.networkBusyCount = max(0, self.networkBusyCount - 1)
+                    self.isNetworkBusy = self.networkBusyCount > 0
+                    if !self.isNetworkBusy { self.networkProgress = nil }
                 }
             }
             do {
-                let repo = try await IDEGitSupport.repository(for: rootURL, existing: existing)
+                let repo = try await IDEGitSupport.repository(for: rootURL, existing: existing, runner: runner)
                 var configured = repo
                 if let environment { configured = configured.withNetwork(environment) }
                 if let progress { configured = configured.withProgress(progress) }
-                let reported = try await action(configured)
+                let operation = configured
+                let reported = try await GitMutationLane.shared.perform(gitDirectory: repo.gitDirectory) {
+                    await self.invalidateForMutation()
+                    try Task.checkCancellation()
+                    return try await action(operation)
+                }
                 guard !Task.isCancelled else { return }
                 self.repository = repo
                 self.noteRefsChanged()
@@ -685,6 +934,8 @@ final class IDEGitStatusModel {
                 }
                 onSuccess?()
                 self.refresh()
+            } catch is CancellationError {
+                return
             } catch {
                 guard !Task.isCancelled else { return }
                 // A rebase or merge that stopped on a conflict moved refs and left state behind.
@@ -696,7 +947,7 @@ final class IDEGitStatusModel {
                 onFailure?(self.actionStatus)
             }
         }
-        if network { networkTask = task } else { actionTask = task }
+        mutationTasks[taskID] = task
     }
 
     /// What a successful commit leaves behind in the panel.
@@ -772,12 +1023,40 @@ final class IDEGitStatusModel {
         }
     }
 
-    nonisolated private static func loadSnapshot(root: URL, existing: GitRepository?) async -> (repository: GitRepository?, snapshot: GitSnapshot) {
-        guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing),
-              let entries = try? await repo.status(includingIgnored: true)
-        else {
-            return (nil, GitSnapshot())
+    enum LoadOutcome: Sendable {
+        case unavailable
+        case cancelled
+        case failed(String)
+        case loaded(GitRepository, GitSnapshot, [GitStatusEntry], GitRepositoryState, [GitBranch])
+    }
+
+    /// Status without `--ignored`. A thrown status keeps the caller's snapshot. Discover returning
+    /// "not a repository" is `.unavailable`. Cancellation is not a failure.
+    nonisolated private static func loadSnapshot(
+        root: URL, existing: GitRepository?, runner: any GitRunning
+    ) async -> LoadOutcome {
+        if Task.isCancelled { return .cancelled }
+        let repo: GitRepository
+        do {
+            repo = try await IDEGitSupport.repository(for: root, existing: existing, runner: runner)
+        } catch is CancellationError {
+            return .cancelled
+        } catch let error as GitError where isDiscoveryMiss(error) {
+            return .unavailable
+        } catch {
+            if Task.isCancelled { return .cancelled }
+            return .failed(IDEGitSupport.describe(error))
         }
+        let entries: [GitStatusEntry]
+        do {
+            entries = try await repo.status(includingIgnored: false)
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            if Task.isCancelled { return .cancelled }
+            return .failed(IDEGitSupport.describe(error))
+        }
+        if Task.isCancelled { return .cancelled }
         let branch = await repo.currentBranch()
         var snapshot = parse(entries: entries, toplevel: repo.root.standardizedFileURL.path, branch: branch)
         let infos = (try? await repo.branchList()) ?? []
@@ -785,9 +1064,13 @@ final class IDEGitStatusModel {
         snapshot.localBranches = infos
             .compactMap { $0.kind == .local ? $0.name : nil }
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        snapshot.sync = await repo.syncStatus()
         snapshot.state = repo.state()
-        return (repo, snapshot)
+        return .loaded(repo, snapshot, entries, snapshot.state, infos)
+    }
+
+    nonisolated private static func isDiscoveryMiss(_ error: GitError) -> Bool {
+        if case .notARepository = error { return true }
+        return false
     }
 
     nonisolated private static func loadHistory(
@@ -898,7 +1181,8 @@ final class IDEGitStatusModel {
                             path: path,
                             relativePath: relative,
                             staged: staged,
-                            unstaged: unstaged
+                            unstaged: unstaged,
+                            originalPath: entry.originalPath
                         )
                     }
                 }

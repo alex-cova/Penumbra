@@ -54,4 +54,13 @@ final class IDEDiffSessionStore {
             session.reload()
         }
     }
+
+    /// Reloads the sessions whose file is in `relativePaths`. Other tabs keep their texts.
+    func reload(relativePaths: Set<String>) {
+        guard !relativePaths.isEmpty else { return }
+        for session in diffs.values where !session.isRightDirty {
+            guard let path = session.request.repositoryRelativePath, relativePaths.contains(path) else { continue }
+            session.reload()
+        }
+    }
 }

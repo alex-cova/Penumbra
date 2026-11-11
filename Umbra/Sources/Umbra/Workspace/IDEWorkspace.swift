@@ -309,11 +309,21 @@ public final class IDEWorkspace {
         gitStatus.onShowComparison = { [weak self] in
             self?.showBottomTab(.sourceControl)
         }
+        gitStatus.onGitDirectory = { [weak self] url in
+            self?.projectWatcher.setGitDirectory(url)
+        }
         gitStatus.onRefreshed = { [weak self] in
-            self?.refreshBlameInOpenEditors()
-            self?.reloadDiffSessions()
-            self?.changeMarkers.invalidateHeadCache()
-            self?.refreshChangedLinesInOpenEditors(force: true, delay: .zero)
+            guard let self else { return }
+            self.refreshBlameInOpenEditors()
+            if case .unavailable = self.gitStatus.refreshState {
+                self.diffSessionStore.reloadAll()
+            } else {
+                self.diffSessionStore.reload(relativePaths: self.gitStatus.refreshedRelativePaths)
+            }
+            if self.gitStatus.headMoved {
+                self.changeMarkers.invalidateHeadCache()
+            }
+            self.refreshChangedLinesInOpenEditors(force: true, delay: .zero)
         }
     }
 
@@ -4948,7 +4958,7 @@ public final class IDEWorkspace {
             self.project.applyChanges(in: batch.affectedDirectories)
             self.localHistory.recordExternalChanges(batch.paths)
             if batch.gitRefsChanged || batch.gitOperationChanged { self.gitStatus.noteRefsChanged() }
-            self.gitStatus.refresh()
+            self.gitStatus.refresh(invalidating: batch.paths)
             self.fileIndexer.handle(batch)
             // `isDirectory:` is stated so the initializer does not `stat` every path on the main
             // actor (measured ~3 µs each: 28 ms for a 10k-file checkout batch, 9 ms without).

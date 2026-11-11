@@ -10,9 +10,11 @@ enum IDEGitSupport {
 
     /// The repository for `root`: `existing` when it still covers `root`, else a fresh discovery.
     /// Throws `GitError.notARepository` when `root` is not inside a work tree.
+    /// A git failure (permissions, a killed process that was not "not a repository") is thrown as that error.
     nonisolated static func repository(
         for root: URL,
         existing: GitRepository?,
+        runner: any GitRunning = IDEGitSupport.runner,
         network: GitNetworkEnvironment = IDEGitSupport.networkEnvironment
     ) async throws -> GitRepository {
         let standardized = root.standardizedFileURL
@@ -23,10 +25,12 @@ enum IDEGitSupport {
                 return existing
             }
         }
-        guard let discovered = await GitRepository.discover(from: standardized, runner: runner, network: network) else {
+        switch try await GitRepository.discoverOutcome(from: standardized, runner: runner, network: network) {
+        case .notARepository:
             throw GitError.notARepository
+        case .repository(let discovered):
+            return discovered
         }
-        return discovered
     }
 
     /// What network commands run with. Phase 1 swaps this for the askpass environment.

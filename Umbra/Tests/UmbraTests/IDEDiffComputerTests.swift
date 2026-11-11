@@ -165,6 +165,17 @@ final class IDEDiffPatchBuilderTests: XCTestCase {
         XCTAssertNil(patch("a", "a\n"))
     }
 
+    func testASpaceInThePathIsQuotedAndANewlineIsRejected() {
+        let left = IDEDiffText("1\n")
+        let right = IDEDiffText("2\n")
+        let chunks = IDEDiffComputer.chunks(left: left, right: right, whitespace: .none, highlight: .lines)
+        let quoted = IDEDiffPatchBuilder.patch(for: chunks[0], left: left, right: right, path: "my file.txt")
+        XCTAssertTrue(quoted?.contains("a/\"my file.txt\"") == true, quoted ?? "")
+        XCTAssertNil(IDEDiffPatchBuilder.headerPath("line\nbreak.txt"))
+        XCTAssertNil(IDEDiffPatchBuilder.patch(for: chunks[0], left: left, right: right, path: "line\nbreak.txt"))
+        XCTAssertEqual(IDEDiffPatchBuilder.headerPath("a.txt"), "a.txt")
+    }
+
     func testCRLFLinesKeepTheirLineBreaks() {
         XCTAssertEqual(patch("1\r\n2\r\n", "1\r\nx\r\n"), header + "@@ -2,1 +2,1 @@\n-2\r\n+x\r\n")
     }
@@ -195,5 +206,96 @@ final class IDEDiffPatchBuilderTests: XCTestCase {
             }
             XCTAssertEqual(current, right, "\(left.debugDescription) → \(right.debugDescription)")
         }
+    }
+}
+
+/// Hunk staging must not write an unsaved editor buffer into the index.
+@MainActor
+final class IDEDiffHunkSafetyTests: XCTestCase {
+    private func session(provider: (@MainActor (String) -> String?)? = nil) -> IDEDiffSession {
+        let request = IDEDiffRequest.change(path: "/repo/a.txt", relativePath: "a.txt", staged: false, isNew: false)
+        let session = IDEDiffSession(
+            request: request, siblings: [], settings: IDEDiffSettings(), settingsPrefix: "test-\(UUID().uuidString)"
+        )
+        session.loadContent = { source in
+            switch source {
+            case .revision: return .text("1\n2\n")
+            case .workingTree: return .text("1\nTWO\n")
+            case .text(let text): return .text(text)
+            }
+        }
+        session.indexBlobID = { _ in "blob" }
+        session.readOnlyReasonProvider = provider
+        return session
+    }
+
+    private func waitUntilReady(_ session: IDEDiffSession) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while session.state != .ready || session.chunks.isEmpty {
+            if Date() > deadline {
+                XCTFail("diff did not become ready: \(session.state)")
+                return
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    func testADirtyRightSideDoesNotStageTheBuffer() async throws {
+        let session = session()
+        var applied = false
+        session.applyIndexPatch = { _ in
+            applied = true
+            return nil
+        }
+        session.reload()
+        try await waitUntilReady(session)
+        session.rightTextDidChange()
+        session.applyToIndex(chunkAt: 0)
+        XCTAssertFalse(applied)
+        XCTAssertFalse(session.isBusy)
+        XCTAssertEqual(
+            session.message,
+            "Save the file before staging hunks. Unsaved editor text is not written to the index."
+        )
+    }
+
+    func testAnUnsavedEditorBufferDoesNotStage() async throws {
+        let session = session(provider: { _ in "Unsaved changes in the editor tab: save them to edit here" })
+        var applied = false
+        session.applyIndexPatch = { _ in
+            applied = true
+            return nil
+        }
+        session.reload()
+        try await waitUntilReady(session)
+        session.applyToIndex(chunkAt: 0)
+        XCTAssertFalse(applied)
+        XCTAssertEqual(
+            session.message,
+            "Save the file before staging hunks. Unsaved editor text is not written to the index."
+        )
+    }
+
+    func testACleanHunkStagesTheLoadedTextAndTheIndexBlob() async throws {
+        let session = session()
+        var request: GitHunkApply?
+        session.applyIndexPatch = { applied in
+            request = applied
+            return nil
+        }
+        session.reload()
+        try await waitUntilReady(session)
+        session.applyToIndex(chunkAt: 0)
+        let deadline = Date().addingTimeInterval(5)
+        while request == nil && session.isBusy && Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let applied = try XCTUnwrap(request)
+        XCTAssertEqual(applied.relativePath, "a.txt")
+        XCTAssertEqual(applied.baseBlobID, "blob")
+        XCTAssertFalse(applied.reverse)
+        XCTAssertTrue(applied.patch.contains("+TWO"), applied.patch)
+        XCTAssertFalse(applied.patch.contains("BUFFER"))
+        XCTAssertNil(session.message)
     }
 }

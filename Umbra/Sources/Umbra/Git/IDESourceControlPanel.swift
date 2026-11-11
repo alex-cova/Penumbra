@@ -667,6 +667,15 @@ struct IDEChangesPanel: View {
                     .padding(.horizontal, IDEAppearance.Spacing.md)
                     .padding(.vertical, IDEAppearance.Spacing.xs)
             }
+            if let refreshError = gitStatus.refreshError {
+                Text(refreshError)
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, IDEAppearance.Spacing.md)
+                    .padding(.vertical, IDEAppearance.Spacing.xs)
+            }
             Rectangle()
                 .fill(IDEAppearance.ColorToken.border)
                 .frame(height: 1)

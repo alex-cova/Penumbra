@@ -179,6 +179,48 @@ final class IDEProjectWatcherTests: XCTestCase {
         XCTAssertFalse(seen.contains { $0.paths.contains { $0.contains("/node_modules/") } }, "the Explorer never sees node_modules")
     }
 
+    func testGitDirectoryClassification() {
+        XCTAssertEqual(IDEProjectWatcher.separateGitDirectory("/repo/.git", projectRoot: "/repo"), "")
+        XCTAssertEqual(IDEProjectWatcher.separateGitDirectory("/repo/.git", projectRoot: "/repo/app"), "/repo/.git")
+        XCTAssertEqual(
+            IDEProjectWatcher.separateGitDirectory("/repo/.git/worktrees/feature", projectRoot: "/work/feature"),
+            "/repo/.git/worktrees/feature"
+        )
+        XCTAssertEqual(
+            String(IDEProjectWatcher.gitTail("/repo/.git/worktrees/feature/index", gitDirectory: "/repo/.git/worktrees/feature") ?? ""),
+            "index"
+        )
+        XCTAssertTrue(IDEProjectWatcher.isGitDirectorySignal("index"))
+        XCTAssertTrue(IDEProjectWatcher.isGitDirectorySignal("HEAD"))
+        XCTAssertTrue(IDEProjectWatcher.isGitDirectorySignal("refs/heads/main"))
+        XCTAssertTrue(IDEProjectWatcher.isGitDirectorySignal("rebase-merge/git-rebase-todo"))
+        XCTAssertFalse(IDEProjectWatcher.isGitDirectorySignal("objects/ab/cd"))
+        let kind = IDEProjectWatcher.classifyGitTail("refs/heads/main")
+        XCTAssertTrue(kind.refs)
+        XCTAssertFalse(kind.metadata)
+    }
+
+    func testAnExternalGitDirectoryReportsHeadAndSkipsObjects() async throws {
+        let project = try folder("nested")
+        let git = directory.appendingPathComponent("repo/.git", isDirectory: true)
+        try FileManager.default.createDirectory(at: git.appendingPathComponent("refs/heads", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: git.appendingPathComponent("objects/ab", isDirectory: true), withIntermediateDirectories: true)
+        try "ref: refs/heads/main\n".write(to: git.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+        let watcher = IDEProjectWatcher()
+        defer { watcher.stop() }
+        watcher.setRoot(project)
+        watcher.setGitDirectory(git)
+
+        guard let seen = try await batches(from: watcher, after: {
+            try "ref: refs/heads/other\n".write(to: git.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+            try Data([0]).write(to: git.appendingPathComponent("objects/ab/cd"))
+        }, until: { $0.gitRefsChanged || $0.gitMetadataChanged }) else {
+            throw XCTSkip("No FSEvents callback observed in this xctest host process within the timeout.")
+        }
+        XCTAssertTrue(seen.contains { $0.gitMetadataChanged || $0.gitRefsChanged })
+        XCTAssertFalse(seen.contains { !$0.paths.isEmpty && $0.paths.contains { $0.contains("/objects/") } })
+    }
+
     func testAWindowWithNoFolderStillWatchesItsOpenFiles() async throws {
         let loose = try folder("loose")
         let open = loose.appendingPathComponent("a.txt")

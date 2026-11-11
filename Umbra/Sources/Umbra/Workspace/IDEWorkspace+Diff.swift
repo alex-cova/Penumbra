@@ -171,8 +171,11 @@ extension IDEWorkspace {
         session.readOnlyReasonProvider = { [weak self] path in
             self?.unsavedEditorText(atPath: path) == nil ? nil : "Unsaved changes in the editor tab: save them to edit here"
         }
-        session.applyIndexPatch = { [weak self] patch, reverse in
-            await self?.gitStatus.applyHunk(patch, reverse: reverse) ?? "The window was closed."
+        session.indexBlobID = { [weak self] path in
+            await self?.gitStatus.indexBlobID(relativePath: path)
+        }
+        session.applyIndexPatch = { [weak self] request in
+            await self?.gitStatus.applyHunk(request) ?? "The window was closed."
         }
         session.confirmOverwrite = { path in
             IDEWorkspace.askToOverwriteChangedFile(named: (path as NSString).lastPathComponent)

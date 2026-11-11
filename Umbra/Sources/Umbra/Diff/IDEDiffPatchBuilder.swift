@@ -12,6 +12,7 @@ enum IDEDiffPatchBuilder {
         var leftRange = chunk.left.clamped(to: 0 ..< leftLines.count)
         var rightRange = chunk.right.clamped(to: 0 ..< rightLines.count)
         guard !leftRange.isEmpty || !rightRange.isEmpty else { return nil }
+        guard let quoted = headerPath(path) else { return nil }
         // Adding after a last line that has no line break changes that line too (it gains one):
         // take it into the hunk on both sides.
         let appendsToUnterminatedLeft = leftRange.isEmpty && leftRange.lowerBound == leftLines.count
@@ -23,7 +24,7 @@ enum IDEDiffPatchBuilder {
             leftRange = leftRange.lowerBound - 1 ..< leftRange.upperBound
             rightRange = rightRange.lowerBound - 1 ..< rightRange.upperBound
         }
-        var patch = "diff --git a/\(path) b/\(path)\n--- a/\(path)\n+++ b/\(path)\n"
+        var patch = "diff --git a/\(quoted) b/\(quoted)\n--- a/\(quoted)\n+++ b/\(quoted)\n"
         patch += "@@ -\(header(leftRange)) +\(header(rightRange)) @@\n"
         for index in leftRange {
             patch += "-" + leftLines.line(index)
@@ -32,6 +33,15 @@ enum IDEDiffPatchBuilder {
             patch += "+" + rightLines.line(index)
         }
         return patch
+    }
+
+    /// A path git's diff header can carry. Spaces are quoted. A newline, quote, or backslash is rejected.
+    static func headerPath(_ path: String) -> String? {
+        if path.isEmpty || path.contains("\n") || path.contains("\r") || path.contains("\"") || path.contains("\\") {
+            return nil
+        }
+        if path.contains(" ") || path.contains("\t") { return "\"\(path)\"" }
+        return path
     }
 
     /// `start,count`, where an empty range names the line before it, as zero-context hunks do.

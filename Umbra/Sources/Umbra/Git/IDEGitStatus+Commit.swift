@@ -39,9 +39,9 @@ extension IDEGitStatusModel {
     func performCommit(message: String, options: IDEGitCommitOptions) {
         let root = repositoryRootPath
         runGitAction({ repo in
-            _ = try await repo.commit(
-                message: message, paths: [], untrackedPaths: [], amend: options.amend,
-                signoff: options.signoff, skipHooks: options.skipHooks)
+            _ = try await repo.commitIndex(GitIndexCommit(
+                message: message, amend: options.amend, signoff: options.signoff, skipHooks: options.skipHooks
+            ))
             return options.amend ? "Amended the last commit" : "Committed"
         }, credentials: true, onSuccess: { [weak self] in
             if let root { IDEGitRecentMessages().record(message, for: root) }

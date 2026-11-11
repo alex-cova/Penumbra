@@ -51,6 +51,8 @@ final class IDEProjectWatcher {
     private var pending = Batch()
     private var rootPath = ""
     private var canonicalRoot = ""
+    /// Canonical path of the resolved git directory when it is not already inside the project.
+    private var gitDirectory = ""
 
     private static let coalescingDelay: Duration = .milliseconds(150)
     private static let latency: CFTimeInterval = 0.5
@@ -60,10 +62,22 @@ final class IDEProjectWatcher {
         root = url
         rootPath = url?.path ?? ""
         canonicalRoot = url.map { IDEFSEventStream.canonicalPath($0.path) } ?? ""
+        gitDirectory = ""
         pending = Batch()
         flushTask?.cancel()
         flushTask = nil
         restartStream(force: true)
+    }
+
+    /// Watches `url` when it is the repository's git directory and that directory sits outside the
+    /// project (a nested folder, a linked worktree, a submodule whose `.git` is a file). A git
+    /// directory already inside the project is covered by the project root, so it is not added again.
+    func setGitDirectory(_ url: URL?) {
+        let next = url.map { IDEFSEventStream.canonicalPath($0.path) } ?? ""
+        let watched = Self.separateGitDirectory(next, projectRoot: canonicalRoot)
+        guard watched != gitDirectory else { return }
+        gitDirectory = watched
+        restartStream(force: false)
     }
 
     /// The files open in editors, by standardized path. They are reported even when they are
@@ -84,19 +98,21 @@ final class IDEProjectWatcher {
         root = nil
         rootPath = ""
         canonicalRoot = ""
+        gitDirectory = ""
         openFiles = [:]
         openFileInput = []
         pending = Batch()
         flushTask?.cancel()
         flushTask = nil
         replaceStream(with: nil)
-        filter.update(root: "", openFiles: [])
+        filter.update(root: "", openFiles: [], gitDirectory: "")
     }
 
     /// The directories the stream must cover: the root, plus the parent of each open file outside it.
     private var wantedRoots: [String] {
         var roots: Set<String> = []
         if !canonicalRoot.isEmpty { roots.insert(canonicalRoot) }
+        if !gitDirectory.isEmpty { roots.insert(gitDirectory) }
         for path in openFiles.keys where !Self.isInside(path, root: canonicalRoot) {
             roots.insert((path as NSString).deletingLastPathComponent)
         }
@@ -106,7 +122,7 @@ final class IDEProjectWatcher {
     /// Recreates the stream when the directories it must cover changed (or always with `force`).
     /// The new stream starts before the old one stops, so no change falls in between.
     private func restartStream(force: Bool) {
-        filter.update(root: canonicalRoot, openFiles: Set(openFiles.keys))
+        filter.update(root: canonicalRoot, openFiles: Set(openFiles.keys), gitDirectory: gitDirectory)
         let roots = wantedRoots
         guard force || roots != (stream?.roots ?? []) else { return }
         guard !roots.isEmpty else {
@@ -136,12 +152,11 @@ final class IDEProjectWatcher {
     }
 
     private func record(canonicalPath path: String) {
-        if Self.isInside(path, root: canonicalRoot) {
+        if let tail = Self.gitTail(path, gitDirectory: gitDirectory) {
+            note(tail)
+        } else if Self.isInside(path, root: canonicalRoot) {
             if let range = path.range(of: "/.git/") {
-                let tail = path[range.upperBound...]
-                if tail == "index" || tail == "HEAD" { pending.gitMetadataChanged = true }
-                if Self.isRefsFile(tail) { pending.gitRefsChanged = true }
-                if Self.isOperationFile(tail) { pending.gitOperationChanged = true }
+                note(path[range.upperBound...])
             } else if Self.isRelevant(path) {
                 pending.paths.insert(rootPath + path.dropFirst(canonicalRoot.count))
             } else if let open = openFiles[path] {
@@ -166,6 +181,35 @@ final class IDEProjectWatcher {
 
     nonisolated private static func isInside(_ path: String, root: String) -> Bool {
         !root.isEmpty && (path == root || path.hasPrefix(root + "/"))
+    }
+
+    /// Empty when `gitDirectory` is blank or already inside the project, so one index write is not delivered twice.
+    nonisolated static func separateGitDirectory(_ gitDirectory: String, projectRoot: String) -> String {
+        guard !gitDirectory.isEmpty, !isInside(gitDirectory, root: projectRoot) else { return "" }
+        return gitDirectory
+    }
+
+    /// The path relative to `gitDirectory`, or nil when `path` is not inside it.
+    nonisolated static func gitTail(_ path: String, gitDirectory: String) -> Substring? {
+        guard isInside(path, root: gitDirectory), path != gitDirectory else { return nil }
+        return path.dropFirst(gitDirectory.count + 1)
+    }
+
+    /// `index` and `HEAD` refresh status. Refs and operation files do too, and also reload the log.
+    nonisolated static func classifyGitTail(_ tail: Substring) -> (metadata: Bool, refs: Bool, operation: Bool) {
+        (metadata: tail == "index" || tail == "HEAD", refs: isRefsFile(tail), operation: isOperationFile(tail))
+    }
+
+    private func note(_ tail: Substring) {
+        let kind = Self.classifyGitTail(tail)
+        if kind.metadata { pending.gitMetadataChanged = true }
+        if kind.refs { pending.gitRefsChanged = true }
+        if kind.operation { pending.gitOperationChanged = true }
+    }
+
+    /// Index, refs, and operation files only. Object files are not a reason to refresh.
+    nonisolated static func isGitDirectorySignal(_ tail: Substring) -> Bool {
+        tail == "index" || isRefsFile(tail) || isOperationFile(tail)
     }
 
     /// Everything outside the directories the Explorer never lists, plus the `.git` files that
@@ -201,16 +245,20 @@ final class IDEProjectWatcher {
         private struct State {
             var root = ""
             var openFiles: Set<String> = []
+            var gitDirectory = ""
         }
         private let state = OSAllocatedUnfairLock(initialState: State())
 
-        func update(root: String, openFiles: Set<String>) {
-            state.withLock { $0 = State(root: root, openFiles: openFiles) }
+        func update(root: String, openFiles: Set<String>, gitDirectory: String) {
+            state.withLock { $0 = State(root: root, openFiles: openFiles, gitDirectory: gitDirectory) }
         }
 
         func accepts(_ path: String) -> Bool {
             state.withLock { state in
                 if state.openFiles.contains(path) { return true }
+                if let tail = IDEProjectWatcher.gitTail(path, gitDirectory: state.gitDirectory) {
+                    return IDEProjectWatcher.isGitDirectorySignal(tail)
+                }
                 return IDEProjectWatcher.isInside(path, root: state.root) && IDEProjectWatcher.isRelevant(path)
             }
         }

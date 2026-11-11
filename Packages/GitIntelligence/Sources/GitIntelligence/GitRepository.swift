@@ -17,6 +17,12 @@ public struct GitRevertResult: Sendable, Equatable {
     }
 }
 
+/// What ``GitRepository/discoverOutcome(from:runner:network:)`` found.
+public enum GitDiscovery: Sendable {
+    case repository(GitRepository)
+    case notARepository
+}
+
 /// Thin, stateless wrapper over the git CLI for one working tree. Every method is one or two git
 /// invocations; nothing runs unless the host calls it.
 public struct GitRepository: Sendable {
@@ -54,28 +60,56 @@ public struct GitRepository: Sendable {
         GitRepository(root: root, runner: runner, network: network, gitDirectory: gitDirectory, progress: handler)
     }
 
+    /// Work tree plus the resolved git directory. Linked worktrees do not share an id with main.
+    public var id: GitRepositoryID { GitRepositoryID(workTree: root, gitDirectory: gitDirectory) }
+
     /// The repository containing `directory`, or nil when it is not inside a work tree.
+    /// A runner failure is also nil here. Callers that must tell "not a repository" from "git failed"
+    /// use ``discoverOutcome(from:runner:network:)``.
     public static func discover(
         from directory: URL,
         runner: any GitRunning = SystemGitRunner(),
         network: GitNetworkEnvironment = .batchMode
     ) async -> GitRepository? {
-        guard let output = try? await runner.run(["rev-parse", "--show-toplevel", "--absolute-git-dir"], in: directory) else {
+        guard let outcome = try? await discoverOutcome(from: directory, runner: runner, network: network) else {
             return nil
+        }
+        if case .repository(let repository) = outcome { return repository }
+        return nil
+    }
+
+    /// Discover, without turning a git failure into "not a repository".
+    /// `.notARepository` is git's own "not a git repository" result. Any other runner error is thrown.
+    public static func discoverOutcome(
+        from directory: URL,
+        runner: any GitRunning = SystemGitRunner(),
+        network: GitNetworkEnvironment = .batchMode
+    ) async throws -> GitDiscovery {
+        let output: GitOutput
+        do {
+            output = try await runner.run(["rev-parse", "--show-toplevel", "--absolute-git-dir"], in: directory)
+        } catch let error as GitError where isNotARepository(error) {
+            return .notARepository
         }
         let lines = output.text.split(separator: "\n", omittingEmptySubsequences: true).map {
             String($0).trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        guard let top = lines.first, !top.isEmpty else { return nil }
+        guard let top = lines.first, !top.isEmpty else { return .notARepository }
         let gitDirectory = lines.count > 1
             ? URL(fileURLWithPath: lines[1], isDirectory: true).standardizedFileURL
             : nil
-        return GitRepository(
+        return .repository(GitRepository(
             root: URL(fileURLWithPath: top).standardizedFileURL,
             runner: runner,
             network: network,
             gitDirectory: gitDirectory
-        )
+        ))
+    }
+
+    private static func isNotARepository(_ error: GitError) -> Bool {
+        guard case .failed(_, let stderr, let stdout) = error else { return false }
+        let text = stderr.isEmpty ? String(decoding: stdout, as: UTF8.self) : stderr
+        return text.contains("not a git repository") || text.contains("not a git work tree")
     }
 
     /// HEAD and the operation in progress, read from disk with no process.
@@ -172,6 +206,20 @@ public struct GitRepository: Sendable {
         return GitSyncStatus(upstream: upstream, ahead: ahead, behind: behind, outgoing: outgoing, incoming: incoming)
     }
 
+    /// The commits a push would send and a pull would bring, when the caller already knows the counts.
+    /// Empty when there is no upstream. Does not recompute ahead/behind.
+    public func upstreamCommitLists(limit: Int = 50) async -> (outgoing: [GitCommit], incoming: [GitCommit]) {
+        let remotes = await remotes()
+        func commits(_ range: String) async -> [GitCommit] {
+            let args = ["log", "--date-order", "--format=" + GitLogParser.format, "-n", "\(limit)", range, "--"]
+            guard let out = try? await readOnly(args) else { return [] }
+            return GitLogParser.parse(out.text, remotes: remotes)
+        }
+        async let outgoing = commits("@{u}..HEAD")
+        async let incoming = commits("HEAD..@{u}")
+        return await (outgoing, incoming)
+    }
+
     /// Porcelain status. `includingIgnored` adds `--ignored`, which the default omits.
     public func status(includingIgnored: Bool = false) async throws -> [GitStatusEntry] {
         var args = ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]
@@ -222,6 +270,7 @@ public struct GitRepository: Sendable {
         args.append("--")
         if let path { args.append(path) }
         args += paths
+        if path != nil || !paths.isEmpty { args.insert("--literal-pathspecs", at: 0) }
         let out = try await readOnly(args)
         return GitLogParser.parse(out.text, remotes: await remotes())
     }
@@ -247,7 +296,23 @@ public struct GitRepository: Sendable {
     }
 
     /// Long path lists go to git in pieces so a "revert everything" cannot hit the argument limit.
+    /// Each piece is one index update. Do not use this for `commit --only` or `stash push`: those
+    /// commands record history, and a second invocation would record a second commit or stash.
     private static let pathsPerInvocation = 200
+
+    /// `--literal-pathspecs` is global and must precede the subcommand. Names such as `star*.txt`
+    /// then match that file only.
+    private func mutateEachChunk(_ paths: [String], command: [String], mutating: Bool = false) async throws {
+        guard !paths.isEmpty else { return }
+        for chunk in Self.chunks(paths) {
+            let args = ["--literal-pathspecs"] + command + ["--"] + chunk
+            if mutating {
+                _ = try await mutate(args)
+            } else {
+                _ = try await runner.run(args, in: root, stdin: nil, environment: nil)
+            }
+        }
+    }
 
     private static func chunks(_ paths: [String]) -> [[String]] {
         stride(from: 0, to: paths.count, by: pathsPerInvocation).map {
@@ -272,15 +337,15 @@ public struct GitRepository: Sendable {
     }
 
     public func commitDiff(hash: String, path: String) async throws -> String {
-        try await readOnly(["show", "--format=", "-M", "--first-parent", hash, "--", path]).text
+        try await readOnly(["--literal-pathspecs", "show", "--format=", "-M", "--first-parent", hash, "--", path]).text
     }
 
     public func unstagedDiff(path: String) async throws -> String {
-        try await readOnly(["diff", "--", path]).text
+        try await readOnly(["--literal-pathspecs", "diff", "--", path]).text
     }
 
     public func stagedDiff(path: String) async throws -> String {
-        try await readOnly(["diff", "--cached", "--", path]).text
+        try await readOnly(["--literal-pathspecs", "diff", "--cached", "--", path]).text
     }
 
     /// The file at `path` (relative to the root) as stored in `revision`, or nil when that version
@@ -307,9 +372,9 @@ public struct GitRepository: Sendable {
     }
 
     public func workingTreeDiff(path: String, isUntracked: Bool) async throws -> String {
-        guard isUntracked else { return try await readOnly(["diff", "HEAD", "--", path]).text }
+        guard isUntracked else { return try await readOnly(["--literal-pathspecs", "diff", "HEAD", "--", path]).text }
         do {
-            return try await readOnly(["diff", "--no-index", "--", "/dev/null", path]).text
+            return try await readOnly(["--literal-pathspecs", "diff", "--no-index", "--", "/dev/null", path]).text
         } catch GitError.failed(let status, _, let stdout) where status == 1 {
             // `--no-index` exits 1 when the files differ, which is the normal case here.
             return String(decoding: stdout, as: UTF8.self)
@@ -318,7 +383,7 @@ public struct GitRepository: Sendable {
 
     /// Blame of `relativePath`, using `contents` (the live buffer) so unsaved edits read as uncommitted.
     public func blame(relativePath: String, contents: Data) async throws -> [GitBlameLine] {
-        let out = try await readOnly(["blame", "--porcelain", "--contents", "-", "--", relativePath], stdin: contents)
+        let out = try await readOnly(["--literal-pathspecs", "blame", "--porcelain", "--contents", "-", "--", relativePath], stdin: contents)
         return GitBlameParser.parse(out.text)
     }
 
@@ -331,13 +396,11 @@ public struct GitRepository: Sendable {
     // MARK: - Mutations
 
     public func stage(paths: [String]) async throws {
-        guard !paths.isEmpty else { return }
-        _ = try await runner.run(["add", "--"] + paths, in: root, stdin: nil, environment: nil)
+        try await mutateEachChunk(paths, command: ["add"])
     }
 
     public func unstage(paths: [String]) async throws {
-        guard !paths.isEmpty else { return }
-        _ = try await runner.run(["restore", "--staged", "--"] + paths, in: root, stdin: nil, environment: nil)
+        try await mutateEachChunk(paths, command: ["restore", "--staged"])
     }
 
     public func stageAll() async throws {
@@ -358,6 +421,27 @@ public struct GitRepository: Sendable {
         _ = try await runner.run(args, in: root, stdin: Data(patch.utf8), environment: nil)
     }
 
+    /// The index blob id of `path` (`git rev-parse --verify :path`), or nil when the index has no such file.
+    public func indexBlobID(_ path: String) async -> String? {
+        await objectID(GitRevision.index.objectName(path: path))
+    }
+
+    private func objectID(_ spec: String) async -> String? {
+        guard let out = try? await readOnly(["rev-parse", "-q", "--verify", spec]) else { return nil }
+        let id = out.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.isEmpty ? nil : id
+    }
+
+    /// Applies `request` to the index when `:path` is still `baseBlobID`.
+    /// Does not read the work tree and does not write it. A changed index is refused before `git apply`.
+    public func applyHunk(_ request: GitHunkApply) async throws {
+        let current = await indexBlobID(request.relativePath)
+        guard current == request.baseBlobID else {
+            throw GitError.invalidRequest("The index changed after this hunk was read. Refresh the diff and try again.")
+        }
+        try await applyPatch(request.patch, toIndex: true, reverse: request.reverse)
+    }
+
     /// Commits only `paths` (plus any `untrackedPaths`, which are added first), whatever else is staged.
     /// - Parameters:
     ///   - signoff: adds a `Signed-off-by` trailer.
@@ -370,10 +454,12 @@ public struct GitRepository: Sendable {
         signoff: Bool = false, skipHooks: Bool = false
     ) async throws -> String {
         if !untrackedPaths.isEmpty {
-            _ = try await mutate(["add", "--"] + untrackedPaths)
+            try await mutateEachChunk(untrackedPaths, command: ["add"], mutating: true)
         }
         // `--only` commits just `paths` and is an error without any; with none, commit what is staged.
+        // One invocation: splitting `--only` across chunks would write several commits.
         var args = ["commit"]
+        if !paths.isEmpty { args.insert("--literal-pathspecs", at: 0) }
         if !paths.isEmpty { args.append("--only") }
         if amend { args.append("--amend") }
         if signoff { args.append("--signoff") }
@@ -382,6 +468,30 @@ public struct GitRepository: Sendable {
         if !paths.isEmpty { args += ["--"] + paths }
         let out = try await mutate(args, network: true, extraEnvironment: ["GIT_EDITOR": "true"])
         return out.text
+    }
+
+    /// Commits the index as it stands. No pathspec. The panel uses this.
+    public func commitIndex(_ commit: GitIndexCommit) async throws -> String {
+        let message = commit.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { throw GitError.invalidRequest("The commit message is empty.") }
+        return try await self.commit(
+            message: message, paths: [], untrackedPaths: [], amend: commit.amend,
+            signoff: commit.signoff, skipHooks: commit.skipHooks
+        )
+    }
+
+    /// `git commit --only` of these literal paths, after adding `untrackedPaths`.
+    /// Records the work-tree bytes of `paths`. The agent commit tool uses this.
+    public func commitFiles(
+        message: String, paths: [String], untrackedPaths: [String], signoff: Bool = false
+    ) async throws -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw GitError.invalidRequest("The commit message is empty.") }
+        guard !paths.isEmpty else { throw GitError.invalidRequest("Name at least one file to commit.") }
+        return try await self.commit(
+            message: trimmed, paths: paths, untrackedPaths: untrackedPaths, amend: false,
+            signoff: signoff, skipHooks: false
+        )
     }
 
     /// Puts `paths` back to their last committed content, in the index and in the working tree,

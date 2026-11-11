@@ -89,7 +89,7 @@ extension GitRepository {
         if includeUntracked { args.append("--include-untracked") }
         if keepIndex { args.append("--keep-index") }
         args += ["-m", message]
-        if !paths.isEmpty { args += ["--"] + paths }
+        if !paths.isEmpty { args = ["--literal-pathspecs"] + args + ["--"] + paths }
         _ = try await mutate(args)
         let after = await stashTop()
         return after != nil && after != before

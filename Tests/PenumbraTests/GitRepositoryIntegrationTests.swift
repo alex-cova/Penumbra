@@ -553,4 +553,219 @@ final class GitRepositoryIntegrationTests: XCTestCase {
         staged = try await repo.stagedDiff(path: "a.txt")
         XCTAssertTrue(staged.isEmpty)
     }
+
+    func testApplyHunkChecksTheIndexBlob() async throws {
+        let repo = try await makeRepo()
+        try write("a.txt", "1\n2\n3\n4\n")
+        _ = try await repo.commit(message: "base", paths: [], untrackedPaths: ["a.txt"], amend: false)
+        try write("a.txt", "1\nTWO\n3\nFOUR\n")
+        let before = await repo.indexBlobID("a.txt")
+        let patch = """
+        diff --git a/a.txt b/a.txt
+        --- a/a.txt
+        +++ b/a.txt
+        @@ -2,1 +2,1 @@
+        -2
+        +TWO
+
+        """
+        try await repo.applyHunk(GitHunkApply(relativePath: "a.txt", baseBlobID: before, patch: patch, reverse: false))
+        let staged = try await repo.stagedDiff(path: "a.txt")
+        XCTAssertTrue(staged.contains("+TWO"), staged)
+        XCTAssertFalse(staged.contains("FOUR"), staged)
+        let after = await repo.indexBlobID("a.txt")
+        XCTAssertNotEqual(before, after)
+        let indexText = try await repo.fileContents(at: .index, path: "a.txt")
+        XCTAssertEqual(indexText.map { String(decoding: $0, as: UTF8.self) }, "1\nTWO\n3\n4\n")
+
+        do {
+            try await repo.applyHunk(GitHunkApply(relativePath: "a.txt", baseBlobID: before, patch: patch, reverse: false))
+            XCTFail("a stale index blob must be refused")
+        } catch let error as GitError {
+            guard case .invalidRequest = error else {
+                XCTFail("expected invalidRequest, got \(error)")
+                return
+            }
+        }
+        let unchanged = await repo.indexBlobID("a.txt")
+        XCTAssertEqual(unchanged, after)
+    }
+
+    func testApplyHunkRejectsAPatchThatDoesNotMatch() async throws {
+        let repo = try await makeRepo()
+        try write("a.txt", "1\n2\n3\n")
+        _ = try await repo.commit(message: "base", paths: [], untrackedPaths: ["a.txt"], amend: false)
+        let blob = await repo.indexBlobID("a.txt")
+        let patch = """
+        diff --git a/a.txt b/a.txt
+        --- a/a.txt
+        +++ b/a.txt
+        @@ -2,1 +2,1 @@
+        -nope
+        +TWO
+
+        """
+        do {
+            try await repo.applyHunk(GitHunkApply(relativePath: "a.txt", baseBlobID: blob, patch: patch, reverse: false))
+            XCTFail("git apply must fail")
+        } catch is GitError {
+            // expected
+        }
+        let unchanged = await repo.indexBlobID("a.txt")
+        XCTAssertEqual(unchanged, blob)
+    }
+
+    func testApplyHunkRefusesAfterARenameMovesTheIndexBlob() async throws {
+        let repo = try await makeRepo()
+        try write("old.txt", "1\n2\n")
+        _ = try await repo.commit(message: "base", paths: [], untrackedPaths: ["old.txt"], amend: false)
+        let blob = await repo.indexBlobID("old.txt")
+        _ = try await runner.run(["mv", "old.txt", "new.txt"], in: directory)
+        let patch = """
+        diff --git a/old.txt b/old.txt
+        --- a/old.txt
+        +++ b/old.txt
+        @@ -2,1 +2,1 @@
+        -2
+        +TWO
+
+        """
+        do {
+            try await repo.applyHunk(GitHunkApply(relativePath: "old.txt", baseBlobID: blob, patch: patch, reverse: false))
+            XCTFail("the old path no longer has that index blob")
+        } catch let error as GitError {
+            guard case .invalidRequest = error else {
+                XCTFail("expected invalidRequest, got \(error)")
+                return
+            }
+        }
+        let oldBlob = await repo.indexBlobID("old.txt")
+        let newBlob = await repo.indexBlobID("new.txt")
+        XCTAssertNil(oldBlob)
+        XCTAssertEqual(newBlob, blob)
+    }
+
+    func testApplyHunkDeletesAFileFromTheIndexOnly() async throws {
+        let repo = try await makeRepo()
+        try write("gone.txt", "1\n2\n")
+        try write("keep.txt", "k\n")
+        _ = try await repo.commit(message: "base", paths: [], untrackedPaths: ["gone.txt", "keep.txt"], amend: false)
+        let blob = await repo.indexBlobID("gone.txt")
+        let keepBlob = await repo.indexBlobID("keep.txt")
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("gone.txt"))
+        let patch = """
+        diff --git a/gone.txt b/gone.txt
+        deleted file mode 100644
+        --- a/gone.txt
+        +++ /dev/null
+        @@ -1,2 +0,0 @@
+        -1
+        -2
+
+        """
+        try await repo.applyHunk(GitHunkApply(relativePath: "gone.txt", baseBlobID: blob, patch: patch, reverse: false))
+        let goneBlob = await repo.indexBlobID("gone.txt")
+        let keepAfter = await repo.indexBlobID("keep.txt")
+        XCTAssertNil(goneBlob)
+        XCTAssertEqual(keepAfter, keepBlob)
+        let keep = try await repo.fileContents(at: .index, path: "keep.txt")
+        XCTAssertEqual(keep.map { String(decoding: $0, as: UTF8.self) }, "k\n")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("gone.txt").path))
+
+        do {
+            try await repo.applyHunk(GitHunkApply(relativePath: "gone.txt", baseBlobID: blob, patch: patch, reverse: false))
+            XCTFail("the index no longer has the blob the hunk was built from")
+        } catch let error as GitError {
+            guard case .invalidRequest = error else {
+                XCTFail("expected invalidRequest, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testCommitIndexDoesNotTakeAPathAndCommitFilesDoes() async throws {
+        let repo = try await makeRepo()
+        try write("a.txt", "a\n")
+        try write("b.txt", "b\n")
+        _ = try await repo.commitFiles(message: "both", paths: ["a.txt", "b.txt"], untrackedPaths: ["a.txt", "b.txt"])
+        try write("a.txt", "a2\n")
+        try write("b.txt", "b2\n")
+        try await repo.stage(paths: ["a.txt", "b.txt"])
+        _ = try await repo.commitIndex(GitIndexCommit(message: "index"))
+        let status = try await repo.status()
+        XCTAssertTrue(status.isEmpty)
+    }
+
+
+    /// A file name is never a pathspec. Each selected name has a decoy that magic (`*`, `?`, `[]`)
+    /// would otherwise touch, plus a leading hyphen, a space, non-ASCII, and a newline.
+    func testLiteralPathspecsTouchOnlyTheNamedFiles() async throws {
+        let repo = try await makeRepo()
+        try write("seed.txt", "seed\n")
+        _ = try await repo.commit(message: "seed", paths: [], untrackedPaths: ["seed.txt"], amend: false)
+
+        let selected = [
+            "star*.txt", "q?.txt", "bracket[a].txt", "-dash.txt", "my file.txt", "café.txt", "line\nbreak.txt",
+        ]
+        let decoys = ["starX.txt", "qX.txt", "bracketa.txt", "untouched.txt"]
+        for name in selected + decoys { try writeLiteral(name, "1\n") }
+
+        try await repo.stage(paths: selected)
+        var status = try await repo.status()
+        XCTAssertEqual(Set(status.filter { $0.indexCode == "A" }.map(\.path)), Set(selected))
+        XCTAssertEqual(Set(status.filter(\.isUntracked).map(\.path)), Set(decoys))
+
+        try await repo.unstage(paths: selected)
+        status = try await repo.status()
+        XCTAssertTrue(status.allSatisfy { $0.indexCode != "A" && $0.indexCode != "M" })
+        XCTAssertEqual(Set(status.filter(\.isUntracked).map(\.path)), Set(selected + decoys))
+
+        _ = try await repo.commit(message: "named", paths: selected, untrackedPaths: selected, amend: false)
+        let log = try await repo.log(scope: .head)
+        let head = try XCTUnwrap(log.first?.hash)
+        let committed = try await repo.commitChanges(hash: head)
+        XCTAssertEqual(Set(committed.map(\.path)), Set(selected))
+        status = try await repo.status()
+        XCTAssertEqual(Set(status.map(\.path)), Set(decoys))
+
+        for name in selected + decoys { try writeLiteral(name, "2\n") }
+        try await repo.stage(paths: selected + decoys)
+        try await repo.unstage(paths: selected)
+        status = try await repo.status()
+        let staged = Set(status.filter { $0.indexCode == "M" || $0.indexCode == "A" }.map(\.path))
+        XCTAssertEqual(staged, Set(decoys), "Unstaging the magic names leaves the decoys staged")
+
+        let diff = try await repo.unstagedDiff(path: "star*.txt")
+        XCTAssertTrue(diff.contains("+2") || diff.contains("-1"))
+        XCTAssertFalse(diff.contains("bracketa"))
+        let blame = try await repo.blame(relativePath: "star*.txt", contents: Data("2\n".utf8))
+        XCTAssertFalse(blame.isEmpty)
+
+        let stashed = try await repo.stashPush(message: "one", includeUntracked: false, paths: ["star*.txt"])
+        XCTAssertTrue(stashed)
+        status = try await repo.status()
+        XCTAssertFalse(status.contains { $0.path == "star*.txt" })
+        XCTAssertTrue(status.contains { $0.path == "starX.txt" })
+
+        try await repo.stage(paths: decoys)
+        _ = try await repo.commit(message: "decoys", paths: [], untrackedPaths: [], amend: false)
+        for name in selected { try writeLiteral(name, "3\n") }
+        let reverted = try await repo.revert(paths: selected)
+        XCTAssertEqual(Set(reverted.reverted), Set(selected))
+        for name in selected {
+            XCTAssertEqual(try literalText(name), "1\n", name)
+        }
+        XCTAssertEqual(try literalText("starX.txt"), "2\n")
+    }
+
+    /// `appendingPathComponent` is fine for globs and spaces. A newline stays one path component.
+    private func writeLiteral(_ name: String, _ text: String) throws {
+        let url = URL(fileURLWithPath: directory.path + "/" + name, isDirectory: false)
+        try Data(text.utf8).write(to: url)
+    }
+
+    private func literalText(_ name: String) throws -> String {
+        let url = URL(fileURLWithPath: directory.path + "/" + name, isDirectory: false)
+        return String(decoding: try Data(contentsOf: url), as: UTF8.self)
+    }
 }

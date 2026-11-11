@@ -244,9 +244,11 @@ struct IDEGitCommitTool: AgentTool {
             signoff = (primary ?? fallback)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "true"
         }
         do {
-            let output = try await snapshot.repository.commit(
-                message: message, paths: repoPaths, untrackedPaths: untracked,
-                amend: false, signoff: signoff, skipHooks: false)
+            let repository = snapshot.repository
+            let output = try await GitMutationLane.shared.perform(gitDirectory: repository.gitDirectory) {
+                try await repository.commitFiles(
+                    message: message, paths: repoPaths, untrackedPaths: untracked, signoff: signoff)
+            }
             return output.isEmpty ? "Committed \(paths.count == 1 ? "1 file" : "\(paths.count) files")." : output
         } catch {
             throw ToolError(error.localizedDescription)
@@ -295,9 +297,12 @@ struct IDEGitBranchTool: AgentTool {
         let snapshot: IDEAgentGitSource.Snapshot
         do { snapshot = try await source.snapshot() } catch { throw ToolError(error.localizedDescription) }
         do {
-            let output = action == "create"
-                ? try await snapshot.repository.createBranch(name)
-                : try await snapshot.repository.switchBranch(name)
+            let repository = snapshot.repository
+            let output = try await GitMutationLane.shared.perform(gitDirectory: repository.gitDirectory) {
+                action == "create"
+                    ? try await repository.createBranch(name)
+                    : try await repository.switchBranch(name)
+            }
             return output.isEmpty ? (action == "create" ? "Created and switched to \(name)." : "Switched to \(name).") : output
         } catch {
             throw ToolError(error.localizedDescription)

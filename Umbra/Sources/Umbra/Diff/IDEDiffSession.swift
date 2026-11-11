@@ -113,8 +113,12 @@ final class IDEDiffSession {
     @ObservationIgnored var loadContent: (@MainActor (IDEDiffSource) async -> IDEDiffContent)?
     /// Why the working tree cannot be edited right now, or nil.
     @ObservationIgnored var readOnlyReasonProvider: (@MainActor (String) -> String?)?
-    /// Applies a hunk patch to git's index; the closure reports the failure message, or nil.
-    @ObservationIgnored var applyIndexPatch: (@MainActor (String, Bool) async -> String?)?
+    /// Applies a hunk to git's index; the closure reports the failure message, or nil.
+    @ObservationIgnored var applyIndexPatch: (@MainActor (GitHunkApply) async -> String?)?
+    /// The index blob id of a relative path, read when the diff loads so a later apply can refuse a stale hunk.
+    @ObservationIgnored var indexBlobID: (@MainActor (String) async -> String?)?
+    /// `:path` as of the load that produced `chunks`. Nil when the index has no blob for the file.
+    @ObservationIgnored private(set) var hunkBaseBlobID: String?
     /// Called after the right side was written to disk.
     @ObservationIgnored var onSaved: (@MainActor (String) -> Void)?
     /// Asked before a save writes over a file that changed on disk since it was loaded here; true
@@ -190,6 +194,11 @@ final class IDEDiffSession {
                         self.onPresentationChanged?()
                     }
                     return
+                }
+                if let path = request.repositoryRelativePath, request.indexAction != nil {
+                    self.hunkBaseBlobID = await self.indexBlobID?(path)
+                } else {
+                    self.hunkBaseBlobID = nil
                 }
                 self.left = IDEDiffText(leftText)
                 self.right = IDEDiffText(rightText)
@@ -274,16 +283,24 @@ final class IDEDiffSession {
     func applyToIndex(chunkAt index: Int) {
         guard let action = request.indexAction, chunks.indices.contains(index),
               let path = request.repositoryRelativePath, let applyIndexPatch else { return }
-        if isRightDirty, let text = currentRightText?() {
-            right = IDEDiffText(text)
+        if isRightDirty || request.workingTreePath.flatMap({ readOnlyReasonProvider?($0) }) != nil {
+            message = "Save the file before staging hunks. Unsaved editor text is not written to the index."
+            return
+        }
+        guard IDEDiffPatchBuilder.headerPath(path) != nil else {
+            message = "This file name cannot be staged as a hunk. Stage the whole file instead."
+            return
         }
         guard let patch = IDEDiffPatchBuilder.patch(for: chunks[index], left: left, right: right, path: path) else {
             message = "Only a final line break changed here; stage the whole file instead."
             return
         }
+        let request = GitHunkApply(
+            relativePath: path, baseBlobID: hunkBaseBlobID, patch: patch, reverse: action == .unstage
+        )
         isBusy = true
         Task { [weak self] in
-            let failure = await applyIndexPatch(patch, action == .unstage)
+            let failure = await applyIndexPatch(request)
             guard let self else { return }
             self.isBusy = false
             self.message = failure
