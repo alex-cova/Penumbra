@@ -210,8 +210,8 @@ final class SelfDefinitionRedirectTests: XCTestCase {
     }
 
     func testHoverDoesNotRunReferencesSearch() async throws {
-        let selfRange = NSRange(location: 22, length: 3)
-        let (controller, _, provider) = try await makeController(
+        let selfRange = NSRange(location: 12, length: 3)
+        let (controller, textView, provider) = try await makeController(
             text: "int count = Box;\n",
             stub: StubResult(
                 definition: .single(makeLocation(range: selfRange)),
@@ -219,10 +219,11 @@ final class SelfDefinitionRedirectTests: XCTestCase {
             )
         )
         await controller.resolveHover(
-            at: TextPosition(line: 0, column: 22, utf16Offset: 22), identifier: selfRange
+            at: TextPosition(line: 0, column: 12, utf16Offset: 12), identifier: selfRange
         )
         XCTAssertNotNil(controller.cachedHoverResult(for: selfRange))
         XCTAssertEqual(provider.requestedKinds, [.definition], "hover never runs a references search")
+        withExtendedLifetime(textView) {}
     }
 
     // MARK: - Keyboard path (EditorIntelligenceController)

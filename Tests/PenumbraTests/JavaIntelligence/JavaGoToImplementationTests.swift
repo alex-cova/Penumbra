@@ -340,19 +340,19 @@ final class JavaGoToImplementationTests: XCTestCase {
         XCTAssertEqual(hits.compactMap { $0.location.url?.lastPathComponent }, ["Child.java"])
     }
 
-    func testDefinitionOnConcreteOrStaticDeclarationsStaysEmpty() async throws {
+    func testDefinitionOnConcreteOrStaticDeclarationsSelectsTheDeclaration() async throws {
         let base = try write("Base.java", "class Base { void run() {} }")
         let child = try write("Child.java", "class Child extends Base { void run() {} }")
-        let util = try write("Util.java", "interface Util { static void help() {} }")
+        let util = try write("Util.java", "interface Util { static void help() {} int LIMIT = 1; }")
         let files = [base, child, util]
-        let concreteClass = try await navigate("class €Base { void run() {} }", url: base.url, indexing: files, kind: .definition)
-        XCTAssertNil(concreteClass)
-        let concreteMethod = try await navigate("class Base { void €run() {} }", url: base.url, indexing: files, kind: .definition)
-        XCTAssertNil(concreteMethod)
-        let staticMethod = try await navigate("interface Util { static void €help() {} }", url: util.url, indexing: files, kind: .definition)
-        XCTAssertNil(staticMethod)
-        let field = try await navigate("interface Util { int €LIMIT = 1; }", url: util.url, indexing: files, kind: .definition)
-        XCTAssertNil(field)
+        let concreteClass = try await implementations("class €Base { void run() {} }", url: base.url, indexing: files, kind: .definition)
+        XCTAssertEqual(concreteClass.map(\.text), ["Base"])
+        let concreteMethod = try await implementations("class Base { void €run() {} }", url: base.url, indexing: files, kind: .definition)
+        XCTAssertEqual(concreteMethod.map(\.text), ["run"])
+        let staticMethod = try await implementations("interface Util { static void €help() {} }", url: util.url, indexing: files, kind: .definition)
+        XCTAssertEqual(staticMethod.map(\.text), ["help"])
+        let field = try await implementations("interface Util { static void help() {} int €LIMIT = 1; }", url: util.url, indexing: files, kind: .definition)
+        XCTAssertEqual(field.map(\.text), ["LIMIT"])
     }
 
     func testDefinitionOnAnInterfaceReferenceStillOpensTheInterface() async throws {

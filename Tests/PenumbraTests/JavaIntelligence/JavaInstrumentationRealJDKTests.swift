@@ -51,7 +51,7 @@ final class JavaInstrumentationRealJDKTests: XCTestCase {
 
     func testCoverageOfAPlainMainEndToEnd() async throws {
         let jdk = try requireJDK()
-        let toolchain = try XCTUnwrap(toolchain, "run Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh") as JavaCoverageToolchain
+        guard let toolchain else { throw XCTSkip("JaCoCo jars unavailable; run Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh") }
         if let reason = JavaCoverageToolchain.unsupportedLanguageLevel(jdk.featureVersion) { throw XCTSkip(reason) }
         let classes = try await compile("""
         package app;
@@ -99,7 +99,7 @@ final class JavaInstrumentationRealJDKTests: XCTestCase {
 
     func testReportWithoutExecutionDataSaysSo() async throws {
         let jdk = try requireJDK()
-        let toolchain = try XCTUnwrap(toolchain, "run Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh") as JavaCoverageToolchain
+        guard let toolchain else { throw XCTSkip("JaCoCo jars unavailable; run Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh") }
         let classes = directory.appendingPathComponent("classes", isDirectory: true)
         try FileManager.default.createDirectory(at: classes, withIntermediateDirectories: true)
         do {

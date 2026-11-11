@@ -133,9 +133,11 @@ final class RecentFilesSwitcherTests: XCTestCase {
         ])
 
         controller.presentRecentFiles()
+        controller.paletteView.query = "zeb"
         controller.paletteView.onQueryChange?("zeb")
         await waitUntil { controller.paletteView.emptyStateMessage == "No results" && controller.flatItems.isEmpty }
         controller.activateSelection()
+        await waitUntil { controller.paletteModel.mode == .quickOpen }
 
         XCTAssertTrue(controller.isPresented)
         XCTAssertEqual(controller.paletteModel.mode, .quickOpen)
