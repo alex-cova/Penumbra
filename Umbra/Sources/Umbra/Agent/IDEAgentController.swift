@@ -269,6 +269,56 @@ final class IDEAgentController {
         return created
     }
 
+    /// Points the visible chat at an agent. A chat that already has a transcript is left
+    /// alone, including while it is running, and another chat takes the new agent.
+    func selectProvider(_ binding: IDEACPBinding) {
+        let defaultID = settings.agentIDForNewChats(in: projectRoot)
+        let current = providerRef(selected)
+        let effect = IDEACPProviderSwitch.plan(
+            selected: current, chats: conversations.map(providerRef), target: binding, defaultID: defaultID)
+        switch effect {
+        case .stay:
+            return
+        case .rebind(let id):
+            conversations.first { $0.id == id }?.bindProvider(binding)
+        case .open(let keeping, let existing, let previousIsRunning):
+            let previous = conversations.first { $0.id == keeping }
+            let previousName = providerName(previous?.resolvedACPAgentID)
+            let nextName = providerName(binding.agentID)
+            if let existing, let destination = conversations.first(where: { $0.id == existing }) {
+                select(destination.id)
+            } else {
+                let created = addConversation()
+                created.bindProvider(binding)
+                created.appendNotice("This chat uses \(nextName). \(previousName) stays in its own chat.")
+            }
+            if previousIsRunning {
+                previous?.appendNotice("Still running on \(previousName). Switching agents did not stop it.")
+            }
+        }
+    }
+
+    /// Pins chats that already have a transcript to the agent they resolve to now, so changing
+    /// the default does not move them.
+    func freezeUnpinnedTranscripts() {
+        let defaultID = settings.agentIDForNewChats(in: projectRoot)
+        for conversation in conversations where conversation.modelChoice == nil && conversation.acpPin == nil && !conversation.isEmpty {
+            conversation.acpPin = IDEACPBinding(agentID: conversation.resolvedACPAgentID ?? defaultID)
+        }
+    }
+
+    private func providerRef(_ conversation: IDEAgentConversation) -> IDEACPChatRef {
+        IDEACPChatRef(
+            id: conversation.id, isEmpty: conversation.isEmpty, isRunning: conversation.isRunning,
+            pin: conversation.acpPin, hasModelChoice: conversation.modelChoice != nil,
+            modelACPAgentID: conversation.modelChoice?.acpAgentID)
+    }
+
+    private func providerName(_ agentID: UUID?) -> String {
+        guard let agentID else { return "Umbra Native" }
+        return settings.acpAgents.first { $0.id == agentID }?.displayName ?? "the previous agent"
+    }
+
     func select(_ id: UUID) {
         guard let conversation = conversations.first(where: { $0.id == id }) else { return }
         selectedID = id

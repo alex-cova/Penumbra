@@ -19,7 +19,11 @@ final class FakeACPAgent: @unchecked Sendable {
     var protocolVersion = 1
     var authMethodsJSON: [JSONValue] = []
     var requireAuth = false
+    /// When set, `session/new` and `session/load` fail with `-32000` and this message.
+    var sessionErrorMessage: String?
     var hangInitialize = false
+    /// Codex ACP 2.6.0 answers `session/load` without `sessionId`. The client keeps the requested id.
+    var omitSessionIdOnLoad = false
     let authenticated = ACPLocked(false)
     let cancelled = ACPLocked(false)
     let lastInitializeParams = ACPLocked<JSONValue?>(nil)
@@ -64,8 +68,19 @@ final class FakeACPAgent: @unchecked Sendable {
             authenticated.set(true)
             return .success(.object([:]))
         case "session/new", "session/load":
+            if let sessionErrorMessage {
+                return .failure(JSONRPCError(code: -32000, message: sessionErrorMessage))
+            }
             if requireAuth, !authenticated.get() {
                 return .failure(JSONRPCError(code: -32000, message: "Authentication required"))
+            }
+            if method == "session/load", omitSessionIdOnLoad {
+                return .success(.object([
+                    "modes": .object([
+                        "currentModeId": "agent",
+                        "availableModes": .array([.object(["id": "agent", "name": "Agent"])]),
+                    ]),
+                ]))
             }
             return .success(.object([
                 "sessionId": .string(params?.string("sessionId") ?? "fake-session-1"),
@@ -477,6 +492,74 @@ func acpPair() -> (ACPInMemoryTransport, ACPInMemoryTransport) { ACPInMemoryTran
         await #expect(throws: ACPError.self) {
             try await connection.request(method: "initialize", params: nil, timeout: .milliseconds(100))
         }
+        await connection.close()
+    }
+
+    @Test func permissionTimeoutCancelsWithoutApproving() async throws {
+        let (clientTransport, agentTransport) = acpPair()
+        let agent = await FakeACPAgent.make(transport: agentTransport)
+        agent.onPrompt = { agent, _ in
+            _ = await agent.requestPermission()
+            return "end_turn"
+        }
+        let session = ACPClientSession(
+            transport: clientTransport, cwd: "/tmp/project", permissionTimeout: .milliseconds(200))
+        let events = await collectACP(await session.send("run it"))
+        let outcome = agent.permissionOutcome.get()
+        #expect(outcome?["outcome"]?["outcome"]?.stringValue == "cancelled")
+        #expect(events.contains {
+            if case .toolCallFinished(_, _, let output) = $0 {
+                output.isError && output.text.contains("Permission request timed out")
+            } else { false }
+        })
+        #expect(events.last == .runEnded(.completed))
+    }
+
+    @Test func loadWithoutSessionIdKeepsTheRequestedId() async throws {
+        let (clientTransport, agentTransport) = acpPair()
+        let agent = await FakeACPAgent.make(transport: agentTransport)
+        agent.omitSessionIdOnLoad = true
+        let session = ACPClientSession(transport: clientTransport, cwd: "/tmp/project")
+        let loaded = try await session.loadSession(id: "remote-9")
+        #expect(loaded == "remote-9")
+        #expect(await session.sessionId == "remote-9")
+    }
+
+    @Test func staleSessionLoadWithoutAuthMethodsIsNotRewritten() async throws {
+        let (clientTransport, agentTransport) = acpPair()
+        let agent = await FakeACPAgent.make(transport: agentTransport)
+        agent.sessionErrorMessage = "session not found"
+        let session = ACPClientSession(transport: clientTransport, cwd: "/tmp/project")
+        do {
+            _ = try await session.loadSession(id: "gone")
+            Issue.record("load should fail")
+        } catch let error as ACPError {
+            #expect(error.localizedDescription == "session not found")
+        }
+        #expect(!agent.authenticated.get())
+    }
+
+    @Test func malformedFrameFailsTheWaitingRequest() async throws {
+        let (clientTransport, peerTransport) = acpPair()
+        let connection = ACPConnection(transport: clientTransport)
+        await connection.start()
+        let closed = ACPLocked(false)
+        await connection.setCloseHandler { _ in closed.set(true) }
+        let peer = Task {
+            for await chunk in peerTransport.incoming {
+                if String(decoding: chunk, as: UTF8.self).contains("initialize") {
+                    peerTransport.sendRaw(Data("{not json\n".utf8))
+                }
+            }
+        }
+        defer { peer.cancel() }
+        do {
+            _ = try await connection.request(method: "initialize", params: nil, timeout: .seconds(5))
+            Issue.record("initialize should fail")
+        } catch let error as ACPError {
+            #expect(error.localizedDescription.contains("Malformed"))
+        }
+        #expect(closed.get())
         await connection.close()
     }
 }

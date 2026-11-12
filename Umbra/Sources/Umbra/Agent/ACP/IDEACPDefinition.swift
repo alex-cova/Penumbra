@@ -1,26 +1,82 @@
 import Foundation
 
-/// One user-configured external ACP agent: a name and a command line (plan: command-based
-/// definitions only, no auto-discovery in v1).
+/// One user-configured external ACP agent: a name and a command line.
+///
+/// Presets fill `presetID` when the row came from the built-in catalog. The executable is a
+/// name or a path the user typed; it is resolved on `PATH` at launch and is never started
+/// during discovery.
 struct IDEACPDefinition: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var name: String
-    /// Executable as typed: an absolute/relative path, or a bare name resolved on `PATH`.
+    /// Executable as typed: an absolute or relative path, or a bare name resolved on `PATH`.
     var command: String
     var args: [String]
-    /// Extra environment for the agent process. Values may name Keychain-backed secrets by
-    /// literal value only; the settings UI stores them with the definition, never in a repo.
+    /// Extra environment for the agent process. Secret values stay in the Keychain; this
+    /// dictionary is for non-secret values only.
     var env: [String: String]
+    /// Catalog id (`claude-code`, `codex`, …) when this row was created from a preset.
+    var presetID: String?
+    /// A disabled agent stays in the list and is not launched.
+    var isEnabled: Bool
 
-    init(id: UUID = UUID(), name: String, command: String, args: [String] = [], env: [String: String] = [:]) {
+    init(
+        id: UUID = UUID(), name: String, command: String, args: [String] = [], env: [String: String] = [:],
+        presetID: String? = nil, isEnabled: Bool = true
+    ) {
         self.id = id
         self.name = name
         self.command = command
         self.args = args
         self.env = env
+        self.presetID = presetID
+        self.isEnabled = isEnabled
     }
 
     var displayName: String { name.isEmpty ? command : name }
+
+    /// `npx -y` downloads a package the first time it runs. That is never an installed agent.
+    var launchesPackageDownload: Bool { command == "npx" }
+
+    /// What to show when the executable cannot be resolved. A path is not a `PATH` lookup.
+    var missingExecutableMessage: String {
+        if command.contains("/") {
+            return "Could not find the ACP agent executable “\(command)”."
+        }
+        return "Could not find the ACP agent executable “\(command)” on PATH."
+    }
+
+    /// The command line shown in settings. Parts that contain spaces are quoted.
+    var commandLine: String {
+        ([command] + args).map { part in
+            part.contains(where: \.isWhitespace) ? "\"\(part.replacingOccurrences(of: "\"", with: "\\\""))\"" : part
+        }.joined(separator: " ")
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, command, args, env, presetID, isEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        command = try container.decode(String.self, forKey: .command)
+        args = try container.decodeIfPresent([String].self, forKey: .args) ?? []
+        env = try container.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
+        presetID = try container.decodeIfPresent(String.self, forKey: .presetID)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(command, forKey: .command)
+        try container.encode(args, forKey: .args)
+        try container.encode(env, forKey: .env)
+        try container.encodeIfPresent(presetID, forKey: .presetID)
+        try container.encode(isEnabled, forKey: .isEnabled)
+    }
 
     /// Splits a typed command line into executable + arguments, honouring single/double quotes.
     static func parseCommandLine(_ text: String) -> (command: String, args: [String])? {
@@ -68,13 +124,17 @@ struct IDEACPDefinition: Codable, Equatable, Identifiable, Sendable {
     }
 
     /// Resolves the executable to an absolute path, searching `pathValue` for a bare name.
-    func resolvedExecutable(pathValue: String) -> String? {
+    /// `isExecutable` is the only filesystem check; nothing is spawned.
+    func resolvedExecutable(
+        pathValue: String,
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> String? {
         if command.contains("/") {
-            return FileManager.default.isExecutableFile(atPath: command) ? command : nil
+            return isExecutable(command) ? command : nil
         }
-        for directory in pathValue.split(separator: ":") {
+        for directory in pathValue.split(separator: ":") where !directory.isEmpty {
             let candidate = "\(directory)/\(command)"
-            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+            if isExecutable(candidate) { return candidate }
         }
         return nil
     }

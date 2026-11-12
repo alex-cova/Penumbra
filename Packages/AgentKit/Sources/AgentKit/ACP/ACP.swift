@@ -310,8 +310,12 @@ public struct ACPNewSessionResponse: Sendable, Equatable {
     public var sessionId: String
     public var modes: ACPSessionModeState?
     public var configOptions: [ACPConfigOption]
-    public init(jsonValue: JSONValue) throws {
-        guard let id = jsonValue.string("sessionId") else { throw ACPError.malformedFrame("session/new response missing sessionId") }
+    /// `fallbackSessionID` covers agents that accept `session/load` and omit `sessionId`
+    /// in the result. Codex ACP 2.6.0 does that. `session/new` does not pass a fallback.
+    public init(jsonValue: JSONValue, fallbackSessionID: String? = nil) throws {
+        guard let id = jsonValue.string("sessionId") ?? fallbackSessionID, !id.isEmpty else {
+            throw ACPError.malformedFrame("session/new response missing sessionId")
+        }
         sessionId = id
         modes = ACPSessionModeState(jsonValue: jsonValue["modes"])
         configOptions = (jsonValue["configOptions"]?.arrayValue ?? []).map(ACPConfigOption.init(jsonValue:))

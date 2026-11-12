@@ -47,8 +47,7 @@ final class IDEACPTransport: ACPTransport, @unchecked Sendable {
             guard !spawned else { throw ACPError.transportClosed }
             spawned = true
             guard let executable = definition.resolvedExecutable(pathValue: environment["PATH"] ?? "") else {
-                throw ACPError.agentError(JSONRPCError(
-                    code: -32000, message: "Could not find the ACP agent executable “\(definition.command)” on PATH."))
+                throw ACPError.agentError(JSONRPCError(code: -32000, message: definition.missingExecutableMessage))
             }
             var request = SubprocessRequest(executable: executable, arguments: definition.args)
             request.workingDirectory = workingDirectory
@@ -88,6 +87,20 @@ final class IDEACPTransport: ACPTransport, @unchecked Sendable {
     /// Hard stop: SIGTERM to the process group, then SIGKILL after the request's grace.
     func terminate() {
         lock.withLock { handle }?.terminate()
+    }
+
+    /// Waits until the child has been reaped. `close` only signals. A replacement process
+    /// must not start while this one can still be killed by pid. The wait gives up after
+    /// `timeout` so a process that survives SIGKILL cannot hold the next launch.
+    func waitForExit(timeout: Duration = .seconds(5)) async {
+        let handle = lock.withLock { self.handle }
+        guard let handle, !handle.isFinished else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { _ = await handle.result }
+            group.addTask { try? await Task.sleep(for: timeout) }
+            _ = await group.next()
+            group.cancelAll()
+        }
     }
 
     func close() async {

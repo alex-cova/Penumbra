@@ -92,6 +92,10 @@ public nonisolated enum AgentCommandEnvironment {
         var environment: [String: String] = [
             "PATH": path.joined(separator: ":"),
             "HOME": home,
+            // Claude Code treats a missing USER as logged out, even when its credential
+            // store is already present under HOME. This is the account name, not a secret.
+            "USER": NSUserName(),
+            "LOGNAME": NSUserName(),
             "TMPDIR": temporaryDirectory,
             "LANG": "en_US.UTF-8",
             "TERM": "dumb",

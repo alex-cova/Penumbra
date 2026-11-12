@@ -9,6 +9,7 @@ import SwiftUI
 /// Done and Escape close it.
 struct IDEAgentSettingsSheet: View {
     let settings: IDEAgentSettings
+    var agent: IDEAgentController?
     @Environment(\.dismiss) private var dismiss
     @State private var isModelsPresented = false
 
@@ -24,7 +25,7 @@ struct IDEAgentSettingsSheet: View {
             }
                 .padding(IDEAppearance.Spacing.md)
             Divider().overlay(IDEAppearance.ColorToken.border)
-            IDEAgentSettingsView(settings: settings, width: nil, manageModels: { isModelsPresented = true })
+            IDEAgentSettingsView(settings: settings, agent: agent, width: nil, manageModels: { isModelsPresented = true })
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
             .frame(width: 460, height: 560)
@@ -49,8 +50,6 @@ struct IDEAgentSettingsView: View {
     @State private var keyDraft = ""
     @State private var webSearchKeyDraft = ""
     @State private var isConfirmingClear = false
-    @State private var acpNameDraft = ""
-    @State private var acpCommandDraft = ""
 
     var body: some View {
         @Bindable var settings = settings
@@ -154,55 +153,7 @@ struct IDEAgentSettingsView: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
 
-            Section("External ACP Agents") {
-                @Bindable var settings = settings
-                if settings.acpAgents.isEmpty {
-                    Text("No external agents. Add one by name and command; it runs as a process on this Mac and talks to the panel over the Agent Client Protocol.")
-                        .font(IDEAppearance.Typography.caption)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                }
-                ForEach(settings.acpAgents) { definition in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(definition.displayName)
-                            Text(([definition.command] + definition.args).joined(separator: " "))
-                                .font(IDEAppearance.Typography.caption)
-                                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        let isUsed = settings.acpActiveAgentID == definition.id && settings.acpAllowedAgentIDs.contains(definition.id)
-                        Button {
-                            if isUsed {
-                                settings.acpActiveAgentID = nil
-                            } else {
-                                settings.setACPAllowed(true, agentID: definition.id)
-                                settings.acpActiveAgentID = definition.id
-                            }
-                        } label: {
-                            Label("Use", systemImage: isUsed ? "checkmark.square" : "square")
-                        }
-                            .buttonStyle(.borderless)
-                            .help("Allow running this agent and use it for new chats. Umbra asks through the existing approval cards before it changes files or runs commands.")
-                            .accessibilityLabel(isUsed ? "Stop using \(definition.displayName)" : "Use \(definition.displayName)")
-                        Button("Remove") { settings.removeACPAgent(id: definition.id) }
-                    }
-                }
-                TextField("Name (e.g. My Agent)", text: $acpNameDraft)
-                TextField("Command (e.g. my-agent --acp)", text: $acpCommandDraft)
-                    .font(IDEAppearance.Typography.monoSmall)
-                Button("Add Agent") {
-                    settings.addACPAgent(
-                        name: acpNameDraft.trimmingCharacters(in: .whitespaces),
-                        commandLine: acpCommandDraft.trimmingCharacters(in: .whitespaces))
-                    acpNameDraft = ""
-                    acpCommandDraft = ""
-                }
-                    .disabled(acpCommandDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-                Text("Turning on “Use” is the consent to run that command. Nothing is spawned until you send a message, and Stop kills the process group.")
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            }
+            IDEACPSettingsSection(settings: settings, agent: agent, projectRoot: agent?.projectRoot)
 
             IDEMCPSettingsSection(store: settings.mcp, manager: agent?.mcp, projectRoot: agent?.projectRoot)
 

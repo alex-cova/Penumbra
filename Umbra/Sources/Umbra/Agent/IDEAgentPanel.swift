@@ -51,7 +51,7 @@ struct IDEAgentPanel: View {
         // backdrop lives one level up, in IDEAICodeView, so it fills the whole card.
         .ideAnimation(placement == .aiMode ? IDEAppearance.Motion.panel : nil, value: agent.entries.isEmpty)
         .sheet(isPresented: $isSettingsPresented) {
-            IDEAgentSettingsSheet(settings: settings)
+            IDEAgentSettingsSheet(settings: settings, agent: agent)
         }
         .sheet(item: Bindable(agent).rewindRequest) { request in
             IDEAgentRewindSheet(agent: agent, request: request) { agent.rewindRequest = nil }
@@ -64,6 +64,7 @@ struct IDEAgentPanel: View {
     private var header: some View {
         HStack(spacing: 2) {
             headerTitle
+            IDEACPProviderMenu(agent: agent, openSettings: { isSettingsPresented = true })
 
             if agent.usage.inputTokens + agent.usage.outputTokens > 0 {
                 Text("\(IDEAgentFormat.tokens(agent.usage.inputTokens + agent.usage.outputTokens)) tokens"
@@ -331,7 +332,7 @@ struct IDEAgentPanel: View {
             if agent.selected.isACPConversation {
                 IDEACPModeChip(conversation: agent.selected)
                 if !agent.selected.acpConfigOptions.isEmpty {
-                    IDEACPConfigChip(options: agent.selected.acpConfigOptions)
+                    IDEACPConfigChip(conversation: agent.selected)
                 }
                 Button("Restart Agent") { agent.selected.restartACP() }
                     .buttonStyle(.borderless)
@@ -352,7 +353,7 @@ struct IDEAgentPanel: View {
                     Task { await chat.compact(focus: nil) }
                 }
             }
-            if isAIMode {
+            if isAIMode, !agent.selected.isACPConversation {
                 IDEAIModelPicker(
                     settings: settings, choice: choice, mode: .code,
                     onSelect: { workspace.selectAIModel($0, for: .code) },

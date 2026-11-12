@@ -120,4 +120,14 @@ struct IDEAgentSavedTranscript: Codable {
     var runInProgress: Bool?
     /// Messages written during that run and not yet delivered, so a quit does not lose them.
     var queued: [String]?
+    /// The ACP agent this transcript is bound to. Absent on older files, which follow the default.
+    var acpPinnedAgentID: UUID? = nil
+    /// True when the chat was bound to Umbra Native, so a later ACP default does not take it.
+    var acpPinnedNative: Bool? = nil
+    /// The external agent's session id, when that agent advertised `session/load`. An id is not
+    /// proof the session still exists; the next connection checks, and a failure starts a new one.
+    var acpSessionID: String? = nil
+    /// Agent, command, arguments, and workspace the session id was created with. A later launch
+    /// that does not match does not reuse the id.
+    var acpLaunchFingerprint: String? = nil
 }

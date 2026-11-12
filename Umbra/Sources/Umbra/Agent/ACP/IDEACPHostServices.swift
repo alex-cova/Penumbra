@@ -5,8 +5,8 @@ import Foundation
 /// checkpoint recording in `ACPClientSession`), `terminal/*` through `AgentCommandRunner`.
 /// Capabilities are advertised strictly from what is provided here (plan step 4/5).
 enum IDEACPHostServices {
-    static func make(workspace: IDEAgentWorkspace, root: URL) -> ACPHostServices {
-        let terminals = IDEACPTerminalStore(root: root, workspace: workspace)
+    static func make(workspace: IDEAgentWorkspace, root: URL, environment: [String: String] = [:]) -> ACPHostServices {
+        let terminals = IDEACPTerminalStore(root: root, workspace: workspace, environment: environment)
         return ACPHostServices(
             readTextFile: { request in
                 try await workspace.readText(path: relativePath(request.path, workspace: workspace))
@@ -60,24 +60,28 @@ final class IDEACPTerminalStore: @unchecked Sendable {
     private var entries: [String: Entry] = [:]
     private let root: URL
     private let workspace: IDEAgentWorkspace
+    /// The agent process environment. Terminals do not inherit the editor's full environment.
+    private let environment: [String: String]
 
-    init(root: URL, workspace: IDEAgentWorkspace) {
+    init(root: URL, workspace: IDEAgentWorkspace, environment: [String: String]) {
         self.root = root
         self.workspace = workspace
+        self.environment = environment
     }
 
     func create(_ request: ACPCreateTerminalRequest) async throws -> String {
         let id = UUID().uuidString
         let commandLine = ([request.command] + request.args).map(Self.shellQuoted).joined(separator: " ")
-        let cwd = request.cwd.map { URL(fileURLWithPath: $0) } ?? root
-        var environment = ProcessInfo.processInfo.environment
-        for variable in request.env { environment[variable.name] = variable.value }
+        // The same jail as file tools. A cwd outside the project is refused.
+        let cwd = try request.cwd.map { try workspace.disk.jail.resolve($0) } ?? root
+        var commandEnvironment = environment
+        for variable in request.env { commandEnvironment[variable.name] = variable.value }
         lock.withLock { entries[id] = Entry() }
         let task = Task { [weak self] in
             guard let self else { return }
             do {
                 let result = try await AgentCommandRunner.run(
-                    AgentCommandSpec(command: commandLine, workingDirectory: cwd, environment: environment, timeout: 3600),
+                    AgentCommandSpec(command: commandLine, workingDirectory: cwd, environment: commandEnvironment, timeout: 3600),
                     onOutput: { [weak self] chunk in
                         self?.lock.withLock { self?.entries[id]?.output += chunk }
                     })

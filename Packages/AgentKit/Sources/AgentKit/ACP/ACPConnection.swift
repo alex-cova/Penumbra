@@ -17,6 +17,7 @@ public actor ACPConnection {
     private let transport: any ACPTransport
     private var nextID = 1
     private var pending: [JSONRPCID: CheckedContinuation<JSONValue, Error>] = [:]
+    private var timeoutTasks: [JSONRPCID: Task<Void, Never>] = [:]
     private var readerTask: Task<Void, Never>?
     private var closed = false
     private var closeError: ACPError?
@@ -65,17 +66,24 @@ public actor ACPConnection {
                     return
                 }
                 if let timeout {
-                    Task {
+                    let task = Task {
                         try? await Task.sleep(for: timeout)
                         self.expire(id: id, method: method)
                     }
+                    self.timeoutTasks[id] = task
                 }
             }
         }
     }
 
     private func expire(id: JSONRPCID, method: String) {
+        timeoutTasks.removeValue(forKey: id)?.cancel()
         pending.removeValue(forKey: id)?.resume(throwing: ACPError.timeout(method))
+    }
+
+    private func takePending(_ id: JSONRPCID) -> CheckedContinuation<JSONValue, Error>? {
+        timeoutTasks.removeValue(forKey: id)?.cancel()
+        return pending.removeValue(forKey: id)
     }
 
     public func notify(method: String, params: JSONValue? = nil) async throws {
@@ -95,7 +103,10 @@ public actor ACPConnection {
         guard !closed else { return }
         closed = true
         readerTask?.cancel()
-        failAllPending(with: ACPError.transportClosed)
+        for task in timeoutTasks.values { task.cancel() }
+        timeoutTasks.removeAll()
+        // A frame that already failed the connection keeps its reason. A normal close does not.
+        failAllPending(with: closeError ?? ACPError.transportClosed)
         await transport.close()
     }
 
@@ -154,9 +165,9 @@ public actor ACPConnection {
         }
         switch message {
         case .result(let id, let result):
-            pending.removeValue(forKey: id)?.resume(returning: result)
+            takePending(id)?.resume(returning: result)
         case .error(let id, let error):
-            if let id, let continuation = pending.removeValue(forKey: id) {
+            if let id, let continuation = takePending(id) {
                 continuation.resume(throwing: ACPError.agentError(error))
             }
         case .notification(let method, let params):

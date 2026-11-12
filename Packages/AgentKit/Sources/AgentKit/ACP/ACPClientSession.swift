@@ -58,6 +58,8 @@ public actor ACPClientSession {
     private let additionalDirectories: [String]
     private let mcpServers: [JSONValue]
     private let requestTimeout: Duration
+    /// How long a permission card may sit unanswered before it is cancelled. Zero waits forever.
+    private let permissionTimeout: Duration
 
     public private(set) var permissionMode: PermissionMode
     public private(set) var permissionRules: PermissionRules
@@ -81,6 +83,7 @@ public actor ACPClientSession {
     private var knownToolCalls: [String: String] = [:]
 
     private var pendingApprovals: [String: CheckedContinuation<ACPRequestPermissionOutcome, Never>] = [:]
+    private var permissionTimeouts: [String: Task<Void, Never>] = [:]
     private var pendingOptions: [String: [ACPPermissionOption]] = [:]
     private var pendingSuggestedRules: [String: PermissionRule] = [:]
 
@@ -94,6 +97,7 @@ public actor ACPClientSession {
         mode: PermissionMode = .acceptEdits,
         rules: PermissionRules = PermissionRules(),
         requestTimeout: Duration = .seconds(30),
+        permissionTimeout: Duration = .seconds(300),
         checkpoints: CheckpointLog? = nil
     ) {
         self.checkpoints = checkpoints
@@ -106,6 +110,7 @@ public actor ACPClientSession {
         self.permissionMode = mode
         self.permissionRules = rules
         self.requestTimeout = requestTimeout
+        self.permissionTimeout = permissionTimeout
     }
 
     public var agentCapabilities: ACPAgentCapabilities? { initializeResponse?.agentCapabilities }
@@ -136,6 +141,8 @@ public actor ACPClientSession {
         do {
             raw = try await connection.request(method: "initialize", params: request.jsonValue, timeout: requestTimeout)
         } catch {
+            // Dropping the reference without closing leaves the process running after a timeout.
+            await connection.close()
             self.connection = nil
             throw error
         }
@@ -157,8 +164,8 @@ public actor ACPClientSession {
         guard let connection else { throw ACPError.notConnected }
         do {
             return try await startSession(method: "session/new", extra: [:], connection: connection)
-        } catch ACPError.agentError(let error) where error.code == -32000 {
-            try await authenticate(connection: connection)
+        } catch {
+            try await authenticateIfAgentDemandsIt(error, connection: connection)
             return try await startSession(method: "session/new", extra: [:], connection: connection)
         }
     }
@@ -169,10 +176,20 @@ public actor ACPClientSession {
         guard let connection else { throw ACPError.notConnected }
         do {
             return try await startSession(method: "session/load", extra: ["sessionId": .string(id)], connection: connection)
-        } catch ACPError.agentError(let error) where error.code == -32000 {
-            try await authenticate(connection: connection)
+        } catch {
+            try await authenticateIfAgentDemandsIt(error, connection: connection)
             return try await startSession(method: "session/load", extra: ["sessionId": .string(id)], connection: connection)
         }
+    }
+
+    /// `-32000` means "authenticate first" only when the agent advertised a method.
+    /// A stale session id, with no method advertised, is returned unchanged.
+    private func authenticateIfAgentDemandsIt(_ error: Error, connection: ACPConnection) async throws {
+        guard case ACPError.agentError(let rpc) = error, rpc.code == -32000,
+              initializeResponse?.authMethods.isEmpty == false else {
+            throw error
+        }
+        try await authenticate(connection: connection)
     }
 
     private func startSession(method: String, extra: [String: JSONValue], connection: ACPConnection) async throws -> String {
@@ -185,7 +202,8 @@ public actor ACPClientSession {
         }
         for (key, value) in extra { params[key] = value }
         let raw = try await connection.request(method: method, params: .object(params), timeout: requestTimeout)
-        let response = try ACPNewSessionResponse(jsonValue: raw)
+        let fallback = method == "session/load" ? extra["sessionId"]?.stringValue : nil
+        let response = try ACPNewSessionResponse(jsonValue: raw, fallbackSessionID: fallback)
         sessionId = response.sessionId
         if let modes = response.modes { modeState = modes }
         if !response.configOptions.isEmpty { configOptions = response.configOptions }
@@ -338,6 +356,8 @@ public actor ACPClientSession {
         stopRequested = true
         let approvals = pendingApprovals
         pendingApprovals = [:]
+        for task in permissionTimeouts.values { task.cancel() }
+        permissionTimeouts = [:]
         pendingOptions = [:]
         pendingSuggestedRules = [:]
         for (_, continuation) in approvals { continuation.resume(returning: .cancelled) }
@@ -394,12 +414,15 @@ public actor ACPClientSession {
         permissionRules.add(rule, to: .allow)
     }
 
-    private func resumeApproval(callID: String, outcome: ACPRequestPermissionOutcome) {
-        guard let continuation = pendingApprovals.removeValue(forKey: callID) else { return }
+    @discardableResult
+    private func resumeApproval(callID: String, outcome: ACPRequestPermissionOutcome) -> Bool {
+        permissionTimeouts.removeValue(forKey: callID)?.cancel()
+        guard let continuation = pendingApprovals.removeValue(forKey: callID) else { return false }
         pendingOptions.removeValue(forKey: callID)
         pendingSuggestedRules.removeValue(forKey: callID)
         activeContinuation?.yield(.stateChanged(.streaming))
         continuation.resume(returning: outcome)
+        return true
     }
 
     public var awaitingApproval: [String] { Array(pendingApprovals.keys) }
@@ -438,6 +461,8 @@ public actor ACPClientSession {
         initializeResponse = nil
         let approvals = pendingApprovals
         pendingApprovals = [:]
+        for task in permissionTimeouts.values { task.cancel() }
+        permissionTimeouts = [:]
         pendingOptions = [:]
         pendingSuggestedRules = [:]
         for (_, continuation) in approvals { continuation.resume(returning: .cancelled) }
@@ -654,7 +679,18 @@ public actor ACPClientSession {
         activeContinuation?.yield(.approvalRequested(approval))
         let outcome: ACPRequestPermissionOutcome = await withCheckedContinuation { continuation in
             pendingApprovals[callID] = continuation
-            if stopRequested { resumeApproval(callID: callID, outcome: .cancelled) }
+            if stopRequested {
+                resumeApproval(callID: callID, outcome: .cancelled)
+                return
+            }
+            guard permissionTimeout > .zero else { return }
+            permissionTimeouts[callID] = Task {
+                try? await Task.sleep(for: permissionTimeout)
+                guard self.resumeApproval(callID: callID, outcome: .cancelled) else { return }
+                self.activeContinuation?.yield(.toolCallFinished(
+                    id: callID, name: name,
+                    output: ToolOutput("Permission request timed out. The tool was not run.", isError: true)))
+            }
         }
         return .success(.object(["outcome": outcome.jsonValue]))
     }

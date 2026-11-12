@@ -294,16 +294,62 @@ final class IDEAgentSettings {
     var acpAllowedAgentIDs: Set<UUID> { didSet { defaults.set(acpAllowedAgentIDs.map(\.uuidString).sorted(), forKey: Keys.acpAllowed) } }
     /// Key names with Keychain-backed values per agent id (`[agentUUID: [key]]`; values excluded).
     private(set) var acpEnvKeys: [String: [String]]
+    /// `PATH` used to decide which preset commands are installed. Refreshed from the login shell;
+    /// until then it is the same base path agent commands use. Discovery does not spawn agents.
+    var acpPathValue: String
+    /// Results of connection tests the user started. Not written to disk: a diagnostic can quote
+    /// an agent message, and nothing here is a credential.
+    var acpProbes: [UUID: IDEACPProbe] = [:]
+    /// Workspace path → agent id, for a default that applies only in that folder.
+    var acpWorkspaceDefaults: [String: String] {
+        didSet { defaults.set(acpWorkspaceDefaults, forKey: Keys.acpWorkspace) }
+    }
 
     var activeACPAgent: IDEACPDefinition? {
-        guard let acpActiveAgentID, acpAllowedAgentIDs.contains(acpActiveAgentID) else { return nil }
-        return acpAgents.first { $0.id == acpActiveAgentID }
+        guard let acpActiveAgentID else { return nil }
+        return acpAgent(id: acpActiveAgentID)
+    }
+
+    /// The agent `id` when it may run: it is still configured, enabled, and the user allowed it.
+    func acpAgent(id: UUID) -> IDEACPDefinition? {
+        guard acpAllowedAgentIDs.contains(id) else { return nil }
+        guard let agent = acpAgents.first(where: { $0.id == id }), agent.isEnabled else { return nil }
+        return agent
     }
 
     /// The ACP agent a choice names, when it may run. A choice with no agent uses the built-in one.
     func acpAgent(for choice: IDEAIModelChoice) -> IDEACPDefinition? {
-        guard let id = choice.acpAgentID, acpAllowedAgentIDs.contains(id) else { return nil }
-        return acpAgents.first { $0.id == id }
+        guard let id = choice.acpAgentID else { return nil }
+        return acpAgent(id: id)
+    }
+
+    /// The agent new, unpinned chats use in `workspace`: the workspace override when it still
+    /// may run, otherwise the global default.
+    func agentIDForNewChats(in workspace: URL?) -> UUID? {
+        if let workspace {
+            let key = Self.workspaceKey(workspace)
+            if let raw = acpWorkspaceDefaults[key], let id = UUID(uuidString: raw), acpAgent(id: id) != nil {
+                return id
+            }
+        }
+        return activeACPAgent?.id
+    }
+
+    func setWorkspaceDefault(agentID: UUID?, workspace: URL) {
+        let key = Self.workspaceKey(workspace)
+        if let agentID {
+            acpWorkspaceDefaults[key] = agentID.uuidString
+        } else {
+            acpWorkspaceDefaults.removeValue(forKey: key)
+        }
+    }
+
+    func workspaceDefaultID(for workspace: URL) -> UUID? {
+        acpWorkspaceDefaults[Self.workspaceKey(workspace)].flatMap(UUID.init(uuidString:))
+    }
+
+    private static func workspaceKey(_ workspace: URL) -> String {
+        workspace.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     func addACPAgent(name: String, commandLine: String) {
@@ -324,6 +370,46 @@ final class IDEAgentSettings {
 
     func setACPAllowed(_ allowed: Bool, agentID: UUID) {
         if allowed { acpAllowedAgentIDs.insert(agentID) } else { acpAllowedAgentIDs.remove(agentID) }
+    }
+
+    func setACPEnabled(_ enabled: Bool, agentID: UUID) {
+        guard let index = acpAgents.firstIndex(where: { $0.id == agentID }) else { return }
+        acpAgents[index].isEnabled = enabled
+    }
+
+    /// Replaces the name and command line. The id, consent, preset and secrets stay.
+    @discardableResult
+    func updateACPAgent(id: UUID, name: String, commandLine: String) -> Bool {
+        guard let parsed = IDEACPDefinition.parseCommandLine(commandLine),
+              let index = acpAgents.firstIndex(where: { $0.id == id }) else { return false }
+        acpAgents[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        acpAgents[index].command = parsed.command
+        acpAgents[index].args = parsed.args
+        return true
+    }
+
+    /// Adds a preset's launch command when the user asks for it. Does not allow or start it.
+    /// An existing row with the same preset id is returned unchanged.
+    @discardableResult
+    func materializePreset(_ preset: IDEACPPreset) -> IDEACPDefinition {
+        if let existing = acpAgents.first(where: { $0.presetID == preset.id }) { return existing }
+        let launch = preset.preferredLaunch(pathValue: acpPathValue)
+        let created = IDEACPDefinition(
+            name: preset.name, command: launch.command, args: launch.args, presetID: preset.id)
+        acpAgents.append(created)
+        return created
+    }
+
+    func recordProbe(_ phase: IDEACPProbe.Phase, for agentID: UUID) {
+        var copy = acpProbes
+        copy[agentID] = IDEACPProbe(phase: phase, checkedAt: Date())
+        acpProbes = copy
+    }
+
+    /// Reads the login shell's `PATH` once and keeps it for preset discovery.
+    func refreshACPPath() async {
+        let login = await IDELoginShellPath.shared.entries()
+        acpPathValue = AgentCommandEnvironment.make(javaHome: nil, loginPath: login)["PATH"] ?? acpPathValue
     }
 
     // ACP secret environment values live in the Keychain (per-agent accounts), never in
@@ -417,6 +503,7 @@ final class IDEAgentSettings {
         static let acpActive = "umbra.agent.acpActive"
         static let acpAllowed = "umbra.agent.acpAllowed"
         static let acpEnvKeys = "umbra.agent.acpEnvKeys"
+        static let acpWorkspace = "umbra.agent.acpWorkspaceDefaults"
 
         /// `umbra.agent.baseURL` for the original (Responses) provider, so earlier settings carry over.
         static func field(_ name: String, _ provider: IDEAgentProvider) -> String {
@@ -476,6 +563,8 @@ final class IDEAgentSettings {
         acpActiveAgentID = defaults.string(forKey: Keys.acpActive).flatMap(UUID.init(uuidString:))
         acpAllowedAgentIDs = Set((defaults.stringArray(forKey: Keys.acpAllowed) ?? []).compactMap(UUID.init(uuidString:)))
         acpEnvKeys = (defaults.dictionary(forKey: Keys.acpEnvKeys) as? [String: [String]]) ?? [:]
+        acpPathValue = AgentCommandEnvironment.basePath.joined(separator: ":")
+        acpWorkspaceDefaults = defaults.dictionary(forKey: Keys.acpWorkspace) as? [String: String] ?? [:]
         disclosedHosts = Set(defaults.stringArray(forKey: Keys.disclosed) ?? [])
         helperChoice = defaults.data(forKey: Keys.helperModel).flatMap { try? JSONDecoder().decode(IDEAIModelChoice.self, from: $0) }
     }

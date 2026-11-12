@@ -97,10 +97,46 @@ final class IDEAgentConversation: Identifiable {
     }
 
     /// What this chat uses now: its own choice, else the global settings.
-    var effectiveChoice: IDEAIModelChoice { modelChoice ?? settings.currentChoice }
+    var effectiveChoice: IDEAIModelChoice {
+        if let modelChoice { return modelChoice }
+        var choice = settings.currentChoice
+        // A pin is this chat's agent. The global default stays on `currentChoice` for chats
+        // that have not chosen one, and must not leak onto a chat bound to Umbra Native.
+        if let acpPin { choice.acpAgentID = acpPin.agentID }
+        return choice
+    }
+
+    /// Set once this chat has chosen an agent, so a later default does not move its transcript.
+    /// Nil means the chat still follows the workspace or global default.
+    var acpPin: IDEACPBinding?
+    /// What the header shows for the ACP process of this chat.
+    private(set) var acpLiveState: IDEACPLiveState = .idle
 
     /// The external agent driving this chat, when it has one and may run it.
-    private var acpDefinition: IDEACPDefinition? { settings.acpAgent(for: effectiveChoice) }
+    private var acpDefinition: IDEACPDefinition? {
+        guard let id = resolvedACPAgentID else { return nil }
+        return settings.acpAgent(id: id)
+    }
+
+    /// The agent this chat resolves to, including one that is not allowed yet.
+    var resolvedACPAgentID: UUID? {
+        IDEACPBindingResolver.agentID(
+            pin: acpPin, modelChoice: modelChoice,
+            defaultID: settings.agentIDForNewChats(in: host?.agentProjectRoot))
+    }
+
+    /// Why a resolved agent cannot run, or nil when this chat uses Umbra Native or a runnable agent.
+    var acpUnavailableReason: String? {
+        guard let id = resolvedACPAgentID else { return nil }
+        guard let agent = settings.acpAgents.first(where: { $0.id == id }) else {
+            return "The selected agent is no longer configured."
+        }
+        if !agent.isEnabled { return "\(agent.displayName) is disabled. Enable it in Agent Settings." }
+        if !settings.acpAllowedAgentIDs.contains(id) {
+            return "Allow \(agent.displayName) before sending. That starts its program on this Mac."
+        }
+        return nil
+    }
 
     @ObservationIgnored weak var host: (any IDEAgentHost)?
     /// Shared by the window's chats; `nil` when there is only ever one.
@@ -130,8 +166,26 @@ final class IDEAgentConversation: Identifiable {
     // ACP backend (plan steps 5-6): an external agent presenting the same AgentEvent stream.
     @ObservationIgnored private var acpSession: ACPClientSession?
     @ObservationIgnored private var acpTransport: IDEACPTransport?
+    /// The previous process's close and reap. The next launch awaits it so two agents
+    /// for one chat are not alive together.
+    @ObservationIgnored private var acpShutdown: Task<Void, Never>?
     @ObservationIgnored private var acpFingerprint: String?
+    /// Header reads and config writes run one at a time. A refresh that started earlier
+    /// must not overwrite a config change the user made after it.
+    @ObservationIgnored private var acpHeaderTask: Task<Void, Never>?
+    /// Bumped when the process is released, so a header read still in flight does not
+    /// repopulate a chat that no longer has that session.
+    @ObservationIgnored private var acpHeaderEpoch = 0
     @ObservationIgnored private var lastACPSessionID: String?
+    /// Command and workspace the saved session id belongs to. Compared on the next connection.
+    @ObservationIgnored private var acpLaunchFingerprint: String?
+    /// Set once a restore or fresh-session notice has been shown for this process.
+    @ObservationIgnored private var acpExplainedSessionID: String?
+    @ObservationIgnored private var acpExplainedFreshSession = false
+    /// Initialize and session calls. A prompt itself is not limited by this.
+    var acpRequestTimeout: Duration = .seconds(30)
+    /// Unanswered permission cards are cancelled after this. Zero waits until Stop.
+    var acpPermissionTimeout: Duration = .seconds(300)
     @ObservationIgnored private var pendingElicitations: [String: CheckedContinuation<String?, Never>] = [:]
     /// A subagent's plan waiting on a parent card: parent entry call id → the child's plan call id,
     /// which is what the session routes to the waiting child.
@@ -139,7 +193,8 @@ final class IDEAgentConversation: Identifiable {
     /// Agent-advertised modes for the ACP header chip; empty for the built-in agent.
     private(set) var acpAvailableModes: [ACPSessionMode] = []
     private(set) var acpCurrentModeID: String?
-    /// Agent-advertised config options, shown read-only in the panel header.
+    /// Agent-advertised config options. A select option can be changed; nothing is invented
+    /// when the agent does not advertise one.
     private(set) var acpConfigOptions: [ACPConfigOption] = []
     private(set) var acpAgentName: String?
 
@@ -231,9 +286,13 @@ final class IDEAgentConversation: Identifiable {
         settings.clientFactory().supportsImages(for: effectiveChoice)
     }
 
-    /// Whether what this chat sends may leave the Mac: the endpoint was accepted, or it runs on this Mac,
-    /// or an external agent the user allowed does the work.
-    var hasConsent: Bool { settings.hasAcceptedDisclosure(for: effectiveChoice.provider) || isACPConversation }
+    /// Whether what this chat sends may leave the Mac: the endpoint was accepted, or it runs on this Mac.
+    /// A chat bound to an external agent skips that gate. Allow, and a disabled or missing agent, are
+    /// reported by `acpUnavailableReason` so the send does not fall through to the native model.
+    var hasConsent: Bool {
+        if resolvedACPAgentID != nil { return true }
+        return settings.hasAcceptedDisclosure(for: effectiveChoice.provider)
+    }
 
     // MARK: - Sending
 
@@ -304,6 +363,11 @@ final class IDEAgentConversation: Identifiable {
         guard !isRunning, !isCompacting, hasConsent, (!text.isEmpty || !pendingImages.isEmpty), let host else { return }
         guard let root = effectiveRoot else {
             append(.init(kind: .error, text: "Open a project folder first; the agent works inside one."))
+            return
+        }
+        pinProviderIfNeeded(root: root)
+        if let reason = acpUnavailableReason {
+            append(.init(kind: .error, text: reason))
             return
         }
 
@@ -457,13 +521,16 @@ final class IDEAgentConversation: Identifiable {
         status = "Thinking…"
         runTask = Task { [weak self] in
             guard let self else { return }
+            let snapshotTask = Task.detached { IDEACPWorkspaceSnapshot.capture(root: root) }
             let active: ACPClientSession
             do {
                 active = try await self.currentACPSession(root: root, host: host)
             } catch {
+                snapshotTask.cancel()
                 self.abandonRun(error: error.localizedDescription)
                 return
             }
+            let snapshot = await snapshotTask.value
             await active.setMode(self.mode)
             await active.setRules(self.currentRules(root: root))
             if self.stopRequested { return self.endBeforeStarting() }
@@ -473,7 +540,7 @@ final class IDEAgentConversation: Identifiable {
                 if let index = self.entries.lastIndex(where: \.canRetry) { self.entries.remove(at: index) }
             }
             if self.stopRequested { await active.stop() }
-            await self.consumeACP(stream, session: active)
+            await self.consumeACP(stream, session: active, snapshot: snapshot, root: root)
         }
     }
 
@@ -485,9 +552,20 @@ final class IDEAgentConversation: Identifiable {
         if let acpSession, acpFingerprint == fingerprint, await acpSession.isConnected {
             return acpSession
         }
-        // Crash/settings change: respawn. The old process is killed with its transport.
-        if let oldTransport = acpTransport { Task { await oldTransport.close() } }
+        // A session id belongs to one command and one workspace. Another launch must not load it.
+        // A missing fingerprint is an older file: the id is still tried, and a stale load starts over.
+        if let bound = acpLaunchFingerprint, bound != fingerprint { lastACPSessionID = nil }
+        if let existing = acpFingerprint, existing != fingerprint { lastACPSessionID = nil }
+        let previousSession = acpSession
+        let previousTransport = acpTransport
         acpSession = nil
+        acpTransport = nil
+        acpFingerprint = nil
+        await acpShutdown?.value
+        acpShutdown = nil
+        await previousSession?.close()
+        await previousTransport?.close()
+        await previousTransport?.waitForExit()
         let box = IDEAgentHostBox(host)
         let writeFlag = self.writeFlag
         let workspace = IDEAgentWorkspace(root: root, box: box, onWrite: { [weak self] path, before, after in
@@ -498,8 +576,9 @@ final class IDEAgentConversation: Identifiable {
         var environment = await host.agentCommandEnvironment()
         for (key, value) in definition.env { environment[key] = value }
         for (key, value) in settings.acpKeychainEnv(for: definition.id) { environment[key] = value }
+        acpLiveState = .connecting
         let transport = IDEACPTransport(definition: definition, workingDirectory: root, environment: environment)
-        var services = IDEACPHostServices.make(workspace: workspace, root: root)
+        var services = IDEACPHostServices.make(workspace: workspace, root: root, environment: environment)
         services.askText = { [weak self] prompt in await self?.askElicitation(prompt) }
         let created = ACPClientSession(
             transport: transport,
@@ -507,33 +586,187 @@ final class IDEAgentConversation: Identifiable {
             cwd: root.path,
             mode: mode,
             rules: currentRules(root: root),
+            requestTimeout: acpRequestTimeout,
+            permissionTimeout: acpPermissionTimeout,
             checkpoints: await ensureCheckpointLog())
         acpTransport = transport
         acpSession = created
         acpFingerprint = fingerprint
-        _ = try await created.connect()
         do {
-            if let previous = lastACPSessionID, await created.agentCapabilities?.loadSession == true {
-                _ = try await created.loadSession(id: previous)
-            } else {
+            let response = try await created.connect()
+            let earlier = acpHasEarlierTranscript
+            let savedID = lastACPSessionID
+            var notice: String?
+            switch IDEACPSessionResume.plan(
+                savedSessionID: savedID,
+                agentSupportsLoad: response.agentCapabilities.loadSession,
+                hasEarlierTranscript: earlier)
+            {
+            case .load(let id):
+                do {
+                    _ = try await created.loadSession(id: id)
+                    if earlier, acpExplainedSessionID != id {
+                        acpExplainedSessionID = id
+                        notice = IDEACPSessionResume.restoredNotice
+                    }
+                } catch {
+                    // Authentication stays on this agent. A stale id is not reused.
+                    if IDEACPAuth.isAuthenticationFailure(error) { throw error }
+                    lastACPSessionID = nil
+                    _ = try await created.newSession()
+                    notice = IDEACPSessionResume.staleNotice
+                }
+            case .create(let createdNotice):
                 _ = try await created.newSession()
+                if let createdNotice, !acpExplainedFreshSession {
+                    acpExplainedFreshSession = true
+                    notice = createdNotice
+                }
             }
+            lastACPSessionID = IDEACPSessionResume.normalizedSessionID(await created.sessionId)
+            acpLaunchFingerprint = fingerprint
+            acpAgentName = definition.displayName
+            acpLiveState = .connected
+            refreshACPHeaderState()
+            if let notice { appendNotice(notice) }
+            return created
         } catch {
-            // A failed load falls back to a fresh session on the same connection.
-            if lastACPSessionID != nil { _ = try await created.newSession() } else { throw error }
+            let failed = acpSession
+            let failedTransport = acpTransport
+            let method = await failed?.initializeResponse?.authMethods.first?.name ?? "sign in"
+            acpSession = nil
+            acpTransport = nil
+            acpFingerprint = nil
+            invalidateACPHeader()
+            // Close here, before the error is shown, so a rejected handshake does not leave
+            // the agent process running. `close` sends the signal and returns. The transport
+            // is closed too: a failed initialize drops the session's connection first.
+            await failed?.close()
+            await failedTransport?.close()
+            await failedTransport?.waitForExit()
+            if IDEACPAuth.isAuthenticationFailure(error) {
+                acpLiveState = .authenticationRequired(method)
+                throw ACPError.agentError(JSONRPCError(
+                    code: -32000,
+                    message: "\(definition.displayName) needs authentication (\(method))."))
+            }
+            let message = Self.acpDiagnostic(
+                IDEACPSecretScrubber.scrub(error.localizedDescription), stderr: failedTransport?.recentStderr ?? "")
+            acpLiveState = .failed(message)
+            throw ACPError.agentError(JSONRPCError(code: -32000, message: message))
         }
-        lastACPSessionID = await created.sessionId
-        acpAgentName = definition.displayName
-        refreshACPHeaderState()
-        return created
+    }
+
+    /// Binds this chat to an agent without copying another chat's transcript.
+    func bindProvider(_ binding: IDEACPBinding) {
+        let previous = resolvedACPAgentID
+        acpPin = binding
+        if var choice = modelChoice {
+            choice.acpAgentID = binding.agentID
+            modelChoice = choice
+        }
+        if binding.agentID != previous {
+            lastACPSessionID = nil
+            acpLaunchFingerprint = nil
+        }
+        guard isEmpty, !isRunning else { return }
+        releaseACPProcess()
+    }
+
+    /// Messages already in the transcript, not counting the one being sent now.
+    private var acpHasEarlierTranscript: Bool {
+        entries.contains { $0.kind == .assistant } || entries.filter { $0.kind == .user }.count > 1
+    }
+
+    /// Remembers the agent this transcript started with. A chat that already chose a model
+    /// keeps that choice; an unpinned docked chat takes the default it is about to use.
+    private func pinProviderIfNeeded(root: URL) {
+        guard acpPin == nil, modelChoice == nil else { return }
+        acpPin = IDEACPBinding(agentID: settings.agentIDForNewChats(in: host?.agentProjectRoot ?? root))
+    }
+
+    private func releaseACPProcess() {
+        let transport = acpTransport
+        let session = acpSession
+        acpSession = nil
+        acpTransport = nil
+        acpFingerprint = nil
+        acpLiveState = .idle
+        acpAvailableModes = []
+        acpCurrentModeID = nil
+        acpConfigOptions = []
+        invalidateACPHeader()
+        retireACPProcess(session: session, transport: transport)
+    }
+
+    /// Closes the agent and waits until that process has been reaped. The next launch awaits this.
+    private func retireACPProcess(session: ACPClientSession?, transport: IDEACPTransport?) {
+        let previous = acpShutdown
+        acpShutdown = Task.detached {
+            await previous?.value
+            await session?.close()
+            await transport?.close()
+            await transport?.waitForExit()
+        }
+    }
+
+    /// Appends a scrubbed, short stderr tail when the agent wrote one.
+    private static func acpDiagnostic(_ message: String, stderr: String) -> String {
+        let scrubbed = IDEACPSecretScrubber.scrub(message)
+        guard let detail = IDEACPDiagnostics.detail(stderr) else { return scrubbed }
+        if scrubbed.contains(detail) { return scrubbed }
+        return scrubbed + "\n" + detail
+    }
+
+    /// Drops header updates that already started. The session they read may close underneath them.
+    private func invalidateACPHeader() {
+        acpHeaderEpoch += 1
+        acpHeaderTask = nil
+    }
+
+    /// Runs header work after anything already queued. `epoch` is captured when the work is queued;
+    /// the work discards its result when `invalidateACPHeader` has run since then.
+    private func enqueueACPHeader(_ work: @escaping @MainActor (Int) async -> Void) {
+        let epoch = acpHeaderEpoch
+        let previous = acpHeaderTask
+        acpHeaderTask = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, epoch == self.acpHeaderEpoch else { return }
+            await work(epoch)
+        }
+    }
+
+    /// Sets one option the agent advertised. Values come from that option, not from a built-in list.
+    func setACPConfig(id: String, value: String) {
+        guard let acpSession else { return }
+        let session = acpSession
+        enqueueACPHeader { [weak self] epoch in
+            guard let self else { return }
+            do {
+                guard let sessionID = await session.sessionId else { return }
+                let options = try await session.setConfigOption(
+                    sessionId: sessionID, configId: id, value: value)
+                guard epoch == self.acpHeaderEpoch else { return }
+                self.acpConfigOptions = options
+            } catch {
+                guard epoch == self.acpHeaderEpoch else { return }
+                self.appendError(IDEACPSecretScrubber.scrub(error.localizedDescription))
+            }
+        }
     }
 
     private func refreshACPHeaderState() {
         guard let acpSession else { return }
-        Task {
-            acpAvailableModes = await acpSession.modeState?.availableModes ?? []
-            acpCurrentModeID = await acpSession.currentModeId
-            acpConfigOptions = await acpSession.configOptions
+        let session = acpSession
+        enqueueACPHeader { [weak self] epoch in
+            guard let self else { return }
+            let modes = await session.modeState?.availableModes ?? []
+            let modeID = await session.currentModeId
+            let options = await session.configOptions
+            guard epoch == self.acpHeaderEpoch else { return }
+            self.acpAvailableModes = modes
+            self.acpCurrentModeID = modeID
+            self.acpConfigOptions = options
         }
     }
 
@@ -551,13 +784,19 @@ final class IDEAgentConversation: Identifiable {
         }
     }
 
-    private func consumeACP(_ stream: AsyncStream<AgentEvent>, session: ACPClientSession) async {
+    private func consumeACP(
+        _ stream: AsyncStream<AgentEvent>, session: ACPClientSession,
+        snapshot: IDEACPWorkspaceSnapshot, root: URL
+    ) async {
         for await event in stream {
             handle(event)
             if case .runStarted = event { refreshACPHeaderState() }
         }
         flush()
         if let currentRun, let checkpoints = session.checkpoints {
+            let after = await Task.detached { IDEACPWorkspaceSnapshot.capture(root: root) }.value
+            await IDEACPWorkspaceSnapshot.record(
+                before: snapshot, after: after, run: currentRun, checkpoints: checkpoints)
             let changes = await checkpoints.changes(in: currentRun)
             if !changes.isEmpty {
                 var entry = IDEAgentEntry(kind: .changes, text: "")
@@ -586,6 +825,12 @@ final class IDEAgentConversation: Identifiable {
             let lastAnswer = entries.last(where: { $0.kind == .assistant })?.text ?? ""
             onAttention?(.finished(ending, summary: Self.firstLine(of: lastAnswer, limit: 140)))
         }
+        if case .failed(let message) = lastEnding {
+            acpLiveState = .failed(IDEACPSecretScrubber.scrub(message))
+            if let index = entries.lastIndex(where: { $0.kind == .error }) {
+                entries[index].text = Self.acpDiagnostic(entries[index].text, stderr: acpTransport?.recentStderr ?? "")
+            }
+        }
         refreshACPHeaderState()
         drainQueue()
     }
@@ -597,10 +842,9 @@ final class IDEAgentConversation: Identifiable {
         acpSession = nil
         acpTransport = nil
         acpFingerprint = nil
-        Task {
-            await session?.close()
-            await transport?.close()
-        }
+        acpLiveState = .idle
+        invalidateACPHeader()
+        retireACPProcess(session: session, transport: transport)
         appendNotice("The ACP agent will restart on the next message.")
     }
 
@@ -1095,6 +1339,9 @@ final class IDEAgentConversation: Identifiable {
         contextTokens = nil
         // A new conversation is a new external session too.
         lastACPSessionID = nil
+        acpLaunchFingerprint = nil
+        acpExplainedSessionID = nil
+        acpExplainedFreshSession = false
         fileClaims?.release(tab: id)
     }
 
@@ -1188,9 +1435,39 @@ final class IDEAgentConversation: Identifiable {
         summaryTitle = snapshot.title
         customTitle = saved.customTitle
         modelChoice = saved.modelChoice
-        lastACPSessionID = nil
+        if saved.acpPinnedNative {
+            acpPin = .native
+        } else if let id = saved.acpPinnedAgentID {
+            acpPin = IDEACPBinding(agentID: id)
+        } else {
+            acpPin = nil
+        }
+        acpLiveState = .idle
+        lastACPSessionID = IDEACPSessionResume.normalizedSessionID(saved.acpSessionID)
+        acpLaunchFingerprint = saved.acpLaunchFingerprint
+        acpExplainedSessionID = nil
+        acpExplainedFreshSession = false
         status = nil
-        if saved.runInProgress { restoreInterruptedRun(queued: saved.queued) }
+        if saved.runInProgress {
+            if saved.acpPinnedAgentID != nil || saved.acpSessionID != nil {
+                restoreInterruptedACPRun(queued: saved.queued)
+            } else {
+                restoreInterruptedRun(queued: saved.queued)
+            }
+        }
+    }
+
+    /// An ACP run that was cut off. The transcript stays. Resume is not offered: sending the old
+    /// prompt again, on top of a restored remote session, would run it twice.
+    private func restoreInterruptedACPRun(queued: [String]) {
+        append(.init(
+            kind: .notice,
+            text: "The last run was interrupted when Umbra closed. This transcript was kept. The next message restores the remote session when the agent supports it, and does not send these messages again."))
+        if !queued.isEmpty {
+            let text = queued.joined(separator: "\n\n")
+            draft = draft.isEmpty ? text : draft + "\n\n" + text
+        }
+        persist(items: restoredItems ?? [], checkpoints: restoredRuns)
     }
 
     /// The saved file says a run was going and never ended. Its finished steps are in the history; say so,
@@ -1237,7 +1514,10 @@ final class IDEAgentConversation: Identifiable {
                 entries: savedEntries.map(Array.init) ?? entries, cost: cost, todos: todos, customTitle: customTitle,
                 checkpoints: checkpoints, modelChoice: modelChoice,
                 runInProgress: interrupted, queued: queue.map(\.text),
-                chatRoot: rootOverride?.path),
+                chatRoot: rootOverride?.path,
+                acpPinnedAgentID: acpPin?.agentID,
+                acpPinnedNative: acpPin != nil && acpPin?.agentID == nil,
+                acpSessionID: lastACPSessionID, acpLaunchFingerprint: acpLaunchFingerprint),
             children: children ?? restoredChildren)
         // A write failure only costs the history; it is not worth interrupting the user for.
         try? store.save(snapshot)
@@ -1298,20 +1578,19 @@ final class IDEAgentConversation: Identifiable {
         acpSession = nil
         acpTransport = nil
         acpFingerprint = nil
+        acpLiveState = .idle
         acpAvailableModes = []
         acpCurrentModeID = nil
         acpConfigOptions = []
         acpAgentName = nil
+        invalidateACPHeader()
         cancelElicitations()
         isRunning = false
         isAwaitingUser = false
         runRules = PermissionRules()
         fileClaims?.release(tab: id)
-        Task {
-            await old?.stop()
-            await oldACP?.close()
-            await oldTransport?.close()
-        }
+        Task { await old?.stop() }
+        retireACPProcess(session: oldACP, transport: oldTransport)
     }
 
     // MARK: - Session
@@ -2177,11 +2456,14 @@ final class IDEAgentConversation: Identifiable {
         case .toolCallFinished(let id, _, let output):
             if let index = toolIndex(id) {
                 entries[index].output = output
-                // Finished without an answer (Stop): the question is moot.
+                // Finished without an answer (Stop, or a permission timeout): the question is moot.
                 entries[index].approval = nil
                 entries[index].question = nil
                 entries[index].plan = nil
                 entries[index].elicitation = nil
+            }
+            if !entries.contains(where: { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }) {
+                isAwaitingUser = false
             }
         case .toolCallOutput:
             break

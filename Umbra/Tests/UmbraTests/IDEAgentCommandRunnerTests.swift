@@ -78,6 +78,7 @@ final class AgentCommandRunnerTests: XCTestCase {
         XCTAssertFalse(result.output.contains("hunter2"), "the app's own environment must not leak into commands")
         XCTAssertTrue(result.output.contains("TERM=dumb"))
         XCTAssertTrue(result.output.contains("HOME=\(NSHomeDirectory())"))
+        XCTAssertTrue(result.output.contains("USER=\(NSUserName())"))
     }
 
     func testJavaHomeAndExtrasGoIntoTheEnvironment() {
