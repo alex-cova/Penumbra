@@ -1,0 +1,129 @@
+{
+ "_hasShrinkwrap": false,
+ "_id": "@agentclientprotocol/codex-acp@2.6.0",
+ "_nodeVersion": "24.22.2",
+ "_npmOperationalInternal": {
+  "host": "s3://npm-registry-packages-npm-production",
+  "tmp": "tmp/codex-acp_2.6.0_1794138027273_0.33750245793891187"
+ },
+ "_npmUser": {
+  "email": "npm-oidc-no-reply@github.com",
+  "name": "GitHub Actions",
+  "trustedPublisher": {
+   "id": "github",
+   "oidcConfigId": "196d8599-f8be-47e5-a202-d954562108bd"
+  }
+ },
+ "_npmVersion": "11.19.1",
+ "author": {
+  "name": "Agent Client Protocol"
+ },
+ "bin": {
+  "codex-acp": "dist/index.js"
+ },
+ "bugs": {
+  "url": "https://github.com/agentclientprotocol/codex-acp/issues"
+ },
+ "dependencies": {
+  "@agentclientprotocol/sdk": "~2.4.0",
+  "@openai/codex": "^0.166.0",
+  "cross-spawn": "^7.0.6",
+  "diff": "^9.0.0",
+  "open": "^11.0.1",
+  "vscode-jsonrpc": "^9.0.1",
+  "zod": "^4.0.0"
+ },
+ "description": "[![npm version](https://img.shields.io/npm/v/%40agentclientprotocol%2Fcodex-acp)](https://www.npmjs.com/package/@agentclientprotocol/codex-acp)",
+ "devDependencies": {
+  "@types/cross-spawn": "^6.0.6",
+  "@types/node": "^26.1.0",
+  "ajv": "^8.20.0",
+  "esbuild": "^0.28.2",
+  "mcp-hello-world": "^1.1.2",
+  "tsx": "^4.23.12",
+  "typescript": "^7.0.2",
+  "vitest": "^5.0.1"
+ },
+ "directories": {},
+ "dist": {
+  "attestations": {
+   "provenance": {
+    "predicateType": "https://slsa.dev/provenance/v1"
+   },
+   "url": "https://registry.npmjs.org/-/npm/v1/attestations/@agentclientprotocol%2fcodex-acp@2.6.0"
+  },
+  "fileCount": 4,
+  "integrity": "sha512-/PBsd0H6URy4bhXhAeXqwb7RqctbXfNceRihAh6nDmn5HJ873uzoHvHxF45YmeWfgOKKRrNRLZjYsket2a7EsQ==",
+  "shasum": "362fa819c20cf4f7af0e06d6b34f943d21b38484",
+  "signatures": [
+   {
+    "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+    "sig": "MEYCIQDOo4yh9O1iTJxsGu75O1GwGFpgcBEyW2xhYdEyr/bvnQIhAJjvaq6BOrrp6j82DiciTly8OT/NMlVk8si+SUmauFmg"
+   },
+   {
+    "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+    "sig": "MEUCIF/+TkR6kBL3WS7Yz04VUSw4695+9H0mMWZMKZsI98A5AiEAyMGVq+mNVXz5blLidJ51PDGdkCkT5UwdVI4ENzUaaMA="
+   }
+  ],
+  "tarball": "https://registry.npmjs.org/@agentclientprotocol/codex-acp/-/codex-acp-2.6.0.tgz",
+  "unpackedSize": 2169589
+ },
+ "homepage": "https://github.com/agentclientprotocol/codex-acp#readme",
+ "keywords": [],
+ "license": "Apache-2.0",
+ "main": "dist/index.js",
+ "maintainers": [
+  {
+   "email": "benjamin.j.brandt@gmail.com",
+   "name": "benbrandt"
+  },
+  {
+   "email": "sup@aguz.me",
+   "name": "aguzubiaga"
+  },
+  {
+   "email": "conrad.irwin@gmail.com",
+   "name": "cirwin"
+  }
+ ],
+ "name": "@agentclientprotocol/codex-acp",
+ "publishConfig": {
+  "access": "public"
+ },
+ "repository": {
+  "type": "git",
+  "url": "git+https://github.com/agentclientprotocol/codex-acp.git"
+ },
+ "scripts": {
+  "build": "node build.mjs",
+  "bundle:all": "npm run bundle:linux-x64 && npm run bundle:linux-arm64 && npm run bundle:darwin-x64 && npm run bundle:darwin-arm64 && npm run bundle:win-x64 && npm run bundle:win-arm64",
+  "bundle:darwin-arm64": "bun build src/index.ts --minify --sourcemap --compile --target=bun-darwin-arm64 --outfile dist/bin/codex-acp-arm64-darwin",
+  "bundle:darwin-x64": "bun build src/index.ts --minify --sourcemap --compile --target=bun-darwin-x64-baseline --outfile dist/bin/codex-acp-x64-darwin",
+  "bundle:linux-arm64": "bun build src/index.ts --minify --sourcemap --compile --target=bun-linux-arm64 --outfile dist/bin/codex-acp-arm64-linux",
+  "bundle:linux-x64": "bun build src/index.ts --minify --sourcemap --compile --target=bun-linux-x64-baseline --outfile dist/bin/codex-acp-x64-linux",
+  "bundle:win-arm64": "bun build src/index.ts --minify --sourcemap --compile --target=bun-windows-arm64 --outfile dist/bin/codex-acp-arm64-windows.exe",
+  "bundle:win-x64": "bun build src/index.ts --minify --sourcemap --compile --target=bun-windows-x64-baseline --outfile dist/bin/codex-acp-x64-windows.exe",
+  "codex-test": "tsx .agents/skills/run-codex/scripts/run-codex-test.ts",
+  "example:simple-client": "node --import tsx examples/simple-client.ts",
+  "example:steering": "node --import tsx examples/steering.ts",
+  "example:steering:multistep": "node --import tsx examples/steering.ts",
+  "generate-types": "codex app-server generate-ts --out src/app-server",
+  "package:all": "npm run package:linux-x64 && npm run package:linux-arm64 && npm run package:darwin-x64 && npm run package:darwin-arm64 && npm run package:win-x64 && npm run package:win-arm64",
+  "package:darwin-arm64": "cd dist/bin && zip codex-acp-arm64-darwin.zip codex-acp-arm64-darwin",
+  "package:darwin-x64": "cd dist/bin && zip codex-acp-x64-darwin.zip codex-acp-x64-darwin",
+  "package:linux-arm64": "cd dist/bin && zip codex-acp-arm64-linux.zip codex-acp-arm64-linux",
+  "package:linux-x64": "cd dist/bin && zip codex-acp-x64-linux.zip codex-acp-x64-linux",
+  "package:win-arm64": "cd dist/bin && zip codex-acp-arm64-windows.zip codex-acp-arm64-windows.exe",
+  "package:win-x64": "cd dist/bin && zip codex-acp-x64-windows.zip codex-acp-x64-windows.exe",
+  "prepublishOnly": "npm run build",
+  "release:preflight": "bash scripts/release-preflight.sh",
+  "start": "node --import tsx src/index.ts",
+  "test": "vitest run --no-file-parallelism --retry=2 --exclude 'src/__tests__/integration/**' --exclude '**/node_modules/**' --exclude '**/.git/**'",
+  "test:e2e": "npm run build && RUN_E2E_TESTS=true vitest run --no-file-parallelism --retry=2 src/__tests__/CodexACPAgent/e2e",
+  "test:integration": "vitest run --no-file-parallelism --hookTimeout=30000 src/__tests__/integration",
+  "test:watch": "vitest",
+  "typecheck": "tsc --noEmit && tsc --noEmit -p examples/tsconfig.json"
+ },
+ "type": "module",
+ "version": "2.6.0"
+}

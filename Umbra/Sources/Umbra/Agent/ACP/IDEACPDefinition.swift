@@ -18,10 +18,18 @@ struct IDEACPDefinition: Codable, Equatable, Identifiable, Sendable {
     var presetID: String?
     /// A disabled agent stays in the list and is not launched.
     var isEnabled: Bool
+    /// `.auto` lets Umbra pick the launch for a catalog agent (managed adapter, verified system
+    /// adapter, native CLI). `.custom` runs `command` and `args` exactly as typed.
+    var launchMode: LaunchMode
+
+    enum LaunchMode: String, Codable, Sendable {
+        case auto
+        case custom
+    }
 
     init(
         id: UUID = UUID(), name: String, command: String, args: [String] = [], env: [String: String] = [:],
-        presetID: String? = nil, isEnabled: Bool = true
+        presetID: String? = nil, isEnabled: Bool = true, launchMode: LaunchMode = .custom
     ) {
         self.id = id
         self.name = name
@@ -30,12 +38,15 @@ struct IDEACPDefinition: Codable, Equatable, Identifiable, Sendable {
         self.env = env
         self.presetID = presetID
         self.isEnabled = isEnabled
+        self.launchMode = launchMode
     }
 
     var displayName: String { name.isEmpty ? command : name }
 
-    /// `npx -y` downloads a package the first time it runs. That is never an installed agent.
-    var launchesPackageDownload: Bool { command == "npx" }
+    /// The catalog entry this row follows, when Umbra picks its launch.
+    var adapterEntry: IDEACPAdapterEntry? {
+        launchMode == .auto ? IDEACPAdapterCatalog.entry(presetID: presetID) : nil
+    }
 
     /// What to show when the executable cannot be resolved. A path is not a `PATH` lookup.
     var missingExecutableMessage: String {
@@ -53,18 +64,30 @@ struct IDEACPDefinition: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, command, args, env, presetID, isEnabled
+        case id, name, command, args, env, presetID, isEnabled, launchMode
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
-        command = try container.decode(String.self, forKey: .command)
+        let decodedCommand = try container.decode(String.self, forKey: .command)
+        command = decodedCommand
         args = try container.decodeIfPresent([String].self, forKey: .args) ?? []
         env = try container.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
         presetID = try container.decodeIfPresent(String.self, forKey: .presetID)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        // Rows saved before launch modes: a catalog row that ran a package runner or the adapter's
+        // own command follows the catalog. Anything else is the user's command line.
+        if let mode = try container.decodeIfPresent(LaunchMode.self, forKey: .launchMode) {
+            launchMode = mode
+        } else if let presetID, let preset = IDEACPRegistry.preset(id: presetID),
+                  decodedCommand == "npx" || preset.launchers.contains(where: { $0.command == decodedCommand })
+        {
+            launchMode = .auto
+        } else {
+            launchMode = .custom
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -76,6 +99,7 @@ struct IDEACPDefinition: Codable, Equatable, Identifiable, Sendable {
         try container.encode(env, forKey: .env)
         try container.encodeIfPresent(presetID, forKey: .presetID)
         try container.encode(isEnabled, forKey: .isEnabled)
+        try container.encode(launchMode, forKey: .launchMode)
     }
 
     /// Splits a typed command line into executable + arguments, honouring single/double quotes.

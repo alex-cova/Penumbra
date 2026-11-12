@@ -13,6 +13,8 @@ struct IDEACPSettingsSection: View {
     @State private var editName = ""
     @State private var editCommand = ""
 
+    private let manager = IDEACPAdapterManager.shared
+
     var body: some View {
         Section("Agents") {
             Text("Umbra Native uses the model above. An external agent runs on this Mac and talks to this panel over the Agent Client Protocol. Each chat keeps its own transcript.")
@@ -58,7 +60,7 @@ struct IDEACPSettingsSection: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(definition.displayName)
-                    Text(definition.commandLine)
+                    Text(launchText(definition))
                         .font(IDEAppearance.Typography.monoSmall)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                         .lineLimit(1)
@@ -74,12 +76,12 @@ struct IDEACPSettingsSection: View {
                     .help(definition.isEnabled ? "Disable \(definition.displayName)" : "Enable \(definition.displayName)")
                     .accessibilityLabel("\(definition.displayName) enabled")
             }
-            if let resolved = definition.resolvedExecutable(pathValue: settings.acpPathValue) {
-                Text(resolved)
+            if let launch = manager.resolution(for: definition, pathValue: settings.acpPathValue).launch {
+                Text("\(launch.sourceTitle) · \(launch.executable)")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .lineLimit(1)
-                    .help(resolved)
+                    .help(launch.commandLine)
             }
             if let preset = definition.presetID.flatMap(IDEACPRegistry.preset(id:)) {
                 Text(preset.authHint)
@@ -158,25 +160,35 @@ struct IDEACPSettingsSection: View {
 
     private func test(_ definition: IDEACPDefinition) {
         if !settings.acpAllowedAgentIDs.contains(definition.id) {
-            let download = definition.launchesPackageDownload ? " The first run downloads a package from the network." : ""
+            let command = manager.resolution(for: definition, pathValue: settings.acpPathValue).launch?.commandLine
+                ?? definition.commandLine
             var alert = IDEAlert.confirm(
                 "Allow “\(definition.displayName)” to run?",
-                detail: "Test starts \(definition.commandLine), checks the ACP handshake, and then quits the process.\(download)",
+                detail: "Test starts \(command), checks the ACP handshake, and then quits the process.",
                 confirm: "Allow and Test")
             guard alert.confirms() else { return }
             settings.setACPAllowed(true, agentID: definition.id)
         }
-        settings.recordProbe(.running, for: definition.id)
-        // A handshake must not run inside the project. The agent can read its working directory.
-        let root = FileManager.default.temporaryDirectory
         Task {
-            let environment = await agent?.host?.agentCommandEnvironment() ?? AgentCommandEnvironment.make(javaHome: nil)
-            var merged = environment
-            for (key, value) in definition.env { merged[key] = value }
-            for (key, value) in settings.acpKeychainEnv(for: definition.id) { merged[key] = value }
-            let phase = await IDEACPConnectionTest.run(
-                definition: definition, workingDirectory: root, environment: merged)
-            settings.recordProbe(phase, for: definition.id)
+            let environment: [String: String]
+            if let fromHost = await agent?.host?.agentCommandEnvironment() {
+                environment = fromHost
+            } else {
+                let login = await IDELoginShellPath.shared.entries()
+                environment = AgentCommandEnvironment.make(javaHome: nil, loginPath: login)
+            }
+            // The handshake runs in a temporary folder, never in the project: the agent can read
+            // its working directory.
+            await manager.testConnection(definition: definition, settings: settings, environment: environment)
+        }
+    }
+
+    /// What this row runs: the command line for a custom row, the chosen source for a catalog row.
+    private func launchText(_ definition: IDEACPDefinition) -> String {
+        guard definition.launchMode == .auto else { return definition.commandLine }
+        switch manager.resolution(for: definition, pathValue: settings.acpPathValue) {
+        case .launch(let launch): return launch.sourceTitle
+        case .unavailable: return "Chosen by Umbra · \(definition.commandLine)"
         }
     }
 
@@ -184,18 +196,16 @@ struct IDEACPSettingsSection: View {
         let live = agent?.conversations.contains {
             $0.resolvedACPAgentID == definition.id && $0.acpLiveState == .connected
         } ?? false
-        return IDEACPAvailabilityResolver.resolve(
-            isEnabled: definition.isEnabled,
-            executableFound: definition.resolvedExecutable(pathValue: settings.acpPathValue) != nil,
-            probe: settings.acpProbes[definition.id],
-            isLive: live,
-            downloadsOnUse: definition.launchesPackageDownload)
+        return manager.availability(of: definition, settings: settings, isLive: live)
     }
 
     private func presetSummary(_ preset: IDEACPPreset) -> String {
-        if preset.isInstalled(pathValue: settings.acpPathValue) { return preset.summary }
-        if preset.canDownload(pathValue: settings.acpPathValue) {
-            return "Adapter not installed. Adding it does not download anything. Allowing a test or a message can download it with npx. \(preset.summary)"
+        let launcher = preset.recordedLauncher
+        let probe = IDEACPDefinition(
+            name: preset.name, command: launcher.command, args: launcher.args, presetID: preset.id, launchMode: .auto)
+        if manager.resolution(for: probe, pathValue: settings.acpPathValue).launch != nil { return preset.summary }
+        if preset.entry?.isManaged == true && !manager.isSandboxed {
+            return "Adapter not installed. Install it under Adapters above. Adding this row does not download anything. \(preset.summary)"
         }
         return "Not installed. \(preset.summary)"
     }
@@ -212,7 +222,7 @@ struct IDEACPSettingsSection: View {
         case .notInstalled:
             return definition.command.contains("/") ? "Executable not found" : "Not installed"
         case .adapterMissing:
-            return "Adapter not installed. Testing or sending downloads it with npx."
+            return "Adapter not installed. Install it under Adapters above."
         case .authenticationRequired(let method): return "Authentication required · \(method)"
         case .connected: return "Connected"
         case .disconnected: return "Disconnected. Send a message to start the agent again."

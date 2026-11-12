@@ -803,6 +803,13 @@ final class IDEACPTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("b.txt").path))
         let assistant = conversation.entries.filter { $0.kind == .assistant }.map(\.text).joined()
         XCTAssertFalse(assistant.contains("write:ok"), assistant)
+        // Like Codex, this agent never reports the call after a cancelled permission. The card
+        // must still go: its buttons can no longer do anything.
+        XCTAssertFalse(conversation.entries.contains { $0.approval != nil }, "no card is left with live buttons")
+        XCTAssertFalse(conversation.isAwaitingUser)
+        XCTAssertTrue(conversation.entries.contains {
+            $0.callID == "perm-1" && $0.output?.text.contains("not run") == true
+        }, "the call says it was not run: \(conversation.entries.map { "\($0.kind):\($0.output?.text ?? "")" })")
         let pidValue = agentPid(pid)
         XCTAssertGreaterThan(pidValue, 0)
         conversation.teardown()

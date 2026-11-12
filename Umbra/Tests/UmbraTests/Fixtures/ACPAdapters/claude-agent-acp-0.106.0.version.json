@@ -1,0 +1,140 @@
+{
+ "_hasShrinkwrap": false,
+ "_id": "@agentclientprotocol/claude-agent-acp@0.106.0",
+ "_nodeVersion": "26.13.0",
+ "_npmOperationalInternal": {
+  "host": "s3://npm-registry-packages-npm-production",
+  "tmp": "tmp/claude-agent-acp_0.106.0_1794350976579_0.9013868063222297"
+ },
+ "_npmUser": {
+  "email": "npm-oidc-no-reply@github.com",
+  "name": "GitHub Actions",
+  "trustedPublisher": {
+   "id": "github",
+   "oidcConfigId": "4fdc09b1-fb60-4fde-9e10-0cfb284cc663"
+  }
+ },
+ "_npmVersion": "11.20.0",
+ "author": {
+  "name": "Zed Industries"
+ },
+ "bin": {
+  "claude-agent-acp": "dist/index.js"
+ },
+ "bugs": {
+  "url": "https://github.com/agentclientprotocol/claude-agent-acp/issues"
+ },
+ "dependencies": {
+  "@agentclientprotocol/sdk": "2.6.0",
+  "@anthropic-ai/claude-agent-sdk": "0.3.322",
+  "diff": "9.0.0",
+  "zod": "4.6.7"
+ },
+ "description": "An ACP-compatible coding agent powered by the Claude Agent SDK (TypeScript)",
+ "devDependencies": {
+  "@anthropic-ai/sdk": "1.7.0",
+  "@eslint/js": "10.0.1",
+  "@tsconfig/node22": "22.0.6",
+  "@types/node": "26.6.6",
+  "@typescript-eslint/eslint-plugin": "8.72.2",
+  "@typescript-eslint/parser": "8.72.2",
+  "ajv": "8.20.0",
+  "ajv-formats": "3.0.1",
+  "eslint": "10.14.0",
+  "eslint-config-prettier": "10.1.8",
+  "globals": "17.14.0",
+  "prettier": "3.9.10",
+  "typescript": "6.0.3",
+  "vitest": "5.1.0"
+ },
+ "directories": {},
+ "dist": {
+  "attestations": {
+   "provenance": {
+    "predicateType": "https://slsa.dev/provenance/v1"
+   },
+   "url": "https://registry.npmjs.org/-/npm/v1/attestations/@agentclientprotocol%2fclaude-agent-acp@0.106.0"
+  },
+  "fileCount": 453,
+  "integrity": "sha512-jfwcUc7J+KTIOqsPPSDzCgh4WI+QgvbPEACPtibMV1e41spmsR2Wb5xEeO1lh0el/kLxi7nF3zqZ1RYpdoVw7Q==",
+  "shasum": "85381931f5a0a387a60707594c86b19ab2d8203b",
+  "signatures": [
+   {
+    "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+    "sig": "MEUCIGhbX2MnyghwCiuHIo3s5f3V0i4yyRYB3oJ3FGz7SLKIAiEAoAx18RD+zkWl9gF3D4RzyeOIAkoY5wV1yxXYH2PP4wU="
+   },
+   {
+    "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+    "sig": "MEQCIF8pz8PSuxGFu/2sXwGuBJYGrNCRyMsvuVO1IPI09I5GAiBHfPWKaaYS0tzDG63hqRHteDLdyow7Ik1xgGKywrt5tA=="
+   }
+  ],
+  "tarball": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.106.0.tgz",
+  "unpackedSize": 2908533
+ },
+ "engines": {
+  "node": ">=22"
+ },
+ "exports": {
+  ".": {
+   "import": "./dist/lib.js",
+   "types": "./dist/lib.d.ts"
+  },
+  "./package.json": "./package.json"
+ },
+ "homepage": "https://github.com/agentclientprotocol/claude-agent-acp#readme",
+ "keywords": [
+  "claude",
+  "acp",
+  "agent",
+  "anthropic",
+  "typescript",
+  "sdk",
+  "code"
+ ],
+ "license": "Apache-2.0",
+ "main": "dist/lib.js",
+ "maintainers": [
+  {
+   "email": "benjamin.j.brandt@gmail.com",
+   "name": "benbrandt"
+  },
+  {
+   "email": "sup@aguz.me",
+   "name": "aguzubiaga"
+  },
+  {
+   "email": "conrad.irwin@gmail.com",
+   "name": "cirwin"
+  }
+ ],
+ "name": "@agentclientprotocol/claude-agent-acp",
+ "publishConfig": {
+  "access": "public"
+ },
+ "repository": {
+  "type": "git",
+  "url": "git+https://github.com/agentclientprotocol/claude-agent-acp.git"
+ },
+ "scripts": {
+  "build": "tsc",
+  "build:binary": "node scripts/build-binary.mjs",
+  "check": "npm run lint && npm run format:check",
+  "dev": "npm run build && npm run start",
+  "example:simple-client": "node --experimental-strip-types --disable-warning=ExperimentalWarning examples/simple-client.ts",
+  "format": "prettier --write .",
+  "format:check": "prettier --check .",
+  "lint": "eslint src --ext .ts",
+  "lint:fix": "eslint src --ext .ts --fix",
+  "prepublishOnly": "npm run build",
+  "release:preflight": "bash scripts/release-preflight.sh",
+  "smoke:binary": "node scripts/smoke-binary.mjs",
+  "start": "node dist/index.js",
+  "test": "vitest",
+  "test:coverage": "vitest run --coverage",
+  "test:integration": "RUN_INTEGRATION_TESTS=true vitest run",
+  "test:run": "vitest run"
+ },
+ "type": "module",
+ "types": "dist/lib.d.ts",
+ "version": "0.106.0"
+}

@@ -166,6 +166,8 @@ final class IDEAgentConversation: Identifiable {
     // ACP backend (plan steps 5-6): an external agent presenting the same AgentEvent stream.
     @ObservationIgnored private var acpSession: ACPClientSession?
     @ObservationIgnored private var acpTransport: IDEACPTransport?
+    /// The managed adapter version this chat's agent last started on, for the "now running X" note.
+    @ObservationIgnored private var acpLaunchedVersion: String?
     /// The previous process's close and reap. The next launch awaits it so two agents
     /// for one chat are not alive together.
     @ObservationIgnored private var acpShutdown: Task<Void, Never>?
@@ -576,8 +578,23 @@ final class IDEAgentConversation: Identifiable {
         var environment = await host.agentCommandEnvironment()
         for (key, value) in definition.env { environment[key] = value }
         for (key, value) in settings.acpKeychainEnv(for: definition.id) { environment[key] = value }
+        // The launch is decided here, at the moment a process starts, from what is installed now:
+        // a custom command, the active managed adapter, a verified system adapter, or the CLI's
+        // own ACP mode. Nothing is downloaded, and `npx` is never used.
+        let launch: IDEACPResolvedLaunch
+        switch IDEACPAdapterManager.shared.resolutionForLaunch(for: definition, pathValue: environment["PATH"] ?? "") {
+        case .launch(let resolved):
+            launch = resolved
+        case .unavailable(let reason):
+            acpLiveState = .failed(reason.message)
+            throw ACPError.agentError(JSONRPCError(code: -32000, message: reason.message))
+        }
         acpLiveState = .connecting
-        let transport = IDEACPTransport(definition: definition, workingDirectory: root, environment: environment)
+        // The process holds a lease on its adapter version for as long as it runs, in the same
+        // registry the store consults before it removes or replaces anything.
+        let transport = IDEACPTransport(
+            definition: definition, launch: launch, workingDirectory: root, environment: environment,
+            leases: IDEACPAdapterManager.shared.store.leases)
         var services = IDEACPHostServices.make(workspace: workspace, root: root, environment: environment)
         services.askText = { [weak self] prompt in await self?.askElicitation(prompt) }
         let created = ACPClientSession(
@@ -629,6 +646,14 @@ final class IDEAgentConversation: Identifiable {
             acpLiveState = .connected
             refreshACPHeaderState()
             if let notice { appendNotice(notice) }
+            // A newer adapter version is used by new processes only; a running chat is never moved.
+            // Say so when this chat's agent starts again on a different version.
+            if let version = launch.version {
+                if let earlier = acpLaunchedVersion, earlier != version {
+                    appendNotice("\(definition.displayName) adapter is now \(version). This chat used \(earlier) before.")
+                }
+                acpLaunchedVersion = version
+            }
             return created
         } catch {
             let failed = acpSession
@@ -2568,6 +2593,19 @@ final class IDEAgentConversation: Identifiable {
         case .runEnded(let ending):
             lastEnding = ending
             closeStreamingEntry()
+            // Nothing can answer a card once its run is over (an agent that never reported the
+            // call, a disconnect). Leaving its buttons live would invite a click that does nothing.
+            // A plan card keeps its own outcome handling.
+            for index in entries.indices where entries[index].approval != nil || entries[index].question != nil
+                || entries[index].elicitation != nil {
+                if entries[index].approval != nil { entries[index].approvalOutcome = "Not answered" }
+                if entries[index].question != nil { entries[index].questionOutcome = "Not answered" }
+                if entries[index].elicitation != nil { entries[index].elicitationOutcome = "Not answered" }
+                entries[index].approval = nil
+                entries[index].question = nil
+                entries[index].elicitation = nil
+            }
+            isAwaitingUser = entries.contains { $0.plan != nil }
             if case .failed(let message) = ending, IDEAgentNetworkFailure.offersRetry(message) {
                 // The turn never landed in the history. Drop its partial text so Retry starts clean.
                 dropUncommittedTurn()

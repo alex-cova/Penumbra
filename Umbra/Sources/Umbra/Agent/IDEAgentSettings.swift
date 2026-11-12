@@ -377,15 +377,31 @@ final class IDEAgentSettings {
         acpAgents[index].isEnabled = enabled
     }
 
-    /// Replaces the name and command line. The id, consent, preset and secrets stay.
+    /// Replaces the name and command line. The id, consent, preset and secrets stay. Typing a
+    /// different command on a catalog row makes it the user's own (`.custom`); changing only the
+    /// name keeps Umbra's choice of launch.
     @discardableResult
     func updateACPAgent(id: UUID, name: String, commandLine: String) -> Bool {
         guard let parsed = IDEACPDefinition.parseCommandLine(commandLine),
               let index = acpAgents.firstIndex(where: { $0.id == id }) else { return false }
         acpAgents[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        acpAgents[index].command = parsed.command
-        acpAgents[index].args = parsed.args
+        if acpAgents[index].command != parsed.command || acpAgents[index].args != parsed.args {
+            acpAgents[index].command = parsed.command
+            acpAgents[index].args = parsed.args
+            acpAgents[index].launchMode = .custom
+        }
         return true
+    }
+
+    /// Hands a catalog row back to Umbra: the recorded command is reset to the adapter's own and
+    /// the launch is picked again at every start.
+    func useCatalogLaunch(id: UUID) {
+        guard let index = acpAgents.firstIndex(where: { $0.id == id }),
+              let preset = acpAgents[index].presetID.flatMap(IDEACPRegistry.preset(id:)) else { return }
+        let launcher = preset.recordedLauncher
+        acpAgents[index].command = launcher.command
+        acpAgents[index].args = launcher.args
+        acpAgents[index].launchMode = .auto
     }
 
     /// Adds a preset's launch command when the user asks for it. Does not allow or start it.
@@ -393,10 +409,30 @@ final class IDEAgentSettings {
     @discardableResult
     func materializePreset(_ preset: IDEACPPreset) -> IDEACPDefinition {
         if let existing = acpAgents.first(where: { $0.presetID == preset.id }) { return existing }
-        let launch = preset.preferredLaunch(pathValue: acpPathValue)
+        // The row records the adapter's own command for display. Which executable actually runs
+        // is decided at launch by `IDEACPLaunchResolver` (managed, verified system, native CLI).
+        let launcher = preset.recordedLauncher
         let created = IDEACPDefinition(
-            name: preset.name, command: launch.command, args: launch.args, presetID: preset.id)
+            name: preset.name, command: launcher.command, args: launcher.args, presetID: preset.id,
+            launchMode: .auto)
         acpAgents.append(created)
+        return created
+    }
+
+    /// After Umbra installs an adapter: make sure its row exists and follows the catalog, and keep
+    /// everything the user already set on it (name, enabled state, environment, Keychain secrets,
+    /// workspace defaults). The install approval is the consent to run it, so the row is allowed.
+    @discardableResult
+    func adoptManagedAdapter(_ entry: IDEACPAdapterEntry) -> IDEACPDefinition? {
+        guard let preset = IDEACPRegistry.preset(id: entry.presetID) else { return nil }
+        if let index = acpAgents.firstIndex(where: { $0.presetID == preset.id }) {
+            // A row the user pointed at their own command stays theirs.
+            let id = acpAgents[index].id
+            if acpAgents[index].launchMode == .auto { setACPAllowed(true, agentID: id) }
+            return acpAgents[index]
+        }
+        let created = materializePreset(preset)
+        setACPAllowed(true, agentID: created.id)
         return created
     }
 

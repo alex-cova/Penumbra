@@ -53,7 +53,7 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
     )
     static let agent = IDEPreferencesDomain(
         id: "agent", title: "Agent", symbol: "sparkles",
-        searchTerms: ["agent", "ai", "model", "openai", "ollama", "mlx", "api key", "provider", "plan", "approve edits", "autonomy", "context", "compaction", "history", "conversations", "secrets", "protected files", "environment", "steps", "iterations"]
+        searchTerms: ["agent", "ai", "model", "openai", "ollama", "mlx", "api key", "provider", "plan", "approve edits", "autonomy", "context", "compaction", "history", "conversations", "secrets", "protected files", "environment", "steps", "iterations", "adapters", "acp", "codex", "claude code", "gemini", "opencode", "install", "update", "node", "npm", "version", "rollback"]
     )
 
     /// The pages before the language modules' and the one after them.

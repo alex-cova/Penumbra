@@ -306,6 +306,12 @@ final class IDEXcodeTestFlowTests: XCTestCase {
                 .contains("-only-testing \(fixture.testTarget)/\(fixture.testTarget)/testPerformanceExample")
         }
         XCTAssertTrue(reran, "rerun asks for just the failure, without the () suffix")
+        // The fake logs its arguments before it exits, so the rerun is still running here; the
+        // provider refuses a second run while Xcode is busy, so wait for this one to finish.
+        let rerunFinished = await waitUntil {
+            !fixture.xcode.isRunningTasks && !fixture.workspace.testResults.isRunning
+        }
+        XCTAssertTrue(rerunFinished, "the failed-only rerun finishes")
 
         fixture.workspace.rerunTests(failedOnly: false)
         let reranAll = await waitUntil {

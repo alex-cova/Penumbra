@@ -515,6 +515,80 @@ func acpPair() -> (ACPInMemoryTransport, ACPInMemoryTransport) { ACPInMemoryTran
         #expect(events.last == .runEnded(.completed))
     }
 
+    /// Codex's adapter, measured 2026-11-12: a `cancelled` permission ends the whole turn with
+    /// `stopReason: cancelled`, after its own `failed` update for the call.
+    @Test func aTimedOutPermissionStaysExplainedWhenTheAgentEndsItsTurn() async throws {
+        let (clientTransport, agentTransport) = acpPair()
+        let agent = await FakeACPAgent.make(transport: agentTransport)
+        agent.onPrompt = { agent, _ in
+            _ = await agent.requestPermission()
+            await agent.emit(update: .object([
+                "sessionUpdate": "tool_call_update", "toolCallId": "perm-1", "status": "failed",
+                "content": .array([.object(["type": "content", "content": .object(["type": "text", "text": "aborted"])])]),
+            ]))
+            return "cancelled"
+        }
+        let session = ACPClientSession(
+            transport: clientTransport, cwd: "/tmp/project", permissionTimeout: .milliseconds(200))
+        let events = await collectACP(await session.send("run it"))
+        #expect(agent.permissionOutcome.get()?["outcome"]?["outcome"]?.stringValue == "cancelled")
+        let outputs = events.compactMap { event -> ToolOutput? in
+            if case .toolCallFinished("perm-1", _, let output) = event { output } else { nil }
+        }
+        #expect(outputs.last?.text.hasPrefix("Permission request timed out") == true, "\(outputs)")
+        #expect(outputs.last?.text.contains("aborted") == true, "the agent's own text is kept after the reason")
+        #expect(events.last == .runEnded(.failed(ACPClientSession.unansweredPermissionEnding)),
+                "nobody pressed Stop, so the ending is not \"Stopped.\"")
+    }
+
+    /// Claude Code's adapter, measured 2026-11-12: it reports the call failed and goes on.
+    @Test func aTimedOutPermissionKeepsItsReasonWhenTheAgentCarriesOn() async throws {
+        let (clientTransport, agentTransport) = acpPair()
+        let agent = await FakeACPAgent.make(transport: agentTransport)
+        agent.onPrompt = { agent, _ in
+            _ = await agent.requestPermission()
+            await agent.emit(update: .object([
+                "sessionUpdate": "tool_call_update", "toolCallId": "perm-1", "status": "failed", "rawOutput": "{}",
+            ]))
+            await agent.emitText("NOT-CREATED")
+            return "end_turn"
+        }
+        let session = ACPClientSession(
+            transport: clientTransport, cwd: "/tmp/project", permissionTimeout: .milliseconds(200))
+        let events = await collectACP(await session.send("run it"))
+        let last = events.last { if case .toolCallFinished("perm-1", _, _) = $0 { true } else { false } }
+        guard case .toolCallFinished(_, _, let output)? = last else {
+            Issue.record("no finish for the call")
+            return
+        }
+        #expect(output.isError && output.text.hasPrefix("Permission request timed out"))
+        #expect(events.last == .runEnded(.completed))
+    }
+
+    @Test func stopWhileACardWaitsFinishesItsCall() async throws {
+        let (clientTransport, agentTransport) = acpPair()
+        let agent = await FakeACPAgent.make(transport: agentTransport)
+        agent.onPrompt = { agent, _ in
+            _ = await agent.requestPermission()
+            // Like Codex: no update for the call, just the cancelled turn.
+            while !agent.cancelled.get() { try? await Task.sleep(for: .milliseconds(10)) }
+            return "cancelled"
+        }
+        let session = ACPClientSession(transport: clientTransport, cwd: "/tmp/project")
+        let collector = Task { await collectACP(await session.send("go")) }
+        for _ in 0..<200 where await session.awaitingApproval.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await session.awaitingApproval == ["perm-1"])
+        await session.stop()
+        let events = await collector.value
+        #expect(events.contains {
+            if case .toolCallFinished("perm-1", _, let output) = $0 {
+                output.isError && output.text == ACPClientSession.permissionCancelledNote
+            } else { false }
+        }, "the host is told the card's call is over, so it can clear the card")
+        #expect(agent.permissionOutcome.get()?["outcome"]?["outcome"]?.stringValue == "cancelled")
+        #expect(events.last == .runEnded(.stopped))
+    }
+
     @Test func loadWithoutSessionIdKeepsTheRequestedId() async throws {
         let (clientTransport, agentTransport) = acpPair()
         let agent = await FakeACPAgent.make(transport: agentTransport)

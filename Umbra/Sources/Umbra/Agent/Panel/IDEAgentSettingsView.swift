@@ -153,6 +153,8 @@ struct IDEAgentSettingsView: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
 
+            IDEACPAdaptersSection(settings: settings, agent: agent)
+
             IDEACPSettingsSection(settings: settings, agent: agent, projectRoot: agent?.projectRoot)
 
             IDEMCPSettingsSection(store: settings.mcp, manager: agent?.mcp, projectRoot: agent?.projectRoot)

@@ -84,6 +84,8 @@ public actor ACPClientSession {
 
     private var pendingApprovals: [String: CheckedContinuation<ACPRequestPermissionOutcome, Never>] = [:]
     private var permissionTimeouts: [String: Task<Void, Never>] = [:]
+    /// Calls whose permission card timed out in this run.
+    private var timedOutCalls: Set<String> = []
     private var pendingOptions: [String: [ACPPermissionOption]] = [:]
     private var pendingSuggestedRules: [String: PermissionRule] = [:]
 
@@ -294,6 +296,7 @@ public actor ACPClientSession {
         runEndedSent = false
         stopRequested = false
         knownToolCalls = [:]
+        timedOutCalls = []
         activeContinuation = continuation
         let task = Task { [weak self] in
             guard let self else { return }
@@ -323,7 +326,13 @@ public actor ACPClientSession {
             ])
             let raw = try await connection.request(method: "session/prompt", params: params)
             let reason = ACPStopReason(raw: raw.string("stopReason"))
-            finishRun(stopRequested && reason != .cancelled ? .stopped : reason.runEnding, continuation: continuation)
+            if reason == .cancelled, !stopRequested, !timedOutCalls.isEmpty {
+                // Some agents end the whole turn when a permission comes back `cancelled`. Nobody
+                // pressed Stop, so say what happened instead of "Stopped.".
+                finishRun(.failed(Self.unansweredPermissionEnding), continuation: continuation)
+            } else {
+                finishRun(stopRequested && reason != .cancelled ? .stopped : reason.runEnding, continuation: continuation)
+            }
         } catch is CancellationError {
             finishRun(.stopped, continuation: continuation)
         } catch let error as ACPError {
@@ -360,6 +369,7 @@ public actor ACPClientSession {
         permissionTimeouts = [:]
         pendingOptions = [:]
         pendingSuggestedRules = [:]
+        finishUnansweredCalls(approvals.keys)
         for (_, continuation) in approvals { continuation.resume(returning: .cancelled) }
         guard let connection, let sessionId else { return }
         try? await connection.notify(method: "session/cancel", params: .object(["sessionId": .string(sessionId)]))
@@ -427,6 +437,29 @@ public actor ACPClientSession {
 
     public var awaitingApproval: [String] { Array(pendingApprovals.keys) }
 
+    static let permissionTimedOutNote = "Permission request timed out. The tool was not run."
+    static let permissionCancelledNote = "Cancelled before it was answered. The tool was not run."
+    static let unansweredPermissionEnding = "A permission request was not answered in time, so the agent ended its turn. Nothing was run."
+
+    /// Finishes the tool call of each card nobody will answer now (Stop, a disconnect), so the
+    /// host clears it and the transcript says why. Some agents send their own update afterwards;
+    /// others never do, and the card would stay with live buttons.
+    private func finishUnansweredCalls(_ callIDs: some Sequence<String>) {
+        guard let continuation = activeContinuation else { return }
+        for callID in callIDs {
+            continuation.yield(.toolCallFinished(
+                id: callID, name: knownToolCalls[callID] ?? "tool",
+                output: ToolOutput(Self.permissionCancelledNote, isError: true)))
+        }
+    }
+
+    /// What a finished tool call shows. A call whose permission timed out keeps saying so when the
+    /// agent reports the call afterwards, instead of the agent's own text replacing the reason.
+    private func finishedOutput(id: String, text: String, isError: Bool) -> ToolOutput {
+        guard timedOutCalls.contains(id) else { return ToolOutput(text, isError: isError) }
+        return ToolOutput(Self.permissionTimedOutNote + (text.isEmpty ? "" : "\n" + text), isError: true)
+    }
+
     /// ACP has no `ask_user` equivalent in the client direction; late answers are ignored,
     /// matching `AgentSession.answerQuestion` for an unknown call.
     public func answerQuestion(callID: String, answer: String?) {}
@@ -465,6 +498,7 @@ public actor ACPClientSession {
         permissionTimeouts = [:]
         pendingOptions = [:]
         pendingSuggestedRules = [:]
+        finishUnansweredCalls(approvals.keys)
         for (_, continuation) in approvals { continuation.resume(returning: .cancelled) }
         if let continuation = activeContinuation {
             let message = error.map { "The ACP agent disconnected: \($0.localizedDescription)" } ?? "The ACP agent disconnected."
@@ -514,7 +548,8 @@ public actor ACPClientSession {
                     value.stringValue ?? (try? value.serialized())
                 } ?? ""
                 continuation?.yield(.toolCallFinished(
-                    id: update.toolCallId, name: name, output: ToolOutput(text, isError: status == .failed)))
+                    id: update.toolCallId, name: name,
+                    output: finishedOutput(id: update.toolCallId, text: text, isError: status == .failed)))
             }
         case .plan(let entries):
             continuation?.yield(.todosUpdated(entries.map(\.todoItem)))
@@ -540,7 +575,7 @@ public actor ACPClientSession {
         let text = content.compactMap(\.textValue).joined(separator: "\n")
         switch status {
         case .completed, .failed:
-            continuation.yield(.toolCallFinished(id: id, name: name, output: ToolOutput(text, isError: status == .failed)))
+            continuation.yield(.toolCallFinished(id: id, name: name, output: finishedOutput(id: id, text: text, isError: status == .failed)))
         case .inProgress:
             if !text.isEmpty { continuation.yield(.toolCallOutput(id: id, chunk: text)) }
         case .pending, nil:
@@ -686,10 +721,16 @@ public actor ACPClientSession {
             guard permissionTimeout > .zero else { return }
             permissionTimeouts[callID] = Task {
                 try? await Task.sleep(for: permissionTimeout)
-                guard self.resumeApproval(callID: callID, outcome: .cancelled) else { return }
+                guard !Task.isCancelled else { return }
+                // Marked before the agent hears `cancelled`, so its reply is read as a timeout.
+                self.timedOutCalls.insert(callID)
+                guard self.resumeApproval(callID: callID, outcome: .cancelled) else {
+                    self.timedOutCalls.remove(callID)
+                    return
+                }
                 self.activeContinuation?.yield(.toolCallFinished(
                     id: callID, name: name,
-                    output: ToolOutput("Permission request timed out. The tool was not run.", isError: true)))
+                    output: ToolOutput(Self.permissionTimedOutNote, isError: true)))
             }
         }
         return .success(.object(["outcome": outcome.jsonValue]))

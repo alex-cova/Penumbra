@@ -3,16 +3,13 @@ import Foundation
 
 // MARK: - Presets
 
-/// One way to start a known ACP agent. The command is a bare name or `npx`, resolved on `PATH`.
+/// One way to start a known ACP agent. The command is a bare name resolved on `PATH`.
 struct IDEACPLauncher: Equatable, Sendable {
     var command: String
     var args: [String]
     /// True when this launcher is an adapter rather than the agent's own ACP mode.
     var isAdapter: Bool
     var note: String
-
-    /// True for a package runner that may download on first launch (`npx -y`).
-    var downloadsPackage: Bool { command == "npx" }
 }
 
 /// A verified ACP agent Umbra knows how to offer. Discovery only checks that the command
@@ -25,51 +22,34 @@ struct IDEACPPreset: Equatable, Sendable, Identifiable {
     /// Tried in order. The first command that resolves on `PATH` is the one offered.
     var launchers: [IDEACPLauncher]
 
-    func preferredLaunch(
-        pathValue: String,
-        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
-    ) -> IDEACPLauncher {
-        for launcher in launchers {
-            let probe = IDEACPDefinition(name: name, command: launcher.command, args: launcher.args)
-            if probe.resolvedExecutable(pathValue: pathValue, isExecutable: isExecutable) != nil {
-                return launcher
-            }
-        }
-        return launchers[0]
-    }
+    /// The catalog entry that installs or detects this agent.
+    var entry: IDEACPAdapterEntry? { IDEACPAdapterCatalog.entry(presetID: id) }
 
-    /// A real binary resolved. An `npx` fallback does not count as installed.
-    func isInstalled(
-        pathValue: String,
-        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
-    ) -> Bool {
-        launchers.contains { launcher in
-            guard !launcher.downloadsPackage else { return false }
-            let probe = IDEACPDefinition(name: name, command: launcher.command, args: launcher.args)
-            return probe.resolvedExecutable(pathValue: pathValue, isExecutable: isExecutable) != nil
-        }
-    }
+    /// The command a definition created from this preset records. It is documentation for an
+    /// `.auto` row: the real launch comes from `IDEACPLaunchResolver`.
+    var recordedLauncher: IDEACPLauncher { launchers[0] }
 
-    /// `npx` is on `PATH` and no adapter binary is. Running it can download a package.
-    func canDownload(
-        pathValue: String,
-        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
-    ) -> Bool {
-        guard !isInstalled(pathValue: pathValue, isExecutable: isExecutable) else { return false }
-        return launchers.contains { launcher in
-            guard launcher.downloadsPackage else { return false }
-            let probe = IDEACPDefinition(name: name, command: launcher.command, args: launcher.args)
-            return probe.resolvedExecutable(pathValue: pathValue, isExecutable: isExecutable) != nil
-        }
+    /// Resolves this preset the way an `.auto` row would, against a managed install if given.
+    func resolution(
+        active: IDEACPActiveInstall?, pathValue: String,
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
+        systemPackageName: (String) -> String? = IDEACPLaunchResolver.packageName(ofExecutable:)
+    ) -> IDEACPLaunchResolver.Resolution {
+        let launcher = recordedLauncher
+        let definition = IDEACPDefinition(
+            name: name, command: launcher.command, args: launcher.args, presetID: id, launchMode: .auto)
+        return IDEACPLaunchResolver.resolve(
+            definition: definition, entry: entry, active: active, pathValue: pathValue,
+            isExecutable: isExecutable, systemPackageName: systemPackageName)
     }
 }
 
 enum IDEACPRegistry {
     /// Claude Code and Codex do not speak ACP themselves. Gemini CLI and OpenCode do.
-    /// Commands verified against the ACP registry (November 2026):
-    /// `npx @agentclientprotocol/claude-agent-acp`, `npx @agentclientprotocol/codex-acp`,
-    /// `gemini --acp`, `opencode acp`. A globally installed adapter binary is preferred
-    /// over `npx` so a later lookup does not download anything.
+    /// Commands verified against the ACP registry (November 2026): the
+    /// `@agentclientprotocol/claude-agent-acp` and `codex-acp` packages, `gemini --acp`,
+    /// `opencode acp`. Umbra installs the two adapters itself (`IDEACPAdapterManager`); it never
+    /// falls back to `npx`, which would download and run a package as a side effect.
     static let presets: [IDEACPPreset] = [
         IDEACPPreset(
             id: "claude-code",
@@ -79,10 +59,7 @@ enum IDEACPRegistry {
             launchers: [
                 IDEACPLauncher(
                     command: "claude-agent-acp", args: [], isAdapter: true,
-                    note: "Installed adapter binary."),
-                IDEACPLauncher(
-                    command: "npx", args: ["-y", "@agentclientprotocol/claude-agent-acp"], isAdapter: true,
-                    note: "The first allowed run may download @agentclientprotocol/claude-agent-acp."),
+                    note: "Adapter installed by Umbra, or a verified system copy."),
             ]),
         IDEACPPreset(
             id: "codex",
@@ -92,10 +69,7 @@ enum IDEACPRegistry {
             launchers: [
                 IDEACPLauncher(
                     command: "codex-acp", args: [], isAdapter: true,
-                    note: "Installed adapter binary."),
-                IDEACPLauncher(
-                    command: "npx", args: ["-y", "@agentclientprotocol/codex-acp"], isAdapter: true,
-                    note: "The first allowed run may download @agentclientprotocol/codex-acp."),
+                    note: "Adapter installed by Umbra, or a verified system copy."),
             ]),
         IDEACPPreset(
             id: "gemini",
@@ -138,7 +112,7 @@ enum IDEACPLiveState: Equatable, Sendable {
 enum IDEACPAvailability: Equatable, Sendable {
     case installed
     case notInstalled
-    /// The agent's own binary is absent. `npx` could download an adapter, and nothing has yet.
+    /// The adapter is not installed. Settings ▸ Agent ▸ Adapters installs it.
     case adapterMissing
     case authenticationRequired(String)
     case connected
@@ -185,8 +159,10 @@ struct IDEACPProbe: Equatable, Sendable {
 enum IDEACPAvailabilityResolver {
     /// `isLive` is a session that is up now. A saved probe never outranks a missing executable,
     /// and a disabled agent is never reported as connected.
+    /// `installable` is an agent Umbra can install itself: without an executable it reads
+    /// "Adapter not installed" and points at Settings instead of "Not installed".
     static func resolve(
-        isEnabled: Bool, executableFound: Bool, probe: IDEACPProbe?, isLive: Bool, downloadsOnUse: Bool = false
+        isEnabled: Bool, executableFound: Bool, probe: IDEACPProbe?, isLive: Bool, installable: Bool = false
     ) -> IDEACPAvailability {
         if !isEnabled { return .disabled }
         if isLive { return .connected }
@@ -194,7 +170,7 @@ enum IDEACPAvailabilityResolver {
             switch probe.phase {
             case .authenticationRequired(let method): return .authenticationRequired(method)
             case .failed(let message):
-                if !executableFound { return .notInstalled }
+                if !executableFound { return installable ? .adapterMissing : .notInstalled }
                 if Self.isProtocolMismatch(message) { return .incompatibleProtocol(message) }
                 if Self.isDisconnect(message) { return .disconnected }
                 return .failed(message)
@@ -202,8 +178,7 @@ enum IDEACPAvailabilityResolver {
                 break
             }
         }
-        if !executableFound { return .notInstalled }
-        if downloadsOnUse, probe == nil { return .adapterMissing }
+        if !executableFound { return installable ? .adapterMissing : .notInstalled }
         return .installed
     }
 

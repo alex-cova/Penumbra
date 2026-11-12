@@ -6,6 +6,7 @@ struct IDEACPProviderMenu: View {
     let openSettings: () -> Void
 
     private var settings: IDEAgentSettings { agent.settings }
+    private let manager = IDEACPAdapterManager.shared
 
     var body: some View {
         Menu {
@@ -67,7 +68,10 @@ struct IDEACPProviderMenu: View {
         .accessibilityLabel("Agent provider")
         .accessibilityValue("\(title), \(statusTitle)")
         .accessibilityHint("Choose an agent for this chat, or manage agents")
-        .task { await settings.refreshACPPath() }
+        .task {
+            await settings.refreshACPPath()
+            await manager.load()
+        }
     }
 
     private var title: String {
@@ -120,15 +124,30 @@ struct IDEACPProviderMenu: View {
         }
     }
 
+    /// A row as it would be created from the preset, to ask the resolver what it would launch.
+    private func probe(_ preset: IDEACPPreset) -> IDEACPDefinition {
+        let launcher = preset.recordedLauncher
+        return IDEACPDefinition(
+            name: preset.name, command: launcher.command, args: launcher.args, presetID: preset.id, launchMode: .auto)
+    }
+
+    private func isAvailable(_ preset: IDEACPPreset) -> Bool {
+        manager.resolution(for: probe(preset), pathValue: settings.acpPathValue).launch != nil
+    }
+
+    private func needsInstall(_ preset: IDEACPPreset) -> Bool {
+        !isAvailable(preset) && preset.entry?.isManaged == true && !manager.isSandboxed
+    }
+
     private func presetLabel(_ preset: IDEACPPreset) -> String {
-        if preset.isInstalled(pathValue: settings.acpPathValue) { return preset.name }
-        if preset.canDownload(pathValue: settings.acpPathValue) { return "\(preset.name) · adapter not installed" }
+        if isAvailable(preset) { return preset.name }
+        if needsInstall(preset) { return "\(preset.name) · install adapter…" }
         return "\(preset.name) · not installed"
     }
 
     private func presetHelp(_ preset: IDEACPPreset) -> String {
-        if preset.canDownload(pathValue: settings.acpPathValue) {
-            return "The adapter is not installed. Allowing it can download a package with npx."
+        if needsInstall(preset) {
+            return "The adapter is not installed. Settings ▸ Agent ▸ Adapters installs and verifies it."
         }
         return preset.launchers.first?.note ?? preset.summary
     }
@@ -137,12 +156,7 @@ struct IDEACPProviderMenu: View {
         let live = agent.conversations.contains {
             $0.isACPConversation && $0.resolvedACPAgentID == definition.id && $0.acpLiveState == .connected
         }
-        return IDEACPAvailabilityResolver.resolve(
-            isEnabled: definition.isEnabled,
-            executableFound: definition.resolvedExecutable(pathValue: settings.acpPathValue) != nil,
-            probe: settings.acpProbes[definition.id],
-            isLive: live,
-            downloadsOnUse: definition.launchesPackageDownload)
+        return manager.availability(of: definition, settings: settings, isLive: live)
     }
 
     private func item(_ name: String, isSelected: Bool, detail: String) -> some View {
@@ -159,12 +173,23 @@ struct IDEACPProviderMenu: View {
     private func choose(_ binding: IDEACPBinding) {
         if let id = binding.agentID {
             guard let definition = settings.acpAgents.first(where: { $0.id == id }) else { return }
+            // A catalog agent whose adapter is not installed cannot start: Settings installs it.
+            if availability(of: definition) == .adapterMissing {
+                openSettings()
+                return
+            }
             guard ensureAllowed(definition) else { return }
         }
         agent.selectProvider(binding)
     }
 
     private func add(_ preset: IDEACPPreset) {
+        // An adapter that is not installed is installed in Settings, with the approval sheet.
+        // Choosing it here never downloads anything.
+        guard !needsInstall(preset) else {
+            openSettings()
+            return
+        }
         let definition = settings.materializePreset(preset)
         guard ensureAllowed(definition) else { return }
         agent.selectProvider(.agent(definition.id))
@@ -183,9 +208,8 @@ struct IDEACPProviderMenu: View {
     }
 
     private func consentDetail(_ definition: IDEACPDefinition) -> String {
-        let download = definition.launchesPackageDownload
-            ? " The first run downloads a package from the network."
-            : ""
-        return "Umbra starts \(definition.commandLine) when you send a message or test the connection.\(download) File changes and commands still ask you first. Stop ends the process."
+        let command = manager.resolution(for: definition, pathValue: settings.acpPathValue).launch?.commandLine
+            ?? definition.commandLine
+        return "Umbra starts \(command) when you send a message or test the connection. File changes and commands still ask you first. Stop ends the process."
     }
 }

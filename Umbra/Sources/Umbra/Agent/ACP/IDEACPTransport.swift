@@ -16,11 +16,27 @@ final class IDEACPTransport: ACPTransport, @unchecked Sendable {
     let definition: IDEACPDefinition
     let workingDirectory: URL
     let environment: [String: String]
+    /// A launch picked by `IDEACPLaunchResolver`. Nil means "run `definition` as typed" (MCP
+    /// servers and older call sites).
+    let launch: IDEACPResolvedLaunch?
+    private let leases: IDEACPAdapterLeases?
+    private var leaseToken: IDEACPAdapterLeases.Token?
 
     public let incoming: AsyncStream<Data>
 
-    init(definition: IDEACPDefinition, workingDirectory: URL, environment: [String: String]) {
+    convenience init(definition: IDEACPDefinition, workingDirectory: URL, environment: [String: String]) {
+        self.init(definition: definition, launch: nil, workingDirectory: workingDirectory, environment: environment, leases: nil)
+    }
+
+    /// `leases` marks a managed version as in use while the process lives, so it cannot be removed
+    /// or replaced underneath a running chat. Pass nil for a throwaway process (the install check).
+    init(
+        definition: IDEACPDefinition, launch: IDEACPResolvedLaunch?, workingDirectory: URL,
+        environment: [String: String], leases: IDEACPAdapterLeases? = .shared
+    ) {
         self.definition = definition
+        self.launch = launch
+        self.leases = leases
         self.workingDirectory = workingDirectory
         self.environment = environment
         var captured: AsyncStream<Data>.Continuation?
@@ -46,10 +62,32 @@ final class IDEACPTransport: ACPTransport, @unchecked Sendable {
             if let handle { return handle }
             guard !spawned else { throw ACPError.transportClosed }
             spawned = true
-            guard let executable = definition.resolvedExecutable(pathValue: environment["PATH"] ?? "") else {
-                throw ACPError.agentError(JSONRPCError(code: -32000, message: definition.missingExecutableMessage))
+            let executable: String
+            let arguments: [String]
+            if let launch {
+                if let managed = launch.managed {
+                    // A managed adapter is checked right before it runs: still ours, still
+                    // unwritable by others, and the entry file is the one that was verified.
+                    // The lease comes first: once it is held no Umbra process can remove or replace
+                    // the version, so the files verified below are the ones that run.
+                    let token = leases?.acquire(
+                        adapterID: managed.adapterID, version: managed.version, versionDirectory: managed.versionDirectory)
+                    do { try IDEACPAdapterStore.verifyEntryAllowingReinstall(managed) } catch {
+                        token?.release()
+                        throw ACPError.agentError(JSONRPCError(code: -32000, message: error.localizedDescription))
+                    }
+                    leaseToken = token
+                }
+                executable = launch.executable
+                arguments = launch.args
+            } else {
+                guard let resolved = definition.resolvedExecutable(pathValue: environment["PATH"] ?? "") else {
+                    throw ACPError.agentError(JSONRPCError(code: -32000, message: definition.missingExecutableMessage))
+                }
+                executable = resolved
+                arguments = definition.args
             }
-            var request = SubprocessRequest(executable: executable, arguments: definition.args)
+            var request = SubprocessRequest(executable: executable, arguments: arguments)
             request.workingDirectory = workingDirectory
             request.environment = environment
             request.standardInput = .interactive
@@ -57,25 +95,36 @@ final class IDEACPTransport: ACPTransport, @unchecked Sendable {
             request.processGroup = true
             request.killGroupOnExit = true
             request.terminationGrace = .seconds(2)
-            let started = try SubprocessRunner.start(request) { [weak self] data, source in
-                guard let self else { return }
-                switch source {
-                case .stdout:
-                    self.lock.withLock { self.continuation }?.yield(data)
-                case .stderr:
-                    self.lock.withLock {
-                        self.stderrText += String(decoding: data, as: UTF8.self)
-                        if self.stderrText.count > 4096 { self.stderrText = String(self.stderrText.suffix(4096)) }
+            let started: SubprocessHandle
+            do {
+                started = try SubprocessRunner.start(request) { [weak self] data, source in
+                    guard let self else { return }
+                    switch source {
+                    case .stdout:
+                        self.lock.withLock { self.continuation }?.yield(data)
+                    case .stderr:
+                        self.lock.withLock {
+                            self.stderrText += String(decoding: data, as: UTF8.self)
+                            if self.stderrText.count > 4096 { self.stderrText = String(self.stderrText.suffix(4096)) }
+                        }
                     }
                 }
+            } catch {
+                leaseToken?.release()
+                leaseToken = nil
+                throw error
             }
             handle = started
+            let token = leaseToken
             Task { [weak self] in
                 _ = await started.result
+                // The version is free to be replaced or removed once its process is gone.
+                token?.release()
                 guard let self else { return }
                 let continuation: AsyncStream<Data>.Continuation? = self.lock.withLock {
                     let captured = self.continuation
                     self.continuation = nil
+                    self.leaseToken = nil
                     return captured
                 }
                 continuation?.finish()

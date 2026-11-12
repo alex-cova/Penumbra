@@ -26,7 +26,7 @@ final class IDEACPRegistryTests: XCTestCase {
         XCTAssertEqual(looked, ["/tmp/no-such-acp-agent"])
     }
 
-    func testPresetsPreferAnInstalledAdapterAndDoNotInventAnNpxCommand() {
+    func testPresetsUseAVerifiedAdapterOrNativeCLIAndNeverInventAnNpxCommand() {
         let claude = IDEACPRegistry.preset(id: "claude-code")!
         let codex = IDEACPRegistry.preset(id: "codex")!
         let gemini = IDEACPRegistry.preset(id: "gemini")!
@@ -34,41 +34,46 @@ final class IDEACPRegistryTests: XCTestCase {
         let none: (String) -> Bool = { _ in false }
         let npxOnly: (String) -> Bool = { $0.hasSuffix("/npx") }
         let adapter: (String) -> Bool = { $0.hasSuffix("/claude-agent-acp") || $0.hasSuffix("/codex-acp") }
+        let rightPackage: (String) -> String? = { $0.hasSuffix("claude-agent-acp") ? "@agentclientprotocol/claude-agent-acp" : "@agentclientprotocol/codex-acp" }
+        let otherPackage: (String) -> String? = { _ in "some-other-tool" }
 
-        XCTAssertEqual(claude.preferredLaunch(pathValue: "/bin", isExecutable: adapter).command, "claude-agent-acp")
-        XCTAssertEqual(claude.preferredLaunch(pathValue: "/bin", isExecutable: npxOnly).command, "npx")
+        // A system adapter counts only when its package.json names the expected package.
         XCTAssertEqual(
-            claude.preferredLaunch(pathValue: "/bin", isExecutable: npxOnly).args,
-            ["-y", "@agentclientprotocol/claude-agent-acp"])
-        XCTAssertEqual(claude.preferredLaunch(pathValue: "/bin", isExecutable: none).command, "claude-agent-acp")
-        XCTAssertTrue(claude.preferredLaunch(pathValue: "/bin", isExecutable: none).args.isEmpty)
-        XCTAssertFalse(claude.isInstalled(pathValue: "/bin", isExecutable: npxOnly))
-        XCTAssertTrue(claude.isInstalled(pathValue: "/bin", isExecutable: adapter))
-        XCTAssertTrue(claude.canDownload(pathValue: "/bin", isExecutable: npxOnly))
-        XCTAssertFalse(claude.canDownload(pathValue: "/bin", isExecutable: adapter))
-        XCTAssertFalse(gemini.canDownload(pathValue: "/bin", isExecutable: npxOnly))
+            claude.resolution(active: nil, pathValue: "/bin", isExecutable: adapter, systemPackageName: rightPackage).launch?.source,
+            .systemAdapter)
+        XCTAssertEqual(
+            claude.resolution(active: nil, pathValue: "/bin", isExecutable: adapter, systemPackageName: otherPackage),
+            .unavailable(.notInstalled("Claude Code")))
+        XCTAssertEqual(
+            codex.resolution(active: nil, pathValue: "/bin", isExecutable: adapter, systemPackageName: rightPackage).launch?.executable,
+            "/bin/codex-acp")
+        // npx on its own is never an adapter, and nothing falls back to it.
+        XCTAssertEqual(
+            claude.resolution(active: nil, pathValue: "/bin", isExecutable: npxOnly, systemPackageName: rightPackage),
+            .unavailable(.notInstalled("Claude Code")))
+        XCTAssertEqual(
+            codex.resolution(active: nil, pathValue: "/bin", isExecutable: none, systemPackageName: rightPackage),
+            .unavailable(.notInstalled("Codex")))
+        for preset in IDEACPRegistry.presets {
+            XCTAssertFalse(preset.launchers.contains { $0.command == "npx" }, preset.id)
+        }
 
-        XCTAssertEqual(codex.preferredLaunch(pathValue: "/bin", isExecutable: adapter).command, "codex-acp")
-        XCTAssertEqual(codex.preferredLaunch(pathValue: "/bin", isExecutable: npxOnly).args, ["-y", "@agentclientprotocol/codex-acp"])
-        XCTAssertEqual(gemini.preferredLaunch(pathValue: "/bin", isExecutable: npxOnly).command, "gemini")
-        XCTAssertEqual(gemini.preferredLaunch(pathValue: "/bin", isExecutable: npxOnly).args, ["--acp"])
-        XCTAssertFalse(gemini.isInstalled(pathValue: "/bin", isExecutable: npxOnly))
-        XCTAssertEqual(opencode.preferredLaunch(pathValue: "/bin", isExecutable: none).args, ["acp"])
+        // Native CLIs run their documented ACP mode, and only when the CLI is there.
+        let geminiLaunch = gemini.resolution(active: nil, pathValue: "/bin", isExecutable: { $0 == "/bin/gemini" })
+        XCTAssertEqual(geminiLaunch.launch?.args, ["--acp"])
+        XCTAssertEqual(geminiLaunch.launch?.source, .nativeCLI)
+        XCTAssertEqual(
+            gemini.resolution(active: nil, pathValue: "/bin", isExecutable: npxOnly), .unavailable(.cliMissing("gemini")))
+        XCTAssertEqual(
+            opencode.resolution(active: nil, pathValue: "/bin", isExecutable: { $0 == "/bin/opencode" }).launch?.args, ["acp"])
         XCTAssertEqual(opencode.launchers.count, 1)
     }
 
-    func testMaterializeUsesTheResolvedLauncherAndDoesNotAllowOrStart() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("umbra-acp-path-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let npx = dir.appendingPathComponent("npx")
-        try "#!/bin/sh\nexit 0\n".write(to: npx, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: npx.path)
-
+    func testMaterializeCreatesACatalogRowAndDoesNotAllowOrStart() {
         let settings = makeSettings()
-        settings.acpPathValue = dir.path
         let claude = settings.materializePreset(IDEACPRegistry.preset(id: "claude-code")!)
-        XCTAssertEqual(claude.command, "npx")
+        XCTAssertEqual(claude.command, "claude-agent-acp")
+        XCTAssertEqual(claude.launchMode, .auto)
         XCTAssertEqual(claude.presetID, "claude-code")
         XCTAssertFalse(settings.acpAllowedAgentIDs.contains(claude.id))
         XCTAssertNil(settings.activeACPAgent)
@@ -77,7 +82,7 @@ final class IDEACPRegistryTests: XCTestCase {
         let gemini = settings.materializePreset(IDEACPRegistry.preset(id: "gemini")!)
         XCTAssertEqual(gemini.command, "gemini")
         XCTAssertEqual(gemini.args, ["--acp"])
-        XCTAssertNil(gemini.resolvedExecutable(pathValue: settings.acpPathValue))
+        XCTAssertNil(gemini.resolvedExecutable(pathValue: "/nonexistent-umbra-path"))
         XCTAssertEqual(
             IDEACPAvailabilityResolver.resolve(isEnabled: true, executableFound: false, probe: nil, isLive: false),
             .notInstalled)
@@ -109,9 +114,14 @@ final class IDEACPRegistryTests: XCTestCase {
         XCTAssertEqual(
             IDEACPAvailabilityResolver.resolve(isEnabled: true, executableFound: false, probe: nil, isLive: false),
             .notInstalled)
+        // An agent Umbra can install, with nothing to launch yet.
         XCTAssertEqual(
             IDEACPAvailabilityResolver.resolve(
-                isEnabled: true, executableFound: true, probe: nil, isLive: false, downloadsOnUse: true),
+                isEnabled: true, executableFound: false, probe: nil, isLive: false, installable: true),
+            .adapterMissing)
+        XCTAssertEqual(
+            IDEACPAvailabilityResolver.resolve(
+                isEnabled: true, executableFound: false, probe: failed, isLive: false, installable: true),
             .adapterMissing)
     }
 
@@ -129,11 +139,11 @@ final class IDEACPRegistryTests: XCTestCase {
             .disconnected)
         XCTAssertEqual(
             IDEACPAvailabilityResolver.resolve(
-                isEnabled: true, executableFound: true, probe: handshake, isLive: false, downloadsOnUse: true),
+                isEnabled: true, executableFound: true, probe: handshake, isLive: false, installable: true),
             .installed)
         XCTAssertEqual(
             IDEACPAvailabilityResolver.resolve(
-                isEnabled: true, executableFound: false, probe: nil, isLive: false, downloadsOnUse: true),
+                isEnabled: true, executableFound: false, probe: nil, isLive: false, installable: false),
             .notInstalled)
         XCTAssertEqual(IDEACPAvailability.adapterMissing.title, "Adapter not installed")
         XCTAssertFalse(IDEACPDefinition(name: "A", command: "/tmp/missing-agent").missingExecutableMessage.contains("on PATH"))
