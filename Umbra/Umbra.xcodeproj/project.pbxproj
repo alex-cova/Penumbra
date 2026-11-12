@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C1A10000000000000000000E /* UmbraAgentSupport in Frameworks */ = {isa = PBXBuildFile; productRef = C1A10000000000000000000D /* UmbraAgentSupport */; };
 		000000000000000000000093 /* jacocoagent.jar in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000095 /* jacocoagent.jar */; };
 		000000000000000000000094 /* jacococli.jar in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000096 /* jacococli.jar */; };
 		000000000000000000000017 /* java-debug-adapter.jar in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000016 /* java-debug-adapter.jar */; };
@@ -42,6 +43,7 @@
 		00000000000000000000009B /* java-analysis-server.jar */ = {isa = PBXFileReference; lastKnownFileType = archive.jar; name = java-analysis-server.jar; path = Sources/Umbra/Tools/JavaAnalysisServer/build/java-analysis-server.jar; sourceTree = "<group>"; };
 		0000000000000000000000B0 /* GhosttyVt.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GhosttyVt.xcframework; path = Vendor/GhosttyVt.xcframework; sourceTree = "<group>"; };
 		000000000000000000000004 /* Umbra.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Umbra.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C1A100000000000000000002 /* UmbraUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = UmbraUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		00000000000000000000000B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		00000000000000000000000C /* Umbra.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Umbra.entitlements; sourceTree = "<group>"; };
 		00000000000000000000000D /* umbra.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = umbra.png; path = umbra.png; sourceTree = "<group>"; };
@@ -156,6 +158,11 @@
 			path = Sources/Umbra;
 			sourceTree = "<group>";
 		};
+		C1A100000000000000000006 /* UITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = UITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -176,6 +183,7 @@
 				000000000000000000000076 /* GitIntelligence in Frameworks */,
 				000000000000000000000078 /* SubprocessKit in Frameworks */,
 				00000000000000000000007A /* AgentKit in Frameworks */,
+				C1A10000000000000000000E /* UmbraAgentSupport in Frameworks */,
 				00000000000000000000007C /* AgentKitMLX in Frameworks */,
 				0000000000000000000000A2 /* AgentKitApple in Frameworks */,
 				00000000000000000000007E /* LocalModelStore in Frameworks */,
@@ -187,6 +195,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C1A100000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -194,6 +209,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000009 /* Umbra */,
+				C1A100000000000000000006 /* UITests */,
 				00000000000000000000000A /* Resources */,
 				00000000000000000000000D /* umbra.png */,
 				000000000000000000000016 /* java-debug-adapter.jar */,
@@ -209,6 +225,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000004 /* Umbra.app */,
+				C1A100000000000000000002 /* UmbraUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -256,6 +273,7 @@
 				000000000000000000000075 /* GitIntelligence */,
 				000000000000000000000077 /* SubprocessKit */,
 				000000000000000000000079 /* AgentKit */,
+				C1A10000000000000000000D /* UmbraAgentSupport */,
 				00000000000000000000007B /* AgentKitMLX */,
 				0000000000000000000000A1 /* AgentKitApple */,
 				00000000000000000000007D /* LocalModelStore */,
@@ -268,7 +286,46 @@
 			productReference = 000000000000000000000004 /* Umbra.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C1A100000000000000000001 /* UmbraUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C1A100000000000000000009 /* Build configuration list for PBXNativeTarget "UmbraUITests" */;
+			buildPhases = (
+				C1A100000000000000000003 /* Sources */,
+				C1A100000000000000000004 /* Frameworks */,
+				C1A100000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C1A10000000000000000000B /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				C1A100000000000000000006 /* UITests */,
+			);
+			name = UmbraUITests;
+			productName = UmbraUITests;
+			productReference = C1A100000000000000000002 /* UmbraUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		C1A10000000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000000000005;
+			remoteInfo = Umbra;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		C1A10000000000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000000000005 /* Umbra */;
+			targetProxy = C1A10000000000000000000A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXProject section */
 		000000000000000000000001 /* Project object */ = {
@@ -279,6 +336,10 @@
 				TargetAttributes = {
 					000000000000000000000005 = {
 						CreatedOnToolsVersion = 27.0;
+					};
+					C1A100000000000000000001 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 000000000000000000000005;
 					};
 				};
 			};
@@ -292,6 +353,7 @@
 			);
 			mainGroup = 000000000000000000000002;
 			packageReferences = (
+				C1A10000000000000000000C /* XCLocalSwiftPackageReference "." */,
 				000000000000000000000064 /* XCLocalSwiftPackageReference ".." */,
 				000000000000000000000067 /* XCLocalSwiftPackageReference "../Packages/AgentKit" */,
 				000000000000000000000068 /* XCLocalSwiftPackageReference "../Packages/AgentKitMLX" */,
@@ -307,6 +369,7 @@
 			projectRoot = "";
 			targets = (
 				000000000000000000000005 /* Umbra */,
+				C1A100000000000000000001 /* UmbraUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -321,6 +384,13 @@
 				00000000000000000000009C /* java-analysis-server.jar in Resources */,
 				000000000000000000000093 /* jacocoagent.jar in Resources */,
 				000000000000000000000094 /* jacococli.jar in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1A100000000000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -350,6 +420,13 @@
 
 /* Begin PBXSourcesBuildPhase section */
 		000000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1A100000000000000000003 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -455,6 +532,42 @@
 			};
 			name = Release;
 		};
+		C1A100000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.umbra.editor.uitests;
+				PRODUCT_NAME = UmbraUITests;
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Umbra;
+			};
+			name = Debug;
+		};
+		C1A100000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.umbra.editor.uitests;
+				PRODUCT_NAME = UmbraUITests;
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Umbra;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -476,9 +589,22 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		C1A100000000000000000009 /* Build configuration list for PBXNativeTarget "UmbraUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1A100000000000000000007 /* Debug */,
+				C1A100000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		C1A10000000000000000000C /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
 		000000000000000000000064 /* XCLocalSwiftPackageReference ".." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "..";
@@ -529,6 +655,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		C1A10000000000000000000D /* UmbraAgentSupport */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1A10000000000000000000C /* XCLocalSwiftPackageReference "." */;
+			productName = UmbraAgentSupport;
+		};
 		00000000000000000000006B /* Penumbra */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 000000000000000000000064 /* XCLocalSwiftPackageReference ".." */;

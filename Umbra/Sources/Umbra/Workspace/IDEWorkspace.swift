@@ -223,6 +223,10 @@ public final class IDEWorkspace {
     /// real `windows.json` and `app.json`.
     static var isSessionPersistenceEnabled = true
 
+    /// UI tests set this before the first window so the first-run guide is not shown and the
+    /// user's "has completed the guide" default is not written.
+    static var suppressesFirstRunGuide = false
+
     /// A weak handle for the menu bar; see `IDEWorkspaceRef`.
     let reference = IDEWorkspaceRef()
 
@@ -431,10 +435,10 @@ public final class IDEWorkspace {
         if returnsToAIModeFromSettings { windowMode = .editor }
         isBottomPanelExpanded = false
         agent.dismissPage()
+        // Release the editor before Settings requests focus for its search field.
+        window?.makeFirstResponder(nil)
         isSettingsVisible = true
         refreshEditorKeyLoop()
-        // Otherwise keystrokes keep going to the editor hidden under the settings.
-        window?.makeFirstResponder(nil)
     }
 
     /// AI mode covers the window: Settings and an expanded bottom panel belong to the editor, and
@@ -1054,7 +1058,7 @@ public final class IDEWorkspace {
         refreshPresentation()
         openEmptyFileIfNeeded()
         showsWelcome = !hasOpenDocuments
-        showsFirstRunGuide = !preferences.hasCompletedFirstRunGuide
+        showsFirstRunGuide = !Self.suppressesFirstRunGuide && !preferences.hasCompletedFirstRunGuide
 
         if IDEWindowRegistry.shared.consumeLaunchArguments() {
             openLaunchArgumentTargets()

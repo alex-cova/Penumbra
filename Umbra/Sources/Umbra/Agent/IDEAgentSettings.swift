@@ -105,7 +105,14 @@ enum IDEAgentProvider: String, CaseIterable, Identifiable, Sendable, Codable {
 @MainActor
 @Observable
 final class IDEAgentSettings {
-    static let shared = IDEAgentSettings()
+    static let shared: IDEAgentSettings = {
+        #if DEBUG
+        if let defaults = IDEACPUITestBootstrap.isolatedDefaults {
+            return IDEAgentSettings(defaults: defaults, keyStore: IDEAgentMemoryKeyStore())
+        }
+        #endif
+        return IDEAgentSettings()
+    }()
 
     static let defaultBaseURL = IDEAgentProvider.openAIResponses.defaultBaseURL
     static let defaultModel = IDEAgentProvider.openAIResponses.defaultModel
@@ -603,6 +610,14 @@ final class IDEAgentSettings {
         acpWorkspaceDefaults = defaults.dictionary(forKey: Keys.acpWorkspace) as? [String: String] ?? [:]
         disclosedHosts = Set(defaults.stringArray(forKey: Keys.disclosed) ?? [])
         helperChoice = defaults.data(forKey: Keys.helperModel).flatMap { try? JSONDecoder().decode(IDEAIModelChoice.self, from: $0) }
+        #if DEBUG
+        if IDEACPUITestBootstrap.adoptsInstalledAgents {
+            mode = .manual
+            for entry in IDEACPAdapterCatalog.managedEntries {
+                _ = adoptManagedAdapter(entry)
+            }
+        }
+        #endif
     }
 
     private func store(_ key: String, _ value: String) {

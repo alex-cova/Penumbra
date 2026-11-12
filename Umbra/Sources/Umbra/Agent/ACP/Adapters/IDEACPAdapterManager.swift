@@ -60,8 +60,14 @@ final class IDEACPAdapterManager {
         case missing
     }
 
-    /// The app-wide manager. Tests replace it with one over a temporary folder.
-    static var shared = IDEACPAdapterManager.makeProduction()
+    /// The app-wide manager. Tests replace it with one over a temporary folder. A UI-test launch
+    /// installs a fixture manager before the first read, and only in a Debug build.
+    static var shared: IDEACPAdapterManager = {
+        #if DEBUG
+        if let manager = IDEACPUITestBootstrap.makeManagerIfRequested() { return manager }
+        #endif
+        return makeProduction()
+    }()
 
     private(set) var states: [String: AdapterState]
     private(set) var node: NodeStatus = .unknown
@@ -117,7 +123,9 @@ final class IDEACPAdapterManager {
 
     /// The real thing: the real registry, npm and processes. `root` is Application Support unless a
     /// live test installs into a folder of its own.
-    static func makeProduction(root: URL = IDEACPAdapterStore.defaultRoot) -> IDEACPAdapterManager {
+    static func makeProduction(
+        root: URL = IDEACPAdapterStore.defaultRoot, defaults: UserDefaults = .standard
+    ) -> IDEACPAdapterManager {
         let store = IDEACPAdapterStore(root: root)
         let registry = IDEACPNpmRegistry()
         let environment = IDEACPAdapterInstaller.Environment(
@@ -139,7 +147,8 @@ final class IDEACPAdapterManager {
                     environment: environment, leases: nil, timeout: .seconds(20))
             })
         return IDEACPAdapterManager(
-            store: store, registry: registry, installer: IDEACPAdapterInstaller(environment: environment))
+            store: store, registry: registry, installer: IDEACPAdapterInstaller(environment: environment),
+            defaults: defaults)
     }
 
     /// The `PATH` agents run with: the login shell's entries, then the base directories.

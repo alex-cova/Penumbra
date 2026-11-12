@@ -329,6 +329,13 @@ struct IDESessionFiles {
 
     /// Application Support, with the old `session.json` migrated on first use.
     static let standard: IDESessionFiles = {
+        #if DEBUG
+        if let directory = IDEACPUITestBootstrap.sessionDirectory {
+            let files = IDESessionFiles(directory: directory)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            return files
+        }
+        #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let files = IDESessionFiles(directory: base.appendingPathComponent("com.umbra.editor", isDirectory: true))
         files.migrateLegacySessionIfNeeded()

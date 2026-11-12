@@ -29,6 +29,9 @@ struct IDEDiffToolbar: View {
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(IDEAppearance.ColorToken.panel)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(model.session?.request.title.hasSuffix("(agent)") == true ? IDEACPAccessibility.diff : "diff.toolbar")
+        .accessibilityLabel(model.session?.request.title ?? "Diff")
         .overlay(alignment: .bottom) {
             Rectangle().fill(IDEAppearance.ColorToken.border).frame(height: 1)
         }

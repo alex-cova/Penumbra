@@ -282,6 +282,7 @@ struct IDEAgentPanel: View {
             if agent.isRunning {
                 IDEIconButton(
                     systemImage: "stop.fill", help: "Stop", tint: IDEAppearance.ColorToken.error, action: agent.stop)
+                    .accessibilityIdentifier(IDEACPAccessibility.stop)
             } else {
                 IDEIconButton(
                     systemImage: "arrow.up.circle.fill", help: "Send",
@@ -289,6 +290,7 @@ struct IDEAgentPanel: View {
                     isDisabled: agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         && agent.selected.pendingImages.isEmpty,
                     action: send)
+                    .accessibilityIdentifier(IDEACPAccessibility.send)
             }
         }
     }

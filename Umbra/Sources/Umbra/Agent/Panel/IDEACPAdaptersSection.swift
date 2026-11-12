@@ -17,17 +17,23 @@ struct IDEACPAdaptersSection: View {
     @State private var customCommand = ""
 
     var body: some View {
-        Section("Adapters") {
+        Section {
             Text("Claude Code and Codex need a small adapter to speak the Agent Client Protocol. Umbra installs it in its own folder, checks who published it, and keeps earlier versions so you can go back. Nothing is installed or updated without your approval, and nothing touches your global npm packages.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             if manager.isSandboxed {
-                banner("Managed installs are not available in the App Store build, which cannot run npm. Use a custom executable under Agents below.")
+                banner(
+                    "Managed installs are not available in the App Store build, which cannot run npm. Use a custom executable under Agents below.",
+                    identifier: IDEACPAccessibility.adaptersSandbox)
             } else if manager.node == .missing {
-                banner(IDEACPAdapterError.nodeMissing.localizedDescription ?? "Node.js was not found.")
+                banner(
+                    IDEACPAdapterError.nodeMissing.localizedDescription ?? "Node.js was not found.",
+                    identifier: IDEACPAccessibility.adaptersNode)
             }
             if manager.states.values.contains(where: { if case .offline? = $0.checkError { true } else { false } }) {
-                banner("You appear to be offline. Umbra cannot check for updates or install adapters until the network is back. Installed adapters keep working.")
+                banner(
+                    "You appear to be offline. Umbra cannot check for updates or install adapters until the network is back. Installed adapters keep working.",
+                    identifier: IDEACPAccessibility.adaptersOffline)
             }
             updatesRow
             if manager.hasLoaded {
@@ -42,10 +48,14 @@ struct IDEACPAdaptersSection: View {
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                 }
                 .accessibilityElement(children: .combine)
+                .accessibilityIdentifier(IDEACPAccessibility.adaptersLoading)
             }
             ForEach(IDEACPAdapterCatalog.entries.filter { !$0.isManaged }) { entry in
                 nativeRow(entry)
             }
+        } header: {
+            Text("Adapters")
+                .accessibilityIdentifier(IDEACPAccessibility.adapters)
         }
         .task {
             await manager.load()
@@ -75,11 +85,14 @@ struct IDEACPAdaptersSection: View {
                     ForEach(IDEACPUpdateCheckPolicy.allCases) { Text($0.title).tag($0) }
                 }
                 .disabled(manager.isSandboxed)
+                .accessibilityLabel("Check for updates")
+                .accessibilityIdentifier(IDEACPAccessibility.updatePolicy)
                 Button(manager.isChecking ? "Checking…" : "Check Now") {
                     Task { await manager.checkForUpdates() }
                 }
                 .disabled(manager.isChecking || manager.isSandboxed)
                 .accessibilityLabel("Check for adapter updates now")
+                .accessibilityIdentifier(IDEACPAccessibility.checkUpdates)
             }
             Text(lastCheckedText + " · Checking reads the registry's version list only; it never downloads or runs anything.")
                 .font(IDEAppearance.Typography.caption)
@@ -122,19 +135,22 @@ struct IDEACPAdaptersSection: View {
                         .font(IDEAppearance.Typography.caption)
                         .foregroundStyle(IDEAppearance.ColorToken.error)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(IDEACPAccessibility.message(entry.id))
+                        .ideAnnounces(message)
                     Spacer()
                     Button("Dismiss") { messages[entry.id] = nil }
                         .font(IDEAppearance.Typography.caption)
                 }
             }
             if let definition = definition(for: entry) {
-                readinessLine(definition)
+                readinessLine(definition, adapterID: entry.id)
             }
             if customEditing == entry.id { customEditor(entry) }
             if detailsOpen.contains(entry.id) { versionDetails(state) }
         }
         .padding(.vertical, IDEAppearance.Spacing.xxs)
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(IDEACPAccessibility.adapter(entry.id))
         .accessibilityLabel("\(entry.name) adapter, \(state.phase.title)")
     }
 
@@ -160,15 +176,18 @@ struct IDEACPAdaptersSection: View {
             VStack(alignment: .leading, spacing: 2) {
                 if let done = state.progress?.bytesDone, let total = state.progress?.bytesExpected, step == .downloading, total > 0 {
                     ProgressView(value: Double(min(done, total)), total: Double(total))
+                        .accessibilityIdentifier(IDEACPAccessibility.progress(state.entry.id))
                         .accessibilityLabel("\(state.entry.name) install progress")
                         .accessibilityValue("\(done * 100 / total) percent")
                 } else {
                     ProgressView().controlSize(.small)
+                        .accessibilityIdentifier(IDEACPAccessibility.progress(state.entry.id))
                         .accessibilityLabel("\(state.entry.name) \(step.title)")
                 }
                 Text(progressText(state, step: step))
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .accessibilityIdentifier(IDEACPAccessibility.status(state.entry.id))
             }
         case .failed(let error, let keeping):
             VStack(alignment: .leading, spacing: 2) {
@@ -179,21 +198,30 @@ struct IDEACPAdaptersSection: View {
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.error)
                     .fixedSize(horizontal: false, vertical: true)
+                    .ideAnnounces(error.localizedDescription)
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(IDEACPAccessibility.status(state.entry.id))
         case .updateAvailable(_, let available, let security):
             Text(security
                  ? "Security update \(available) is available. The installed version has a published advisory."
                  : "Update \(available) is available.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(security ? Color.orange : IDEAppearance.ColorToken.muted)
+                .accessibilityIdentifier(IDEACPAccessibility.status(state.entry.id))
+                .ideAnnounces(security
+                    ? "Security update \(available) is available for \(state.entry.name)."
+                    : "Update \(available) is available for \(state.entry.name).")
         case .ready:
             Text(runningText(state.entry.id) ?? "Ready")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.run)
+                .accessibilityIdentifier(IDEACPAccessibility.status(state.entry.id))
         case .notInstalled:
             Text(state.checkError?.localizedDescription ?? "Not installed.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(state.checkError == nil ? IDEAppearance.ColorToken.muted : Color.orange)
+                .accessibilityIdentifier(IDEACPAccessibility.status(state.entry.id))
         case .disabled:
             Text("Disabled")
                 .font(IDEAppearance.Typography.caption)
@@ -215,11 +243,12 @@ struct IDEACPAdaptersSection: View {
         return uses > 0 ? "Ready · used by \(uses) running chat\(uses == 1 ? "" : "s")" : nil
     }
 
-    @ViewBuilder private func readinessLine(_ definition: IDEACPDefinition) -> some View {
+    @ViewBuilder private func readinessLine(_ definition: IDEACPDefinition, adapterID: String) -> some View {
         let text = readiness(of: definition)
         Text(text.title)
             .font(IDEAppearance.Typography.caption)
             .foregroundStyle(text.color)
+            .accessibilityIdentifier(IDEACPAccessibility.connection(adapterID))
             .accessibilityLabel("Connection: \(text.title)")
     }
 
@@ -252,18 +281,22 @@ struct IDEACPAdaptersSection: View {
                 Button(preparing.contains(entry.id) ? "Checking…" : "Install…") { prepare(entry) }
                     .disabled(manager.isSandboxed || preparing.contains(entry.id))
                     .accessibilityLabel("Install \(entry.name) adapter")
+                    .accessibilityIdentifier(IDEACPAccessibility.install(entry.id))
             case .working, .updating:
                 Button("Cancel") { manager.cancel(entry.id) }
                     .accessibilityLabel("Cancel installing \(entry.name)")
+                    .accessibilityIdentifier(IDEACPAccessibility.cancel(entry.id))
             case .updateAvailable:
                 Button(preparing.contains(entry.id) ? "Checking…" : "Update…") { prepare(entry) }
                     .disabled(preparing.contains(entry.id))
                     .accessibilityLabel("Update \(entry.name) adapter")
+                    .accessibilityIdentifier(IDEACPAccessibility.update(entry.id))
                 testButton(entry)
             case .failed(_, let keeping):
                 Button(preparing.contains(entry.id) ? "Checking…" : "Retry") { prepare(entry) }
                     .disabled(preparing.contains(entry.id))
                     .accessibilityLabel("Retry \(entry.name)")
+                    .accessibilityIdentifier(IDEACPAccessibility.retry(entry.id))
                 if keeping != nil { testButton(entry) }
             case .ready:
                 testButton(entry)
@@ -279,6 +312,7 @@ struct IDEACPAdaptersSection: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel("More actions for \(entry.name)")
+            .accessibilityIdentifier(IDEACPAccessibility.more(entry.id))
         }
         .font(IDEAppearance.Typography.caption)
     }
@@ -288,8 +322,10 @@ struct IDEACPAdaptersSection: View {
         Button(detailsOpen.contains(entry.id) ? "Hide Version Details" : "Version Details") {
             if detailsOpen.contains(entry.id) { detailsOpen.remove(entry.id) } else { detailsOpen.insert(entry.id) }
         }
+        .accessibilityIdentifier(IDEACPAccessibility.details(entry.id))
         Button("Restore Previous Version") { restorePrevious(entry.id) }
             .disabled(state.previousVersion == nil || state.phase.isBusy)
+            .accessibilityIdentifier(IDEACPAccessibility.restore(entry.id))
         Button("Show in Finder") { manager.reveal(entry.id) }
         Divider()
         if let definition = definition(for: entry) {
@@ -308,12 +344,14 @@ struct IDEACPAdaptersSection: View {
         Divider()
         Button("Remove Adapter…", role: .destructive) { confirmRemove(entry) }
             .disabled(state.versions.isEmpty || state.phase.isBusy)
+            .accessibilityIdentifier(IDEACPAccessibility.remove(entry.id))
     }
 
     private func testButton(_ entry: IDEACPAdapterEntry) -> some View {
         Button("Test Connection") { test(entry) }
             .disabled(isTesting(entry))
             .accessibilityLabel("Test \(entry.name) connection")
+            .accessibilityIdentifier(IDEACPAccessibility.test(entry.id))
     }
 
     // MARK: - Version details
@@ -339,10 +377,12 @@ struct IDEACPAdaptersSection: View {
                             Button("Make Active") { makeActive(entry.id, manifest.version) }
                                 .disabled(state.phase.isBusy)
                                 .accessibilityLabel("Make \(entry.name) \(manifest.version) active")
+                                .accessibilityIdentifier(IDEACPAccessibility.activateVersion(entry.id, manifest.version))
                             Button("Remove") { removeVersion(entry.id, manifest.version) }
                                 .disabled(inUse || state.phase.isBusy)
                                 .help(inUse ? "A running chat is using this version." : "Delete this version")
                                 .accessibilityLabel("Remove \(entry.name) \(manifest.version)")
+                                .accessibilityIdentifier(IDEACPAccessibility.removeVersion(entry.id, manifest.version))
                         }
                     }
                     Text("Installed \(manifest.installedAt.formatted(date: .abbreviated, time: .shortened)) · \(ByteCountFormatter.string(fromByteCount: manifest.installedBytes, countStyle: .file)) · Node.js \(manifest.nodeVersion)")
@@ -376,6 +416,8 @@ struct IDEACPAdaptersSection: View {
             }
         }
         .padding(.leading, 28)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(IDEACPAccessibility.versions(entry.id))
     }
 
     // MARK: - Custom executable
@@ -436,7 +478,7 @@ struct IDEACPAdaptersSection: View {
                  ?? "Not found on PATH. Install \(entry.name) from its publisher; Umbra does not install it.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(found == nil ? IDEAppearance.ColorToken.muted : IDEAppearance.ColorToken.run)
-            if let definition { readinessLine(definition) }
+            if let definition { readinessLine(definition, adapterID: entry.id) }
         }
         .padding(.vertical, IDEAppearance.Spacing.xxs)
         .accessibilityElement(children: .contain)
@@ -453,12 +495,14 @@ struct IDEACPAdaptersSection: View {
         settings.acpAgents.first { $0.presetID == entry.presetID }
     }
 
-    private func banner(_ text: String) -> some View {
+    private func banner(_ text: String, identifier: String) -> some View {
         Text(text)
             .font(IDEAppearance.Typography.caption)
             .foregroundStyle(Color.orange)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel("Notice: \(text)")
+            .accessibilityIdentifier(identifier)
+            .ideAnnounces(text)
     }
 
     private func prepare(_ entry: IDEACPAdapterEntry) {
@@ -605,14 +649,17 @@ struct IDEACPInstallApprovalSheet: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier(IDEACPAccessibility.approvalCancel)
                 Button(isUpdate ? "Update" : "Install", action: onApprove)
                     .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier(IDEACPAccessibility.approvalConfirm)
             }
         }
         .padding(IDEAppearance.Spacing.lg)
         .frame(width: 520)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(IDEACPAccessibility.approval)
     }
 
     private func row(_ label: String, _ value: String) -> some View {
@@ -626,6 +673,8 @@ struct IDEACPInstallApprovalSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(label == "Adapter" ? IDEACPAccessibility.approvalPackage : "acp.approval.\(label.lowercased())")
+        .accessibilityLabel("\(label): \(value)")
     }
 }
 

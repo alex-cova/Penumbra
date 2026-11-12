@@ -22,6 +22,7 @@ struct IDESettingsPage<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .scrollIndicators(.automatic)
+        .accessibilityIdentifier(IDEACPAccessibility.settingsDetail)
         .ideSettingsScrollSurface()
     }
 }

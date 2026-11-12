@@ -79,7 +79,7 @@ struct IDEWelcomeView: View {
             IDEWelcomeBackdrop(
                 kind: workspace.preferences.welcomeBackground,
                 parallax: parallax,
-                animationDisabled: workspace.preferences.welcomeAnimationDisabled
+                animationDisabled: workspace.preferences.welcomeAnimationDisabled || IDEACPUITestLaunch.pausesMotion
             )
         }
     }

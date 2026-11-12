@@ -49,6 +49,8 @@ struct IDEAgentComposerField: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.registerForDraggedTypes([.fileURL])
         textView.placeholder = placeholder
+        textView.setAccessibilityIdentifier(IDEACPAccessibility.composer)
+        textView.setAccessibilityLabel("Message")
         context.coordinator.textView = textView
         context.coordinator.applyAppearance()
 

@@ -51,7 +51,10 @@ public struct IDEPreferencesView: View {
         .background(IDEAppearance.ColorToken.workbench)
         .id(preferences.uiColorSchemeID)
         .focusSection()
-        .task { searchFocused = true }
+        .task {
+            await Task.yield()
+            searchFocused = true
+        }
         .onExitCommand(perform: handleEscape)
         .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
@@ -67,6 +70,8 @@ public struct IDEPreferencesView: View {
             TextField("Search settings", text: $query)
                 .textFieldStyle(.plain)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                .accessibilityLabel("Search settings")
+                .accessibilityIdentifier(IDEACPAccessibility.settingsSearch)
                 .focused($searchFocused)
                 .onSubmit {
                     if let first = visibleDomains.first { selectedDomain = first }
@@ -147,6 +152,8 @@ public struct IDEPreferencesView: View {
             searchFocused = true
             return .handled
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(IDEACPAccessibility.settingsSidebar)
         .ideSettingsScrollSurface()
     }
 
@@ -322,6 +329,7 @@ private struct IDEPreferencesSidebarRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+        .accessibilityIdentifier(IDEACPAccessibility.settingsDomain(domain.id))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

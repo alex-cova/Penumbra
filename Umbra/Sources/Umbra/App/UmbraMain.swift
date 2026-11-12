@@ -13,6 +13,13 @@ enum UmbraMain {
             }
             exit(status)
         }
+        #if DEBUG
+        if CommandLine.arguments.contains("--acp-ui-test") {
+            MainActor.assumeIsolated {
+                IDEACPUITestBootstrap.installIfRequested()
+            }
+        }
+        #endif
         UmbraApp.main()
     }
 }

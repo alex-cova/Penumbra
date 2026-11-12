@@ -29,6 +29,8 @@ enum IDEAppUpdater {
     }
 
     static func startIfNeeded() {
+        // A UI-test launch must not raise Sparkle's update UI over the window the test is driving.
+        guard !IDEACPUITestLaunch.isEnabled else { return }
         guard isEnabled, controller == nil else { return }
         controller = SPUStandardUpdaterController(
             startingUpdater: true,

@@ -65,6 +65,7 @@ struct IDEACPProviderMenu: View {
         .menuIndicator(.hidden)
         .fixedSize(horizontal: true, vertical: false)
         .help(helpText)
+        .accessibilityIdentifier(IDEACPAccessibility.provider)
         .accessibilityLabel("Agent provider")
         .accessibilityValue("\(title), \(statusTitle)")
         .accessibilityHint("Choose an agent for this chat, or manage agents")

@@ -52,8 +52,12 @@ struct IDEAgentChangesCard: View {
                 }
                 .buttonStyle(.plain)
                 .help("Show what changed")
+                .accessibilityIdentifier(IDEACPAccessibility.change(change.path))
+                .accessibilityLabel("Show changes in \(change.path)")
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(IDEACPAccessibility.changes)
         .foregroundStyle(IDEAppearance.ColorToken.foreground)
         .padding(IDEAppearance.Spacing.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -149,6 +153,7 @@ struct IDEAgentApprovalView: View {
                     .controlSize(.small)
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier(IDEACPAccessibility.approvalAllow)
                 if request.editableArgument != nil {
                     Button(isEditing ? "Done Editing" : "Edit…") { isEditing.toggle() }
                         .controlSize(.small)
@@ -158,6 +163,7 @@ struct IDEAgentApprovalView: View {
                     if isDenying { decide(.deny(note: note)) } else { isDenying = true }
                 }
                 .controlSize(.small)
+                .accessibilityIdentifier(IDEACPAccessibility.approvalDeny)
                 Spacer()
             }
         }
@@ -238,6 +244,7 @@ struct IDEAgentToolCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier(IDEACPAccessibility.tool(entry.callID ?? name))
 
             if let request = entry.approval, entry.output == nil {
                 Divider().overlay(IDEAppearance.ColorToken.border)

@@ -218,6 +218,7 @@ private struct IDETitlebarGlobalActions: View {
                 action: workspace.toggleAgentPanel
             )
             .disabled(!workspace.hasOpenProject)
+            .accessibilityIdentifier(IDEACPAccessibility.agentToggle)
 
             IDEIconButton(
                 systemImage: "sparkles",
@@ -231,6 +232,7 @@ private struct IDETitlebarGlobalActions: View {
                 isActive: workspace.isSettingsVisible,
                 action: workspace.showSettings
             )
+            .accessibilityIdentifier(IDEACPAccessibility.settingsOpen)
         }
     }
 }
@@ -343,6 +345,7 @@ private struct IDEAIToolbarRow: View {
                     help: "Settings",
                     action: workspace.showSettings
                 )
+                .accessibilityIdentifier(IDEACPAccessibility.settingsOpen)
             }
         }
         .padding(.leading, IDEAppearance.Spacing.trafficLightsInset)

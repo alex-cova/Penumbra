@@ -30,6 +30,7 @@ let package = Package(
         .macOS(.v26)
     ],
     products: [
+        .library(name: "UmbraAgentSupport", targets: ["UmbraAgentSupport"]),
         .executable(name: "umbra-agent", targets: ["UmbraAgent"]),
     ],
     dependencies: [

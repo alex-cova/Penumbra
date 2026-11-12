@@ -8,7 +8,15 @@ import Observation
 @MainActor
 @Observable
 final class IDEAppState {
-    static let shared = IDEAppState(files: .standard, preferences: .shared)
+    static let shared: IDEAppState = {
+        #if DEBUG
+        if IDEACPUITestBootstrap.isEnabled {
+            // The temp app.json must not restore or rewrite the user's preference snapshot.
+            return IDEAppState(files: .standard, preferences: nil)
+        }
+        #endif
+        return IDEAppState(files: .standard, preferences: .shared)
+    }()
 
     var recentFiles: [URL] = []
     var recentProjects: [URL] = []
