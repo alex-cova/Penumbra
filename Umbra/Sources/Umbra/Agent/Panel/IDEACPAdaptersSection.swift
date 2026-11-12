@@ -50,7 +50,8 @@ struct IDEACPAdaptersSection: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier(IDEACPAccessibility.adaptersLoading)
             }
-            ForEach(IDEACPAdapterCatalog.entries.filter { !$0.isManaged }) { entry in
+            let nativeEntries = IDEACPAdapterCatalog.entries.filter { !$0.isManaged }
+            ForEach(nativeEntries) { entry in
                 nativeRow(entry)
             }
         } header: {
@@ -77,11 +78,10 @@ struct IDEACPAdaptersSection: View {
     // MARK: - Updates
 
     private var updatesRow: some View {
-        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
+        @Bindable var manager = manager
+        return VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
             HStack {
-                Picker("Check for updates", selection: Binding(
-                    get: { manager.updatePolicy }, set: { manager.updatePolicy = $0 })
-                ) {
+                Picker("Check for updates", selection: $manager.updatePolicy) {
                     ForEach(IDEACPUpdateCheckPolicy.allCases) { Text($0.title).tag($0) }
                 }
                 .disabled(manager.isSandboxed)
@@ -128,7 +128,7 @@ struct IDEACPAdaptersSection: View {
             Text(versionLine(state))
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            statusView(state)
+            IDEACPAdapterStatusView(state: state)
             if let message = messages[entry.id] {
                 HStack(alignment: .top) {
                     Text(message)
@@ -146,7 +146,7 @@ struct IDEACPAdaptersSection: View {
                 readinessLine(definition, adapterID: entry.id)
             }
             if customEditing == entry.id { customEditor(entry) }
-            if detailsOpen.contains(entry.id) { versionDetails(state) }
+            if detailsOpen.contains(entry.id) { IDEACPVersionDetails(state: state, messages: $messages) }
         }
         .padding(.vertical, IDEAppearance.Spacing.xxs)
         .accessibilityElement(children: .contain)
@@ -168,79 +168,6 @@ struct IDEACPAdaptersSection: View {
             parts.append("Node.js \(manifest.nodeVersion)")
         }
         return parts.joined(separator: " · ")
-    }
-
-    @ViewBuilder private func statusView(_ state: IDEACPAdapterManager.AdapterState) -> some View {
-        switch state.phase {
-        case .working(let step), .updating(_, _, let step):
-            VStack(alignment: .leading, spacing: 2) {
-                if let done = state.progress?.bytesDone, let total = state.progress?.bytesExpected, step == .downloading, total > 0 {
-                    ProgressView(value: Double(min(done, total)), total: Double(total))
-                        .accessibilityIdentifier(IDEACPAccessibility.progress(state.entry.id))
-                        .accessibilityLabel("\(state.entry.name) install progress")
-                        .accessibilityValue("\(done * 100 / total) percent")
-                } else {
-                    ProgressView().controlSize(.small)
-                        .accessibilityIdentifier(IDEACPAccessibility.progress(state.entry.id))
-                        .accessibilityLabel("\(state.entry.name) \(step.title)")
-                }
-                Text(progressText(state, step: step))
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .accessibilityIdentifier(IDEACPAccessibility.status(state.entry.id))
-            }
-        case .failed(let error, let keeping):
-            VStack(alignment: .leading, spacing: 2) {
-                Text(keeping.map { "Update failed. Still on \($0)." } ?? "Failed")
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.error)
-                Text(error.localizedDescription)
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.error)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .ideAnnounces(error.localizedDescription)
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier(IDEACPAccessibility.status(state.entry.id))
-        case .updateAvailable(_, let available, let security):
-            Text(security
-                 ? "Security update \(available) is available. The installed version has a published advisory."
-                 : "Update \(available) is available.")
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(security ? Color.orange : IDEAppearance.ColorToken.muted)
-                .accessibilityIdentifier(IDEACPAccessibility.status(state.entry.id))
-                .ideAnnounces(security
-                    ? "Security update \(available) is available for \(state.entry.name)."
-                    : "Update \(available) is available for \(state.entry.name).")
-        case .ready:
-            Text(runningText(state.entry.id) ?? "Ready")
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.run)
-                .accessibilityIdentifier(IDEACPAccessibility.status(state.entry.id))
-        case .notInstalled:
-            Text(state.checkError?.localizedDescription ?? "Not installed.")
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(state.checkError == nil ? IDEAppearance.ColorToken.muted : Color.orange)
-                .accessibilityIdentifier(IDEACPAccessibility.status(state.entry.id))
-        case .disabled:
-            Text("Disabled")
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-        }
-    }
-
-    private func progressText(_ state: IDEACPAdapterManager.AdapterState, step: IDEACPAdapterStep) -> String {
-        guard let progress = state.progress else { return step.title + "…" }
-        if let done = progress.bytesDone, let total = progress.bytesExpected, step == .downloading {
-            let format = { (bytes: Int64) in IDEACPByteFormat.string(bytes) }
-            return "\(progress.detail) · \(format(done)) of about \(format(total))"
-        }
-        return progress.detail
-    }
-
-    private func runningText(_ id: String) -> String? {
-        let uses = manager.runningUses(id)
-        return uses > 0 ? "Ready · used by \(uses) running chat\(uses == 1 ? "" : "s")" : nil
     }
 
     @ViewBuilder private func readinessLine(_ definition: IDEACPDefinition, adapterID: String) -> some View {
@@ -306,12 +233,12 @@ struct IDEACPAdaptersSection: View {
             Menu {
                 menuItems(for: state)
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Label("More actions for \(entry.name)", systemImage: "ellipsis.circle")
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+            .labelStyle(.iconOnly)
             .fixedSize()
-            .accessibilityLabel("More actions for \(entry.name)")
             .accessibilityIdentifier(IDEACPAccessibility.more(entry.id))
         }
         .font(IDEAppearance.Typography.caption)
@@ -352,72 +279,6 @@ struct IDEACPAdaptersSection: View {
             .disabled(isTesting(entry))
             .accessibilityLabel("Test \(entry.name) connection")
             .accessibilityIdentifier(IDEACPAccessibility.test(entry.id))
-    }
-
-    // MARK: - Version details
-
-    @ViewBuilder private func versionDetails(_ state: IDEACPAdapterManager.AdapterState) -> some View {
-        let entry = state.entry
-        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
-            Text("Versions on this Mac")
-                .font(IDEAppearance.Typography.sectionHeader)
-            if state.versions.isEmpty {
-                Text("None installed.")
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-            }
-            ForEach(state.versions) { manifest in
-                let isActive = manifest.version == state.activeVersion
-                let inUse = manager.isInUse(entry.id, version: manifest.version)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(manifest.version + (isActive ? " · active" : "") + (inUse ? " · in use" : ""))
-                        Spacer()
-                        if !isActive {
-                            Button("Make Active") { makeActive(entry.id, manifest.version) }
-                                .disabled(state.phase.isBusy)
-                                .accessibilityLabel("Make \(entry.name) \(manifest.version) active")
-                                .accessibilityIdentifier(IDEACPAccessibility.activateVersion(entry.id, manifest.version))
-                            Button("Remove") { removeVersion(entry.id, manifest.version) }
-                                .disabled(inUse || state.phase.isBusy)
-                                .help(inUse ? "A running chat is using this version." : "Delete this version")
-                                .accessibilityLabel("Remove \(entry.name) \(manifest.version)")
-                                .accessibilityIdentifier(IDEACPAccessibility.removeVersion(entry.id, manifest.version))
-                        }
-                    }
-                    Text("Installed \(manifest.installedAt.formatted(date: .abbreviated, time: .shortened)) · \(ByteCountFormatter.string(fromByteCount: manifest.installedBytes, countStyle: .file)) · Node.js \(manifest.nodeVersion)")
-                        .font(IDEAppearance.Typography.caption)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    Text("Publisher: \(manifest.publisher)")
-                        .font(IDEAppearance.Typography.caption)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    Text("Registry key \(manifest.signatureKeyID) · entry sha256 \(manifest.entrySHA256.prefix(12))…")
-                        .font(IDEAppearance.Typography.monoSmall)
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    ForEach(manifest.warnings, id: \.self) { warning in
-                        Text("⚠︎ \(warning)")
-                            .font(IDEAppearance.Typography.caption)
-                            .foregroundStyle(Color.orange)
-                    }
-                }
-                .font(IDEAppearance.Typography.caption)
-            }
-            if !state.diagnostics.isEmpty {
-                DisclosureGroup("Diagnostics") {
-                    ScrollView {
-                        Text(state.diagnostics)
-                            .font(IDEAppearance.Typography.monoSmall)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 120)
-                }
-                .font(IDEAppearance.Typography.caption)
-            }
-        }
-        .padding(.leading, 28)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(IDEACPAccessibility.versions(entry.id))
     }
 
     // MARK: - Custom executable
@@ -466,7 +327,7 @@ struct IDEACPAdaptersSection: View {
                 }
                 Spacer()
                 if definition == nil {
-                    Button("Add") { if let preset = IDEACPRegistry.preset(id: entry.presetID) { settings.materializePreset(preset) } }
+                    Button("Add", action: { addPreset(entry) })
                         .font(IDEAppearance.Typography.caption)
                         .accessibilityLabel("Add \(entry.name) to Agents")
                 } else if found != nil {
@@ -493,6 +354,11 @@ struct IDEACPAdaptersSection: View {
 
     private func definition(for entry: IDEACPAdapterEntry) -> IDEACPDefinition? {
         settings.acpAgents.first { $0.presetID == entry.presetID }
+    }
+
+    private func addPreset(_ entry: IDEACPAdapterEntry) {
+        guard let preset = IDEACPRegistry.preset(id: entry.presetID) else { return }
+        _ = settings.materializePreset(preset)
     }
 
     private func banner(_ text: String, identifier: String) -> some View {
@@ -560,26 +426,6 @@ struct IDEACPAdaptersSection: View {
         }
     }
 
-    private func makeActive(_ id: String, _ version: String) {
-        Task {
-            do { try await manager.makeActive(id, version: version) } catch {
-                messages[id] = IDEACPAdapterManager.normalize(error).localizedDescription
-            }
-        }
-    }
-
-    private func removeVersion(_ id: String, _ version: String) {
-        var alert = IDEAlert.confirm(
-            "Remove version \(version)?", detail: "The files for this version are deleted. The active version is not changed.",
-            confirm: "Remove", isDestructive: true)
-        guard alert.confirms() else { return }
-        Task {
-            do { try await manager.removeVersion(id, version: version) } catch {
-                messages[id] = IDEACPAdapterManager.normalize(error).localizedDescription
-            }
-        }
-    }
-
     private func confirmRemove(_ entry: IDEACPAdapterEntry) {
         let uses = manager.runningUses(entry.id)
         if uses > 0 {
@@ -599,91 +445,5 @@ struct IDEACPAdaptersSection: View {
                 messages[entry.id] = IDEACPAdapterManager.normalize(error).localizedDescription
             }
         }
-    }
-}
-
-// MARK: - Approval
-
-/// What the user approves before anything is downloaded.
-struct IDEACPInstallApprovalSheet: View {
-    let proposal: IDEACPInstallProposal
-    let onApprove: () -> Void
-    let onCancel: () -> Void
-
-    private var isUpdate: Bool { proposal.updatingFrom != nil }
-    private var name: String { IDEACPAdapterCatalog.entry(id: proposal.entryID)?.name ?? proposal.entryID }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
-            Text(isUpdate ? "Update \(name) adapter" : "Install \(name) adapter")
-                .font(IDEAppearance.Typography.titlebarTitle)
-                .accessibilityAddTraits(.isHeader)
-            if proposal.isSecurityUpdate {
-                Text("The installed version has a published security advisory.")
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(Color.orange)
-            }
-            Grid(alignment: .topLeading, horizontalSpacing: IDEAppearance.Spacing.md, verticalSpacing: IDEAppearance.Spacing.xs) {
-                row("Adapter", "\(proposal.packageName)@\(proposal.version)" + (proposal.updatingFrom.map { " (from \($0))" } ?? ""))
-                row("Provider", proposal.providerName)
-                row("Publisher", proposal.publisher)
-                row("Source", "registry.npmjs.org")
-                row("Method", proposal.method)
-                row("Requires", "\(proposal.nodeVersionRequirement.map { "Node.js \($0)" } ?? "Node.js"). \(proposal.nodeDescription)")
-                row("Size", "About \(ByteCountFormatter.string(fromByteCount: proposal.approximateBytes, countStyle: .file)) on disk, including the \(name) engine. \(ByteCountFormatter.string(fromByteCount: proposal.freeBytes, countStyle: .file)) free.")
-                row("Checked", "Registry signature verified with a key built into Umbra (\(proposal.signatureKeyID.suffix(12))…). Build provenance names \(proposal.repository.replacingOccurrences(of: "https://", with: "")). npm re-checks signatures after the download.")
-            }
-            .font(IDEAppearance.Typography.caption)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            ForEach(proposal.warnings, id: \.self) { warning in
-                Text("⚠︎ \(warning)")
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(Color.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Text("It installs into Umbra's own folder and never changes your global npm packages or shell. After verification Umbra starts the adapter once to check that it speaks ACP, then makes \(name) available in the Agent panel. Approving also allows Umbra to run it when you choose it.")
-                .font(IDEAppearance.Typography.caption)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                    .accessibilityIdentifier(IDEACPAccessibility.approvalCancel)
-                Button(isUpdate ? "Update" : "Install", action: onApprove)
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier(IDEACPAccessibility.approvalConfirm)
-            }
-        }
-        .padding(IDEAppearance.Spacing.lg)
-        .frame(width: 520)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(IDEACPAccessibility.approval)
-    }
-
-    private func row(_ label: String, _ value: String) -> some View {
-        GridRow(alignment: .firstTextBaseline) {
-            Text(label)
-                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                .gridColumnAlignment(.trailing)
-            Text(value)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier(label == "Adapter" ? IDEACPAccessibility.approvalPackage : "acp.approval.\(label.lowercased())")
-        .accessibilityLabel("\(label): \(value)")
-    }
-}
-
-/// File sizes for the adapter UI, written as numbers ("0 bytes", never "Zero KB").
-enum IDEACPByteFormat {
-    static func string(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        formatter.allowsNonnumericFormatting = false
-        return formatter.string(fromByteCount: bytes)
     }
 }

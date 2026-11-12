@@ -1,0 +1,47 @@
+name: Set up Xcode 27
+description: >
+  Shared first steps for Umbra CI jobs on the xcode-27 runner: report the toolchain, refuse variables
+  that enable paid-API tests, and (optionally) mount the Metal toolchain. Set DEVELOPER_DIR in the job's env.
+
+inputs:
+  metal:
+    description: Install and verify the Metal toolchain (needed to build MLX and SwiftTerm shaders).
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Select Xcode
+      shell: bash
+      run: |
+        xcodebuild -version
+        xcrun --show-sdk-version
+
+    # Tests that call OpenAI, Anthropic or an Ollama server (Packages/AgentKit: the smoke tests and the
+    # evals) and the live ACP tests are opt-in by environment variable and cost money. A workflow must not
+    # hand them a key at all, so fail if one ever does.
+    - name: Refuse variables that enable paid-API tests
+      shell: bash
+      run: Scripts/refuse-paid-test-variables.sh
+
+    # Xcode 27's default metal is a stub. Unless the separate Metal toolchain is
+    # mounted, Swift Build calls that stub, it exits before writing a .dia, and
+    # the log only shows a missing diagnostics file for the first shader
+    # (MLX steel_attention.metal, or SwiftTerm's Shaders.metal before that).
+    - name: Install Metal toolchain
+      if: inputs.metal == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        xcodebuild -downloadComponent MetalToolchain
+        xcodebuild -showComponent MetalToolchain
+        metal="$(xcrun -f metal)"
+        echo "metal: ${metal}"
+        case "${metal}" in
+          *XcodeDefault.xctoolchain*)
+            echo "error: xcrun metal is the Xcode stub; the Metal toolchain is not mounted" >&2
+            exit 1
+            ;;
+        esac
+        "${metal}" --version

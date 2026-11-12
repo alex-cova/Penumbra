@@ -5,23 +5,35 @@ on:
     branches: [main]
     paths:
       - 'Umbra/**'
+      - 'Packages/**'
       - 'Sources/Penumbra/**'
       - 'Sources/EditorIntelligence/**'
       - 'Sources/JavaIntelligence/**'
       - 'Package.swift'
       - '.github/workflows/editor-ci.yml'
+      - '.github/actions/**'
       - 'Scripts/check-ios-carryover.sh'
       - 'Scripts/check-design-tokens.sh'
+      - 'Scripts/ci-*.sh'
+      - 'Scripts/refuse-paid-test-variables.sh'
   pull_request:
     paths:
       - 'Umbra/**'
+      - 'Packages/**'
       - 'Sources/Penumbra/**'
       - 'Sources/EditorIntelligence/**'
       - 'Sources/JavaIntelligence/**'
       - 'Package.swift'
       - '.github/workflows/editor-ci.yml'
+      - '.github/actions/**'
       - 'Scripts/check-ios-carryover.sh'
       - 'Scripts/check-design-tokens.sh'
+      - 'Scripts/ci-*.sh'
+      - 'Scripts/refuse-paid-test-variables.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: umbra-ci-${{ github.workflow }}-${{ github.ref }}
@@ -36,35 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: |
-          xcodebuild -version
-          xcrun --show-sdk-version
-
-      # Tests that call OpenAI, Anthropic or an Ollama server (Packages/AgentKit: the smoke tests and the
-      # evals) are opt-in by environment variable and cost money. They also refuse to run when CI is set,
-      # but a workflow must not hand them a key at all, so fail if one ever does.
-      - name: Refuse variables that enable paid-API tests
-        run: Scripts/refuse-paid-test-variables.sh
-
-      # Xcode 27's default metal is a stub. Unless the separate Metal toolchain is
-      # mounted, Swift Build calls that stub, it exits before writing a .dia, and
-      # the log only shows a missing diagnostics file for the first shader
-      # (MLX steel_attention.metal, or SwiftTerm's Shaders.metal before that).
-      - name: Install Metal toolchain
-        run: |
-          set -euo pipefail
-          xcodebuild -downloadComponent MetalToolchain
-          xcodebuild -showComponent MetalToolchain
-          metal="$(xcrun -f metal)"
-          echo "metal: ${metal}"
-          case "${metal}" in
-            *XcodeDefault.xctoolchain*)
-              echo "error: xcrun metal is the Xcode stub; the Metal toolchain is not mounted" >&2
-              exit 1
-              ;;
-          esac
-          "${metal}" --version
+      - uses: ./.github/actions/xcode27-setup
 
       - name: Check for legacy iOS carryover
         run: bash Scripts/check-ios-carryover.sh
@@ -85,3 +69,191 @@ jobs:
 
       - name: Build Umbra
         run: swift build --package-path Umbra -c release --product Umbra
+
+  # AgentKit's own suite. Its paid-API tests are opt-in by variable and refuse to run when CI is set;
+  # the setup action also fails the job if a key variable is present.
+  agentkit-tests:
+    runs-on: xcode-27
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      CI: '1'
+      NSUnbufferedIO: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/xcode27-setup
+        with:
+          metal: 'false'
+
+      - name: Cache SwiftPM downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            Packages/AgentKit/.build/repositories
+          key: spm-agentkit-${{ runner.os }}-${{ hashFiles('Packages/AgentKit/Package.resolved') }}
+          restore-keys: spm-agentkit-${{ runner.os }}-
+
+      - name: Build AgentKit tests
+        run: swift build --package-path Packages/AgentKit --build-tests
+
+      # Dependencies are resolved and built; from here a call to an AI or npm host fails.
+      - name: Block AI and npm hosts
+        run: Scripts/ci-network-guard.sh
+
+      - name: AgentKit tests
+        run: swift test --package-path Packages/AgentKit --skip-build --parallel
+
+  # Every Umbra unit test except the opt-in live-agent suite, plus a check that the deterministic ACP
+  # suites ran without a skip. Fixtures write only to temporary directories; the guards prove it.
+  umbra-tests:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      CI: '1'
+      NSUnbufferedIO: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/xcode27-setup
+
+      # The ACP install tests start the fixture agent with a real Node process.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Cache SwiftPM downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            Umbra/.build/repositories
+          key: spm-umbra-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Umbra/Package.resolved', 'Packages/*/Package.resolved') }}
+          restore-keys: spm-umbra-${{ runner.os }}-
+
+      - name: Cache JaCoCo downloads
+        uses: actions/cache@v4
+        with:
+          path: Umbra/Sources/Umbra/Tools/JaCoCo
+          key: jacoco-${{ hashFiles('Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh') }}
+
+      - name: Build Umbra tests
+        run: swift build --package-path Umbra --build-tests
+
+      - name: Snapshot user state
+        run: Scripts/ci-user-state-guard.sh snapshot
+
+      - name: Start agent tripwire
+        run: Scripts/ci-agent-tripwire.sh start
+
+      - name: Block AI and npm hosts
+        run: Scripts/ci-network-guard.sh
+
+      - name: Umbra tests
+        run: Scripts/ci-umbra-tests.sh
+
+      - name: Verify no real agent or npm ran
+        if: always()
+        run: Scripts/ci-agent-tripwire.sh verify
+
+      - name: Verify user state unchanged
+        if: always()
+        run: Scripts/ci-user-state-guard.sh verify
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: umbra-test-results
+          path: ${{ runner.temp }}/results
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # The 19 ACP Adapter Manager XCUITests. Everything they use is a fixture: captured registry documents,
+  # a fake npm, a Node script standing in for the agent, temporary adapter/session/defaults locations.
+  # Hosted runners are not guaranteed a GUI session or an Accessibility grant, so the job checks first and
+  # then runs the suite anyway; a runner that cannot drive the GUI fails the job with the blocker named.
+  # It never skips and never reports success without 19 passing tests. See docs/CI.md.
+  acp-ui-tests:
+    runs-on: xcode-27
+    timeout-minutes: 75
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+      CI: '1'
+      NSUnbufferedIO: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/xcode27-setup
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The UI harness only looks in these three places and skips its Node tests when it finds none.
+      - name: Make Node visible to the UI harness
+        run: |
+          set -euo pipefail
+          for candidate in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
+            if [ -x "$candidate" ]; then echo "node already at $candidate"; exit 0; fi
+          done
+          sudo mkdir -p /usr/local/bin
+          sudo ln -sf "$(command -v node)" /usr/local/bin/node
+          /usr/local/bin/node --version
+
+      - name: Cache cloned Swift packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/spm
+          key: xcode-spm-${{ runner.os }}-${{ hashFiles('Umbra/Umbra.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'Umbra/Package.resolved') }}
+          restore-keys: xcode-spm-${{ runner.os }}-
+
+      - name: Cache JaCoCo downloads
+        uses: actions/cache@v4
+        with:
+          path: Umbra/Sources/Umbra/Tools/JaCoCo
+          key: jacoco-${{ hashFiles('Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh') }}
+
+      # Resolves packages and runs the JaCoCo fetch phase while the network is still open.
+      - name: Build UI tests
+        run: Scripts/ci-acp-ui-tests.sh --build-only
+
+      - name: Keep the display awake
+        run: |
+          nohup caffeinate -u -d -i -s >/dev/null 2>&1 &
+
+      - name: GUI preflight
+        run: Scripts/ci-gui-preflight.sh
+
+      - name: Snapshot user state
+        run: Scripts/ci-user-state-guard.sh snapshot
+
+      - name: Start agent tripwire
+        run: Scripts/ci-agent-tripwire.sh start
+
+      - name: Block AI and npm hosts
+        run: Scripts/ci-network-guard.sh
+
+      - name: ACP XCUITests
+        run: Scripts/ci-acp-ui-tests.sh --no-build
+
+      - name: Verify no real agent or npm ran
+        if: always()
+        run: Scripts/ci-agent-tripwire.sh verify
+
+      - name: Verify user state unchanged
+        if: always()
+        run: Scripts/ci-user-state-guard.sh verify
+
+      - name: Upload xcresult bundles
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acp-ui-xcresult
+          path: |
+            ${{ runner.temp }}/results/*.xcresult
+            ${{ runner.temp }}/results/*.log
+          retention-days: 14
+          if-no-files-found: warn

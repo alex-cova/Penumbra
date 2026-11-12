@@ -166,9 +166,12 @@ struct IDEACPProviderMenu: View {
             Spacer(minLength: IDEAppearance.Spacing.sm)
             Text(detail)
                 .foregroundStyle(.secondary)
-            if isSelected { Image(systemName: "checkmark") }
+            if isSelected {
+                Image(systemName: "checkmark")
+                    .accessibilityHidden(true)
+            }
         }
-        .accessibilityLabel("\(name), \(detail)")
+        .accessibilityLabel("\(name), \(detail)\(isSelected ? ", selected" : "")")
     }
 
     private func choose(_ binding: IDEACPBinding) {

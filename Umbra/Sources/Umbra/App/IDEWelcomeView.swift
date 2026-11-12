@@ -57,17 +57,17 @@ enum IDEWelcomeBackground: String, CaseIterable, Identifiable {
 struct IDEWelcomeView: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var parallax = IDEWelcomeParallax()
+    @State private var minHeight: CGFloat?
 
     var body: some View {
         // The content cannot shrink, so without a scroll view a short editor area (terminal open)
         // would grow the whole root layout past the window instead of clipping.
-        GeometryReader { proxy in
-            ScrollView(.vertical) {
-                content
-                    .frame(minHeight: proxy.size.height)
-            }
-            .scrollBounceBehavior(.basedOnSize)
+        ScrollView(.vertical) {
+            content
+                .frame(minHeight: minHeight)
         }
+        .scrollBounceBehavior(.basedOnSize)
+        .onGeometryChange(for: CGFloat.self, of: \.size.height) { minHeight = $0 }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .onContinuousHover { phase in
             switch phase {
@@ -423,7 +423,7 @@ private struct IDEWelcomeRecentRow: View {
             }
             .buttonStyle(.plain)
             .opacity(isHovering ? 1 : 0)
-            .accessibilityLabel("Remove from recents")
+            .accessibilityLabel("Remove \(title) from recents")
         }
         .onHover { isHovering = $0 }
         .help(path)

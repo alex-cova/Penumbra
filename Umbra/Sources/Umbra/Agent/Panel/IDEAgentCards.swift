@@ -16,7 +16,7 @@ struct IDEAgentChangesCard: View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
             HStack {
                 Label(
-                    "\(entry.fileChanges.count) \(entry.fileChanges.count == 1 ? "file" : "files") changed",
+                    "^[\(entry.fileChanges.count) file](inflect: true) changed",
                     systemImage: entry.isReverted ? "arrow.uturn.backward.circle" : "pencil.circle")
                     .font(IDEAppearance.Typography.sectionHeader)
                 Spacer()
@@ -29,8 +29,9 @@ struct IDEAgentChangesCard: View {
                         .help("Restore every file this run changed; files you edited afterwards are left alone")
                 }
             }
+            let conflictPaths = Set(entry.conflicts.map(\.path))
             ForEach(entry.fileChanges) { change in
-                let isConflict = entry.conflicts.contains { $0.path == change.path }
+                let isConflict = conflictPaths.contains(change.path)
                 Button {
                     agent.showDiff(for: change)
                 } label: {
@@ -86,6 +87,10 @@ struct IDEAgentApprovalView: View {
         self.decide = decide
         self.approveWith = approveWith
         _command = State(initialValue: request.command)
+    }
+
+    private func submitDecision() {
+        decide(isEditing && command != request.command ? .approveEditing(command) : .approve)
     }
 
     var body: some View {
@@ -148,7 +153,7 @@ struct IDEAgentApprovalView: View {
                     .onSubmit { decide(.deny(note: note)) }
             }
             HStack {
-                Button(request.diff == nil ? "Run" : "Apply") { decide(isEditing && command != request.command ? .approveEditing(command) : .approve) }
+                Button(request.diff == nil ? "Run" : "Apply", action: submitDecision)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .keyboardShortcut(.return, modifiers: .command)

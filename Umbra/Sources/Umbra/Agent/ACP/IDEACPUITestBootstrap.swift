@@ -169,10 +169,10 @@ enum IDEACPUITestBootstrap {
                 publisher: "Fixture", nodePath: node, nodeVersion: "22.0.0",
                 entryRelativePath: relative, entrySHA256: IDEACPAdapterStore.sha256(of: entry) ?? "",
                 installedBytes: 1,
-                installedAt: Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded()),
+                installedAt: Date(timeIntervalSince1970: Date.now.timeIntervalSince1970.rounded()),
                 warnings: [])
             try store.writeManifest(manifest, in: directory)
-            try store.writeActive(id, IDEACPActiveManifest(version: version, previous: nil, activatedAt: Date()))
+            try store.writeActive(id, IDEACPActiveManifest(version: version, previous: nil, activatedAt: .now))
         } catch {
             FileHandle.standardError.write(Data("ACP UI fixture preinstall failed: \(error)\n".utf8))
         }

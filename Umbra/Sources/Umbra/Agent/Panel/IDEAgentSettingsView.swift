@@ -81,8 +81,8 @@ struct IDEAgentSettingsView: View {
             }
 
             switch settings.provider {
-                case .ollama: ollamaSection(settings)
-                case .mlx: mlxSection(settings)
+                case .ollama: IDEAgentOllamaSection(settings: settings)
+                case .mlx: IDEAgentMLXSection(settings: settings, manageModels: manageModels)
                 case .apple, .applePCC: appleSection(settings)
                 case .openAIResponses, .chatCompletions, .anthropic, .meta: TextField("Model", text: $settings.model)
             }
@@ -253,8 +253,9 @@ struct IDEAgentSettingsView: View {
     @ViewBuilder private func advancedSections(_ settings: IDEAgentSettings) -> some View {
         @Bindable var settings = settings
         Section("Limits") {
+            let iterationCaps = Set(IDEAgentSettings.iterationCapChoices + [settings.iterationCap]).sorted()
             Picker("Steps per message", selection: $settings.iterationCap) {
-                ForEach(Set(IDEAgentSettings.iterationCapChoices + [settings.iterationCap]).sorted(), id: \.self) { Text("\($0)").tag($0) }
+                ForEach(iterationCaps, id: \.self) { Text("\($0)").tag($0) }
             }
             Text("After this many model turns the run pauses; sending “continue” goes on.")
                 .font(IDEAppearance.Typography.caption)
@@ -335,65 +336,6 @@ struct IDEAgentSettingsView: View {
         }
     }
 
-    @ViewBuilder private func ollamaSection(_ settings: IDEAgentSettings) -> some View {
-        @Bindable var settings = settings
-        HStack {
-            Picker("Model", selection: $settings.model) {
-                if settings.model.isEmpty { Text("Choose…").tag("") }
-                ForEach(settings.ollamaModels) { model in
-                    Text(IDEAgentOllamaLabel.title(model)).tag(model.name).disabled(!model.supportsTools)
-                }
-                if !settings.model.isEmpty, settings.selectedOllamaModel == nil { Text(settings.model).tag(settings.model) }
-            }
-            if settings.isLoadingOllamaModels {
-                ProgressView().controlSize(.small)
-            } else {
-                IDEIconButton(systemImage: "arrow.clockwise", help: "Reload the installed models") {
-                    Task { await settings.refreshOllamaModels() }
-                }
-                .ideIconButtonSize(.compact)
-            }
-        }
-        if let error = settings.ollamaError {
-            Text(error).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
-        } else if let info = settings.selectedOllamaModel, !info.supportsTools {
-            Text("This model does not support tool calling, so the agent cannot use it.")
-                .font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
-        }
-        Picker("Context", selection: $settings.localContextLength) {
-            ForEach(IDEAgentSettings.contextChoices, id: \.self) { Text(IDEAgentFormat.tokens($0)).tag($0) }
-        }
-        Text("A larger window needs more memory and slows the first reply. The model's own maximum is \(settings.selectedOllamaModel?.contextLength.map(IDEAgentFormat.tokens) ?? "unknown"); the request uses \(IDEAgentFormat.tokens(settings.effectiveContextLength)).")
-            .font(IDEAppearance.Typography.caption)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-    }
-
-    @ViewBuilder private func mlxSection(_ settings: IDEAgentSettings) -> some View {
-        @Bindable var settings = settings
-        let store = IDELocalModelsStore.shared
-        Picker("Model", selection: $settings.model) {
-            if settings.model.isEmpty { Text("Choose…").tag("") }
-            ForEach(store.installed) { model in
-                let info = store.info(for: model)
-                Text(LocalModelFormat.shortName(model.id) + (info.hasChatTemplate && !info.supportsTools ? " (no tool support)" : ""))
-                    .tag(model.id)
-                    .disabled(info.hasChatTemplate && !info.supportsTools)
-            }
-            if !settings.model.isEmpty, settings.selectedMLXModel == nil { Text(settings.model).tag(settings.model) }
-        }
-        Button("Manage On-Device Models…", action: manageModels)
-        Label("Runs on this Mac's GPU. Nothing is sent anywhere.", systemImage: "lock.shield")
-            .font(IDEAppearance.Typography.caption)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
-        Picker("Context", selection: $settings.localContextLength) {
-            ForEach(IDEAgentSettings.contextChoices, id: \.self) { Text(IDEAgentFormat.tokens($0)).tag($0) }
-        }
-        let status = MLXAvailability.currentStatus()
-        if status != .available {
-            Text(MLXAvailability.message(for: status)).font(IDEAppearance.Typography.caption).foregroundStyle(IDEAppearance.ColorToken.error)
-        }
-    }
-
     @ViewBuilder private func appleSection(_ settings: IDEAgentSettings) -> some View {
         let kind = settings.provider.appleKind ?? .onDevice
         if let message = AppleModelAvailability.message(for: settings.appleStatus(kind), kind: kind) {
@@ -431,17 +373,5 @@ struct IDEAgentSettingsView: View {
     private func saveWebSearchKey() {
         settings.saveWebSearchKey(webSearchKeyDraft)
         webSearchKeyDraft = ""
-    }
-}
-
-enum IDEAgentOllamaLabel {
-    /// "qwen-fixed:latest · 27.3B Q4_K_M · 17 GB", or why it can't be used.
-    static func title(_ model: OllamaModel) -> String {
-        var parts = [model.name]
-        let detail = [model.parameterSize, model.quantization].compactMap { $0 }.joined(separator: " ")
-        if !detail.isEmpty { parts.append(detail) }
-        if model.sizeBytes > 0 { parts.append(ByteCountFormatter.string(fromByteCount: model.sizeBytes, countStyle: .file)) }
-        let label = parts.joined(separator: " · ")
-        return model.supportsTools ? label : label + " (no tool support)"
     }
 }

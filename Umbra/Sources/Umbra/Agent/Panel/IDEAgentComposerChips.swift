@@ -37,16 +37,19 @@ struct IDEAgentBrowserNotesChip: View {
             Text(isAttached ? "sent with your next message" : "kept out of the next message")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            Button(action: toggle) {
-                Image(systemName: isAttached ? "xmark" : "arrow.uturn.backward")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
-            }
+            Button(
+                isAttached ? "Leave browser notes out of the next message" : "Send browser notes with the next message",
+                systemImage: isAttached ? "xmark" : "arrow.uturn.backward",
+                action: toggle
+            )
+            .labelStyle(.iconOnly)
+            .font(.caption2)
+            .bold()
+            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .frame(width: 16, height: 16)
+            .contentShape(Rectangle())
             .buttonStyle(.plain)
             .help(isAttached ? "Leave these notes out of the next message" : "Send these notes with the next message")
-            .accessibilityLabel(isAttached ? "Leave browser notes out of the next message" : "Send browser notes with the next message")
         }
         .padding(IDEAppearance.Spacing.xs + 2)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -74,18 +77,15 @@ struct IDEAgentQueuedMessages: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 0)
-                    Button {
-                        remove(message.id)
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(IDEAppearance.ColorToken.muted)
-                            .frame(width: 16, height: 16)
-                            .contentShape(Rectangle())
-                    }
+                    Button("Remove queued message", systemImage: "xmark") { remove(message.id) }
+                    .labelStyle(.iconOnly)
+                    .font(.caption2)
+                    .bold()
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
                     .buttonStyle(.plain)
                     .help("Take this message back")
-                    .accessibilityLabel("Remove queued message")
                 }
             }
             Text("Sent at the agent's next step")
@@ -198,7 +198,11 @@ struct IDEACPModeChip: View {
                     Button {
                         conversation.setACPMode(candidate.id)
                     } label: {
-                        Label(candidate.name, systemImage: candidate.id == conversation.acpCurrentModeID ? "checkmark" : "")
+                        if candidate.id == conversation.acpCurrentModeID {
+                            Label(candidate.name, systemImage: "checkmark")
+                        } else {
+                            Text(candidate.name)
+                        }
                     }
                     .help(candidate.description ?? candidate.name)
                 }
