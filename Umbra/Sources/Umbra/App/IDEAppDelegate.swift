@@ -156,6 +156,9 @@ struct IDEWindowReopenBridge: View {
         delegate.onReopenWithoutVisibleWindows = {
             openWindow(id: "main")
         }
+        IDESettingsPresentation.shared.setOpenWindowAction {
+            openWindow(id: "settings")
+        }
         IDEWindowRegistry.shared.setOpenWindowAction {
             openWindow(id: "main")
         }

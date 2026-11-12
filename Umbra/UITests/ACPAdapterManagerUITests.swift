@@ -15,6 +15,28 @@ import XCTest
 /// - Whether the keyboard focus ring is visible. The tests check where keystrokes land.
 @MainActor
 final class ACPAdapterManagerUITests: XCTestCase {
+    func testSettingsWindowLifecycle() throws {
+        let ui = try ACPUIHarness()
+        defer { ui.cleanup() }
+        ui.launch(scenario: "empty")
+        let gear = ui.wait(ACPUIID.settingsOpen, timeout: 45)
+        let mainWindow = ui.app.windows.firstMatch
+        gear.click()
+        let settings = ui.app.windows["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        XCTAssertTrue(ui.wait(ACPUIID.settingsSearch).exists)
+        ui.app.typeKey(",", modifierFlags: .command)
+        XCTAssertEqual(ui.app.windows.matching(identifier: "Settings").count, 1)
+        ui.app.typeKey("w", modifierFlags: .command)
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: settings)
+        XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed)
+        XCTAssertTrue(mainWindow.exists)
+        ui.app.typeKey(",", modifierFlags: .command)
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.buttons[XCUIIdentifierCloseWindow].click()
+        XCTAssertTrue(mainWindow.exists)
+    }
+
     func testSettingsNavigation() throws {
         let ui = try ACPUIHarness()
         defer { ui.cleanup() }

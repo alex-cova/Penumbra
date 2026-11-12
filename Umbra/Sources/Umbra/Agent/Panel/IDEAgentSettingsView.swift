@@ -28,7 +28,7 @@ struct IDEAgentSettingsSheet: View {
             IDEAgentSettingsView(settings: settings, agent: agent, width: nil, manageModels: { isModelsPresented = true })
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-            .frame(width: 460, height: 560)
+            .frame(minWidth: 780, idealWidth: 1000, minHeight: 520, idealHeight: 700)
             .background(IDEAppearance.ColorToken.panel)
             .preferredColorScheme(IDEAppearance.preferredColorScheme)
             .onExitCommand { dismiss() }
@@ -47,13 +47,68 @@ struct IDEAgentSettingsView: View {
     var isFullPane = false
     var width: CGFloat? = 380
     let manageModels: () -> Void
+    @State private var category: Category = .models
     @State private var keyDraft = ""
     @State private var webSearchKeyDraft = ""
     @State private var isConfirmingClear = false
 
+    private enum Category: String, CaseIterable, Identifiable {
+        case models = "Providers & Models", integrations = "Agents & Integrations"
+        case behavior = "Behavior & Skills", tools = "Tools & Permissions"
+        case memory = "Memory & Context", advanced = "Limits & Advanced"
+        var id: String { rawValue }
+        var symbol: String {
+            switch self {
+            case .models: "cpu"
+            case .integrations: "puzzlepiece.extension"
+            case .behavior: "slider.horizontal.3"
+            case .tools: "lock.shield"
+            case .memory: "brain"
+            case .advanced: "gearshape.2"
+            }
+        }
+    }
+
     var body: some View {
         @Bindable var settings = settings
+        HStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xxs) {
+                    ForEach(Category.allCases) { item in
+                        Button { category = item } label: {
+                            HStack(spacing: IDEAppearance.Spacing.sm) {
+                                Image(systemName: item.symbol)
+                                    .frame(width: 18)
+                                    .foregroundStyle(category == item ? IDEAppearance.ColorToken.accent : IDEAppearance.ColorToken.muted)
+                                    .accessibilityHidden(true)
+                                Text(item.rawValue)
+                                    .foregroundStyle(category == item ? IDEAppearance.ColorToken.foreground : IDEAppearance.ColorToken.muted)
+                                Spacer(minLength: 0)
+                            }
+                            .font(IDEAppearance.Typography.body)
+                            .padding(.horizontal, IDEAppearance.Spacing.sm)
+                            .frame(minHeight: 30)
+                            .background(category == item ? IDEAppearance.ColorToken.tabActive : .clear,
+                                        in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.control))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(category == item ? .isSelected : [])
+                    }
+                }
+                .padding(IDEAppearance.Spacing.sm)
+            }
+            .ideSettingsScrollSurface()
+            .frame(minWidth: 180, idealWidth: 210, maxWidth: 230)
+            Divider().overlay(IDEAppearance.ColorToken.border)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(category.rawValue)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(IDEAppearance.ColorToken.foreground)
+                    .accessibilityAddTraits(.isHeader)
+                    .padding()
         Form {
+            if category == .models {
             Picker("Provider", selection: $settings.provider) {
                 ForEach(IDEAgentProvider.allCases) { Text($0.title).tag($0) }
             }
@@ -153,12 +208,16 @@ struct IDEAgentSettingsView: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
 
+            }
+            if category == .integrations {
             IDEACPAdaptersSection(settings: settings, agent: agent)
 
             IDEACPSettingsSection(settings: settings, agent: agent, projectRoot: agent?.projectRoot)
 
             IDEMCPSettingsSection(store: settings.mcp, manager: agent?.mcp, projectRoot: agent?.projectRoot)
 
+            }
+            if category == .behavior {
             IDEAgentSkillsSection(settings: settings, agent: agent)
 
             Section("Behavior") {
@@ -179,6 +238,10 @@ struct IDEAgentSettingsView: View {
                 Text("Puts ~/.claude/CLAUDE.md and Umbra's own AGENTS.md ahead of the project's, which still wins. Off until you turn it on.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            }
+            if category == .tools {
+            Section("Web tools") {
                 Toggle("Web search", isOn: $settings.webSearchEnabled)
                 Text("Queries are sent to api.search.brave.com, including while the model runs on this Mac. Nothing is sent until the agent calls the tool.")
                     .font(IDEAppearance.Typography.caption)
@@ -206,10 +269,18 @@ struct IDEAgentSettingsView: View {
                 Text("Lets the agent look at the page in AI mode's Browser tab (its structure and text, console errors, failed requests), read the notes you pin on elements, and, each time you allow it, click, type and navigate there while you watch (Stop ends it). What it reads goes to the model provider. Pages on this Mac (localhost) are readable at once; any other site asks the first time, and Always allow adds a rule such as browser_inspect(https://example.com/*). Input values are never read, and password fields are never typed into.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            }
+            if category == .behavior {
+            Section("Execution") {
                 Toggle("Run tests before finishing", isOn: $settings.runTestsBeforeFinishing)
                 Text("In a Gradle project, a run that changed files must pass the tests before it may end. Off until you turn it on; turning it on is the consent to run them.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            }
+            if category == .tools {
+            Section("Command sandbox") {
                 if IDEAgentSandbox.isAvailable {
                     Toggle("Run commands in a sandbox", isOn: $settings.sandboxCommands)
                     Text("Commands run under a workspace Seatbelt profile: reads stay out of credentials, writes stay in the project, temp and build caches, and .git stays read-only. Off until you turn it on; the first run asks. Direct builds only.")
@@ -221,6 +292,8 @@ struct IDEAgentSettingsView: View {
                 }
             }
 
+            }
+            if category == .memory {
             Section("Memory") {
                 Toggle("Remember across chats", isOn: $settings.memoryEnabled)
                 Text("The agent can save durable facts to a memory file beside the project's saved chats, outside the repo, and reads them back in later chats. Off until you turn it on.")
@@ -241,10 +314,16 @@ struct IDEAgentSettingsView: View {
                     }
                 }
             }
-            if isFullPane { advancedSections(settings) }
+            }
+            advancedSections(settings)
         }
             .formStyle(.grouped)
-            .frame(width: width)
+            .ideSettingsScrollSurface()
+            }
+        }
+            .background(IDEAppearance.ColorToken.workbench)
+            .foregroundStyle(IDEAppearance.ColorToken.foreground)
+            .tint(IDEAppearance.ColorToken.accent)
             .onChange(of: settings.baseURL) { settings.refreshKeyState() }
             .onChange(of: settings.provider) { Task { await refreshModelsIfOllama() } }
             .task { await refreshModelsIfOllama() }
@@ -252,6 +331,7 @@ struct IDEAgentSettingsView: View {
 
     @ViewBuilder private func advancedSections(_ settings: IDEAgentSettings) -> some View {
         @Bindable var settings = settings
+        if category == .advanced {
         Section("Limits") {
             let iterationCaps = Set(IDEAgentSettings.iterationCapChoices + [settings.iterationCap]).sorted()
             Picker("Steps per message", selection: $settings.iterationCap) {
@@ -304,6 +384,8 @@ struct IDEAgentSettingsView: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
         }
+        }
+        if category == .tools {
         if let agent {
             IDEAgentPermissionsSection(agent: agent)
         }
@@ -315,6 +397,8 @@ struct IDEAgentSettingsView: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
+        }
+        if category == .advanced {
         Section("Command environment") {
             TextEditor(text: $settings.commandEnvironmentText)
                 .font(IDEAppearance.Typography.monoSmall)
@@ -323,7 +407,8 @@ struct IDEAgentSettingsView: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
         }
-        if let agent {
+        }
+        if category == .memory, let agent {
             Section("History") {
                 Button("Clear History for This Project…", role: .destructive) { isConfirmingClear = true }
                     .confirmationDialog("Delete every saved agent conversation for this project?", isPresented: $isConfirmingClear) {

@@ -116,6 +116,7 @@ final class IDEWindowRegistry {
     /// when it was the last window with content.
     func unregister(_ workspace: IDEWorkspace) {
         entries.removeAll { $0.workspace == nil || $0.workspace === workspace }
+        IDESettingsPresentation.shared.workspaceDidClose(workspace)
     }
 
     /// Quitting has been confirmed. Call before any window closes: this stores every window with
@@ -464,5 +465,16 @@ extension FocusedValues {
     var ideWorkspace: IDEWorkspaceRef? {
         get { self[IDEWorkspaceFocusedKey.self] }
         set { self[IDEWorkspaceFocusedKey.self] = newValue }
+    }
+}
+
+private struct IDESettingsWindowFocusedKey: FocusedValueKey {
+    typealias Value = Bool
+}
+
+extension FocusedValues {
+    var ideSettingsWindow: Bool? {
+        get { self[IDESettingsWindowFocusedKey.self] }
+        set { self[IDESettingsWindowFocusedKey.self] = newValue }
     }
 }

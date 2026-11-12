@@ -32,24 +32,28 @@ final class IDEPreferencesKeyboardTests: XCTestCase {
         XCTAssertEqual(moved, .saving)
     }
 
-    func testOpeningSettingsTakesTheEditorOutOfTheKeyLoop() {
+    func testOpeningSettingsLeavesEditorStateAlone() {
         let host = workspace.host(for: workspace.workbench.activePaneID)
-        XCTAssertTrue(host.textView.participatesInKeyViewLoop)
-
+        let selected = workspace.workbench.activePane.selectedDocumentID
         workspace.showSettings()
-
-        XCTAssertTrue(workspace.isSettingsVisible)
-        XCTAssertTrue(workspace.isEditorCoveredByOverlay)
-        XCTAssertFalse(host.textView.participatesInKeyViewLoop)
+        XCTAssertTrue(host.textView.participatesInKeyViewLoop)
+        XCTAssertFalse(workspace.isEditorCoveredByOverlay)
+        XCTAssertEqual(workspace.workbench.activePane.selectedDocumentID, selected)
+        IDESettingsPresentation.shared.clearContext()
     }
 
-    func testClosingSettingsPutsTheEditorBackInTheKeyLoop() {
-        let host = workspace.host(for: workspace.workbench.activePaneID)
-        workspace.showSettings()
-        workspace.hideSettings()
-
-        XCTAssertFalse(workspace.isSettingsVisible)
-        XCTAssertTrue(host.textView.participatesInKeyViewLoop)
+    func testSettingsRequestsUseTheSamePresentationAndUpdateContext() {
+        let presentation = IDESettingsPresentation()
+        var opens = 0
+        presentation.setOpenWindowAction { opens += 1 }
+        let other = IDEWorkspace()
+        presentation.open(from: workspace)
+        XCTAssertTrue(presentation.workspace === workspace)
+        presentation.open(from: other)
+        XCTAssertTrue(presentation.workspace === other)
+        XCTAssertEqual(opens, 2)
+        presentation.clearContext()
+        XCTAssertNil(presentation.workspace)
     }
 
     func testTheAgentPageTakesTheEditorOutOfTheKeyLoopAndClosingItBringsItBack() throws {

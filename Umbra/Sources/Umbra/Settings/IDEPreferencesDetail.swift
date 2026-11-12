@@ -11,10 +11,15 @@ struct IDEPreferencesDetail: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            IDESettingsPage(title: domain.title) {
-                domainPane(for: domain)
+            if domain == .agent {
+                IDEPreferencesAgentPane(agent: workspace.agent)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                IDESettingsPage(title: domain.title) {
+                    domainPane(for: domain)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             if domain.showsTypePreview {
                 IDEPreferencesTypePreview(

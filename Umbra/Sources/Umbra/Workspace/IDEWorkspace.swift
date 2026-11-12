@@ -285,10 +285,6 @@ public final class IDEWorkspace {
         reference.workspace = self
         if Self.isSessionPersistenceEnabled { localHistory.enable(baseDirectory: IDELocalHistoryRecorder.defaultDirectory()) }
         agent.attach(host: self)
-        agent.onPanelRequested = { [weak self] in
-            // Settings only has to make room when the chat is going to cover the same area.
-            if self?.agent.settings.opensAsPage == true { self?.dismissSettingsForAgent() }
-        }
         agent.onLayoutChanged = { [weak self] in self?.saveSession() }
         // The page takes the editor out of the key-view loop and its close puts it back; do it
         // before the caller focuses the editor rather than waiting for SwiftUI's next update.
@@ -377,13 +373,9 @@ public final class IDEWorkspace {
     /// not observable, so this stored flag is what refreshes the welcome-vs-editor switch.
     private(set) var showsWelcome = true
     var showsFirstRunGuide = false
-    /// Settings open over the editor area, like a tab, instead of in their own window. The editor
-    /// underneath stays mounted so its carets and scroll positions survive.
-    private(set) var isSettingsVisible = false
-    /// True while Settings or the agent page covers the editor: the editor stays mounted but is
-    /// skipped in the key-view loop so Tab cannot type into it.
+    /// The agent page covers the editor and is excluded from its key-view loop.
     var isEditorCoveredByOverlay: Bool {
-        isSettingsVisible || (agent.coversEditor && hasOpenProject && !isAIMode)
+        agent.coversEditor && hasOpenProject && !isAIMode
     }
     /// Editor, or AI mode over the whole window. The editor stays mounted underneath AI mode.
     var windowMode: IDEWindowMode = .editor {
@@ -411,8 +403,6 @@ public final class IDEWorkspace {
     var aiBrowser: IDEAIBrowserModel?
     /// The Browser tab's address, readable from anywhere before the page object exists.
     @ObservationIgnored let aiBrowserPageInfo = IDEAIBrowserPageInfo()
-    /// Settings were opened from AI mode, so closing them goes back there rather than to the editor.
-    private var returnsToAIModeFromSettings = false
     /// Set while a saved window comes back, which is not a change worth saving.
     private var isRestoringAIMode = false
     /// What to do in AI mode once the folder being opened here is the project; see `applyAIOpen`.
@@ -429,46 +419,17 @@ public final class IDEWorkspace {
     var focusedIntentionID: String?
 
     func showSettings() {
-        guard !isSettingsVisible else { return }
-        // Settings belong to the editor's side of the window; closing them returns to AI mode.
-        returnsToAIModeFromSettings = windowMode == .ai
-        if returnsToAIModeFromSettings { windowMode = .editor }
-        isBottomPanelExpanded = false
-        agent.dismissPage()
-        // Release the editor before Settings requests focus for its search field.
-        window?.makeFirstResponder(nil)
-        isSettingsVisible = true
-        refreshEditorKeyLoop()
+        IDESettingsPresentation.shared.open(from: self)
     }
 
-    /// AI mode covers the window: Settings and an expanded bottom panel belong to the editor, and
-    /// keystrokes must not keep going to a text view that is no longer on screen.
+    /// AI mode covers the editor, so its text view must leave the key-view loop.
     func prepareForAIMode() {
-        isSettingsVisible = false
-        returnsToAIModeFromSettings = false
         isBottomPanelExpanded = false
         refreshEditorKeyLoop()
         window?.makeFirstResponder(nil)
     }
 
-    /// The chat page takes the place Settings has; opening it closes Settings without moving focus.
-    func dismissSettingsForAgent() {
-        isSettingsVisible = false
-        refreshEditorKeyLoop()
-    }
-
-    func hideSettings() {
-        guard isSettingsVisible else { return }
-        isSettingsVisible = false
-        refreshEditorKeyLoop()
-        if returnsToAIModeFromSettings {
-            showAIMode()
-            return
-        }
-        focusActiveEditor()
-    }
-
-    /// Settings and the agent page cover the editor; Tab must not land in the caret underneath.
+    /// The agent page covers the editor; Tab must not land in the caret underneath.
     func refreshEditorKeyLoop() {
         let enabled = !isEditorCoveredByOverlay
         // Only panes that already have a host: this runs during restore, and a pane that mounts
@@ -1251,7 +1212,6 @@ public final class IDEWorkspace {
             language: nil,
             languageIdentifier: nil
         )
-        isSettingsVisible = false
         agent.dismissPage()
         workbench.openDocument(document)
         showsWelcome = false
@@ -2732,7 +2692,6 @@ public final class IDEWorkspace {
         if let range { document.selectedRange = range }
         let alreadyVisible = pane.id == workbench.activePaneID && pane.selectedDocumentID == document.id
         if alreadyVisible {
-            isSettingsVisible = false
             agent.dismissPage()
             showsWelcome = false
         } else {
@@ -3283,7 +3242,6 @@ public final class IDEWorkspace {
     }
 
     func selectTab(_ id: UUID, in paneID: UUID? = nil) {
-        if isSettingsVisible { isSettingsVisible = false }
         agent.dismissPage()
         let pane: EditorPane
         if let paneID, let found = workbench.layout.findPane(id: paneID) {
@@ -3941,7 +3899,6 @@ public final class IDEWorkspace {
                 selected.selectedRange = range
             }
             recordRecentFile(url)
-            isSettingsVisible = false
             agent.dismissPage()
             showsWelcome = false
             rebuildLayoutHosts()
@@ -5934,7 +5891,6 @@ public final class IDEWorkspace {
     /// Opens a diff tab (already set up with its session) in the active pane.
     func presentDiffDocument(_ document: WorkbenchDocument) {
         workbench.openDocument(document)
-        isSettingsVisible = false
         agent.dismissPage()
         showsWelcome = false
         rebuildLayoutHosts()

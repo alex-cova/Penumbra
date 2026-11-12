@@ -55,7 +55,6 @@ struct IDETitlebarGlobalActions: View {
             IDEIconButton(
                 systemImage: "gearshape",
                 help: "Settings",
-                isActive: workspace.isSettingsVisible,
                 action: workspace.showSettings
             )
             .accessibilityIdentifier(IDEACPAccessibility.settingsOpen)

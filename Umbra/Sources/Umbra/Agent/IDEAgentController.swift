@@ -53,8 +53,6 @@ final class IDEAgentController {
     @ObservationIgnored private var layoutNotificationsSuspended = false
     /// Called whenever the panel opens or closes, including during a restore (unlike `onLayoutChanged`).
     @ObservationIgnored var onPanelVisibilityChanged: (() -> Void)?
-    /// Called before the chat page opens, so the window can close what it would cover (Settings).
-    @ObservationIgnored var onPanelRequested: (() -> Void)?
     /// Bumped when something fills the composer from outside, so the panel moves focus to it.
     var composerFocusRequest = 0
     /// This project's saved conversations, newest first, for the history menu.
@@ -157,7 +155,6 @@ final class IDEAgentController {
 
     /// Opens the chat and puts the caret in the composer.
     func showPanel() {
-        onPanelRequested?()
         isPanelVisible = true
         composerFocusRequest += 1
     }

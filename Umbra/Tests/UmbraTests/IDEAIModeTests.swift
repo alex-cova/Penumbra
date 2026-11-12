@@ -48,12 +48,12 @@ final class IDEAIModeTests: XCTestCase {
         XCTAssertTrue(workspace.isAIMode)
     }
 
-    func testAIModeClosesSettingsWhichBelongToTheEditor() {
+    func testOpeningSettingsKeepsAIMode() {
         let workspace = makeWorkspace()
-        workspace.showSettings()
-        XCTAssertTrue(workspace.isSettingsVisible)
         workspace.showAIMode()
-        XCTAssertFalse(workspace.isSettingsVisible)
+        workspace.showSettings()
+        XCTAssertTrue(workspace.isAIMode)
+        IDESettingsPresentation.shared.clearContext()
     }
 
     func testLeavingAIModeForTheEditorNeedsNoFocusAndOnlyActsInAIMode() {

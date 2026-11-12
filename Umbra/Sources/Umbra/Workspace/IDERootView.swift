@@ -111,15 +111,10 @@ public struct IDERootView: View {
                                 IDENoDocumentView()
                             }
                         }
-                        .allowsHitTesting(!workspace.isSettingsVisible && !isAgentPageShown)
-                        .accessibilityHidden(workspace.isSettingsVisible || isAgentPageShown)
+                        .allowsHitTesting(!isAgentPageShown)
+                        .accessibilityHidden(isAgentPageShown)
                         .overlay {
-                            if workspace.isSettingsVisible {
-                                IDEPreferencesView(preferences: workspace.preferences)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .background(IDEAppearance.ColorToken.workbench)
-                                    .transition(.opacity)
-                            } else if isAgentPageShown {
+                            if isAgentPageShown {
                                 // Expanded chat covers the editor, which stays mounted. Side Panel docks it.
                                 IDEAgentPage(agent: workspace.agent, onClose: workspace.hideAgentPage)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)

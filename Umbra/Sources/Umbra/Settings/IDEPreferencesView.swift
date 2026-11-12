@@ -4,6 +4,7 @@ import SwiftUI
 public struct IDEPreferencesView: View {
     @Bindable var preferences: IDEPreferences
     @Environment(IDEWorkspace.self) private var workspace
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var selectedDomain: IDEPreferencesDomain = .editor
     @State private var query = ""
     @FocusState private var searchFocused: Bool
@@ -32,9 +33,6 @@ public struct IDEPreferencesView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            IDESettingsTabHeader(onClose: workspace.hideSettings)
-                .onAppear { takeRequestedDomain() }
-                .onChange(of: workspace.requestedSettingsDomain) { takeRequestedDomain() }
             IDEPreferencesSearchField(
                 query: $query, visibleDomains: visibleDomains, selectedDomain: $selectedDomain,
                 searchFocused: $searchFocused, sidebarFocused: $sidebarFocused)
@@ -54,6 +52,8 @@ public struct IDEPreferencesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(IDEAppearance.ColorToken.workbench)
         .id(preferences.uiColorSchemeID)
+        .onAppear { takeRequestedDomain() }
+        .onChange(of: workspace.requestedSettingsDomain) { takeRequestedDomain() }
         .focusSection()
         .task {
             await Task.yield()
@@ -78,7 +78,7 @@ public struct IDEPreferencesView: View {
             searchFocused = true
             return
         }
-        workspace.hideSettings()
+        dismissWindow(id: "settings")
     }
 
 }

@@ -20,6 +20,12 @@ struct UmbraApp: App {
         .commands {
             IDEAppCommands()
         }
+
+        Window("Settings", id: "settings") {
+            IDESettingsWindow()
+        }
+        .defaultSize(width: 1000, height: 700)
+        .windowResizability(.contentMinSize)
     }
 }
 
@@ -81,5 +87,50 @@ private struct IDEReopenCenteringView: NSViewRepresentable {
                 }
             }
         }
+    }
+}
+
+/// The single settings scene uses the invoking workspace for project-specific controls.
+struct IDESettingsWindow: View {
+    private let presentation = IDESettingsPresentation.shared
+
+    var body: some View {
+        Group {
+            if let workspace = presentation.workspace {
+                IDEPreferencesView(preferences: IDEPreferences.shared)
+                    .environment(workspace)
+                    .id(workspace.windowID)
+            }
+        }
+        .frame(minWidth: 780, minHeight: 520)
+        .focusedSceneValue(\.ideSettingsWindow, true)
+        .onAppear { presentation.ensureContext() }
+        .onDisappear { presentation.clearContext() }
+    }
+}
+
+@MainActor @Observable
+final class IDESettingsPresentation {
+    static let shared = IDESettingsPresentation()
+    private(set) var workspace: IDEWorkspace?
+    @ObservationIgnored private var openWindow: (() -> Void)?
+
+    func setOpenWindowAction(_ action: @escaping () -> Void) { openWindow = action }
+
+    func open(from workspace: IDEWorkspace?) {
+        if let workspace { self.workspace = workspace }
+        ensureContext()
+        openWindow?()
+    }
+
+    func ensureContext() {
+        if workspace == nil { workspace = IDEWindowRegistry.shared.activeWorkspace ?? IDEWorkspace() }
+    }
+
+    func clearContext() { workspace = nil }
+
+    func workspaceDidClose(_ closing: IDEWorkspace) {
+        guard workspace === closing else { return }
+        workspace = IDEWindowRegistry.shared.activeWorkspace ?? IDEWorkspace()
     }
 }

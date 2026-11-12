@@ -157,8 +157,8 @@ final class IDEAgentEntryPointsTests: XCTestCase {
         XCTAssertFalse(workspace.agent.coversEditor, "docked, it leaves the editor visible")
 
         workspace.showSettings()
-        XCTAssertTrue(workspace.isSettingsVisible && workspace.agent.isPanelVisible, "Settings does not close a docked chat")
-        workspace.hideSettings()
+        XCTAssertTrue(workspace.agent.isPanelVisible, "Settings does not close a docked chat")
+        IDESettingsPresentation.shared.clearContext()
 
         let id = try XCTUnwrap(workspace.workbench.activePane.selectedDocumentID)
         workspace.selectTab(id)
@@ -171,27 +171,15 @@ final class IDEAgentEntryPointsTests: XCTestCase {
         XCTAssertFalse(workspace.agent.isPanelVisible, "the brain button closes it")
     }
 
-    func testTheChatOpensInPlaceOfSettingsAndSettingsInPlaceOfTheChat() async {
+    func testSettingsDoesNotDismissExpandedChat() async {
         let restore = withPageLayout(true)
-        defer { restore() }
+        defer { restore(); IDESettingsPresentation.shared.clearContext() }
         await waitForEditorSupport()
-        workspace.showSettings()
-        XCTAssertTrue(workspace.isSettingsVisible)
-
         workspace.toggleAgentPanel()
         XCTAssertTrue(workspace.agent.isPanelVisible)
-        XCTAssertFalse(workspace.isSettingsVisible, "only one of the two covers the editor")
-
         workspace.showSettings()
-        XCTAssertTrue(workspace.isSettingsVisible)
-        XCTAssertFalse(workspace.agent.isPanelVisible)
-
-        workspace.agent.compose("hello", send: false)
         XCTAssertTrue(workspace.agent.isPanelVisible)
-        XCTAssertFalse(workspace.isSettingsVisible, "Ask Agent / Fix with Agent also take Settings' place")
-
-        workspace.toggleAgentPanel()
-        XCTAssertFalse(workspace.agent.isPanelVisible, "the brain button closes it again")
+        XCTAssertTrue(workspace.agent.coversEditor)
     }
 
     func testSwitchingToAnEditorTabClosesTheChatWhenItIsAPage() async throws {

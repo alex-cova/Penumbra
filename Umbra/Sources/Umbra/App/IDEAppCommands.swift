@@ -30,9 +30,11 @@ struct IDEAppCommands: Commands {
                     .disabled(!IDEAppUpdater.canCheckForUpdates)
             }
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…", systemImage: "gearshape") { workspace?.showSettings() }
+                Button("Settings…", systemImage: "gearshape") {
+                    IDESettingsPresentation.shared.setOpenWindowAction { openWindow(id: "settings") }
+                    IDESettingsPresentation.shared.open(from: workspace ?? IDEWindowRegistry.shared.activeWorkspace)
+                }
                     .keyboardShortcut(",", modifiers: .command)
-                    .disabled(workspace == nil)
             }
             CommandGroup(replacing: .newItem) {
                 Button("New Window", systemImage: "macwindow.badge.plus") { openWindow(id: "main") }
@@ -130,6 +132,7 @@ private struct IDENoWindowCommand: View {
 /// focused (they route to a window, or open a new one); the rest need one.
 private struct IDEFileCommands: View {
     let ref: IDEWorkspaceRef?
+    @FocusedValue(\.ideSettingsWindow) private var settingsWindow
 
     private var workspace: IDEWorkspace? { ref?.workspace }
 
@@ -181,9 +184,14 @@ private struct IDEFileCommands: View {
         .menuShortcut(.reloadAllFromDisk, in: preset)
         .disabled(workspace == nil)
         Divider()
-        Button("Close Tab", systemImage: "xmark") { workspace?.requestCloseActiveTab() }
-            .menuShortcut(.closeTab, in: preset)
-            .disabled(workspace == nil)
+        if settingsWindow == true {
+            Button("Close Window", systemImage: "xmark") { NSApp.keyWindow?.performClose(nil) }
+                .keyboardShortcut("w", modifiers: .command)
+        } else {
+            Button("Close Tab", systemImage: "xmark") { workspace?.requestCloseActiveTab() }
+                .menuShortcut(.closeTab, in: preset)
+                .disabled(workspace == nil)
+        }
         IDEOpenRecentMenu(origin: origin)
     }
 }
