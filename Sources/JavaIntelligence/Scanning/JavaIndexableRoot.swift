@@ -42,6 +42,39 @@ enum CtSymRelease {
             return top.count < entry.name.count && top.contains(letter)
         }
     }
+
+    /// The feature versions `archive` carries API signatures for (letters with at least one
+    /// `.sig` below them). JDK 21's holds 8...20; JDK 22 and later also hold their own release.
+    static func releasesWithSignatures(in archive: ZipArchive) -> Set<Int> {
+        var letters = Set<Character>()
+        var seenTops = Set<Substring>()
+        for entry in archive.entries where entry.name.hasSuffix(".sig") {
+            let top = entry.name.prefix { $0 != "/" }
+            guard top.count < entry.name.count, seenTops.insert(top).inserted else { continue }
+            letters.formUnion(top)
+        }
+        return Set((8...35).filter { version in letter(forFeatureVersion: version).map(letters.contains) ?? false })
+    }
+}
+
+/// The platform roots a JDK can index: its own platform (``JDKIndexRoot``) and, from `ct.sym`,
+/// the API of each older release `--release` accepts.
+public enum JDKPlatformRoot {
+    /// The releases `installation`'s `ct.sym` holds signatures for. Opens `ct.sym`'s central
+    /// directory, so callers run it off the main actor. Empty without a `ct.sym`.
+    public static func supportedReleases(of installation: JDKInstallation) -> Set<Int> {
+        guard let archive = try? ZipArchive(url: installation.ctSym) else { return [] }
+        return CtSymRelease.releasesWithSignatures(in: archive)
+    }
+
+    /// The root that indexes release `release`'s API as javac's `--release` sees it, with its
+    /// shard kind, or `nil` when `ct.sym` has no signatures for it (JDK 8 has no `ct.sym`;
+    /// releases below 8 are gone). The JDK's own release is ``JDKIndexRoot/make(for:)``.
+    public static func make(for installation: JDKInstallation, release: Int) -> (root: any JavaIndexableRoot, kind: String)? {
+        guard release != installation.featureVersion else { return JDKIndexRoot.make(for: installation) }
+        guard supportedReleases(of: installation).contains(release) else { return nil }
+        return (JDKCtSymRoot(installation: installation, release: release), "ctsym-release-\(release)")
+    }
 }
 
 /// Picks what to index for a JDK: `ct.sym` when it has signatures for the JDK's own release, else
@@ -53,7 +86,7 @@ public enum JDKIndexRoot {
             CtSymRelease.hasSignatures(in: $0, forFeatureVersion: installation.featureVersion)
         } ?? false
         if hasSignatures || !installation.hasJmods { return (ctSym, "ctsym") }
-        return (JModsRoot(installation: installation), "jmods")
+        return (JModsRoot(installation: installation), "jmods-exported")
     }
 }
 
@@ -63,11 +96,15 @@ public enum JDKIndexRoot {
 /// version's letter.
 public struct JDKCtSymRoot: JavaIndexableRoot {
     private let installation: JDKInstallation
+    /// The release whose signatures are read: the JDK's own feature version unless asked for
+    /// another (`--release N`).
+    public let release: Int
     public let id: String
 
-    public init(installation: JDKInstallation) {
+    public init(installation: JDKInstallation, release: Int? = nil) {
         self.installation = installation
-        self.id = "jdk-ctsym-\(installation.cacheKey)"
+        self.release = release ?? installation.featureVersion
+        self.id = release.map { "jdk-ctsym-\(installation.cacheKey)-release-\($0)" } ?? "jdk-ctsym-\(installation.cacheKey)"
     }
 
     public var stamp: JavaStamp {
@@ -75,7 +112,7 @@ public struct JDKCtSymRoot: JavaIndexableRoot {
     }
 
     public func readStubs() throws -> [JavaClassStub] {
-        guard let releaseLetter = CtSymRelease.letter(forFeatureVersion: installation.featureVersion) else {
+        guard let releaseLetter = CtSymRelease.letter(forFeatureVersion: release) else {
             return []
         }
         let archive = try ZipArchive(url: installation.ctSym)
@@ -109,7 +146,8 @@ public struct JModsRoot: JavaIndexableRoot {
 
     public init(installation: JDKInstallation) {
         self.installation = installation
-        self.id = "jdk-jmods-\(installation.cacheKey)"
+        // `-exported`: shards written before non-exported packages were left out are not reused.
+        self.id = "jdk-jmods-exported-\(installation.cacheKey)"
     }
 
     public var stamp: JavaStamp {
@@ -124,10 +162,20 @@ public struct JModsRoot: JavaIndexableRoot {
         for jmodURL in jmodFiles where jmodURL.pathExtension == "jmod" {
             let moduleName = jmodURL.deletingPathExtension().lastPathComponent
             guard let archive = try? ZipArchive(url: jmodURL) else { continue }
+            // Only the packages the module exports to everyone, as `ct.sym` and `javac` see them
+            // (`jdk.internal.misc` is in `java.base` but no code outside the JDK may name it). A
+            // module-info that cannot be read keeps every package, as before.
+            let exports = archive.entries.first { $0.name == "classes/module-info.class" }
+                .flatMap { try? archive.data(for: $0) }
+                .flatMap { try? ClassFileReader.unqualifiedExports(ofModuleInfo: $0) }
             for entry in archive.entries {
                 guard entry.name.hasPrefix("classes/"), entry.name.hasSuffix(".class") else { continue }
                 let path = String(entry.name.dropFirst("classes/".count))
                 if path == "module-info.class" || path.hasSuffix("/package-info.class") { continue }
+                if let exports {
+                    let package = (path as NSString).deletingLastPathComponent.replacingOccurrences(of: "/", with: ".")
+                    guard exports.contains(package) else { continue }
+                }
                 guard let data = try? archive.data(for: entry) else { continue }
                 guard let stub = try? ClassFileReader.read(data, origin: .jdkModule(moduleName)) else { continue }
                 stubs.append(stub)

@@ -45,6 +45,9 @@ struct MavenEffectiveModule: Sendable {
     var testGeneratedSourceDirectories: [URL]
     var annotationProcessors: [MavenDependency]
     var languageLevel: Int?
+    /// `maven-compiler-plugin`'s settings for `compile` and `testCompile`.
+    var compiler: JavaCompilerSettings
+    var testCompiler: JavaCompilerSettings
     var modules: [String]
     var plugins: [MavenPlugin]
     var profiles: [(id: String, active: Bool)]
@@ -485,6 +488,9 @@ enum MavenModelBuilder {
         let compiler = model.plugins.first { $0.artifactId == "maven-compiler-plugin" }
         let processors = annotationProcessors(in: compiler?.configuration)
         let level = languageLevel(properties: model.properties, compiler: compiler?.configuration)
+        let toolchainsPlugin = model.plugins.first { $0.artifactId == "maven-toolchains-plugin" }
+        let (mainCompiler, testCompiler) = compilerSettings(
+            properties: model.properties, compiler: compiler?.configuration, toolchains: toolchainsPlugin?.configuration)
         let surefire = model.plugins.first { $0.artifactId == "maven-surefire-plugin" }
         let argLine = surefire?.configuration?.child("argLine")?.trimmedText
         let jacoco = model.plugins.contains { plugin in
@@ -509,6 +515,8 @@ enum MavenModelBuilder {
             testGeneratedSourceDirectories: testGenerated,
             annotationProcessors: processors,
             languageLevel: level,
+            compiler: mainCompiler,
+            testCompiler: testCompiler,
             modules: model.modules,
             plugins: model.plugins,
             profiles: model.profiles.map { ($0.id, active.contains($0.id)) },
@@ -531,6 +539,39 @@ enum MavenModelBuilder {
             if let level = parseLevel(candidate) { return level }
         }
         return nil
+    }
+
+    /// What `maven-compiler-plugin` passes javac for `compile` and `testCompile`. The plugin's
+    /// own `<configuration>` wins over the `maven.compiler.*` user properties (they only feed the
+    /// parameters' defaults); `testRelease`/`testSource`/`testTarget` fall back to the main values.
+    /// The JDK comes from `maven-toolchains-plugin`'s `<jdk><version>` or the compiler's
+    /// `<jdkToolchain><version>`, when it names one exact version (a range does not say which).
+    static func compilerSettings(
+        properties: [String: String], compiler: MavenXMLElement?, toolchains: MavenXMLElement?
+    ) -> (main: JavaCompilerSettings, test: JavaCompilerSettings) {
+        func value(_ element: String, _ property: String) -> Int? {
+            for candidate in [compiler?.child(element)?.trimmedText, properties[property]] {
+                guard let candidate, !candidate.isEmpty, !candidate.contains("${") else { continue }
+                if let level = parseLevel(candidate) { return level }
+            }
+            return nil
+        }
+        let toolchainText = compiler?.child("jdkToolchain")?.child("version")?.trimmedText
+            ?? toolchains?.child("toolchains")?.child("jdk")?.child("version")?.trimmedText
+        let toolchain = toolchainText.flatMap { text -> Int? in
+            text.allSatisfy { $0.isNumber || $0 == "." } ? parseLevel(text) : nil
+        }
+        let release = value("release", "maven.compiler.release")
+        let source = value("source", "maven.compiler.source")
+        let target = value("target", "maven.compiler.target")
+        let main = JavaCompilerSettings(release: release, toolchainVersion: toolchain, sourceCompatibility: source, targetCompatibility: target)
+        let test = JavaCompilerSettings(
+            release: value("testRelease", "maven.compiler.testRelease") ?? release,
+            toolchainVersion: toolchain,
+            sourceCompatibility: value("testSource", "maven.compiler.testSource") ?? source,
+            targetCompatibility: value("testTarget", "maven.compiler.testTarget") ?? target
+        )
+        return (main, test)
     }
 
     static func parseLevel(_ text: String) -> Int? {

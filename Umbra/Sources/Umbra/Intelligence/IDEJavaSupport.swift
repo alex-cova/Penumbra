@@ -140,6 +140,21 @@ final class IDEJavaSupport {
     /// role, so Find Usages only parses files that can bind the target.
     let roleIndex = JavaRoleIndex()
     @ObservationIgnored private var jdkReader: JavaIndexShardReader?
+    /// The installation `jdkReader` was read from; its feature version is the default platform's
+    /// release (`JavaPlatformScope`).
+    @ObservationIgnored private var indexedJDK: JDKInstallation?
+    /// The API releases the project's modules compile against besides the JDK's own (`--release 8`
+    /// on JDK 21), read from that JDK's `ct.sym` on demand and published as their own platforms.
+    /// Only the releases the current model names are kept; all come from `platformJDKKey`.
+    @ObservationIgnored private var platformReaders: [Int: JavaIndexShardReader] = [:]
+    @ObservationIgnored private var platformJDKKey: String?
+    @ObservationIgnored private var platformTask: Task<Void, Never>?
+    @ObservationIgnored private var platformRun = 0
+    @ObservationIgnored private var runningPlatformRun: Int?
+    private var isIndexingPlatforms: Bool { runningPlatformRun != nil }
+    /// Releases the indexed JDK has no signatures for. Their modules stay pending (no missing-class
+    /// report) rather than being judged against another release's API.
+    @ObservationIgnored private(set) var unavailablePlatformReleases: Set<Int> = []
     /// Project and jar shards carry `shardPath` so a Gradle source-set scope can hide the ones that
     /// are not on the file's compile classpath. The JDK shard does not: it is always visible.
     @ObservationIgnored private var projectSources: [JavaIndex.Source] = []
@@ -451,12 +466,18 @@ final class IDEJavaSupport {
         let standardized = await inspectionService.resolutionReadiness(for: url.standardizedFileURL)
         let readiness = standardized != nil ? standardized : await inspectionService.resolutionReadiness(for: url)
         var activity = IDEResolutionStatus.Activity()
-        activity.isIndexingJDK = jdkIndexingTask != nil && pendingJDKHomePath != nil
+        activity.isIndexingJDK = (jdkIndexingTask != nil && pendingJDKHomePath != nil) || isIndexingPlatforms
         activity.isIndexingSources = self.activity.isActive(.javaSources)
         activity.isIndexingDependencies = self.activity.isActive(.javaDependencies)
         activity.isSyncing = gradle.syncState.isSyncing || maven.syncState.isSyncing
         activity.awaitsProjectModel = isJavaBuildActive && projectModel == nil
         var names: [String: String] = [:]
+        for release in (projectModel?.platformReleases ?? []) {
+            let token = JavaPlatformScope.token(release: release)
+            names[token] = unavailablePlatformReleases.contains(release)
+                ? "Java \(release) API (not in \(indexedJDK?.displayName ?? "the JDK"))"
+                : "Java \(release) API"
+        }
         if let model = projectModel {
             for jar in model.classpathJars { names[paths.jarShard(jar).path] = jar.lastPathComponent }
             for target in model.sourceIndexTargets(paths: paths) {
@@ -624,6 +645,7 @@ final class IDEJavaSupport {
         clearTestIndex()
         jarSources = []
         clearSourceSetClasspath()
+        refreshPlatformReleases()
 
         guard let url else {
             buildNameIndex(roots: [], generation: generation)
@@ -664,6 +686,9 @@ final class IDEJavaSupport {
         Task { [overlayService] in await overlayService.disconnect() }
         jdkIndexingTask?.cancel()
         jdkIndexingTask = nil
+        platformTask?.cancel()
+        platformTask = nil
+        runningPlatformRun = nil
         projectIndexingTask?.cancel()
         projectIndexingTask = nil
         nameIndexTask?.cancel()
@@ -897,6 +922,7 @@ final class IDEJavaSupport {
         await lineMarkerProvider.setSourceSetClasspath(model, indexPaths: paths)
         await inspectionService.setSourceSetClasspath(model, indexPaths: paths)
         reindexTests(model: model)
+        refreshPlatformReleases()
         refreshCompilerDiagnostics()
     }
 
@@ -1148,6 +1174,15 @@ final class IDEJavaSupport {
             let isReplacement = jdkReader != nil
             jdkReader = reader
             indexedJDKHomePath = homePath
+            indexedJDK = installation
+            // Release platforms read from another JDK's `ct.sym` go with it; the new JDK's are
+            // indexed below, and their modules wait meanwhile.
+            if platformJDKKey != installation.cacheKey {
+                platformTask?.cancel()
+                platformReaders = [:]
+                unavailablePlatformReleases = []
+                platformJDKKey = installation.cacheKey
+            }
             // Publishing moves the index's sources version, which makes every inspection result
             // judged against the previous JDK stale and re-checks the open files once
             // (`onIndexSourcesPublished`). A second, forced re-analysis here only repeated it.
@@ -1156,6 +1191,54 @@ final class IDEJavaSupport {
                 // `javac` and the language level follow the new JDK; a level change re-analyses
                 // through `refreshInspectionLanguageLevel`.
                 refreshCompilerDiagnostics()
+            }
+            refreshPlatformReleases()
+        }
+    }
+
+    /// Brings the release platforms in line with the current model and JDK: drops the releases no
+    /// module asks for any more, and indexes the missing ones from the JDK's `ct.sym` (shared
+    /// across windows through `shardHub`, one release at a time, off the main actor). A result
+    /// for a JDK or model that has moved on meanwhile is dropped, never published over the newer
+    /// state; a release the JDK cannot provide is recorded and its modules stay pending.
+    private func refreshPlatformReleases() {
+        guard let installation = indexedJDK, jdkReader != nil else { return }
+        let key = installation.cacheKey
+        let wanted = (projectModel?.platformReleases ?? []).subtracting([installation.featureVersion])
+        let dropped = Set(platformReaders.keys).subtracting(wanted)
+        for release in dropped { platformReaders[release] = nil }
+        unavailablePlatformReleases.formIntersection(wanted)
+        if !dropped.isEmpty { Task { await publishSources() } }
+        let missing = wanted.subtracting(platformReaders.keys).subtracting(unavailablePlatformReleases)
+        guard !missing.isEmpty else { return }
+        platformTask?.cancel()
+        platformRun += 1
+        let run = platformRun
+        runningPlatformRun = run
+        platformTask = Task { [paths, shardHub] in
+            defer { if runningPlatformRun == run { runningPlatformRun = nil } }
+            for release in missing.sorted() {
+                guard !Task.isCancelled, platformJDKKey == key else { return }
+                // Opens ct.sym's central directory, so off the main actor.
+                let made = await Task.detached(priority: .utility) { JDKPlatformRoot.make(for: installation, release: release) }.value
+                guard !Task.isCancelled, platformJDKKey == key else { return }
+                guard let made else {
+                    unavailablePlatformReleases.insert(release)
+                    appendBuildNote("\(installation.displayName) has no Java \(release) API signatures; modules on --release \(release) are not checked for missing classes")
+                    onIndexSourcesPublished?()
+                    continue
+                }
+                let message = "Indexing Java \(release) API…"
+                if status.message == nil { status.set(message) }
+                let reader = await shardHub.shard(for: made.root, at: paths.jdkShard(installation, kind: made.kind))
+                status.clear(message)
+                guard !Task.isCancelled, platformJDKKey == key else { return }
+                // An empty or failed read is not a platform: publishing it would make every class
+                // of that release missing. Left out, the release stays required and pending.
+                guard let reader, !reader.allQualifiedNames.isEmpty else { continue }
+                guard (projectModel?.platformReleases ?? []).contains(release) else { continue }
+                platformReaders[release] = reader
+                await publishSources()
             }
         }
     }
@@ -1172,7 +1255,20 @@ final class IDEJavaSupport {
 
     private func publishSources() async {
         var sources: [JavaIndex.Source] = []
-        if let jdkReader { sources.append(.init(precedence: 3, reader: jdkReader)) }
+        if let jdkReader {
+            // The JDK's own platform is the default: the one a module without a `--release` (or
+            // with the JDK's own) and a file outside every module resolve against.
+            if let indexedJDK {
+                sources.append(.init(
+                    precedence: 3, reader: jdkReader,
+                    shardPath: JavaPlatformScope.token(release: indexedJDK.featureVersion), isDefaultPlatform: true))
+            } else {
+                sources.append(.init(precedence: 3, reader: jdkReader))
+            }
+            for (release, reader) in platformReaders.sorted(by: { $0.key < $1.key }) where release != indexedJDK?.featureVersion {
+                sources.append(.init(precedence: 3, reader: reader, shardPath: JavaPlatformScope.token(release: release)))
+            }
+        }
         sources.append(contentsOf: projectSources)
         sources.append(contentsOf: jarSources)
         await javaIndex.setSources(sources, classpathComplete: isClasspathComplete)

@@ -11,7 +11,7 @@ import Foundation
 enum GradleProjectModelScript {
     /// Bumped whenever the emitted JSON shape changes; mirrored in
     /// ``JavaGradleProjectModel/formatVersion``.
-    static let formatVersion = 8
+    static let formatVersion = 9
 
     /// Groovy, not Kotlin DSL: a Groovy init script doesn't need the `kotlin-dsl` plugin resolved
     /// first, which keeps this working on older Gradle versions with no extra project-side setup.
@@ -89,6 +89,72 @@ enum GradleProjectModelScript {
     // comma-separated lists split. Only `--add-modules` is captured: `--add-exports` is rejected
     // alongside `--release` (which Umbra always passes), and `--add-opens`/`--add-reads` are
     // runtime-only no-ops at compile time, so replaying them would only add noise or errors.
+    def umbraLevel = { value ->
+        if (value == null) { return null }
+        try {
+            def text = value.toString().trim()
+            if (text.startsWith('1.')) { text = text.substring(2) }
+            if (text.startsWith('VERSION_')) { text = text.substring(8).replace('1_', '') }
+            def digits = text.takeWhile { Character.isDigit(it as char) }
+            return digits.isEmpty() ? null : Integer.parseInt(digits)
+        } catch (Exception ignored) {
+            return null
+        }
+    }
+
+    // How the source set's compile task is configured: `--release` (`options.release`, or by hand
+    // in `compilerArgs`), the project's toolchain, and the task's source/target compatibility.
+    // Each is only what the build declares; the app decides what they mean for the platform API.
+    def umbraCompilerSettings = { p, ss ->
+        def settings = [:]
+        def compileTask = null
+        try { compileTask = p.tasks.findByName(ss.compileJavaTaskName) } catch (Exception ignored) {}
+        try {
+            def release = compileTask?.options?.release
+            if (release != null && release.isPresent()) { settings.release = release.get() as Integer }
+        } catch (Exception ignored) {}
+        if (settings.release == null) {
+            try {
+                def args = compileTask?.options?.compilerArgs
+                def takeNext = false
+                args?.each { raw ->
+                    def arg = raw?.toString()
+                    if (arg == null) { return }
+                    if (takeNext) {
+                        takeNext = false
+                        def level = umbraLevel(arg)
+                        if (level != null) { settings.release = level }
+                    } else if (arg == '--release') {
+                        takeNext = true
+                    } else if (arg.startsWith('--release=')) {
+                        def level = umbraLevel(arg.substring(10))
+                        if (level != null) { settings.release = level }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        try {
+            def javaExt = p.extensions.findByType(JavaPluginExtension)
+            def toolchain = javaExt?.toolchain
+            if (toolchain != null && toolchain.languageVersion.isPresent()) {
+                settings.toolchainVersion = toolchain.languageVersion.get().asInt()
+            }
+        } catch (Exception ignored) {}
+        // With a toolchain, the task's compatibility defaults come from the toolchain's compiler;
+        // reading them would locate (or provision) that JDK during sync, so they stay unread.
+        if (settings.toolchainVersion == null) {
+            try {
+                def source = umbraLevel(compileTask?.sourceCompatibility)
+                if (source != null) { settings.sourceCompatibility = source }
+            } catch (Exception ignored) {}
+            try {
+                def target = umbraLevel(compileTask?.targetCompatibility)
+                if (target != null) { settings.targetCompatibility = target }
+            } catch (Exception ignored) {}
+        }
+        return settings
+    }
+
     def umbraCompileAddModules = { p, ss ->
         def modules = [] as LinkedHashSet
         try {
@@ -139,6 +205,7 @@ enum GradleProjectModelScript {
             annotationProcessorJars: [],
             annotationProcessorProjects: [],
             addModules: umbraCompileAddModules(p, ss),
+            compiler: umbraCompilerSettings(p, ss),
             unresolved: []
         ]
         try {

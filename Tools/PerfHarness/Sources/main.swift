@@ -116,7 +116,7 @@ let options = Commands.Options(
 )
 
 let allowsSyntheticPath = command == "scroll-frames" || command == "metal-waits" || command == "typeset-long" || command == "index-parse" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-reinspection" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
-    || command == "java-profile-import" || command == "java-coverage-bands"
+    || command == "java-profile-import" || command == "java-coverage-bands" || command == "java-platform-release"
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index" || command == "java-inheritors" || command == "java-stub-reuse" || command == "java-parse-edit" || command == "java-allocations" || command == "java-anonymous"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
@@ -163,6 +163,10 @@ do {
         try JavaNameIndexProfile.run(
             pathOrSynthetic: path,
             files: Int(flagValue("--files", in: rest) ?? "") ?? 5_000
+        )
+    case "java-platform-release":
+        try JavaPlatformReleaseProfile.run(
+            releases: (flagValue("--releases", in: rest) ?? "8,11,17").split(separator: ",").compactMap { Int($0) }
         )
     case "java-reinspection":
         try JavaReinspectionProfile.run(

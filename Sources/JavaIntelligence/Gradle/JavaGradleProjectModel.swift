@@ -64,6 +64,10 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
         /// `--add-opens`/`--add-reads` are runtime-only, so only `--add-modules` is captured.
         /// Empty for a model synced before format version 7.
         public let addModules: [String]
+        /// How this source set's compile task is configured (`--release`, toolchain, source and
+        /// target compatibility). `nil` for a model synced before format version 9: unknown, so
+        /// no platform API restriction is assumed (``JavaPlatformAPI/legacy(languageLevel:)``).
+        public let compiler: JavaCompilerSettings?
 
         public init(
             name: String,
@@ -75,8 +79,10 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
             runtimeProjectDependencies: [ProjectDependency] = [],
             generatedSourceDirs: [URL] = [],
             annotationProcessorJars: [URL] = [],
-            addModules: [String] = []
+            addModules: [String] = [],
+            compiler: JavaCompilerSettings? = nil
         ) {
+            self.compiler = compiler
             self.name = name
             self.sourceDirs = sourceDirs
             self.outputDirs = outputDirs
@@ -101,6 +107,7 @@ public struct JavaGradleProjectModel: Codable, Sendable, Equatable {
             generatedSourceDirs = try container.decodeIfPresent([URL].self, forKey: .generatedSourceDirs) ?? []
             annotationProcessorJars = try container.decodeIfPresent([URL].self, forKey: .annotationProcessorJars) ?? []
             addModules = try container.decodeIfPresent([String].self, forKey: .addModules) ?? []
+            compiler = try container.decodeIfPresent(JavaCompilerSettings.self, forKey: .compiler)
         }
     }
 
@@ -276,6 +283,31 @@ extension JavaGradleProjectModel {
             .languageLevel
     }
 
+    /// The platform API `file`'s source set compiles against (``JavaPlatformAPI``), or `nil` when
+    /// the file is outside every source set.
+    public func platformAPI(forFile file: URL) -> JavaPlatformAPI? {
+        guard let match = sourceSet(containing: file) else { return nil }
+        return Self.platformAPI(subproject: match.subproject, sourceSet: match.sourceSet)
+    }
+
+    public static func platformAPI(subproject: Subproject, sourceSet: SourceSet) -> JavaPlatformAPI {
+        JavaPlatformAPI(settings: sourceSet.compiler, legacyLanguageLevel: subproject.languageLevel)
+    }
+
+    /// Every API release some source set resolves against (``JavaPlatformAPI/apiRelease``): the
+    /// platforms the host indexes besides the selected JDK's own.
+    public var platformReleases: Set<Int> {
+        var releases = Set<Int>()
+        for subproject in subprojects {
+            for sourceSet in subproject.sourceSets {
+                if let release = Self.platformAPI(subproject: subproject, sourceSet: sourceSet).apiRelease {
+                    releases.insert(release)
+                }
+            }
+        }
+        return releases
+    }
+
     /// What a program in `file`'s source set runs with, first entry first: the source set's own
     /// output directories, then those of every project on its runtime classpath, then the resolved
     /// runtime jars. Dependencies come after the code that uses them, as `java -cp` expects.
@@ -318,6 +350,10 @@ extension JavaGradleProjectModel {
     public func visibleShardPaths(forFile file: URL, paths: JavaIndexPaths) -> Set<String>? {
         guard let match = sourceSet(containing: file) else { return nil }
         var shards = Set<String>()
+        // The platform the source set compiles against, when the build restricts it.
+        if let release = Self.platformAPI(subproject: match.subproject, sourceSet: match.sourceSet).apiRelease {
+            shards.insert(JavaPlatformScope.token(release: release))
+        }
         addSourceDirShards(match.sourceSet.sourceDirs + match.sourceSet.generatedSourceDirs, to: &shards, paths: paths)
         for jar in match.sourceSet.compileClasspathJars {
             shards.insert(paths.jarShard(jar).path)
@@ -454,7 +490,8 @@ extension JavaGradleProjectModel {
     /// (`JDKLocator.select(minimumFeatureVersion:)`) and to let jar roots favor the newest
     /// applicable entry in a multi-release jar.
     public var maxLanguageLevel: Int? {
-        subprojects.compactMap(\.languageLevel).max()
+        // A `--release N` needs a JDK of at least N as much as a toolchain or source level does.
+        (subprojects.compactMap(\.languageLevel) + Array(platformReleases)).max()
     }
 
     /// One ``SourceRoot`` per existing source directory, paired with the shard URL

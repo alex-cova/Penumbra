@@ -36,8 +36,14 @@ public struct JavacResolvedSettings: Sendable, Equatable {
     public let packageName: String?
     /// `--add-modules` roots from the source set's `JavaCompile` (e.g. `jdk.incubator.vector`).
     public let addModules: [String]
+    /// The platform API the build compiles against; decides `--release` versus `-source`.
+    public let platform: JavaPlatformAPI
 
-    public init(moduleId: String, classpath: [URL], sourcepath: [URL], processorJars: [URL], languageLevel: Int?, packageName: String?, addModules: [String] = []) {
+    public init(
+        moduleId: String, classpath: [URL], sourcepath: [URL], processorJars: [URL], languageLevel: Int?,
+        packageName: String?, addModules: [String] = [], platform: JavaPlatformAPI? = nil
+    ) {
+        self.platform = platform ?? .legacy(languageLevel: languageLevel)
         self.moduleId = moduleId
         self.classpath = classpath
         self.sourcepath = sourcepath
@@ -78,7 +84,8 @@ public enum JavacInvocationBuilder {
                 classpath: match.sourceSet.compileClasspathJars, sourcepath: sourcepath,
                 processorJars: match.sourceSet.annotationProcessorJars,
                 languageLevel: match.subproject.languageLevel, packageName: packageName,
-                addModules: match.sourceSet.addModules
+                addModules: match.sourceSet.addModules,
+                platform: JavaGradleProjectModel.platformAPI(subproject: match.subproject, sourceSet: match.sourceSet)
             )
         }
     }
@@ -91,10 +98,11 @@ public enum JavacInvocationBuilder {
         guard let settings = resolve(file: file, text: text, kind: kind) else { return nil }
         let classpath = unique(settings.classpath)
         let processorPath = resolvedProcessorJars(settings: settings, classpath: classpath)
+        let flags = platformFlags(settings.platform, jdkFeatureVersion: jdk.featureVersion)
         return JavaAnalysisServerModule(
             moduleId: settings.moduleId, classpath: classpath, sourcepath: unique(settings.sourcepath),
-            release: release(languageLevel: settings.languageLevel, jdkFeatureVersion: jdk.featureVersion),
-            processorPath: processorPath, options: addModulesOptions(settings.addModules)
+            release: flags.release,
+            processorPath: processorPath, options: flags.options + addModulesOptions(settings.addModules)
         )
     }
 
@@ -116,7 +124,6 @@ public enum JavacInvocationBuilder {
             .appendingPathComponent(packagePath, isDirectory: true)
             .appendingPathComponent(file.lastPathComponent)
 
-        let languageLevel = settings.languageLevel
         let classpath = settings.classpath
         let sourcepath = settings.sourcepath
 
@@ -130,9 +137,11 @@ public enum JavacInvocationBuilder {
             "-XDshould-stop.at=FLOW", "-XDshouldStopPolicyIfNoError=FLOW",
             "-d", workDirectory.appendingPathComponent("classes", isDirectory: true).path,
         ]
-        if let release = release(languageLevel: languageLevel, jdkFeatureVersion: jdk.featureVersion) {
+        let flags = platformFlags(settings.platform, jdkFeatureVersion: jdk.featureVersion)
+        if let release = flags.release {
             arguments += ["--release", String(release)]
         }
+        arguments += flags.options
         arguments += addModulesOptions(settings.addModules)
         let classpathJars = unique(classpath)
         if !classpathJars.isEmpty {
@@ -168,6 +177,29 @@ public enum JavacInvocationBuilder {
         let modules = addModules.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         guard !modules.isEmpty else { return [] }
         return ["--add-modules", modules.joined(separator: ",")]
+    }
+
+    /// The platform flags javac gets for `platform`, matching what the build passes:
+    /// - `--release N` for a declared release, and for a toolchain JDK N that is not the one
+    ///   checking (release N's API stands in for that JDK's);
+    /// - `-source N -target N` when only source compatibility is declared: the build compiles
+    ///   against its JDK's whole platform, so `--release` would reject APIs the build accepts;
+    /// - the old `--release <language level>` for a model synced before compiler settings.
+    static func platformFlags(_ platform: JavaPlatformAPI, jdkFeatureVersion: Int) -> (release: Int?, options: [String]) {
+        switch platform {
+        case .release(let release):
+            return (self.release(languageLevel: release, jdkFeatureVersion: jdkFeatureVersion), [])
+        case .toolchain(let version):
+            guard version != jdkFeatureVersion else { return (nil, []) }
+            return (self.release(languageLevel: version, jdkFeatureVersion: jdkFeatureVersion), [])
+        case .compilerJDK(let sourceLevel):
+            guard let sourceLevel, sourceLevel >= 8, sourceLevel < jdkFeatureVersion else { return (nil, []) }
+            let level = sourceLevel == 8 && jdkFeatureVersion == 8 ? "1.8" : String(sourceLevel)
+            // `-Xlint:-options`: no "source value 8 is obsolete" or bootstrap class path warnings.
+            return (nil, ["-source", level, "-target", level, "-Xlint:-options"])
+        case .legacy(let languageLevel):
+            return (self.release(languageLevel: languageLevel, jdkFeatureVersion: jdkFeatureVersion), [])
+        }
     }
 
     /// `--release N`, capped at what the JDK supports. Omitted when unknown, or on a JDK 8 (whose

@@ -65,6 +65,6 @@ final class JavaRuntimeClasspathTests: XCTestCase {
         XCTAssertTrue(script.contains("--add-modules"))
         XCTAssertTrue(script.contains("umbraRunMainClass"))
         XCTAssertTrue(script.contains("runMainClass"))
-        XCTAssertEqual(GradleProjectModelScript.formatVersion, 8)
+        XCTAssertEqual(GradleProjectModelScript.formatVersion, 9)
     }
 }

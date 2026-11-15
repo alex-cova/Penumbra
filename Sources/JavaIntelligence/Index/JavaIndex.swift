@@ -14,18 +14,28 @@ public actor JavaIndex {
         public let precedence: Int
         public let reader: JavaIndexShardReader
         /// Shard file path used to scope queries. Empty means the source is visible to every query
-        /// (the JDK, and any caller that has not opted into scoping).
+        /// (the JDK, and any caller that has not opted into scoping). A platform (precedence 3)
+        /// names its release with ``JavaPlatformScope/token(release:)`` here.
         public let shardPath: String
+        /// The platform a query sees when its scope names no platform release (the selected JDK's
+        /// own). Only meaningful at precedence 3 with a platform token.
+        public let isDefaultPlatform: Bool
 
-        public init(precedence: Int, reader: JavaIndexShardReader, shardPath: String = "") {
+        public init(precedence: Int, reader: JavaIndexShardReader, shardPath: String = "", isDefaultPlatform: Bool = false) {
             self.precedence = precedence
             self.reader = reader
             self.shardPath = shardPath
+            self.isDefaultPlatform = isDefaultPlatform
         }
+
+        /// A release-specific platform: precedence 3 with a platform token.
+        var isPlatform: Bool { precedence == 3 && JavaPlatformScope.release(ofToken: shardPath) != nil }
     }
 
     /// Shard paths a single completion may see. `nil` (the default) sees every source. JDK shards
-    /// (precedence 3), the overlay, and sources with an empty `shardPath` stay visible either way.
+    /// (precedence 3), the overlay, and sources with an empty `shardPath` stay visible either way,
+    /// except that of several platforms (one per Java API release) exactly one is visible: the one
+    /// whose ``JavaPlatformScope`` token the scope holds, else the default platform.
     @TaskLocal public static var queryScope: Set<String>?
     /// Package restrictions of the module the query comes from (JPMS, F16). They narrow the lists
     /// of class names offered to the user, never `classStub(qualifiedName:)`: a value's type may
@@ -233,6 +243,11 @@ public actor JavaIndex {
         self.classpathComplete = classpathComplete
         appliedSignature = signature
         loadedShardPaths = Set(sorted.map(\.shardPath).filter { !$0.isEmpty })
+        let platforms = sorted.filter(\.isPlatform)
+        defaultPlatformShardPath = (platforms.first(where: \.isDefaultPlatform) ?? platforms.first)?.shardPath
+        platformShardPaths = platforms.map(\.shardPath)
+        platformShardPathSet = Set(platformShardPaths)
+        platformSelectionCache = nil
         baseMembers = nil
         baseMembersBuild = nil
         baseInheritors = nil
@@ -261,6 +276,35 @@ public actor JavaIndex {
     /// The shard paths of the applied sources (scoped ones only).
     public private(set) var loadedShardPaths: Set<String> = []
 
+    /// Platform tokens of the applied platform sources, and the one a query without a platform
+    /// token sees. With one platform (or none) every JDK source is visible, as before releases.
+    private var platformShardPaths: [String] = []
+    private var platformShardPathSet: Set<String> = []
+    private var defaultPlatformShardPath: String?
+
+    /// The platform token visible to the current query: the first applied platform the query
+    /// scope names, else the default. `nil` when at most one platform is applied.
+    private func selectedPlatformShardPath() -> String? {
+        guard platformShardPaths.count > 1 else { return nil }
+        guard let scope = Self.queryScope else { return defaultPlatformShardPath }
+        // Name listings ask once per entry; one query passes the same scope set throughout, and
+        // `==` on the same set storage returns at once.
+        if let cached = platformSelectionCache, cached.scope == scope { return cached.selected }
+        let selected = platformShardPaths.first(where: scope.contains) ?? defaultPlatformShardPath
+        platformSelectionCache = (scope, selected)
+        return selected
+    }
+
+    /// The last scope's platform choice. Cleared whenever the platforms change.
+    private var platformSelectionCache: (scope: Set<String>, selected: String?)?
+
+    /// The platform release the current query resolves against, when a platform is published
+    /// under a token (`nil` for an index whose JDK carries no token, as in most tests).
+    public var queryPlatformRelease: Int? {
+        if let selected = selectedPlatformShardPath() { return JavaPlatformScope.release(ofToken: selected) }
+        return platformShardPaths.first.flatMap(JavaPlatformScope.release(ofToken:))
+    }
+
     /// What the applied sources were, for spotting a republish that changes nothing.
     private var appliedSignature: SourcesSignature?
 
@@ -269,12 +313,13 @@ public actor JavaIndex {
             let reader: ObjectIdentifier
             let precedence: Int
             let shardPath: String
+            let isDefaultPlatform: Bool
         }
         let entries: [Entry]
         let classpathComplete: Bool
 
         init(sources: [Source], classpathComplete: Bool) {
-            entries = sources.map { Entry(reader: ObjectIdentifier($0.reader), precedence: $0.precedence, shardPath: $0.shardPath) }
+            entries = sources.map { Entry(reader: ObjectIdentifier($0.reader), precedence: $0.precedence, shardPath: $0.shardPath, isDefaultPlatform: $0.isDefaultPlatform) }
             self.classpathComplete = classpathComplete
         }
     }
@@ -398,10 +443,15 @@ public actor JavaIndex {
         entries.reserveCapacity(nameCount)
         winners.reserveCapacity(nameCount)
 
+        // The unscoped package pool is the default platform's: another release's packages
+        // (`javax.xml.bind` for release 8) appear only under a scope that selects it.
+        let platforms = sortedSources.filter(\.isPlatform)
+        let defaultPlatform = (platforms.first(where: \.isDefaultPlatform) ?? platforms.first)?.shardPath
         // First position in `sortedSources` wins, which is the shard `classStub` used to return.
         // Equal precedences keep their incoming order, so two project shards stay in caller order.
         for (position, source) in sortedSources.enumerated() {
             let sourcePosition = Int32(position)
+            let addsPackages = !source.isPlatform || source.shardPath == defaultPlatform
             for qualifiedName in source.reader.allQualifiedNames {
                 if winners[qualifiedName] == nil { winners[qualifiedName] = sourcePosition }
                 let simpleName = String(qualifiedName.split(separator: ".").last ?? Substring(qualifiedName))
@@ -412,6 +462,7 @@ public actor JavaIndex {
                     precedence: source.precedence,
                     shardPath: source.shardPath
                 ))
+                guard addsPackages else { continue }
                 if let lastDot = qualifiedName.range(of: ".", options: .backwards) {
                     Self.insertPackages(of: String(qualifiedName[..<lastDot.lowerBound]), into: &pkgs)
                 } else {
@@ -560,8 +611,12 @@ public actor JavaIndex {
     }
 
     /// JDK (precedence 3), the overlay (precedence -1), and unscoped sources stay visible. A set
-    /// query scope hides every other shard whose path is not in the set.
+    /// query scope hides every other shard whose path is not in the set. Of several platforms,
+    /// only the query's (``selectedPlatformShardPath()``) is visible.
     private func isVisible(shardPath: String, precedence: Int) -> Bool {
+        if precedence == 3, platformShardPaths.count > 1, platformShardPathSet.contains(shardPath) {
+            return shardPath == selectedPlatformShardPath()
+        }
         if precedence <= 0 || precedence == 3 || shardPath.isEmpty { return true }
         guard let scope = Self.queryScope else { return true }
         return scope.contains(shardPath)

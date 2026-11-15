@@ -16,8 +16,10 @@ import XCTest
 /// - `featureDifference`: by design (a type one import away belongs to auto-import, not this rule).
 /// - `unsupported`: a case marked `//! unsupported: <reason>`; its lines are compared and printed
 ///   but never fail.
-/// - `configurationMismatch`: `--release N` below the JDK: `javac` reads release N's API from
-///   `ct.sym`, Umbra indexes the JDK's own release. Printed, never fails.
+/// `--release N` below the JDK is compared like the JDK's own release: Umbra indexes release N's
+/// platform from the JDK's `ct.sym` (`JDKPlatformRoot`) and the file's scope names it, as a module
+/// on `--release N` does in the app. (Before release platforms this was a waived
+/// `configurationMismatch`: `javax.xml.bind` was reported missing under `--release 8`.)
 ///
 /// Skipped without a JDK. Runs in a few seconds per JDK (one `javac` per case).
 final class JavaImportDifferentialTests: XCTestCase {
@@ -106,7 +108,7 @@ final class JavaImportDifferentialTests: XCTestCase {
 
     // MARK: - Run
 
-    private enum Kind: String { case match, falsePositive, falseNegative, featureDifference, unsupported, configurationMismatch }
+    private enum Kind: String { case match, falsePositive, falseNegative, featureDifference, unsupported }
 
     func testUmbraAgreesWithJavacOnResolution() async throws {
         let jdks = JDKLocator().discoverAll().filter { $0.javac != nil }
@@ -124,8 +126,10 @@ final class JavaImportDifferentialTests: XCTestCase {
             let jdk = byVersion[version]!
             let work = scratch.appendingPathComponent("jdk\(version)", isDirectory: true)
             let jar = try buildLibraryJar(jdk: jdk, in: work)
-            let index = try await makeIndex(jdk: jdk, jar: jar, in: work)
-            let releases = [nil] + [8, 17, 21].filter { $0 < version }.map(Optional.some)
+            let supported = JDKPlatformRoot.supportedReleases(of: jdk)
+            let belowJDK = [8, 17, 21].filter { $0 < version && supported.contains($0) }
+            let index = try await makeIndex(jdk: jdk, jar: jar, releases: belowJDK, in: work)
+            let releases = [nil] + belowJDK.map(Optional.some)
             for release in releases {
                 var counts: [Kind: Int] = [:]
                 for testCase in Self.cases {
@@ -177,7 +181,10 @@ final class JavaImportDifferentialTests: XCTestCase {
         var options = JavaBatchInspector.Options(profile: .standard())
         options.onlyRules = [.unresolvedType, .unresolvedImport]
         let source = testCase.source
-        let found = await JavaBatchInspector(index: index).inspect(url: file, options: options) { _ in source }
+        // A module on `--release N`: its scope names release N's platform.
+        let scope: Set<String>? = release.map { [JavaPlatformScope.token(release: $0)] }
+        let inspector = JavaBatchInspector(index: index, queryScope: { _ in scope })
+        let found = await inspector.inspect(url: file, options: options) { _ in source }
         var umbra: [Int: String] = [:]
         for finding in found {
             let line = finding.range.start.line + 1
@@ -193,10 +200,9 @@ final class JavaImportDifferentialTests: XCTestCase {
             switch (javac[line] != nil, umbra[line] != nil) {
             case (true, true): kind = .match
             case (false, true):
-                kind = release != nil ? .configurationMismatch : (unsupported ? .unsupported : .falsePositive)
+                kind = unsupported ? .unsupported : .falsePositive
             case (true, false):
-                if release != nil { kind = .configurationMismatch }
-                else if unsupported || declaredGaps { kind = .unsupported }
+                if unsupported || declaredGaps { kind = .unsupported }
                 else if await isImportableName(onLine: line, of: testCase.source, index: index) { kind = .featureDifference }
                 else { kind = .falseNegative }
             case (false, false): continue
@@ -238,17 +244,25 @@ final class JavaImportDifferentialTests: XCTestCase {
         return jar
     }
 
-    private func makeIndex(jdk: JDKInstallation, jar: URL, in work: URL) async throws -> JavaIndex {
+    private func makeIndex(jdk: JDKInstallation, jar: URL, releases: [Int], in work: URL) async throws -> JavaIndex {
         let (root, _) = JDKIndexRoot.make(for: jdk)
         let jdkShard = work.appendingPathComponent("jdk.idx")
         try JavaIndexShardWriter().write(try root.readStubs(), stamp: JavaStamp(size: 0, modificationDate: 0), to: jdkShard)
         let jarShard = work.appendingPathComponent("lib.idx")
         try JavaIndexShardWriter().write(try JarRoot(jarURL: jar).readStubs(), stamp: JavaStamp(size: 0, modificationDate: 0), to: jarShard)
-        let index = JavaIndex()
-        await index.setSources([
-            .init(precedence: 3, reader: try JavaIndexShardReader(url: jdkShard)),
+        var sources: [JavaIndex.Source] = [
+            .init(precedence: 3, reader: try JavaIndexShardReader(url: jdkShard),
+                  shardPath: JavaPlatformScope.token(release: jdk.featureVersion), isDefaultPlatform: true),
             .init(precedence: 2, reader: try JavaIndexShardReader(url: jarShard)),
-        ])
+        ]
+        for release in releases {
+            let made = try XCTUnwrap(JDKPlatformRoot.make(for: jdk, release: release))
+            let shard = work.appendingPathComponent("release-\(release).idx")
+            try JavaIndexShardWriter().write(try made.root.readStubs(), stamp: JavaStamp(size: 0, modificationDate: 0), to: shard)
+            sources.append(.init(precedence: 3, reader: try JavaIndexShardReader(url: shard), shardPath: JavaPlatformScope.token(release: release)))
+        }
+        let index = JavaIndex()
+        await index.setSources(sources)
         return index
     }
 

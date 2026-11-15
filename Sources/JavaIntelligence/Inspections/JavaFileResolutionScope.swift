@@ -62,9 +62,12 @@ public struct JavaFileResolutionScopes: Sendable, Equatable {
     public func context(for file: URL) -> JavaFileResolutionContext {
         guard let model, let paths else { return .unscoped }
         let visible = model.visibleShardPaths(forFile: file, paths: paths)
+        // The module's platform release is required like its jars: until it is indexed (or when
+        // the JDK cannot provide it) a class missing from the stand-in platform proves nothing.
+        let platform = visible?.filter { JavaPlatformScope.release(ofToken: $0) != nil } ?? []
         return JavaFileResolutionContext(
             visibleShards: visible,
-            requiredShards: visible.map { $0.intersection(indexedShardPaths) },
+            requiredShards: visible.map { $0.intersection(indexedShardPaths).union(platform) },
             modules: model.moduleVisibility(forFile: file, paths: paths)
         )
     }

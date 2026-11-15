@@ -102,8 +102,25 @@ enum JavaCompletionProfile {
         try JavaIndexShardWriter().write(try writeProject(in: directory), stamp: JavaStamp(size: 0, modificationDate: 0), to: projectShard)
         var sources: [JavaIndex.Source] = [
             .init(precedence: 1, reader: try JavaIndexShardReader(url: projectShard), shardPath: projectShard.path),
-            .init(precedence: 3, reader: try JavaIndexShardReader(url: jdkShard))
         ]
+        // `PERF_JAVA_PLATFORM_RELEASES=8,17`: publish the JDK as the default platform plus those
+        // releases from its ct.sym, as Umbra does for modules on `--release N`, so the cost of
+        // several platforms in one index is measured against the single-platform default.
+        let releases = (ProcessInfo.processInfo.environment["PERF_JAVA_PLATFORM_RELEASES"] ?? "")
+            .split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        if releases.isEmpty {
+            sources.append(.init(precedence: 3, reader: try JavaIndexShardReader(url: jdkShard)))
+        } else {
+            sources.append(.init(precedence: 3, reader: try JavaIndexShardReader(url: jdkShard),
+                                 shardPath: JavaPlatformScope.token(release: jdk.featureVersion), isDefaultPlatform: true))
+            for release in releases where release != jdk.featureVersion {
+                guard let made = JDKPlatformRoot.make(for: jdk, release: release) else { continue }
+                let shard = directory.appendingPathComponent("release-\(release).idx")
+                try JavaIndexShardWriter().write(try made.root.readStubs(), stamp: JavaStamp(size: 0, modificationDate: 0), to: shard)
+                sources.append(.init(precedence: 3, reader: try JavaIndexShardReader(url: shard), shardPath: JavaPlatformScope.token(release: release)))
+            }
+            note("  platforms: default \(jdk.featureVersion) + releases \(releases)")
+        }
         sources += try writeJarShards(count: jars, in: directory)
         let nameCount = sources.reduce(0) { $0 + $1.reader.allQualifiedNames.count }
         let started = DispatchTime.now().uptimeNanoseconds

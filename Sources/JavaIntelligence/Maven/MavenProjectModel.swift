@@ -65,6 +65,10 @@ public struct MavenModule: Codable, Sendable, Equatable {
     public var generatedSourceDirectories: [URL]
     public var testGeneratedSourceDirectories: [URL]
     public var languageLevel: Int?
+    /// `maven-compiler-plugin`'s settings for `compile` and `testCompile` (`nil` when read by an
+    /// older Umbra: unknown, no platform restriction assumed).
+    public var compiler: JavaCompilerSettings?
+    public var testCompiler: JavaCompilerSettings?
     public var compileClasspathJars: [URL]
     public var runtimeClasspathJars: [URL]
     public var testClasspathJars: [URL]
@@ -82,6 +86,7 @@ public struct MavenModule: Codable, Sendable, Equatable {
         packaging: String = "jar", plugins: [MavenPlugin] = [], dependencyTree: [MavenDependencyNode] = [],
         sourceDirectories: [URL] = [], testSourceDirectories: [URL] = [], outputDirectory: URL, testOutputDirectory: URL,
         generatedSourceDirectories: [URL] = [], testGeneratedSourceDirectories: [URL] = [], languageLevel: Int? = nil,
+        compiler: JavaCompilerSettings? = nil, testCompiler: JavaCompilerSettings? = nil,
         compileClasspathJars: [URL] = [], runtimeClasspathJars: [URL] = [], testClasspathJars: [URL] = [],
         compileProjectDependencies: [MavenModuleDependency] = [],
         runtimeProjectDependencies: [MavenModuleDependency] = [],
@@ -104,6 +109,8 @@ public struct MavenModule: Codable, Sendable, Equatable {
         self.generatedSourceDirectories = generatedSourceDirectories
         self.testGeneratedSourceDirectories = testGeneratedSourceDirectories
         self.languageLevel = languageLevel
+        self.compiler = compiler
+        self.testCompiler = testCompiler
         self.compileClasspathJars = compileClasspathJars
         self.runtimeClasspathJars = runtimeClasspathJars
         self.testClasspathJars = testClasspathJars
@@ -180,7 +187,8 @@ public struct MavenProjectModel: Codable, Sendable, Equatable {
                 runtimeClasspathJars: module.runtimeClasspathJars,
                 runtimeProjectDependencies: module.runtimeProjectDependencies.map(Self.projectDependency),
                 generatedSourceDirs: module.generatedSourceDirectories,
-                annotationProcessorJars: module.annotationProcessorJars
+                annotationProcessorJars: module.annotationProcessorJars,
+                compiler: module.compiler
             )
             let ownMain = JavaGradleProjectModel.ProjectDependency(projectPath: module.path, sourceSetName: "main")
             let testProjects = [ownMain] + module.testProjectDependencies.map(Self.projectDependency)
@@ -196,7 +204,8 @@ public struct MavenProjectModel: Codable, Sendable, Equatable {
                 // both `target/generated-sources` and `target/generated-test-sources` on the
                 // test sourcepath.
                 generatedSourceDirs: module.generatedSourceDirectories + module.testGeneratedSourceDirectories,
-                annotationProcessorJars: module.annotationProcessorJars
+                annotationProcessorJars: module.annotationProcessorJars,
+                compiler: module.testCompiler
             )
             let testTask = JavaGradleProjectModel.GradleTestTask(
                 path: module.path == ":" ? ":test" : "\(module.path):test",
@@ -213,7 +222,7 @@ public struct MavenProjectModel: Codable, Sendable, Equatable {
                 testTasks: [testTask]
             )
         }
-        return JavaGradleProjectModel(formatVersion: 8, gradleVersion: "maven", subprojects: subprojects, unresolved: unresolved)
+        return JavaGradleProjectModel(formatVersion: GradleProjectModelScript.formatVersion, gradleVersion: "maven", subprojects: subprojects, unresolved: unresolved)
     }
 
     /// The library graph of one module, from the native tree. No Maven process runs.

@@ -59,7 +59,7 @@ final class JavaIndexableRootTests: XCTestCase {
         let installation = try makeJDKLayout(withJmods: true)
         defer { try? FileManager.default.removeItem(at: installation.home) }
         let choice = JDKIndexRoot.make(for: installation)
-        XCTAssertEqual(choice.kind, "jmods")
+        XCTAssertEqual(choice.kind, "jmods-exported")
         XCTAssertTrue(choice.root is JModsRoot)
     }
 

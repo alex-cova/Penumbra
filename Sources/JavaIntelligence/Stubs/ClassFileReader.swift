@@ -337,6 +337,45 @@ extension JavaModifiers {
     }
 }
 
+extension ClassFileReader {
+    /// The packages a `module-info.class` exports to every module (JVMS §4.7.25 `Module`
+    /// attribute; qualified `exports … to …` are left out), dotted. `nil` when the bytes carry no
+    /// `Module` attribute.
+    public static func unqualifiedExports(ofModuleInfo bytes: Data) throws -> Set<String>? {
+        var cursor = BinaryCursor(bytes)
+        guard try cursor.readUInt32() == 0xCAFE_BABE else { throw ClassFileError.badMagic }
+        _ = try cursor.readUInt16()
+        _ = try cursor.readUInt16()
+        let pool = try ConstantPool(reading: &cursor)
+        _ = try cursor.readUInt16() // access flags
+        _ = try cursor.readUInt16() // this_class
+        _ = try cursor.readUInt16() // super_class
+        // A module-info has no interfaces, fields or methods (JVMS §4.1).
+        guard try cursor.readUInt16() == 0, try cursor.readUInt16() == 0, try cursor.readUInt16() == 0 else { return nil }
+        let attributeCount = try cursor.readUInt16()
+        for _ in 0..<attributeCount {
+            let name = (try? pool.utf8(at: try cursor.readUInt16())) ?? ""
+            let length = Int(try cursor.readUInt32())
+            let end = cursor.offset + length
+            defer { cursor.offset = end }
+            guard name == "Module" else { continue }
+            cursor.offset += 6 // module_name_index, module_flags, module_version_index
+            let requiresCount = Int(try cursor.readUInt16())
+            cursor.offset += requiresCount * 6
+            var exports = Set<String>()
+            for _ in 0..<(try cursor.readUInt16()) {
+                let packageIndex = try cursor.readUInt16()
+                _ = try cursor.readUInt16() // exports_flags
+                let targets = try cursor.readUInt16()
+                cursor.offset += Int(targets) * 2
+                if targets == 0 { exports.insert(try pool.packageName(at: packageIndex).replacingOccurrences(of: "/", with: ".")) }
+            }
+            return exports
+        }
+        return nil
+    }
+}
+
 /// A forward-only cursor over class-file bytes, big-endian per JVMS.
 struct BinaryCursor {
     let data: [UInt8]
@@ -381,6 +420,8 @@ struct ConstantPool {
     private enum Entry {
         case utf8(String)
         case classRef(nameIndex: UInt16)
+        /// `CONSTANT_Package` (module-info only), the internal-form package name's index.
+        case packageRef(nameIndex: UInt16)
         case other
         /// Long/Double entries occupy two consecutive pool slots (JVMS §4.4.5); the following index
         /// is unusable and must be skipped by the reader.
@@ -402,7 +443,9 @@ struct ConstantPool {
             case 7: // Class
                 let nameIndex = try cursor.readUInt16()
                 entries.append(.classRef(nameIndex: nameIndex))
-            case 8, 16, 19, 20: // String, MethodType, Module, Package
+            case 20: // Package
+                entries.append(.packageRef(nameIndex: try cursor.readUInt16()))
+            case 8, 16, 19: // String, MethodType, Module
                 _ = try cursor.readUInt16()
                 entries.append(.other)
             case 15: // MethodHandle
@@ -434,6 +477,13 @@ struct ConstantPool {
             throw ClassFileError.badConstantPoolIndex(Int(index))
         }
         return s
+    }
+
+    func packageName(at index: UInt16) throws -> String {
+        guard index > 0, Int(index) < entries.count, case .packageRef(let nameIndex) = entries[Int(index)] else {
+            throw ClassFileError.badConstantPoolIndex(Int(index))
+        }
+        return try utf8(at: nameIndex)
     }
 
     func className(at index: UInt16) throws -> String {
