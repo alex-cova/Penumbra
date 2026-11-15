@@ -10,9 +10,11 @@ final class JSDebugSessionTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["UMBRA_JS_DEBUG"] == "1" else {
             throw XCTSkip("Set UMBRA_JS_DEBUG=1 to run the js-debug session")
         }
-        guard let script = JSDebugDiscovery.serverScript(userPath: ProcessInfo.processInfo.environment["UMBRA_JS_DEBUG_PATH"]),
-              let node = JSDebugDiscovery.node() else {
-            throw XCTSkip("js-debug or node was not found")
+        guard let script = JSDebugDiscovery.serverScript(userPath: ProcessInfo.processInfo.environment["UMBRA_JS_DEBUG_PATH"]) else {
+            throw XCTSkip("Set UMBRA_JS_DEBUG_PATH to js-debug's dapDebugServer.js (from a vscode-js-debug js-debug-dap release)")
+        }
+        guard let node = JSDebugDiscovery.node() else {
+            throw XCTSkip("node is not on PATH")
         }
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("umbra-js-debug-\(UUID().uuidString)", isDirectory: true)

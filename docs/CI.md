@@ -51,6 +51,34 @@ jars), never build products.
   `ACPAdapterManagerUITests` gains or loses a test, change `EXPECTED_TESTS` in `Scripts/ci-acp-ui-tests.sh`
   (the script checks the file and tells you).
 
+## Opt-in suites (not in the default run)
+
+Every skip in the default suites names the variable or tool it waits for. These stay out of the default run
+because they are slow, need hardware or a GUI session, contact a paid model, or download a lot. Run them as
+separate jobs or by hand, with the display on (`caffeinate -u -d -i -s`).
+
+| Suite | Enable | Needs | Default-suite cost if enabled |
+|---|---|---|---|
+| Window server UI tests (`IDEViewFocusTests`, `IDERootViewInvalidationTests`, `IDEHostedWindowRetentionTests`) | `UMBRA_UI_TESTS=1` | a logged-in Aqua session | ~30 s; deterministic on a desktop Mac |
+| SwiftUI preview pipeline (`IDESwiftUIPreviewSessionTests`) | `UMBRA_PREVIEW_INTEGRATION=1` | Xcode | ~3 min of real builds |
+| iOS simulator previews (`IDESimulatorServiceTests`, root `SwiftPreviewBuildPlanTests`) | `UMBRA_PREVIEW_INTEGRATION=1` | an iOS Simulator runtime | ~8 min, boots devices |
+| Your own iOS project | `UMBRA_PREVIEW_IOS_PROJECT`, `_FILE`, `_TARGET` | the project | manual only |
+| lldb-dap (`DAPDebugSessionTests`, `LLDBDAPSpikeTests`) | `UMBRA_LLDB_DAP=1` (`UMBRA_LLDB_DAP_PATH`) | `xcrun -f lldb-dap` | ~20 s |
+| js-debug (`JSDebugSessionTests`) | `UMBRA_JS_DEBUG=1`, `UMBRA_JS_DEBUG_PATH=…/dapDebugServer.js` | node, a js-debug-dap release | ~10 s |
+| Java parity scorecard | `JAVA_PARITY=1` | a JDK | seconds; gate: 0 valid-corpus false positives |
+| Java differential baseline | `JAVA_DIFFERENTIAL=1` | network (clones pinned gson / jackson-core), the baseline's JDK (27) via `JAVA_HOME` | ~1 min; skips on another JDK |
+| Java completion quality | `JAVA_QUALITY=1` (`JAVA_QUALITY_SET`, `JAVA_QUALITY_GRADLE_MODELS`) | network, a JDK | ~4 min; report |
+| Receiver-type audit, differential report | `JAVA_AUDIT=1`, `JAVA_DIFFERENTIAL_REPORT=1` | network, a JDK | ~2 min each; report |
+| Swift parity / SourceKit ceiling | `SWIFT_PARITY=1` | SourceKit-LSP | report |
+| Live ACP agents | `UMBRA_LIVE_ACP=1` (`UMBRA_LIVE_ACP_CODEX`, `_CLAUDE`, `_PREFIX`; `UMBRA_LIVE_ACP_INSTALL=1`) | paid accounts | refused in CI by `refuse-paid-test-variables.sh` |
+| Local agent models | `UMBRA_AGENT_OLLAMA_MODEL`, `UMBRA_AGENT_MLX_MODEL` | a local model | nondeterministic |
+| Packaged app layout | `UMBRA_PACKAGED_APP=…/Umbra.app` | a built app | seconds |
+| Tools, not tests | `UMBRA_TEMPLATE_SAMPLES`, `SWIFT_INSPECTION_APPLY_FIXES_TO`, `SWIFT_REFACTOR_APPLY_TO`, `LARGE_FILE_MEASURE_MB`, `PENUMBRA_HIGHLIGHT_STRESS` | — | write output or measure |
+
+Shared stores (`IDESharedServices`: trust decisions, JDK selection, run configurations, breakpoints, bookmarks,
+data sources) live in a per-process temporary directory under XCTest (`IDESharedServices.testStoreDirectory`), so
+no test reads or writes the user's `~/Library/Application Support/com.umbra.editor`.
+
 ## Reading a failure
 
 On failure the job uploads `acp-ui-xcresult` (the `.xcresult` bundle and the xcodebuild log) or

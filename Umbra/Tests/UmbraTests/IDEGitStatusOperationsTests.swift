@@ -12,7 +12,7 @@ final class IDEGitStatusOperationsTests: XCTestCase {
     private let runner = SystemGitRunner()
 
     override func setUp() async throws {
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath))
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath), "git is not installed at \(SystemGitRunner.executablePath)")
         IDEWorkspace.isSessionPersistenceEnabled = false
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("git-model-ops-\(UUID().uuidString)", isDirectory: true)

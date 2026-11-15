@@ -9,7 +9,7 @@ final class IDEGitStatusStashTests: XCTestCase {
     private let runner = SystemGitRunner()
 
     override func setUp() async throws {
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath))
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath), "git is not installed at \(SystemGitRunner.executablePath)")
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("git-model-stash-\(UUID().uuidString)", isDirectory: true)
             .resolvingSymlinksInPath()

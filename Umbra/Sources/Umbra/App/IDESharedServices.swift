@@ -43,18 +43,19 @@ final class IDESharedServices {
     private let memoryPressure: DispatchSourceMemoryPressure
 
     private init() {
-        gradleTrust = ProjectTrustStore(storeURL: IDEGradleProjectSystem.defaultTrustStoreURL)
-        mavenTrust = ProjectTrustStore(storeURL: IDEMavenProjectSystem.defaultTrustStoreURL)
-        npmTrust = ProjectTrustStore(storeURL: IDENpmProjectSystem.defaultTrustStoreURL)
-        swiftPMTrust = ProjectTrustStore(storeURL: IDESwiftPMProjectSystem.defaultTrustStoreURL)
-        xcodeTrust = ProjectTrustStore(storeURL: IDEXcodeProjectSystem.defaultTrustStoreURL)
-        jdkSelection = JDKSelectionStore(storeURL: IDEJDKSelection.defaultStoreURL)
+        let store = Self.storeURL
+        gradleTrust = ProjectTrustStore(storeURL: store(IDEGradleProjectSystem.defaultTrustStoreURL))
+        mavenTrust = ProjectTrustStore(storeURL: store(IDEMavenProjectSystem.defaultTrustStoreURL))
+        npmTrust = ProjectTrustStore(storeURL: store(IDENpmProjectSystem.defaultTrustStoreURL))
+        swiftPMTrust = ProjectTrustStore(storeURL: store(IDESwiftPMProjectSystem.defaultTrustStoreURL))
+        xcodeTrust = ProjectTrustStore(storeURL: store(IDEXcodeProjectSystem.defaultTrustStoreURL))
+        jdkSelection = JDKSelectionStore(storeURL: store(IDEJDKSelection.defaultStoreURL))
         runConfigurations = JavaRunConfigurationCatalog(
-            store: JavaRunConfigurationStore(storeURL: IDEWorkspace.defaultRunConfigurationsURL)
+            store: JavaRunConfigurationStore(storeURL: store(IDEWorkspace.defaultRunConfigurationsURL))
         )
-        breakpoints = JavaBreakpointStore(storeURL: JavaBreakpointStore.defaultStoreURL)
-        bookmarks = IDEBookmarkStore(storeURL: IDEBookmarkStore.defaultStoreURL)
-        databases = IDEDatabaseCatalog(storeURL: IDEDatabaseCatalog.defaultStoreURL)
+        breakpoints = JavaBreakpointStore(storeURL: store(JavaBreakpointStore.defaultStoreURL))
+        bookmarks = IDEBookmarkStore(storeURL: store(IDEBookmarkStore.defaultStoreURL))
+        databases = IDEDatabaseCatalog(storeURL: store(IDEDatabaseCatalog.defaultStoreURL))
         let hub = JavaSharedShardHub()
         shards = hub
         memoryPressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
@@ -62,5 +63,24 @@ final class IDESharedServices {
             Task { await hub.trimMemory() }
         }
         memoryPressure.resume()
+    }
+
+    /// Where the shared stores live under XCTest: a directory of its own for this test process,
+    /// so the suite neither reads the user's saved data sources, trust decisions, JDK choice,
+    /// breakpoints and bookmarks nor writes to them. Nil in a real Umbra process.
+    static let testStoreDirectory: URL? = {
+        let environment = ProcessInfo.processInfo.environment
+        let underXCTest = environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+        guard underXCTest else { return nil }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("umbra-test-shared-stores-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)", isDirectory: true)
+    }()
+
+    /// `defaultURL` in a real process; the same file name inside `testStoreDirectory` under XCTest.
+    static func storeURL(_ defaultURL: URL) -> URL {
+        guard let directory = testStoreDirectory else { return defaultURL }
+        return directory.appendingPathComponent(defaultURL.lastPathComponent)
     }
 }

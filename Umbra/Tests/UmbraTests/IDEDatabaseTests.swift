@@ -89,16 +89,30 @@ final class IDEDatabaseTests: XCTestCase {
         XCTAssertEqual(support.connectionForNewConsole()?.id, second.id)
     }
 
+    /// A catalog in a scratch directory, so these tests never read the data sources saved on
+    /// this Mac. Removed when the test ends.
+    private func makeIsolatedCatalog() throws -> IDEDatabaseCatalog {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("umbra-database-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return IDEDatabaseCatalog(storeURL: directory.appendingPathComponent("database-connections.json"))
+    }
+
     func testNewQueryConsoleFromWelcomeBindsTheFirstDataSource() throws {
         IDEWorkspace.isSessionPersistenceEnabled = false
-        let workspace = IDEWorkspace()
+        let catalog = try makeIsolatedCatalog()
+        let first = DatabaseConnection(name: "first", engine: .postgres)
+        catalog.upsert(first)
+        catalog.upsert(DatabaseConnection(name: "second", engine: .postgres))
+        let workspace = IDEWorkspace(
+            databaseSupport: IDEDatabaseSupport(catalog: catalog, keychain: IDEDatabaseMemoryKeyStore())
+        )
         defer { workspace.teardown() }
         // An editor view needs the adapter that `bootstrap()` wires, which the window
         // runs when it appears.
         workspace.bootstrap()
-        guard let first = workspace.databaseSupport.catalog.connections.first else {
-            throw XCTSkip("Requires at least one configured data source")
-        }
+        XCTAssertEqual(workspace.databaseSupport.catalog.connections.map(\.id).first, first.id)
         XCTAssertFalse(workspace.hasOpenProject)
         XCTAssertFalse(workspace.hasOpenDocuments)
         // A fresh window has configured data sources but no selection yet.
@@ -110,19 +124,20 @@ final class IDEDatabaseTests: XCTestCase {
         )
         XCTAssertEqual(workspace.databaseSupport.selectedConnectionID, first.id)
         XCTAssertEqual(workspace.databaseSupport.consoles.values.first?.connectionID, first.id)
+        XCTAssertNil(workspace.databaseSupport.editor, "With a data source there is nothing to create")
     }
 
     func testNewQueryConsoleWithoutDataSourcesOpensTheConnectionSheet() throws {
         IDEWorkspace.isSessionPersistenceEnabled = false
-        let workspace = IDEWorkspace()
+        let catalog = try makeIsolatedCatalog()
+        let workspace = IDEWorkspace(
+            databaseSupport: IDEDatabaseSupport(catalog: catalog, keychain: IDEDatabaseMemoryKeyStore())
+        )
         defer { workspace.teardown() }
         // An editor view needs the adapter that `bootstrap()` wires, which the window
         // runs when it appears.
         workspace.bootstrap()
-        try XCTSkipUnless(
-            workspace.databaseSupport.catalog.connections.isEmpty,
-            "Requires no configured data sources"
-        )
+        XCTAssertTrue(workspace.databaseSupport.catalog.connections.isEmpty)
         XCTAssertFalse(workspace.hasOpenProject)
         XCTAssertFalse(workspace.hasOpenDocuments)
         workspace.openDatabaseQueryConsole()
@@ -130,6 +145,18 @@ final class IDEDatabaseTests: XCTestCase {
             workspace.databaseSupport.editor,
             "With no data source the console offers to create one instead of doing nothing"
         )
+        XCTAssertFalse(workspace.hasOpenDocuments, "No console opens without a data source")
+    }
+
+    /// Under XCTest the window's default catalog is the per-process scratch store, never the
+    /// user's Application Support file.
+    func testTheDefaultCatalogIsNotTheUsersFileUnderXCTest() throws {
+        let directory = try XCTUnwrap(IDESharedServices.testStoreDirectory)
+        XCTAssertEqual(
+            IDESharedServices.shared.databases.storeURL,
+            directory.appendingPathComponent("database-connections.json")
+        )
+        XCTAssertNotEqual(IDESharedServices.shared.databases.storeURL, IDEDatabaseCatalog.defaultStoreURL)
     }
 
     func testExecuteFillsResultsAndRefusesWritesWhenReadOnly() async {

@@ -13,7 +13,7 @@ final class IDEGitStatusRemoteTests: XCTestCase {
     private let runner = SystemGitRunner()
 
     override func setUp() async throws {
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath))
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath), "git is not installed at \(SystemGitRunner.executablePath)")
         directory = try makeDirectory("git-model-remote")
         remote = try makeDirectory("git-model-bare")
         _ = try await runner.run(["init", "-q", "--bare", "-b", "main", remote.path], in: directory)

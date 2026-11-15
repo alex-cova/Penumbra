@@ -8,19 +8,45 @@ import XCTest
 /// default suite does not download, spawn, or contact a model.
 @MainActor
 final class ExternalACPLiveTests: XCTestCase {
-    private let prefix = "/tmp/umbra-acp-adapters/prefix/node_modules/.bin"
-    private let codexCLI = "/opt/homebrew/bin/codex"
-    private let claudeCLI = "/Users/alex/.local/bin/claude"
+    private static let environment = ProcessInfo.processInfo.environment
+    /// The adapters' `node_modules/.bin`, from an isolated npm prefix
+    /// (`UMBRA_LIVE_ACP_PREFIX`, default `/tmp/umbra-acp-adapters/prefix/node_modules/.bin`).
+    private let prefix = environment["UMBRA_LIVE_ACP_PREFIX"] ?? "/tmp/umbra-acp-adapters/prefix/node_modules/.bin"
+    /// The Codex and Claude Code CLIs the adapters drive: `UMBRA_LIVE_ACP_CODEX` /
+    /// `UMBRA_LIVE_ACP_CLAUDE`, else the first `codex` / `claude` on `PATH`. No path is assumed.
+    private let codexCLI = environment["UMBRA_LIVE_ACP_CODEX"] ?? ExternalACPLiveTests.onPath("codex") ?? ""
+    private let claudeCLI = environment["UMBRA_LIVE_ACP_CLAUDE"] ?? ExternalACPLiveTests.onPath("claude") ?? ""
+
+    private static func onPath(_ name: String) -> String? {
+        (environment["PATH"] ?? "").split(separator: ":")
+            .map { "\($0)/\(name)" }
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
 
     override func setUp() async throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_LIVE_ACP"] == "1")
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: codexCLI))
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: claudeCLI))
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["UMBRA_LIVE_ACP"] == "1",
+            "Live Codex and Claude Code sessions are paid and contact a model; set UMBRA_LIVE_ACP=1 to run them"
+        )
+        try XCTSkipUnless(
+            FileManager.default.isExecutableFile(atPath: codexCLI),
+            "No codex CLI: set UMBRA_LIVE_ACP_CODEX or put codex on PATH"
+        )
+        try XCTSkipUnless(
+            FileManager.default.isExecutableFile(atPath: claudeCLI),
+            "No claude CLI: set UMBRA_LIVE_ACP_CLAUDE or put claude on PATH"
+        )
     }
 
     func testBothAdaptersCompleteSessionsThroughTheAgentPanel() async throws {
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: "\(prefix)/codex-acp"))
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: "\(prefix)/claude-agent-acp"))
+        try XCTSkipUnless(
+            FileManager.default.isExecutableFile(atPath: "\(prefix)/codex-acp"),
+            "codex-acp is not installed under \(prefix) (UMBRA_LIVE_ACP_PREFIX)"
+        )
+        try XCTSkipUnless(
+            FileManager.default.isExecutableFile(atPath: "\(prefix)/claude-agent-acp"),
+            "claude-agent-acp is not installed under \(prefix) (UMBRA_LIVE_ACP_PREFIX)"
+        )
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("umbra-acp-live-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -65,7 +91,10 @@ final class ExternalACPLiveTests: XCTestCase {
     /// policy), then runs the same end-to-end flow against the **managed** launches. No path
     /// override, no environment override: the rows are the catalog rows Umbra creates itself.
     func testManagedInstallThenBothAdaptersCompleteSessionsThroughTheAgentPanel() async throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_LIVE_ACP_INSTALL"] == "1")
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["UMBRA_LIVE_ACP_INSTALL"] == "1",
+            "Downloads both adapters from npm (hundreds of MB); set UMBRA_LIVE_ACP_INSTALL=1 as well"
+        )
         let acpRoot = FileManager.default.temporaryDirectory.appendingPathComponent("umbra-live-acp-\(UUID().uuidString)", isDirectory: true)
         let saved = IDEACPAdapterManager.shared
         let manager = IDEACPAdapterManager.makeProduction(root: acpRoot)

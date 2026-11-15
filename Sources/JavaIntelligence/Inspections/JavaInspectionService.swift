@@ -97,10 +97,19 @@ public actor JavaInspectionService: DiagnosticProvider {
     /// Waits until no pass is queued or running. For tests: `analyzeNow` joins a pass already
     /// queued for the same key without waiting for it.
     func settle() async {
-        while let task = pending.values.first {
+        while let (url, task) = pending.first {
             await task.value
+            // A pass releases its own entry, but one cancelled before it ran cannot. A finished
+            // task left registered would make this loop await it again forever.
+            if pending[url] == task {
+                pending[url] = nil
+                pendingKey[url] = nil
+            }
         }
     }
+
+    /// Passes queued or running. For tests.
+    var pendingPassCount: Int { pending.count }
 
     /// What a result is valid for. Findings depend on the text, on what the index holds
     /// (`unresolved-type` claims a class does not exist) and on the file's module scope, so a
@@ -328,7 +337,10 @@ public actor JavaInspectionService: DiagnosticProvider {
         // A pass for this exact text and these sources is already waiting or running: joining it
         // beats cancelling and restarting it.
         if !force, pendingKey[url] == key { return }
+        // The cancelled pass stops at its next boundary and, its key gone, never releases itself:
+        // drop it here so nothing is left registered for a task that is finished.
         pending[url]?.cancel()
+        pending[url] = nil
         pendingKey[url] = nil
         await runAnalysis(url: url, text: text, key: key, document: document)
     }

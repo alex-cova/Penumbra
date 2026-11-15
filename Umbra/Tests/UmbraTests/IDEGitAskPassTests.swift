@@ -131,7 +131,7 @@ final class IDEGitAskPassTests: XCTestCase {
     /// Git runs `$GIT_ASKPASS <prompt>` and reads stdout. This pins that contract on this machine's git
     /// with a stand-in helper (a shell script), so the argument handling above matches what git sends.
     func testGitPassesThePromptAsTheOnlyArgument() async throws {
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath))
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath), "git is not installed at \(SystemGitRunner.executablePath)")
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("askpass-git-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -479,7 +479,7 @@ final class IDEGitChangeDiffIdentityTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath))
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath), "git is not installed at \(SystemGitRunner.executablePath)")
         IDEWorkspace.isSessionPersistenceEnabled = false
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("diff-identity-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -13,7 +13,7 @@ final class JavaIndexPathsTests: XCTestCase {
     func testShardNamesAreUnchanged() {
         let paths = JavaIndexPaths(root: URL(fileURLWithPath: "/cache"))
         var samples = [
-            "", "a", "abc", "/Users/alex/.gradle/caches/modules-2/files-2.1/org.springframework/spring-core/6.1.0/abc/spring-core-6.1.0.jar",
+            "", "a", "abc", "/Users/dev/.gradle/caches/modules-2/files-2.1/org.springframework/spring-core/6.1.0/abc/spring-core-6.1.0.jar",
             "/tmp/é日本😀.jar", String(repeating: "x", count: 4_000)
         ]
         for index in 0..<400 { samples.append("/m2/repository/g\(index)/a\(index * 7)/\(index).\(index % 13)/a-\(index).jar") }

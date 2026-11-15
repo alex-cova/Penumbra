@@ -38,10 +38,8 @@ final class JavaCallHierarchyTests: XCTestCase {
         let provider = try await makeProvider(fixture)
         let root = try await rootMethod(provider, fixture)
         let callees = await provider.callees(of: root, file: fixture.url("Chain.java"))
-        guard !callees.isEmpty else {
-            throw XCTSkip("callee resolution requires full classpath wiring in this fixture")
-        }
-        XCTAssertTrue(callees.contains { $0.displayName.hasPrefix("Helper.help") })
+        XCTAssertEqual(callees.map(\.displayName), ["Helper.help()"])
+        XCTAssertEqual(callees.first?.origin, .source)
     }
 
     func testTheGenericProtocolWrapsCallersAndKeepsTheNode() async throws {
@@ -132,9 +130,9 @@ final class JavaCallHierarchyTests: XCTestCase {
         try fixture.add("Counter.java", "class Counter { int €count; void increment() { count++; } }")
         let provider = try await makeProvider(fixture)
         let root = try await rootMethod(provider, fixture)
-        guard let found = await provider.location(of: root, file: fixture.url("Counter.java")) else {
-            throw XCTSkip("location requires attached navigation sources in this fixture")
-        }
+        let location = await provider.location(of: root, file: fixture.url("Counter.java"))
+        let found = try XCTUnwrap(location, "a source field has a location")
+        XCTAssertEqual(found.url?.lastPathComponent, "Counter.java")
         let text = try String(contentsOf: try XCTUnwrap(found.url), encoding: .utf8) as NSString
         XCTAssertEqual(
             text.substring(with: NSRange(location: found.range.start.utf16Offset, length: found.range.end.utf16Offset - found.range.start.utf16Offset)),
@@ -152,15 +150,53 @@ final class JavaCallHierarchyTests: XCTestCase {
         let provider = try await makeProvider(fixture)
         let root = try await rootMethod(provider, fixture)
         let location = await provider.location(of: root, file: fixture.url("Chain.java"))
-        if location == nil {
-            throw XCTSkip("location requires attached navigation sources in this fixture")
-        }
-        let found = try XCTUnwrap(location)
+        let found = try XCTUnwrap(location, "a source method has a location")
         XCTAssertEqual(found.url?.lastPathComponent, "Chain.java")
         let text = try String(contentsOf: try XCTUnwrap(found.url), encoding: .utf8) as NSString
         XCTAssertEqual(
             text.substring(with: NSRange(location: found.range.start.utf16Offset, length: found.range.end.utf16Offset - found.range.start.utf16Offset)),
             "caller"
         )
+    }
+
+    /// Regression: the declaring file's text was replaced by an empty string whenever the request
+    /// came from the file that declares the method, so callees and locations in the open file were
+    /// empty. A request from another file must find the same declaration.
+    func testCalleesAndLocationResolveFromTheDeclaringFileWhenAskedFromAnother() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Helper.java", "class Helper { static int help(int n) { return n; } }")
+        try fixture.add("Chain.java", """
+        class Chain {
+            void €caller() { Helper.help(1); local(); }
+            void local() { }
+        }
+        """)
+        try fixture.add("Use.java", "class Use { void go(Chain c) { c.caller(); } }")
+        let provider = try await makeProvider(fixture)
+        let root = try await rootMethod(provider, fixture)
+
+        let fromSelf = await provider.callees(of: root, file: fixture.url("Chain.java"))
+        let fromOther = await provider.callees(of: root, file: fixture.url("Use.java"))
+        XCTAssertEqual(fromSelf.map(\.displayName), ["Chain.local()", "Helper.help(int)"])
+        XCTAssertEqual(fromOther.map(\.displayName), fromSelf.map(\.displayName))
+
+        let location = await provider.location(of: root, file: fixture.url("Use.java"))
+        let found = try XCTUnwrap(location)
+        XCTAssertEqual(found.url?.lastPathComponent, "Chain.java")
+        XCTAssertEqual(found.range.start.line, 1)
+    }
+
+    /// An unsaved buffer is what the hierarchy reads, not the file on disk.
+    func testLocationReadsTheOpenBufferOverTheDisk() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Chain.java", "class Chain {\n    void €caller() { }\n}\n")
+        let provider = try await makeProvider(fixture)
+        let root = try await rootMethod(provider, fixture)
+        let edited = "class Chain {\n\n\n    void caller() { }\n}\n"
+        await provider.setOpenBufferLookup { url in url.lastPathComponent == "Chain.java" ? edited : nil }
+        let location = await provider.location(of: root, file: fixture.url("Chain.java"))
+        let found = try XCTUnwrap(location)
+        XCTAssertEqual(found.range.start.line, 3, "the buffer moved the method down two lines")
+        XCTAssertEqual(found.range.start.column, 9)
     }
 }

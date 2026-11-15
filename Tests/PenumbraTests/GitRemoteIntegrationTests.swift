@@ -11,7 +11,7 @@ final class GitRemoteIntegrationTests: XCTestCase {
     private var scratch: [URL] = []
 
     override func setUp() async throws {
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath))
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath), "git is not installed at \(SystemGitRunner.executablePath)")
         directory = try makeDirectory("git-remote")
         remote = try makeDirectory("git-bare")
         _ = try await runner.run(["init", "-q", "--bare", "-b", "main", remote.path], in: directory)

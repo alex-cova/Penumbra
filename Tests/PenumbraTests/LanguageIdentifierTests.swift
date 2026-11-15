@@ -53,13 +53,13 @@ final class LanguageIdentifierTests: XCTestCase {
         let names = [".bashrc", ".bash_profile", ".bash_aliases", ".bash_logout",
                      ".zshrc", ".zprofile", ".zshenv", ".zlogin", ".zlogout", ".profile"]
         for name in names {
-            let url = URL(fileURLWithPath: "/Users/alex/\(name)")
+            let url = URL(fileURLWithPath: "/Users/dev/\(name)")
             XCTAssertEqual(LanguageIdentifier.identifier(for: url), "shell", "dotfile: \(name)")
         }
     }
 
     func testDotfileMatchingIsCaseInsensitive() {
-        let url = URL(fileURLWithPath: "/Users/alex/.ZSHRC")
+        let url = URL(fileURLWithPath: "/Users/dev/.ZSHRC")
         XCTAssertEqual(LanguageIdentifier.identifier(for: url), "shell")
     }
 

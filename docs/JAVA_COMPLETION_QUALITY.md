@@ -140,7 +140,7 @@ changes add one forward scan of an identifier's length per statement-site reques
 Question: do the improvements generalize to projects nothing was written against, and is the editor integration
 correct? The implementation was frozen before the held-out measurement (no ranking change followed it). Two
 bugs it found were fixed afterwards, and are listed as such. Reproduce with `JAVA_QUALITY_SET=held-out|development|all`
-(`JAVA_QUALITY_GRADLE=a,b` picks Umbra's cached Gradle models by directory name). "Before" is the same harness, built
+(`JAVA_QUALITY_GRADLE_MODELS=~/Library/Application\ Support/com.umbra.editor/gradle-models` adds Umbra's cached Gradle models, which are never read unless that variable names their folder; `JAVA_QUALITY_GRADLE=a,b` then picks them by directory name). "Before" is the same harness, built
 in a separate `git worktree` at `HEAD` (which already contained the earlier uncommitted work), with the pre-change
 insertion rule, so nothing in the working tree was reverted. Statistics on for both sides. 1-character prefix, JDK 25.
 

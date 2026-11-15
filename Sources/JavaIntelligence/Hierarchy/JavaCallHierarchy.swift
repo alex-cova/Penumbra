@@ -128,16 +128,19 @@ public actor JavaCallHierarchyProvider {
         return await scoped(file) { [index, jdkHome, indexPaths, openBuffer] in
             guard let stub = await index.classStub(qualifiedName: declaringClass),
                   stub.methods.contains(where: { $0.name == name && JavaTypeKeys.keys(of: $0) == parameterKeys }) else { return [] }
-            let source = await Self.source(
+            let declaring = await Self.declaringSource(
                 for: declaringClass, preferred: file, index: index, jdkHome: jdkHome,
                 cacheRoot: indexPaths.root, openBuffer: openBuffer
             )
-            guard let source, let tree = JavaSyntaxParser().parse(source) else { return [] }
+            guard let declaring, let tree = JavaSyntaxParser().parse(declaring.text) else { return [] }
             guard let methodNode = Self.methodNode(named: name, parameterKeys: parameterKeys, in: tree) else { return [] }
             var result: [JavaCallHierarchyNode] = []
             var seen = Set<String>()
             for invocation in Self.methodInvocations(in: methodNode) {
-                let hits = await Self.resolveCallee(invocation, source: source, fileURL: file, environment: environment)
+                // The body is resolved in the file that declares it, not the file the request came from.
+                let hits = await Self.resolveCallee(
+                    invocation, source: declaring.text, fileURL: declaring.url ?? file, environment: environment
+                )
                 for hit in hits {
                     let key = Self.pathKey(for: hit.id)
                     guard seen.insert(key).inserted else { continue }
@@ -157,39 +160,33 @@ public actor JavaCallHierarchyProvider {
         }
         guard case .method(let declaringClass, let name, let parameterKeys) = node.symbolID else { return nil }
         return await scoped(file) { [index, jdkHome, indexPaths, openBuffer] in
-            guard let source = await Self.source(
+            guard let declaring = await Self.declaringSource(
                 for: declaringClass, preferred: file, index: index, jdkHome: jdkHome,
                 cacheRoot: indexPaths.root, openBuffer: openBuffer
             ),
-                  let tree = JavaSyntaxParser().parse(source),
-                  let methodNode = Self.methodNode(named: name, parameterKeys: parameterKeys, in: tree) else { return nil }
-            let start = JavaImportInserter.textPosition(forByteOffset: methodNode.startByte, in: tree.sourceBytes)
-            let end = JavaImportInserter.textPosition(forByteOffset: methodNode.endByte, in: tree.sourceBytes)
-            let url = await Self.sourceURL(
-                for: declaringClass, preferred: file ?? URL(fileURLWithPath: "/"), index: index, jdkHome: jdkHome,
-                cacheRoot: indexPaths.root, openBuffer: openBuffer
-            )
-            return JavaCallHierarchyLocation(url: url, range: TextRange(start: start, end: end))
+                  let tree = JavaSyntaxParser().parse(declaring.text),
+                  let methodNode = Self.methodNode(named: name, parameterKeys: parameterKeys, in: tree),
+                  let nameNode = methodNode.child(byFieldName: "name") else { return nil }
+            // The name, like a field's location: opening the node selects what the user knows it by.
+            let start = JavaImportInserter.textPosition(forByteOffset: nameNode.startByte, in: tree.sourceBytes)
+            let end = JavaImportInserter.textPosition(forByteOffset: nameNode.endByte, in: tree.sourceBytes)
+            return JavaCallHierarchyLocation(url: declaring.url, range: TextRange(start: start, end: end))
         }
     }
 
     private func fieldLocation(declaringClass: String, name: String, file: URL?) async -> JavaCallHierarchyLocation? {
         await scoped(file) { [index, jdkHome, indexPaths, openBuffer] in
-            guard let source = await Self.source(
+            guard let declaring = await Self.declaringSource(
                 for: declaringClass, preferred: file, index: index, jdkHome: jdkHome,
                 cacheRoot: indexPaths.root, openBuffer: openBuffer
             ),
-                  let tree = JavaSyntaxParser().parse(source),
+                  let tree = JavaSyntaxParser().parse(declaring.text),
                   let range = JavaDeclarationLocator.fieldRanges(declaringClass: declaringClass, name: name, in: tree).first else {
                 return nil
             }
             let start = JavaImportInserter.textPosition(forByteOffset: range.lowerBound, in: tree.sourceBytes)
             let end = JavaImportInserter.textPosition(forByteOffset: range.upperBound, in: tree.sourceBytes)
-            let url = await Self.sourceURL(
-                for: declaringClass, preferred: file ?? URL(fileURLWithPath: "/"), index: index, jdkHome: jdkHome,
-                cacheRoot: indexPaths.root, openBuffer: openBuffer
-            )
-            return JavaCallHierarchyLocation(url: url, range: TextRange(start: start, end: end))
+            return JavaCallHierarchyLocation(url: declaring.url, range: TextRange(start: start, end: end))
         }
     }
 
@@ -394,43 +391,36 @@ public actor JavaCallHierarchyProvider {
         return hits
     }
 
-    private static func source(
+    /// The text and URL of the file that declares `declaringClass`. The navigation session is given
+    /// the preferred file's real text: a session with that file's URL and empty text answered "this
+    /// file" for a class declared in it and then found nothing in the empty text, so callees and
+    /// locations of methods in the open file came back empty.
+    static func declaringSource(
         for declaringClass: String,
         preferred file: URL?,
         index: JavaIndex,
         jdkHome: URL?,
         cacheRoot: URL,
         openBuffer: (@Sendable (URL) async -> String?)?
-    ) async -> String? {
+    ) async -> (url: URL?, text: String)? {
+        var preferredText = ""
+        if let file {
+            if let buffer = await openBuffer?(file) {
+                preferredText = buffer
+            } else if let disk = try? String(contentsOf: file, encoding: .utf8) {
+                preferredText = disk
+            }
+        }
+        guard let tree = JavaSyntaxParser().parse(preferredText) ?? JavaSyntaxParser().parse("") else { return nil }
         let session = JavaNavigationSession(
-            source: "", fileURL: file, tree: JavaSyntaxParser().parse("")!, byteOffset: 0,
+            source: preferredText, fileURL: preferredText.isEmpty ? nil : file, tree: tree, byteOffset: 0,
             index: index, jdkHome: jdkHome, cacheRoot: cacheRoot, openBuffer: openBuffer,
             decompile: JavaDecompileGate(policy: .denied)
         )
-        guard let url = await session.typeHits(qualifiedName: declaringClass).first?.url else { return nil }
-        if let buffer = await openBuffer?(url) { return buffer }
-        return try? String(contentsOf: url, encoding: .utf8)
-    }
-
-    private static func source(for declaringClass: String, file: URL?, openBuffer: (@Sendable (URL) async -> String?)?) async -> String? {
-        if let file, let buffer = await openBuffer?(file) { return buffer }
-        if let file, let disk = try? String(contentsOf: file, encoding: .utf8) { return disk }
-        return nil
-    }
-
-    private static func sourceURL(
-        for declaringClass: String,
-        preferred file: URL,
-        index: JavaIndex,
-        jdkHome: URL?,
-        cacheRoot: URL,
-        openBuffer: (@Sendable (URL) async -> String?)?
-    ) async -> URL? {
-        let session = JavaNavigationSession(
-            source: "", fileURL: file, tree: JavaSyntaxParser().parse("")!, byteOffset: 0,
-            index: index, jdkHome: jdkHome, cacheRoot: cacheRoot, openBuffer: openBuffer,
-            decompile: JavaDecompileGate(policy: .denied)
-        )
-        return await session.typeHits(qualifiedName: declaringClass).first?.url
+        guard let hit = await session.typeHits(qualifiedName: declaringClass).first, let url = hit.url else { return nil }
+        if JavaNavigationText.sameFile(url, file) { return (url, preferredText) }
+        if let buffer = await openBuffer?(url) { return (url, buffer) }
+        guard let disk = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return (url, disk)
     }
 }

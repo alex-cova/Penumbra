@@ -1660,7 +1660,7 @@ final class IDESimulatorServiceTests: XCTestCase {
         let before = one.frame?.tiffRepresentation
         one.refresh()
         let reloaded = await waitUntil(seconds: 120) { one.phase == .ready && one.frame?.tiffRepresentation != before }
-        XCTAssertTrue(reloaded, "first after the second started: \(one.phase)")
+        XCTAssertTrue(reloaded, "first after the second started: \(one.phase)\n\(one.log.suffix(20).joined(separator: "\n"))")
         XCTAssertEqual(two.phase, .ready)
         one.stop()
         two.stop()

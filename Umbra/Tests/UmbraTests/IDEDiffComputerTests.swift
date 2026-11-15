@@ -182,7 +182,7 @@ final class IDEDiffPatchBuilderTests: XCTestCase {
 
     func testPatchesApplyWithGit() async throws {
         let runner = SystemGitRunner()
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath))
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath), "git is not installed at \(SystemGitRunner.executablePath)")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("diff-patch-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -278,7 +278,13 @@ public final class IDEWorkspace {
     var isFullScreen = false
 
 
-    public init() {
+    public convenience init() {
+        self.init(databaseSupport: IDEDatabaseSupport())
+    }
+
+    /// `databaseSupport` is a parameter so a test can hand the window a catalog of its own.
+    init(databaseSupport: IDEDatabaseSupport) {
+        self.databaseSupport = databaseSupport
         let settle = DocumentSettleCoordinator()
         documentSettle = settle
         overlays = IDEEditorOverlayController(settle: settle)
@@ -553,7 +559,7 @@ public final class IDEWorkspace {
     @ObservationIgnored var javaMainLocations: JavaMainLocations?
     let httpSupport = IDEHTTPSupport()
     /// Connections, schema and query results for this window. The connection list is shared.
-    let databaseSupport = IDEDatabaseSupport()
+    let databaseSupport: IDEDatabaseSupport
     var isMarkdownPreviewVisible = false
     /// The SwiftUI canvas is docked beside the editor (`IDEWorkspace+SwiftUIPreview.swift`).
     var isSwiftUIPreviewVisible = false

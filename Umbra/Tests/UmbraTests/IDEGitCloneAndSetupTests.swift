@@ -10,7 +10,7 @@ final class IDEGitCloneAndSetupTests: XCTestCase {
     private let runner = SystemGitRunner()
 
     override func setUp() async throws {
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath))
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath), "git is not installed at \(SystemGitRunner.executablePath)")
         IDEWorkspace.isSessionPersistenceEnabled = false
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("git-setup-\(UUID().uuidString)", isDirectory: true)

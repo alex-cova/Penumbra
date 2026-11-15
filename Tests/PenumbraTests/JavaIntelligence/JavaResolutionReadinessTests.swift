@@ -256,6 +256,39 @@ final class JavaResolutionReadinessTests: XCTestCase {
         XCTAssertEqual(codes(found), [])
     }
 
+    // MARK: - Pending bookkeeping
+
+    /// Regression: `analyzeNow` cancelled a queued pass but left it registered. The cancelled task
+    /// could not release itself, so `settle()` awaited the finished task in a loop forever, which
+    /// hung the whole suite whenever the churn test below re-queued a straddled pass.
+    func testAnalyzeNowOverAQueuedPassLeavesNothingRegistered() async throws {
+        let index = JavaIndex()
+        await index.setSources([try jdk()])
+        let service = JavaInspectionService(
+            index: index, enabledRules: [.unresolvedType, .unresolvedImport], idleDelay: .seconds(60)
+        )
+        let doc = document(Self.resolutionTest, url: scratch.appendingPathComponent("ResolutionTest.java"))
+        _ = await service.diagnostics(for: doc)   // queues a pass behind the 60 s idle delay
+        let queued = await service.pendingPassCount
+        XCTAssertEqual(queued, 1)
+        await service.analyzeNow(doc, force: true)
+        let left = await service.pendingPassCount
+        XCTAssertEqual(left, 0, "the cancelled pass is still registered")
+        // With a leaked entry the old `settle()` never returns and cannot be cancelled: stop here.
+        guard left == 0 else { return }
+
+        let settled = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await service.settle(); return true }
+            group.addTask { try? await Task.sleep(for: .seconds(10)); return false }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        XCTAssertTrue(settled, "settle() did not return")
+        let fresh = await service.isFresh(doc)
+        XCTAssertTrue(fresh)
+    }
+
     // MARK: - Stress
 
     /// Resolve the sample over and over while the index is replaced underneath: empty, project

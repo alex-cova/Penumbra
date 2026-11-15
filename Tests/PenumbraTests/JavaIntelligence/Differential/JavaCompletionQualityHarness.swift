@@ -125,9 +125,9 @@ enum JavaCompletionQualityHarness {
     }
 
     /// Projects nothing in the fixes was written against: two public libraries with heavy generics
-    /// and deep hierarchies, and the Gradle projects Umbra has synced (their cached models give the
-    /// source sets, the jars and the processor path). `JAVA_QUALITY_GRADLE=a,b` picks models by
-    /// project directory name.
+    /// and deep hierarchies, and, when `JAVA_QUALITY_GRADLE_MODELS` names a folder of them, the Gradle
+    /// projects Umbra has synced (their cached models give the source sets, the jars and the
+    /// processor path). `JAVA_QUALITY_GRADLE=a,b` picks models by project directory name.
     static func heldOutProjects() throws -> [QualityProject] {
         var projects = [
             try publicProject(
@@ -144,8 +144,13 @@ enum JavaCompletionQualityHarness {
     }
 
     static func gradleProjects() -> [QualityProject] {
-        let directory = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/com.umbra.editor/gradle-models")
+        // Synced Gradle models are private projects on one Mac. They are read only from a directory
+        // the run names (`JAVA_QUALITY_GRADLE_MODELS`, e.g. Umbra's
+        // `~/Library/Application Support/com.umbra.editor/gradle-models`), never found by default.
+        guard let configured = ProcessInfo.processInfo.environment["JAVA_QUALITY_GRADLE_MODELS"], !configured.isEmpty else {
+            return []
+        }
+        let directory = URL(fileURLWithPath: (configured as NSString).expandingTildeInPath, isDirectory: true)
         let wanted = ProcessInfo.processInfo.environment["JAVA_QUALITY_GRADLE"].map { Set($0.split(separator: ",").map(String.init)) }
         var result: [QualityProject] = []
         let entries = ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
