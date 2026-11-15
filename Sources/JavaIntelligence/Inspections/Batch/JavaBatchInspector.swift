@@ -39,20 +39,28 @@ public struct JavaBatchInspector: Sendable {
 
     private let index: JavaIndex
     private let usageProvider: JavaFindUsagesProvider?
+    private let scopes: JavaFileResolutionScopes?
     private let queryScope: @Sendable (URL) -> Set<String>?
     private let languageLevel: @Sendable (URL) -> Int?
 
     /// - Parameters:
-    ///   - queryScope: the shard paths a file's source set sees (`nil` sees everything).
+    ///   - resolutionScopes: each file's module context, as the live `JavaInspectionService` has
+    ///     it (`JavaInspectionService.resolutionScopes`): visible shards, required shards and JPMS
+    ///     visibility. When given, it wins over `queryScope`.
+    ///   - queryScope: only the shard paths a file's source set sees (`nil` sees everything). A
+    ///     scope without its required shards cannot tell a failed jar from a missing class, so
+    ///     prefer `resolutionScopes`.
     ///   - languageLevel: the Java language level of a file (`nil` when unknown).
     public init(
         index: JavaIndex,
         usageProvider: JavaFindUsagesProvider? = nil,
+        resolutionScopes: JavaFileResolutionScopes? = nil,
         queryScope: @escaping @Sendable (URL) -> Set<String>? = { _ in nil },
         languageLevel: @escaping @Sendable (URL) -> Int? = { _ in nil }
     ) {
         self.index = index
         self.usageProvider = usageProvider
+        self.scopes = resolutionScopes
         self.queryScope = queryScope
         self.languageLevel = languageLevel
     }
@@ -107,7 +115,8 @@ public struct JavaBatchInspector: Sendable {
         var enabled = options.profile.enabledRules(in: file)
         if let only = options.onlyRules { enabled = only }
         guard !enabled.isEmpty, let tree = JavaSyntaxParser().parse(source) else { return [] }
-        let scope = queryScope(url)
+        let resolution = scopes?.context(for: url)
+            ?? JavaFileResolutionContext(visibleShards: queryScope(url), requiredShards: nil, modules: nil)
         let level = languageLevel(url)
         let profile = options.profile
         let thresholds = profile.thresholds
@@ -115,7 +124,7 @@ public struct JavaBatchInspector: Sendable {
         let runsProjectRules = options.includeProjectRules && !enabled.isDisjoint(with: JavaInspectionRegistry.projectRules)
         let provider = usageProvider
         let index = index
-        let found: [JavaInspection] = await JavaIndex.$queryScope.withValue(scope) {
+        let found: [JavaInspection] = await resolution.apply {
             var projectFindings: [JavaInspection] = []
             if runsProjectRules, let provider {
                 projectFindings = await JavaProjectInspector.inspect(

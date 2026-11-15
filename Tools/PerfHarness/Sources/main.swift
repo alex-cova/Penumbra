@@ -115,7 +115,7 @@ let options = Commands.Options(
     language: flagValue("--lang", in: rest)
 )
 
-let allowsSyntheticPath = command == "scroll-frames" || command == "metal-waits" || command == "typeset-long" || command == "index-parse" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
+let allowsSyntheticPath = command == "scroll-frames" || command == "metal-waits" || command == "typeset-long" || command == "index-parse" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-reinspection" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
     || command == "java-profile-import" || command == "java-coverage-bands"
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index" || command == "java-inheritors" || command == "java-stub-reuse" || command == "java-parse-edit" || command == "java-allocations" || command == "java-anonymous"
     || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
@@ -163,6 +163,11 @@ do {
         try JavaNameIndexProfile.run(
             pathOrSynthetic: path,
             files: Int(flagValue("--files", in: rest) ?? "") ?? 5_000
+        )
+    case "java-reinspection":
+        try JavaReinspectionProfile.run(
+            files: Int(flagValue("--files", in: rest) ?? "") ?? 5,
+            lines: Int(flagValue("--lines", in: rest) ?? "") ?? 2_000
         )
     case "java-inspections":
         try JavaInspectionsProfile.run(

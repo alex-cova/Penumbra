@@ -70,3 +70,32 @@ final class TextViewCaptureStateTests: XCTestCase {
         )
     }
 }
+
+/// A file-backed tab's bridged snapshot (`makeEIPDocument`) after the tab was edited and switched
+/// away from must read the captured buffer, not the text the file had when it was opened. Language
+/// services (the Java overlay, inspections) read background tabs through this snapshot only.
+@MainActor
+final class WorkbenchDocumentSnapshotAfterCaptureTests: XCTestCase {
+    func testTheBridgedSnapshotFollowsTheCapturedEdits() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).java")
+        let disk = "class Widget { }\n"
+        try disk.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let document = try await WorkbenchDocument.load(contentsOf: url)
+        let textView = makeFocusedTextView(text: "")
+        textView.setState(try XCTUnwrap(document.pendingState))
+        document.pendingState = nil
+        textView.selectedRange = NSRange(location: (disk as NSString).length, length: 0)
+        textView.insertText("class Gadget { }\n")
+        let edited = disk + "class Gadget { }\n"
+
+        // What a tab switch does (`IDEWorkspace`): keep the live buffer on the document.
+        document.pendingState = textView.makeCapturedState()
+
+        let bridged = document.makeEIPDocument(version: 7)
+        let length = bridged.contentSnapshot.utf16Length
+        XCTAssertEqual(length, (edited as NSString).length)
+        XCTAssertEqual(bridged.substring(utf16Offset: 0, length: length), edited)
+    }
+}

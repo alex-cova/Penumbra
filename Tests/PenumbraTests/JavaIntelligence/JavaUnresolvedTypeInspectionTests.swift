@@ -29,9 +29,11 @@ final class JavaUnresolvedTypeInspectionTests: XCTestCase {
         return all.filter { $0.id == "unresolved-type" }
     }
 
+    /// Every library list carries the platform root: an index without `java.lang.Object` cannot
+    /// prove a class missing, so the rule would stay silent (see `JavaResolutionReadinessTests`).
     private func makeIndex(libraries: [String] = []) async throws -> JavaIndex {
         var stubs: [JavaClassStub] = []
-        for (number, library) in libraries.enumerated() {
+        for (number, library) in (["package java.lang; public class Object { }"] + libraries).enumerated() {
             let file = scratch.appendingPathComponent("Lib\(number).java")
             try library.write(to: file, atomically: true, encoding: .utf8)
             stubs.append(contentsOf: JavaSourceStubBuilder.build(source: library, url: file).classes)

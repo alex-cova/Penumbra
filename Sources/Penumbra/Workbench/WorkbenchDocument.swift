@@ -46,7 +46,16 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     public var scrollOffset: CGPoint
     /// One-shot `TextViewState` from ``load(contentsOf:language:languageIdentifier:parsePolicy:io:)``.
     /// Consumed on first apply so the workbench does not rebuild the line index from `text`.
-    public var pendingState: TextViewState?
+    public var pendingState: TextViewState? {
+        didSet {
+            // A tab switch stores the live buffer here (`TextView.makeCapturedState()`). The
+            // reader must follow it, or every snapshot of this background tab (`makeEIPDocument`,
+            // what language services read) keeps serving the text the file had when it opened.
+            // A piece-tree snapshot copies piece descriptors, not text.
+            guard isFileBacked, let pendingState, let snapshot = pendingState.stringView.contentSnapshot() else { return }
+            refreshRangeReader(from: snapshot)
+        }
+    }
     /// True when the document was loaded as a file-backed piece tree (no `text` copy).
     public var isFileBacked: Bool
     /// Ranged reader for file-backed buffers so EIP snapshots can substring without full text.

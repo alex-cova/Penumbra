@@ -983,7 +983,10 @@ public final class IDEWorkspace {
             self?.compilerDidReconfigure()
         }
         intelligenceServices.javaSupport.onIndexSourcesPublished = { [weak self] in
-            self?.javaGutterIconsPreferenceChanged()
+            guard let self else { return }
+            javaGutterIconsPreferenceChanged()
+            // Inspection results are only current for the sources they were judged against.
+            javaSupport.reanalyzeInspectionsAfterIndexChange(openJavaDocuments())
         }
         intelligenceServices.javaSupport.onInspectionConfigurationChanged = { [weak self] in
             guard let self else { return }
@@ -4065,6 +4068,12 @@ public final class IDEWorkspace {
 
     private func applyInspectionDiagnostics(_ diagnostics: [Diagnostic], for url: URL) {
         problems.publish(DiagnosticPublication(source: .javaInspection, url: url, diagnostics: diagnostics))
+        // An empty result is only "no problems" when the missing-class checks ran.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let status = await javaSupport.resolutionStatus(for: url)
+            problems.setResolutionStatus(status, for: url)
+        }
         noteServiceResultFreshness(url: url, source: IDEProblemsStore.inspectionSource) { [service = javaSupport.inspectionService] document in
             await service.isFresh(document)
         }
@@ -4239,7 +4248,7 @@ public final class IDEWorkspace {
 
     /// Open Java documents with the active one first, so a save reports on what the user is
     /// looking at before the rest.
-    private func openJavaDocuments() -> [EditorIntelligence.Document] {
+    func openJavaDocuments() -> [EditorIntelligence.Document] {
         let activeURL = workbench.activePane.selectedDocument?.url?.standardizedFileURL
         let documents = adapter?.openDocuments.filter { $0.languageIdentifier == "java" && !$0.isDependencySource } ?? []
         return documents.sorted { lhs, _ in lhs.url?.standardizedFileURL == activeURL }

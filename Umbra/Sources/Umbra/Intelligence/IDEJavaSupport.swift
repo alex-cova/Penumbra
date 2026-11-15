@@ -165,6 +165,21 @@ final class IDEJavaSupport {
     /// Home of the JDK whose reader is installed.
     @ObservationIgnored private var indexedJDKHomePath: String?
     @ObservationIgnored private var projectRootURL: URL?
+    /// The `projectGeneration` whose own source classes are in `projectSources` (the whole-tree
+    /// shard, or a model's per-source-set shards). Until it matches, the project's classes are not
+    /// indexed yet and the index cannot say a class is missing; see `isClasspathComplete`.
+    @ObservationIgnored private var projectSourcesGeneration = -1
+
+    /// Whether the sources about to be published hold every class the open project can see, the
+    /// host's half of `JavaIndex.canProveAbsence` (the index checks the JDK itself). Not while the
+    /// project's own sources are still being indexed, and not while a Gradle or Maven project has
+    /// no model (its dependency jars are unknown; a declined or failed sync stays here, as `javac`
+    /// does). Unresolved-type findings wait for it instead of flagging every dependency class.
+    private var isClasspathComplete: Bool {
+        guard projectRootURL != nil else { return true }
+        if isJavaBuildActive && projectModel == nil { return false }
+        return projectSourcesGeneration == projectGeneration
+    }
 
     /// Called with each finished compile's diagnostics for one file (empty when it is clean).
     @ObservationIgnored var onCompilerDiagnostics: (@MainActor (URL, [Diagnostic]) -> Void)?
@@ -249,9 +264,16 @@ final class IDEJavaSupport {
         jdk.onSelectionChanged = { [weak self] in self?.jdkSelectionChanged() }
         Task { [weak self] in await self?.installCompilerResultHandler() }
         Task { [weak self] in await self?.installInspectionResultHandler() }
-        Task { [overlayService, testIndex] in
-            await overlayService.setOnDocumentIndexed { _, url, text in
+        Task { [overlayService, testIndex, javaIndex, weak self] in
+            let declarations = OverlayDeclarationWatch()
+            await overlayService.setOnDocumentIndexed { [weak self] _, url, text in
                 await testIndex.scheduleRescan(file: url, source: text)
+                // An open buffer changed what it declares (a type added, removed or reshaped, not
+                // a body edit): the other open files' "cannot resolve" results depended on it.
+                // The service skips every file whose result is still current.
+                let version = await javaIndex.overlayDeclarationsVersion
+                guard await declarations.moved(to: version) else { return }
+                await self?.recheckOpenJavaDocuments()
             }
         }
     }
@@ -398,7 +420,9 @@ final class IDEJavaSupport {
             let key = "\(fallback ?? 0)|\(levels)"
             let resolver: @Sendable (URL) -> Int? = { url in model?.languageLevel(forFile: url) ?? fallback }
             self.inspectionLanguageLevel = resolver
-            await self.inspectionService.setLanguageLevelResolver(resolver)
+            // Same levels, same resolver: the service keeps its results (this runs after every sync
+            // and every compiler refresh, and used to drop every open file's result each time).
+            await self.inspectionService.setLanguageLevelResolver(resolver, identity: key)
             guard key != self.languageLevelKey else { return }
             let isFirst = self.languageLevelKey.isEmpty
             self.languageLevelKey = key
@@ -411,14 +435,51 @@ final class IDEJavaSupport {
     func makeBatchInspector() -> JavaBatchInspector {
         let model = projectModel
         let paths = paths
+        // The same per-file module context the live inspections use (visible and required
+        // shards, JPMS visibility), so Inspect Code and the editor agree, and one failed jar keeps
+        // only the modules that see it pending.
         return JavaBatchInspector(
             index: javaIndex, usageProvider: findUsagesProvider,
-            queryScope: { url in
-                guard let model else { return nil }
-                return model.visibleShardPaths(forFile: url, paths: paths)
-            },
+            resolutionScopes: JavaFileResolutionScopes(model: model, paths: paths),
             languageLevel: inspectionLanguageLevel
         )
+    }
+
+    /// Whether `url`'s missing-class checks ran, are waiting for indexing, or cannot run (the
+    /// Problems panel's note). Shard paths are named by the jar or folder they index.
+    func resolutionStatus(for url: URL) async -> IDEResolutionStatus {
+        let standardized = await inspectionService.resolutionReadiness(for: url.standardizedFileURL)
+        let readiness = standardized != nil ? standardized : await inspectionService.resolutionReadiness(for: url)
+        var activity = IDEResolutionStatus.Activity()
+        activity.isIndexingJDK = jdkIndexingTask != nil && pendingJDKHomePath != nil
+        activity.isIndexingSources = self.activity.isActive(.javaSources)
+        activity.isIndexingDependencies = self.activity.isActive(.javaDependencies)
+        activity.isSyncing = gradle.syncState.isSyncing || maven.syncState.isSyncing
+        activity.awaitsProjectModel = isJavaBuildActive && projectModel == nil
+        var names: [String: String] = [:]
+        if let model = projectModel {
+            for jar in model.classpathJars { names[paths.jarShard(jar).path] = jar.lastPathComponent }
+            for target in model.sourceIndexTargets(paths: paths) {
+                names[target.shardURL.path] = (target.root as? SourceRoot)?.directory.lastPathComponent
+            }
+        }
+        return IDEResolutionStatus.make(readiness: readiness, activity: activity) { names[$0] }
+    }
+
+    /// Re-checks the window's open Java files whose inspection result is no longer current.
+    func recheckOpenJavaDocuments() {
+        guard let documents = openJavaDocuments?() else { return }
+        reanalyzeInspectionsAfterIndexChange(documents)
+    }
+
+    /// The index's sources changed: re-run the inspections of `documents` whose result was judged
+    /// against the previous sources (an "unresolved type" may now resolve, or now be provable).
+    /// The service skips a file whose result is already current, and the project-wide rules are
+    /// left to the next save.
+    func reanalyzeInspectionsAfterIndexChange(_ documents: [EditorIntelligence.Document]) {
+        Task { [inspectionService] in
+            await inspectionService.refreshAfterIndexChange(documents)
+        }
     }
 
     /// Analyses `documents` again with the current inspection settings.
@@ -561,7 +622,6 @@ final class IDEJavaSupport {
         pendingStubRefresh = []
         projectRootURL = url
         clearTestIndex()
-        let hadJars = !jarSources.isEmpty
         jarSources = []
         clearSourceSetClasspath()
 
@@ -573,11 +633,12 @@ final class IDEJavaSupport {
             return
         }
 
+        // The new folder's sources are not indexed yet: say so now, so nothing judged against the
+        // previous folder's sources (or none) reads as authoritative meanwhile.
+        Task { await publishSources() }
+
         guard isJavaBuildActive else {
             indexWholeTree(at: url, generation: generation)
-            if hadJars {
-                Task { await publishSources() }
-            }
             refreshCompilerDiagnostics()
             return
         }
@@ -586,9 +647,6 @@ final class IDEJavaSupport {
         // false "cannot find symbol" errors. Maven's read is free and arrives within moments, so
         // the whole tree waits for it; a read that never produces a model indexes the tree then.
         refreshCompilerDiagnostics()
-        if hadJars {
-            Task { await publishSources() }
-        }
         if gradle.isActive {
             if !gradle.isLoadingCachedModel {
                 indexWholeTree(at: url, generation: generation)
@@ -753,6 +811,7 @@ final class IDEJavaSupport {
                 // No shard path: this whole-tree fallback is only published while completion is
                 // unscoped. A finished sync replaces it with per-source-set readers.
                 projectSources = [.init(precedence: 1, reader: reader)]
+                projectSourcesGeneration = generation
             }
             status.clear(Self.indexingSourcesMessage)
             await publishSources()
@@ -776,6 +835,11 @@ final class IDEJavaSupport {
         }
         await adoptLanguageLevelIfNeeded(model.maxLanguageLevel, generation: generation)
         guard isCurrent(generation) else { return }
+        // The inspections take the new module scopes now, before the new roots are indexed: a
+        // module whose new jars or sources are not in yet then reads as pending (its required
+        // shards are missing) instead of reporting their classes missing under the old scope, and
+        // the modules that did not change keep reporting.
+        await inspectionService.setSourceSetClasspath(model, indexPaths: paths)
 
         let diff = JavaGradleProjectModel.diff(old: previousModel, new: model)
         let sourceTargets = model.sourceIndexTargets(paths: paths)
@@ -819,6 +883,7 @@ final class IDEJavaSupport {
         if status.message?.hasPrefix("Indexing dependencies…") == true {
             status.message = nil
         }
+        projectSourcesGeneration = generation
         await publishSources()
         await completionProvider.setSourceSetClasspath(model, indexPaths: paths)
         await navigationProvider.setSourceSetClasspath(model, indexPaths: paths)
@@ -1083,10 +1148,13 @@ final class IDEJavaSupport {
             let isReplacement = jdkReader != nil
             jdkReader = reader
             indexedJDKHomePath = homePath
+            // Publishing moves the index's sources version, which makes every inspection result
+            // judged against the previous JDK stale and re-checks the open files once
+            // (`onIndexSourcesPublished`). A second, forced re-analysis here only repeated it.
             await publishSources()
             if isReplacement {
-                // Results computed against the previous JDK are stale.
-                onInspectionConfigurationChanged?()
+                // `javac` and the language level follow the new JDK; a level change re-analyses
+                // through `refreshInspectionLanguageLevel`.
                 refreshCompilerDiagnostics()
             }
         }
@@ -1107,7 +1175,7 @@ final class IDEJavaSupport {
         if let jdkReader { sources.append(.init(precedence: 3, reader: jdkReader)) }
         sources.append(contentsOf: projectSources)
         sources.append(contentsOf: jarSources)
-        await javaIndex.setSources(sources)
+        await javaIndex.setSources(sources, classpathComplete: isClasspathComplete)
         if let indexedJDKHomePath {
             await navigationProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
             await findUsagesProvider.setJDKHome(URL(fileURLWithPath: indexedJDKHomePath))
@@ -1158,10 +1226,22 @@ extension IDEJavaSupport: IDEJavaModelConsumer {
 
     func javaModelRemoved() {
         clearSourceSetClasspath()
+        // Without a model the dependency jars are unknown again.
+        Task { await publishSources() }
     }
 
     func buildSucceeded() {
         refreshGeneratedSources()
+    }
+}
+
+/// The last overlay declarations version the window re-checked for.
+private actor OverlayDeclarationWatch {
+    private var seen = 0
+    func moved(to version: Int) -> Bool {
+        guard version != seen else { return false }
+        seen = version
+        return true
     }
 }
 

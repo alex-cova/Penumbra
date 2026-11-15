@@ -203,7 +203,11 @@ final class JavaInspectionServiceTests: XCTestCase {
     }
 
     func testUnresolvedTypeInspectionWarnsWhenNoCandidateExists() async throws {
-        let index = try await makeIndex()
+        // The platform root makes the index authoritative; without it the rule stays pending.
+        let object = JavaSourceStubBuilder.build(
+            source: "package java.lang; public class Object { }", url: scratch.appendingPathComponent("Object.java")
+        ).classes
+        let index = try await makeIndex(stubs: object)
         let source = "class T { UnknownType value; }"
         let tree = try XCTUnwrap(JavaSyntaxParser().parse(source))
         let walker = JavaSemanticWalker(tree: tree, source: source)

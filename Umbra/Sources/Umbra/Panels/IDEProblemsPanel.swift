@@ -94,6 +94,9 @@ struct IDEProblemsPanel: View {
                 ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        if workspace.problems.resolutionSummary != .complete {
+                            IDEResolutionNote(status: workspace.problems.resolutionSummary, onAction: performResolutionAction)
+                        }
                         ForEach(messages) { message in
                             IDEBuildMessageRowView(message: message, isSelected: selectedRowID == "message:\(message.id)") {
                                 selectedRowID = "message:\(message.id)"
@@ -216,16 +219,44 @@ struct IDEProblemsPanel: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: IDEAppearance.Spacing.xs) {
-            Image(systemName: "checkmark.circle")
+        // "No problems" is a claim: it is made only when the missing-class checks ran.
+        let status = workspace.problems.resolutionSummary
+        let (symbol, title): (String, String) = switch status {
+        case .complete: ("checkmark.circle", workspace.problems.isEmpty ? "No problems" : "No problems match the filter")
+        case .pending: ("clock", "No problems found yet")
+        case .unavailable: ("exclamationmark.circle", "Some checks did not run")
+        }
+        return VStack(spacing: IDEAppearance.Spacing.xs) {
+            Image(systemName: symbol)
                 .font(.system(size: IDEAppearance.IconSize.emptyStateGlyph))
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            Text(workspace.problems.isEmpty ? "No problems" : "No problems match the filter")
+            Text(title)
                 .font(IDEAppearance.Typography.body)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
+            if let detail = status.message {
+                Text(detail)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
+            if case .unavailable(_, let action?) = status {
+                Button(IDEResolutionNote.title(for: action)) { performResolutionAction(action) }
+                    .controlSize(.small)
+                    .padding(.top, IDEAppearance.Spacing.xs)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
+    }
+
+    private func performResolutionAction(_ action: IDEResolutionStatus.Action) {
+        switch action {
+        case .syncProject: workspace.javaSupport.buildSystem?.reload()
+        case .chooseJDK:
+            workspace.requestedSettingsDomain = .java
+            workspace.showSettings()
+        }
     }
 
     private func fileHeader(_ file: ProblemFile) -> some View {
@@ -476,5 +507,46 @@ struct IDEProblemsTabItem: View {
     private var title: String {
         let total = errorCount + warningCount
         return total > 0 ? "Problems · \(total)" : "Problems"
+    }
+}
+
+/// One quiet line above the problem list when the missing-class checks are waiting for indexing
+/// (a clock, no spinner: it goes away when the index is published) or cannot run (with the action
+/// that would let them).
+struct IDEResolutionNote: View {
+    let status: IDEResolutionStatus
+    let onAction: (IDEResolutionStatus.Action) -> Void
+
+    static func title(for action: IDEResolutionStatus.Action) -> String {
+        switch action {
+        case .syncProject: "Sync Project"
+        case .chooseJDK: "Choose a JDK…"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            Image(systemName: isUnavailable ? "exclamationmark.circle" : "clock")
+                .font(.system(size: IDEAppearance.IconSize.smallGlyph))
+            Text(status.message ?? "")
+                .font(IDEAppearance.Typography.caption)
+                .lineLimit(2)
+            Spacer(minLength: IDEAppearance.Spacing.sm)
+            if case .unavailable(_, let action?) = status {
+                Button(Self.title(for: action)) { onAction(action) }
+                    .buttonStyle(.link)
+                    .font(IDEAppearance.Typography.caption)
+            }
+        }
+        .foregroundStyle(IDEAppearance.ColorToken.muted)
+        .padding(.horizontal, IDEAppearance.Spacing.md)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(status.message ?? "")
+    }
+
+    private var isUnavailable: Bool {
+        if case .unavailable = status { return true }
+        return false
     }
 }

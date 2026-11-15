@@ -4,12 +4,22 @@ import Foundation
 enum JavaUnresolvedTypeInspection {
     static func inspect(source: String, url: URL?, index: JavaIndex, walker: JavaSemanticWalker) async -> [JavaInspection] {
         var inspections: [JavaInspection] = []
-        for name in walker.undeclaredTypeNames.sorted() {
+        let names = walker.undeclaredTypeNames.sorted()
+        guard !names.isEmpty else { return [] }
+        // Absence is only a finding when the index can prove it: with no JDK yet, or a build model
+        // still being read, every name is "missing" and none of it is true. Silence here is
+        // "pending", not "resolved": the service recomputes when the sources change.
+        guard await index.canProveAbsence else {
+            await JavaResolutionLog.pending(rule: "unresolved-type", names: names, url: url, index: index)
+            return []
+        }
+        for name in names {
             // A name some known type bears resolves without an import (`java.lang`, the file's
             // own package) or is one import away (auto-import and the import fix own those, so
             // this rule stays silent). Only a name no known type bears is reported.
             let candidates = await index.classes(simpleName: name, limit: 50)
             guard candidates.isEmpty else { continue }
+            await JavaResolutionLog.missing(rule: "unresolved-type", name: name, url: url, index: index)
             guard let range = firstTypeReference(to: name, in: walker.syntaxTree) else { continue }
             let start = JavaImportInserter.textPosition(forByteOffset: range.lowerBound, in: walker.syntaxTree.sourceBytes)
             let end = JavaImportInserter.textPosition(forByteOffset: range.upperBound, in: walker.syntaxTree.sourceBytes)

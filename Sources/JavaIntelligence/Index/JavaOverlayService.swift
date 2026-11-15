@@ -111,7 +111,10 @@ public actor JavaOverlayService {
 
     private func rebuild(_ document: Document, edits: [TextEdit]? = nil) async {
         guard lastIndexedVersion[document.id] != document.version else { return }
-        guard !document.contentSnapshot.isElided else { return }
+        // Every file-backed buffer arrives elided (Umbra's bridge). Skipping those left the overlay
+        // empty for every file opened from disk, so a declaration typed into one tab reached the
+        // other tabs only after a save re-indexed the disk.
+        let document = JavaNavigationText.materialized(document)
         let url = document.url ?? URL(fileURLWithPath: "/unsaved/\(document.id).java")
         let tree: JavaSyntaxTree?
         if let parseCache {

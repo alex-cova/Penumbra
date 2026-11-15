@@ -60,17 +60,24 @@ enum JavaParserErrorOverlap {
 /// code (the warm server path) can suppress: cold CLI diagnostics carry no key, so meaning is
 /// unknown and they suppress nothing. Stale compiler results suppress nothing either.
 enum JavaDiagnosticsMerger {
-    /// A `javac` key group per inspection rule; `nil` means the rule has no compiler twin.
-    static func errorGroup(forInspection code: String?) -> String? {
+    /// The `javac` key groups each inspection rule restates; empty means no compiler twin.
+    /// An import can fail as a missing symbol, a missing package, or an access violation.
+    static func errorGroups(forInspection code: String?) -> [String] {
         switch code {
-        case "unresolved-member", "unresolved-type", "unresolved-import":
-            return "compiler.err.cant.resolve"
+        case "unresolved-member", "unresolved-type":
+            return ["compiler.err.cant.resolve"]
+        case "unresolved-import":
+            return [
+                "compiler.err.cant.resolve", "compiler.err.doesnt.exist",
+                "compiler.err.not.def.public.cant.access", "compiler.err.report.access",
+                "compiler.err.not.def.access.package.cant.access", "compiler.err.package.not.visible",
+            ]
         case "ambiguous-import":
-            return "compiler.err.ref.ambiguous"
+            return ["compiler.err.ref.ambiguous"]
         case "unreachable-code":
-            return "compiler.err.unreachable.stmt"
+            return ["compiler.err.unreachable.stmt"]
         default:
-            return nil
+            return []
         }
     }
 
@@ -82,8 +89,9 @@ enum JavaDiagnosticsMerger {
         }
         guard !keyed.isEmpty else { return inspections }
         return inspections.filter { finding in
-            guard let group = errorGroup(forInspection: finding.code) else { return true }
-            return !keyed.contains { $0.line == finding.range.start.line && $0.key.hasPrefix(group) }
+            let groups = errorGroups(forInspection: finding.code)
+            guard !groups.isEmpty else { return true }
+            return !keyed.contains { key in key.line == finding.range.start.line && groups.contains { key.key.hasPrefix($0) } }
         }
     }
 }

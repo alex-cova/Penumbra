@@ -61,6 +61,18 @@ final class IDEProblemsStore {
 
     var visibleSeverities: Set<DiagnosticSeverity> = [.error, .warning, .information, .hint]
 
+    /// Per open Java file: whether its missing-class checks ran (see `IDEResolutionStatus`).
+    private(set) var resolutionStatus: [URL: IDEResolutionStatus] = [:]
+
+    func setResolutionStatus(_ status: IDEResolutionStatus, for url: URL) {
+        let key = url.standardizedFileURL
+        guard resolutionStatus[key] != status else { return }
+        resolutionStatus[key] = status
+    }
+
+    /// The panel's one note: anything unavailable, else anything pending, else nothing.
+    var resolutionSummary: IDEResolutionStatus { IDEResolutionStatus.summary(resolutionStatus.values) }
+
     /// Every file with problems, ignoring the severity filter -- the basis for the badge counts.
     private var allFiles: [ProblemFile] {
         DiagnosticGrouping.files(from: [editorDiagnostics, compilerDiagnostics, inspectionDiagnostics, buildDiagnostics])

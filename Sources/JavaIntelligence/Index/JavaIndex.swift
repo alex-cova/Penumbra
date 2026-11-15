@@ -38,6 +38,12 @@ public actor JavaIndex {
     /// Anything that caches answers (the member-set cache) must not be used while this is set.
     @TaskLocal public static var liveStubs: [String: JavaClassStub]?
 
+    /// Shard paths the query's module needs before it can call a class missing: the indexed roots
+    /// of its compile classpath (its source directories, its project dependencies', its jars).
+    /// ``canProveAbsence`` is false while any of them is not among the sources (still indexing,
+    /// failed, cancelled). `nil` asks only for the platform and the host's completeness flag.
+    @TaskLocal public static var requiredShards: Set<String>?
+
     private var sources: [Source] = []
     /// `sources` ordered by precedence, cached by `setSources` so `classStub` doesn't re-sort on
     /// every lookup.
@@ -111,7 +117,10 @@ public actor JavaIndex {
     /// Built lazily by ``members(matching:limit:)`` and dropped when the sources change.
     private var baseMembers: JavaMemberTable?
     private var baseMembersBuild: Task<JavaMemberTable, Never>?
-    private var sourcesVersion = 0
+    /// Bumped by every ``setSources(_:classpathComplete:)`` that applies (never by an overlay
+    /// edit). Anything that caches a conclusion drawn from the indexed classpath — in particular
+    /// "no class of this name exists" — keys it by this value and recomputes when it moves.
+    public private(set) var sourcesVersion = 0
     private var overlayMembers: (generation: Int, table: JavaMemberTable)?
 
     /// The members of every project shard. The build decodes each class once, off the actor, so a
@@ -203,15 +212,27 @@ public actor JavaIndex {
     /// rebuild; this used to hold the actor, and every save stalled the next completion by that long. Returns once
     /// the new sources are in effect. A call overtaken by a newer one (the actor is re-entrant) returns without
     /// applying: the newer one applies its own sources.
-    public func setSources(_ sources: [Source]) async {
+    ///
+    /// `classpathComplete` is the host's word that `sources` hold every root the project's code
+    /// can see (no build model still being read, no dependency left to index). It is applied with
+    /// the sources, so the two never disagree. See ``canProveAbsence``.
+    public func setSources(_ sources: [Source], classpathComplete: Bool = true) async {
         let sorted = sources.sorted { $0.precedence < $1.precedence }
         sourcesBuildToken += 1
         let token = sourcesBuildToken
+        // The same readers (shards are immutable, so the same content) and the same flag: nothing
+        // a query can see changes. Keep the tables and the version, so nothing cached is dropped
+        // and no open file is analysed again. The token above still overtakes an older call.
+        let signature = SourcesSignature(sources: sorted, classpathComplete: classpathComplete)
+        if signature == appliedSignature { return }
         let built = await Task.detached(priority: .userInitiated) {
             await Self.sourcesBuildHook?()
             return Self.buildBase(sortedSources: sorted)
         }.value
         guard token == sourcesBuildToken else { return }
+        self.classpathComplete = classpathComplete
+        appliedSignature = signature
+        loadedShardPaths = Set(sorted.map(\.shardPath).filter { !$0.isEmpty })
         baseMembers = nil
         baseMembersBuild = nil
         baseInheritors = nil
@@ -234,16 +255,115 @@ public actor JavaIndex {
     /// Which ``setSources(_:)`` call is the newest: only it may apply its tables.
     private var sourcesBuildToken = 0
 
+    /// See ``setSources(_:classpathComplete:)``.
+    public private(set) var classpathComplete = true
+
+    /// The shard paths of the applied sources (scoped ones only).
+    public private(set) var loadedShardPaths: Set<String> = []
+
+    /// What the applied sources were, for spotting a republish that changes nothing.
+    private var appliedSignature: SourcesSignature?
+
+    private struct SourcesSignature: Equatable {
+        struct Entry: Equatable {
+            let reader: ObjectIdentifier
+            let precedence: Int
+            let shardPath: String
+        }
+        let entries: [Entry]
+        let classpathComplete: Bool
+
+        init(sources: [Source], classpathComplete: Bool) {
+            entries = sources.map { Entry(reader: ObjectIdentifier($0.reader), precedence: $0.precedence, shardPath: $0.shardPath) }
+            self.classpathComplete = classpathComplete
+        }
+    }
+
+    /// Whether "no class of this name is indexed" means "no such class exists" for the code this
+    /// index serves. It does not while the Java platform is missing (the JDK is still being
+    /// indexed, or none was found: every `String` would be unresolved) or while the host says the
+    /// classpath is still incomplete (a Gradle or Maven project whose model, and so whose
+    /// dependency jars, is not known yet). `java.lang.Object` is the platform test: every class
+    /// extends it, so an index without it cannot resolve anything authoritatively.
+    ///
+    /// Rules that report a class as missing ask this first and stay silent ("pending") when it is
+    /// false; they never cache that silence past the next ``sourcesVersion``.
+    ///
+    /// Under ``requiredShards`` (set per file by the inspection service from its module's
+    /// classpath) every required shard must be loaded too, so a module whose jar failed or is still
+    /// indexing stays pending while the other modules keep reporting.
+    public var canProveAbsence: Bool {
+        classpathComplete && hasPlatformClasses && missingRequiredShards.isEmpty
+    }
+
+    /// The query's ``requiredShards`` that no applied source provides.
+    public var missingRequiredShards: Set<String> {
+        guard let required = Self.requiredShards else { return [] }
+        return required.subtracting(loadedShardPaths)
+    }
+
+    /// Whether `java.lang.Object` is indexed (in any source, or an open buffer).
+    public var hasPlatformClasses: Bool {
+        winningSource["java.lang.Object"] != nil || overlay["java.lang.Object"] != nil
+    }
+
     public func setOverlay(_ stubs: [String: JavaClassStub]) {
         self.overlay = stubs
         rebuildOverlayIndex()
+        noteOverlayDeclarations()
         bumpGeneration()
     }
 
     public func updateOverlay(qualifiedName: String, stub: JavaClassStub?) {
         overlay[qualifiedName] = stub
         rebuildOverlayIndex()
+        noteOverlayDeclarations()
         bumpGeneration()
+    }
+
+    /// Bumped when what the open buffers *declare* changes: a type added or removed, or a type's
+    /// surface (kind, modifiers, supertypes, member names and signatures, nested types). A body
+    /// edit or a moved name range leaves it alone. Results that judge other files by these
+    /// declarations ("cannot resolve type") key on it, as they key on ``sourcesVersion``.
+    public private(set) var overlayDeclarationsVersion = 0
+    private var overlaySurfaces: [String: Int] = [:]
+
+    private func noteOverlayDeclarations() {
+        var surfaces: [String: Int] = [:]
+        surfaces.reserveCapacity(overlay.count)
+        for (name, stub) in overlay {
+            surfaces[name] = Self.surface(of: stub)
+        }
+        if surfaces != overlaySurfaces {
+            overlaySurfaces = surfaces
+            overlayDeclarationsVersion += 1
+        }
+    }
+
+    /// What another file can see of a class. Deliberately leaves out source ranges and Javadoc.
+    private static func surface(of stub: JavaClassStub) -> Int {
+        var hasher = Hasher()
+        hasher.combine(stub.qualifiedName)
+        hasher.combine(String(describing: stub.kind))
+        hasher.combine(stub.modifiers.rawValue)
+        hasher.combine(String(describing: stub.typeParameters))
+        hasher.combine(String(describing: stub.superclass))
+        hasher.combine(String(describing: stub.interfaces))
+        hasher.combine(stub.innerTypeNames)
+        for field in stub.fields {
+            hasher.combine(field.name)
+            hasher.combine(String(describing: field.type))
+            hasher.combine(field.modifiers.rawValue)
+        }
+        for method in stub.methods {
+            hasher.combine(method.name)
+            hasher.combine(method.isConstructor)
+            hasher.combine(method.modifiers.rawValue)
+            hasher.combine(String(describing: method.returnType))
+            hasher.combine(String(describing: method.typeParameters))
+            for parameter in method.parameters { hasher.combine(String(describing: parameter.type)) }
+        }
+        return hasher.finalize()
     }
 
     /// Applies one document's overlay change: drops `removing`, then adds (or replaces) `adding`.
@@ -257,6 +377,7 @@ public actor JavaIndex {
             overlay[stub.qualifiedName] = stub
         }
         rebuildOverlayIndex()
+        noteOverlayDeclarations()
         bumpGeneration()
     }
 
@@ -418,6 +539,24 @@ public actor JavaIndex {
             }
         }
         return nil
+    }
+
+    /// Whether `qualifiedName` (already known to resolve through ``classStub(qualifiedName:)``)
+    /// comes from a package its defining module exports to the query's module
+    /// (``queryModules``). An open buffer, the JDK, and any shard with no restriction are exported.
+    /// The shard asked about is the one ``classStub(qualifiedName:)`` answered from.
+    public func isExportedToQuery(qualifiedName: String) -> Bool {
+        guard let modules = Self.queryModules else { return true }
+        if Self.liveStubs?[qualifiedName] != nil || overlay[qualifiedName] != nil { return true }
+        guard let start = winningSource[qualifiedName] else { return true }
+        for position in Int(start)..<sortedSources.count {
+            let source = sortedSources[position]
+            guard isVisible(shardPath: source.shardPath, precedence: source.precedence),
+                  decodedStubs.value(for: DecodedKey(source: position, qualifiedName: qualifiedName)) != nil
+                    || source.reader.classStub(named: qualifiedName) != nil else { continue }
+            return modules.restrictions[source.shardPath]?.allows(qualifiedName: qualifiedName) ?? true
+        }
+        return true
     }
 
     /// JDK (precedence 3), the overlay (precedence -1), and unscoped sources stay visible. A set
@@ -751,3 +890,34 @@ struct JavaFIFOCache<Key: Hashable, Value> {
         storage[key] = value
     }
 }
+
+/// Why an index could not prove a class missing for one file, as of one pass.
+public struct JavaResolutionReadiness: Sendable, Equatable {
+    /// `java.lang.Object` is not indexed: the JDK is still indexing, or none was found.
+    public let platformMissing: Bool
+    /// The host said the classpath is incomplete (project sources still indexing, or a Gradle or
+    /// Maven project without a model).
+    public let classpathIncomplete: Bool
+    /// Shards of the file's module classpath that no applied source provides (still indexing,
+    /// failed, or cancelled).
+    public let missingShards: Set<String>
+
+    /// Reads the index under the caller's task-locals (the file's resolution context). `nil` when
+    /// the index can prove absence.
+    public init?(index: JavaIndex) async {
+        let platform = await index.hasPlatformClasses
+        let complete = await index.classpathComplete
+        let missing = await index.missingRequiredShards
+        guard !platform || !complete || !missing.isEmpty else { return nil }
+        platformMissing = !platform
+        classpathIncomplete = !complete
+        missingShards = missing
+    }
+
+    public init(platformMissing: Bool, classpathIncomplete: Bool, missingShards: Set<String>) {
+        self.platformMissing = platformMissing
+        self.classpathIncomplete = classpathIncomplete
+        self.missingShards = missingShards
+    }
+}
+

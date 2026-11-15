@@ -2,6 +2,20 @@ import EditorIntelligence
 import Foundation
 
 enum JavaNavigationText {
+    /// `document` with its text in the snapshot. File-backed buffers reach the services elided
+    /// (no `text`, a range reader), which the shared parse cache declines; this copy keeps the id,
+    /// URL and version, so the cache reuses its tree for the same text and reparses an edit
+    /// incrementally against it.
+    static func materialized(_ document: Document) -> Document {
+        guard document.contentSnapshot.isElided else { return document }
+        return Document(
+            id: document.id, url: document.url, displayName: document.displayName,
+            contentSnapshot: TextSnapshot(version: document.version, text: fullText(of: document)),
+            selection: document.selection, cursor: document.cursor, viewport: document.viewport,
+            languageIdentifier: document.languageIdentifier
+        )
+    }
+
     static func fullText(of document: Document) -> String {
         if let text = document.contentSnapshot.text {
             return text
