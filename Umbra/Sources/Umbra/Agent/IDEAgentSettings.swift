@@ -304,6 +304,9 @@ final class IDEAgentSettings {
     /// `PATH` used to decide which preset commands are installed. Refreshed from the login shell;
     /// until then it is the same base path agent commands use. Discovery does not spawn agents.
     var acpPathValue: String
+    /// Bumped by every discovery refresh, so views that list agents look at the disk again even when
+    /// `PATH` did not change (a CLI installed while Settings was open).
+    private(set) var acpDiscoveryEpoch = 0
     /// Results of connection tests the user started. Not written to disk: a diagnostic can quote
     /// an agent message, and nothing here is a credential.
     var acpProbes: [UUID: IDEACPProbe] = [:]
@@ -453,6 +456,7 @@ final class IDEAgentSettings {
     func refreshACPPath() async {
         let login = await IDELoginShellPath.shared.entries()
         acpPathValue = AgentCommandEnvironment.make(javaHome: nil, loginPath: login)["PATH"] ?? acpPathValue
+        acpDiscoveryEpoch += 1
     }
 
     // ACP secret environment values live in the Keychain (per-agent accounts), never in

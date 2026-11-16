@@ -15,6 +15,7 @@ struct IDEACPAgentRow: View {
     private let manager = IDEACPAdapterManager.shared
 
     var body: some View {
+        let _ = settings.acpDiscoveryEpoch
         let status = availability(of: definition)
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
             HStack {
@@ -48,7 +49,7 @@ struct IDEACPAgentRow: View {
                     .help(launch.commandLine)
             }
             if let preset = definition.presetID.flatMap(IDEACPRegistry.preset(id:)) {
-                Text(preset.authHint)
+                Text(preset.entry?.isExperimental == true ? "Experimental ACP support. \(preset.authHint)" : preset.authHint)
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
@@ -156,10 +157,20 @@ struct IDEACPAgentRow: View {
             }
             return "Installed"
         case .notInstalled:
-            return definition.command.contains("/") ? "Executable not found" : "Not installed"
+            if case .unavailable(let reason) = manager.resolution(for: definition, pathValue: settings.acpPathValue),
+               case .cliUnverified = reason
+            {
+                return reason.message
+            }
+            if definition.command.contains("/") { return "Executable not found" }
+            if let hint = provider(definition)?.installHint { return "Not installed · \(hint)" }
+            return "Not installed"
         case .adapterMissing:
             return "Adapter not installed. Install it under Adapters above."
         case .authenticationRequired(let method):
+            if let login = provider(definition)?.loginCommand {
+                return "Authentication required · Run “\(login)” in Terminal, then Test again."
+            }
             return "Authentication required · \(method)"
         case .connected: return "Connected"
         case .disconnected: return "Disconnected. Send a message to start the agent again."
@@ -169,6 +180,10 @@ struct IDEACPAgentRow: View {
             return "Error · \(message)"
         case .disabled: return "Disabled"
         }
+    }
+
+    private func provider(_ definition: IDEACPDefinition) -> IDEACPAdapterEntry? {
+        IDEACPAdapterCatalog.entry(presetID: definition.presetID)
     }
 
     private func statusColor(_ status: IDEACPAvailability) -> Color {

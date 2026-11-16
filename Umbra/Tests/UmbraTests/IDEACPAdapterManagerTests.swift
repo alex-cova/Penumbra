@@ -82,7 +82,8 @@ final class IDEACPAdapterManagerTests: XCTestCase {
         XCTAssertEqual(state.phase, .ready(version: "2.5.0"))
         XCTAssertEqual(state.versions.map(\.version), ["2.5.0"])
         XCTAssertEqual(h.manager.states["claude-agent-acp"]?.phase, .notInstalled)
-        XCTAssertEqual(h.manager.states.count, 4, "the native CLIs are listed too")
+        XCTAssertEqual(Set(h.manager.states.keys), Set(IDEACPAdapterCatalog.entries.map(\.id)), "the native CLIs are listed too")
+        XCTAssertEqual(h.manager.states.count, 7)
         XCTAssertFalse(FileManager.default.fileExists(atPath: h.root.store.versionDirectory("codex-acp", "9.9.9").path))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: h.root.store.stagingDirectory("codex-acp").path), [])
     }

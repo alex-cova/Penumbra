@@ -91,6 +91,38 @@ enum IDEACPRegistry {
                     command: "opencode", args: ["acp"], isAdapter: false,
                     note: "Native ACP. opencode acp"),
             ]),
+        // Kiro, Cursor and Muse speak ACP themselves. Commands verified against the installed CLIs on
+        // 2026-11-16 (Kiro CLI 2.24.1, Cursor CLI 2026.11.05, Muse 1.4.20): initialize and session/new.
+        IDEACPPreset(
+            id: "kiro",
+            name: "Kiro",
+            summary: "Kiro CLI's built-in ACP mode.",
+            authHint: IDEACPAdapterCatalog.kiro.authHint,
+            launchers: [
+                IDEACPLauncher(
+                    command: "kiro-cli", args: ["acp"], isAdapter: false,
+                    note: "Native ACP. kiro-cli acp"),
+            ]),
+        IDEACPPreset(
+            id: "cursor",
+            name: "Cursor",
+            summary: "Cursor CLI's built-in ACP mode.",
+            authHint: IDEACPAdapterCatalog.cursor.authHint,
+            launchers: [
+                IDEACPLauncher(
+                    command: "agent", args: ["acp"], isAdapter: false,
+                    note: "Native ACP. agent acp (Cursor's agent, checked by its install path)"),
+            ]),
+        IDEACPPreset(
+            id: "muse",
+            name: "Muse",
+            summary: "Muse Code's ACP mode (experimental).",
+            authHint: IDEACPAdapterCatalog.muse.authHint,
+            launchers: [
+                IDEACPLauncher(
+                    command: "muse", args: ["acp"], isAdapter: false,
+                    note: "Native ACP. muse acp"),
+            ]),
     ]
 
     static func preset(id: String) -> IDEACPPreset? { presets.first { $0.id == id } }
@@ -335,7 +367,28 @@ enum IDEACPAuth {
         guard let acp = error as? ACPError, case .agentError(let rpc) = acp else { return false }
         let message = rpc.message.lowercased()
         return message.contains("auth") || message.contains("sign in") || message.contains("login")
-            || message.contains("unauthor")
+            || message.contains("log in") || message.contains("logged in") || message.contains("unauthor")
+    }
+
+    /// `isAuthenticationFailure`, or ACP's auth-required code (`-32000`) from an agent that advertised
+    /// a way to sign in, whatever its wording.
+    static func isAuthenticationRequired(_ error: Error, agentAdvertisedMethods: Bool) -> Bool {
+        if isAuthenticationFailure(error) { return true }
+        guard agentAdvertisedMethods, let acp = error as? ACPError, case .agentError(let rpc) = acp else { return false }
+        return rpc.code == -32000
+    }
+
+    /// What to tell the user when an agent that never signs in on its own needs a login. The agent's
+    /// own message is kept (Muse puts the device link and code there), scrubbed of anything that looks
+    /// like a credential, then the CLI's login command.
+    static func signInMessage(agent: String, agentMessage: String, loginCommand: String?) -> String {
+        var parts = ["\(agent) needs you to sign in."]
+        let detail = IDEACPSecretScrubber.scrub(agentMessage).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !detail.isEmpty, detail.lowercased() != "authentication required" { parts.append(detail) }
+        if let loginCommand {
+            parts.append("Run “\(loginCommand)” in Terminal, then send your message again.")
+        }
+        return parts.joined(separator: " ")
     }
 }
 

@@ -60,6 +60,9 @@ public actor ACPClientSession {
     private let requestTimeout: Duration
     /// How long a permission card may sit unanswered before it is cancelled. Zero waits forever.
     private let permissionTimeout: Duration
+    private let authenticationPolicy: ACPAuthenticationPolicy
+    /// Provider-specific methods (`cursor/*`). Consulted only for methods this session does not implement.
+    private let extensions: [any ACPClientExtension]
 
     public private(set) var permissionMode: PermissionMode
     public private(set) var permissionRules: PermissionRules
@@ -68,6 +71,9 @@ public actor ACPClientSession {
     public private(set) var initializeResponse: ACPInitializeResponse?
     public private(set) var sessionId: String?
     public private(set) var modeState: ACPSessionModeState?
+    /// The agent's advertised models (`models` in the session response). Nil when it sent none,
+    /// in which case `setModel` is never sent.
+    public private(set) var modelState: ACPSessionModelState?
     public private(set) var configOptions: [ACPConfigOption] = []
     public private(set) var availableCommands: [String] = []
 
@@ -88,6 +94,10 @@ public actor ACPClientSession {
     private var timedOutCalls: Set<String> = []
     private var pendingOptions: [String: [ACPPermissionOption]] = [:]
     private var pendingSuggestedRules: [String: PermissionRule] = [:]
+    /// Questions and plans an extension is waiting on, answered by `answerQuestion` / `resolvePlan`.
+    private var pendingQuestions: [String: CheckedContinuation<ACPQuestionOutcome, Never>] = [:]
+    private var pendingPlans: [String: CheckedContinuation<PlanDecision?, Never>] = [:]
+    private var interactionTimeouts: [String: Task<Void, Never>] = [:]
 
     public init(
         transport: any ACPTransport,
@@ -100,8 +110,12 @@ public actor ACPClientSession {
         rules: PermissionRules = PermissionRules(),
         requestTimeout: Duration = .seconds(30),
         permissionTimeout: Duration = .seconds(300),
-        checkpoints: CheckpointLog? = nil
+        checkpoints: CheckpointLog? = nil,
+        authenticationPolicy: ACPAuthenticationPolicy = .automatic,
+        extensions: [any ACPClientExtension] = []
     ) {
+        self.authenticationPolicy = authenticationPolicy
+        self.extensions = extensions
         self.checkpoints = checkpoints
         self.transport = transport
         self.hostServices = hostServices
@@ -187,11 +201,23 @@ public actor ACPClientSession {
     /// `-32000` means "authenticate first" only when the agent advertised a method.
     /// A stale session id, with no method advertised, is returned unchanged.
     private func authenticateIfAgentDemandsIt(_ error: Error, connection: ACPConnection) async throws {
-        guard case ACPError.agentError(let rpc) = error, rpc.code == -32000,
+        guard authenticationPolicy == .automatic, case ACPError.agentError(let rpc) = error, rpc.code == -32000,
               initializeResponse?.authMethods.isEmpty == false else {
             throw error
         }
         try await authenticate(connection: connection)
+    }
+
+    /// Runs one advertised auth method because the user asked to sign in. The agent decides what
+    /// that does (a stored CLI login, a device code, a browser); the client never sees a credential.
+    public func authenticate(methodId: String) async throws {
+        _ = try await connect()
+        guard let connection else { throw ACPError.notConnected }
+        guard initializeResponse?.authMethods.contains(where: { $0.id == methodId }) == true else {
+            throw ACPError.agentError(.invalidParams("The agent did not advertise the auth method “\(methodId)”."))
+        }
+        _ = try await connection.request(
+            method: "authenticate", params: .object(["methodId": .string(methodId)]), timeout: requestTimeout)
     }
 
     private func startSession(method: String, extra: [String: JSONValue], connection: ACPConnection) async throws -> String {
@@ -208,6 +234,7 @@ public actor ACPClientSession {
         let response = try ACPNewSessionResponse(jsonValue: raw, fallbackSessionID: fallback)
         sessionId = response.sessionId
         if let modes = response.modes { modeState = modes }
+        if let models = response.models { modelState = models }
         if !response.configOptions.isEmpty { configOptions = response.configOptions }
         return response.sessionId
     }
@@ -237,6 +264,7 @@ public actor ACPClientSession {
         let response = try ACPNewSessionResponse(jsonValue: raw)
         sessionId = response.sessionId
         if let modes = response.modes { modeState = modes }
+        if let models = response.models { modelState = models }
         if !response.configOptions.isEmpty { configOptions = response.configOptions }
         return response.sessionId
     }
@@ -277,6 +305,21 @@ public actor ACPClientSession {
         let options = (raw["configOptions"]?.arrayValue ?? []).map(ACPConfigOption.init(jsonValue:))
         configOptions = options
         return options
+    }
+
+    /// Switches the session model with `session/set_model`. Only a model the agent advertised in
+    /// `models` is sent; an agent that advertised none is never asked.
+    public func setModel(_ modelId: String) async throws {
+        guard let connection else { throw ACPError.notConnected }
+        guard let state = modelState, state.availableModels.contains(where: { $0.modelId == modelId }) else {
+            throw ACPError.agentError(.invalidParams("The agent did not advertise the model “\(modelId)”."))
+        }
+        let sessionId = try await ensureSession()
+        _ = try await connection.request(
+            method: "session/set_model",
+            params: .object(["sessionId": .string(sessionId), "modelId": .string(modelId)]),
+            timeout: requestTimeout)
+        modelState?.currentModelId = modelId
     }
 
     // MARK: - Prompt turns
@@ -371,6 +414,7 @@ public actor ACPClientSession {
         pendingSuggestedRules = [:]
         finishUnansweredCalls(approvals.keys)
         for (_, continuation) in approvals { continuation.resume(returning: .cancelled) }
+        cancelInteractions()
         guard let connection, let sessionId else { return }
         try? await connection.notify(method: "session/cancel", params: .object(["sessionId": .string(sessionId)]))
     }
@@ -460,9 +504,113 @@ public actor ACPClientSession {
         return ToolOutput(Self.permissionTimedOutNote + (text.isEmpty ? "" : "\n" + text), isError: true)
     }
 
-    /// ACP has no `ask_user` equivalent in the client direction; late answers are ignored,
-    /// matching `AgentSession.answerQuestion` for an unknown call.
-    public func answerQuestion(callID: String, answer: String?) {}
+    /// Answers a question an extension asked (`askQuestion`); `nil` skips it. A late or unknown
+    /// answer is ignored, matching `AgentSession.answerQuestion`.
+    public func answerQuestion(callID: String, answer: String?) {
+        interactionTimeouts.removeValue(forKey: callID)?.cancel()
+        guard let continuation = pendingQuestions.removeValue(forKey: callID) else { return }
+        activeContinuation?.yield(.stateChanged(.streaming))
+        continuation.resume(returning: answer.map(ACPQuestionOutcome.answered) ?? .skipped)
+    }
+
+    /// Answers a plan an extension proposed (`proposePlan`). A late or unknown decision is ignored.
+    public func resolvePlan(callID: String, decision: PlanDecision) {
+        interactionTimeouts.removeValue(forKey: callID)?.cancel()
+        guard let continuation = pendingPlans.removeValue(forKey: callID) else { return }
+        activeContinuation?.yield(.stateChanged(.streaming))
+        continuation.resume(returning: decision)
+    }
+
+    public var awaitingInteraction: [String] { Array(pendingQuestions.keys) + Array(pendingPlans.keys) }
+
+    // MARK: - Extension surface
+
+    /// Yields an event into the running prompt turn. Dropped when no run is on screen.
+    public func emit(_ event: AgentEvent) {
+        activeContinuation?.yield(event)
+    }
+
+    /// Starts a tool row for a call the agent described through an extension, unless the call is
+    /// already known from a standard `tool_call` update (an extension method often carries the id of
+    /// a call the agent also reports normally). Arguments are shown only for a new row.
+    public func emitToolCall(id: String, name: String, arguments: JSONValue? = nil) {
+        guard knownToolCalls[id] == nil else { return }
+        knownToolCalls[id] = name
+        activeContinuation?.yield(.toolCallStarted(id: id, name: name))
+        if let arguments, let text = try? arguments.serialized() {
+            activeContinuation?.yield(.toolCallArguments(id: id, name: name, arguments: text))
+        }
+    }
+
+    /// Finishes a tool row an extension started.
+    public func finishToolCall(id: String, output: String, isError: Bool = false) {
+        activeContinuation?.yield(.toolCallFinished(
+            id: id, name: knownToolCalls[id] ?? "tool", output: ToolOutput(output, isError: isError)))
+    }
+
+    /// Shows a question card on the call's row and waits for `answerQuestion`. Always returns: Stop,
+    /// a disconnect and `permissionTimeout` answer `.cancelled`, and with no run on screen (nobody
+    /// could see the card) it is `.cancelled` at once.
+    public func askQuestion(callID: String, title: String, question: String, options: [String]) async -> ACPQuestionOutcome {
+        guard activeContinuation != nil, !stopRequested, pendingQuestions[callID] == nil else { return .cancelled }
+        emitToolCall(id: callID, name: title)
+        activeContinuation?.yield(.stateChanged(.awaitingAnswer(callID: callID)))
+        activeContinuation?.yield(.questionAsked(UserQuestion(callID: callID, question: question, options: options)))
+        return await withCheckedContinuation { continuation in
+            pendingQuestions[callID] = continuation
+            armInteractionTimeout(callID: callID)
+        }
+    }
+
+    /// Shows a plan card on the call's row and waits for `resolvePlan`. `nil` means nobody decided
+    /// (Stop, a disconnect, the timeout, or no run on screen).
+    public func proposePlan(callID: String, title: String, plan: String) async -> PlanDecision? {
+        guard activeContinuation != nil, !stopRequested, pendingPlans[callID] == nil else { return nil }
+        emitToolCall(id: callID, name: title)
+        activeContinuation?.yield(.stateChanged(.awaitingPlanApproval(callID: callID)))
+        activeContinuation?.yield(.planProposed(callID: callID, plan: plan))
+        return await withCheckedContinuation { continuation in
+            pendingPlans[callID] = continuation
+            armInteractionTimeout(callID: callID)
+        }
+    }
+
+    private func armInteractionTimeout(callID: String) {
+        guard permissionTimeout > .zero else { return }
+        interactionTimeouts[callID] = Task {
+            try? await Task.sleep(for: permissionTimeout)
+            guard !Task.isCancelled else { return }
+            self.expireInteraction(callID: callID)
+        }
+    }
+
+    private func expireInteraction(callID: String) {
+        interactionTimeouts.removeValue(forKey: callID)
+        let question = pendingQuestions.removeValue(forKey: callID)
+        let plan = pendingPlans.removeValue(forKey: callID)
+        guard question != nil || plan != nil else { return }
+        activeContinuation?.yield(.toolCallFinished(
+            id: callID, name: knownToolCalls[callID] ?? "tool",
+            output: ToolOutput(Self.interactionTimedOutNote, isError: true)))
+        activeContinuation?.yield(.stateChanged(.streaming))
+        question?.resume(returning: .cancelled)
+        plan?.resume(returning: nil)
+    }
+
+    /// Stop and a disconnect: every open question or plan card is finished and answered as cancelled.
+    private func cancelInteractions() {
+        for task in interactionTimeouts.values { task.cancel() }
+        interactionTimeouts = [:]
+        let questions = pendingQuestions
+        let plans = pendingPlans
+        pendingQuestions = [:]
+        pendingPlans = [:]
+        finishUnansweredCalls(Array(questions.keys) + Array(plans.keys))
+        for (_, continuation) in questions { continuation.resume(returning: .cancelled) }
+        for (_, continuation) in plans { continuation.resume(returning: nil) }
+    }
+
+    static let interactionTimedOutNote = "Nobody answered in time, so the agent was told it was cancelled."
 
     // MARK: - Modes
 
@@ -500,6 +648,7 @@ public actor ACPClientSession {
         pendingSuggestedRules = [:]
         finishUnansweredCalls(approvals.keys)
         for (_, continuation) in approvals { continuation.resume(returning: .cancelled) }
+        cancelInteractions()
         if let continuation = activeContinuation {
             let message = error.map { "The ACP agent disconnected: \($0.localizedDescription)" } ?? "The ACP agent disconnected."
             finishRun(.failed(message), continuation: continuation)
@@ -507,7 +656,15 @@ public actor ACPClientSession {
     }
 
     private func dispatchNotification(method: String, params: JSONValue?) async {
-        guard method == "session/update", let params else { return }
+        if method != "session/update" {
+            // Another session's extension traffic is not this chat's.
+            if let other = params?.string("sessionId"), let sessionId, other != sessionId { return }
+            if let handler = extensions.first(where: { $0.handles(method: method) }) {
+                await handler.handleNotification(method: method, params: params, session: self)
+            }
+            return
+        }
+        guard let params else { return }
         if let updateSession = params.string("sessionId"), let sessionId, updateSession != sessionId { return }
         guard let updateValue = params["update"] else { return }
         let update = ACPSessionUpdate(jsonValue: updateValue)
@@ -666,7 +823,13 @@ public actor ACPClientSession {
             do { try await service(terminalId); return .success(.object([:])) }
             catch { return .failure(.internalError(error.localizedDescription)) }
         default:
-            return .failure(.methodNotFound(method))
+            guard let handler = extensions.first(where: { $0.handles(method: method) }) else {
+                return .failure(.methodNotFound(method))
+            }
+            if let other = params?.string("sessionId"), let sessionId, other != sessionId {
+                return .failure(.invalidParams("Unknown session “\(other)”."))
+            }
+            return await handler.handleRequest(method: method, params: params, session: self)
         }
     }
 

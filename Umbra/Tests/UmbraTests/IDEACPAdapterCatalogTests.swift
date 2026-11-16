@@ -6,7 +6,7 @@ final class IDEACPAdapterCatalogTests: XCTestCase {
     func testEntriesAreWellFormedAndMatchThePresets() {
         let ids = IDEACPAdapterCatalog.entries.map(\.id)
         XCTAssertEqual(Set(ids).count, ids.count, "ids are unique")
-        XCTAssertEqual(ids, ["codex-acp", "claude-agent-acp", "gemini", "opencode"])
+        XCTAssertEqual(ids, ["codex-acp", "claude-agent-acp", "gemini", "opencode", "kiro", "cursor", "muse"])
         for entry in IDEACPAdapterCatalog.entries {
             XCTAssertFalse(entry.name.isEmpty)
             XCTAssertFalse(entry.provider.isEmpty)

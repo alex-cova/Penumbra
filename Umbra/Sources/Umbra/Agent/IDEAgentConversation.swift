@@ -198,7 +198,22 @@ final class IDEAgentConversation: Identifiable {
     /// Agent-advertised config options. A select option can be changed; nothing is invented
     /// when the agent does not advertise one.
     private(set) var acpConfigOptions: [ACPConfigOption] = []
+    /// Models the agent advertised in `models` (Kiro, Cursor). Empty when it sent none, or when it
+    /// offers the model as a config option instead (Muse), so there is one model control, not two.
+    private(set) var acpAvailableModels: [ACPSessionModel] = []
+    private(set) var acpCurrentModelID: String?
     private(set) var acpAgentName: String?
+
+    /// Options for the config chip. A `mode` option is left out when the agent also sent `modes`,
+    /// which the mode chip already shows (Muse sends both).
+    var acpDisplayedConfigOptions: [ACPConfigOption] {
+        guard !acpAvailableModes.isEmpty else { return acpConfigOptions }
+        return acpConfigOptions.filter { $0.category != "mode" }
+    }
+
+    /// The catalog's description of this chat's agent (sign-in, extensions, mode mapping). A row the
+    /// user pointed at their own copy of the CLI is still that provider.
+    private var acpProviderEntry: IDEACPAdapterEntry? { IDEACPAdapterCatalog.entry(presetID: acpDefinition?.presetID) }
 
     /// Whether this chat is driven by an external ACP agent (its own choice, else the one selected in Settings ▸ Agent).
     var isACPConversation: Bool { acpDefinition != nil }
@@ -597,6 +612,7 @@ final class IDEAgentConversation: Identifiable {
             leases: IDEACPAdapterManager.shared.store.leases)
         var services = IDEACPHostServices.make(workspace: workspace, root: root, environment: environment)
         services.askText = { [weak self] prompt in await self?.askElicitation(prompt) }
+        let provider = acpProviderEntry
         let created = ACPClientSession(
             transport: transport,
             hostServices: services,
@@ -605,7 +621,9 @@ final class IDEAgentConversation: Identifiable {
             rules: currentRules(root: root),
             requestTimeout: acpRequestTimeout,
             permissionTimeout: acpPermissionTimeout,
-            checkpoints: await ensureCheckpointLog())
+            checkpoints: await ensureCheckpointLog(),
+            authenticationPolicy: provider?.authenticationPolicy ?? .automatic,
+            extensions: (provider?.extensions ?? []).map { $0.make() })
         acpTransport = transport
         acpSession = created
         acpFingerprint = fingerprint
@@ -640,6 +658,8 @@ final class IDEAgentConversation: Identifiable {
                     notice = createdNotice
                 }
             }
+            // An agent that runs tools itself (Muse) gets Umbra's permission mode as its own approval mode.
+            await applyAgentMode(for: mode, session: created)
             lastACPSessionID = IDEACPSessionResume.normalizedSessionID(await created.sessionId)
             acpLaunchFingerprint = fingerprint
             acpAgentName = definition.displayName
@@ -658,7 +678,8 @@ final class IDEAgentConversation: Identifiable {
         } catch {
             let failed = acpSession
             let failedTransport = acpTransport
-            let method = await failed?.initializeResponse?.authMethods.first?.name ?? "sign in"
+            let methods = await failed?.initializeResponse?.authMethods ?? []
+            let method = methods.first?.name ?? "sign in"
             acpSession = nil
             acpTransport = nil
             acpFingerprint = nil
@@ -669,8 +690,20 @@ final class IDEAgentConversation: Identifiable {
             await failed?.close()
             await failedTransport?.close()
             await failedTransport?.waitForExit()
-            if IDEACPAuth.isAuthenticationFailure(error) {
+            // Only an agent that never signs in on its own is judged by the code alone: the Claude Code
+            // and Codex adapters also answer -32000 for a missing CLI, which is not a sign-in.
+            let userInitiated = provider?.authenticationPolicy == .userInitiated
+            if IDEACPAuth.isAuthenticationFailure(error)
+                || (userInitiated && IDEACPAuth.isAuthenticationRequired(error, agentAdvertisedMethods: !methods.isEmpty))
+            {
                 acpLiveState = .authenticationRequired(method)
+                if provider?.authenticationPolicy == .userInitiated {
+                    let agentMessage = (error as? ACPError).flatMap { if case .agentError(let rpc) = $0 { rpc.message } else { nil } } ?? ""
+                    throw ACPError.agentError(JSONRPCError(
+                        code: -32000,
+                        message: IDEACPAuth.signInMessage(
+                            agent: definition.displayName, agentMessage: agentMessage, loginCommand: provider?.loginCommand)))
+                }
                 throw ACPError.agentError(JSONRPCError(
                     code: -32000,
                     message: "\(definition.displayName) needs authentication (\(method))."))
@@ -720,6 +753,8 @@ final class IDEAgentConversation: Identifiable {
         acpAvailableModes = []
         acpCurrentModeID = nil
         acpConfigOptions = []
+        acpAvailableModels = []
+        acpCurrentModelID = nil
         invalidateACPHeader()
         retireACPProcess(session: session, transport: transport)
     }
@@ -788,10 +823,46 @@ final class IDEAgentConversation: Identifiable {
             let modes = await session.modeState?.availableModes ?? []
             let modeID = await session.currentModeId
             let options = await session.configOptions
+            let models = await session.modelState
             guard epoch == self.acpHeaderEpoch else { return }
             self.acpAvailableModes = modes
             self.acpCurrentModeID = modeID
             self.acpConfigOptions = options
+            let modelIsAnOption = options.contains { $0.category == "model" }
+            self.acpAvailableModels = modelIsAnOption ? [] : models?.availableModels ?? []
+            self.acpCurrentModelID = modelIsAnOption ? nil : models?.currentModelId
+        }
+    }
+
+    /// Switches the agent's model (`session/set_model`), only among the models it advertised.
+    func setACPModel(_ modelID: String) {
+        guard let acpSession, acpAvailableModels.contains(where: { $0.modelId == modelID }) else { return }
+        let session = acpSession
+        enqueueACPHeader { [weak self] epoch in
+            guard let self else { return }
+            do {
+                try await session.setModel(modelID)
+                guard epoch == self.acpHeaderEpoch else { return }
+                self.acpCurrentModelID = modelID
+            } catch {
+                guard epoch == self.acpHeaderEpoch else { return }
+                self.appendError(IDEACPSecretScrubber.scrub(error.localizedDescription))
+            }
+        }
+    }
+
+    /// Sets the agent's own mode to match Umbra's permission mode when its catalog entry maps one
+    /// (Muse's approval modes, Cursor's plan mode) and the agent advertised that mode.
+    private func applyAgentMode(for mode: PermissionMode, session: ACPClientSession) async {
+        guard let entry = acpProviderEntry, !entry.permissionModeMap.isEmpty else { return }
+        let advertised = await session.modeState?.availableModes.map(\.id) ?? []
+        let current = await session.currentModeId
+        guard let target = entry.agentModeID(for: mode, current: current, advertised: advertised) else { return }
+        do {
+            try await session.setAgentMode(target)
+            acpCurrentModeID = target
+        } catch {
+            appendNotice("Could not switch \(acpAgentName ?? entry.name) to its “\(target)” mode: \(IDEACPSecretScrubber.scrub(error.localizedDescription))")
         }
     }
 
@@ -1163,7 +1234,12 @@ final class IDEAgentConversation: Identifiable {
         guard newMode != mode else { return }
         mode = newMode
         if let session { Task { await session.setMode(newMode) } }
-        if let acpSession { Task { await acpSession.setMode(newMode) } }
+        if let acpSession {
+            Task {
+                await acpSession.setMode(newMode)
+                await self.applyAgentMode(for: newMode, session: acpSession)
+            }
+        }
     }
 
     func cycleMode() { setMode(mode.next) }
@@ -2125,19 +2201,35 @@ final class IDEAgentConversation: Identifiable {
     /// Answers a plan card. Approving also switches this chat to that mode. A card showing a
     /// subagent's plan resolves with the child's call id, which the session routes to it.
     func approvePlan(callID: String, mode: PermissionMode) {
-        guard let session else { return }
+        guard session != nil || acpSession != nil else { return }
         let routed = subagentPlanCalls.removeValue(forKey: callID) ?? callID
         if let index = toolIndex(callID) {
             entries[index].plan = nil
             entries[index].planOutcome = "Approved · \(mode.displayName)"
         }
-        if mode != .plan { self.mode = mode }
         isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
-        Task { await session.resolvePlan(callID: routed, decision: .approve(mode)) }
+        if let session {
+            if mode != .plan { self.mode = mode }
+            Task { await session.resolvePlan(callID: routed, decision: .approve(mode)) }
+        } else if let acpSession {
+            // An external agent's plan (Cursor's `cursor/create_plan`): the mode change goes through
+            // `setMode`, so the agent's own mode follows it.
+            if mode != .plan { setMode(mode) }
+            Task { await acpSession.resolvePlan(callID: callID, decision: .approve(mode)) }
+        }
     }
 
     /// "Keep planning": the model revises with the user's words.
     func revisePlan(callID: String, feedback: String) {
+        if session == nil, let acpSession {
+            if let index = toolIndex(callID) {
+                entries[index].plan = nil
+                entries[index].planOutcome = "Changes requested"
+            }
+            isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+            Task { await acpSession.resolvePlan(callID: callID, decision: .revise(feedback)) }
+            return
+        }
         guard let session else { return }
         let routed = subagentPlanCalls.removeValue(forKey: callID) ?? callID
         if let index = toolIndex(callID) {

@@ -278,6 +278,42 @@ public struct ACPSessionModeState: Sendable, Equatable {
     }
 }
 
+/// One model an agent advertised in a session response's `models` field (ACP's session model
+/// selection, still marked unstable in the spec). Kiro and Cursor send it; agents that expose
+/// the model as a config option (Muse) do not.
+public struct ACPSessionModel: Sendable, Equatable {
+    public var modelId: String
+    public var name: String
+    public var description: String?
+    public init(modelId: String, name: String, description: String? = nil) {
+        self.modelId = modelId; self.name = name; self.description = description
+    }
+    public init(jsonValue: JSONValue) {
+        modelId = jsonValue.string("modelId") ?? ""
+        name = jsonValue.string("name") ?? modelId
+        description = jsonValue.string("description")
+    }
+}
+
+public struct ACPSessionModelState: Sendable, Equatable {
+    public var currentModelId: String
+    public var availableModels: [ACPSessionModel]
+    public init(currentModelId: String, availableModels: [ACPSessionModel]) {
+        self.currentModelId = currentModelId; self.availableModels = availableModels
+    }
+    /// Nil when the agent sent no `models` object, or one with no usable model: the client then
+    /// shows no model picker and never calls `session/set_model`.
+    public init?(jsonValue: JSONValue?) {
+        guard let jsonValue, let current = jsonValue.string("currentModelId") else { return nil }
+        let models = (jsonValue["availableModels"]?.arrayValue ?? [])
+            .map(ACPSessionModel.init(jsonValue:))
+            .filter { !$0.modelId.isEmpty }
+        guard !models.isEmpty else { return nil }
+        currentModelId = current
+        availableModels = models
+    }
+}
+
 /// One agent-advertised config option, kept largely raw: full config UI is a non-goal (plan step 6).
 public struct ACPConfigOption: Sendable, Equatable {
     public var id: String
@@ -292,6 +328,8 @@ public struct ACPConfigOption: Sendable, Equatable {
         type = jsonValue.string("type")
         raw = jsonValue
     }
+    /// The option's semantic category (`mode`, `model`, `thought_level`, …) when the agent sent one.
+    public var category: String? { raw.string("category") }
     /// Current value as display text, when the option carries one.
     public var currentValueDescription: String? {
         if let value = raw["currentValue"] {
@@ -309,6 +347,7 @@ public struct ACPConfigOption: Sendable, Equatable {
 public struct ACPNewSessionResponse: Sendable, Equatable {
     public var sessionId: String
     public var modes: ACPSessionModeState?
+    public var models: ACPSessionModelState?
     public var configOptions: [ACPConfigOption]
     /// `fallbackSessionID` covers agents that accept `session/load` and omit `sessionId`
     /// in the result. Codex ACP 2.6.0 does that. `session/new` does not pass a fallback.
@@ -318,6 +357,7 @@ public struct ACPNewSessionResponse: Sendable, Equatable {
         }
         sessionId = id
         modes = ACPSessionModeState(jsonValue: jsonValue["modes"])
+        models = ACPSessionModelState(jsonValue: jsonValue["models"])
         configOptions = (jsonValue["configOptions"]?.arrayValue ?? []).map(ACPConfigOption.init(jsonValue:))
     }
 }

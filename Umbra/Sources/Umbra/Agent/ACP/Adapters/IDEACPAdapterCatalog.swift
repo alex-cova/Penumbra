@@ -1,3 +1,4 @@
+import AgentKit
 import Foundation
 
 /// An npm package Umbra can install into its own folder.
@@ -23,6 +24,30 @@ enum IDEACPAdapterKind: Equatable, Sendable {
     case custom
 }
 
+/// A check on the file a bare command name resolved to, after following symbolic links. A
+/// generic name (`agent`) can belong to another program on `PATH`: on a Mac with Grok's CLI the
+/// first `agent` is Grok's, not Cursor's. A candidate that fails the check is skipped, never run.
+struct IDEACPExecutableIdentity: Equatable, Sendable {
+    /// The resolved path must contain one of these, ignoring case.
+    var resolvedPathContainsAny: [String]
+
+    func accepts(resolvedPath: String) -> Bool {
+        let path = resolvedPath.lowercased()
+        return resolvedPathContainsAny.contains { path.contains($0.lowercased()) }
+    }
+}
+
+/// Provider extension methods Umbra can answer (`ACPClientExtension`).
+enum IDEACPExtensionKind: Equatable, Sendable {
+    case cursor
+
+    func make() -> any ACPClientExtension {
+        switch self {
+        case .cursor: CursorACPExtension()
+        }
+    }
+}
+
 /// One agent in the catalog. The catalog is code, not downloaded data: what Umbra trusts to
 /// install is decided here and reviewed with the source, never by a remote manifest.
 /// Versions are not listed; they come from the registry at check time.
@@ -39,6 +64,44 @@ struct IDEACPAdapterEntry: Equatable, Sendable, Identifiable {
     /// Rough size of the whole install tree, platform binary included, for the disk check and the
     /// approval sheet. The registry only knows the adapter's own few megabytes.
     var approximateInstallBytes: Int64
+    /// Other names a native CLI is installed under, tried after `kind`'s command.
+    var alternateCommands: [String] = []
+    /// Folders searched after `PATH` (`~` is the home folder), for CLIs whose installer puts them
+    /// where a GUI app's `PATH` may not reach.
+    var extraSearchDirectories: [String] = []
+    /// Required when the command name is generic enough to belong to another program.
+    var executableIdentity: IDEACPExecutableIdentity? = nil
+    /// The CLI's own sign-in, shown when the agent says authentication is needed.
+    var loginCommand: String? = nil
+    /// `.userInitiated` never starts the agent's login flow unasked.
+    var authenticationPolicy: ACPAuthenticationPolicy = .automatic
+    var extensions: [IDEACPExtensionKind] = []
+    /// Umbra's permission mode → the agent's own mode id, for agents whose modes are approval
+    /// policies Umbra cannot otherwise enforce (they run tools themselves, not through Umbra's
+    /// file and terminal services). Applied only when the agent advertised that id.
+    var permissionModeMap: [PermissionMode: String] = [:]
+    /// The agent mode to return to when Umbra leaves a mapped mode and the new one has no entry.
+    var defaultAgentModeID: String? = nil
+    /// Where to get the CLI, shown when it is not installed. Umbra never installs it.
+    var installHint: String? = nil
+    /// Shown beside the agent: its ACP support is early and may change.
+    var isExperimental = false
+
+    /// The agent's mode for a permission mode change, or nil to leave the agent's mode alone.
+    /// `current` is the agent's mode now: leaving a mapped mode for an unmapped one goes back to the
+    /// default, and a mode the user picked on the agent's own chip is otherwise kept.
+    func agentModeID(for mode: PermissionMode, current: String?, advertised: [String]) -> String? {
+        let target: String?
+        if let mapped = permissionModeMap[mode] {
+            target = mapped
+        } else if let current, permissionModeMap.values.contains(current) {
+            target = defaultAgentModeID
+        } else {
+            target = nil
+        }
+        guard let target, target != current, advertised.contains(target) else { return nil }
+        return target
+    }
 
     var npm: IDEACPNpmSource? {
         if case .npmPackage(let source) = kind { return source }
@@ -113,6 +176,71 @@ enum IDEACPAdapterCatalog {
         authHint: "Uses the providers you signed in to with opencode.",
         approximateInstallBytes: 0)
 
+    /// Kiro CLI (https://kiro.dev/docs/cli/acp/). Its modes are agent configurations, not approval
+    /// policies, so no permission mapping. Models come in the session's `models` field.
+    static let kiro = IDEACPAdapterEntry(
+        id: "kiro",
+        presetID: "kiro",
+        name: "Kiro",
+        provider: "Kiro",
+        symbol: "wand.and.stars",
+        kind: .nativeCLI(command: "kiro-cli", args: ["acp"]),
+        systemCommand: nil,
+        authHint: "Uses your Kiro sign-in. Run kiro-cli login in Terminal if Umbra says you need to sign in.",
+        approximateInstallBytes: 0,
+        extraSearchDirectories: ["~/.local/bin"],
+        loginCommand: "kiro-cli login",
+        authenticationPolicy: .userInitiated,
+        installHint: "Install Kiro CLI from kiro.dev/cli, then press Detect Again.")
+
+    /// Cursor CLI (https://cursor.com/docs/cli/acp). `agent` is a generic name, so the resolved file
+    /// must be Cursor's (its installer links `agent` and `cursor-agent` into a `cursor-agent` folder;
+    /// Homebrew's cask is named `cursor-cli`).
+    static let cursor = IDEACPAdapterEntry(
+        id: "cursor",
+        presetID: "cursor",
+        name: "Cursor",
+        provider: "Anysphere",
+        symbol: "cursorarrow.rays",
+        kind: .nativeCLI(command: "agent", args: ["acp"]),
+        systemCommand: nil,
+        authHint: "Uses your Cursor CLI login (agent login), or CURSOR_API_KEY set as a secret below.",
+        approximateInstallBytes: 0,
+        alternateCommands: ["cursor-agent"],
+        extraSearchDirectories: ["~/.local/bin"],
+        executableIdentity: IDEACPExecutableIdentity(resolvedPathContainsAny: ["cursor-agent", "cursor-cli", "/cursor"]),
+        loginCommand: "agent login",
+        authenticationPolicy: .userInitiated,
+        extensions: [.cursor],
+        permissionModeMap: [.plan: "plan"],
+        defaultAgentModeID: "agent",
+        installHint: "Install Cursor CLI from cursor.com/cli, then press Detect Again.")
+
+    /// Muse Code (`muse acp`). It reads and writes the disk and runs tools itself, never through
+    /// Umbra's file and terminal services, and starts in `allowAll` ("run every action without
+    /// asking"). Umbra's permission mode is therefore applied as Muse's approval mode.
+    static let muse = IDEACPAdapterEntry(
+        id: "muse",
+        presetID: "muse",
+        name: "Muse",
+        provider: "Meta",
+        symbol: "sparkles",
+        kind: .nativeCLI(command: "muse", args: ["acp"]),
+        systemCommand: nil,
+        authHint: "Uses your Muse Code login. Run muse login in Terminal if Umbra says you need to sign in.",
+        approximateInstallBytes: 0,
+        extraSearchDirectories: ["~/.local/bin"],
+        loginCommand: "muse login",
+        authenticationPolicy: .userInitiated,
+        permissionModeMap: [
+            .manual: "promptUnmatched",
+            .acceptEdits: "promptUnmatched",
+            .auto: "onRequest",
+            .plan: "denyUnmatched",
+        ],
+        installHint: "Install Muse Code, then press Detect Again.",
+        isExperimental: true)
+
     /// The custom executable row: not installable, always user-managed.
     static let custom = IDEACPAdapterEntry(
         id: "custom",
@@ -125,7 +253,7 @@ enum IDEACPAdapterCatalog {
         authHint: "Whatever the program you configure needs.",
         approximateInstallBytes: 0)
 
-    static let entries: [IDEACPAdapterEntry] = [codex, claude, gemini, opencode]
+    static let entries: [IDEACPAdapterEntry] = [codex, claude, gemini, opencode, kiro, cursor, muse]
 
     static func entry(id: String) -> IDEACPAdapterEntry? { entries.first { $0.id == id } }
     static func entry(presetID: String?) -> IDEACPAdapterEntry? {

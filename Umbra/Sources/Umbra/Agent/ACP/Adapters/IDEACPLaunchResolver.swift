@@ -45,6 +45,8 @@ enum IDEACPLaunchUnavailable: Equatable, Sendable {
     case nodeMissing
     /// The agent's CLI is not on `PATH`.
     case cliMissing(String)
+    /// A file with the CLI's name was found but is another program (a generic name such as `agent`).
+    case cliUnverified(command: String, path: String, agent: String)
     case customMissing(String)
 
     var message: String {
@@ -52,6 +54,8 @@ enum IDEACPLaunchUnavailable: Equatable, Sendable {
         case .notInstalled(let name): "The \(name) adapter is not installed. Install it in Settings ▸ Agent ▸ Adapters."
         case .nodeMissing: "Node.js was not found, and this adapter needs it. Install Node.js 22 or later."
         case .cliMissing(let command): "Could not find “\(command)” on PATH."
+        case .cliUnverified(let command, let path, let agent):
+            "Found “\(command)” at \(path), but it is not \(agent)’s CLI, so Umbra will not run it. Install \(agent)’s CLI, or set the full path to it in Settings ▸ Agent."
         case .customMissing(let message): message
         }
     }
@@ -77,7 +81,9 @@ enum IDEACPLaunchResolver {
         active: IDEACPActiveInstall?,
         pathValue: String,
         isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
-        systemPackageName: (String) -> String? = IDEACPLaunchResolver.packageName(ofExecutable:)
+        systemPackageName: (String) -> String? = IDEACPLaunchResolver.packageName(ofExecutable:),
+        resolvedPath: (String) -> String = IDEACPLaunchResolver.resolvingSymlinks,
+        home: String = NSHomeDirectory()
     ) -> Resolution {
         if definition.launchMode == .custom || entry == nil {
             guard let path = definition.resolvedExecutable(pathValue: pathValue, isExecutable: isExecutable) else {
@@ -95,12 +101,18 @@ enum IDEACPLaunchResolver {
             return .unavailable(.customMissing(definition.missingExecutableMessage))
 
         case .nativeCLI(let command, let args):
-            let probe = IDEACPDefinition(name: entry.name, command: command, args: args)
-            guard let path = probe.resolvedExecutable(pathValue: pathValue, isExecutable: isExecutable) else {
+            switch findNativeCLI(
+                entry: entry, command: command, pathValue: pathValue, home: home,
+                isExecutable: isExecutable, resolvedPath: resolvedPath)
+            {
+            case .found(let path):
+                return .launch(IDEACPResolvedLaunch(
+                    executable: path, args: args, source: .nativeCLI, identity: identity, managed: nil))
+            case .rejected(let name, let path):
+                return .unavailable(.cliUnverified(command: name, path: path, agent: entry.name))
+            case .missing:
                 return .unavailable(.cliMissing(command))
             }
-            return .launch(IDEACPResolvedLaunch(
-                executable: path, args: args, source: .nativeCLI, identity: identity, managed: nil))
 
         case .npmPackage(let source):
             if let active {
@@ -124,6 +136,49 @@ enum IDEACPLaunchResolver {
             }
             return .unavailable(.notInstalled(entry.name))
         }
+    }
+
+    enum NativeSearch: Equatable {
+        case found(String)
+        /// The first file that had a candidate's name but failed the identity check.
+        case rejected(name: String, path: String)
+        case missing
+    }
+
+    /// Looks for a native CLI under each of its names, in `PATH` order and then in the entry's extra
+    /// folders. Only the filesystem is read: nothing is started. With an identity check, a file that
+    /// is another program is skipped and the search goes on, so Cursor's `agent` later on `PATH` is
+    /// found past Grok's.
+    static func findNativeCLI(
+        entry: IDEACPAdapterEntry, command: String, pathValue: String, home: String,
+        isExecutable: (String) -> Bool, resolvedPath: (String) -> String
+    ) -> NativeSearch {
+        var directories: [String] = []
+        for directory in pathValue.split(separator: ":").map(String.init) + entry.extraSearchDirectories.map({ expand($0, home: home) })
+        where !directory.isEmpty && !directories.contains(directory) {
+            directories.append(directory)
+        }
+        var rejected: NativeSearch?
+        for name in [command] + entry.alternateCommands {
+            for directory in directories {
+                let candidate = "\(directory)/\(name)"
+                guard isExecutable(candidate) else { continue }
+                guard let check = entry.executableIdentity else { return .found(candidate) }
+                if check.accepts(resolvedPath: resolvedPath(candidate)) { return .found(candidate) }
+                if rejected == nil { rejected = .rejected(name: name, path: candidate) }
+            }
+        }
+        return rejected ?? .missing
+    }
+
+    static func expand(_ directory: String, home: String) -> String {
+        if directory == "~" { return home }
+        if directory.hasPrefix("~/") { return home + directory.dropFirst() }
+        return directory
+    }
+
+    static func resolvingSymlinks(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().path
     }
 
     /// The `name` in the `package.json` that holds `path` (after following links), looked for in

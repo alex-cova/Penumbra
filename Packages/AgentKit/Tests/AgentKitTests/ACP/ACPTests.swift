@@ -24,6 +24,9 @@ final class FakeACPAgent: @unchecked Sendable {
     var hangInitialize = false
     /// Codex ACP 2.6.0 answers `session/load` without `sessionId`. The client keeps the requested id.
     var omitSessionIdOnLoad = false
+    /// Sent as `models` in the session response when set (Kiro and Cursor do this).
+    var modelsJSON: JSONValue?
+    let setModelID = ACPLocked<String?>(nil)
     let authenticated = ACPLocked(false)
     let cancelled = ACPLocked(false)
     let lastInitializeParams = ACPLocked<JSONValue?>(nil)
@@ -82,7 +85,7 @@ final class FakeACPAgent: @unchecked Sendable {
                     ]),
                 ]))
             }
-            return .success(.object([
+            var response: [String: JSONValue] = [
                 "sessionId": .string(params?.string("sessionId") ?? "fake-session-1"),
                 "modes": .object([
                     "currentModeId": "agent",
@@ -94,7 +97,12 @@ final class FakeACPAgent: @unchecked Sendable {
                 "configOptions": .array([
                     .object(["id": "model", "name": "Model", "type": "select", "currentValue": "fake-1"]),
                 ]),
-            ]))
+            ]
+            if let modelsJSON { response["models"] = modelsJSON }
+            return .success(.object(response))
+        case "session/set_model":
+            setModelID.set(params?.string("modelId"))
+            return .success(.object([:]))
         case "session/prompt":
             let text = params?["prompt"]?.arrayValue?.first.flatMap { ACPContentBlock(jsonValue: $0).textValue } ?? ""
             promptText.set(text)

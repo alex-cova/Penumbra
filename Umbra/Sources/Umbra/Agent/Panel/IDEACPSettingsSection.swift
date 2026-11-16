@@ -17,7 +17,17 @@ struct IDEACPSettingsSection: View {
 
     var body: some View {
         @Bindable var settings = settings
+        _ = settings.acpDiscoveryEpoch
         return Section("Agents") {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Agents are found on PATH and in the folders their installers use. Nothing is started until you allow it.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Spacer()
+                Button("Detect Again") { Task { await settings.refreshACPPath() } }
+                    .font(IDEAppearance.Typography.caption)
+                    .help("Look for installed agent CLIs again. Nothing is run.")
+            }
             Text("Umbra Native uses the model above. An external agent runs on this Mac and talks to this panel over the Agent Client Protocol. Each chat keeps its own transcript.")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -70,11 +80,13 @@ struct IDEACPSettingsSection: View {
         let launcher = preset.recordedLauncher
         let probe = IDEACPDefinition(
             name: preset.name, command: launcher.command, args: launcher.args, presetID: preset.id, launchMode: .auto)
-        if manager.resolution(for: probe, pathValue: settings.acpPathValue).launch != nil { return preset.summary }
+        let resolution = manager.resolution(for: probe, pathValue: settings.acpPathValue)
+        if resolution.launch != nil { return preset.summary }
         if preset.entry?.isManaged == true && !manager.isSandboxed {
             return "Adapter not installed. Install it under Adapters above. Adding this row does not download anything. \(preset.summary)"
         }
-        return "Not installed. \(preset.summary)"
+        if case .unavailable(let reason) = resolution, case .cliUnverified = reason { return reason.message }
+        return ["Not installed.", preset.entry?.installHint, preset.summary].compactMap { $0 }.joined(separator: " ")
     }
 
 }

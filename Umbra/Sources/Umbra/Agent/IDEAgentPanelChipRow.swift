@@ -26,7 +26,10 @@ struct IDEAgentPanelChipRow: View {
             IDEAgentModeChip(mode: agent.mode) { agent.selected.setMode($0) }
             if agent.selected.isACPConversation {
                 IDEACPModeChip(conversation: agent.selected)
-                if !agent.selected.acpConfigOptions.isEmpty {
+                if !agent.selected.acpAvailableModels.isEmpty {
+                    IDEACPModelChip(conversation: agent.selected)
+                }
+                if !agent.selected.acpDisplayedConfigOptions.isEmpty {
                     IDEACPConfigChip(conversation: agent.selected)
                 }
                 Button("Restart Agent") { agent.selected.restartACP() }

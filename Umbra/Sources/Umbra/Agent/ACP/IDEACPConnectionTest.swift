@@ -16,7 +16,10 @@ enum IDEACPConnectionTest {
         }
         let transport = IDEACPTransport(
             definition: definition, workingDirectory: workingDirectory, environment: environment)
-        return await run(transport: transport, workingDirectory: workingDirectory, timeout: timeout)
+        // A test never starts a login flow for an agent that signs in only when the user asks.
+        let policy = IDEACPAdapterCatalog.entry(presetID: definition.presetID)?.authenticationPolicy ?? .automatic
+        return await run(
+            transport: transport, workingDirectory: workingDirectory, timeout: timeout, authenticationPolicy: policy)
     }
 
     /// The same check for a launch the resolver picked (a managed adapter, a system adapter, a
@@ -32,23 +35,31 @@ enum IDEACPConnectionTest {
         let transport = IDEACPTransport(
             definition: definition, launch: launch, workingDirectory: workingDirectory,
             environment: environment, leases: leases)
-        return await run(transport: transport, workingDirectory: workingDirectory, timeout: timeout)
+        // A test never starts a login flow for an agent that signs in only when the user asks.
+        let policy = IDEACPAdapterCatalog.entry(presetID: definition.presetID)?.authenticationPolicy ?? .automatic
+        return await run(
+            transport: transport, workingDirectory: workingDirectory, timeout: timeout, authenticationPolicy: policy)
     }
 
     private static func run(
-        transport: IDEACPTransport, workingDirectory: URL, timeout: Duration
+        transport: IDEACPTransport, workingDirectory: URL, timeout: Duration,
+        authenticationPolicy: ACPAuthenticationPolicy
     ) async -> IDEACPProbe.Phase {
-        let phase = await handshake(transport: transport, workingDirectory: workingDirectory, timeout: timeout)
+        let phase = await handshake(
+            transport: transport, workingDirectory: workingDirectory, timeout: timeout,
+            authenticationPolicy: authenticationPolicy)
         // Wait for the child to be reaped, so the version it used can be replaced right after.
         await transport.waitForExit()
         return phase
     }
 
     private static func handshake(
-        transport: IDEACPTransport, workingDirectory: URL, timeout: Duration
+        transport: IDEACPTransport, workingDirectory: URL, timeout: Duration,
+        authenticationPolicy: ACPAuthenticationPolicy
     ) async -> IDEACPProbe.Phase {
         let session = ACPClientSession(
-            transport: transport, cwd: workingDirectory.path, requestTimeout: timeout)
+            transport: transport, cwd: workingDirectory.path, requestTimeout: timeout,
+            authenticationPolicy: authenticationPolicy)
         do {
             let response = try await session.connect()
             let name = response.agentInfo?.title ?? response.agentInfo?.name
@@ -66,7 +77,11 @@ enum IDEACPConnectionTest {
                     loadSession: response.agentCapabilities.loadSession)
             } catch {
                 await session.close()
-                if IDEACPAuth.isAuthenticationFailure(error) {
+                // By code alone only for agents that sign in when the user asks; see IDEAgentConversation.
+                if IDEACPAuth.isAuthenticationFailure(error)
+                    || (authenticationPolicy == .userInitiated
+                        && IDEACPAuth.isAuthenticationRequired(error, agentAdvertisedMethods: true))
+                {
                     return .authenticationRequired(response.authMethods.first?.name ?? "Sign in")
                 }
                 return .failed(failureText(error, transport: transport))
