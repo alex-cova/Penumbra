@@ -440,6 +440,10 @@ final class MavenProjectReaderTests: XCTestCase {
         XCTAssertEqual(MavenVersion.highest(among: ["1.0", "1.5", "2.0"], matching: "[1.0,2.0)"), "1.5")
     }
 
+    /// The classpath the reader computes is the one Maven computes. The project's dependencies come
+    /// from the fixture's repository (read-only, `maven.repo.local.tail`), never the user's `~/.m2`;
+    /// the pinned `maven-dependency-plugin` comes from a cache of its own, which
+    /// `MAVEN_CONFORMANCE_FETCH=1` fills from Maven Central once. Without it the run stays offline.
     func testConformanceAgainstMavenCLI() async throws {
         let probe = Process()
         probe.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -451,6 +455,18 @@ final class MavenProjectReaderTests: XCTestCase {
         let path = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         try XCTSkipIf(path.isEmpty, "mvn is not installed")
+
+        let plugin = "org.apache.maven.plugins:maven-dependency-plugin:3.6.0"
+        let pluginCache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("umbra-maven-conformance/repository", isDirectory: true)
+        let pluginJar = pluginCache.appendingPathComponent(
+            "org/apache/maven/plugins/maven-dependency-plugin/3.6.0/maven-dependency-plugin-3.6.0.jar")
+        let fetch = ProcessInfo.processInfo.environment["MAVEN_CONFORMANCE_FETCH"] == "1"
+        try XCTSkipUnless(
+            fetch || FileManager.default.fileExists(atPath: pluginJar.path),
+            "\(plugin) is not in \(pluginCache.path); run once with MAVEN_CONFORMANCE_FETCH=1 to download it from Maven Central"
+        )
+
         try fixture.install(group: "com.example", artifact: "lib", version: "1")
         try fixture.writeProject("pom.xml", MavenFixture.pom(group: "com.example", artifact: "app", version: "1", body: """
         <dependencies>\(dependencyElement("lib", "1"))</dependencies>
@@ -459,13 +475,39 @@ final class MavenProjectReaderTests: XCTestCase {
         let mvn = Process()
         mvn.executableURL = URL(fileURLWithPath: path)
         mvn.currentDirectoryURL = fixture.project
-        mvn.arguments = ["-o", "-B", "-ntp", "dependency:build-classpath", "-DincludeScope=compile", "-Dmdep.outputFile=cp.txt"]
+        mvn.arguments = (fetch ? [] : ["-o"]) + [
+            "-B", "-ntp",
+            "-Dmaven.repo.local=\(pluginCache.path)",
+            "-Dmaven.repo.local.tail=\(fixture.repo.path)",
+            "\(plugin):build-classpath", "-DincludeScope=compile", "-Dmdep.outputFile=cp.txt",
+        ]
+        let output = Pipe()
+        mvn.standardOutput = output
+        mvn.standardError = output
         try mvn.run()
+        let log = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         mvn.waitUntilExit()
-        try XCTSkipIf(mvn.terminationStatus != 0, "mvn dependency:build-classpath failed")
+        guard mvn.terminationStatus == 0 else {
+            XCTFail("mvn build-classpath failed (\(mvn.terminationStatus)):\n\(log.suffix(3000))")
+            return
+        }
         let classpath = try String(contentsOf: fixture.project.appendingPathComponent("cp.txt"), encoding: .utf8)
-        let expected = try XCTUnwrap(model.modules.first?.compileClasspathJars.map(\.path).joined(separator: ":"))
-        XCTAssertTrue(classpath.contains(expected))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let expected = try XCTUnwrap(model.modules.first?.compileClasspathJars)
+        XCTAssertFalse(expected.isEmpty)
+        // Both resolve the same artifacts in the same order; Maven may name them through either
+        // local repository, so compare their paths inside the repository.
+        func relative(_ path: String) -> String {
+            for root in [fixture.repo.path, pluginCache.path] where path.hasPrefix(root + "/") {
+                return String(path.dropFirst(root.count + 1))
+            }
+            return path
+        }
+        XCTAssertEqual(
+            classpath.split(separator: ":").map { relative(String($0)) },
+            expected.map { relative($0.path) },
+            "mvn: \(classpath)"
+        )
     }
 
     private static func flatten(_ nodes: [MavenDependencyNode]) -> [MavenDependencyNode] {

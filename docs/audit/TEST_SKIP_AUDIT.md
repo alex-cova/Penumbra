@@ -5,7 +5,8 @@ skips (27 root with the two JaCoCo cases it then fixed, 37 Umbra). No commit was
 
 Environment: macOS 27.2, Xcode 27.2, JDKs 21, 24, 25 (on `PATH`, the default) and 26, plus Temurin 27.0.0+35 installed with
 SDKMAN for this audit (`sdk install java 27.0.0.0+35-tem`, not made the default); iOS 27.0 Simulator runtime;
-`lldb-dap` from Xcode; node 22; no `mvn`; no js-debug.
+`lldb-dap` from Xcode; node 22. Installed afterwards for this audit: Maven 3.10.1 (`sdk install maven`) and js-debug-dap
+v1.140.1 (GitHub release, SHA-256 checked) under `~/.local/share/umbra-test-tools/js-debug-1.140.1`.
 
 ## Result
 
@@ -93,10 +94,28 @@ it printed a sweep and asserted nothing. No other test used it.
 | `JAVA_AUDIT=1` | `testAuditReceiverTypesAgainstJavac` | pass (report only) |
 | `UMBRA_UI_TESTS=1` | `IDEViewFocusTests` (5), `IDERootViewInvalidationTests` (3), `IDEHostedWindowRetentionTests` (1) | all pass |
 | `UMBRA_LLDB_DAP=1` | `DAPDebugSessionTests`, `LLDBDAPSpikeTests` | both pass |
-| `UMBRA_JS_DEBUG=1` | `JSDebugSessionTests` | skipped: no js-debug server (environment) |
+| `UMBRA_JS_DEBUG=1` | `JSDebugSessionTests` | skipped until js-debug was installed; with `UMBRA_JS_DEBUG_PATH=…/js-debug/src/dapDebugServer.js`: **pass** |
 | `UMBRA_PREVIEW_INTEGRATION=1` | `IDESwiftUIPreviewSessionTests` (10 gated) | all pass |
 | `UMBRA_PREVIEW_INTEGRATION=1` | root `SwiftPreviewPipelineIntegrationTests` (4) | all pass |
 | `UMBRA_PREVIEW_INTEGRATION=1` | `IDESimulatorServiceTests` (6 gated) | 4 pass, **2 fail** (below) |
+
+### Maven conformance: the skip hid a test that could not pass
+
+With `mvn` installed, `MavenProjectReaderTests.testConformanceAgainstMavenCLI` still skipped:
+"mvn dependency:build-classpath failed". It ran `mvn -o` against the user's `~/.m2` instead of the fixture's
+repository, so the fixture's `com.example:lib:1` could not be found. Offline mode also cannot resolve an
+unpinned plugin's version. Any failure became a skip, and the assertion only checked `contains`.
+
+Now:
+
+- The fixture repository is passed as a read-only `maven.repo.local.tail`, and the plugin is pinned
+  (`maven-dependency-plugin:3.6.0`) in its own cache, `~/Library/Caches/umbra-maven-conformance` (22 MB).
+- `MAVEN_CONFORMANCE_FETCH=1` fills that cache from Maven Central once. Without the variable the run is offline, and
+  with no cache it skips, naming the variable.
+- A Maven failure fails the test with Maven's output.
+- The two classpaths must be equal, in order, compared inside their repositories. That is stronger than `contains`.
+
+Result: it passes with the fetch and then offline. `MavenProjectReaderTests` runs 16 tests with 0 skipped.
 
 ### JDK 27
 
@@ -147,7 +166,7 @@ Root, 21:
 | 4 | `UMBRA_PREVIEW_INTEGRATION=1` | real builds (passed when run) |
 | 2 | `JAVA_DIFFERENTIAL`, `JAVA_DIFFERENTIAL_REPORT` | network clone; baseline needs JDK 27 (`JAVA_HOME`) |
 | 1 each | `JAVA_QUALITY`, `JAVA_PARITY`, `JAVA_AUDIT` | network or minutes of javac; reports |
-| 1 | `mvn is not installed` | conformance against the real Maven CLI |
+| 1 | `mvn` missing, or its plugin cache empty (`MAVEN_CONFORMANCE_FETCH=1` once) | conformance against the real Maven CLI; runs here |
 | 1 each | `PENUMBRA_HIGHLIGHT_STRESS`, `LARGE_FILE_MEASURE_MB` | stress and measurement |
 | 1 each | `SWIFT_INSPECTION_APPLY_FIXES_TO`, `SWIFT_REFACTOR_APPLY_TO` | tools that write a repo copy |
 

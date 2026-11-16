@@ -64,7 +64,8 @@ separate jobs or by hand, with the display on (`caffeinate -u -d -i -s`).
 | iOS simulator previews (`IDESimulatorServiceTests`, root `SwiftPreviewBuildPlanTests`) | `UMBRA_PREVIEW_INTEGRATION=1` | an iOS Simulator runtime | ~8 min, boots devices |
 | Your own iOS project | `UMBRA_PREVIEW_IOS_PROJECT`, `_FILE`, `_TARGET` | the project | manual only |
 | lldb-dap (`DAPDebugSessionTests`, `LLDBDAPSpikeTests`) | `UMBRA_LLDB_DAP=1` (`UMBRA_LLDB_DAP_PATH`) | `xcrun -f lldb-dap` | ~20 s |
-| js-debug (`JSDebugSessionTests`) | `UMBRA_JS_DEBUG=1`, `UMBRA_JS_DEBUG_PATH=…/dapDebugServer.js` | node, a js-debug-dap release | ~10 s |
+| js-debug (`JSDebugSessionTests`) | `UMBRA_JS_DEBUG=1`, `UMBRA_JS_DEBUG_PATH=…/dapDebugServer.js` | node, a js-debug-dap release (`gh release download -R microsoft/vscode-js-debug -p 'js-debug-dap-*.tar.gz'`) | ~10 s |
+| Maven conformance (`testConformanceAgainstMavenCLI`) | `mvn` on `PATH`; `MAVEN_CONFORMANCE_FETCH=1` once | network once, for `maven-dependency-plugin:3.6.0` into `~/Library/Caches/umbra-maven-conformance` | ~1 s offline afterwards |
 | Java parity scorecard | `JAVA_PARITY=1` | a JDK | seconds; gate: 0 valid-corpus false positives |
 | Java differential baseline | `JAVA_DIFFERENTIAL=1` | network (clones pinned gson / jackson-core), the baseline's JDK (27) via `JAVA_HOME` | ~1 min; skips on another JDK |
 | Java completion quality | `JAVA_QUALITY=1` (`JAVA_QUALITY_SET`, `JAVA_QUALITY_GRADLE_MODELS`) | network, a JDK | ~4 min; report |
