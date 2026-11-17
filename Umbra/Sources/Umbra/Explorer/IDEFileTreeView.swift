@@ -525,7 +525,7 @@ private struct IDEFileTreeRow: View {
 
             if gitStatus == .conflicted {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10))
+                    .font(.system(size: IDEAppearance.IconSize.smallGlyph))
                     .foregroundStyle(IDEAppearance.ColorToken.gitConflict)
                     .accessibilityHidden(true)
             }
