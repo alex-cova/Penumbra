@@ -18,15 +18,15 @@ extension IDEPreferencesDomain {
 extension IDESwiftModule {
     var preferencePanes: [IDEPreferencesPane] {
         [
-            IDEPreferencesPane(domain: .swift) { _, _ in AnyView(IDESwiftServerSettings()) },
-            IDEPreferencesPane(domain: .swiftUIPreview) { _, _ in AnyView(IDESwiftUIPreviewSettingsPage()) }
+            IDEPreferencesPane(domain: .swift) { _, _ in IDESwiftServerSettings() },
+            IDEPreferencesPane(domain: .swiftUIPreview) { _, _ in IDESwiftUIPreviewSettingsPage() }
         ]
     }
 }
 
 extension IDETypeScriptModule {
     var preferencePanes: [IDEPreferencesPane] {
-        [IDEPreferencesPane(domain: .typescript) { _, _ in AnyView(IDETypeScriptServerSettings()) }]
+        [IDEPreferencesPane(domain: .typescript) { _, _ in IDETypeScriptServerSettings() }]
     }
 }
 

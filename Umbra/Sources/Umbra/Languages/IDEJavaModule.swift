@@ -236,7 +236,7 @@ struct IDEJavaModule: IDELanguageModule {
     }
 
     var preferencePanes: [IDEPreferencesPane] {
-        [IDEPreferencesPane(domain: .java) { preferences, _ in AnyView(IDEPreferencesJavaPane(preferences: preferences)) }]
+        [IDEPreferencesPane(domain: .java) { preferences, _ in IDEPreferencesJavaPane(preferences: preferences) }]
     }
 }
 

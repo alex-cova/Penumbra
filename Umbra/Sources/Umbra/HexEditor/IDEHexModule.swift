@@ -151,7 +151,7 @@ struct IDEHexModule: IDELanguageModule {
     }
 
     var preferencePanes: [IDEPreferencesPane] {
-        [IDEPreferencesPane(domain: .hex) { _, _ in AnyView(IDEHexSettingsPage()) }]
+        [IDEPreferencesPane(domain: .hex) { _, _ in IDEHexSettingsPage() }]
     }
 }
 

@@ -17,14 +17,13 @@ struct IDEACPSettingsSection: View {
 
     var body: some View {
         @Bindable var settings = settings
-        _ = settings.acpDiscoveryEpoch
         return Section("Agents") {
             HStack(alignment: .firstTextBaseline) {
                 Text("Agents are found on PATH and in the folders their installers use. Nothing is started until you allow it.")
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                 Spacer()
-                Button("Detect Again") { Task { await settings.refreshACPPath() } }
+                Button("Detect Again", action: detectAgain)
                     .font(IDEAppearance.Typography.caption)
                     .help("Look for installed agent CLIs again. Nothing is run.")
             }
@@ -35,6 +34,7 @@ struct IDEACPSettingsSection: View {
                 IDEACPAgentRow(
                     definition: definition, isEnabled: $definition.isEnabled, settings: settings,
                     agent: agent, projectRoot: projectRoot,
+                    discoveryEpoch: settings.acpDiscoveryEpoch,
                     editingID: $editingID, editName: $editName, editCommand: $editCommand)
             }
             let available = IDEACPRegistry.presets.filter { preset in
@@ -45,13 +45,13 @@ struct IDEACPSettingsSection: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(preset.name)
-                            Text(presetSummary(preset))
+                            Text(presetSummary(preset, discoveryEpoch: settings.acpDiscoveryEpoch))
                                 .font(IDEAppearance.Typography.caption)
                                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                                 .lineLimit(2)
                         }
                         Spacer()
-                        Button("Add") { _ = settings.materializePreset(preset) }
+                        Button("Add") { addPreset(preset) }
                             .help(preset.launchers.first?.note ?? preset.summary)
                     }
                 }
@@ -68,6 +68,14 @@ struct IDEACPSettingsSection: View {
         .task { await settings.refreshACPPath() }
     }
 
+    private func detectAgain() {
+        Task { await settings.refreshACPPath() }
+    }
+
+    private func addPreset(_ preset: IDEACPPreset) {
+        _ = settings.materializePreset(preset)
+    }
+
     private func addCustom() {
         settings.addACPAgent(
             name: nameDraft.trimmingCharacters(in: .whitespaces),
@@ -76,7 +84,9 @@ struct IDEACPSettingsSection: View {
         commandDraft = ""
     }
 
-    private func presetSummary(_ preset: IDEACPPreset) -> String {
+    /// `discoveryEpoch` is bumped by Detect Again (`refreshACPPath`): reading it here
+    /// subscribes this view, so preset availability re-resolves against the disk.
+    private func presetSummary(_ preset: IDEACPPreset, discoveryEpoch _: Int) -> String {
         let launcher = preset.recordedLauncher
         let probe = IDEACPDefinition(
             name: preset.name, command: launcher.command, args: launcher.args, presetID: preset.id, launchMode: .auto)

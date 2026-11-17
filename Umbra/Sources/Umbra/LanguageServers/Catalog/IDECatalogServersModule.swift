@@ -20,6 +20,6 @@ struct IDECatalogServersModule: IDELanguageModule {
     }
 
     var preferencePanes: [IDEPreferencesPane] {
-        [IDEPreferencesPane(domain: .languageServers) { _, workspace in AnyView(IDELanguageServersSettings(workspace: workspace)) }]
+        [IDEPreferencesPane(domain: .languageServers) { _, workspace in IDELanguageServersSettings(workspace: workspace) }]
     }
 }

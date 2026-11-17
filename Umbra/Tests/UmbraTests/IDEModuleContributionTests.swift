@@ -252,7 +252,7 @@ final class IDEModuleContributionTests: XCTestCase {
         }
 
         var preferencePanes: [IDEPreferencesPane] {
-            [IDEPreferencesPane(domain: Self.page) { _, _ in AnyView(EmptyView()) }]
+            [IDEPreferencesPane(domain: Self.page) { _, _ in EmptyView() }]
         }
 
         func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] {

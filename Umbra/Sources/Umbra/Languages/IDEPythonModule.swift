@@ -11,6 +11,6 @@ struct IDEPythonModule: IDELanguageModule {
     var languageServers: [IDELanguageServerDefinition] { [IDEPythonServer.definition()] }
 
     var preferencePanes: [IDEPreferencesPane] {
-        [IDEPreferencesPane(domain: .python) { _, _ in AnyView(IDEPythonServerSettings()) }]
+        [IDEPreferencesPane(domain: .python) { _, _ in IDEPythonServerSettings() }]
     }
 }

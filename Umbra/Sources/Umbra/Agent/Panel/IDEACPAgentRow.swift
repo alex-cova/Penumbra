@@ -8,6 +8,9 @@ struct IDEACPAgentRow: View {
     let settings: IDEAgentSettings
     var agent: IDEAgentController?
     var projectRoot: URL?
+    /// Bumped by Detect Again (`refreshACPPath`): the section passes the current value, so this
+    /// row re-resolves its agent against the disk after a refresh.
+    let discoveryEpoch: Int
     @Binding var editingID: UUID?
     @Binding var editName: String
     @Binding var editCommand: String
@@ -15,17 +18,16 @@ struct IDEACPAgentRow: View {
     private let manager = IDEACPAdapterManager.shared
 
     var body: some View {
-        let _ = settings.acpDiscoveryEpoch
-        let status = availability(of: definition)
+        let status = availability(of: definition, discoveryEpoch: discoveryEpoch)
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(definition.displayName)
-                    Text(launchText(definition))
+                    Text(launchText(definition, discoveryEpoch: discoveryEpoch))
                         .font(IDEAppearance.Typography.monoSmall)
                         .foregroundStyle(IDEAppearance.ColorToken.muted)
                         .lineLimit(1)
-                    Text(statusLine(status, definition: definition))
+                    Text(statusLine(status, definition: definition, discoveryEpoch: discoveryEpoch))
                         .font(IDEAppearance.Typography.caption)
                         .foregroundStyle(statusColor(status))
                         .lineLimit(2)
@@ -54,9 +56,7 @@ struct IDEACPAgentRow: View {
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
             }
             HStack {
-                Button(settings.acpAllowedAgentIDs.contains(definition.id) ? "Allowed" : "Allow") {
-                    settings.setACPAllowed(!settings.acpAllowedAgentIDs.contains(definition.id), agentID: definition.id)
-                }
+                Button(settings.acpAllowedAgentIDs.contains(definition.id) ? "Allowed" : "Allow", action: toggleAllowed)
                 .help("Allow is the consent to run this command.")
                 .accessibilityLabel("Allow \(definition.displayName)")
                 Button("Default") { makeDefault(definition) }
@@ -100,6 +100,10 @@ struct IDEACPAgentRow: View {
         .padding(.vertical, IDEAppearance.Spacing.xxs)
     }
 
+    private func toggleAllowed() {
+        settings.setACPAllowed(!settings.acpAllowedAgentIDs.contains(definition.id), agentID: definition.id)
+    }
+
     private func makeDefault(_ definition: IDEACPDefinition) {
         agent?.freezeUnpinnedTranscripts()
         settings.setACPAllowed(true, agentID: definition.id)
@@ -132,7 +136,8 @@ struct IDEACPAgentRow: View {
     }
 
     /// What this row runs: the command line for a custom row, the chosen source for a catalog row.
-    private func launchText(_ definition: IDEACPDefinition) -> String {
+    /// `discoveryEpoch` re-runs this read after Detect Again (see the property).
+    private func launchText(_ definition: IDEACPDefinition, discoveryEpoch _: Int) -> String {
         guard definition.launchMode == .auto else { return definition.commandLine }
         switch manager.resolution(for: definition, pathValue: settings.acpPathValue) {
         case .launch(let launch): return launch.sourceTitle
@@ -140,14 +145,16 @@ struct IDEACPAgentRow: View {
         }
     }
 
-    private func availability(of definition: IDEACPDefinition) -> IDEACPAvailability {
+    /// `discoveryEpoch` re-runs this read after Detect Again (see the property).
+    private func availability(of definition: IDEACPDefinition, discoveryEpoch _: Int) -> IDEACPAvailability {
         let live = agent?.conversations.contains {
             $0.resolvedACPAgentID == definition.id && $0.acpLiveState == .connected
         } ?? false
         return manager.availability(of: definition, settings: settings, isLive: live)
     }
 
-    private func statusLine(_ status: IDEACPAvailability, definition: IDEACPDefinition) -> String {
+    /// `discoveryEpoch` re-runs this read after Detect Again (see the property).
+    private func statusLine(_ status: IDEACPAvailability, definition: IDEACPDefinition, discoveryEpoch _: Int) -> String {
         if settings.acpProbes[definition.id]?.phase == .running { return "Testing connection…" }
         switch status {
         case .installed:

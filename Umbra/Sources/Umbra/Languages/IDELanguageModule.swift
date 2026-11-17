@@ -12,9 +12,16 @@ struct IDEModuleMenu {
 }
 
 /// A Settings page a language module adds, in the sidebar after Project and before Agent.
+/// Modules return their concrete page; the erasure into `AnyView` happens in this initializer,
+/// once, so call sites never spell it.
 struct IDEPreferencesPane {
     let domain: IDEPreferencesDomain
     let content: @MainActor (IDEPreferences, IDEWorkspace) -> AnyView
+
+    init<Content: View>(domain: IDEPreferencesDomain, content: @MainActor @escaping (IDEPreferences, IDEWorkspace) -> Content) {
+        self.domain = domain
+        self.content = { preferences, workspace in AnyView(content(preferences, workspace)) }
+    }
 }
 
 /// One button or control a module (or a project system) puts in the titlebar's action cluster.

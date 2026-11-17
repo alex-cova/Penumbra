@@ -17,13 +17,22 @@ struct IDEAgentPanelChipRow: View {
 
     private var choice: IDEAIModelChoice { agent.selected.effectiveChoice }
 
+    private func restartAgent() {
+        agent.selected.restartACP()
+    }
+
+    private func compactConversation() {
+        let chat = agent.selected
+        Task { await chat.compact(focus: nil) }
+    }
+
     var body: some View {
         HStack {
             if isAIMode {
                 IDEAIProjectChip()
                 IDEAIBranchChip()
             }
-            IDEAgentModeChip(mode: agent.mode) { agent.selected.setMode($0) }
+            IDEAgentPermissionChip(mode: agent.mode) { agent.selected.setMode($0) }
             if agent.selected.isACPConversation {
                 IDEACPModeChip(conversation: agent.selected)
                 if !agent.selected.acpAvailableModels.isEmpty {
@@ -32,7 +41,7 @@ struct IDEAgentPanelChipRow: View {
                 if !agent.selected.acpDisplayedConfigOptions.isEmpty {
                     IDEACPConfigChip(conversation: agent.selected)
                 }
-                Button("Restart Agent") { agent.selected.restartACP() }
+                Button("Restart Agent", action: restartAgent)
                     .buttonStyle(.borderless)
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -45,11 +54,9 @@ struct IDEAgentPanelChipRow: View {
                 IDEAgentContextMeter(
                     fraction: fraction, tokens: agent.selected.contextTokens ?? 0,
                     window: settings.contextWindow(for: choice) ?? 0,
-                    isBusy: agent.selected.isRunning || agent.selected.isCompacting
-                ) {
-                    let chat = agent.selected
-                    Task { await chat.compact(focus: nil) }
-                }
+                    isBusy: agent.selected.isRunning || agent.selected.isCompacting,
+                    compact: compactConversation
+                )
             }
             if isAIMode, !agent.selected.isACPConversation {
                 IDEAIModelPicker(
