@@ -123,6 +123,46 @@ enum IDEACPRegistry {
                     command: "muse", args: ["acp"], isAdapter: false,
                     note: "Native ACP. muse acp"),
             ]),
+        IDEACPPreset(
+            id: "antigravity",
+            name: "Antigravity",
+            summary: "Antigravity CLI's built-in ACP mode.",
+            authHint: IDEACPAdapterCatalog.antigravity.authHint,
+            launchers: [
+                IDEACPLauncher(
+                    command: "agy", args: ["acp"], isAdapter: false,
+                    note: "Native ACP. agy acp"),
+            ]),
+        IDEACPPreset(
+            id: "copilot",
+            name: "GitHub Copilot",
+            summary: "GitHub Copilot CLI's ACP mode (public preview).",
+            authHint: IDEACPAdapterCatalog.copilot.authHint,
+            launchers: [
+                IDEACPLauncher(
+                    command: "copilot", args: ["--acp"], isAdapter: false,
+                    note: "Native ACP. copilot --acp"),
+            ]),
+        IDEACPPreset(
+            id: "kimi",
+            name: "Kimi Code",
+            summary: "Kimi Code CLI's built-in ACP mode.",
+            authHint: IDEACPAdapterCatalog.kimi.authHint,
+            launchers: [
+                IDEACPLauncher(
+                    command: "kimi", args: ["acp"], isAdapter: false,
+                    note: "Native ACP. kimi acp"),
+            ]),
+        IDEACPPreset(
+            id: "qwen",
+            name: "Qwen Code",
+            summary: "Qwen Code's ACP mode.",
+            authHint: IDEACPAdapterCatalog.qwen.authHint,
+            launchers: [
+                IDEACPLauncher(
+                    command: "qwen", args: ["--acp"], isAdapter: false,
+                    note: "Native ACP. qwen --acp"),
+            ]),
     ]
 
     static func preset(id: String) -> IDEACPPreset? { presets.first { $0.id == id } }

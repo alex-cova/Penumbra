@@ -447,3 +447,56 @@ final class IDEACPNativeProviderConversationTests: XCTestCase {
         XCTAssertTrue(gone, "restart reaps the old process")
     }
 }
+
+// MARK: - Antigravity, GitHub Copilot, OpenCode, Kimi Code, Qwen Code (catalog only, no process)
+
+final class IDEACPMoreNativeProviderCatalogTests: XCTestCase {
+    private let expected: [(id: String, name: String, command: String, args: [String])] = [
+        ("antigravity", "Antigravity", "agy", ["acp"]),
+        ("copilot", "GitHub Copilot", "copilot", ["--acp"]),
+        ("opencode", "OpenCode", "opencode", ["acp"]),
+        ("kimi", "Kimi Code", "kimi", ["acp"]),
+        ("qwen", "Qwen Code", "qwen", ["--acp"]),
+    ]
+
+    func testCommandsAndRegistration() throws {
+        for item in expected {
+            let entry = try XCTUnwrap(IDEACPAdapterCatalog.entry(presetID: item.id))
+            XCTAssertEqual(entry.name, item.name)
+            XCTAssertEqual(entry.kind, .nativeCLI(command: item.command, args: item.args))
+            XCTAssertFalse(entry.isManaged)
+            XCTAssertEqual(entry.authenticationPolicy, .userInitiated, "\(item.id) never starts a login unasked")
+            XCTAssertNotNil(entry.loginCommand)
+            let preset = try XCTUnwrap(IDEACPRegistry.preset(id: item.id))
+            XCTAssertEqual(preset.recordedLauncher.command, item.command)
+            XCTAssertEqual(preset.recordedLauncher.args, item.args)
+            XCTAssertFalse(entry.kind == .nativeCLI(command: item.command, args: ["--experimental-acp"]))
+        }
+    }
+
+    func testDiscoveryUsesPathThenInstallerFoldersAndNeverRunsAnything() throws {
+        for item in expected {
+            let preset = try XCTUnwrap(IDEACPRegistry.preset(id: item.id))
+            let found = preset.resolution(active: nil, pathValue: "/opt/homebrew/bin:/usr/bin",
+                                          isExecutable: { $0 == "/opt/homebrew/bin/\(item.command)" })
+            XCTAssertEqual(found.launch?.executable, "/opt/homebrew/bin/\(item.command)")
+            XCTAssertEqual(found.launch?.args, item.args)
+            XCTAssertEqual(preset.resolution(active: nil, pathValue: "/usr/bin", isExecutable: { _ in false }),
+                           .unavailable(.cliMissing(item.command)))
+        }
+        let home = NSHomeDirectory()
+        let agy = try XCTUnwrap(IDEACPRegistry.preset(id: "antigravity"))
+        XCTAssertEqual(agy.resolution(active: nil, pathValue: "/usr/bin",
+                                      isExecutable: { $0 == "\(home)/.local/bin/agy" }).launch?.executable, "\(home)/.local/bin/agy")
+    }
+
+    func testAntigravityModesAreApprovalPoliciesAppliedOnlyWhenAdvertised() {
+        let agy = IDEACPAdapterCatalog.antigravity
+        let advertised = ["default", "accept-edits", "plan"]
+        XCTAssertEqual(agy.agentModeID(for: .plan, current: "default", advertised: advertised), "plan")
+        XCTAssertEqual(agy.agentModeID(for: .acceptEdits, current: "default", advertised: advertised), "accept-edits")
+        XCTAssertEqual(agy.agentModeID(for: .manual, current: "plan", advertised: advertised), "default")
+        XCTAssertNil(agy.agentModeID(for: .plan, current: "default", advertised: ["default"]), "unadvertised ids are never sent")
+        XCTAssertEqual(agy.agentModeID(for: .auto, current: "plan", advertised: advertised), "default")
+    }
+}

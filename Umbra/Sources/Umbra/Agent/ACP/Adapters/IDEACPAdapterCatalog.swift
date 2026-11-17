@@ -173,8 +173,12 @@ enum IDEACPAdapterCatalog {
         symbol: "chevron.left.forwardslash.chevron.right",
         kind: .nativeCLI(command: "opencode", args: ["acp"]),
         systemCommand: nil,
-        authHint: "Uses the providers you signed in to with opencode.",
-        approximateInstallBytes: 0)
+        authHint: "Uses the providers you signed in to with opencode (opencode auth login). Umbra never copies them.",
+        approximateInstallBytes: 0,
+        extraSearchDirectories: ["~/.opencode/bin", "~/.local/bin"],
+        loginCommand: "opencode auth login",
+        authenticationPolicy: .userInitiated,
+        installHint: "Install OpenCode (opencode.ai), then press Detect Again.")
 
     /// Kiro CLI (https://kiro.dev/docs/cli/acp/). Its modes are agent configurations, not approval
     /// policies, so no permission mapping. Models come in the session's `models` field.
@@ -241,6 +245,76 @@ enum IDEACPAdapterCatalog {
         installHint: "Install Muse Code, then press Detect Again.",
         isExperimental: true)
 
+    /// Google Antigravity (`agy acp`, https://antigravity.google/docs/cli/acp/). Measured against
+    /// agy 1.5.3: its modes `default`, `accept-edits` and `plan` are approval policies, so Umbra's
+    /// permission mode is applied as the agent's mode (only when the agent advertised the id).
+    static let antigravity = IDEACPAdapterEntry(
+        id: "antigravity",
+        presetID: "antigravity",
+        name: "Antigravity",
+        provider: "Google",
+        symbol: "arrow.up.forward.circle",
+        kind: .nativeCLI(command: "agy", args: ["acp"]),
+        systemCommand: nil,
+        authHint: "Uses your Antigravity CLI sign-in (Google account, Gemini Enterprise or a Gemini API key). Run agy in Terminal to sign in.",
+        approximateInstallBytes: 0,
+        extraSearchDirectories: ["~/.local/bin"],
+        loginCommand: "agy",
+        authenticationPolicy: .userInitiated,
+        permissionModeMap: [.manual: "default", .acceptEdits: "accept-edits", .plan: "plan"],
+        defaultAgentModeID: "default",
+        installHint: "Install the Antigravity CLI from antigravity.google, then press Detect Again.")
+
+    /// GitHub Copilot CLI (`copilot --acp`, public preview). Needs a Copilot plan; the entitlement
+    /// is GitHub's to decide, and an account without one shows up as the agent's own error.
+    static let copilot = IDEACPAdapterEntry(
+        id: "copilot",
+        presetID: "copilot",
+        name: "GitHub Copilot",
+        provider: "GitHub",
+        symbol: "airplane",
+        kind: .nativeCLI(command: "copilot", args: ["--acp"]),
+        systemCommand: nil,
+        authHint: "Uses your GitHub Copilot CLI login (copilot login) and your Copilot plan.",
+        approximateInstallBytes: 0,
+        extraSearchDirectories: ["~/.local/bin", "~/.npm-global/bin"],
+        loginCommand: "copilot login",
+        authenticationPolicy: .userInitiated,
+        installHint: "Install GitHub Copilot CLI (brew install copilot-cli, or npm install -g @github/copilot), then press Detect Again.",
+        isExperimental: true)
+
+    /// Kimi Code CLI (`kimi acp`). stdout carries the protocol only; stderr is diagnostics.
+    static let kimi = IDEACPAdapterEntry(
+        id: "kimi",
+        presetID: "kimi",
+        name: "Kimi Code",
+        provider: "Moonshot AI",
+        symbol: "moon.stars",
+        kind: .nativeCLI(command: "kimi", args: ["acp"]),
+        systemCommand: nil,
+        authHint: "Uses your Kimi Code login. Run kimi login in Terminal if Umbra says you need to sign in.",
+        approximateInstallBytes: 0,
+        extraSearchDirectories: ["~/.local/bin"],
+        loginCommand: "kimi login",
+        authenticationPolicy: .userInitiated,
+        installHint: "Install Kimi Code CLI (uv tool install kimi-cli), then press Detect Again.")
+
+    /// Qwen Code (`qwen --acp`; the older `--experimental-acp` is deprecated and never used).
+    static let qwen = IDEACPAdapterEntry(
+        id: "qwen",
+        presetID: "qwen",
+        name: "Qwen Code",
+        provider: "Alibaba",
+        symbol: "q.circle",
+        kind: .nativeCLI(command: "qwen", args: ["--acp"]),
+        systemCommand: nil,
+        authHint: "Uses your Qwen Code authentication and settings. Run qwen in Terminal and sign in with /auth if Umbra says you need to.",
+        approximateInstallBytes: 0,
+        extraSearchDirectories: ["~/.local/bin", "~/.npm-global/bin"],
+        loginCommand: "qwen",
+        authenticationPolicy: .userInitiated,
+        installHint: "Install Qwen Code (npm install -g @qwen-code/qwen-code), then press Detect Again.")
+
     /// The custom executable row: not installable, always user-managed.
     static let custom = IDEACPAdapterEntry(
         id: "custom",
@@ -253,7 +327,7 @@ enum IDEACPAdapterCatalog {
         authHint: "Whatever the program you configure needs.",
         approximateInstallBytes: 0)
 
-    static let entries: [IDEACPAdapterEntry] = [codex, claude, gemini, opencode, kiro, cursor, muse]
+    static let entries: [IDEACPAdapterEntry] = [codex, claude, gemini, opencode, kiro, cursor, muse, antigravity, copilot, kimi, qwen]
 
     static func entry(id: String) -> IDEACPAdapterEntry? { entries.first { $0.id == id } }
     static func entry(presetID: String?) -> IDEACPAdapterEntry? {

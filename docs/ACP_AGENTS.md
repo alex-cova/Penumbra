@@ -17,8 +17,14 @@ was built. This page covers the agents Umbra knows by name.
 | **Kiro** | `kiro-cli acp` | Detected | `kiro-cli login` |
 | **Cursor** | `agent acp` (also `cursor-agent`) | Detected, identity-checked | `agent login`, or `CURSOR_API_KEY` |
 | **Muse** (experimental) | `muse acp` | Detected | `muse login` |
+| **Antigravity** | `agy acp` | Detected | `agy` (Google account, Gemini Enterprise or API key) |
+| **GitHub Copilot** (preview) | `copilot --acp` | Detected | `copilot login`, needs a Copilot plan |
+| **Kimi Code** | `kimi acp` | Detected | `kimi login` |
+| **Qwen Code** | `qwen --acp` | Detected | `qwen`, then `/auth` |
 
-Umbra never downloads or installs Kiro, Cursor or Muse, and never runs `npx`.
+Umbra never downloads or installs any of the native CLIs (Kiro, Cursor, Muse, Antigravity, Copilot, OpenCode,
+Kimi, Qwen), and never runs `npx`. OpenCode now also uses `userInitiated` sign-in (`opencode auth login`);
+Umbra never copies its provider configuration.
 
 ### Installing
 
@@ -28,6 +34,16 @@ Umbra never downloads or installs Kiro, Cursor or Muse, and never runs `npx`.
 - **Muse**: install Muse Code. `muse acp` is on by default; `muse acp --help` confirms it. If
   `MUSE_EXPERIMENTAL_ACP` is set to anything but `on`/`true`/`1`, or your organization turned ACP off,
   `muse acp` exits with code 5 ("not available in this build").
+
+- **Antigravity**: install the CLI (`agy` in `~/.local/bin`). Its modes `default`, `accept-edits`, `plan` are approval
+  policies and follow Umbra's permission chip. Never started with `--dangerously-skip-permissions`.
+- **GitHub Copilot**: `brew install copilot-cli` or `npm install -g @github/copilot`. ACP is public preview; stdio only
+  (no `--port`). Entitlements are GitHub's: an account without Copilot gets the agent's own error.
+- **Kimi Code**: `uv tool install kimi-cli` (`~/.local/bin/kimi`). stdout is protocol only; stderr is never chat text.
+- **Qwen Code**: `npm install -g @qwen-code/qwen-code`. Uses the stable `--acp`, never `--experimental-acp`.
+- **OpenCode**: models and credentials stay in OpenCode's own configuration.
+
+Not every CLI above could be verified on every machine (see the matrix below).
 
 Then open Settings ▸ Agent ▸ Agents (or the agent menu in the chat header ▸ Add Agent), add the agent and
 press **Allow**. Allow is the consent to start that program; nothing runs before it.
@@ -119,6 +135,23 @@ built-in list. Measured against the installed CLIs on 2026-11-16.
 Umbra advertises `fs.readTextFile`, `fs.writeTextFile` and `terminal` to every agent and serves them
 through the project jail, unsaved buffers, checkpoints and the permission policy. An agent that reads
 the disk itself (Muse) does not see unsaved edits.
+
+### Verification status of the 2026-11-16 additions
+
+| | Antigravity | Copilot | OpenCode | Kimi | Qwen |
+|---|---|---|---|---|---|
+| Catalog, command, discovery (mocked, deterministic) | yes | yes | yes | yes | yes |
+| Real `initialize` + `session/new` | **yes**, agy 1.5.3 | not installed here | not installed here | not installed here | not installed here |
+| Auth methods advertised | `oauth-personal`, `oauth-business`, `gemini-api-key`, `agent-platform` | unverified | unverified | unverified | unverified |
+| `session/load` / resume / list | yes / yes / yes | unverified | unverified | unverified | unverified |
+| Modes | default, accept-edits, plan (mapped) | unverified | unverified | unverified | unverified |
+| Models | `models` + `model` option, plus `thought_level` | unverified | unverified | unverified | unverified |
+| Images / embedded context | yes / yes | unverified | unverified | unverified | unverified |
+| Prompt turn against a real account | not run | not run | not run | not run | not run |
+
+Run the free handshakes with `UMBRA_LIVE_ACP_NATIVE=1 swift test --package-path Umbra --filter NativeACPLiveTests`;
+the CLIs that are missing skip. The mock-based conversation tests cover Kiro, Cursor and Muse only; the new
+five rely on the same generic runtime and catalog tests.
 
 ### Permissions and modes
 

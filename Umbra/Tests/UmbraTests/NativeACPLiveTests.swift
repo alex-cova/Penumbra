@@ -78,6 +78,11 @@ final class NativeACPLiveTests: XCTestCase {
     func testKiroHandshake() async throws { try await handshake("kiro") }
     func testCursorHandshake() async throws { try await handshake("cursor") }
     func testMuseHandshake() async throws { try await handshake("muse") }
+    func testAntigravityHandshake() async throws { try await handshake("antigravity") }
+    func testCopilotHandshake() async throws { try await handshake("copilot") }
+    func testOpenCodeHandshake() async throws { try await handshake("opencode") }
+    func testKimiHandshake() async throws { try await handshake("kimi") }
+    func testQwenHandshake() async throws { try await handshake("qwen") }
 
     private func prompt(_ presetID: String) async throws {
         try XCTSkipUnless(Self.env["UMBRA_LIVE_ACP_NATIVE_PROMPT"] == "1",
@@ -110,4 +115,9 @@ final class NativeACPLiveTests: XCTestCase {
     func testKiroPrompt() async throws { try await prompt("kiro") }
     func testCursorPrompt() async throws { try await prompt("cursor") }
     func testMusePrompt() async throws { try await prompt("muse") }
+    func testAntigravityPrompt() async throws { try await prompt("antigravity") }
+    func testCopilotPrompt() async throws { try await prompt("copilot") }
+    func testOpenCodePrompt() async throws { try await prompt("opencode") }
+    func testKimiPrompt() async throws { try await prompt("kimi") }
+    func testQwenPrompt() async throws { try await prompt("qwen") }
 }
