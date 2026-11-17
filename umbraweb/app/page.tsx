@@ -1,3 +1,4 @@
+import { AcpSection } from "./acp";
 import { UmbraWindow } from "./editor";
 import { InstallCmd } from "./install-cmd";
 import { CloseWord } from "./close-word";
@@ -200,6 +201,8 @@ export default function Home() {
             </div>
           </div>
         </section>
+
+        <AcpSection />
 
         <section className="section bg-grain" id="features" aria-labelledby="features-h">
           <div className="wrap">
@@ -632,6 +635,10 @@ export default function Home() {
                 <div className="faq__item">
                   <h3>Does Umbra run on Windows?</h3>
                   <p>No. Umbra is a macOS app.</p>
+                </div>
+                <div className="faq__item">
+                  <h3>Does Umbra support ACP today?</h3>
+                  <p>No — the built-in agent only. The ACP section above describes the planned direction.</p>
                 </div>
                 <div className="faq__item">
                   <h3>Where is the Umbra source?</h3>
