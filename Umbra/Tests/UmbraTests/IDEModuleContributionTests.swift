@@ -328,7 +328,7 @@ final class IDEModuleContributionTests: XCTestCase {
         defer { workspace.teardown() }
         workspace.statusLanguage = "ruby"
         XCTAssertEqual(
-            IDELanguageModules.all.map(\.id), ["java", "http", "database", "markdown", "json", "csv", "typescript", "swift", "python", "hex"]
+            IDELanguageModules.all.map(\.id), ["java", "http", "database", "markdown", "json", "csv", "typescript", "swift", "python", "language-servers", "hex"]
         )
         XCTAssertNil(IDESidebarTabs.descriptor(for: FakeRubyModule.sidebar))
         XCTAssertFalse(workspace.languageModuleBottomTabs().contains { $0.tab == FakeRubyModule.tab })

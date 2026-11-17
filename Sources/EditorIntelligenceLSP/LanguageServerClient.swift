@@ -12,6 +12,10 @@ public actor LanguageServerClient: LSPClient {
     /// Diagnostics the server pushed with `textDocument/publishDiagnostics`. An empty push clears the file.
     private var publishedDiagnostics = LSPPublishedDiagnostics()
     private var cachedCapabilities: ServerCapabilities?
+    /// The one `initialize` in flight. Callers that arrive while it runs (the host's feature query and an editor
+    /// request) wait for it; a second `initializeIfNeeded` beside it answered nothing, which left a ready server
+    /// advertising no features.
+    private var initializing: Task<ServerCapabilities?, Never>?
     /// Server work that reports progress, such as background indexing.
     private var workProgress = LSPWorkProgressTracker()
     /// The edits a command sent back through `workspace/applyEdit`, while one is being run; nil otherwise.
@@ -669,9 +673,14 @@ public actor LanguageServerClient: LSPClient {
 
     private func capabilities() async -> ServerCapabilities? {
         if let cachedCapabilities { return cachedCapabilities }
-        guard let response = try? await server.initializeIfNeeded() else { return nil }
-        cachedCapabilities = response.capabilities
-        return response.capabilities
+        if let initializing { return await initializing.value }
+        let server = server
+        let task = Task { try? await server.initializeIfNeeded().capabilities }
+        initializing = task
+        let capabilities = await task.value
+        initializing = nil
+        if let capabilities { cachedCapabilities = capabilities }
+        return capabilities
     }
 
     private func allows(_ feature: LanguageFeature) async -> Bool {

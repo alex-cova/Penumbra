@@ -38,7 +38,10 @@ public final class IDEWorkspace {
     let profileHints = IDEProfileLineHints()
     /// The profile tab that feeds ``profileHints``.
     weak var profileHintsSession: IDEProfilerSession?
-    private let intelligenceServices = IDEIntelligenceServices()
+    /// Where this window's debounces (completion, content refresh, the settle pause) read the time. The machine's
+    /// clock; a test passes a manual one so work after typing starts when the test says so.
+    private let debounceTimer: DebounceTimer
+    private let intelligenceServices: IDEIntelligenceServices
     /// External language servers. Stopped in ``teardown()`` so a running server does not keep the window.
     let languageServerHost = IDELanguageServerHost()
     private let navigationBuffers = NavigationBufferBridge()
@@ -154,6 +157,8 @@ public final class IDEWorkspace {
     var javaSupport: IDEJavaSupport { intelligenceServices.javaSupport }
     /// The window's project systems: what recognizes the open folder, syncs it and runs its tasks.
     var projectSystems: IDEProjectSystems { intelligenceServices.projectSystems }
+    /// The semantic-tier connection of each language server, by definition id (Settings ▸ Language Servers).
+    var languageServerConnections: [String: LSPConnectionBox] { intelligenceServices.languageServerConnections }
     /// Gradle. The Java run and test code asks it for the synced model; everything generic asks
     /// `projectSystems`.
     var gradle: IDEGradleProjectSystem { intelligenceServices.gradle }
@@ -282,10 +287,13 @@ public final class IDEWorkspace {
         self.init(databaseSupport: IDEDatabaseSupport())
     }
 
-    /// `databaseSupport` is a parameter so a test can hand the window a catalog of its own.
-    init(databaseSupport: IDEDatabaseSupport) {
+    /// `databaseSupport` is a parameter so a test can hand the window a catalog of its own, and `debounceTimer`
+    /// so a test can decide when a pause after typing is over.
+    init(databaseSupport: IDEDatabaseSupport, debounceTimer: DebounceTimer = .system) {
         self.databaseSupport = databaseSupport
-        let settle = DocumentSettleCoordinator()
+        self.debounceTimer = debounceTimer
+        intelligenceServices = IDEIntelligenceServices(debounceTimer: debounceTimer)
+        let settle = DocumentSettleCoordinator(timer: debounceTimer)
         documentSettle = settle
         overlays = IDEEditorOverlayController(settle: settle)
         reference.workspace = self
@@ -3590,7 +3598,7 @@ public final class IDEWorkspace {
     }
 
     private func wireAdapter() {
-        adapter = PenumbraWorkbenchEditorAdapter(workbench: workbench)
+        adapter = PenumbraWorkbenchEditorAdapter(workbench: workbench, debounceTimer: debounceTimer)
         adapter.forwardingDelegate = self
         adapter.onOpenHistoryEntry = { [weak self] entry in
             self?.openHistoryEntry(entry) ?? false

@@ -1,6 +1,6 @@
-import EditorIntelligence
+@_spi(Benchmarks) import EditorIntelligence
 import Foundation
-import LanguageSyntax
+@_spi(Benchmarks) import LanguageSyntax
 @_spi(Benchmarks) import Penumbra
 import XCTest
 @testable import Umbra
@@ -21,6 +21,10 @@ import XCTest
 @MainActor
 final class IDEHostEditCostTests: XCTestCase {
     private var directory: URL!
+    /// The clock every debounce of the window reads (completion, content refresh, the settle pause). It moves only
+    /// when `settle()` advances it, so no request can start in the middle of a burst because one keystroke was
+    /// handled late: the burst is the workload and what follows it is the pause.
+    private var clock: ManualDebounceTimer!
     private var workspace: IDEWorkspace!
     private var textView: TextView!
     private var fixture = ""
@@ -43,7 +47,8 @@ final class IDEHostEditCostTests: XCTestCase {
         fixture = Self.makeJavaSource(methods: Self.methodCount)
         let url = directory.appendingPathComponent("Big.java")
         try fixture.write(to: url, atomically: true, encoding: .utf8)
-        workspace = IDEWorkspace()
+        clock = ManualDebounceTimer()
+        workspace = IDEWorkspace(databaseSupport: IDEDatabaseSupport(), debounceTimer: clock.timer)
         workspace.bootstrap()
         await workspace.openDocument(from: url)
         textView = workspace.host(for: workspace.workbench.activePaneID).textView
@@ -54,6 +59,7 @@ final class IDEHostEditCostTests: XCTestCase {
         textView = nil
         workspace?.windowWillClose()
         workspace = nil
+        clock = nil
         IDEWorkspace.isSessionPersistenceEnabled = true
         try? FileManager.default.removeItem(at: directory)
     }
@@ -176,17 +182,32 @@ final class IDEHostEditCostTests: XCTestCase {
         var detachedPeak: Int
         var keystrokeMedianMilliseconds: Double
         var keystrokeMaxMilliseconds: Double
+        /// How long `drive` took. The adapter flushes at most a second after the first unrefreshed
+        /// keystroke, so the number of mid-burst parses follows this, not the code under test.
+        var driveSeconds: Double = 0
 
         var description: String {
             "parses=\(parses.total) (full \(parses.full), incremental \(parses.incremental)) "
                 + "mainBufferCopies=\(mainBufferCopies) exportedTexts=\(exportedTexts) detachedStarted=\(detachedStarted) "
                 + "detachedCancelled=\(detachedCancelled) detachedPeak=\(detachedPeak) "
-                + String(format: "keystrokeMedianMs=%.2f keystrokeMaxMs=%.2f",
-                         keystrokeMedianMilliseconds, keystrokeMaxMilliseconds)
+                + String(format: "keystrokeMedianMs=%.2f keystrokeMaxMs=%.2f driveSeconds=%.2f",
+                         keystrokeMedianMilliseconds, keystrokeMaxMilliseconds, driveSeconds)
         }
     }
 
     private var keystrokeDurations: [Double] = []
+
+    /// Who asked for each parse during a scenario: the frames of the app's own code on the stack.
+    private final class ParseStacks: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String] = []
+        func add(incremental: Bool, symbols: [String]) {
+            let frames = symbols.dropFirst(2).prefix(40).map { String($0.split(separator: " ", maxSplits: 3).last ?? "") }
+            lock.lock(); defer { lock.unlock() }
+            entries.append("\(incremental ? "incremental" : "full") #\(entries.count + 1)\n    " + frames.joined(separator: "\n    "))
+        }
+        func dump() -> String { lock.lock(); defer { lock.unlock() }; return entries.joined(separator: "\n") }
+    }
 
     /// Runs `drive`, waits for the work it caused to finish, and returns what that work cost.
     private func measure(_ name: String, _ drive: () async -> Void) async -> Cost {
@@ -197,12 +218,19 @@ final class IDEHostEditCostTests: XCTestCase {
         let detachedBefore = DetachedWorkStatistics.counts
         DetachedWorkStatistics.resetPeak()
 
+        let driveStart = ContinuousClock.now
+        let stacks = ParseStacks()
+        SyntaxParseStatistics.setObserver { incremental in
+            stacks.add(incremental: incremental, symbols: Thread.callStackSymbols)
+        }
         await drive()
+        let driveElapsed = ContinuousClock.now - driveStart
         await settle()
+        SyntaxParseStatistics.setObserver(nil)
 
         let detached = DetachedWorkStatistics.counts - detachedBefore
         let sorted = keystrokeDurations.sorted()
-        let cost = Cost(
+        var cost = Cost(
             parses: SyntaxParseStatistics.counts - parsesBefore,
             mainBufferCopies: textView.pieceTreeMaterializeCountForBenchmarks - copiesBefore,
             exportedTexts: DocumentTextExport.materializedExportCount - exportsBefore,
@@ -212,7 +240,11 @@ final class IDEHostEditCostTests: XCTestCase {
             keystrokeMedianMilliseconds: sorted.isEmpty ? 0 : sorted[sorted.count / 2],
             keystrokeMaxMilliseconds: sorted.last ?? 0
         )
+        cost.driveSeconds = Double(driveElapsed.components.seconds) + Double(driveElapsed.components.attoseconds) / 1e18
         print("HOSTCOST \(name) \(cost)")
+        if cost.parses.incremental > 3 || ProcessInfo.processInfo.environment["HOSTCOST_STACKS"] != nil {
+            print("HOSTSTACKS \(name)\n" + stacks.dump())
+        }
         return cost
     }
 
@@ -235,7 +267,8 @@ final class IDEHostEditCostTests: XCTestCase {
         }
     }
 
-    /// Waits until the window has been quiet for 1.5 s: no parse started, no text exported and no
+    /// Ends the pause (advances the manual clock, repeatedly, so work that the first release schedules runs
+    /// too) and waits until the window has been quiet for 1.5 s: no parse started, no text exported and no
     /// background hop started or running. Parses alone are not enough: on a slow build (the thread
     /// sanitizer's) the work that follows opening a file, such as semantic colours and markers,
     /// lands well after its parse and would be counted against the scenario that follows. At most 20 s.
@@ -249,6 +282,8 @@ final class IDEHostEditCostTests: XCTestCase {
         var quietSince = ContinuousClock.now
         let deadline = ContinuousClock.now + .seconds(20)
         while ContinuousClock.now < deadline {
+            // The pause is over: every debounce that waits for the clock (and any it starts) may run now.
+            clock.advance(by: 5)
             try? await Task.sleep(nanoseconds: 100_000_000)
             let now = activity()
             if now != last {

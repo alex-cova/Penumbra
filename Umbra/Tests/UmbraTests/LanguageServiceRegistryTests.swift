@@ -369,28 +369,32 @@ final class LanguageServiceRegistryTests: XCTestCase {
     @MainActor
     func testUmbraRegistryOptsOutOfTheSameGenericFeaturesAsBefore() {
         let languages = IDEIntelligenceServices().languages
-        XCTAssertEqual(languages.identifiers(disabling: .snippets), ["http", "java", "javascript", "python", "swift", "typescript"])
-        XCTAssertEqual(languages.identifiers(disabling: .symbolHover), ["java", "javascript", "python", "swift", "typescript"])
-        XCTAssertEqual(languages.identifiers(disabling: .symbolNavigation), ["java", "javascript", "python", "swift", "typescript"])
+        // The catalog servers (`IDELanguageServerCatalog`) opt out of the name-based providers like Python does.
+        let catalog = Set(IDELanguageServerCatalog.all.flatMap(\.languageIDs))
+        XCTAssertEqual(languages.identifiers(disabling: .snippets), Set(["http", "java", "javascript", "python", "swift", "typescript"]).union(catalog))
+        XCTAssertEqual(languages.identifiers(disabling: .symbolHover), Set(["java", "javascript", "python", "swift", "typescript"]).union(catalog))
+        XCTAssertEqual(languages.identifiers(disabling: .symbolNavigation), Set(["java", "javascript", "python", "swift", "typescript"]).union(catalog))
         XCTAssertEqual(languages.identifiers(disabling: .duplicateSymbolDiagnostics), ["http", "swift"])
     }
 
     @MainActor
     func testUmbraRegistryKeepsTheEngineProviderOrder() {
         let languages = IDEIntelligenceServices().languages
+        // One LSP service per catalog server, each contributing one provider per language it serves, after Python's.
+        let catalogNames = IDELanguageServerCatalog.all.flatMap(\.languageIDs)
         XCTAssertEqual(
-            languages.completionProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python", "markdown", "sql", "http"],
+            languages.completionProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"] + catalogNames + ["markdown", "sql", "http"],
             "one tiered completion provider per language, in registration order"
         )
         XCTAssertEqual(
-            languages.hoverProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python", "http"],
+            languages.hoverProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"] + catalogNames + ["http"],
             "`.http` adds the state of a `###@scheme:` line"
         )
         XCTAssertEqual(
-            languages.diagnosticProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"],
+            languages.diagnosticProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"] + catalogNames,
             "Java's javac and inspection providers share one tiered provider"
         )
-        XCTAssertEqual(languages.navigationProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"])
+        XCTAssertEqual(languages.navigationProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"] + catalogNames)
     }
 
     @MainActor

@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 
 /// Runs the latest request once its delay has passed without a newer one. Scheduling again, or
@@ -10,6 +11,12 @@ import Foundation
 @MainActor
 final class Debouncer {
     private var task: Task<Void, Never>?
+    private let timer: DebounceTimer
+
+    /// `timer` is the machine's clock; a test passes a manual one to decide when a pause is over.
+    init(timer: DebounceTimer = .system) {
+        self.timer = timer
+    }
 
     var isPending: Bool { task != nil }
 
@@ -17,8 +24,12 @@ final class Debouncer {
         task?.cancel()
         let identity = UUID()
         pendingIdentity = identity
+        let timer = self.timer
         task = Task { [weak self] in
-            if delay > .zero { try? await Task.sleep(for: delay) }
+            if delay > .zero {
+                let parts = delay.components
+                try? await timer.sleep(TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18)
+            }
             guard !Task.isCancelled else { return }
             await work()
             // Only the newest request clears the slot.
@@ -39,11 +50,16 @@ final class Debouncer {
 @MainActor
 final class KeyedDebouncer<Key: Hashable> {
     private var debouncers: [Key: Debouncer] = [:]
+    private let timer: DebounceTimer
+
+    init(timer: DebounceTimer = .system) {
+        self.timer = timer
+    }
 
     func isPending(_ key: Key) -> Bool { debouncers[key]?.isPending ?? false }
 
     func schedule(_ key: Key, after delay: Duration = .zero, _ work: @escaping @MainActor () async -> Void) {
-        let debouncer = debouncers[key] ?? Debouncer()
+        let debouncer = debouncers[key] ?? Debouncer(timer: timer)
         debouncers[key] = debouncer
         debouncer.schedule(after: delay, work)
     }

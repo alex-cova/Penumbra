@@ -40,7 +40,12 @@ enum EditorAdapterSupport {
 final class AdapterDebouncer: @unchecked Sendable {
     private var task: Task<Void, Never>?
     /// When the oldest call not yet refreshed was made.
-    private var firstPendingAt: ContinuousClock.Instant?
+    private var firstPendingAt: UInt64?
+    private let timer: DebounceTimer
+
+    init(timer: DebounceTimer = .system) {
+        self.timer = timer
+    }
 
     /// Longest a call waits for a pause: a second, or five delays when the delay is longer.
     static func maximumWait(forDelay delay: TimeInterval) -> TimeInterval {
@@ -54,14 +59,15 @@ final class AdapterDebouncer: @unchecked Sendable {
     /// "read when each refresh is scheduled" autoreparse-delay semantics.
     func schedule(delay: TimeInterval, work: @escaping @MainActor () -> Void) {
         task?.cancel()
-        let now = ContinuousClock.now
+        let now = timer.nowNanoseconds()
         let first = firstPendingAt ?? now
         firstPendingAt = first
-        let elapsed = Self.seconds(first.duration(to: now))
+        let elapsed = Double(now &- first) / 1_000_000_000
         let remaining = max(0, Self.maximumWait(forDelay: delay) - elapsed)
         let wait = min(max(delay, 0), remaining)
+        let timer = self.timer
         task = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            try? await timer.sleep(wait)
             guard !Task.isCancelled else { return }
             self?.firstPendingAt = nil
             work()
@@ -72,11 +78,6 @@ final class AdapterDebouncer: @unchecked Sendable {
         task?.cancel()
         task = nil
         firstPendingAt = nil
-    }
-
-    private static func seconds(_ duration: Duration) -> TimeInterval {
-        let parts = duration.components
-        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
     }
 
     deinit {

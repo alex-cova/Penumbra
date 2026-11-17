@@ -51,8 +51,19 @@ public extension LanguageDefinition {
         LanguageDefinition(id: "cpp", displayName: "C++",
                            fileExtensions: ["cpp", "cc", "cxx", "hpp", "hh", "hxx", "mm"],
                            fenceAliases: ["c++", "cc", "cxx", "hpp"], isSelectable: true),
-        // Identity only: no grammar, so Markdown passes the fence name on unchanged.
-        LanguageDefinition(id: "csharp", displayName: "C#", fenceAliases: ["cs"]),
+        // Identity only: no grammar, so Markdown passes the fence name on unchanged. The file extensions
+        // let a language server (`IDELanguageServerCatalog`) answer for the file; colours stay plain.
+        LanguageDefinition(id: "csharp", displayName: "C#", fileExtensions: ["cs", "csx"], fenceAliases: ["cs"]),
+        LanguageDefinition(id: "php", displayName: "PHP", fileExtensions: ["php", "phtml"]),
+        LanguageDefinition(id: "scala", displayName: "Scala", fileExtensions: ["scala", "sc"]),
+        LanguageDefinition(id: "zig", displayName: "Zig", fileExtensions: ["zig", "zon"]),
+        LanguageDefinition(id: "terraform", displayName: "Terraform", fileExtensions: ["tf", "tfvars"],
+                           aliases: ["hcl"], fenceAliases: ["hcl", "tf"]),
+        LanguageDefinition(id: "ruby", displayName: "Ruby", fileExtensions: ["rb", "rake", "gemspec"],
+                           fileNames: ["Gemfile", "Rakefile"], fenceAliases: ["rb"]),
+        LanguageDefinition(id: "r", displayName: "R", fileExtensions: ["r"]),
+        LanguageDefinition(id: "lua", displayName: "Lua", fileExtensions: ["lua"]),
+        LanguageDefinition(id: "dart", displayName: "Dart", fileExtensions: ["dart"]),
         // The fence name stays "bash" (what the fence aliases always produced); the file identifier is "shell".
         LanguageDefinition(id: "shell", displayName: "Shell Script",
                            fileExtensions: ["sh", "bash", "zsh", "command"],

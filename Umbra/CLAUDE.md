@@ -73,6 +73,8 @@ Every window is one project (or none) with its own `IDEWorkspace`; native macOS 
 
 ## Language modules
 
+Catalog language servers (PHP, Rust, C#, Kotlin, Scala, Zig, Terraform, Ruby, R, Lua, Go, Dart, C/C++, Bash): `docs/LANGUAGE_SERVERS.md`, code in `Umbra/Sources/Umbra/LanguageServers/Catalog/`; a new one is a spec in `IDELanguageServerCatalog` plus a `LanguageDefinition`.
+
 The chrome a language adds to Umbra: `Umbra/Sources/Umbra/Languages/CLAUDE.md`.
 
 ## Project systems and run providers

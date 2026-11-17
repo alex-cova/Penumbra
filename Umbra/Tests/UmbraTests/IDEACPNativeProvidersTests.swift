@@ -94,7 +94,7 @@ for line in sys.stdin:
         if provider == "cursor" and "plan" in prompt:
             notify("cursor/update_todos", {"sessionId": "s-1", "toolCallId": "t", "merge": False,
                    "todos": [{"id": "1", "content": "Write it", "status": "pending"}]})
-            answer = request("cursor/create_plan", {"sessionId": "s-1", "toolCallId": "plan-1", "plan": "# Plan\n1. Write it",
+            answer = request("cursor/create_plan", {"sessionId": "s-1", "toolCallId": "plan-1", "plan": "\u0023 Plan\n1. Write it",
                    "todos": [{"id": "1", "content": "Write it", "status": "pending"}]})
             text(" planned:" + answer.get("result", {}).get("outcome", {}).get("outcome", "none"))
         if "unknown" in prompt:

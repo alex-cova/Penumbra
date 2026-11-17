@@ -448,6 +448,65 @@ final class LSPFakeServerTests: XCTestCase {
         await sync.stop()
     }
 
+    func testDocumentSyncSendsTheMappedLSPLanguageIDInDidOpen() async throws {
+        let toServer = Pipe()
+        let fromServer = Pipe()
+        let peer = ScriptedLSPPeer()
+        let server = Task.detached {
+            peer.serve(reading: toServer.fileHandleForReading, writing: fromServer.fileHandleForWriting)
+        }
+        let clientWrite = HandleWriter(toServer.fileHandleForWriting)
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        let reader = Task.detached {
+            let handle = fromServer.fileHandleForReading
+            while true {
+                let data = handle.availableData
+                if data.isEmpty {
+                    continuation.finish()
+                    return
+                }
+                continuation.yield(data)
+            }
+        }
+        defer {
+            clientWrite.close()
+            try? fromServer.fileHandleForWriting.close()
+            server.cancel()
+            reader.cancel()
+        }
+        let client = LanguageServerClient.make(
+            write: { try clientWrite.write($0) },
+            read: stream,
+            documentURI: { $0.url?.absoluteString ?? "untitled:\($0.id)" },
+            workspaceRoot: URL(fileURLWithPath: "/tmp")
+        )
+        let origin = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        func document(_ path: String, language: String) -> Document {
+            Document(
+                id: DocumentID(), url: URL(fileURLWithPath: path), displayName: path,
+                contentSnapshot: TextSnapshot(version: 0, text: "echo hi"),
+                selection: Selection(range: EditorIntelligence.TextRange(start: origin, end: origin)),
+                cursor: Cursor(position: origin), viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
+                languageIdentifier: language
+            )
+        }
+        let workspace = Workspace()
+        await workspace.openDocument(document("/tmp/run.sh", language: "shell"))
+        let sync = LSPWorkspaceDocumentSync(
+            client: client, languages: ["shell"],
+            lspLanguageID: { $0.languageIdentifier == "shell" ? "shellscript" : ($0.languageIdentifier ?? "plaintext") }
+        )
+        await sync.start(workspace: workspace)
+        let deadline = Date().addingTimeInterval(5)
+        while peer.documentSyncNotifications.isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let item = peer.documentSyncNotifications.first?.params["textDocument"] as? [String: Any]
+        XCTAssertEqual(peer.documentSyncNotifications.first?.method, "textDocument/didOpen")
+        XCTAssertEqual(item?["languageId"] as? String, "shellscript", "the protocol's identifier, not Umbra's `shell`")
+        await sync.stop()
+    }
+
     func testAReadOnlyGeneratedInterfaceGetsTheHigherLimitAndAnEditableFileDoesNot() async throws {
         let toServer = Pipe()
         let fromServer = Pipe()

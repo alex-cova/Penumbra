@@ -63,14 +63,19 @@ final class IDEIntelligenceServices {
     let sourceKitConnection = LSPConnectionBox()
     let typeScriptServerConnection = LSPConnectionBox()
     let pythonServerConnection = LSPConnectionBox()
+    /// One box per catalog server (`IDELanguageServerCatalog`), made once from the table.
+    let catalogConnections: [String: LSPConnectionBox] = Dictionary(
+        uniqueKeysWithValues: IDELanguageServerCatalog.all.map { ($0.id, LSPConnectionBox()) }
+    )
     var languageServerConnections: [String: LSPConnectionBox] {
         [
             IDESourceKitServer.id: sourceKitConnection, IDETypeScriptServer.id: typeScriptServerConnection,
             IDEPythonServer.id: pythonServerConnection,
-        ]
+        ].merging(catalogConnections) { first, _ in first }
     }
 
-    init() {
+    /// `debounceTimer` is the machine's clock; a test passes a manual one (see ``DebounceTimer``).
+    init(debounceTimer: DebounceTimer = .system) {
         let jdk = IDEJDKSelection()
         let gradle = IDEGradleProjectSystem(jdk: jdk, status: projectStatus)
         self.gradle = gradle
@@ -103,6 +108,13 @@ final class IDEIntelligenceServices {
         let pythonServer = LSPLanguageService(
             configuration: IDEPythonServer.definition().configuration, connections: pythonServerConnection
         )
+        let catalogConnections = self.catalogConnections
+        let catalogServices: [any LanguageService] = IDELanguageServerCatalog.all.map { spec in
+            LSPLanguageService(
+                configuration: IDECatalogServer.definition(for: spec).configuration,
+                connections: catalogConnections[spec.id] ?? LSPConnectionBox()
+            )
+        }
         let languages = LanguageServiceRegistry(services: [
             javaSupport.languageService,
             typescriptSupport.languageService,
@@ -110,6 +122,7 @@ final class IDEIntelligenceServices {
             sourceKit,
             typeScriptServer,
             pythonServer,
+        ] + catalogServices + [
             BasicLanguageService(
                 name: "umbra.run", languageIdentifiers: ["java"],
                 providers: LanguageProviders(codeActions: IDERunCodeActionProvider())
@@ -148,7 +161,7 @@ final class IDEIntelligenceServices {
             SymbolCompletionProvider(index: symbolIndex),
             WordCompletionProvider(index: symbolIndex),
             SnippetCompletionProvider(excludedLanguageIdentifiers: languages.identifiers(disabling: .snippets))
-        ] + languages.completionProviders)
+        ] + languages.completionProviders, timer: debounceTimer)
         hoverEngine = HoverEngine(providers: languages.hoverProviders + [
             SymbolHoverProvider(index: symbolIndex, skippingLanguages: Array(languages.identifiers(disabling: .symbolHover)))
         ])

@@ -13,7 +13,7 @@ final class IDELanguageModuleTests: XCTestCase {
 
     func testTheShippedModulesAreJavaHTTPThePreviewLanguagesTypeScriptSwiftAndPython() {
         XCTAssertEqual(
-            IDELanguageModules.all.map(\.id), ["java", "http", "database", "markdown", "json", "csv", "typescript", "swift", "python", "hex"]
+            IDELanguageModules.all.map(\.id), ["java", "http", "database", "markdown", "json", "csv", "typescript", "swift", "python", "language-servers", "hex"]
         )
         XCTAssertNotNil(IDELanguageModules.module(id: "http"))
         XCTAssertNotNil(IDELanguageModules.module(id: "swift"))
@@ -106,10 +106,10 @@ final class IDELanguageModuleTests: XCTestCase {
 
     func testSettingsPagesKeepTheirOrderWithTheJavaPageBetweenProjectAndAgent() {
         let modulePages = IDELanguageModules.preferencePanes.map(\.domain)
-        XCTAssertEqual(modulePages.map(\.id), ["java", "typescript", "swift", "swiftUIPreview", "python", "hex"])
+        XCTAssertEqual(modulePages.map(\.id), ["java", "typescript", "swift", "swiftUIPreview", "python", "language-servers", "hex"])
         XCTAssertEqual(
             IDEPreferencesDomain.ordered(with: modulePages).map(\.id),
-            ["general", "editor", "saving", "appearance", "terminal", "focus", "project", "java", "typescript", "swift", "swiftUIPreview", "python", "hex", "agent"]
+            ["general", "editor", "saving", "appearance", "terminal", "focus", "project", "java", "typescript", "swift", "swiftUIPreview", "python", "language-servers", "hex", "agent"]
         )
         XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "saving", "appearance", "terminal", "focus", "project", "agent"])
     }

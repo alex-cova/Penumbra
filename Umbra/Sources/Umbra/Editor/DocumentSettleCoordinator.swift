@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 import Penumbra
 
@@ -42,7 +43,11 @@ final class DocumentSettleCoordinator {
     }
 
     private var batches: [ObjectIdentifier: Batch] = [:]
-    private let timers = KeyedDebouncer<ObjectIdentifier>()
+    private let timers: KeyedDebouncer<ObjectIdentifier>
+
+    init(timer: DebounceTimer = .system) {
+        timers = KeyedDebouncer(timer: timer)
+    }
     /// Settles that captured the buffer text. A burst of keystrokes is one, after the pause.
     private(set) var snapshotCount = 0
 

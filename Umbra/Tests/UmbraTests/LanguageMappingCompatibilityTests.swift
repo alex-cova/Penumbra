@@ -36,13 +36,17 @@ final class LanguageMappingCompatibilityTests: XCTestCase {
             "graphql": "graphql", "gql": "graphql",
             "http": "http", "rest": "http",
             "mmd": "mermaid", "mermaid": "mermaid",
-            "diff": "diff", "patch": "diff"
+            "diff": "diff", "patch": "diff",
+            // Identity only (no grammar): a language server answers for these files.
+            "cs": "csharp", "csx": "csharp", "php": "php", "phtml": "php", "scala": "scala", "sc": "scala",
+            "zig": "zig", "zon": "zig", "tf": "terraform", "tfvars": "terraform",
+            "rb": "ruby", "rake": "ruby", "gemspec": "ruby", "r": "r", "lua": "lua", "dart": "dart"
         ]
         for (ext, expected) in table {
             XCTAssertEqual(LanguageIdentifier.identifier(forFileExtension: ext), expected, "extension '\(ext)'")
             XCTAssertEqual(LanguageIdentifier.identifier(forFileExtension: ext.uppercased()), expected, "extension '\(ext)' uppercased")
         }
-        for unknown in ["xyzzy", "rb", "php", "cs", "lock", "swiftmodule"] {
+        for unknown in ["xyzzy", "lock", "swiftmodule"] {
             XCTAssertNil(LanguageIdentifier.identifier(forFileExtension: unknown), unknown)
         }
     }
@@ -97,7 +101,7 @@ final class LanguageMappingCompatibilityTests: XCTestCase {
             XCTAssertNotNil(BundledLanguages.language(forIdentifier: identifier), identifier)
         }
         // Known identifiers that deliberately have no grammar, and ones nobody defined.
-        for identifier in ["plain", "csv", "tsv", "jsx", "tsx", "csharp", "ruby", "", "JSON", "Java"] {
+        for identifier in ["plain", "csv", "tsv", "jsx", "tsx", "csharp", "ruby", "php", "", "JSON", "Java"] {
             XCTAssertNil(TreeSitterLanguage.bundled(forIdentifier: identifier), identifier)
             XCTAssertNil(BundledLanguages.language(forIdentifier: identifier), identifier)
         }

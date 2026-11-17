@@ -29,6 +29,8 @@ public actor LSPWorkspaceDocumentSync {
     private let languages: Set<String>
     private let maximumUTF16Length: Int
     private let maximumGeneratedInterfaceUTF16Length: Int
+    /// Maps a document to the `languageId` sent in `didOpen`; nil sends Umbra's own identifier.
+    private let lspLanguageID: (@Sendable (Document) -> String)?
     /// The documents the server has been sent. Their versions and lengths are the client's
     /// (`LanguageServerClient.syncFullText`), which also refreshes a document before any request about it.
     private var tracked: Set<DocumentID> = []
@@ -45,8 +47,10 @@ public actor LSPWorkspaceDocumentSync {
         client: LanguageServerClient,
         languages: Set<String>,
         maximumUTF16Length: Int = 2_000_000,
-        maximumGeneratedInterfaceUTF16Length: Int = 16_000_000
+        maximumGeneratedInterfaceUTF16Length: Int = 16_000_000,
+        lspLanguageID: (@Sendable (Document) -> String)? = nil
     ) {
+        self.lspLanguageID = lspLanguageID
         self.client = client
         self.languages = languages
         self.maximumUTF16Length = maximumUTF16Length
@@ -99,7 +103,10 @@ public actor LSPWorkspaceDocumentSync {
         guard isSynced(document) else { return }
         guard !tracked.contains(document.id) else { return await changed(document, force: false) }
         tracked.insert(document.id)
-        await client.notifyOpened(document, languageID: document.languageIdentifier ?? "plaintext", version: 1)
+        // Umbra's identifier (`shell`) is not always the protocol's (`shellscript`): the configuration's
+        // mapping decides what the server is told.
+        let languageID = lspLanguageID?(document) ?? document.languageIdentifier ?? "plaintext"
+        await client.notifyOpened(document, languageID: languageID, version: 1)
     }
 
     private func changed(_ document: Document, force: Bool) async {

@@ -26,11 +26,21 @@ public enum SyntaxParseStatistics {
         state.withLock { $0 }
     }
 
+    private static let observerState = OSAllocatedUnfairLock<(@Sendable (_ incremental: Bool) -> Void)?>(initialState: nil)
+
+    /// Called on the parsing thread for every parse while set, so a benchmark can record who asked
+    /// (`Thread.callStackSymbols`). nil in the app.
+    @_spi(Benchmarks) public static func setObserver(_ observer: (@Sendable (_ incremental: Bool) -> Void)?) {
+        observerState.withLock { $0 = observer }
+    }
+
     static func noteFullParse() {
         state.withLock { $0.full += 1 }
+        observerState.withLock { $0 }?(false)
     }
 
     static func noteIncrementalParse() {
         state.withLock { $0.incremental += 1 }
+        observerState.withLock { $0 }?(true)
     }
 }

@@ -19,6 +19,8 @@ final class IDELanguageServerHost {
         case starting
         case ready
         case restarting
+        /// The server kept exiting and the restart limit was reached. Only Restart in Settings tries again.
+        case failed
     }
 
     struct ServerStatus: Equatable {
@@ -35,6 +37,12 @@ final class IDELanguageServerHost {
     private(set) var serverWork: [String: [LSPWorkProgress]] = [:]
     /// How many times a server exited on its own and the native tier was left in front.
     private(set) var nativeFallbacks = 0
+    /// The tail of the last stderr a server left when it exited on its own, by definition id.
+    private(set) var serverErrors: [String: String] = [:]
+    /// Consecutive quick exits before the host stops restarting a server.
+    var maxRestartAttempts = 5
+    /// A server that ran this long before exiting counts as healthy: its next exit starts the backoff over.
+    var healthyRunDuration: Duration = .seconds(60)
 
     var restartDelay: @Sendable (Int) -> Duration = { attempt in
         .milliseconds(min(8_000, 250 << min(attempt, 5)))
@@ -51,6 +59,9 @@ final class IDELanguageServerHost {
     private let trustDirectory: URL
     private var sessions: [String: Session] = [:]
     private var generation = 0
+    private var currentRoot: URL?
+    /// Identifies one launched process, so the exit of a replaced one (Restart) never clears its successor.
+    private var nextSerial = 0
     static let enabledDefaultsKey = "umbra.languageServers.enabled"
     private let enabledKey = IDELanguageServerHost.enabledDefaultsKey
 
@@ -74,6 +85,7 @@ final class IDELanguageServerHost {
     /// Starts every module's server for `root` when the global switch is on and the folder is trusted.
     func projectDidChange(root: URL?, connections: [String: LSPConnectionBox]) {
         stop()
+        currentRoot = root
         guard let root, isEnabled else { return }
         let definitions = IDELanguageModules.all.flatMap(\.languageServers)
         for definition in definitions {
@@ -85,6 +97,35 @@ final class IDELanguageServerHost {
     /// Starts one server. Used by the modules' project change and by tests.
     func start(_ definition: IDELanguageServerDefinition, connection: LSPConnectionBox, root: URL) async {
         await launch(definition, connection: connection, root: root, attempt: 0)
+    }
+
+    /// Terminates one server and starts it again with a fresh restart budget, whatever state it was in
+    /// (also `failed`, `missing` and `untrusted`, so a newly installed binary is picked up). Other servers
+    /// are not touched.
+    func restart(_ definition: IDELanguageServerDefinition, connection: LSPConnectionBox) {
+        guard let root = currentRoot, isEnabled else { return }
+        terminate(definition, connection: connection)
+        Task { await self.launch(definition, connection: connection, root: root, attempt: 0) }
+    }
+
+    /// Terminates one server and leaves it stopped (Settings turned it off). Other servers keep running.
+    func stop(_ definition: IDELanguageServerDefinition, connection: LSPConnectionBox) {
+        terminate(definition, connection: connection)
+        statuses.removeAll { $0.id == definition.id }
+        serverWork[definition.id] = nil
+        summary = Self.summary(statuses: statuses, work: serverWork)
+    }
+
+    private func terminate(_ definition: IDELanguageServerDefinition, connection: LSPConnectionBox) {
+        if let session = sessions.removeValue(forKey: definition.id) {
+            session.featuresTask?.cancel()
+            session.stopSync()
+            session.handle.terminate()
+            session.finishReading()
+        }
+        connection.setCurrent(nil)
+        connection.setSupportedFeatures(nil)
+        serverErrors[definition.id] = nil
     }
 
     /// Terminates every server. A later exit does not restart.
@@ -100,6 +141,7 @@ final class IDELanguageServerHost {
         sessions = [:]
         statuses = []
         serverWork = [:]
+        serverErrors = [:]
         summary = nil
     }
 
@@ -108,6 +150,8 @@ final class IDELanguageServerHost {
     ) async {
         guard definition.isRelevantToProject(root) else { return }
         let token = generation
+        nextSerial += 1
+        let serial = nextSerial
         if !isTrusted(definition, root: root) {
             let allowed = await requestTrust?(definition, root) ?? false
             guard generation == token else { return }
@@ -142,7 +186,7 @@ final class IDELanguageServerHost {
             initializationOptions: definition.initializationOptions(root),
             onProgress: { [weak self] work in
                 Task { @MainActor in
-                    self?.noteWork(work, definition: definition, token: token, attempt: attempt)
+                    self?.noteWork(work, definition: definition, token: token, serial: serial)
                 }
             }
         )
@@ -169,12 +213,17 @@ final class IDELanguageServerHost {
             return
         }
         bridge.attach(handle)
-        let session = Session(definition: definition, connection: connection, handle: handle, bridge: bridge, attempt: attempt)
+        let launchedAt = ContinuousClock.now
+        let session = Session(definition: definition, connection: connection, handle: handle, bridge: bridge, attempt: attempt, serial: serial)
         sessions[definition.id] = session
         connection.setCurrent(client)
         if let workspace = documentWorkspace {
+            let configuration = definition.configuration
             session.startSync(
-                LSPWorkspaceDocumentSync(client: client, languages: definition.configuration.languageIdentifiers),
+                LSPWorkspaceDocumentSync(
+                    client: client, languages: configuration.languageIdentifiers,
+                    lspLanguageID: { document in configuration.lspLanguageID(document.url, document.languageIdentifier ?? "plaintext") }
+                ),
                 workspace: workspace
             )
         }
@@ -182,9 +231,10 @@ final class IDELanguageServerHost {
         let featuresTask = Task { [weak self] in
             let features = await client.advertisedFeatures()
             await MainActor.run {
-                guard let self, self.generation == token, self.sessions[definition.id]?.attempt == attempt else { return }
+                guard let self, self.generation == token, self.sessions[definition.id]?.serial == serial else { return }
                 connection.setSupportedFeatures(features)
                 self.setStatus(definition, .ready)
+                self.sessions[definition.id]?.beginSync()
             }
         }
         session.featuresTask = featuresTask
@@ -193,7 +243,10 @@ final class IDELanguageServerHost {
             let result = await handle.result
             bridge.finish()
             await MainActor.run {
-                self?.noteExit(definition: definition, connection: connection, root: root, attempt: attempt, token: token, result: result)
+                self?.noteExit(
+                    definition: definition, connection: connection, root: root, attempt: attempt, token: token, serial: serial,
+                    result: result, ranFor: launchedAt.duration(to: .now)
+                )
             }
         }
     }
@@ -204,9 +257,11 @@ final class IDELanguageServerHost {
         root: URL,
         attempt: Int,
         token: Int,
-        result: SubprocessResult
+        serial: Int,
+        result: SubprocessResult,
+        ranFor: Duration = .zero
     ) {
-        guard generation == token, sessions[definition.id]?.attempt == attempt else { return }
+        guard generation == token, sessions[definition.id]?.serial == serial else { return }
         sessions[definition.id]?.featuresTask?.cancel()
         sessions[definition.id]?.stopSync()
         sessions[definition.id] = nil
@@ -214,18 +269,26 @@ final class IDELanguageServerHost {
         connection.setSupportedFeatures(nil)
         if result.cancelled { return }
         nativeFallbacks += 1
+        let stderr = result.stderr.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        serverErrors[definition.id] = stderr.isEmpty ? "Exited with \(result.exit)." : String(stderr.suffix(2_000))
+        // A server that ran for a while and then died starts a new budget; one that dies at once uses it up.
+        let next = ranFor >= healthyRunDuration ? 1 : attempt + 1
+        if next > maxRestartAttempts {
+            setStatus(definition, .failed)
+            return
+        }
         setStatus(definition, .restarting)
         let delay = restartDelay(attempt)
         Task { [weak self] in
             try? await Task.sleep(for: delay)
-            await self?.launch(definition, connection: connection, root: root, attempt: attempt + 1)
+            await self?.launch(definition, connection: connection, root: root, attempt: next)
         }
     }
 
     /// Progress from a server's `$/progress`. Dropped when it comes from a session this host has since
     /// stopped or replaced.
-    private func noteWork(_ work: [LSPWorkProgress], definition: IDELanguageServerDefinition, token: Int, attempt: Int) {
-        guard generation == token, sessions[definition.id]?.attempt == attempt else { return }
+    private func noteWork(_ work: [LSPWorkProgress], definition: IDELanguageServerDefinition, token: Int, serial: Int) {
+        guard generation == token, sessions[definition.id]?.serial == serial else { return }
         serverWork[definition.id] = work.isEmpty ? nil : work
         summary = Self.summary(statuses: statuses, work: serverWork)
     }
@@ -250,6 +313,7 @@ final class IDELanguageServerHost {
             case .unprepared: return "\(status.name): project not indexed"
             case .starting: return "\(status.name): starting"
             case .restarting: return "\(status.name): restarting"
+            case .failed: return "\(status.name): stopped after repeated crashes"
             case .ready:
                 guard let running = work[status.id], let first = running.first else { return status.name }
                 let more = running.count > 1 ? " +\(running.count - 1)" : ""
@@ -271,25 +335,38 @@ final class IDELanguageServerHost {
         let handle: SubprocessHandle
         let bridge: OutputBridge
         let attempt: Int
+        let serial: Int
         var featuresTask: Task<Void, Never>?
         private var sync: LSPWorkspaceDocumentSync?
+        private var pendingWorkspace: Workspace?
 
         init(
             definition: IDELanguageServerDefinition, connection: LSPConnectionBox,
-            handle: SubprocessHandle, bridge: OutputBridge, attempt: Int
+            handle: SubprocessHandle, bridge: OutputBridge, attempt: Int, serial: Int
         ) {
             self.definition = definition
             self.connection = connection
             self.handle = handle
             self.bridge = bridge
             self.attempt = attempt
+            self.serial = serial
         }
 
         func finishReading() { bridge.finish() }
 
         /// Tells the server about the open documents and keeps doing so until ``stopSync()``.
+        /// Remembers the sync; ``beginSync()`` starts it once `initialize` has completed. A `didOpen` that goes out
+        /// while a slow server (clangd, rust-analyzer) is still starting is dropped, and every later request about
+        /// the file then fails with "non-added document". Two concurrent `initialize` waits are not safe either
+        /// (the second reads no capabilities), so the host's one feature query is what the sync waits for.
         func startSync(_ sync: LSPWorkspaceDocumentSync, workspace: Workspace) {
             self.sync = sync
+            pendingWorkspace = workspace
+        }
+
+        func beginSync() {
+            guard let sync, let workspace = pendingWorkspace else { return }
+            pendingWorkspace = nil
             Task { await sync.start(workspace: workspace) }
         }
 

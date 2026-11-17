@@ -17,6 +17,8 @@ public actor CompletionEngine {
     }
     public nonisolated let ranker: Ranker
     public let debounceInterval: TimeInterval
+    /// Where the debounce reads the time and waits. The machine's clock unless a test supplies its own.
+    private let timer: DebounceTimer
     private var currentTask: Task<Void, Never>?
     /// When the previous request arrived, to tell a burst of keystrokes from a single one.
     private var previousArrival: UInt64?
@@ -24,8 +26,10 @@ public actor CompletionEngine {
     public init(
         providers: [CompletionProvider],
         ranker: Ranker = DefaultRanker(),
-        debounceInterval: TimeInterval = 0.05
+        debounceInterval: TimeInterval = 0.05,
+        timer: DebounceTimer = .system
     ) {
+        self.timer = timer
         self.providers = providers
         self.ranker = ranker
         self.debounceInterval = debounceInterval
@@ -61,7 +65,8 @@ public actor CompletionEngine {
         currentTask?.cancel()
         let providers = self.providers
         let ranker = self.ranker
-        let arrival = DispatchTime.now().uptimeNanoseconds
+        let arrival = timer.nowNanoseconds()
+        let timer = self.timer
         let debounce = Self.debounce(
             interval: debounceInterval, isExplicit: context.trigger == .manual, previousArrival: previousArrival, arrival: arrival
         )
@@ -71,7 +76,7 @@ public actor CompletionEngine {
         let task = Task {
             do {
                 if debounce > 0 {
-                    try await Task.sleep(for: .seconds(debounce))
+                    try await timer.sleep(debounce)
                 }
                 try Task.checkCancellation()
                 CompletionLatencyTrace.record(context.traceID, "engineStart")

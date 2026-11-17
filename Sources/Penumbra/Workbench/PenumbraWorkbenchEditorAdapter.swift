@@ -21,7 +21,7 @@ public final class PenumbraWorkbenchEditorAdapter: EditorAdapter, @unchecked Sen
     private let lock = NSLock()
     private var liveDocumentID: DocumentID?
     private var cachedOpenDocuments: [Document] = []
-    private let contentRefreshDebouncer = AdapterDebouncer()
+    private let contentRefreshDebouncer: AdapterDebouncer
     private var pendingContentChanges: [TextEdit] = []
     /// Matches ``LSPDocumentSyncService``'s default `batchInterval`. See
     /// PERFORMANCE_AUDIT.md Phase 2 #1 — `selected.text = textView.text` is an O(document size)
@@ -31,7 +31,13 @@ public final class PenumbraWorkbenchEditorAdapter: EditorAdapter, @unchecked Sen
     /// and the index follow (IntelliJ's "Autoreparse delay"). Read when each refresh is scheduled.
     public var contentRefreshDebounce: TimeInterval = PenumbraWorkbenchEditorAdapter.defaultContentRefreshDebounce
 
-    public init(workbench: EditorWorkbench, textView: TextView? = nil, context: EditorContext = EditorContext()) {
+    /// `debounceTimer` is the machine's clock; a test passes a manual one so the refresh after typing
+    /// starts when the test says so.
+    public init(
+        workbench: EditorWorkbench, textView: TextView? = nil, context: EditorContext = EditorContext(),
+        debounceTimer: DebounceTimer = .system
+    ) {
+        self.contentRefreshDebouncer = AdapterDebouncer(timer: debounceTimer)
         self.workbench = workbench
         self.textView = textView
         self.context = context

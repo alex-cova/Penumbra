@@ -87,6 +87,17 @@ public actor JavaCompletionProvider: CompletionProvider {
     private(set) var slowPhaseSkipCount = 0
     /// Requests for a Java document that reached the provider's actor (a counter for tests).
     private(set) var requestCount = 0
+    /// Requests that were cancelled before the provider's actor reached them and so never parsed (a counter for tests).
+    private(set) var obsoleteRequestSkipCount = 0
+    /// Test seam: awaited by a request's task after it starts and before it asks the provider's actor to work, so a
+    /// test can cancel a request at the one point where it has not yet parsed. Read under a lock, not through the
+    /// actor, so a request pays no extra hop for it.
+    private nonisolated let requestStartHook = OSAllocatedUnfairLock<(@Sendable () async -> Void)?>(initialState: nil)
+
+    nonisolated func setRequestStartHook(_ hook: (@Sendable () async -> Void)?) {
+        requestStartHook.withLock { $0 = hook }
+    }
+
     /// How many update streams were ended by their consumer going away (a counter for tests: it is how a test
     /// knows a cancellation has reached the provider before it lets a held request go on).
     nonisolated let terminationCount = OSAllocatedUnfairLock(initialState: 0)
@@ -116,6 +127,7 @@ public actor JavaCompletionProvider: CompletionProvider {
         return AsyncStream { continuation in
             let task = Task {
                 CompletionLatencyTrace.record(context.traceID, "java:taskStart")
+                if let hook = self.requestStartHook.withLock({ $0 }) { await hook() }
                 // Phased handlers publish their fast update through this as soon as they have it;
                 // the array `updates(for:)` returns then holds only what was not yet published.
                 let sink: @Sendable (CompletionUpdate) -> Void = { update in
@@ -139,6 +151,13 @@ public actor JavaCompletionProvider: CompletionProvider {
         CompletionLatencyTrace.record(context.traceID, "java:actor")
         guard context.document.languageIdentifier == "java" else {
             return [CompletionUpdate(items: [], isFinished: true)]
+        }
+        // A newer request cancels this one, and this task may have waited for the actor behind the request
+        // that was running. Parsing is not cancellable, so the check is made before it starts: nothing
+        // downstream reads what an obsolete request would build.
+        guard !Task.isCancelled else {
+            obsoleteRequestSkipCount += 1
+            return []
         }
         requestCount += 1
         // Anonymous class bodies become types for the length of this request (`this.` inside
