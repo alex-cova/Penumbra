@@ -93,6 +93,7 @@ struct IDEAgentSettingsView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier(item == .integrations ? IDEACPAccessibility.agentIntegrations : "")
                         .accessibilityAddTraits(category == item ? .isSelected : [])
                     }
                 }
@@ -319,6 +320,7 @@ struct IDEAgentSettingsView: View {
         }
             .formStyle(.grouped)
             .ideSettingsScrollSurface()
+            .accessibilityIdentifier(IDEACPAccessibility.settingsDetail)
             }
         }
             .background(IDEAppearance.ColorToken.workbench)

@@ -7,9 +7,8 @@
 # Snapshot covers: ~/Library/Application Support/com.umbra.editor, the com.umbra.editor defaults domain,
 # com.umbra.editor*.plist files, the global npm tree and ~/.npmrc.
 #
-# The UI harness's own isolated suites (com.umbra.editor.acp-ui-test.<uuid>) are the isolation mechanism, not
-# user settings, so they are excluded from the comparison. removePersistentDomain empties a suite but leaves its
-# plist file, so they accumulate; verify reports how many new ones this run left and does not fail on them.
+# The UI harness uses isolated suites (com.umbra.editor.acp-ui-test.<uuid>) and an isolated app domain
+# (com.umbra.editor.acp-ui-test.app). Exclude their plist files and report how many this run created.
 set -euo pipefail
 
 BASE="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/user-state"

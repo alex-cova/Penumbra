@@ -17,6 +17,7 @@ struct UmbraApp: App {
         // leaves the launch window alone.
         .handlesExternalEvents(matching: ["umbra-never-matches-an-event"])
         .windowStyle(.hiddenTitleBar)
+        .restorationBehavior(IDEACPUITestLaunch.isEnabled ? .disabled : .automatic)
         .commands {
             IDEAppCommands()
         }
@@ -26,6 +27,7 @@ struct UmbraApp: App {
         }
         .defaultSize(width: 1000, height: 700)
         .windowResizability(.contentMinSize)
+        .restorationBehavior(IDEACPUITestLaunch.isEnabled ? .disabled : .automatic)
     }
 }
 

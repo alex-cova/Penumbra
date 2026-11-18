@@ -312,7 +312,8 @@ final class ACPAdapterManagerUITests: XCTestCase {
         let search = ui.wait(ACPUIID.settingsSearch)
         search.typeText("Agent")
         ui.expect(search, "value == %@", "Agent", timeout: 3)
-        ui.app.typeKey(.return, modifierFlags: [])
+        search.typeKey(.return, modifierFlags: [])
+        ui.openIntegrations()
         XCTAssertTrue(ui.element(ACPUIID.adapter(ACPUIID.codex)).waitForExistence(timeout: 15))
 
         ui.app.typeKey(.escape, modifierFlags: [])

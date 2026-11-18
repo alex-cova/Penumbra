@@ -82,6 +82,7 @@ if ! ls "$APP_DIR"/Contents/Resources/*_Penumbra.bundle >/dev/null 2>&1; then
 fi
 
 cp "$INFO_PLIST_TEMPLATE" "$APP_DIR/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.umbra.editor' "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP_DIR/Contents/Info.plist"
 

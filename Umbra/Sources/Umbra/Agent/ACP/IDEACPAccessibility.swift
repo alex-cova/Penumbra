@@ -9,6 +9,7 @@ enum IDEACPAccessibility {
     static let settingsSidebar = "settings.sidebar"
     static let settingsDetail = "settings.detail"
     static let settingsOpen = "settings.open"
+    static let agentIntegrations = "settings.agent.integrations"
     static let agentToggle = "agent.toggle"
     static func settingsDomain(_ id: String) -> String { "settings.domain.\(id)" }
 

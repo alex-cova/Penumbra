@@ -51,7 +51,7 @@
 	<key>CFBundleIconName</key>
 	<string>UmbraIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.umbra.editor</string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

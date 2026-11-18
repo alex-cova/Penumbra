@@ -7,6 +7,7 @@ enum ACPUIID {
     static let settingsSidebar = "settings.sidebar"
     static let settingsDetail = "settings.detail"
     static let settingsOpen = "settings.open"
+    static let agentIntegrations = "settings.agent.integrations"
     static let agentToggle = "agent.toggle"
     static func settingsDomain(_ id: String) -> String { "settings.domain.\(id)" }
 
@@ -163,11 +164,20 @@ final class ACPUIHarness {
         search.click()
         search.typeKey("a", modifierFlags: .command)
         search.typeText("Agent")
-        app.typeKey(.return, modifierFlags: [])
+        wait(ACPUIID.settingsDomain("agent")).click()
+        openIntegrations()
+    }
+
+    func openIntegrations() {
+        wait(ACPUIID.agentIntegrations).click()
         wait(ACPUIID.adapters, timeout: 20)
     }
 
     func showAgent() {
+        let settings = app.windows["Settings"]
+        if settings.exists {
+            settings.buttons[XCUIIdentifierCloseWindow].click()
+        }
         let toggle = wait(ACPUIID.agentToggle, timeout: 45)
         let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: toggle)
         XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 20), .completed, "Agent stayed disabled; the project folder did not open")

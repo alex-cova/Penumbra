@@ -47,6 +47,7 @@ xcodebuild "${action}" \
   -test-timeouts-enabled YES \
   -default-test-execution-time-allowance 120 \
   -maximum-test-execution-time-allowance 300 \
+  UMBRA_APP_BUNDLE_IDENTIFIER=com.umbra.editor.acp-ui-test.app \
   CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
   2>&1 | tee "${LOG}"
 xcode_status=${PIPESTATUS[0]}

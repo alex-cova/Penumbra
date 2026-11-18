@@ -503,7 +503,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.umbra.editor;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UMBRA_APP_BUNDLE_IDENTIFIER)";
+				UMBRA_APP_BUNDLE_IDENTIFIER = com.umbra.editor;
 				PRODUCT_NAME = Umbra;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 6.0;
@@ -528,7 +529,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.umbra.editor;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UMBRA_APP_BUNDLE_IDENTIFIER)";
+				UMBRA_APP_BUNDLE_IDENTIFIER = com.umbra.editor;
 				PRODUCT_NAME = Umbra;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 6.0;
