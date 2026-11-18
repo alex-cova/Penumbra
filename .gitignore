@@ -20,3 +20,5 @@ Umbra/Umbra.xcodeproj/project.xcworkspace/xcuserdata/
 docs/**/*PLAN.md
 # JaCoCo agent and CLI, fetched by Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh
 Umbra/Sources/Umbra/Tools/JaCoCo/build/
+# Python bytecode cache (e.g. Tools/JavaReceiverOracle/__pycache__/)
+__pycache__/
