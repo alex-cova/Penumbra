@@ -1,5 +1,6 @@
 import Foundation
 import JavaIntelligence
+import SubprocessKit
 import SwiftIntelligence
 import XCTest
 @testable import Umbra
@@ -156,14 +157,8 @@ final class IDESwiftInstrumentationTests: XCTestCase {
     // MARK: - Profile (a real recording)
 
     func testATimeProfilerRecordingBecomesAProfile() async throws {
-        let find = Process()
-        find.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        find.arguments = ["--find", "xctrace"]
-        find.standardOutput = Pipe()
-        find.standardError = Pipe()
-        try find.run()
-        find.waitUntilExit()
-        try XCTSkipIf(find.terminationStatus != 0, "No xctrace on this machine")
+        let find = try await runXcrun(["--find", "xctrace"], timeout: .seconds(30))
+        try XCTSkipIf(!find.exit.succeeded, "No xctrace on this machine")
 
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("umbra-xctrace-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -171,12 +166,13 @@ final class IDESwiftInstrumentationTests: XCTestCase {
         let source = directory.appendingPathComponent("spin.swift")
         try "func fib(_ n: Int) -> Int { n < 2 ? n : fib(n - 1) + fib(n - 2) }\nprint(fib(38))\n".write(to: source, atomically: true, encoding: .utf8)
         let binary = directory.appendingPathComponent("spin")
-        let compile = try await run("/usr/bin/xcrun", ["swiftc", "-g", "-O", source.path, "-o", binary.path])
-        try XCTSkipIf(compile != 0, "swiftc could not build the sample program")
+        let compile = try await runXcrun(["swiftc", "-g", "-O", source.path, "-o", binary.path], timeout: .seconds(120))
+        try XCTSkipIf(!compile.exit.succeeded, "swiftc could not build the sample program: \(compile.stderr.text)")
 
         let trace = directory.appendingPathComponent("spin.trace")
-        let recorded = try await run("/usr/bin/xcrun", SwiftProfileCommand.recordArguments(trace: trace, executable: binary))
-        try XCTSkipIf(recorded != 0 || !FileManager.default.fileExists(atPath: trace.path), "xctrace could not record here (no permission to profile)")
+        let recorded = try await runXcrun(SwiftProfileCommand.recordArguments(trace: trace, executable: binary), timeout: .seconds(180))
+        try XCTSkipIf(!recorded.exit.succeeded || !FileManager.default.fileExists(atPath: trace.path),
+                      "xctrace could not record here: \(recorded.stderr.text)")
 
         let profile = try await IDESwiftRunProvider.loadTimeProfile(trace: trace)
         XCTAssertGreaterThan(profile.cpuSamples, 5)
@@ -188,16 +184,25 @@ final class IDESwiftInstrumentationTests: XCTestCase {
         XCTAssertEqual(profile.symbols.sourcePath(ofFrame: Int32(hotFrame)), source.path)
     }
 
-    private func run(_ executable: String, _ arguments: [String]) async throws -> Int32 {
-        try await Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            process.standardOutput = Pipe()
-            process.standardError = Pipe()
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus
-        }.value
+    private func runXcrun(_ arguments: [String], timeout: Duration) async throws -> SubprocessResult {
+        var request = SubprocessRequest(executable: "/usr/bin/xcrun", arguments: arguments)
+        request.timeout = timeout
+        request.processGroup = true
+        request.stdoutCapture = .bounded(head: 1_000, tail: 2_000)
+        request.stderrCapture = .bounded(head: 1_000, tail: 2_000)
+        let result = try await SubprocessRunner.run(request)
+        if result.cancelled { throw CancellationError() }
+        if result.timedOut {
+            throw CommandTimeout(errorDescription: """
+                xcrun \(arguments.prefix(2).joined(separator: " ")) timed out after \(timeout).
+                stdout: \(result.stdout.text)
+                stderr: \(result.stderr.text)
+                """)
+        }
+        return result
+    }
+
+    private struct CommandTimeout: LocalizedError {
+        let errorDescription: String?
     }
 }
