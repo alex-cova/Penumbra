@@ -12,7 +12,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 # Number of test methods in Umbra/UITests/ACPAdapterManagerUITests.swift. Update with that file.
-EXPECTED_TESTS=19
+EXPECTED_TESTS=20
 
 TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 RESULTS="${TMP}/results"

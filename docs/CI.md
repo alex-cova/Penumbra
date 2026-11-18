@@ -116,7 +116,7 @@ find out without hiding the answer:
    `Timed out while enabling automation mode`, `Timed out waiting for AX loaded notification`,
    `kAXErrorAPIDisabled`, `is not authorized for accessibility` or `Unable to launch` is reported as
    **"GUI automation unsupported on this runner"** with that line, and the job fails.
-3. Anything short of 19/19 passing with zero skips fails the job. The job is never `continue-on-error`.
+3. Anything short of 20/20 passing with zero skips fails the job. The job is never `continue-on-error`.
 
 What the preflight cannot see in advance is the TCC grant itself; that only surfaces when XCTest tries to
 drive the app (step 2).

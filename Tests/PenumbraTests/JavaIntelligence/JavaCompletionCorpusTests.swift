@@ -339,7 +339,7 @@ struct CorpusIndex: Sendable {
         }
         let temporary = FileManager.default.temporaryDirectory
         let jdkShard = temporary.appendingPathComponent("corpus-jdk-\(UUID().uuidString).idx")
-        try JavaIndexShardWriter().write(try JDKCtSymRoot(installation: installation).readStubs(), stamp: JavaStamp(size: 0, modificationDate: 0), to: jdkShard)
+        try JavaIndexShardWriter().write(try JDKIndexRoot.make(for: installation).root.readStubs(), stamp: JavaStamp(size: 0, modificationDate: 0), to: jdkShard)
 
         var projectStubs: [JavaClassStub] = []
         let projectDirectory = directory.appendingPathComponent("project")

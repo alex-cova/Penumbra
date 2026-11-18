@@ -362,7 +362,7 @@ final class JavaMemberLookupTests: XCTestCase {
               installation.hasCtSym else {
             throw XCTSkip("No JDK with ct.sym found on this machine")
         }
-        let root = JDKCtSymRoot(installation: installation)
+        let root = JDKIndexRoot.make(for: installation).root
         let stubs = try root.readStubs()
         let shardURL = tempShardURL()
         defer { try? FileManager.default.removeItem(at: shardURL) }
@@ -393,7 +393,7 @@ final class JavaMemberLookupTests: XCTestCase {
               installation.hasCtSym else {
             throw XCTSkip("No JDK with ct.sym found on this machine")
         }
-        let root = JDKCtSymRoot(installation: installation)
+        let root = JDKIndexRoot.make(for: installation).root
         let stubs = try root.readStubs()
         let shardURL = tempShardURL()
         defer { try? FileManager.default.removeItem(at: shardURL) }

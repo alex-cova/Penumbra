@@ -171,11 +171,11 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  # The 19 ACP Adapter Manager XCUITests. Everything they use is a fixture: captured registry documents,
+  # The 20 ACP Adapter Manager XCUITests. Everything they use is a fixture: captured registry documents,
   # a fake npm, a Node script standing in for the agent, temporary adapter/session/defaults locations.
   # Hosted runners are not guaranteed a GUI session or an Accessibility grant, so the job checks first and
   # then runs the suite anyway; a runner that cannot drive the GUI fails the job with the blocker named.
-  # It never skips and never reports success without 19 passing tests. See docs/CI.md.
+  # It never skips and never reports success without 20 passing tests. See docs/CI.md.
   acp-ui-tests:
     runs-on: xcode-27
     timeout-minutes: 75
