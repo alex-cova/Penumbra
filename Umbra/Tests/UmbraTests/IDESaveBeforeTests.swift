@@ -170,6 +170,41 @@ final class IDESaveBeforeTests: XCTestCase {
         XCTAssertEqual(try read(url), "edited\n")
     }
 
+    func testClosingATabKeepsItOpenWhenAnEditArrivesDuringTheSave() async throws {
+        let url = try write("CloseRace.txt", "old\n")
+        let (document, host) = try await open(url)
+        let firstEdit = String(repeating: "first edit\n", count: 8_000)
+        let newerEdit = "newer edit\n"
+        let paneID = workspace.workbench.activePaneID
+        edit(document, in: host, to: firstEdit)
+        var prompt: IDEClosePrompt?
+        workspace.closePromptResolver = { _, reason in
+            prompt = reason
+            return .cancel
+        }
+
+        let applyNewerEdit: @MainActor @Sendable () -> Void = {
+            if host.textView.text != newerEdit { host.textView.text = newerEdit }
+        }
+        workspace.requestCloseTab(document.id, in: paneID, saveProgress: { written, _ in
+            guard written > 0 else { return }
+            DispatchQueue.main.sync(execute: applyNewerEdit)
+        })
+
+        await eventually("the close never reported the unsaved edit") { prompt != nil }
+        guard case .failed? = prompt else { return XCTFail("Expected a save failure prompt") }
+        XCTAssertTrue(workspace.workbench.allDocuments().contains { $0.id == document.id })
+        XCTAssertTrue(document.isDirty)
+        XCTAssertEqual(host.textView.text, newerEdit)
+        XCTAssertEqual(try read(url), firstEdit)
+
+        workspace.requestCloseTab(document.id, in: paneID)
+        await eventually("the tab never closed after saving the newer edit") {
+            !self.workspace.workbench.allDocuments().contains { $0.id == document.id }
+        }
+        XCTAssertEqual(try read(url), newerEdit)
+    }
+
     func testClosingACleanTabClosesAtOnce() async throws {
         let url = try write("Clean.txt", "same\n")
         let (document, _) = try await open(url)

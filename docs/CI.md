@@ -15,7 +15,7 @@ No job uses a secret, an OpenAI or Anthropic key, or a Codex / Claude Code login
 | `build-editor` | Unchanged checks: iOS carryover, design tokens, library build, Java completion tests, release build of Umbra. |
 | `agentkit-tests` | `Packages/AgentKit` unit tests. |
 | `umbra-tests` | The whole `Umbra` package suite except `ExternalACPLiveTests`, via `Scripts/ci-umbra-tests.sh`, which then fails if any `IDEACP*` suite or `UmbraACPAgentParityTests` skipped or failed a case. |
-| `acp-ui-tests` | The 19 `ACPAdapterManagerUITests` XCUITests (`UmbraACPUI` scheme), via `Scripts/ci-acp-ui-tests.sh`. |
+| `acp-ui-tests` | The 20 `ACPAdapterManagerUITests` XCUITests (`UmbraACPUI` scheme), via `Scripts/ci-acp-ui-tests.sh`. |
 
 The four jobs run in parallel. Caches hold only downloads (SwiftPM repositories, cloned packages, the JaCoCo
 jars), never build products.
@@ -47,7 +47,7 @@ jars), never build products.
 - **No silent skips.** `ACPUIHarness.requireNode()` skips its tests when there is no Node at
   `/opt/homebrew/bin`, `/usr/local/bin` or `/usr/bin`. The job installs Node 22 and links it into
   `/usr/local/bin` when needed, the preflight fails if it is still missing, and `ci-acp-ui-tests.sh` requires
-  **19 executed, 19 passed, 0 skipped, 0 failed** from the `.xcresult` summary. When
+  **20 executed, 20 passed, 0 skipped, 0 failed** from the `.xcresult` summary. When
   `ACPAdapterManagerUITests` gains or loses a test, change `EXPECTED_TESTS` in `Scripts/ci-acp-ui-tests.sh`
   (the script checks the file and tells you).
 
@@ -96,8 +96,9 @@ The job summary shows the counts table and, when the failure is a runner limitat
 
 ```sh
 Scripts/ci-gui-preflight.sh                 # needs a logged-in desktop and passwordless sudo for automationmodetool
-Scripts/ci-acp-ui-tests.sh                  # build and run the 19 UI tests
-caffeinate -u -d -i -s Scripts/ci-umbra-tests.sh
+Scripts/ci-acp-ui-tests.sh                  # build and run the 20 UI tests
+swift build --package-path Umbra --build-tests
+Scripts/ci-umbra-tests.sh
 ```
 
 `ci-network-guard.sh` edits `/etc/hosts` and refuses to run outside GitHub Actions.

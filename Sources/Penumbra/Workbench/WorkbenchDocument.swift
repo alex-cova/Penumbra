@@ -277,7 +277,7 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
         }
         // Options left at their defaults write the file in the encoding it was opened in.
         let options = options == DocumentWriteOptions() ? DocumentWriteOptions(encoding) : options
-        let result: DocumentWriteResult
+        var result: DocumentWriteResult
         if let textView {
             let identity = textView.stringViewObjectIdentifier
             result = try await textView.write(to: dest, options: options, progress: progress)
@@ -288,18 +288,32 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
                 isDirty = true
             }
         } else if let pendingState {
+            let buffer = pendingState.stringView
+            let bufferGeneration = buffer.contentGenerationSnapshot
+            let documentGeneration = contentGeneration
             result = try await writePendingOrContiguous(
-                pendingState.stringView,
+                buffer,
                 to: dest,
                 options: options,
                 progress: progress
             )
-            isDirty = false
-            refreshRangeReader(from: pendingState.stringView.contentSnapshot())
+            let currentBuffer = self.pendingState?.stringView
+            result.generationMatched = contentGeneration == documentGeneration
+                && buffer.contentGenerationSnapshot == bufferGeneration
+                && (currentBuffer == nil || currentBuffer === buffer)
+            isDirty = !result.generationMatched
+            if currentBuffer === buffer {
+                refreshRangeReader(from: buffer.contentSnapshot())
+            }
         } else if !isFileBacked {
-            result = try await writeContiguousText(to: dest, options: options, progress: progress)
-            isDirty = false
-            rangeReader = nil
+            let savedText = text
+            let documentGeneration = contentGeneration
+            result = try await writeSource(.contiguous(savedText), to: dest, options: options, progress: progress)
+            result.generationMatched = contentGeneration == documentGeneration
+                && pendingState == nil
+                && text.utf8.elementsEqual(savedText.utf8)
+            isDirty = !result.generationMatched
+            if result.generationMatched { rangeReader = nil }
         } else {
             throw DocumentWriteError.bufferUnavailable
         }
@@ -334,14 +348,6 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
             source = .contiguous(stringView.string as String)
         }
         return try await writeSource(source, to: dest, options: options, progress: progress)
-    }
-
-    private func writeContiguousText(
-        to dest: URL,
-        options: DocumentWriteOptions,
-        progress: (@Sendable (Int64, Int64) -> Void)?
-    ) async throws -> DocumentWriteResult {
-        try await writeSource(.contiguous(text), to: dest, options: options, progress: progress)
     }
 
     private func writeSource(

@@ -90,7 +90,8 @@ final class JavaIndexableRootTests: XCTestCase {
               installation.hasCtSym else {
             throw XCTSkip("No JDK with ct.sym found on this machine")
         }
-        let root = JDKCtSymRoot(installation: installation)
+        // JDK 21's ct.sym describes older releases, so test a release it actually contains.
+        let root = try XCTUnwrap(JDKPlatformRoot.make(for: installation, release: 11)).root
         let stubs = try root.readStubs()
         XCTAssertGreaterThan(stubs.count, 1000, "expected thousands of public JDK classes")
         let string = try XCTUnwrap(stubs.first { $0.qualifiedName == "java.lang.String" })

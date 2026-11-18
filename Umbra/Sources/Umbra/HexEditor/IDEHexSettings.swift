@@ -5,7 +5,12 @@ import HexKit
 /// of the shared preferences snapshot (`IDEPreferences.snapshot()` / `restore(from:)`).
 @MainActor
 final class IDEHexSettings {
-    static let shared = IDEHexSettings()
+    static let shared = IDEHexSettings(defaults: testDefaults)
+
+    private static let testDefaults: UserDefaults? = {
+        guard IDESharedServices.testStoreDirectory != nil else { return nil }
+        return UserDefaults(suiteName: "umbra-test.hex-\(UUID().uuidString)")
+    }()
 
     static let suiteName = "com.umbra.editor.hex"
 

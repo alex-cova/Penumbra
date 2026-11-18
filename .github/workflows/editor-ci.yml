@@ -9,12 +9,14 @@ on:
       - 'Sources/Penumbra/**'
       - 'Sources/EditorIntelligence/**'
       - 'Sources/JavaIntelligence/**'
+      - 'Tests/PenumbraTests/**'
       - 'Package.swift'
       - '.github/workflows/editor-ci.yml'
       - '.github/actions/**'
       - 'Scripts/check-ios-carryover.sh'
       - 'Scripts/check-design-tokens.sh'
       - 'Scripts/ci-*.sh'
+      - 'Scripts/tests/**'
       - 'Scripts/refuse-paid-test-variables.sh'
   pull_request:
     paths:
@@ -23,12 +25,14 @@ on:
       - 'Sources/Penumbra/**'
       - 'Sources/EditorIntelligence/**'
       - 'Sources/JavaIntelligence/**'
+      - 'Tests/PenumbraTests/**'
       - 'Package.swift'
       - '.github/workflows/editor-ci.yml'
       - '.github/actions/**'
       - 'Scripts/check-ios-carryover.sh'
       - 'Scripts/check-design-tokens.sh'
       - 'Scripts/ci-*.sh'
+      - 'Scripts/tests/**'
       - 'Scripts/refuse-paid-test-variables.sh'
   workflow_dispatch:
 
@@ -50,6 +54,9 @@ jobs:
 
       - uses: ./.github/actions/xcode27-setup
 
+      - name: Test user-state guard
+        run: Scripts/tests/ci-user-state-guard-test.sh
+
       - name: Check for legacy iOS carryover
         run: bash Scripts/check-ios-carryover.sh
 
@@ -61,6 +68,9 @@ jobs:
       # import cannot leak into Penumbra or the intelligence libraries.
       - name: Build the libraries
         run: swift build --build-tests
+
+      - name: Editor save regression tests
+        run: swift test --skip-build --filter 'WorkbenchSaveTests|TextFileEncodingTests|CompletionAcceptSaveReparseTests'
 
       # Java completion goldens plus the engine path the editor takes. Fails when no JDK is present
       # (a skipped corpus would pass while testing nothing).
@@ -163,7 +173,7 @@ jobs:
         run: Scripts/ci-user-state-guard.sh verify
 
       - name: Upload test results
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: umbra-test-results

@@ -37,9 +37,9 @@ extension IDEWorkspace {
         requestClose([document.id], in: workbench.activePane)
     }
 
-    func requestCloseTab(_ id: UUID, in paneID: UUID) {
+    func requestCloseTab(_ id: UUID, in paneID: UUID, saveProgress: (@Sendable (Int64, Int64) -> Void)? = nil) {
         guard let pane = workbench.layout.findPane(id: paneID) else { return }
-        requestClose([id], in: pane)
+        requestClose([id], in: pane, saveProgress: saveProgress)
     }
 
     func requestCloseOtherTabs(_ id: UUID, in paneID: UUID) {
@@ -60,7 +60,11 @@ extension IDEWorkspace {
 
     /// Saves the unsaved documents among `ids` that this close would drop, then closes them all. A
     /// cancelled prompt closes nothing. With nothing unsaved it closes at once.
-    private func requestClose(_ ids: [UUID], in pane: EditorPane) {
+    private func requestClose(
+        _ ids: [UUID],
+        in pane: EditorPane,
+        saveProgress: (@Sendable (Int64, Int64) -> Void)? = nil
+    ) {
         let paneID = pane.id
         let dirty = pane.documents.filter { document in
             ids.contains(document.id) && document.isDirty && !isOpenInAnotherPane(document, besides: paneID)
@@ -76,7 +80,7 @@ extension IDEWorkspace {
             return
         }
         Task { @MainActor [self] in
-            guard await saveForClosing(dirty) else { return }
+            guard await saveForClosing(dirty, progress: saveProgress) else { return }
             closeAll()
         }
     }
@@ -87,11 +91,16 @@ extension IDEWorkspace {
 
     /// Writes each document, asking about the ones that cannot be written. Returns whether the
     /// close may go on.
-    func saveForClosing(_ documents: [WorkbenchDocument]) async -> Bool {
+    func saveForClosing(
+        _ documents: [WorkbenchDocument],
+        progress: (@Sendable (Int64, Int64) -> Void)? = nil
+    ) async -> Bool {
         for document in documents where document.isDirty {
-            let outcome = await saveDocument(document, reason: .closingTab)
+            let outcome = await saveDocument(document, reason: .closingTab, progress: progress)
             let prompt: IDEClosePrompt
             switch outcome {
+            case .saved where document.isDirty:
+                prompt = .failed("The document changed during the save and still has unsaved edits.")
             case .saved, .clean:
                 continue
             case .skippedUntitled:
@@ -103,7 +112,7 @@ extension IDEWorkspace {
             }
             switch closePromptResolver(document, prompt) {
             case .save:
-                guard await saveDocument(document, reason: .explicit) == .saved else { return false }
+                guard await saveDocument(document, reason: .explicit) == .saved, !document.isDirty else { return false }
             case .discard:
                 continue
             case .cancel:

@@ -93,7 +93,11 @@ extension IDEWorkspace {
     /// A document in a background tab is written from its captured state, without the actions on
     /// save, which need a live editor.
     @discardableResult
-    func saveDocument(_ document: WorkbenchDocument, reason: IDESaveReason) async -> IDESaveOutcome {
+    func saveDocument(
+        _ document: WorkbenchDocument,
+        reason: IDESaveReason,
+        progress: (@Sendable (Int64, Int64) -> Void)? = nil
+    ) async -> IDESaveOutcome {
         switch document.contentKind {
         case .diff:
             guard reason.isUserSave, let session = diffSessionStore.session(for: document.id), session.isRightDirty else { return .clean }
@@ -123,11 +127,16 @@ extension IDEWorkspace {
             destination = url
         }
         guard let destination else { return .clean }
-        return await write(document, to: destination, reason: reason)
+        return await write(document, to: destination, reason: reason, progress: progress)
     }
 
     /// Writes `document` to `destination`: its own file, or a new one for Save As.
-    func write(_ document: WorkbenchDocument, to destination: URL, reason: IDESaveReason) async -> IDESaveOutcome {
+    func write(
+        _ document: WorkbenchDocument,
+        to destination: URL,
+        reason: IDESaveReason,
+        progress: (@Sendable (Int64, Int64) -> Void)? = nil
+    ) async -> IDESaveOutcome {
         let live = livePane(for: document)
         if destination == document.url, !(await confirmOverwriteIfDiskChanged(document, interactive: reason.isInteractive)) {
             return reason.isInteractive ? .clean : .conflict
@@ -140,7 +149,7 @@ extension IDEWorkspace {
         let urlBefore = document.url
         let languageBefore = document.languageIdentifier
         do {
-            _ = try await document.save(from: live?.host.textView, to: destination)
+            _ = try await document.save(from: live?.host.textView, to: destination, progress: progress)
         } catch {
             if reason.isInteractive { presentError(error) }
             return .failed(error.localizedDescription)
@@ -180,6 +189,7 @@ extension IDEWorkspace {
             // The document may have been closed or saved while an earlier one was being written.
             guard document.isDirty else { continue }
             switch await saveDocument(document, reason: reason) {
+            case .saved where document.isDirty: report.failures.append(document.displayName)
             case .saved: report.saved += 1
             case .clean: break
             case .skippedUntitled: report.untitled.append(document.displayName)

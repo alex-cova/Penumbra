@@ -16,8 +16,9 @@ rm -f "${XUNIT}" "${RESULTS}/umbra-parallel.xml"
 
 # ExternalACPLiveTests drives the real codex and claude CLIs (UMBRA_LIVE_ACP=1); it never runs in CI.
 caffeinate -u -d -i -s swift test --package-path Umbra \
+  --skip-build \
   --skip ExternalACPLiveTests \
-  --xunit-output "${XUNIT}"
+  --xunit-output "${XUNIT}" 2>&1 | tee "${RESULTS}/umbra.log"
 test_status=$?
 
 # swift test writes <name>.xml and <name>-swift-testing.xml; take whichever exist.

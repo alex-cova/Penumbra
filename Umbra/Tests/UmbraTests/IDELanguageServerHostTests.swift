@@ -170,6 +170,8 @@ final class IDELanguageServerHostTests: XCTestCase {
                 trustFile: "sleep-trust.json"
             )
             workspace.languageServerHost.trust(definition, root: root)
+            let testStore = try XCTUnwrap(IDESharedServices.testStoreDirectory)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: testStore.appendingPathComponent("sleep-trust.json").path))
             await workspace.languageServerHost.start(
                 definition, connection: LSPConnectionBox(), root: root
             )

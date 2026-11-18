@@ -57,6 +57,45 @@ final class WorkbenchSaveTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "no view\n")
     }
 
+    func testEditingBackgroundBufferDuringSaveLeavesNewEditUnsaved() async throws {
+        let original = String(repeating: "background\n", count: 8_000)
+        let url = try writeTempFile(original)
+        let document = try await WorkbenchDocument.load(contentsOf: url)
+        let buffer = StringViewBox(try XCTUnwrap(document.pendingState).stringView)
+        let result = try await document.save(progress: { written, _ in
+            if written > 0, buffer.stringView.contentGenerationSnapshot == 0 {
+                buffer.stringView.replaceText(in: NSRange(location: 0, length: 0), with: "new ")
+            }
+        })
+
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), original)
+        XCTAssertFalse(result.generationMatched)
+        XCTAssertTrue(document.isDirty)
+        XCTAssertEqual(document.rangeReader?.substring(utf16Offset: 0, length: 4), "new ")
+
+        _ = try await document.save()
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "new " + original)
+        XCTAssertFalse(document.isDirty)
+    }
+
+    func testEditingUntitledTextDuringSaveLeavesNewEditUnsaved() async throws {
+        let original = String(repeating: "untitled\n", count: 8_000)
+        let document = WorkbenchDocument(displayName: "Untitled", text: original)
+        let dest = try uniqueDest(named: "untitled.txt")
+        let result = try await document.save(to: dest, progress: { written, _ in
+            guard written > 0 else { return }
+            DispatchQueue.main.sync { document.text = "new " + original }
+        })
+
+        XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), original)
+        XCTAssertFalse(result.generationMatched)
+        XCTAssertTrue(document.isDirty)
+
+        _ = try await document.save()
+        XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "new " + original)
+        XCTAssertFalse(document.isDirty)
+    }
+
     func testUntitledSaveWritesTextAndUpdatesURL() async throws {
         let document = WorkbenchDocument(displayName: "Untitled", text: "hello untitled")
         let dest = try uniqueDest(named: "untitled.txt")
@@ -89,6 +128,35 @@ final class WorkbenchSaveTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "original body\n")
         XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "original body\n")
         XCTAssertTrue(document.isFileBacked)
+    }
+
+    func testFailedSaveAsKeepsOriginalFileAndDirtyBufferForRetry() async throws {
+        let source = try writeTempFile("original\n")
+        let document = try await WorkbenchDocument.load(contentsOf: source)
+        let buffer = try XCTUnwrap(document.pendingState).stringView
+        buffer.replaceText(in: NSRange(location: 0, length: 0), with: "edited ")
+        document.isDirty = true
+        let destination = try uniqueDest(named: "occupied.txt")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+        let sentinel = destination.appendingPathComponent("keep.txt")
+        try Data("keep".utf8).write(to: sentinel)
+
+        do {
+            _ = try await document.save(to: destination)
+            XCTFail("Expected saving over a nonempty directory to fail")
+        } catch DocumentWriteError.ioFailure {
+            // The original path and the edited buffer must remain available for retry.
+        }
+        XCTAssertEqual(document.url, source)
+        XCTAssertTrue(document.isDirty)
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "original\n")
+        XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "keep")
+        assertNoWriterTemps(in: destination.deletingLastPathComponent())
+
+        let retry = destination.deletingLastPathComponent().appendingPathComponent("retry.txt")
+        _ = try await document.save(to: retry)
+        XCTAssertEqual(try String(contentsOf: retry, encoding: .utf8), "edited original\n")
+        XCTAssertFalse(document.isDirty)
     }
 
     func testCancelPublicTextViewWriteLeavesDestUnchanged() async throws {

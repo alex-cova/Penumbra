@@ -7,6 +7,10 @@ import XCTest
 /// protocol (state gating, frame selection, result decoding). Skips without a JDK and adapter jar.
 @MainActor
 final class JavaDebugSessionEvaluateTests: XCTestCase {
+    private struct TestFailure: LocalizedError {
+        let errorDescription: String?
+    }
+
     private var directory: URL!
     private var source: URL!
     private var java: URL!
@@ -60,10 +64,10 @@ final class JavaDebugSessionEvaluateTests: XCTestCase {
     private func waitUntilStopped(_ session: JavaDebugSession) async throws {
         for _ in 0..<200 {
             if case .stopped = session.state, !session.stackFrames.isEmpty { return }
-            if case .failed(let message) = session.state { return XCTFail(message) }
+            if case .failed(let message) = session.state { throw TestFailure(errorDescription: message) }
             try await Task.sleep(for: .milliseconds(100))
         }
-        XCTFail("the program never stopped: \(session.state)")
+        throw TestFailure(errorDescription: "the program never stopped: \(session.state)")
     }
 
     private func start(_ session: JavaDebugSession) async throws {
@@ -87,8 +91,8 @@ final class JavaDebugSessionEvaluateTests: XCTestCase {
 
     func testEvaluateReadsTheSelectedFrameAndRecordsTheHistory() async throws {
         let session = JavaDebugSession()
-        try await start(session)
         defer { session.stop() }
+        try await start(session)
 
         guard case .value(let name) = await session.evaluate("name") else { return XCTFail("name did not evaluate") }
         XCTAssertEqual(name.value, "\"umbra\"")
@@ -129,8 +133,8 @@ final class JavaDebugSessionEvaluateTests: XCTestCase {
 
     func testEvaluateReportsAFailureAndRefusesWhileRunning() async throws {
         let session = JavaDebugSession()
-        try await start(session)
         defer { session.stop() }
+        try await start(session)
 
         guard case .value(let sum) = await session.evaluate("box.width + 1") else { return XCTFail("operators evaluate") }
         XCTAssertEqual(sum.value, "3")
@@ -145,8 +149,8 @@ final class JavaDebugSessionEvaluateTests: XCTestCase {
     func testVariablesWatchesAndStopDetails() async throws {
         let session = JavaDebugSession()
         session.watches = ["name + box.width", "missing"]
-        try await start(session)
         defer { session.stop() }
+        try await start(session)
         try await waitFor { session.watchResults.count == 2 }
 
         XCTAssertEqual(session.stopInfo?.reason, "breakpoint")
@@ -167,8 +171,8 @@ final class JavaDebugSessionEvaluateTests: XCTestCase {
 
     func testBreakpointsChangedDuringTheSessionReachTheProgram() async throws {
         let session = JavaDebugSession()
-        try await start(session)
         defer { session.stop() }
+        try await start(session)
         try await waitFor { !session.breakpointVerification.isEmpty }
 
         // A breakpoint added while stopped, on the next line: resuming stops there.
@@ -188,11 +192,12 @@ final class JavaDebugSessionEvaluateTests: XCTestCase {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(100))
         }
-        XCTFail("timed out")
+        throw TestFailure(errorDescription: "timed out waiting for the debugger")
     }
 
     func testStoppingClearsTheHistory() async throws {
         let session = JavaDebugSession()
+        defer { session.stop() }
         try await start(session)
         await session.evaluate("name")
         XCTAssertEqual(session.evaluations.count, 1)

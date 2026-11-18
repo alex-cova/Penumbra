@@ -30,9 +30,9 @@ capture() {
   ls -1 "${HOME}/Library/Preferences" 2>/dev/null | grep '^com\.umbra\.editor' | grep -v '^com\.umbra\.editor\.acp-ui-test\.' | sort > "${out}/plists.txt" || true
   ls -1 "${HOME}/Library/Preferences" 2>/dev/null | grep -c '^com\.umbra\.editor\.acp-ui-test\.' > "${out}/ui-suites.count" || true
 
-  if command -v npm >/dev/null 2>&1; then
+  if [ -f "${BASE}/npm-root.txt" ]; then
     local root
-    root="$(npm root -g 2>/dev/null || true)"
+    root="$(cat "${BASE}/npm-root.txt")"
     if [ -n "${root}" ] && [ -d "${root}" ]; then
       ls -1 "${root}" | sort > "${out}/npm-global.txt"
     else
@@ -47,6 +47,12 @@ capture() {
 case "${1:-}" in
   snapshot)
     rm -rf "${BASE}/before" "${BASE}/after"
+    rm -f "${BASE}/npm-root.txt"
+    # Resolve this before changing npm's prefix and before the tripwire shadows npm on PATH.
+    # Both captures must inspect the same real global tree.
+    if command -v npm >/dev/null 2>&1; then
+      npm root -g > "${BASE}/npm-root.txt" 2>/dev/null || true
+    fi
     capture "${BASE}/before"
     # Anything that does reach npm lands in the runner's temp directory, not the global prefix.
     if [ -n "${GITHUB_ENV:-}" ]; then

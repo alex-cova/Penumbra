@@ -33,10 +33,8 @@ struct JavaDebugProcessLauncher: Sendable {
         process.arguments = ["-jar", jar.path]
         let input = Pipe()
         let output = Pipe()
-        let error = Pipe()
         process.standardInput = input
         process.standardOutput = output
-        process.standardError = error
         try process.run()
         return process
     }

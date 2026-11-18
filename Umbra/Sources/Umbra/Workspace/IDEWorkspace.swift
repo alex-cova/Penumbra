@@ -43,7 +43,7 @@ public final class IDEWorkspace {
     private let debounceTimer: DebounceTimer
     private let intelligenceServices: IDEIntelligenceServices
     /// External language servers. Stopped in ``teardown()`` so a running server does not keep the window.
-    let languageServerHost = IDELanguageServerHost()
+    let languageServerHost = IDELanguageServerHost(trustDirectory: IDESharedServices.testStoreDirectory)
     private let navigationBuffers = NavigationBufferBridge()
     private var adapter: PenumbraWorkbenchEditorAdapter!
     @ObservationIgnored
@@ -98,7 +98,8 @@ public final class IDEWorkspace {
         store: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentController.appStore() : nil,
         appPermissionsFile: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentPermissionFiles.appFile() : nil,
         commandsHome: IDEWorkspace.isSessionPersistenceEnabled ? FileManager.default.homeDirectoryForCurrentUser : nil,
-        commandsAppSupport: IDEWorkspace.isSessionPersistenceEnabled ? IDEAgentPermissionFiles.appFile()?.deletingLastPathComponent() : nil)
+        commandsAppSupport: IDEWorkspace.isSessionPersistenceEnabled
+            ? (IDESharedServices.testStoreDirectory ?? IDEAgentPermissionFiles.appFile()?.deletingLastPathComponent()) : nil)
     /// AI mode's plain chats (no project), and the list of every project's saved Code sessions.
     /// A `var` so tests can give the window a chat controller that talks to a scripted client.
     var aiChat = IDEAIChatController(store: IDEWorkspace.isSessionPersistenceEnabled ? IDEAIChatController.appStore() : nil)

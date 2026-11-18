@@ -65,6 +65,7 @@ final class JavaDebugSessionConsoleTests: XCTestCase {
 
     func testTheConsoleFillsFromTheProgramAndEndsWithItsExitCode() async throws {
         let session = JavaDebugSession()
+        defer { session.stop() }
         try await run(session, lines: 50, exitCode: 4)
 
         let chunks = session.console.chunks
@@ -80,6 +81,7 @@ final class JavaDebugSessionConsoleTests: XCTestCase {
 
     func testAHugeOutputStaysBoundedAndCountsWhatWasDropped() async throws {
         let session = JavaDebugSession()
+        defer { session.stop() }
         let lines = IDEDebugConsoleLog.maxChunks + IDEDebugConsoleLog.trimSlack + 1_500
         try await run(session, lines: lines, exitCode: 0)
 
@@ -94,6 +96,7 @@ final class JavaDebugSessionConsoleTests: XCTestCase {
 
     func testStartingAgainClearsTheConsole() async throws {
         let session = JavaDebugSession()
+        defer { session.stop() }
         try await run(session, lines: 5, exitCode: 0)
         let firstRun = session.console.runID
         try await run(session, lines: 2, exitCode: 1)
@@ -106,6 +109,7 @@ final class JavaDebugSessionConsoleTests: XCTestCase {
 
     func testAGradleAttachSessionSaysWhereItsOutputIs() async throws {
         let session = JavaDebugSession()
+        defer { session.stop() }
         try await session.prepareAdapter(javaHome: java.deletingLastPathComponent().deletingLastPathComponent())
         XCTAssertEqual(session.console.chunks.map(\.text), ["The program's output is in the Gradle tab."])
         session.stop()

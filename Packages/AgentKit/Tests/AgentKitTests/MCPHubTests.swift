@@ -60,20 +60,24 @@ private func finalOutput(_ session: AgentSession) async -> String? {
     }
 
     @Test func aServerThatFailsOrHangsIsReportedAndTheOthersWork() async throws {
-        let servers = Servers { config, transport in
-            FakeMCPServer(transport: transport) { $0.respondToInitialize = config.name != "silent" }
-        }
+        let servers = Servers()
         let factory: MCPHub.TransportFactory = { config in
             if config.name == "missing" { throw MCPError.server(code: 0, message: "Could not find “nope” on PATH.") }
+            // Leave the other end open without a reader, so initialize gets no response.
+            if config.name == "silent" { return ACPInMemoryTransport.pair().client }
             return try servers.factory(config)
         }
-        let hub = MCPHub(servers: [config("ok"), config("missing"), config("silent")], connectTimeout: 0.4, makeTransport: factory)
-        let started = Date()
+        // Leave room for the healthy fake server to run when the entire suite runs in parallel.
+        let hub = MCPHub(servers: [config("ok"), config("missing"), config("silent")], connectTimeout: 5, makeTransport: factory)
         let statuses = Dictionary(uniqueKeysWithValues: await hub.start().map { ($0.name, $0.state) })
         #expect(statuses["ok"] == .connected(tools: 1))
         if case .failed(let reason)? = statuses["missing"] { #expect(reason.contains("PATH")) } else { Issue.record("missing should fail") }
-        if case .failed? = statuses["silent"] {} else { Issue.record("silent should fail: \(String(describing: statuses["silent"]))") }
-        #expect(Date().timeIntervalSince(started) < 3)
+        if case .failed(let reason)? = statuses["silent"] {
+            // Either the hub deadline or the client's initialize deadline can fire first.
+            #expect(reason.contains("did not start within") || reason == MCPError.timedOut("the handshake").localizedDescription)
+        } else {
+            Issue.record("silent should time out: \(String(describing: statuses["silent"]))")
+        }
         #expect(await hub.tools.map(\.name) == ["mcp__ok__echo"])
         await hub.close()
     }

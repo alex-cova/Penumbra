@@ -142,7 +142,8 @@ final class JavaDebugSession {
     private var readTask: Task<Void, Never>?
     private var nextRequestID = 1
     private var pending: [Int: CheckedContinuation<[String: Any], Error>] = [:]
-    private let launcher = JavaDebugProcessLauncher()
+    private let requestTimeout: Duration
+    private let startAdapter: (URL) throws -> Process
     private(set) var isGradleAttachSession = false
     /// The breakpoints the adapter holds, as last sent.
     private var sentBreakpoints: [UUID: JavaBreakpoint] = [:]
@@ -165,6 +166,14 @@ final class JavaDebugSession {
     /// The source file's imports, for conditions and evaluations that need compiling.
     var importsProvider: (_ filePath: String) -> [String] = JavaDebugSession.imports(ofFile:)
 
+    init(
+        requestTimeout: Duration = .seconds(60),
+        startAdapter: @escaping (URL) throws -> Process = JavaDebugProcessLauncher().startAdapter
+    ) {
+        self.requestTimeout = requestTimeout
+        self.startAdapter = startAdapter
+    }
+
     var isActive: Bool {
         switch state {
         case .idle, .terminated, .failed(_): return false
@@ -186,7 +195,7 @@ final class JavaDebugSession {
         state = .launching
         do {
             let javaHome = launch.javaExecutable.deletingLastPathComponent().deletingLastPathComponent()
-            let process = try launcher.startAdapter(javaHome: javaHome)
+            let process = try startAdapter(javaHome)
             self.process = process
             inputHandle = (process.standardInput as? Pipe)?.fileHandleForWriting
             startReading(process)
@@ -228,7 +237,7 @@ final class JavaDebugSession {
         console.appendNote("The program's output is in the Gradle tab.")
         isGradleAttachSession = true
         state = .launching
-        let process = try launcher.startAdapter(javaHome: javaHome)
+        let process = try startAdapter(javaHome)
         self.process = process
         inputHandle = (process.standardInput as? Pipe)?.fileHandleForWriting
         startReading(process)
@@ -595,7 +604,7 @@ final class JavaDebugSession {
         readTask?.cancel()
         readTask = nil
         if let process {
-            _ = try? sendSync(["command": "disconnect"])
+            try? writeRequest(["command": "disconnect"], id: nextRequestID)
             if process.isRunning { process.terminate() }
         }
         process = nil
@@ -680,14 +689,15 @@ final class JavaDebugSession {
                     buffer = Data(buffer[buffer.index(after: newline)...])
                 }
                 if !lines.isEmpty {
-                    await self?.handle(lines: lines)
+                    await self?.handle(lines: lines, processID: processID)
                 }
             }
             await self?.adapterOutputEnded(processID: processID)
         }
     }
 
-    private func handle(lines: [String]) {
+    private func handle(lines: [String], processID: ObjectIdentifier) {
+        guard let process, ObjectIdentifier(process) == processID else { return }
         for line in lines {
             handleEventLine(line)
         }
@@ -696,7 +706,10 @@ final class JavaDebugSession {
     /// The adapter closed its output: the program is over, unless this is an older session's
     /// adapter finishing after a new one started.
     private func adapterOutputEnded(processID: ObjectIdentifier) {
-        guard let process, ObjectIdentifier(process) == processID, !process.isRunning else { return }
+        guard let process, ObjectIdentifier(process) == processID else { return }
+        inputHandle = nil
+        pending.values.forEach { $0.resume(throwing: JavaDebugProcessError.disconnected) }
+        pending.removeAll()
         if case .failed = state { return }
         state = .terminated
     }
@@ -776,29 +789,34 @@ final class JavaDebugSession {
     }
 
     private func send(_ body: [String: Any]) async throws -> [String: Any] {
-        try await withCheckedThrowingContinuation { continuation in
+        let id = nextRequestID
+        nextRequestID += 1
+        let command = body["command"] as? String ?? "unknown"
+        let deadline = Task { [weak self, requestTimeout] in
+            do { try await Task.sleep(for: requestTimeout) } catch { return }
+            self?.pending.removeValue(forKey: id)?.resume(
+                throwing: JavaDebugProcessError.launchFailed("The Java debug adapter did not reply to ‘\(command)’ in time.")
+            )
+        }
+        defer { deadline.cancel() }
+        return try await withCheckedThrowingContinuation { continuation in
             do {
-                _ = try sendSync(body, continuation: continuation)
+                try writeRequest(body, id: id)
+                pending[id] = continuation
             } catch {
                 continuation.resume(throwing: error)
             }
         }
     }
 
-    private func sendSync(_ body: [String: Any], continuation: CheckedContinuation<[String: Any], Error>? = nil) throws -> [String: Any]? {
+    private func writeRequest(_ body: [String: Any], id: Int) throws {
         guard let inputHandle else { throw JavaDebugProcessError.disconnected }
         var payload = body
-        let id = nextRequestID
-        nextRequestID += 1
         payload["id"] = id
         let data = try JSONSerialization.data(withJSONObject: payload)
         guard var line = String(data: data, encoding: .utf8) else { throw JavaDebugProcessError.launchFailed("invalid request") }
         line.append("\n")
-        inputHandle.write(line.data(using: .utf8)!)
-        if let continuation {
-            pending[id] = continuation
-        }
-        return nil
+        try inputHandle.write(contentsOf: Data(line.utf8))
     }
 
     // MARK: - Imports
