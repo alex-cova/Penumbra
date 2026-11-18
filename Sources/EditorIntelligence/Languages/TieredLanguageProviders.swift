@@ -153,6 +153,25 @@ struct TieredNavigationProvider: NavigationProvider {
         let feature = TieredGroups.feature(for: context.kind)
         let groups = TieredGroups.descending(services, feature: feature) { !$0.navigation.isEmpty }
         for group in groups {
+            if context.kind == .references {
+                // Usages are additive: a framework layer's services (Spring's injection points of a bean) add
+                // to a language's own usages instead of replacing them. Inside one service the first provider
+                // that answers still wins, so a language with a single service is unchanged.
+                var merged: [Location] = []
+                var seen = Set<String>()
+                for service in group {
+                    for provider in service.providers.navigation {
+                        guard let result = await provider.provide(context: context) else { continue }
+                        for location in result.locations where seen.insert("\(location.url?.path ?? "")#\(location.range.start.utf16Offset)").inserted {
+                            merged.append(location)
+                        }
+                        break
+                    }
+                }
+                if merged.count == 1 { return .single(merged[0]) }
+                if !merged.isEmpty { return .multiple(merged) }
+                continue
+            }
             for service in group {
                 for provider in service.providers.navigation {
                     if let result = await provider.provide(context: context) { return result }

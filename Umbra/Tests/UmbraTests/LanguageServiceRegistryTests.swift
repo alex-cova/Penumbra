@@ -382,19 +382,25 @@ final class LanguageServiceRegistryTests: XCTestCase {
         let languages = IDEIntelligenceServices().languages
         // One LSP service per catalog server, each contributing one provider per language it serves, after Python's.
         let catalogNames = IDELanguageServerCatalog.all.flatMap(\.languageIDs)
+        // Spring's configuration service claims `properties` and `yaml` right after Java's (it is registered next), so
+        // those two languages come first; a catalog server for either joins that same per-language provider.
+        // Spring's HTTP service (a request line → its handler) is registered right after, so `http` joins them there
+        // and keeps its own hover/completion providers in that per-language group.
+        let spring = ["properties", "yaml", "http"]
+        let rest = catalogNames.filter { !spring.contains($0) }
         XCTAssertEqual(
-            languages.completionProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"] + catalogNames + ["markdown", "sql", "http"],
+            languages.completionProviders.map(\.name), ["java"] + spring + ["javascript", "typescript", "swift", "python"] + rest + ["markdown", "sql"],
             "one tiered completion provider per language, in registration order"
         )
         XCTAssertEqual(
-            languages.hoverProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"] + catalogNames + ["http"],
+            languages.hoverProviders.map(\.name), ["java"] + spring + ["javascript", "typescript", "swift", "python"] + rest,
             "`.http` adds the state of a `###@scheme:` line"
         )
         XCTAssertEqual(
-            languages.diagnosticProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"] + catalogNames,
+            languages.diagnosticProviders.map(\.name), ["java", "properties", "yaml"] + ["javascript", "typescript", "swift", "python"] + rest,
             "Java's javac and inspection providers share one tiered provider"
         )
-        XCTAssertEqual(languages.navigationProviders.map(\.name), ["java", "javascript", "typescript", "swift", "python"] + catalogNames)
+        XCTAssertEqual(languages.navigationProviders.map(\.name), ["java"] + spring + ["javascript", "typescript", "swift", "python"] + rest)
     }
 
     @MainActor

@@ -167,14 +167,59 @@ final class GutterLineMarkerView: EditorView {
             let line = sortedMarkers[index].line
             let isDecorated = decoration(onLine: line) != nil
             var slot = 0
+            let runLengthOnLine = runLength(from: index, line: line)
             while index < sortedMarkers.count, sortedMarkers[index].line == line {
                 if !isDecorated, slot < Self.maximumSlots, let rect = iconRect(line: line, slot: slot, lineManager: lineManager) {
-                    GutterLineMarkerGlyphs.draw(sortedMarkers[index].icon, in: rect, context: context)
+                    // Markers beyond the slot are not dropped silently: the count says how many share the line.
+                    let marker = sortedMarkers[index]
+                    GutterLineMarkerGlyphs.draw(marker, count: max(marker.stackCount, runLengthOnLine), in: rect, context: context)
                 }
                 slot += 1
                 index += 1
             }
         }
+    }
+
+    /// How many markers the store holds on `line`, starting at `start`.
+    private func runLength(from start: Int, line: Int) -> Int {
+        var end = start
+        while end < sortedMarkers.count, sortedMarkers[end].line == line { end += 1 }
+        return end - start
+    }
+
+    // MARK: - Accessibility
+
+    override func isAccessibilityElement() -> Bool { false }
+
+    /// One button per marker in the visible rows, so VoiceOver can reach and press what the gutter draws.
+    override func accessibilityChildren() -> [Any]? {
+        guard let lineManager, let window else { return nil }
+        let first = row(atLocalY: visibleRect.minY) ?? 0
+        let last = row(atLocalY: visibleRect.maxY) ?? max(lineManager.lineCount - 1, 0)
+        var elements: [NSAccessibilityElement] = []
+        var index = Self.firstIndex(in: sortedMarkers, atOrAfterLine: first + 1)
+        while index < sortedMarkers.count, sortedMarkers[index].line <= last + 1 {
+            let marker = sortedMarkers[index]
+            let line = marker.line
+            let count = max(marker.stackCount, runLength(from: index, line: line))
+            if decoration(onLine: line) == nil, let rect = iconRect(line: line, slot: 0, lineManager: lineManager) {
+                let element = GutterMarkerAccessibilityElement()
+                let label = marker.symbol?.accessibilityLabel ?? GutterLineMarkerGlyphs.accessibilityLabel(for: marker.icon)
+                element.setAccessibilityRole(.button)
+                element.setAccessibilityLabel(count > 1 ? "\(label), \(count) markers on line \(line)" : "\(label), line \(line)")
+                element.setAccessibilityHelp(marker.tooltip)
+                element.setAccessibilityParent(self)
+                element.setAccessibilityFrameInParentSpace(rect)
+                let screen = window.convertToScreen(convert(rect, to: nil))
+                element.setAccessibilityFrame(screen)
+                element.setAccessibilityActivationPoint(CGPoint(x: screen.midX, y: screen.midY))
+                let captured = marker
+                element.onPress = { [weak self] in self?.onMarkerClicked?(captured, rect) }
+                elements.append(element)
+            }
+            while index < sortedMarkers.count, sortedMarkers[index].line == line { index += 1 }
+        }
+        return elements
     }
 
     // MARK: - Geometry
@@ -246,5 +291,14 @@ final class GutterLineMarkerView: EditorView {
             }
         }
         return low
+    }
+}
+
+/// A marker as an accessibility button; pressing it does what clicking the icon does.
+private final class GutterMarkerAccessibilityElement: NSAccessibilityElement {
+    var onPress: (() -> Void)?
+    override func accessibilityPerformPress() -> Bool {
+        onPress?()
+        return onPress != nil
     }
 }

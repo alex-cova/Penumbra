@@ -38,7 +38,7 @@ final class IDEEditorOverlayControllerTests: XCTestCase {
     func testMarkersArePaintedAndAClickReachesTheCaller() async {
         let controller = IDEEditorOverlayController()
         let textView = makeTextView()
-        var clicked: [LineMarker] = []
+        var clicked: [LineMarkerStack] = []
         controller.scheduleLineMarkers(
             for: textView, provider: FakeMarkers(markers: [overriding]), kinds: [.overriding],
             languageIdentifier: "java", delay: .zero
@@ -47,10 +47,10 @@ final class IDEEditorOverlayControllerTests: XCTestCase {
         await waitFor("painted") { textView.lineMarkerHandler != nil }
 
         let gutter = GutterLineMarker(id: 0, line: 1, icon: LineMarkerKind.overriding.gutterIcon, tooltip: "")
-        XCTAssertEqual(controller.marker(for: gutter, in: textView)?.anchorUTF16Offset, 4)
+        XCTAssertEqual(controller.stack(for: gutter, in: textView)?.visible.anchorUTF16Offset, 4)
         textView.lineMarkerHandler?(gutter, .zero)
         XCTAssertEqual(clicked.count, 1)
-        XCTAssertEqual(clicked.first?.kind, .overriding)
+        XCTAssertEqual(clicked.first?.visible.kind, .overriding)
     }
 
     func testAResultForTextThatChangedMeanwhileIsDropped() async {
@@ -65,7 +65,7 @@ final class IDEEditorOverlayControllerTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(400))
         XCTAssertNil(textView.lineMarkerHandler, "markers computed for the old text were not painted")
         let gutter = GutterLineMarker(id: 0, line: 1, icon: LineMarkerKind.overriding.gutterIcon, tooltip: "")
-        XCTAssertNil(controller.marker(for: gutter, in: textView))
+        XCTAssertNil(controller.stack(for: gutter, in: textView))
     }
 
     func testAClickOnMarkersOlderThanTheBufferIsIgnored() async {
@@ -78,7 +78,7 @@ final class IDEEditorOverlayControllerTests: XCTestCase {
         await waitFor("painted") { textView.lineMarkerHandler != nil }
         textView.text = "class B {}\n"
         let gutter = GutterLineMarker(id: 0, line: 1, icon: LineMarkerKind.overriding.gutterIcon, tooltip: "")
-        XCTAssertNil(controller.marker(for: gutter, in: textView), "their offsets are stale")
+        XCTAssertNil(controller.stack(for: gutter, in: textView), "their offsets are stale")
     }
 
     func testWithoutAProviderTheMarkersAreCleared() async {

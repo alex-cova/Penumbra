@@ -36,6 +36,8 @@ final class IDEDiagramSession {
     /// The editor buffer a JSON preview draws. Read on the main actor when a load starts.
     @ObservationIgnored var loadJSONText: (() -> String)?
     @ObservationIgnored var openSource: ((URL) -> Void)?
+    /// Opens a file at a byte range, for nodes that know where their declaration is.
+    @ObservationIgnored var openSourceRange: ((URL, Range<Int>) -> Void)?
     /// Opens (or reuses) another diagram tab; the Int is the least neighbour depth it should show.
     @ObservationIgnored var openDiagram: ((IDEDiagramRequest, Int) -> Void)?
     /// A diagram of the type a node stands for, and the least neighbour depth that tab should show.
@@ -101,6 +103,7 @@ final class IDEDiagramSession {
 
     func open(_ node: IDEDiagramNode) {
         guard let url = node.fileURL else { return }
+        if let range = node.sourceByteRange, let openSourceRange { openSourceRange(url, range); return }
         openSource?(url)
     }
 

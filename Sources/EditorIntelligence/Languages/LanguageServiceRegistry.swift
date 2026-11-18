@@ -226,8 +226,21 @@ public struct LanguageServiceRegistry: Sendable {
     public func semanticTokens(for languageIdentifier: String?) -> (any SemanticTokenProviding)? {
         owner(of: languageIdentifier, feature: .semanticTokens, \.semanticTokens)
     }
+    /// Every extension marker kind the registered services declare, ordered by group then title (what Settings lists).
+    public var lineMarkerDescriptors: [LineMarkerDescriptor] {
+        var seen = Set<LineMarkerDescriptor.ID>()
+        return services.flatMap(\.lineMarkerDescriptors).filter { seen.insert($0.id).inserted }
+            .sorted { ($0.group, $0.title, $0.id) < ($1.group, $1.title, $1.id) }
+    }
+
+    /// Every ready service's markers, merged (see ``CompositeLineMarkerProvider``). One provider is returned as is.
     public func lineMarkers(for languageIdentifier: String?) -> (any LineMarkerProviding)? {
-        owner(of: languageIdentifier, feature: .lineMarkers, \.lineMarkers)
+        let all = readyServices(for: languageIdentifier, feature: .lineMarkers).compactMap { $0.providers.lineMarkers }
+        switch all.count {
+        case 0: return nil
+        case 1: return all[0]
+        default: return CompositeLineMarkerProvider(all)
+        }
     }
     public func structure(for languageIdentifier: String?) -> (any StructureProviding)? {
         owner(of: languageIdentifier, feature: .structure, \.structure)

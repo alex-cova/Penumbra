@@ -2,6 +2,7 @@ import EditorIntelligence
 import EditorIntelligenceLSP
 import JavaIntelligence
 import Penumbra
+import SpringIntelligence
 
 @MainActor
 final class IDEIntelligenceServices {
@@ -116,6 +117,10 @@ final class IDEIntelligenceServices {
             )
         }
         let languages = LanguageServiceRegistry(services: [
+            // Before Java's, so Go to Definition on an injected name asks Spring first.
+            SpringLanguageService.make(indexer: javaSupport.springIndexer),
+            SpringConfigLanguageService.make(indexer: javaSupport.springIndexer),
+            SpringHTTPLanguageService.make(indexer: javaSupport.springIndexer),
             javaSupport.languageService,
             typescriptSupport.languageService,
             swiftSupport.languageService,

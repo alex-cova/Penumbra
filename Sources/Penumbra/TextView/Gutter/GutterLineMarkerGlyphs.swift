@@ -25,6 +25,7 @@ public enum GutterLineMarkerGlyphs {
         case .overridden: return "Overridden"
         case .siblingInherited: return "Sibling inherited method"
         case .recursiveCall: return "Recursive call"
+        case .custom: return "Marker"
         }
     }
 
@@ -54,7 +55,62 @@ public enum GutterLineMarkerGlyphs {
             drawArrow(in: box, up: true, down: true, color: upArrowColor, context: context)
         case .recursiveCall:
             drawRecursion(in: box, context: context)
+        case .custom:
+            break   // drawn by `draw(_ marker:count:in:context:)`, which has the symbol
         }
+    }
+
+    /// Draws `marker` (a built-in glyph or its symbol) and, when `count` is more than one, the number of markers on its line.
+    static func draw(_ marker: GutterLineMarker, count: Int, in rect: CGRect, context: CGContext) {
+        if marker.icon != .custom || marker.symbol == nil {
+            draw(marker.icon, in: rect, context: context)
+        } else if let symbol = marker.symbol {
+            drawSymbol(symbol, in: rect, context: context)
+        }
+        if count > 1 { drawCount(count, in: rect, context: context) }
+    }
+
+    /// The system colour or theme colour a tint stands for. Nothing here is a literal RGB value except what the existing glyphs
+    /// already use for `interface` and `override`.
+    static func color(for tint: GutterLineMarkerTint) -> NSColor {
+        switch tint {
+        case .neutral: return .secondaryLabelColor
+        case .accent: return .controlAccentColor
+        case .interface: return interfaceColor
+        case .override: return overrideColor
+        case .success: return .systemGreen
+        case .warning: return .systemOrange
+        case .danger: return .systemRed
+        }
+    }
+
+    private static func drawSymbol(_ symbol: GutterLineMarkerSymbol, in rect: CGRect, context: CGContext) {
+        let color = color(for: symbol.tint)
+        let configuration = NSImage.SymbolConfiguration(pointSize: rect.height * 0.8, weight: .medium)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        guard let image = NSImage(systemSymbolName: symbol.name, accessibilityDescription: symbol.accessibilityLabel)?
+            .withSymbolConfiguration(configuration) else {
+            // A symbol this macOS does not have: a plain dot in the same tint, never an empty slot.
+            context.setFillColor(color.cgColor)
+            context.fillEllipse(in: rect.insetBy(dx: rect.width * 0.28, dy: rect.height * 0.28))
+            return
+        }
+        let size = image.size
+        let target = CGRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height)
+        image.draw(in: target, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+    }
+
+    private static func drawCount(_ count: Int, in rect: CGRect, context: CGContext) {
+        let diameter = rect.width * 0.55
+        let badge = CGRect(x: rect.maxX - diameter + 1, y: rect.maxY - diameter + 1, width: diameter, height: diameter)
+        context.setFillColor(NSColor.labelColor.cgColor)
+        context.fillEllipse(in: badge)
+        let text = NSAttributedString(string: count > 9 ? "9+" : "\(count)", attributes: [
+            .font: NSFont.systemFont(ofSize: diameter * 0.78, weight: .bold),
+            .foregroundColor: NSColor.textBackgroundColor,
+        ])
+        let size = text.size()
+        text.draw(at: CGPoint(x: badge.midX - size.width / 2, y: badge.midY - size.height / 2))
     }
 
     // MARK: - Colors

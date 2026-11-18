@@ -59,6 +59,14 @@ nonisolated struct IDEDiagramPalette: Sendable {
             case .jsonObject: return IDEDiagramPalette(fill: 0x243044, stroke: 0x7EB0E8, header: 0x2C3C56)
             case .jsonArray: return IDEDiagramPalette(fill: 0x24342F, stroke: 0x6FCBB0, header: 0x2C4740)
             case .jsonValue: return IDEDiagramPalette(fill: 0x2E2C28, stroke: 0xC4B08A, header: 0x3A362F)
+            case .springBean: return colors(for: .classType, dark: true)
+            case .springConditionalBean: return colors(for: .replacedLibrary, dark: true)
+            case .springController: return colors(for: .interfaceType, dark: true)
+            case .springRepository: return colors(for: .recordType, dark: true)
+            case .springConfiguration: return colors(for: .enumType, dark: true)
+            case .springExternal: return colors(for: .externalType, dark: true)
+            case .springUnresolved: return colors(for: .unresolvedLibrary, dark: true)
+            case .springPackage: return colors(for: .library, dark: true)
             }
         }
         switch kind {
@@ -76,6 +84,14 @@ nonisolated struct IDEDiagramPalette: Sendable {
         case .jsonObject: return IDEDiagramPalette(fill: 0xF3F7FD, stroke: 0x3D74C4, header: 0xE3EDF9)
         case .jsonArray: return IDEDiagramPalette(fill: 0xF2FBF8, stroke: 0x2E8F74, header: 0xDDF3EC)
         case .jsonValue: return IDEDiagramPalette(fill: 0xFBF8F3, stroke: 0xA6844A, header: 0xF4EDE0)
+        case .springBean: return colors(for: .classType, dark: false)
+        case .springConditionalBean: return colors(for: .replacedLibrary, dark: false)
+        case .springController: return colors(for: .interfaceType, dark: false)
+        case .springRepository: return colors(for: .recordType, dark: false)
+        case .springConfiguration: return colors(for: .enumType, dark: false)
+        case .springExternal: return colors(for: .externalType, dark: false)
+        case .springUnresolved: return colors(for: .unresolvedLibrary, dark: false)
+        case .springPackage: return colors(for: .library, dark: false)
         }
     }
 

@@ -43,10 +43,21 @@ public enum LineMarkerKind: String, CaseIterable, Hashable, Sendable {
     case siblingInherited
     /// A call to the method it sits in.
     case recursiveCall
+    /// A marker a language or framework layer defines itself: its look, group and actions are in
+    /// ``LineMarker/descriptor`` (see ``LineMarkerDescriptor``). Not one of the built-in kinds, so it is not in `allCases`
+    /// and has no entry in the Java gutter-icon preferences.
+    case extended
+
+    /// The built-in kinds, which the Java preferences list. `extended` markers are listed by their descriptors.
+    public static var allCases: [LineMarkerKind] {
+        [.implementing, .overriding, .implemented, .overridden, .siblingInherited, .recursiveCall]
+    }
 }
 
 public struct LineMarker: Sendable {
     public let kind: LineMarkerKind
+    /// Set when `kind` is ``LineMarkerKind/extended``: what the marker looks like and how it is identified and toggled.
+    public let descriptor: LineMarkerDescriptor?
     /// 1-based line, counted as the editor counts them (`\r\n` is one break).
     public let line: Int
     /// UTF-16 offset of the declaration or call name; Go to Super Method or Go to Implementation
@@ -56,13 +67,33 @@ public struct LineMarker: Sendable {
     /// The provider's own record of the marker, handed back to ``LineMarkerProviding/siblingTargets(of:source:fileURL:documentID:)``.
     public let payload: (any Sendable)?
 
-    public init(kind: LineMarkerKind, line: Int, anchorUTF16Offset: Int, tooltip: String, payload: (any Sendable)? = nil) {
+    init(kind: LineMarkerKind, descriptor: LineMarkerDescriptor?, line: Int, anchorUTF16Offset: Int, tooltip: String, payload: (any Sendable)?) {
         self.kind = kind
+        self.descriptor = descriptor
         self.line = line
         self.anchorUTF16Offset = anchorUTF16Offset
         self.tooltip = tooltip
         self.payload = payload
     }
+
+    public init(kind: LineMarkerKind, line: Int, anchorUTF16Offset: Int, tooltip: String, payload: (any Sendable)? = nil) {
+        self.kind = kind
+        descriptor = nil
+        self.line = line
+        self.anchorUTF16Offset = anchorUTF16Offset
+        self.tooltip = tooltip
+        self.payload = payload
+    }
+}
+
+extension LineMarker {
+    /// A marker described by `descriptor` instead of a built-in kind.
+    public init(descriptor: LineMarkerDescriptor, line: Int, anchorUTF16Offset: Int, tooltip: String, payload: (any Sendable)? = nil) {
+        self.init(kind: .extended, descriptor: descriptor, line: line, anchorUTF16Offset: anchorUTF16Offset, tooltip: tooltip, payload: payload)
+    }
+
+    /// Identity used to drop a marker two providers both produced: the descriptor (or built-in kind), the line and the anchor.
+    public var identity: String { "\(descriptor?.id.rawValue ?? kind.rawValue)@\(line):\(anchorUTF16Offset)" }
 }
 
 public protocol LineMarkerProviding: Sendable {
@@ -72,6 +103,14 @@ public protocol LineMarkerProviding: Sendable {
     /// Where a ``LineMarkerKind/siblingInherited`` marker leads. `documentID` stands for a target in
     /// `fileURL` itself.
     func siblingTargets(of marker: LineMarker, source: String, fileURL: URL?, documentID: DocumentID) async -> [Location]
+
+    /// What clicking an ``LineMarkerKind/extended`` marker offers, in order (the first is the default). Built-in kinds keep
+    /// their own click behaviour in the host and are not asked. Default: nothing.
+    func menu(for marker: LineMarker, source: String, fileURL: URL?, documentID: DocumentID) async -> [LineMarkerMenuItem]
+}
+
+public extension LineMarkerProviding {
+    func menu(for marker: LineMarker, source: String, fileURL: URL?, documentID: DocumentID) async -> [LineMarkerMenuItem] { [] }
 }
 
 // MARK: - Structure

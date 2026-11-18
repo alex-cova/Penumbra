@@ -92,6 +92,7 @@ let package = Package(
         .library(name: "PenumbraLanguages", targets: ["PenumbraLanguages"]),
         .library(name: "LanguageSyntax", targets: ["LanguageSyntax"]),
         .library(name: "JavaIntelligence", targets: ["JavaIntelligence"]),
+        .library(name: "SpringIntelligence", targets: ["SpringIntelligence"]),
         .library(name: "SwiftIntelligence", targets: ["SwiftIntelligence"]),
         .library(name: "TypeScriptIntelligence", targets: ["TypeScriptIntelligence"]),
         .library(name: "HexKit", targets: ["HexKit"]),
@@ -201,6 +202,13 @@ let package = Package(
             ],
             swiftSettings: swift6
         ),
+        // Spring semantic model (beans, injection, resolution). Builds on JavaIntelligence's
+        // annotation-aware declarations; no dependency on Penumbra or any UI.
+        .target(
+            name: "SpringIntelligence",
+            dependencies: ["JavaIntelligence", "EditorIntelligence"],
+            swiftSettings: swift6
+        ),
         // Syntactic Swift and TypeScript engines. They still parse through JavaIntelligence's
         // syntax types until LanguageSyntax exists (docs/LANGUAGE_PARITY_PLAN.md, phase 1).
         // Umbra-only wiring (support objects, SwiftPM, the palette) stays in the app target.
@@ -239,6 +247,7 @@ let package = Package(
                 "Penumbra",
                 "EditorIntelligence",
                 "JavaIntelligence",
+                "SpringIntelligence",
                 "SwiftIntelligence",
                 "TypeScriptIntelligence",
                 "LanguageSyntax",
@@ -335,6 +344,7 @@ let package = Package(
             "PenumbraLanguages",
             "PenumbraLuna",
             "JavaIntelligence",
+            "SpringIntelligence",
             "SwiftIntelligence",
             "TypeScriptIntelligence",
             "HexKit",

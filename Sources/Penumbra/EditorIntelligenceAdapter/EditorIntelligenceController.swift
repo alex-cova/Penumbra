@@ -1630,6 +1630,10 @@ public final class EditorIntelligenceController {
             TextEditApplicator.apply(action.edits, in: textView)
         }
         hideCodeActions()
+        if let plan = action.workspacePlan {
+            // Always previewed: the edit lands in files the user is not looking at.
+            presentWorkspaceEditPlan(plan, appliesDirectly: false)
+        }
         if let command = action.command {
             onCodeActionCommand?(command)
         }

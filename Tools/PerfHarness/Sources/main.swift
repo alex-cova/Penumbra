@@ -41,6 +41,8 @@ func printUsageAndExit() -> Never {
       java-completion synthetic [--jars N] [--large-methods N] [--large-per-class N] [--unicode]
       java-anonymous synthetic [--samples N] [--edits N]
       java-name-index <java-source-directory|synthetic> [--files N]
+      spring synthetic [--beans N] [--config-lines N] [--jar spring-boot-autoconfigure.jar]
+      spring-endpoints synthetic [--endpoints N] [--modules M]
       java-members <java-source-directory>
       java-inheritors synthetic [--files N]
       java-stub-reuse synthetic [--samples N]
@@ -118,7 +120,7 @@ let options = Commands.Options(
 let allowsSyntheticPath = command == "scroll-frames" || command == "metal-waits" || command == "typeset-long" || command == "index-parse" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-reinspection" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
     || command == "java-profile-import" || command == "java-coverage-bands" || command == "java-platform-release"
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index" || command == "java-inheritors" || command == "java-stub-reuse" || command == "java-parse-edit" || command == "java-allocations" || command == "java-anonymous"
-    || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
+    || command == "spring" || command == "spring-endpoints" || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
 guard usesSynthetic || command == "java-diagnostics" || FileManager.default.fileExists(atPath: path) else {
     FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
@@ -159,6 +161,15 @@ do {
         JavaStubReuseProfile.run(samples: Int(flagValue("--samples", in: rest) ?? "") ?? 20)
     case "java-inheritors":
         try JavaInheritorsProfile.run(files: Int(flagValue("--files", in: rest) ?? "") ?? 5_000)
+    case "spring":
+        try SpringProfile.run(
+            beans: Int(flagValue("--beans", in: rest) ?? "") ?? 1_500,
+            configLines: Int(flagValue("--config-lines", in: rest) ?? "") ?? 500,
+            bootJar: flagValue("--jar", in: rest))
+    case "spring-endpoints":
+        try SpringEndpointProfile.run(
+            endpoints: Int(flagValue("--endpoints", in: rest) ?? "") ?? 1_000,
+            modules: Int(flagValue("--modules", in: rest) ?? "") ?? 1)
     case "java-name-index":
         try JavaNameIndexProfile.run(
             pathOrSynthetic: path,

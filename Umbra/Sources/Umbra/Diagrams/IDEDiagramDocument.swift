@@ -26,12 +26,24 @@ nonisolated enum IDEDiagramNodeKind: String, Codable, Sendable, Equatable {
     case jsonArray
     /// A JSON string, number, boolean, or null. The subtitle is the value.
     case jsonValue
+    /// A Spring bean, and what makes it worth telling apart on the picture. Colours reuse the class/interface/record/enum/library
+    /// palettes (see ``IDEDiagramPalette``): green controller, purple repository, amber configuration or conditional, red unresolved.
+    case springBean
+    case springConditionalBean
+    case springController
+    case springRepository
+    case springConfiguration
+    /// A type something injects that no bean provides here (a library type, or a missing bean).
+    case springExternal
+    case springUnresolved
+    case springPackage
 
     var isType: Bool {
         switch self {
         case .classType, .abstractClass, .interfaceType, .enumType, .recordType, .annotationType, .externalType:
             true
-        case .table, .project, .library, .replacedLibrary, .unresolvedLibrary, .jsonObject, .jsonArray, .jsonValue:
+        case .table, .project, .library, .replacedLibrary, .unresolvedLibrary, .jsonObject, .jsonArray, .jsonValue,
+             .springBean, .springConditionalBean, .springController, .springRepository, .springConfiguration, .springExternal, .springUnresolved, .springPackage:
             false
         }
     }
@@ -49,10 +61,24 @@ nonisolated enum IDEDiagramEdgeKind: String, Codable, Sendable, Equatable, CaseI
     case replaced
     /// A JSON value contained in the value the edge leaves. No arrow: the child box names itself.
     case containment
+    /// Spring: an injection the analysis resolved with nothing in doubt.
+    case springDependency
+    /// Spring: depends on a condition, or on one of several candidates.
+    case springConditional
+    /// Spring: several beans could satisfy it and nothing picks one.
+    case springAmbiguous
+    /// Spring: nothing satisfies it.
+    case springUnresolved
+    /// Spring: part of a dependency cycle.
+    case springCycle
+    /// Spring configuration graph: a configuration class declares a bean / imports another class / scans a package.
+    case springDeclares
+    case springImport
+    case springScan
 
     var isDashed: Bool {
         switch self {
-        case .realization, .dependency, .replaced: true
+        case .realization, .dependency, .replaced, .springConditional, .springAmbiguous, .springUnresolved, .springScan: true
         default: false
         }
     }
@@ -76,6 +102,8 @@ nonisolated struct IDEDiagramNode: Codable, Sendable, Equatable, Identifiable, D
     var attributes: [String]
     var methods: [String]
     var fileURL: URL?
+    /// Where in `fileURL` the node's declaration is (UTF-8 byte range), when the producer knows; double-click opens it there.
+    var sourceByteRange: Range<Int>?
 
     init(
         key: String,
@@ -85,8 +113,10 @@ nonisolated struct IDEDiagramNode: Codable, Sendable, Equatable, Identifiable, D
         attributes: [String] = [],
         methods: [String] = [],
         fileURL: URL? = nil,
+        sourceByteRange: Range<Int>? = nil,
         origin: CGPoint = .zero
     ) {
+        self.sourceByteRange = sourceByteRange
         self.id = IDEDiagramIdentity.id(for: "node:" + key)
         self.key = key
         self.kind = kind

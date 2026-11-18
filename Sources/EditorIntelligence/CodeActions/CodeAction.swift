@@ -36,6 +36,20 @@ public struct CodeAction: Sendable, Hashable, Identifiable {
     public let preview: String?
     /// Commands offered from a chevron on the row (Disable, Edit settings).
     public let options: [CodeActionOption]
+    /// An edit that spans files (or inserts into one other than the open document). The host shows it in its
+    /// refactoring preview and applies it from there; `edits` stay the open document's own immediate edits.
+    /// A cross-file fix is never applied without that preview, because it changes code the user is not looking at.
+    public let workspacePlan: WorkspaceEditPlan?
+
+    public static func == (lhs: CodeAction, rhs: CodeAction) -> Bool {
+        lhs.id == rhs.id && lhs.title == rhs.title && lhs.kind == rhs.kind && lhs.edits == rhs.edits
+            && lhs.isPreferred == rhs.isPreferred && lhs.command == rhs.command && lhs.preview == rhs.preview
+            && lhs.options == rhs.options && lhs.workspacePlan?.entries.map(\.id) == rhs.workspacePlan?.entries.map(\.id)
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id); hasher.combine(title); hasher.combine(kind); hasher.combine(edits)
+    }
 
     public init(
         id: UUID = UUID(),
@@ -45,8 +59,10 @@ public struct CodeAction: Sendable, Hashable, Identifiable {
         isPreferred: Bool = false,
         command: CodeActionCommand? = nil,
         preview: String? = nil,
-        options: [CodeActionOption] = []
+        options: [CodeActionOption] = [],
+        workspacePlan: WorkspaceEditPlan? = nil
     ) {
+        self.workspacePlan = workspacePlan
         self.id = id
         self.title = title
         self.kind = kind

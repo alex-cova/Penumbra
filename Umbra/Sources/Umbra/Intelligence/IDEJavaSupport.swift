@@ -2,6 +2,7 @@ import EditorIntelligence
 import Foundation
 import JavaIntelligence
 import Observation
+import SpringIntelligence
 
 /// Why open files get live `javac` errors right now, or nothing when they do not.
 enum JavaCompilerState: Sendable {
@@ -56,6 +57,13 @@ final class IDEJavaSupport {
     let bytecodeCallHierarchyProvider: JavaBytecodeCallHierarchyProvider
     /// Static inspections (unused imports, missing @Override, unresolved types).
     let inspectionService: JavaInspectionService
+    /// Spring's bean model for this window's project. Inert (no files read) unless the build model
+    /// shows Spring on a module's classpath.
+    let springIndexer = SpringWorkspaceIndexer()
+    /// The modules the indexer found, mirrored here (an actor cannot be read synchronously) so the tool window's availability and
+    /// badge follow it. Empty without Spring.
+    private(set) var springModules: [SpringModuleInfo] = []
+    var hasSpring: Bool { springModules.contains { $0.isSpring } }
     /// Classifies Java identifiers for semantic highlighting.
     let semanticTokenProvider: JavaSemanticTokenProvider
     /// Parameter-name hints at call sites (the Parameter Name Hints preference).
@@ -518,6 +526,7 @@ final class IDEJavaSupport {
     /// user has turned the preference off, nor when no installed JDK ships a `javac`.
     func refreshCompilerDiagnostics() {
         refreshInspectionLanguageLevel()
+        refreshSpring()
         compilerConfigurationTask?.cancel()
         let generation = projectGeneration
         let root = projectRootURL
@@ -766,7 +775,27 @@ final class IDEJavaSupport {
     /// `.java` files changed on disk (from `IDEProjectWatcher`): update the identifier index for
     /// them and rebuild the stub shard of every source root that changed, bypassing the
     /// directory-mtime stamp (which does not move when a file is merely edited).
+    /// Points the Spring model at the current build model (a no-op for a project without Spring).
+    func refreshSpring() {
+        let model = projectModel
+        let hasBuild = isJavaBuildActive
+        Task { [springIndexer, weak self] in
+            if model == nil && !hasBuild { await springIndexer.reset() } else { await springIndexer.configure(model: model) }
+            await self?.mirrorSpringModules()
+        }
+    }
+
+    /// Copies the indexer's detected modules into the observable mirror the tool window's availability reads.
+    func mirrorSpringModules() async {
+        let modules = await springIndexer.modules
+        if springModules != modules { springModules = modules }
+    }
+
     func filesDidChange(_ changed: [URL]) {
+        // Spring re-reads Java sources and `application*` files whose size or date changed; inert without Spring.
+        if changed.contains(where: { ["java", "properties", "yml", "yaml"].contains($0.pathExtension.lowercased()) }) {
+            Task { [springIndexer] in await springIndexer.rescan() }
+        }
         // Annotation-processor output is not a name-index root, so the per-root path below never
         // sees it. A build that did not go through Umbra (a terminal, another tool, `clean`)
         // rewrites or removes it all the same.

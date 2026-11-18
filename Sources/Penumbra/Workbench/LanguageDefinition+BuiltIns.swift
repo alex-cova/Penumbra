@@ -28,6 +28,8 @@ public extension LanguageDefinition {
         LanguageDefinition(id: "kotlin", displayName: "Kotlin", fileExtensions: ["kt", "kts"],
                            fenceAliases: ["kt", "kts"], isSelectable: true),
         LanguageDefinition(id: "groovy", displayName: "Groovy", fileExtensions: ["gradle"]),
+        // Identity only (no grammar): lets language services, such as Spring configuration, claim `.properties` files.
+        LanguageDefinition(id: "properties", displayName: "Properties", fileExtensions: ["properties"]),
         LanguageDefinition(id: "javascript", displayName: "JavaScript", fileExtensions: ["js", "jsx", "mjs", "cjs"],
                            fenceAliases: ["js", "jsx", "mjs", "cjs", "node"],
                            configuration: .javaScript, isSelectable: true),

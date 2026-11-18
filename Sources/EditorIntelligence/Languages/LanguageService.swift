@@ -121,6 +121,9 @@ public protocol LanguageService: Sendable {
     /// Syntactic services are the fallback. A semantic service is asked first while it is ready.
     var tier: LanguageServiceTier { get }
 
+    /// The gutter marker kinds this service's `lineMarkers` provider can produce beyond the built-in ones.
+    var lineMarkerDescriptors: [LineMarkerDescriptor] { get }
+
     /// Features this service will not answer yet. Empty means ready. A property, not a method:
     /// the registry lives in this module, and a method with a default implementation is not
     /// dispatched to the conforming type from here.
@@ -214,6 +217,7 @@ public enum FeatureFidelity: Int, Comparable, Sendable {
 public extension LanguageService {
     var policy: LanguagePolicy { .none }
     var tier: LanguageServiceTier { .syntactic }
+    var lineMarkerDescriptors: [LineMarkerDescriptor] { [] }
 
     var unavailableFeatures: Set<LanguageFeature> { [] }
 

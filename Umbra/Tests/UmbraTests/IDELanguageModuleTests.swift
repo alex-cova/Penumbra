@@ -13,7 +13,7 @@ final class IDELanguageModuleTests: XCTestCase {
 
     func testTheShippedModulesAreJavaHTTPThePreviewLanguagesTypeScriptSwiftAndPython() {
         XCTAssertEqual(
-            IDELanguageModules.all.map(\.id), ["java", "http", "database", "markdown", "json", "csv", "typescript", "swift", "python", "language-servers", "hex"]
+            IDELanguageModules.all.map(\.id), ["java", "spring", "http", "database", "markdown", "json", "csv", "typescript", "swift", "python", "language-servers", "hex"]
         )
         XCTAssertNotNil(IDELanguageModules.module(id: "http"))
         XCTAssertNotNil(IDELanguageModules.module(id: "swift"))
@@ -197,11 +197,11 @@ final class IDELanguageModuleTests: XCTestCase {
     func testTheSidebarKeepsItsTabsInOrder() {
         XCTAssertEqual(
             IDESidebarTabs.all.map(\.tab.rawValue),
-            ["explorer", "structure", "changes", "breakpoints", "bookmarks", "history", "database"]
+            ["explorer", "structure", "changes", "breakpoints", "bookmarks", "history", "spring", "database"]
         )
         XCTAssertEqual(
             IDESidebarTabs.all.map(\.title),
-            ["Explorer", "Structure", "Changes", "Breakpoints", "Bookmarks", "History", "Database"]
+            ["Explorer", "Structure", "Changes", "Breakpoints", "Bookmarks", "History", "Spring", "Database"]
         )
         XCTAssertEqual(IDESidebarTab.breakpoints.systemImage, "circle.fill")
         XCTAssertEqual(IDESidebarTabs.descriptor(for: .breakpoints)?.iconSize, 8)

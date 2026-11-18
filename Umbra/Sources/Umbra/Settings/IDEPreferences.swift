@@ -112,6 +112,7 @@ public final class IDEPreferences {
         static let javaCodeVisionImplementations = "com.umbra.editor.javaCodeVisionImplementations"
         static let inlayHintsUseEditorFont = "com.umbra.editor.inlayHintsUseEditorFont"
         static let javaDisabledGutterIcons = "com.umbra.editor.javaDisabledGutterIcons"
+        static let disabledMarkerDescriptors = "com.umbra.editor.disabledMarkerDescriptors"
         static let javaDisabledIntentions = "com.umbra.editor.javaDisabledIntentions"
         static let javaShowIntentionBulb = "com.umbra.editor.javaShowIntentionBulb"
         static let javaShowIntentionPreview = "com.umbra.editor.javaShowIntentionPreview"
@@ -840,6 +841,15 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaDisabledGutterIcons.map(\.rawValue).sorted(), forKey: Keys.javaDisabledGutterIcons) }
     }
 
+    /// Extension gutter markers (Spring beans, injection points…) the user turned off, by descriptor id. Every one is on by default.
+    var disabledMarkerDescriptors: Set<String> {
+        didSet { UserDefaults.standard.set(disabledMarkerDescriptors.sorted(), forKey: Keys.disabledMarkerDescriptors) }
+    }
+
+    var disabledMarkerDescriptorIDs: Set<LineMarkerDescriptor.ID> {
+        Set(disabledMarkerDescriptors.map { LineMarkerDescriptor.ID(rawValue: $0) })
+    }
+
     var enabledJavaGutterIcons: Set<JavaLineMarkerKind> {
         Set(JavaLineMarkerKind.allCases).subtracting(javaDisabledGutterIcons)
     }
@@ -1231,6 +1241,7 @@ public final class IDEPreferences {
         javaCodeVisionImplementations = defaults.bool(forKey: Keys.javaCodeVisionImplementations)
         inlayHintsUseEditorFont = defaults.bool(forKey: Keys.inlayHintsUseEditorFont)
         javaDisabledGutterIcons = Set((defaults.stringArray(forKey: Keys.javaDisabledGutterIcons) ?? []).compactMap(JavaLineMarkerKind.init(rawValue:)))
+        disabledMarkerDescriptors = Set(defaults.stringArray(forKey: Keys.disabledMarkerDescriptors) ?? [])
         javaDisabledIntentions = Set(defaults.stringArray(forKey: Keys.javaDisabledIntentions) ?? [])
         javaShowIntentionBulb = defaults.object(forKey: Keys.javaShowIntentionBulb) as? Bool ?? true
         javaShowIntentionPreview = defaults.object(forKey: Keys.javaShowIntentionPreview) as? Bool ?? true
@@ -1880,6 +1891,7 @@ extension JavaLineMarkerKind {
         case .overridden: return .overridden
         case .siblingInherited: return .siblingInherited
         case .recursiveCall: return .recursiveCall
+        case .extended: return .custom
         }
     }
 
@@ -1892,6 +1904,7 @@ extension JavaLineMarkerKind {
         case .overridden: return "Overridden method"
         case .siblingInherited: return "Sibling inherited method"
         case .recursiveCall: return "Recursive call"
+        case .extended: return "Framework marker"
         }
     }
 }

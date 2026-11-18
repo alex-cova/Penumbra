@@ -95,6 +95,7 @@ let package = Package(
                 .product(name: "EditorIntelligence", package: "Penumbra"),
                 .product(name: "EditorIntelligenceLSP", package: "Penumbra"),
                 .product(name: "JavaIntelligence", package: "Penumbra"),
+                .product(name: "SpringIntelligence", package: "Penumbra"),
                 .product(name: "SwiftIntelligence", package: "Penumbra"),
                 .product(name: "TypeScriptIntelligence", package: "Penumbra"),
                 .product(name: "GitIntelligence", package: "Penumbra"),

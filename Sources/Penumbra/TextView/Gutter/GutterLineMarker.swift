@@ -15,6 +15,27 @@ public enum GutterLineMarkerIcon: String, Hashable, Sendable, CaseIterable {
     case siblingInherited
     /// A call to the method it sits in.
     case recursiveCall
+    /// A host-defined marker: drawn from its ``GutterLineMarker/symbol`` (an SF Symbol and a semantic tint).
+    case custom
+}
+
+/// What a ``GutterLineMarkerIcon/custom`` marker means, not what colour it is: the gutter maps it to the theme in light and
+/// dark appearance, so a host cannot hard-code a colour into a marker.
+public enum GutterLineMarkerTint: String, Hashable, Sendable, CaseIterable {
+    case neutral, accent, interface, override, success, warning, danger
+}
+
+/// An SF Symbol drawn in the marker column, with the words VoiceOver says for it.
+public struct GutterLineMarkerSymbol: Hashable, Sendable {
+    public let name: String
+    public let tint: GutterLineMarkerTint
+    public let accessibilityLabel: String
+
+    public init(name: String, tint: GutterLineMarkerTint = .neutral, accessibilityLabel: String) {
+        self.name = name
+        self.tint = tint
+        self.accessibilityLabel = accessibilityLabel
+    }
 }
 
 /// An icon in the line-marker column, which sits between the line numbers and the folding ribbon.
@@ -26,12 +47,19 @@ public struct GutterLineMarker: Hashable, Sendable {
     public var line: Int
     public let icon: GutterLineMarkerIcon
     public let tooltip: String
+    /// What a ``GutterLineMarkerIcon/custom`` marker draws.
+    public let symbol: GutterLineMarkerSymbol?
+    /// How many markers the host put on this line. More than one draws a count over the icon, so a covered marker is
+    /// never invisible; the host decides what a click on a stack does.
+    public var stackCount: Int
 
-    public init(id: Int, line: Int, icon: GutterLineMarkerIcon, tooltip: String) {
+    public init(id: Int, line: Int, icon: GutterLineMarkerIcon, tooltip: String, symbol: GutterLineMarkerSymbol? = nil, stackCount: Int = 1) {
         self.id = id
         self.line = line
         self.icon = icon
         self.tooltip = tooltip
+        self.symbol = symbol
+        self.stackCount = stackCount
     }
 }
 

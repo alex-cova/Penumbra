@@ -17,7 +17,7 @@ final class IDEEditorOverlayController {
 
     let settle: DocumentSettleCoordinator
     /// The markers last painted for an editor and the text generation they were computed for.
-    private var shownMarkers: [ObjectIdentifier: (generation: UInt64, markers: [LineMarker])] = [:]
+    private var shownMarkers: [ObjectIdentifier: (generation: UInt64, stacks: [LineMarkerStack])] = [:]
 
     init(settle: DocumentSettleCoordinator = DocumentSettleCoordinator()) {
         self.settle = settle
@@ -68,12 +68,14 @@ final class IDEEditorOverlayController {
     /// marker kind turned off. `onClick` receives the marker for a click on fresh markers only.
     func scheduleLineMarkers(
         for textView: TextView, provider: (any LineMarkerProviding)?, kinds: Set<LineMarkerKind>,
-        languageIdentifier: String?, delay: Duration, onClick: @escaping (LineMarker) -> Void
+        disabledDescriptors: Set<LineMarkerDescriptor.ID> = [],
+        languageIdentifier: String?, delay: Duration, onClick: @escaping (LineMarkerStack) -> Void
     ) {
         let key = ObjectIdentifier(textView)
         textView.reservedLineMarkerSlots = Self.reservedLineMarkerSlots(
             languageIdentifier: languageIdentifier, hasMarkerProvider: provider != nil)
-        guard let provider, !kinds.isEmpty else {
+        // Extension markers (Spring…) are filtered by descriptor below, so the provider still runs when every Java kind is off.
+        guard let provider else {
             settle.cancel(Self.markerID, for: textView)
             shownMarkers[key] = nil
             textView.setLineMarkers([])
@@ -87,23 +89,43 @@ final class IDEEditorOverlayController {
                 return await provider.lineMarkers(source: snapshot.text, fileURL: url, kinds: kinds)
             }
             guard !Task.isCancelled, let self, let markers, textView.contentGeneration == snapshot.generation else { return }
-            self.shownMarkers[key] = (snapshot.generation, markers)
-            textView.setLineMarkers(markers.enumerated().map { index, marker in
-                GutterLineMarker(id: index, line: marker.line, icon: marker.kind.gutterIcon, tooltip: marker.tooltip)
-            })
+            let visible = markers.filter { marker in
+                if let descriptor = marker.descriptor { return !disabledDescriptors.contains(descriptor.id) }
+                return kinds.contains(marker.kind)
+            }
+            // Several markers on one line stay reachable: the highest priority is drawn with a count, a click lists them all.
+            let stacks = LineMarkerPresentation.stacks(from: visible)
+            self.shownMarkers[key] = (snapshot.generation, stacks)
+            textView.setLineMarkers(stacks.enumerated().map { index, stack in Self.gutterMarker(id: index, stack: stack) })
             textView.lineMarkerHandler = { [weak self, weak textView] gutterMarker, _ in
-                guard let self, let textView, let marker = self.marker(for: gutterMarker, in: textView) else { return }
-                onClick(marker)
+                guard let self, let textView, let stack = self.stack(for: gutterMarker, in: textView) else { return }
+                onClick(stack)
             }
         }
     }
 
     /// The marker a gutter icon stands for, or nil when the markers are older than the buffer: their
     /// anchor offsets are stale, and fresh markers are already on the way.
-    func marker(for gutterMarker: GutterLineMarker, in textView: TextView) -> LineMarker? {
+    func stack(for gutterMarker: GutterLineMarker, in textView: TextView) -> LineMarkerStack? {
         guard let entry = shownMarkers[ObjectIdentifier(textView)], entry.generation == textView.contentGeneration,
-              entry.markers.indices.contains(gutterMarker.id) else { return nil }
-        return entry.markers[gutterMarker.id]
+              entry.stacks.indices.contains(gutterMarker.id) else { return nil }
+        return entry.stacks[gutterMarker.id]
+    }
+
+    /// The gutter icon for a stack: the visible marker's glyph or symbol, a count when more share the line, and a tooltip that
+    /// says so.
+    static func gutterMarker(id: Int, stack: LineMarkerStack) -> GutterLineMarker {
+        let marker = stack.visible
+        var tooltip = marker.tooltip
+        if stack.isStacked { tooltip += "\n+\(stack.markers.count - 1) more: click to choose" }
+        if let descriptor = marker.descriptor {
+            let tint = GutterLineMarkerTint(rawValue: descriptor.tint.rawValue) ?? .neutral
+            return GutterLineMarker(
+                id: id, line: marker.line, icon: .custom, tooltip: tooltip,
+                symbol: GutterLineMarkerSymbol(name: descriptor.symbolName, tint: tint, accessibilityLabel: descriptor.accessibilityLabel),
+                stackCount: stack.markers.count)
+        }
+        return GutterLineMarker(id: id, line: marker.line, icon: marker.kind.gutterIcon, tooltip: tooltip, stackCount: stack.markers.count)
     }
 
     // MARK: Name index

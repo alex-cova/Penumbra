@@ -344,6 +344,8 @@ public final class IDEWorkspace {
     var isSidebarVisible = false
     /// The left sidebar's tab. Read `activeSidebarTab`: this may name a tab that is unavailable now.
     var selectedSidebarTab = IDESidebarTab.explorer
+    /// The Spring tool window's state (section, application, bean filter and selection).
+    let springStore = IDESpringStore()
     /// Bumped when a shortcut or Go to Tool Window wants the visible sidebar pane to take the keyboard.
     var sidebarFocusRequestID: UInt64 = 0
     /// The Changes file list has the keyboard. ⌘S then stages. The commit field does not set this.
@@ -4351,11 +4353,85 @@ public final class IDEWorkspace {
             for: host.textView,
             provider: languages.lineMarkers(for: languageIdentifier),
             kinds: preferences.enabledJavaGutterIcons,
+            disabledDescriptors: preferences.disabledMarkerDescriptorIDs,
             languageIdentifier: languageIdentifier,
             delay: delay ?? settleDelay
-        ) { [weak self, weak host] marker in
+        ) { [weak self, weak host] stack in
             guard let self, let host else { return }
-            self.lineMarkerClicked(marker, host: host)
+            self.lineMarkerStackClicked(stack, host: host)
+        }
+    }
+
+    /// A click on the gutter icon of a line. A lone built-in marker keeps its own behaviour (↑ goes to the super method…). An
+    /// extension marker, or several markers sharing the line, open a menu of what each offers, so nothing is hidden behind the
+    /// visible icon; a lone extension marker with one action simply performs it.
+    private func lineMarkerStackClicked(_ stack: LineMarkerStack, host: IDEEditorPaneHost) {
+        if !stack.isStacked, stack.visible.descriptor == nil {
+            lineMarkerClicked(stack.visible, host: host)
+            return
+        }
+        let languageID = workbench.activePane.selectedDocument?.intelligenceLanguageIdentifier
+        guard let provider = languages.lineMarkers(for: languageID) else { return }
+        let textView = host.textView
+        let source = textView.text
+        let url = textView.documentURL
+        Task { [weak self, weak host] in
+            var sections: [(marker: LineMarker, items: [LineMarkerMenuItem])] = []
+            for marker in stack.markers {
+                var items: [LineMarkerMenuItem]
+                if marker.descriptor != nil {
+                    items = await provider.menu(for: marker, source: source, fileURL: url, documentID: DocumentID())
+                } else {
+                    items = Self.builtInMenuItems(for: marker)
+                    if marker.kind == .siblingInherited {
+                        let locations = await provider.siblingTargets(of: marker, source: source, fileURL: url, documentID: DocumentID())
+                        items = locations.isEmpty ? [] : [LineMarkerMenuItem(title: "Go to implemented interface methods", symbolName: "arrow.up", action: .open(locations))]
+                    }
+                }
+                if !items.isEmpty { sections.append((marker, items)) }
+            }
+            guard let self, let host, !sections.isEmpty else { return }
+            if sections.count == 1, sections[0].items.count == 1 {
+                self.performMarkerAction(sections[0].items[0].action, marker: sections[0].marker, host: host)
+                return
+            }
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+            for (index, section) in sections.enumerated() {
+                if sections.count > 1 {
+                    if index > 0 { menu.addItem(.separator()) }
+                    menu.addItem(NSMenuItem.sectionHeader(title: section.marker.descriptor?.title ?? section.marker.tooltip))
+                }
+                for item in section.items {
+                    let menuItem = IDEClosureMenuItem(title: item.title) { [weak self, weak host] in
+                        guard let self, let host else { return }
+                        self.performMarkerAction(item.action, marker: section.marker, host: host)
+                    }
+                    if let symbol = item.symbolName { menuItem.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
+                    menu.addItem(menuItem)
+                }
+            }
+            IDERunGutterMenu.popUp(menu, in: host.textView)
+        }
+    }
+
+    private static func builtInMenuItems(for marker: LineMarker) -> [LineMarkerMenuItem] {
+        switch marker.kind {
+        case .implementing, .overriding: return [LineMarkerMenuItem(title: "Go to super method", symbolName: "arrow.up", action: .navigate(.superMethod))]
+        case .implemented, .overridden: return [LineMarkerMenuItem(title: "Go to implementations", symbolName: "arrow.down", action: .navigate(.implementation))]
+        case .siblingInherited, .recursiveCall, .extended: return []
+        }
+    }
+
+    private func performMarkerAction(_ action: LineMarkerAction, marker: LineMarker, host: IDEEditorPaneHost) {
+        switch action {
+        case .navigate(let kind):
+            host.intelligenceController?.navigate(kind: kind, atUTF16Offset: marker.anchorUTF16Offset)
+        case .open(let locations):
+            if locations.count == 1 { _ = openNavigationLocation(locations[0]) }
+            else if !locations.isEmpty { presentNavigationChoices(locations, kind: .definition) }
+        case .command(let command):
+            performMarkerCommand(command)
         }
     }
 
@@ -4381,7 +4457,7 @@ public final class IDEWorkspace {
                     self.presentNavigationChoices(locations, kind: .superMethod)
                 }
             }
-        case .recursiveCall:
+        case .recursiveCall, .extended:
             break
         }
     }

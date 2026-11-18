@@ -38,7 +38,8 @@ nonisolated enum IDEDiagramEdgeMarkers {
             if let marker = diamondPlacement(&line, length: size * 1.7, width: size * 0.9) {
                 shapes.append(IDEDiagramMarkerShape(points: marker, closed: true, fill: .background))
             }
-        case .association, .dependency:
+        case .association, .dependency, .springDependency, .springConditional, .springAmbiguous, .springUnresolved, .springCycle,
+             .springDeclares, .springImport, .springScan:
             if let arrow = openArrow(line, length: size * 1.2, width: size * 0.8) {
                 shapes.append(IDEDiagramMarkerShape(points: arrow, closed: false, fill: .none))
             }

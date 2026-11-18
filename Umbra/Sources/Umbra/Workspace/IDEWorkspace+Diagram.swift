@@ -1,6 +1,7 @@
 import AppKit
 import JavaIntelligence
 import Penumbra
+import SpringIntelligence
 
 /// Class and dependency diagrams: opening them as editor tabs from the Java menu, the editor, the Explorer
 /// and the Gradle sidebar, and what their sessions need from the workspace (the index, open buffers, Gradle).
@@ -230,6 +231,9 @@ extension IDEWorkspace {
         session.invalidateCaches = { gradle.invalidateDependencyGraphs() }
         session.openSource = { [weak self] url in
             Task { @MainActor [weak self] in await self?.openDocument(from: url) }
+        }
+        session.openSourceRange = { [weak self] url, range in
+            self?.openSpringLocation(SpringSourceLocation(url: url, byteRange: range), title: url.lastPathComponent)
         }
         session.openDiagram = { [weak self] request, depth in
             self?.openDiagram(request, minimumNeighbourDepth: depth)

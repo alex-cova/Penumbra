@@ -21,6 +21,7 @@ struct IDESidebarTab: RawRepresentable, Codable, Hashable, Identifiable {
     static let changes = IDESidebarTab(rawValue: "changes")
     static let bookmarks = IDESidebarTab(rawValue: "bookmarks")
     static let history = IDESidebarTab(rawValue: "history")
+    static let spring = IDESidebarTab(rawValue: "spring")
 
     /// The Explorer is the sidebar's home: it stays when the others are closed.
     var isClosable: Bool { self != .explorer }

@@ -121,7 +121,13 @@ struct IDEDiagramNodeView: View {
         case .table: "T"
         case .jsonObject: "{}"
         case .jsonArray: "[]"
-        case .project, .library, .replacedLibrary, .unresolvedLibrary, .jsonValue: nil
+        case .springBean, .springConditionalBean: "B"
+        case .springController: "C"
+        case .springRepository: "R"
+        case .springConfiguration: "@"
+        case .springExternal: "?"
+        case .springUnresolved: "!"
+        case .project, .library, .replacedLibrary, .unresolvedLibrary, .jsonValue, .springPackage: nil
         }
     }
 

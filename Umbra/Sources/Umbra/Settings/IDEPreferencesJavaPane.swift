@@ -19,6 +19,7 @@ struct IDEPreferencesJavaPane: View {
         IDEJavaPostfixSection(preferences: preferences)
         IDEJavaImportsSection(preferences: preferences)
         IDEJavaGutterIconsSection(preferences: preferences)
+        IDEFrameworkGutterIconsSection(preferences: preferences)
         IDEPreferencesIntentionsPane(preferences: preferences)
         IDEPreferencesInspectionsPane(preferences: preferences)
     }
@@ -618,6 +619,48 @@ private struct IDEJavaGutterIconsSection: View {
             } else {
                 preferences.javaDisabledGutterIcons.insert(kind)
             }
+            workspace.javaGutterIconsPreferenceChanged()
+        }
+    }
+}
+
+/// The gutter markers that language and framework layers declare (Spring beans, injection points…), grouped by layer. Each has its own
+/// toggle, stored by descriptor id so a marker kind keeps its setting across releases.
+private struct IDEFrameworkGutterIconsSection: View {
+    @Bindable var preferences: IDEPreferences
+    @Environment(IDEWorkspace.self) private var workspace
+
+    var body: some View {
+        let descriptors = workspace.languages.lineMarkerDescriptors
+        if !descriptors.isEmpty {
+            let groups = Dictionary(grouping: descriptors, by: \.group)
+            ForEach(groups.keys.sorted(), id: \.self) { group in
+                IDESettingsSection(
+                    "\(group) Gutter Icons",
+                    footer: "Markers beside the line numbers. When several markers share a line the most specific one is drawn with a count, and clicking it lists all of them."
+                ) {
+                    ForEach(groups[group] ?? []) { descriptor in
+                        Toggle(isOn: binding(descriptor)) {
+                            Label {
+                                Text(descriptor.title).foregroundStyle(IDEAppearance.ColorToken.foreground)
+                            } icon: {
+                                Image(systemName: descriptor.symbolName)
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                        .accessibilityLabel(descriptor.accessibilityLabel)
+                    }
+                }
+            }
+        }
+    }
+
+    private func binding(_ descriptor: LineMarkerDescriptor) -> Binding<Bool> {
+        Binding {
+            !preferences.disabledMarkerDescriptors.contains(descriptor.id.rawValue)
+        } set: { isOn in
+            if isOn { preferences.disabledMarkerDescriptors.remove(descriptor.id.rawValue) }
+            else { preferences.disabledMarkerDescriptors.insert(descriptor.id.rawValue) }
             workspace.javaGutterIconsPreferenceChanged()
         }
     }
