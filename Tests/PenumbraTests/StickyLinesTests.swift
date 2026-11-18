@@ -197,6 +197,51 @@ final class StickyLinesTests: XCTestCase {
         XCTAssertLessThanOrEqual(with, without + 50, "sticky lines read rows, they do not take line handles (\(with) vs \(without))")
     }
 
+    /// The pinned number is drawn against the column the gutter's own labels use, whatever other
+    /// columns (stripe, markers, ribbon, padding) sit between it and the text.
+    func testPinnedLineNumbersUseTheGuttersLineNumberColumn() throws {
+        for withExtraColumns in [false, true] {
+            let (window, textView) = makeTextView(source: makeSource())
+            defer { window.orderOut(nil) }
+            textView.showLineNumbers = true
+            if withExtraColumns {
+                textView.showsGutterChangeStripe = true
+                textView.reservedLineMarkerSlots = 1
+                textView.isLineFoldingEnabled = true
+            }
+            textView.layoutIfNeeded()
+            pumpMainRunLoop(for: 0.2)
+            scroll(textView, toRow: 60)
+            XCTAssertFalse(textView.stickyLineHeaderRowsForTesting.isEmpty)
+
+            let column = try XCTUnwrap(textView.stickyLineNumberColumnForTesting)
+            let label = try XCTUnwrap(lineNumberViews(in: textView.gutterContainerViewForTesting).first { !$0.isHidden })
+            XCTAssertEqual(column.x, label.frame.minX, accuracy: 0.01, "extra columns: \(withExtraColumns)")
+            XCTAssertEqual(column.width, label.frame.width, accuracy: 0.01, "extra columns: \(withExtraColumns)")
+            XCTAssertEqual(textView.totalGutterWidthForTesting, textView.gutterContainerViewForTesting.frame.width,
+                           accuracy: 0.01, "the pinned gutter is as wide as the real one")
+            if withExtraColumns {
+                XCTAssertLessThan(column.x + column.width, textView.totalGutterWidthForTesting - 16,
+                                  "the other columns sit to the right of the numbers")
+            }
+        }
+    }
+
+    func testNoLineNumbersMeansNoPinnedNumberColumn() {
+        let (window, textView) = makeTextView(source: makeSource())
+        defer { window.orderOut(nil) }
+        textView.showLineNumbers = false
+        textView.layoutIfNeeded()
+        XCTAssertNil(textView.stickyLineNumberColumnForTesting)
+    }
+
+    private func lineNumberViews(in view: NSView) -> [LineNumberView] {
+        view.subviews.flatMap { subview -> [LineNumberView] in
+            if let lineNumberView = subview as? LineNumberView { return [lineNumberView] }
+            return lineNumberViews(in: subview)
+        }
+    }
+
     func testEditingAHeaderRefreshesThePinnedText() {
         let (window, textView) = makeTextView(source: makeSource())
         defer { window.orderOut(nil) }

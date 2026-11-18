@@ -51,6 +51,34 @@ final class SelectionOverlayViewportTests: XCTestCase {
         XCTAssertTrue(textView.selectionRectsForTesting.contains { $0.rect.intersects(visibleRect) })
     }
 
+    /// The selection and caret host is a fixed overlay above the gutter (which scrolls with the
+    /// document). It must start where the text area does, or a selection scrolled sideways is
+    /// painted over the line numbers.
+    @MainActor
+    func testSelectionChromeStaysClearOfTheGutter() throws {
+        let line = String(repeating: "word ", count: 60)
+        let (window, textView) = makeTextView(text: Array(repeating: line, count: 40).joined(separator: "\n"))
+        defer { window.orderOut(nil) }
+        textView.showLineNumbers = true
+        // Metal defaults off under XCTest; this overlap only exists on the Metal path.
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        guard textView.isMetalRenderingActive else {
+            throw XCTSkip("the gutter overlap only exists on the Metal path")
+        }
+        textView.selectedRange = NSRange(location: 0, length: 200)
+        textView.contentOffset = CGPoint(x: 120, y: 0)
+        textView.layoutIfNeeded()
+
+        let gutterWidth = textView.totalGutterWidthForTesting
+        XCTAssertGreaterThan(gutterWidth, 0)
+        let host = textView.selectionHostGeometryForTesting
+        XCTAssertEqual(host.frame.minX, gutterWidth, accuracy: 0.01, "the host starts at the gutter's trailing edge")
+        XCTAssertEqual(host.frame.width, textView.bounds.width - gutterWidth, accuracy: 0.01)
+        // Content-space frames stay valid: the host's left edge shows the content just right of the gutter.
+        XCTAssertEqual(host.bounds.minX, 120 + gutterWidth, accuracy: 0.01)
+    }
+
     @MainActor
     private func makeTextView(text: String) -> (NSWindow, TextView) {
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)

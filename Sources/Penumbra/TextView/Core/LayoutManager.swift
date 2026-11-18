@@ -695,8 +695,19 @@ final class LayoutManager {
     }
     /// Width of the gutter column, including the leading safe-area inset. This is the region the
     /// Metal canvas (see ``MetalCanvasGeometry``) must never paint over.
-    private var totalGutterWidth: CGFloat {
+    var totalGutterWidth: CGFloat {
         safeAreaInsets.left + gutterWidthService.gutterWidth
+    }
+    /// X, in gutter coordinates, of the column the line numbers are right-aligned in. Both the
+    /// real line-number views and the sticky lines' copies of them use this, so they cannot drift.
+    var lineNumberColumnX: CGFloat {
+        let decorationWidth = gutterWidthService.showGutterDecorations ? gutterWidthService.gutterDecorationColumnWidth : 0
+        return safeAreaInsets.left + gutterWidthService.gutterLeadingPadding + decorationWidth
+            + gutterWidthService.annotationColumnWidth
+    }
+    /// Width of the line-number column; the digits are right-aligned to its trailing edge.
+    var lineNumberColumnWidth: CGFloat {
+        gutterWidthService.lineNumberWidth
     }
     private var insetViewport: CGRect {
         let x = viewport.minX - textContainerInset.left
@@ -1646,9 +1657,7 @@ extension LayoutManager {
         }
         let lineController = lineControllerStorage.getOrCreateLineController(for: line)
         let fontLineHeight = theme.lineNumberFont.lineHeight
-        let decorationWidth = gutterWidthService.showGutterDecorations ? gutterWidthService.gutterDecorationColumnWidth : 0
-        let xPosition = safeAreaInsets.left + gutterWidthService.gutterLeadingPadding + decorationWidth
-            + gutterWidthService.annotationColumnWidth
+        let xPosition = lineNumberColumnX
         var yPosition = textContainerInset.top + (lineYPosition ?? line.yPosition)
         // A lens above the line pushes its text down; the number follows the text.
         let topInset = lineController.topInset
@@ -1665,7 +1674,7 @@ extension LayoutManager {
         lineNumberView.textColor = theme.lineNumberColor
         lineNumberView.decorationColor = gutterDecorationView.iconColor
         lineNumberView.decoration = lineNumberDecorations.isEmpty ? nil : lineNumberDecorations[line.index + 1]
-        lineNumberView.frame = CGRect(x: xPosition, y: yPosition, width: gutterWidthService.lineNumberWidth, height: fontLineHeight)
+        lineNumberView.frame = CGRect(x: xPosition, y: yPosition, width: lineNumberColumnWidth, height: fontLineHeight)
     }
 
     /// Move the transparent Metal canvas to the visible text rect (view-follows-viewport) and give

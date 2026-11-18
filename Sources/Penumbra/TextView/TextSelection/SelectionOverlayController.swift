@@ -25,6 +25,11 @@ final class SelectionOverlayController {
         selectionOverlayView.selectionRects
     }
 
+    /// Where the chrome host sits in its parent, and the content-space rect it shows (tests).
+    var hostGeometryForTesting: (frame: CGRect, bounds: CGRect) {
+        (overlayHostView.frame, overlayHostView.bounds)
+    }
+
     var isEnabled = false {
         didSet {
             if isEnabled != oldValue {
@@ -59,7 +64,11 @@ final class SelectionOverlayController {
     /// The Metal canvas is a fixed overlay above the clip view. Move selection/caret chrome into a
     /// second fixed overlay so an opaque canvas cannot cover it; a viewport-origin `bounds` keeps
     /// the existing content-space caret and selection frames valid while scrolling.
-    func setPresentationHost(_ parent: EditorView?, viewport: CGRect) {
+    ///
+    /// The host starts at the gutter's trailing edge, like the Metal canvas it sits on: the gutter
+    /// is in the scrolling document under every fixed overlay, so a full-width host painted the
+    /// selection of text scrolled sideways, and carets, over the line numbers.
+    func setPresentationHost(_ parent: EditorView?, viewport: CGRect, gutterWidth: CGFloat) {
         if let parent {
             if overlayHostView.superview !== parent {
                 overlayHostView.removeFromSuperview()
@@ -70,8 +79,13 @@ final class SelectionOverlayController {
                 }
             }
             placeAboveMetalCanvas()
-            overlayHostView.frame = CGRect(origin: .zero, size: viewport.size)
-            overlayHostView.bounds = viewport
+            let (hostFrame, hostBounds) = MetalCanvasGeometry.frames(
+                viewport: viewport,
+                gutterWidth: gutterWidth,
+                isScrollViewOverlay: true
+            )
+            overlayHostView.frame = hostFrame
+            overlayHostView.bounds = hostBounds
         } else {
             if overlayHostView.superview !== textInputView {
                 overlayHostView.removeFromSuperview()

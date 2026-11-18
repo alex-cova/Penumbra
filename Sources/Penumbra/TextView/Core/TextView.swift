@@ -1670,6 +1670,12 @@ public struct DocumentTextExport: Sendable {
     var lineManagerForTesting: LineManager { textInputView.lineManager }
     /// Test hook — the selection highlight rects the overlay currently draws.
     var selectionRectsForTesting: [TextSelectionRect] { textInputView.selectionRectsForTesting }
+
+    var selectionHostGeometryForTesting: (frame: CGRect, bounds: CGRect) { textInputView.selectionHostGeometryForTesting }
+
+    var totalGutterWidthForTesting: CGFloat { textInputView.totalGutterWidth }
+
+    var stickyLineNumberColumnForTesting: (x: CGFloat, width: CGFloat)? { textInputView.stickyLineNumberColumn }
     /// Test hook — fold regions (line ranges) and method separator rows the editor currently has.
     var foldLineRangesForTesting: [ClosedRange<Int>] { textInputView.foldLineRangesForTesting }
     var methodSeparatorRowsForTesting: [Int] { textInputView.methodSeparatorRowsForTesting }

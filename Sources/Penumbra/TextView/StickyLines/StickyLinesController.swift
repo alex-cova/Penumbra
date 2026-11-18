@@ -165,11 +165,13 @@ final class StickyLinesController {
         return StickyLineStyle(
             background: background,
             hoverBackground: theme.stickyLinesHoverColor.blended(over: background),
-            gutterBackground: theme.gutterBackgroundColor.blended(over: background),
             lineNumberColor: theme.lineNumberColor,
             lineNumberFont: theme.lineNumberFont,
             border: theme.stickyLinesBorderColor,
             gutterWidth: gutterWidth,
+            lineNumberColumn: input.stickyLineNumberColumn.map { StickyLineNumberColumn(x: $0.x, width: $0.width) },
+            gutterHairlineColor: theme.gutterHairlineColor.blended(over: background),
+            gutterHairlineWidth: theme.gutterHairlineWidth,
             textOriginX: input.stickyTextOriginX - contentOffsetX
         )
     }

@@ -1083,6 +1083,7 @@ final class TextInputView: EditorView {
         return !lineControllerStorage.getOrCreateLineController(for: line).inlayHints.isEmpty
     }
     var selectionRectsForTesting: [TextSelectionRect] { selectionOverlayController.selectionRects }
+    var selectionHostGeometryForTesting: (frame: CGRect, bounds: CGRect) { selectionOverlayController.hostGeometryForTesting }
     /// Test hook — fold regions (line ranges) and method separator rows the editor currently has.
     var foldLineRangesForTesting: [ClosedRange<Int>] { foldingModel.regions.map(\.lineRange) }
     var methodSeparatorRowsForTesting: [Int] { methodSeparatorController.separatorRows }
@@ -2167,7 +2168,8 @@ private extension TextInputView {
     func updateSelectionOverlayPresentationHost() {
         selectionOverlayController.setPresentationHost(
             isMetalRenderingActive ? gutterParentView : nil,
-            viewport: viewport
+            viewport: viewport,
+            gutterWidth: totalGutterWidth
         )
         if isMetalRenderingActive {
             selectionOverlayController.placeAboveMetalCanvas()
@@ -2453,6 +2455,18 @@ extension TextInputView {
     /// Width of the gutter, which sticky lines repeat, or 0 when the gutter takes no room.
     var stickyGutterWidth: CGFloat {
         max(layoutManager.leadingLineSpacing - textContainerInset.left, 0)
+    }
+
+    /// Where the gutter right-aligns its line numbers, in the gutter's own coordinates, or nil
+    /// without line numbers. Sticky lines draw their number against the same edge.
+    var stickyLineNumberColumn: (x: CGFloat, width: CGFloat)? {
+        guard showLineNumbers else { return nil }
+        return (layoutManager.lineNumberColumnX, layoutManager.lineNumberColumnWidth)
+    }
+
+    /// Width of the gutter the Metal canvas and the selection chrome must stay clear of.
+    var totalGutterWidth: CGFloat {
+        layoutManager.totalGutterWidth
     }
 
     /// Height of a one-row sticky line: a single unwrapped line of the editor's font.

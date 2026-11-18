@@ -1,14 +1,25 @@
 @preconcurrency import AppKit
 
+/// Where the gutter puts its line numbers, in the gutter's own coordinates.
+struct StickyLineNumberColumn: Equatable {
+    var x: CGFloat
+    var width: CGFloat
+}
+
 /// What one pinned line looks like. Colors come from the theme; the rest from the document.
 struct StickyLineStyle: Equatable {
     var background: NSColor
     var hoverBackground: NSColor
-    var gutterBackground: NSColor
     var lineNumberColor: NSColor
     var lineNumberFont: NSFont
     var border: NSColor
     var gutterWidth: CGFloat
+    /// The column the editor's gutter right-aligns its numbers in, so a pinned number sits exactly
+    /// under the real one. Nil when the editor shows no line numbers.
+    var lineNumberColumn: StickyLineNumberColumn?
+    /// The gutter's trailing hairline, drawn only where the editor draws it (with line numbers).
+    var gutterHairlineColor: NSColor
+    var gutterHairlineWidth: CGFloat
     /// Where the text starts, in this view's coordinates (past the gutter, shifted by horizontal scrolling).
     var textOriginX: CGFloat
 }
@@ -89,10 +100,8 @@ final class StickyLineRowView: EditorView {
         let background = isHovered ? style.hoverBackground : style.background
         background.setFill()
         bounds.fill()
-        if style.gutterWidth > 0 {
-            style.gutterBackground.setFill()
-            NSRect(x: 0, y: 0, width: style.gutterWidth, height: bounds.height).fill()
-        }
+        // The gutter takes the row's fill, as the editor's gutter takes the editor's: no slab
+        // beside the text.
         if let text {
             NSGraphicsContext.saveGraphicsState()
             NSRect(x: style.gutterWidth, y: 0, width: max(bounds.width - style.gutterWidth, 0), height: bounds.height).clip()
@@ -100,14 +109,24 @@ final class StickyLineRowView: EditorView {
             text.draw(at: CGPoint(x: style.textOriginX, y: max((bounds.height - size.height) / 2, 0)))
             NSGraphicsContext.restoreGraphicsState()
         }
-        if style.gutterWidth > 0 {
+        if let column = style.lineNumberColumn {
             let number = NSAttributedString(string: "\(lineNumber)", attributes: [
                 .font: style.lineNumberFont,
                 .foregroundColor: style.lineNumberColor
             ])
             let size = number.size()
-            number.draw(at: CGPoint(x: max(style.gutterWidth - size.width - 6, 0),
+            // Right-aligned to the column's trailing edge, like the gutter's own label; digits that
+            // do not fit are clipped on the left, not pushed into the neighbouring column.
+            NSGraphicsContext.saveGraphicsState()
+            NSRect(x: column.x, y: 0, width: column.width, height: bounds.height).clip()
+            number.draw(at: CGPoint(x: column.x + column.width - size.width,
                                     y: max((bounds.height - size.height) / 2, 0)))
+            NSGraphicsContext.restoreGraphicsState()
+            if style.gutterWidth > 0, style.gutterHairlineWidth > 0 {
+                style.gutterHairlineColor.setFill()
+                NSRect(x: style.gutterWidth - style.gutterHairlineWidth, y: 0,
+                       width: style.gutterHairlineWidth, height: bounds.height).fill()
+            }
         }
         if drawsBorder {
             style.border.setFill()
