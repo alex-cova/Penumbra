@@ -191,9 +191,10 @@ final class IDEJavaResolutionIntegrationTests: XCTestCase {
         await workspace.openDocument(from: helper)
         await eventually("Helper.java should be clean") { rows(workspace, "Helper.java").isEmpty && recorder.publications["Helper.java"] != nil }
         await workspace.openDocument(from: main)
-        XCTAssertEqual(rows(workspace, "Main.java"), (Self.expectedMain + ["Cannot resolve type 'AlsoMissing'"]).sorted())
-        XCTAssertTrue(workspace.problems.staleSources(for: main.standardizedFileURL).isDisjoint(with: [IDEProblemsStore.inspectionSource])
-                      || workspace.problems.staleSources(for: main).isDisjoint(with: [IDEProblemsStore.inspectionSource]))
+        await eventually("Main.java did not return to current findings after switching tabs") {
+            rows(workspace, "Main.java") == (Self.expectedMain + ["Cannot resolve type 'AlsoMissing'"]).sorted()
+                && !workspace.problems.staleSources(for: main).contains(IDEProblemsStore.inspectionSource)
+        }
         assertNoFalsePositives(recorder)
     }
 

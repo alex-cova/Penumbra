@@ -60,6 +60,13 @@ final class IDELocalModelsStoreTests: XCTestCase {
         return directory
     }
 
+    func testSharedModelAndScratchDirectoriesStayInTheTestStore() throws {
+        let testStore = try XCTUnwrap(IDESharedServices.testStoreDirectory)
+        let store = IDELocalModelsStore.shared
+        XCTAssertEqual(store.modelsFolder, testStore.appendingPathComponent("Models", isDirectory: true))
+        XCTAssertEqual(IDEWorkspace.agentScratchFolder, testStore.appendingPathComponent("Scratch", isDirectory: true))
+    }
+
     func testInstalledModelsAreListedAndInspected() throws {
         try install("acme/tools-4bit")
         try install("acme/plain-4bit", template: plainTemplate)

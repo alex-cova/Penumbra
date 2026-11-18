@@ -13,7 +13,8 @@ extension IDEWorkspace: IDEAgentHost {
     /// Where Code works when no folder is open: a plain folder in Application Support the agent may use.
     static let agentScratchFolder: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let url = base.appendingPathComponent("com.umbra.editor/Scratch", isDirectory: true)
+        let support = IDESharedServices.testStoreDirectory ?? base.appendingPathComponent("com.umbra.editor", isDirectory: true)
+        let url = support.appendingPathComponent("Scratch", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()

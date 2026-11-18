@@ -4141,8 +4141,9 @@ public final class IDEWorkspace {
                       $0.url?.standardizedFileURL == url.standardizedFileURL
                   })
             else { return }
+            let fresh = await isFresh(document)
             var stale = self.problems.staleSources(for: url)
-            if await isFresh(document) {
+            if fresh {
                 stale.remove(source)
             } else {
                 stale.insert(source)

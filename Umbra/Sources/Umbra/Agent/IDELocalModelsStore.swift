@@ -9,7 +9,9 @@ import Observation
 @MainActor
 @Observable
 final class IDELocalModelsStore {
-    static let shared = IDELocalModelsStore()
+    static let shared = IDELocalModelsStore(
+        rootURL: IDESharedServices.testStoreDirectory?.appendingPathComponent("Models", isDirectory: true)
+    )
 
     /// What the details pane shows once a result is selected. `nil` fields are still loading or unknown.
     struct Detail: Equatable {
