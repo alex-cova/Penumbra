@@ -58,6 +58,13 @@ final class JavaDebugAdapterTests: XCTestCase {
             if process.isRunning { process.terminate() }
         }
 
+        func close() {
+            guard process.isRunning else { return }
+            _ = send("disconnect", timeout: 1)
+            try? input.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+        }
+
         func send(_ command: String, _ parameters: [String: Any] = [:], timeout: TimeInterval = 20) -> [String: Any] {
             condition.lock()
             let id = nextID
@@ -67,7 +74,11 @@ final class JavaDebugAdapterTests: XCTestCase {
             body["id"] = id
             body["command"] = command
             let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
-            input.fileHandleForWriting.write(data + Data([0x0A]))
+            do {
+                try input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))
+            } catch {
+                return ["ok": false, "error": error.localizedDescription]
+            }
             condition.lock()
             defer { condition.unlock() }
             let deadline = Date().addingTimeInterval(timeout)
@@ -112,6 +123,7 @@ final class JavaDebugAdapterTests: XCTestCase {
         }
     }
 
+    private var adapters: [Adapter] = []
     private var directory: URL!
     private var hello: URL!
     private var util: URL!
@@ -327,11 +339,15 @@ final class JavaDebugAdapterTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        for adapter in adapters { adapter.close() }
+        adapters.removeAll()
         if let directory { try? FileManager.default.removeItem(at: directory) }
     }
 
     private func launch(mainClass: String = "Hello") throws -> Adapter {
         let adapter = try Adapter(java: java, jar: adapterJar)
+        // The reader owns the adapter until stdout closes, so deinit cannot stop it on its own.
+        adapters.append(adapter)
         let reply = adapter.send("launch", [
             "java": java.path,
             "classpath": directory.appendingPathComponent("classes").path,

@@ -223,7 +223,8 @@ final class GhosttyPtyProcessTests: XCTestCase {
     func testExitCommandFiresOnce() {
         let sink = Sink()
         let process = startedProcess(sink: sink)
-        process.write(Data("exit\r".utf8))
+        // Bare exit inherits the last status, which can come from system login scripts.
+        process.write(Data("exit 0\r".utf8))
         XCTAssertEqual(waitForExit(sink), 0, "clean shell exit reports code 0")
         XCTAssertFalse(process.running)
         XCTAssertEqual(sink.exitCodes.count, 1, "exit must fire exactly once")
