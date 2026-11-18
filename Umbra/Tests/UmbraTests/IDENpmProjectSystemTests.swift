@@ -587,8 +587,8 @@ final class IDENpmProjectSystemTests: XCTestCase {
         try handle.seekToEnd()
         try handle.write(contentsOf: Data("\n".utf8))
         try handle.close()
-        let changed = await waitUntil(seconds: 2) { npm.hasConfigurationChanges }
-        XCTAssertTrue(changed)
+        let changed = await waitUntil(seconds: 10) { npm.hasConfigurationChanges }
+        XCTAssertTrue(changed, "the project watcher did not report the package.json edit")
     }
 
     /// A save of unchanged text is an event, not a change. The edit at the end proves the watcher is

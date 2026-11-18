@@ -19,10 +19,13 @@ capture() {
   mkdir -p "${out}"
 
   local support="${HOME}/Library/Application Support/com.umbra.editor"
+  # Record the contents. A missing root and an empty root both contain no user data.
+  : > "${out}/app-support.txt"
   if [ -d "${support}" ]; then
-    (cd "${support}" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256 2>/dev/null) > "${out}/app-support.txt" || true
-  else
-    echo "absent" > "${out}/app-support.txt"
+    (cd "${support}" && {
+      find . -mindepth 1 ! -type f -print
+      find . -type f -exec shasum -a 256 {} +
+    } | LC_ALL=C sort) > "${out}/app-support.txt"
   fi
 
   defaults export com.umbra.editor - 2>/dev/null > "${out}/defaults.plist" || echo "absent" > "${out}/defaults.plist"

@@ -25,6 +25,16 @@ cat > "${tmp}/bin/npm" <<'SH'
 exit 127
 SH
 "${root}/Scripts/ci-user-state-guard.sh" verify
+support="${HOME}/Library/Application Support/com.umbra.editor"
+mkdir -p "${support}"
+"${root}/Scripts/ci-user-state-guard.sh" verify
+touch "${support}/unexpected.json"
+if "${root}/Scripts/ci-user-state-guard.sh" verify > "${tmp}/diff" 2>&1; then
+  echo 'error: guard did not detect a new Application Support file' >&2
+  exit 1
+fi
+grep -q 'app-support.txt' "${tmp}/diff"
+rm "${support}/unexpected.json"
 rm "${tmp}/global/package"
 if "${root}/Scripts/ci-user-state-guard.sh" verify > "${tmp}/diff" 2>&1; then
   echo 'error: guard did not detect a change to the original npm tree' >&2

@@ -125,9 +125,10 @@ final class GraphQLSchemaStoreTests: XCTestCase {
             recorded.method == "POST" ? (405, "") : (200, GraphQLFixtures.sdl)
         }
         let store = GraphQLSchemaStore(session: GraphQLStubProtocol.makeSession(), cacheDirectory: nil)
-        let schema = try await store.refresh(request("https://api.test/schema"))
+        let address = request("https://api.test/fallback-schema")
+        let schema = try await store.refresh(address)
         XCTAssertNotNil(schema.types["User"])
-        XCTAssertEqual(GraphQLStubProtocol.recorded.map(\.method), ["POST", "GET"])
+        XCTAssertEqual(GraphQLStubProtocol.recorded.filter { $0.url == address.url }.map(\.method), ["POST", "GET"])
     }
 
     func testReadsAFileSchema() async throws {

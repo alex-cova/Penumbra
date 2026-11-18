@@ -565,6 +565,7 @@ public final class DebugAdapter {
             try {
                 while (true) {
                     EventSet set = queue.remove();
+                    boolean startup = false;
                     Stop stop = null;
                     List<Hit> hits = new ArrayList<>();
                     for (Event event : set) {
@@ -573,7 +574,11 @@ public final class DebugAdapter {
                             disconnectQuietly();
                             return;
                         }
-                        if (event instanceof ClassPrepareEvent prepared) {
+                        if (event instanceof VMStartEvent) {
+                            // The client owns the first resume. Resuming this event set too can
+                            // start the target before breakpoints are ready, or release a later stop.
+                            startup = true;
+                        } else if (event instanceof ClassPrepareEvent prepared) {
                             resolveBreakpoints(prepared.referenceType());
                         } else if (event instanceof StepEvent step) {
                             clearSmartStep();
@@ -600,7 +605,7 @@ public final class DebugAdapter {
                     } else if (!hits.isEmpty()) {
                         // Judged off this loop: a condition may run code in the target.
                         evaluations.submit(() -> judge(set, hits));
-                    } else {
+                    } else if (!startup) {
                         set.resume();
                     }
                 }

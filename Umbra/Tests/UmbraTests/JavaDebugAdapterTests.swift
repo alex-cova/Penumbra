@@ -410,6 +410,17 @@ final class JavaDebugAdapterTests: XCTestCase {
         XCTAssertEqual(tail.map(\.partial), [true, false], "The prompt goes out open, the rest of its line closes it")
     }
 
+    func testSuspendedLaunchWaitsForTheFirstResume() throws {
+        let adapter = try launch(mainClass: "Noise")
+        XCTAssertNil(adapter.nextEvent(timeout: 2), "the fixture exited before the debugger asked it to run")
+        XCTAssertFalse(adapter.outputLines.contains { $0.stream == "out" && $0.text.hasPrefix("out ") })
+
+        XCTAssertEqual(adapter.send("resume")["ok"] as? Bool, true)
+        let event = try XCTUnwrap(adapter.nextEvent(timeout: 15))
+        XCTAssertEqual(event["event"] as? String, "terminated")
+        XCTAssertTrue(adapter.outputLines.contains { $0.stream == "out" && $0.text == "out 0" })
+    }
+
     func testBreakpointBeforeTheClassLoadsThenStepIntoOutAndOver() throws {
         let adapter = try launch()
         // The program has not started, so `Hello` is not loaded: the breakpoint has to wait for it.

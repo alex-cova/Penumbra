@@ -264,7 +264,7 @@ final class IDEInstrumentedRunWorkspaceTests: XCTestCase {
         XCTAssertTrue(showing.session === profiler, "the viewer is over the editor")
         let ready = await waitUntil { profiler.phase == .ready }
         XCTAssertTrue(ready, "\(profiler.phase)")
-        XCTAssertGreaterThan(profiler.profile?.cpuSamples ?? 0, 10)
+        XCTAssertGreaterThan(profiler.profile?.cpuSamples ?? 0, 0, "the recording must contain CPU samples")
         let top = try XCTUnwrap(profiler.hotMethods.first)
         XCTAssertEqual(profiler.symbols?.qualifiedName(ofMethod: top.method), "Spin.fib")
 

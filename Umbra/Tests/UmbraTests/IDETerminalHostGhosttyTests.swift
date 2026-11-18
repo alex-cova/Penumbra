@@ -22,13 +22,25 @@ final class IDETerminalHostGhosttyTests: XCTestCase {
         return false
     }
 
-    func testShellStartsAndPromptAppears() {
+    private func installShellFixture() {
+        let preferences = IDEPreferences.shared
+        let original = preferences.terminalShell
+        var fixture = IDETerminalShellSettings()
+        fixture.command = "/bin/sh"
+        fixture.arguments = #"-c 'printf "umbra-terminal-ready:%s\n" "${PWD##*/}"; exec /bin/sleep 60'"#
+        fixture.loginShell = false
+        preferences.terminalShell = fixture
+        addTeardownBlock { @MainActor in preferences.terminalShell = original }
+    }
+
+    func testShellStartsAndRendersOutput() {
+        installShellFixture()
         let host = makeHost()
+        defer { host.terminateProcess() }
         host.setActive(true)
         XCTAssertTrue(
-            waitFor("prompt") { host.recentText(lines: 5)?.contains("%") == true },
-            "ghostty-backed host must reach a shell prompt")
-        host.terminateProcess()
+            waitFor("shell output") { host.recentText(lines: 5)?.contains("umbra-terminal-ready:") == true },
+            "the shell's output must reach the terminal")
     }
 
     func testMirrorTitleAndDirectoryCallbacks() {
@@ -57,11 +69,14 @@ final class IDETerminalHostGhosttyTests: XCTestCase {
     }
 
     func testRestartRecoversShell() {
+        installShellFixture()
         let host = makeHost()
+        defer { host.terminateProcess() }
+        host.workingDirectory = URL(fileURLWithPath: "/usr", isDirectory: true)
         host.setActive(true)
-        XCTAssertTrue(waitFor("prompt") { host.recentText(lines: 5)?.contains("%") == true })
+        XCTAssertTrue(waitFor("first shell") { host.recentText(lines: 5)?.contains("umbra-terminal-ready:usr") == true })
+        host.workingDirectory = URL(fileURLWithPath: "/Applications", isDirectory: true)
         host.restartProcess()
-        XCTAssertTrue(waitFor("prompt again") { host.recentText(lines: 5)?.contains("%") == true })
-        host.terminateProcess()
+        XCTAssertTrue(waitFor("restarted shell") { host.recentText(lines: 5)?.contains("umbra-terminal-ready:Applications") == true })
     }
 }
