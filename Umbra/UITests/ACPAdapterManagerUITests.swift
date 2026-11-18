@@ -270,10 +270,14 @@ final class ACPAdapterManagerUITests: XCTestCase {
         ui.clickAlert("OK")
         XCTAssertTrue(ui.text(containing: "Installed: 2.6.0").exists)
 
+        ui.closeSettingsIfOpen()
         ui.wait(ACPUIID.stop).click()
         let stopped = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: ui.element(ACPUIID.stop))
-        XCTAssertEqual(XCTWaiter.wait(for: [stopped], timeout: 15), .completed)
+        guard XCTWaiter.wait(for: [stopped], timeout: 15) == .completed else {
+            return XCTFail("The chat did not stop after closing Settings and clicking Stop")
+        }
 
+        ui.showAdapters()
         ui.reveal(ACPUIID.more(ACPUIID.codex)).click()
         ui.clickMenu("Remove Adapter…")
         XCTAssertTrue(ui.app.dialogs.staticTexts["Remove the Codex adapter?"].waitForExistence(timeout: 8))

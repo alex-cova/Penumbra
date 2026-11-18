@@ -239,6 +239,7 @@ struct IDEACPAdaptersSection: View {
             .menuIndicator(.hidden)
             .labelStyle(.iconOnly)
             .fixedSize()
+            .accessibilityLabel("More actions for \(entry.name)")
             .accessibilityIdentifier(IDEACPAccessibility.more(entry.id))
         }
         .font(IDEAppearance.Typography.caption)

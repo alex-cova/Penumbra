@@ -173,11 +173,16 @@ final class ACPUIHarness {
         wait(ACPUIID.adapters, timeout: 20)
     }
 
-    func showAgent() {
+    func closeSettingsIfOpen() {
         let settings = app.windows["Settings"]
-        if settings.exists {
-            settings.buttons[XCUIIdentifierCloseWindow].click()
-        }
+        guard settings.exists else { return }
+        settings.buttons[XCUIIdentifierCloseWindow].click()
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: settings)
+        XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed, "Settings did not close")
+    }
+
+    func showAgent() {
+        closeSettingsIfOpen()
         let toggle = wait(ACPUIID.agentToggle, timeout: 45)
         let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: toggle)
         XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 20), .completed, "Agent stayed disabled; the project folder did not open")
