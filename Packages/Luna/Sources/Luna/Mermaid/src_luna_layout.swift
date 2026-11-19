@@ -192,6 +192,7 @@ public func lunaLayoutSync(_ graph: ElkNode) throws -> ElkNode {
     if (out["luna.lanes"] as? Bool) == true {
         total = laneLayout(nodes: &nodes, edges: &compoundEdges, dir: rootDir, opt: opt)
     } else {
+        inheritCrossedDirections(nodes: &nodes, edges: compoundEdges)
         total = compoundLayout(nodes: &nodes, edges: &compoundEdges, rootDir: rootDir, opt: opt)
     }
     // Root padding becomes an offset.

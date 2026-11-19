@@ -151,6 +151,15 @@ public struct DiagramTheme: @unchecked Sendable, Equatable {
 
     public func nodeTextColor(for inlineStyles: [String: String]) -> BMColor {
         if let colorHex = inlineStyles["color"] { return BMColor(hex: colorHex) }
+        // A fill with no text color (`classDef x fill:#fde2c4`) is usually picked for a light
+        // page; on a dark theme the foreground is light too and the label vanishes. Use whichever
+        // of the theme's text and background colors reads better on that fill.
+        if let fillHex = inlineStyles["fill"] {
+            let fill = BMColor(hex: fillHex).hexString
+            let text = foreground.hexString
+            let page = background.hexString
+            return pickContrastingHex(on: fill, text, page) == text ? foreground : background
+        }
         return foreground
     }
 

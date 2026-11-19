@@ -1708,8 +1708,12 @@ private func reduceCrossings(_ g: inout LayeredGraph, nodes: [LayeredNode]) {
                     let from = Int(g.predStart[Int(g.order[i])])
                     let to = Int(g.predStart[Int(g.order[i]) + 1])
                     var mixed = false
-                    for k in (from + 1)..<to {
-                        if g.ETD[Int(g.predE[k])] != g.ETD[Int(g.predE[from])] { mixed = true }
+                    // A node can have no incoming edges (from == to); Pele's JS loop just runs
+                    // zero times there, but a Swift `(from + 1)..<to` range would trap.
+                    if to - from > 1 {
+                        for k in (from + 1)..<to {
+                            if g.ETD[Int(g.predE[k])] != g.ETD[Int(g.predE[from])] { mixed = true }
+                        }
                     }
                     if mixed {
                         let ids = (from..<to).map { Int(g.predE[$0]) }.sorted { g.ETD[$0] < g.ETD[$1] }

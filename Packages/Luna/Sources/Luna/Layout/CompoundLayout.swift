@@ -122,6 +122,33 @@ public func makeCompoundNode(w: Double, h: Double, parent: Int = -1) -> Compound
     CompoundNode(w: w, h: h, parent: parent)
 }
 
+/// Matches Mermaid: a group that an edge crosses (it holds one end but not the other) drops its
+/// own direction and lays out in its parent's. An edge to the group itself does not cross it.
+/// Port of Pele `inheritCrossedDirections` (`src/layout/compound.ts`).
+public func inheritCrossedDirections(nodes: inout [CompoundNode], edges: [CompoundEdge]) {
+    let n = nodes.count
+    // The groups holding node `i`, not `i` itself. Bounded by `n` steps, since groups that
+    // contain each other form a cycle that `compoundLayout` only breaks later.
+    func ancestors(_ i: Int) -> Set<Int> {
+        var out = Set<Int>()
+        var p = nodes[i].parent
+        while p >= 0 && p < n && out.count < n && out.insert(p).inserted {
+            p = nodes[p].parent
+        }
+        return out
+    }
+    var cache: [Int: Set<Int>] = [:]
+    for e in edges {
+        guard e.src >= 0, e.src < n, e.dst >= 0, e.dst < n else { continue }
+        let a = cache[e.src] ?? ancestors(e.src)
+        let b = cache[e.dst] ?? ancestors(e.dst)
+        cache[e.src] = a
+        cache[e.dst] = b
+        for g in a where !b.contains(g) { nodes[g].dir = nil }
+        for g in b where !a.contains(g) { nodes[g].dir = nil }
+    }
+}
+
 private func startSide(_ dir: CompoundDir) -> CompoundSide {
     switch dir {
     case .tb: return .top

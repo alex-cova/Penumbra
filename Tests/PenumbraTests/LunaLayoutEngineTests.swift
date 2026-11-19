@@ -70,6 +70,63 @@ final class LunaLayoutEngineTests: XCTestCase {
         for e in edges { XCTAssertFalse(e.route.isEmpty) }
     }
 
+    func testEmptySiblingSubgraphDoesNotTrapCrossingCount() throws {
+        // An edge into a nested group beside an empty subgraph leaves a node with no
+        // incoming edges in a later layer; the crossing count used to trap on
+        // `(from + 1)..<to` with from == to.
+        let positioned = try MermaidRenderer.layout("""
+            flowchart LR
+                subgraph outer["Outer"]
+                    subgraph left["Left"]
+                        b["b"]
+                    end
+                    subgraph empty["Empty"]
+                    end
+                end
+                a --> b
+            """)
+        XCTAssertGreaterThan(positioned.width, 0)
+        XCTAssertGreaterThan(positioned.height, 0)
+    }
+
+    /// Whether `a` and `b` sit side by side (a row) rather than stacked (a column).
+    private func sideBySide(_ source: String, _ a: String, _ b: String) throws -> Bool {
+        let nodes = try XCTUnwrap(MermaidRenderer.layout(source).flowchartNodes)
+        let na = try XCTUnwrap(nodes.first { $0.id == a })
+        let nb = try XCTUnwrap(nodes.first { $0.id == b })
+        return abs(na.y - nb.y) < abs(na.x - nb.x)
+    }
+
+    func testSubgraphLinkedToTheOutsideInheritsTheParentDirection() throws {
+        // Mermaid: "If any of a subgraph's nodes are linked to the outside, subgraph direction
+        // will be ignored" (Pele `inheritCrossedDirections`). Unlinked nodes share a rank, so
+        // TB puts them in a row and the inherited LR stacks them. The edges touch only `a`, so
+        // `b` and `c`, which have none, show the group's direction.
+        let group = "flowchart LR\n  x\n  subgraph s\n    direction TB\n    a\n    b\n    c\n  end\n"
+        XCTAssertTrue(try sideBySide(group, "b", "c"), "no edge: TB kept")
+        XCTAssertTrue(try sideBySide(group + "  x --> s\n", "b", "c"), "edge to the group itself: TB kept")
+        XCTAssertFalse(try sideBySide(group + "  x --> a\n", "b", "c"), "edge to a node inside: LR inherited")
+        XCTAssertFalse(try sideBySide(group + "  a --> x\n", "b", "c"), "edge from a node inside: LR inherited")
+    }
+
+    func testCrossedOuterGroupInheritsButInnerGroupKeepsItsDirection() throws {
+        // The edge into `inner` crosses `outer`'s border only, so `inner` keeps TB.
+        let source = """
+            flowchart LR
+              x
+              subgraph outer
+                direction TB
+                subgraph inner
+                  direction TB
+                  a
+                  b
+                end
+              end
+              x --> inner
+            """
+        XCTAssertTrue(try sideBySide(source, "a", "b"))
+    }
+
     // MARK: - Shape spans
 
     func testDiamondSpan() {

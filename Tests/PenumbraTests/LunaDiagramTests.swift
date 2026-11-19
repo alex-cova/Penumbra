@@ -232,6 +232,19 @@ final class LunaDiagramTests: XCTestCase {
         """)
     ]
 
+    /// `classDef x fill:#fde2c4` with no `color` kept the dark theme's light text on the light
+    /// fill, which made the label unreadable. The label takes whichever theme color reads better.
+    func testNodeTextContrastsWithACustomFillThatSetsNoColor() {
+        let dark = DiagramTheme.zincDark
+        XCTAssertEqual(dark.nodeTextColor(for: ["fill": "#fde2c4"]).hexString, dark.background.hexString)
+        XCTAssertEqual(dark.nodeTextColor(for: ["fill": "#202024"]).hexString, dark.foreground.hexString)
+        XCTAssertEqual(dark.nodeTextColor(for: [:]).hexString, dark.foreground.hexString)
+        XCTAssertEqual(dark.nodeTextColor(for: ["fill": "#fde2c4", "color": "#ff0000"]).hexString, "#FF0000")
+        let light = DiagramTheme.zincLight
+        XCTAssertEqual(light.nodeTextColor(for: ["fill": "#fde2c4"]).hexString, light.foreground.hexString)
+        XCTAssertEqual(light.nodeTextColor(for: ["fill": "#1e1e2e"]).hexString, light.background.hexString)
+    }
+
     func testDetectsAndParsesAllNewDiagramTypes() throws {
         for (expected, source) in fixtures {
             let graph = try MermaidRenderer.parse(source)
