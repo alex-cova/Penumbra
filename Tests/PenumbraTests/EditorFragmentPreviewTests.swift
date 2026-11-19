@@ -306,6 +306,31 @@ final class EditorFragmentPreviewTests: XCTestCase {
         XCTAssertTrue(preview.isShowing)
     }
 
+    /// A host view laid over the editor (Umbra's Markdown preview, JSON diagram, CSV table) does not
+    /// stop the minimap's tracking area, so the hover must check what is actually on top.
+    func testAViewCoveringTheEditorSuppressesThePreview() throws {
+        let textView = makeTextView(text: tallDocument, showMinimap: true)
+        let window = try XCTUnwrap(textView.window)
+        let container = NSView(frame: textView.frame)
+        window.contentView = container
+        container.addSubview(textView)
+        let cover = NSView(frame: container.bounds)
+        container.addSubview(cover)
+        textView.layoutIfNeeded()
+
+        let minimap = textView.minimapViewForTesting
+        let preview = textView.editorFragmentPreviewForTesting
+        preview.hoverDelay = 0
+        let below = CGPoint(x: minimap.bounds.midX, y: minimap.bounds.height - 4)
+        XCTAssertGreaterThan(below.y, minimap.debugViewportIndicatorFrame.maxY)
+        minimap.mouseMoved(with: mouseEvent(.mouseMoved, at: below, in: minimap))
+        XCTAssertFalse(preview.isShowing)
+
+        cover.removeFromSuperview()
+        minimap.mouseMoved(with: mouseEvent(.mouseMoved, at: below, in: minimap))
+        XCTAssertTrue(preview.isShowing)
+    }
+
     func testTurningThePreviewOffIgnoresHover() {
         let textView = makeTextView(text: tallDocument)
         let vertical = textView.scrollerOverlayForTesting.verticalScroller

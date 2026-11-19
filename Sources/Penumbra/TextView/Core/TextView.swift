@@ -3788,6 +3788,30 @@ extension TextView {
     }
 
     func editorFragmentHit(at point: CGPoint) -> EditorFragmentHit? {
+        let hit = uncoveredEditorFragmentHit(at: point)
+        // Tracking areas keep reporting the pointer while a host view covers the editor (Markdown
+        // preview, JSON diagram, CSV table…), so only show code the user can actually point at.
+        if hit != nil, isCoveredByAnotherView(at: point) {
+            return nil
+        }
+        return hit
+    }
+
+    /// True when the topmost view under `point` (in this view's coordinates) is not part of this
+    /// editor. Runs only over the minimap or scrollbar, never per keystroke.
+    private func isCoveredByAnotherView(at point: CGPoint) -> Bool {
+        guard let window, let contentView = window.contentView else {
+            return false
+        }
+        let windowPoint = convert(point, to: nil)
+        let hitPoint = contentView.superview?.convert(windowPoint, from: nil) ?? windowPoint
+        guard let topmost = contentView.hitTest(hitPoint) else {
+            return false
+        }
+        return !topmost.isDescendant(of: self)
+    }
+
+    private func uncoveredEditorFragmentHit(at point: CGPoint) -> EditorFragmentHit? {
         if isMinimapShown, !minimapView.isHidden, minimapView.frame.contains(point) {
             let local = minimapView.convert(point, from: self)
             guard let sample = minimapView.editorFragmentDocumentY(atLocalPoint: local) else {
