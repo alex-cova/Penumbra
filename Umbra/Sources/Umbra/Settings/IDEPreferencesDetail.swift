@@ -40,6 +40,8 @@ struct IDEPreferencesDetail: View {
             IDEPreferencesGeneralPane(preferences: preferences)
         case .editor:
             IDEPreferencesEditorPane(preferences: preferences)
+        case .markdown:
+            IDEPreferencesMarkdownPane(preferences: preferences)
         case .saving:
             IDEPreferencesSavingPane(preferences: preferences)
         case .appearance:

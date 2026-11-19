@@ -3197,6 +3197,7 @@ public final class IDEWorkspace {
             if let controller = host.intelligenceController {
                 preferences.apply(to: controller)
             }
+            host.markdownPreviewController.options = preferences.markdownPreview.options
         }
         applyCodeInsightPreferences()
         if let textView = adapter?.textView {
@@ -3682,8 +3683,11 @@ public final class IDEWorkspace {
         }
         host.markdownPreviewController.showsAppearanceToggle = true
         host.markdownPreviewController.appearanceOverride = IDEMarkdownPreviewAppearance.stored
+        host.markdownPreviewController.options = preferences.markdownPreview.options
         host.markdownPreviewController.onAppearanceOverrideChange = { [weak self] appearance in
             IDEMarkdownPreviewAppearance.stored = appearance
+            // Settings ▸ Markdown ▸ Appearance shows the same choice.
+            IDEPreferences.shared.markdownPreviewAppearance = appearance
             guard let self else { return }
             IDEWindowRegistry.shared.applyMarkdownPreviewAppearanceToAllWindows(including: self)
         }

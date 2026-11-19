@@ -6,7 +6,15 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
 
     // Split into groups: one 22-modifier chain exceeds the type checker's time limit.
     func body(content: Content) -> some View {
-        smartKeyChanges(codeInsightChanges(modeChanges(displayChanges(editingChanges(appearanceChanges(content))))))
+        markdownChanges(smartKeyChanges(codeInsightChanges(modeChanges(displayChanges(editingChanges(appearanceChanges(content)))))))
+    }
+
+    private func markdownChanges(_ view: some View) -> some View {
+        view
+            .onChange(of: preferences.markdownPreview) { applyLivePreferences() }
+            .onChange(of: preferences.markdownPreviewAppearance) {
+                IDEWindowRegistry.shared.applyMarkdownPreviewAppearanceToAllWindows(including: workspace)
+            }
     }
 
     private func smartKeyChanges(_ view: some View) -> some View {

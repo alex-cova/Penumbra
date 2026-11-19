@@ -46,6 +46,16 @@ public final class MarkdownPreviewView: NSView {
         didSet { scheduleRelayout() }
     }
 
+    /// Whether clicking a rendered mermaid diagram opens it at full size. The preview fits each
+    /// diagram to the column, which leaves a large one unreadable.
+    public var opensDiagramsOnClick = true {
+        didSet { updateDiagramHitAreas() }
+    }
+
+    /// Called with the diagram's mermaid source when one is clicked. `nil` opens Penumbra's
+    /// zoomable viewer window in the preview's colors.
+    public var diagramOpenHandler: ((_ source: String) -> Void)?
+
     public var usesMetalRendering: Bool {
         get { useMetal }
         set {
@@ -83,6 +93,8 @@ public final class MarkdownPreviewView: NSView {
         let documentView = MarkdownPreviewDocumentContainerView()
         documentView.addSubview(contentView)
         scrollView.documentView = documentView
+        documentContainer = documentView
+        documentView.onClick = { [weak self] point in self?.diagramClicked(at: point) }
 
         addSubview(scrollView)
         // The Metal canvas is a fixed viewport-sized overlay (not part of the scrolling document
@@ -117,6 +129,138 @@ public final class MarkdownPreviewView: NSView {
 
     @objc private func scrollViewDidScroll() {
         metalRenderer.setVisibleRect(scrollView.documentVisibleRect)
+    }
+
+    private weak var documentContainer: MarkdownPreviewDocumentContainerView?
+
+    /// The source of the rendered mermaid diagram at `point` (document coordinates), if any.
+    /// A diagram still rendering, or one that failed, is not a target.
+    func diagramSource(at point: CGPoint) -> String? {
+        for blockLayout in contentView.layout.blockLayouts where blockLayout.frame.contains(point) {
+            if case .mermaid(let source) = blockLayout.block.kind,
+               rasterImage(forMermaidSource: source) != nil {
+                return source
+            }
+            return nil
+        }
+        return nil
+    }
+
+    private func rasterImage(forMermaidSource source: String) -> CGImage? {
+        guard let blocks = document?.blocks else { return nil }
+        for (index, block) in blocks.enumerated() {
+            if case .mermaid(let candidate) = block.kind, candidate == source, let image = rasterImages[index] {
+                return image
+            }
+        }
+        return nil
+    }
+
+    /// `point` is in document coordinates (the container and content view share them).
+    private func diagramClicked(at point: CGPoint) {
+        guard opensDiagramsOnClick, let source = diagramSource(at: point) else { return }
+        openDiagram(source: source)
+    }
+
+    // MARK: - Reveal animation
+
+    static let revealAnimationKey = "penumbra.markdownPreview.reveal"
+    /// The scale the page starts at when it appears: larger than the page, which settles down
+    /// to full size (Keynote's "Scale Big").
+    static let revealStartScale: CGFloat = 1.15
+
+    /// Plays the preview's entrance: the page fades in while it shrinks from
+    /// ``revealStartScale`` down to full size around its center, with a slight spring. With
+    /// `reduceMotion` it only fades. The model values stay at full opacity and no transform, so
+    /// the page is correct the moment the animation ends or is removed.
+    public func playRevealAnimation(reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) {
+        guard let layer else { return }
+        alphaValue = 1
+        layer.removeAnimation(forKey: Self.revealAnimationKey)
+
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+
+        let group = CAAnimationGroup()
+        if reduceMotion {
+            fade.duration = 0.18
+            group.animations = [fade]
+            group.duration = fade.duration
+        } else {
+            fade.duration = 0.22
+            // AppKit layers anchor at their corner, so the scale is built around the center.
+            let center = CGPoint(x: layer.bounds.midX, y: layer.bounds.midY)
+            var start = CATransform3DMakeTranslation(center.x, center.y, 0)
+            start = CATransform3DScale(start, Self.revealStartScale, Self.revealStartScale, 1)
+            start = CATransform3DTranslate(start, -center.x, -center.y, 0)
+            let grow = CASpringAnimation(keyPath: "transform")
+            grow.fromValue = NSValue(caTransform3D: start)
+            grow.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+            grow.mass = 1
+            grow.stiffness = 220
+            grow.damping = 20
+            grow.initialVelocity = 0
+            grow.duration = grow.settlingDuration
+            group.animations = [fade, grow]
+            group.duration = max(fade.duration, grow.duration)
+        }
+        layer.add(group, forKey: Self.revealAnimationKey)
+    }
+
+    /// Hides the page until ``playRevealAnimation(reduceMotion:)``, so the previous document is
+    /// not shown before the entrance.
+    func prepareForReveal() {
+        layer?.removeAnimation(forKey: Self.revealAnimationKey)
+        alphaValue = 0
+    }
+
+    /// Plays the entrance at the end of the next layout pass, the one that lays out the
+    /// document just installed.
+    func revealAfterNextLayout() {
+        revealsAfterLayout = true
+        needsLayout = true
+    }
+
+    private var revealsAfterLayout = false
+    /// Test-only hook (`@testable import` visibility).
+    var debugRevealsAfterLayout: Bool { revealsAfterLayout }
+
+    private func revealIfLaidOut() {
+        guard revealsAfterLayout, document != nil else { return }
+        revealsAfterLayout = false
+        playRevealAnimation()
+    }
+
+    /// Drops a pending or running entrance and shows the page as it is.
+    func cancelReveal() {
+        revealsAfterLayout = false
+        layer?.removeAnimation(forKey: Self.revealAnimationKey)
+        alphaValue = 1
+    }
+
+    /// Opens `source` the way a click on its diagram does.
+    public func openDiagram(source: String) {
+        if let diagramOpenHandler {
+            diagramOpenHandler(source)
+        } else {
+            MermaidDiagramViewer.show(source: source, context: style.mermaidRenderingContext)
+        }
+    }
+
+    /// Pointing-hand cursor and a tooltip over each rendered diagram.
+    private func updateDiagramHitAreas() {
+        guard let documentContainer else { return }
+        var rects: [CGRect] = []
+        if opensDiagramsOnClick {
+            for blockLayout in contentView.layout.blockLayouts {
+                if case .mermaid(let source) = blockLayout.block.kind, rasterImage(forMermaidSource: source) != nil {
+                    rects.append(blockLayout.frame)
+                }
+            }
+        }
+        documentContainer.setDiagramRects(rects)
     }
 
     @available(*, unavailable)
@@ -168,6 +312,7 @@ public final class MarkdownPreviewView: NSView {
         contentView.highlightedCode = highlightedCode
         contentView.needsDisplay = true
         layoutMetalCanvasFrame()
+        updateDiagramHitAreas()
 
         let shouldUseMetal = prefersMetal && MetalContext.isAvailable
         useMetal = shouldUseMetal
@@ -227,6 +372,7 @@ public final class MarkdownPreviewView: NSView {
         let width = max(bounds.width, 1)
         if let applied = appliedLayoutKey, applied.generation == inputGeneration, applied.width == width {
             metalRenderer.presentIfNeeded()
+            revealIfLaidOut()
             return
         }
         let layout = computeLayout(document: document, width: width)
@@ -238,6 +384,7 @@ public final class MarkdownPreviewView: NSView {
         // pass is the reliable synchronous trigger; scroll/async-raster updates outside of layout
         // fall back to the canvas's own deferred present.
         metalRenderer.presentIfNeeded()
+        revealIfLaidOut()
     }
 
     public override func viewDidChangeBackingProperties() {
@@ -277,7 +424,7 @@ public final class MarkdownPreviewView: NSView {
             let heights = Self.rasterHeights(
                 for: document,
                 width: width,
-                contentInset: style.contentInset,
+                contentInset: style.horizontalInset(forWidth: width),
                 rasterImages: raster.images,
                 rasterNaturalSizes: raster.naturalSizes
             )
@@ -370,7 +517,7 @@ public final class MarkdownPreviewView: NSView {
         Self.rasterHeights(
             for: document,
             width: width,
-            contentInset: style.contentInset,
+            contentInset: style.horizontalInset(forWidth: width),
             rasterImages: rasterImages,
             rasterNaturalSizes: rasterNaturalSizes
         )
@@ -415,8 +562,60 @@ public final class MarkdownPreviewView: NSView {
 /// document view would otherwise open the scroll view at the bottom of the document and measure
 /// `documentVisibleRect` from the bottom, handing the Metal renderer the wrong tiles.
 @MainActor
-private final class MarkdownPreviewDocumentContainerView: NSView {
+private final class MarkdownPreviewDocumentContainerView: NSView, NSViewToolTipOwner {
     override var isFlipped: Bool { true }
+
+    static let diagramToolTip = "Click to open the diagram at full size"
+
+    /// Diagrams that open on click. Kept here, not on the content view, because the content
+    /// view is hidden while Metal draws and a hidden view gets no cursor rects or tooltips.
+    private var diagramRects: [CGRect] = []
+
+    func setDiagramRects(_ rects: [CGRect]) {
+        guard rects != diagramRects else { return }
+        diagramRects = rects
+        removeAllToolTips()
+        for rect in rects {
+            // `addToolTip` does not retain its owner. A bridged string owner was freed at once,
+            // and AppKit messaged the dead object when the tooltip timer fired (a crash on
+            // hover). This view outlives its own tooltips.
+            addToolTip(rect, owner: self, userData: nil)
+        }
+        window?.invalidateCursorRects(for: self)
+    }
+
+    func view(
+        _ view: NSView,
+        stringForToolTip tag: NSView.ToolTipTag,
+        point: NSPoint,
+        userData data: UnsafeMutableRawPointer?
+    ) -> String {
+        Self.diagramToolTip
+    }
+
+    override func resetCursorRects() {
+        for rect in diagramRects {
+            addCursorRect(rect, cursor: .pointingHand)
+        }
+    }
+
+    /// A single click that ends where it started (in document coordinates). Clicks reach this
+    /// view whether the content view is showing (it passes them up) or hidden behind the Metal
+    /// canvas (which ignores hits).
+    var onClick: ((CGPoint) -> Void)?
+    private var mouseDownPoint: CGPoint?
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownPoint = event.clickCount == 1 ? convert(event.locationInWindow, from: nil) : nil
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { mouseDownPoint = nil }
+        guard let start = mouseDownPoint else { return }
+        let end = convert(event.locationInWindow, from: nil)
+        guard hypot(end.x - start.x, end.y - start.y) <= 4 else { return }
+        onClick?(end)
+    }
 }
 
 @MainActor

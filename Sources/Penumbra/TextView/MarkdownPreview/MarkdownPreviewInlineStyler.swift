@@ -14,11 +14,13 @@ enum MarkdownPreviewInlineStyler {
         baseFont: NSFont,
         color: NSColor,
         alignment: NSTextAlignment = .natural,
+        firstLineIndent: CGFloat = 0,
         style: MarkdownPreviewStyle
     ) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = style.lineSpacing
         paragraphStyle.alignment = alignment
+        paragraphStyle.firstLineHeadIndent = firstLineIndent
 
         let result = NSMutableAttributedString()
         for run in text.runs {

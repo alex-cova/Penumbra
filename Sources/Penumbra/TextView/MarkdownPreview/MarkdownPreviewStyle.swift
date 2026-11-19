@@ -1,4 +1,5 @@
 @preconcurrency import AppKit
+import CoreText
 
 /// A fixed light or dark look for the markdown preview, independent of the editor theme.
 public enum MarkdownPreviewAppearance: String, Sendable {
@@ -57,6 +58,20 @@ public struct MarkdownPreviewStyle: Equatable {
     /// Vertical gap between consecutive footnote entries.
     public var footnoteSpacing: CGFloat
 
+    /// Alignment of heading text.
+    public var headingAlignment: NSTextAlignment = .natural
+    /// Prefixes headings with outline numbers (`1`, `1.1`, `1.1.1`). A document's only top-level
+    /// heading is taken as its title and left unnumbered.
+    public var numbersHeadings = false
+    /// First-line indent of a paragraph that directly follows another paragraph, as in books.
+    /// 0 turns it off.
+    public var paragraphIndent: CGFloat = 0
+    /// Justifies paragraph text (the last line of each paragraph stays ragged).
+    public var justifiesParagraphs = false
+    /// Longest line of body text, in average characters of `bodyFont`. The text column is
+    /// centered in a wider preview. `nil` uses the full width.
+    public var maxLineLength: Int?
+
     public init(
         bodyFont: NSFont = .systemFont(ofSize: 14),
         bodyColor: NSColor = .labelColor,
@@ -113,6 +128,30 @@ public struct MarkdownPreviewStyle: Equatable {
         self.footnoteReferenceBaselineRatio = footnoteReferenceBaselineRatio
         self.footnoteMarkerWidth = footnoteMarkerWidth
         self.footnoteSpacing = footnoteSpacing
+    }
+
+    /// Left (and right) margin of the text column in a preview `width` points wide: `contentInset`,
+    /// or more when ``maxLineLength`` narrows the column, which then sits centered.
+    public func horizontalInset(forWidth width: CGFloat) -> CGFloat {
+        guard let maxLineLength, maxLineLength > 0 else { return contentInset }
+        let column = CGFloat(maxLineLength) * averageCharacterWidth
+        return max(contentInset, ((width - column) / 2).rounded(.down))
+    }
+
+    /// Width of the text column in a preview `width` points wide.
+    public func contentWidth(forWidth width: CGFloat) -> CGFloat {
+        max(width - horizontalInset(forWidth: width) * 2, 1)
+    }
+
+    /// Average advance of `bodyFont` over ordinary prose, which is what a "characters per line"
+    /// limit means.
+    var averageCharacterWidth: CGFloat {
+        let sample = "The quick brown fox jumps over the lazy dog, and then rests a while."
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: sample, attributes: [.font: bodyFont])
+        )
+        let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        return max(width / CGFloat(sample.count), 1)
     }
 
     /// Font used for a footnote entry's body text (`bodyFont` scaled by `footnoteFontScale`).

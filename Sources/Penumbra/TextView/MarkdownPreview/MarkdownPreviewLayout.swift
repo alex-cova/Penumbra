@@ -130,14 +130,19 @@ struct MarkdownPreviewLayout: Equatable {
         defer { cache.end() }
         let fonts = Fonts(style: style)
         let inset = style.contentInset
+        // The text column: the full width, or centered and narrower under a line-length limit.
+        let columnInset = style.horizontalInset(forWidth: width)
+        let headingNumbers = style.numbersHeadings ? Self.headingNumbers(for: document.blocks) : [:]
         var y = inset
         var layouts: [MarkdownPreviewBlockLayout] = []
         layouts.reserveCapacity(document.blocks.count)
+        var previous: MarkdownPreviewBlock?
 
         for (index, block) in document.blocks.enumerated() {
+            defer { previous = block }
             let quoteOffset = CGFloat(block.quoteDepth) * style.quoteIndent
-            let contentX = inset + quoteOffset
-            let contentWidth = max(width - inset * 2 - quoteOffset, 1)
+            let contentX = columnInset + quoteOffset
+            let contentWidth = max(width - columnInset * 2 - quoteOffset, 1)
 
             var fixedHeight: CGFloat?
             var code: NSAttributedString?
@@ -147,11 +152,29 @@ struct MarkdownPreviewLayout: Equatable {
             case .codeBlock: code = highlightedCode[index]
             default: break
             }
+            let number = headingNumbers[index]
+            // Book-style: a paragraph is indented only when it continues another one.
+            var indent: CGFloat = 0
+            if style.paragraphIndent > 0, case .paragraph = block.kind, let previous,
+               case .paragraph = previous.kind, previous.quoteDepth == block.quoteDepth {
+                indent = style.paragraphIndent
+            }
+            // The number and indent come from the block's neighbours, not its content, so they
+            // are part of what the cached measurement depends on.
+            var content = block.resolvedContentHash
+            if number != nil || indent > 0 {
+                var hasher = Hasher()
+                hasher.combine(content)
+                hasher.combine(number)
+                hasher.combine(indent)
+                content = hasher.finalize()
+            }
             let key = MarkdownPreviewMeasureCache.Key(
-                content: block.resolvedContentHash, width: contentWidth, fixedHeight: fixedHeight, code: code.map(ObjectIdentifier.init)
+                content: content, width: contentWidth, fixedHeight: fixedHeight, code: code.map(ObjectIdentifier.init)
             )
             let entry = cache.entry(for: key) {
-                measure(block.kind, width: contentWidth, fixedHeight: fixedHeight, code: code, style: style, fonts: fonts)
+                measure(block.kind, width: contentWidth, fixedHeight: fixedHeight, code: code, style: style, fonts: fonts,
+                        headingNumber: number, firstLineIndent: indent)
             }
 
             let origin = CGPoint(x: contentX, y: y)
@@ -169,8 +192,33 @@ struct MarkdownPreviewLayout: Equatable {
 
         y += inset
         let contentSize = CGSize(width: width, height: max(y, inset * 2))
-        let decorations = quoteDecorations(for: layouts, style: style, width: width, inset: inset)
+        let decorations = quoteDecorations(for: layouts, style: style, width: width, inset: columnInset)
         return MarkdownPreviewLayout(blockLayouts: layouts, quoteDecorations: decorations, contentSize: contentSize)
+    }
+
+    /// Outline numbers for the headings in `blocks`, by block index: `1`, `1.1`, `1.1.1`. A level
+    /// skipped on the way down shows as 0. When the shallowest level appears once and deeper
+    /// headings follow, it is the document's title: it stays unnumbered and numbering starts one
+    /// level below.
+    static func headingNumbers(for blocks: [MarkdownPreviewBlock]) -> [Int: String] {
+        var levels: [Int] = []
+        for block in blocks {
+            if case .heading(let level, _) = block.kind { levels.append(min(max(level, 1), 6)) }
+        }
+        guard let top = levels.min() else { return [:] }
+        let isTitle = levels.filter { $0 == top }.count == 1 && levels.contains { $0 > top }
+        let base = isTitle ? top + 1 : top
+        var counters = [Int](repeating: 0, count: 8)
+        var numbers: [Int: String] = [:]
+        for (index, block) in blocks.enumerated() {
+            guard case .heading(let rawLevel, _) = block.kind else { continue }
+            let level = min(max(rawLevel, 1), 6)
+            guard level >= base else { continue }
+            counters[level] += 1
+            for deeper in (level + 1)..<counters.count { counters[deeper] = 0 }
+            numbers[index] = (base...level).map { String(counters[$0]) }.joined(separator: ".")
+        }
+        return numbers
     }
 
     /// Fonts derived from the style, converted once per layout instead of once per block.
@@ -200,18 +248,27 @@ struct MarkdownPreviewLayout: Equatable {
         fixedHeight: CGFloat?,
         code: NSAttributedString?,
         style: MarkdownPreviewStyle,
-        fonts: Fonts
+        fonts: Fonts,
+        headingNumber: String? = nil,
+        firstLineIndent: CGFloat = 0
     ) -> MarkdownPreviewMeasureCache.Entry {
         typealias Entry = MarkdownPreviewMeasureCache.Entry
         switch kind {
         case .heading(let level, let text):
             let font = fonts.heading(level: level) ?? style.bodyFont
-            let typeset = typesetInline(text, font: font, color: style.bodyColor, style: style, width: contentWidth)
+            let numbered = headingNumber.map { AttributedString("\($0)  ") + text } ?? text
+            let typeset = typesetInline(
+                numbered, font: font, color: style.bodyColor, style: style, width: contentWidth,
+                alignment: style.headingAlignment
+            )
             let frame = CGRect(x: 0, y: 0, width: contentWidth, height: typeset.height)
             return Entry(size: frame.size, textFrames: [frame], markerFrames: [], text: MarkdownPreviewBlockText(frames: [typeset.frame]))
 
         case .paragraph(let text):
-            let typeset = typesetInline(text, font: style.bodyFont, color: style.bodyColor, style: style, width: contentWidth)
+            let typeset = typesetInline(
+                text, font: style.bodyFont, color: style.bodyColor, style: style, width: contentWidth,
+                alignment: style.justifiesParagraphs ? .justified : .natural, firstLineIndent: firstLineIndent
+            )
             let frame = CGRect(x: 0, y: 0, width: contentWidth, height: typeset.height)
             return Entry(size: frame.size, textFrames: [frame], markerFrames: [], text: MarkdownPreviewBlockText(frames: [typeset.frame]))
 
@@ -345,9 +402,13 @@ struct MarkdownPreviewLayout: Equatable {
         font: NSFont,
         color: NSColor,
         style: MarkdownPreviewStyle,
-        width: CGFloat
+        width: CGFloat,
+        alignment: NSTextAlignment = .natural,
+        firstLineIndent: CGFloat = 0
     ) -> (frame: CTFrame, height: CGFloat) {
-        let attributed = MarkdownPreviewInlineStyler.attributedString(text, baseFont: font, color: color, style: style)
+        let attributed = MarkdownPreviewInlineStyler.attributedString(
+            text, baseFont: font, color: color, alignment: alignment, firstLineIndent: firstLineIndent, style: style
+        )
         let framesetter = CTFramesetterCreateWithAttributedString(attributed)
         var fitRange = CFRange()
         let size = CTFramesetterSuggestFrameSizeWithConstraints(

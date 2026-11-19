@@ -40,6 +40,10 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
         id: "appearance", title: "Appearance", symbol: "paintbrush",
         searchTerms: ["ui theme", "color scheme", "appearance", "visual studio", "resharper", "umbra light", "interface", "ui font", "ui font size", "interface font", "sf compact", "welcome", "background", "starfield", "deep space", "stars", "animation"]
     )
+    static let markdown = IDEPreferencesDomain(
+        id: "markdown", title: "Markdown", symbol: "doc.richtext",
+        searchTerms: ["markdown", "preview", "reading", "font", "font size", "typeface", "serif", "new york", "line spacing", "line length", "characters per line", "measure", "headings", "heading alignment", "centered", "number headings", "numbered", "outline", "indent paragraphs", "justify", "tables", "table columns", "padded", "compact", "light mode", "dark mode", "appearance", "diagrams", "mermaid", "export", "animation", "animate", "fade", "scale"]
+    )
     static let terminal = IDEPreferencesDomain(
         id: "terminal", title: "Terminal", symbol: "apple.terminal",
         searchTerms: ["ghostty", "shell", "zsh", "bash", "login shell", "command", "arguments", "environment", "env", "term", "colorterm", "starting folder", "working-directory", "font-family", "font-size", "adjust-cell-height", "padding", "window-padding", "palette", "ansi", "colors", "foreground", "background", "selection", "cursor", "cursor-style", "cursor-style-blink", "blink", "faint-opacity", "scrollback", "scrollback-limit", "option as meta", "macos-option-as-alt", "alt", "bell", "bell-features", "copy-on-select", "copy on select", "mouse-hide-while-typing", "hide mouse", "scroll-to-bottom", "paste", "clipboard-paste-protection", "clipboard", "clipboard-read", "clipboard-write", "osc 52", "notifications", "desktop-notifications", "osc 9", "title", "title-report", "security"]
@@ -53,7 +57,7 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
     )
 
     /// The pages before the language modules' and the one after them.
-    static let leading: [IDEPreferencesDomain] = [.general, .editor, .saving, .appearance, .terminal, .project]
+    static let leading: [IDEPreferencesDomain] = [.general, .editor, .markdown, .saving, .appearance, .terminal, .project]
 
     /// Built-in pages with `modules`' in the middle, in the order they have always had.
     static func ordered(with modules: [IDEPreferencesDomain]) -> [IDEPreferencesDomain] {

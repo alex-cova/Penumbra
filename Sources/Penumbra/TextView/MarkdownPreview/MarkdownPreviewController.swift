@@ -93,7 +93,7 @@ public final class MarkdownPreviewController: NSObject {
     public init(textView: TextView) {
         self.textView = textView
         super.init()
-        previewView.style = MarkdownPreviewStyle.from(textView: textView)
+        previewView.style = makeStyle(for: textView)
         previewView.usesMetalRendering = textView.isMetalRenderingActive
 
         containerStack.translatesAutoresizingMaskIntoConstraints = false
@@ -117,8 +117,25 @@ public final class MarkdownPreviewController: NSObject {
     }
 
     /// The style the preview shows: the editor's, or the fixed look the host asked for.
+    /// Reading options (typeface, size, line length, headings, tables…) applied over the style
+    /// derived from the editor. The defaults change nothing.
+    public var options = MarkdownPreviewOptions() {
+        didSet {
+            guard options != oldValue else { return }
+            previewView.opensDiagramsOnClick = options.opensDiagramsOnClick
+            refreshStyle()
+        }
+    }
+
+    /// Set when the preview opens with ``MarkdownPreviewOptions/animatesAppearance``: the entrance
+    /// plays once the first parse is installed, so it never animates the previous document or
+    /// an empty page. Edits after that re-render without animating.
+    private var revealPending = false
+    /// Test-only hook (`@testable import` visibility).
+    var debugRevealPending: Bool { revealPending }
+
     private func makeStyle(for textView: TextView) -> MarkdownPreviewStyle {
-        let style = MarkdownPreviewStyle.from(textView: textView)
+        let style = options.applied(to: MarkdownPreviewStyle.from(textView: textView))
         guard let appearanceOverride else { return style }
         return style.withAppearance(appearanceOverride)
     }
@@ -277,6 +294,10 @@ public final class MarkdownPreviewController: NSObject {
             editorSelectionBeforePreview = textView.selectedRanges
             textView.isSelectable = false
         }
+        revealPending = options.animatesAppearance
+        if revealPending {
+            previewView.prepareForReveal()
+        }
         previewView.isHidden = false
         refreshStyle()
     }
@@ -284,6 +305,8 @@ public final class MarkdownPreviewController: NSObject {
     private func hidePreview() {
         let wasVisible = isPreviewVisible
         isPreviewVisible = false
+        revealPending = false
+        previewView.cancelReveal()
         previewView.isHidden = true
         updateAppearanceToggle()
         parseTask?.cancel()
@@ -352,7 +375,7 @@ public final class MarkdownPreviewController: NSObject {
         MarkdownPreviewRasterInputs(
             baseURL: documentBaseURL,
             mermaidContext: style.mermaidRenderingContext,
-            contentWidth: max(previewView.bounds.width - style.contentInset * 2, 200),
+            contentWidth: max(style.contentWidth(forWidth: previewView.bounds.width), 200),
             // A fixed look brings its own code colors: the editor theme's tokens were chosen for
             // the editor's background, which the preview no longer has.
             syntaxTheme: appearanceOverride != nil ? DefaultTheme.placeholder : (textView?.theme ?? DefaultTheme()),
@@ -379,6 +402,12 @@ public final class MarkdownPreviewController: NSObject {
         previewView.rasterImages = result.images
         previewView.rasterNaturalSizes = result.naturalSizes
         previewView.highlightedCode = result.highlightedCode
+        if revealPending {
+            revealPending = false
+            // Played by the layout pass that lays this document out, so the entrance shows it
+            // rather than a blank page, without forcing a layout here.
+            previewView.revealAfterNextLayout()
+        }
     }
 
     private func scheduleMermaid(

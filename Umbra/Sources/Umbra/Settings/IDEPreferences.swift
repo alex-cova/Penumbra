@@ -1076,6 +1076,25 @@ public final class IDEPreferences {
         }
     }
 
+    /// Settings ▸ Markdown: how the preview reads (typeface, size, line length, headings, tables).
+    /// Shared through ``IDEPreferencesSnapshot``.
+    var markdownPreview: IDEMarkdownPreviewSettings {
+        didSet {
+            guard markdownPreview != oldValue else { return }
+            markdownPreview.save(to: .standard)
+        }
+    }
+
+    /// Settings ▸ Markdown ▸ Appearance: the preview's fixed light or dark look, `nil` to follow the
+    /// editor. Stored where the preview's sun/moon button keeps it (``IDEMarkdownPreviewAppearance``),
+    /// so both change the same choice; machine-local like before.
+    var markdownPreviewAppearance: MarkdownPreviewAppearance? {
+        didSet {
+            guard markdownPreviewAppearance != oldValue else { return }
+            IDEMarkdownPreviewAppearance.stored = markdownPreviewAppearance
+        }
+    }
+
     /// Settings ▸ Terminal ▸ Shell: what starts in a new tab. Machine-local: not part of `IDEPreferencesSnapshot`.
     var terminalShell: IDETerminalShellSettings {
         didSet {
@@ -1264,6 +1283,8 @@ public final class IDEPreferences {
         localHistoryMegabytes = min(max((defaults.object(forKey: Keys.localHistoryMegabytes) as? NSNumber)?.intValue ?? 500, 50), 10_000)
         terminal = defaults.data(forKey: Keys.terminalSettings)
             .flatMap { try? JSONDecoder().decode(IDETerminalSettings.self, from: $0) } ?? IDETerminalSettings()
+        markdownPreview = IDEMarkdownPreviewSettings.load(from: defaults)
+        markdownPreviewAppearance = IDEMarkdownPreviewAppearance.stored
         terminalShell = defaults.data(forKey: Keys.terminalShell)
             .flatMap { try? JSONDecoder().decode(IDETerminalShellSettings.self, from: $0) } ?? IDETerminalShellSettings()
         IDEUIFonts.setCurrentFamilyName(uiFontName)
@@ -1484,7 +1505,8 @@ public final class IDEPreferences {
             showEditorFragmentPreview: showEditorFragmentPreview,
             flattenJavaPackages: flattenJavaPackages,
             javaPostfix: javaPostfix,
-            terminal: terminal
+            terminal: terminal,
+            markdownPreview: markdownPreview
         )
     }
 
@@ -1543,6 +1565,7 @@ public final class IDEPreferences {
         flattenJavaPackages = snapshot.flattenJavaPackages
         javaPostfix = snapshot.javaPostfix
         terminal = snapshot.terminal ?? IDETerminalSettings()
+        markdownPreview = snapshot.markdownPreview ?? IDEMarkdownPreviewSettings()
     }
 }
 
@@ -1600,6 +1623,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
     var javaPostfix: JavaPostfixConfiguration
     /// Nil in a file written before Settings ▸ Terminal existed.
     var terminal: IDETerminalSettings?
+    /// Nil in a file written before Settings ▸ Markdown existed.
+    var markdownPreview: IDEMarkdownPreviewSettings?
 
     init(
         fontSize: Double,
@@ -1653,7 +1678,8 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         showEditorFragmentPreview: Bool = true,
         flattenJavaPackages: Bool = false,
         javaPostfix: JavaPostfixConfiguration = .standard,
-        terminal: IDETerminalSettings? = nil
+        terminal: IDETerminalSettings? = nil,
+        markdownPreview: IDEMarkdownPreviewSettings? = nil
     ) {
         self.fontSize = fontSize
         self.fontName = fontName
@@ -1707,6 +1733,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         self.flattenJavaPackages = flattenJavaPackages
         self.javaPostfix = javaPostfix
         self.terminal = terminal
+        self.markdownPreview = markdownPreview
     }
 
     init(from decoder: Decoder) throws {
@@ -1767,6 +1794,7 @@ struct IDEPreferencesSnapshot: Codable, Equatable {
         flattenJavaPackages = try container.decodeIfPresent(Bool.self, forKey: .flattenJavaPackages) ?? false
         javaPostfix = try container.decodeIfPresent(JavaPostfixConfiguration.self, forKey: .javaPostfix) ?? .standard
         terminal = try? container.decodeIfPresent(IDETerminalSettings.self, forKey: .terminal)
+        markdownPreview = try? container.decodeIfPresent(IDEMarkdownPreviewSettings.self, forKey: .markdownPreview)
     }
 }
 
