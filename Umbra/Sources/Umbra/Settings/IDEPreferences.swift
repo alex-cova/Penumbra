@@ -1302,6 +1302,12 @@ public final class IDEPreferences {
         // 4 pt more than Penumbra's default, so the numbers (and a breakpoint in place of one)
         // clear the gutter's left edge.
         textView.gutterLeadingPadding = 6
+        // A 3 pt gap between the gutter's last column and the code, in the editor's background.
+        var inset = textView.textContainerInset
+        if inset.left != 3 {
+            inset.left = 3
+            textView.textContainerInset = inset
+        }
         textView.isLineFoldingEnabled = isLineFoldingEnabled
         textView.isLineWrappingEnabled = wrapLines
         textView.showMinimap = showMinimap

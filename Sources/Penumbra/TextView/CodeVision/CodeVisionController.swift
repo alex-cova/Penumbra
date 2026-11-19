@@ -37,7 +37,7 @@ final class CodeVisionController {
         let firstRow = lineManager.row(containingYOffset: top - inset) ?? 0
         let lastRow = lineManager.row(containingYOffset: bottom - inset) ?? max(lineManager.lineCount - 1, 0)
         let gutterWidth = input.stickyGutterWidth
-        let reservedTrailing = textView.showMinimap ? textView.minimapWidth : 0
+        let reservedTrailing = textView.isMinimapShown ? textView.minimapWidth : 0
         view.frame = CGRect(x: gutterWidth, y: 0, width: max(textView.bounds.width - gutterWidth - reservedTrailing, 0),
                             height: textView.bounds.height)
         let appearance = input.inlayHintAppearanceForTesting

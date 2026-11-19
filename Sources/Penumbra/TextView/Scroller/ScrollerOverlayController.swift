@@ -81,7 +81,7 @@ final class ScrollerOverlayController: NSObject {
     /// Deliberately independent of whether the document currently overflows, so reserving the
     /// space can never change wrapping and flip that answer.
     func reservedTrailingWidth(for textView: TextView) -> CGFloat {
-        guard textView.showsScrollers, !textView.showMinimap, usesLegacyStyle else {
+        guard textView.showsScrollers, !textView.isMinimapShown, usesLegacyStyle else {
             return 0
         }
         return OverlayScrollerView.thickness
@@ -95,7 +95,7 @@ final class ScrollerOverlayController: NSObject {
         }
         let bounds = textView.bounds
         let thickness = OverlayScrollerView.thickness
-        let minimapWidth = textView.showMinimap ? textView.minimapWidth : 0
+        let minimapWidth = textView.isMinimapShown ? textView.minimapWidth : 0
 
         let verticalGeometry = OverlayScrollerView.geometry(axis: .vertical, trackLength: bounds.height, in: textView)
         let horizontalGeometry = OverlayScrollerView.geometry(
@@ -103,7 +103,7 @@ final class ScrollerOverlayController: NSObject {
             trackLength: max(bounds.width - minimapWidth, 0),
             in: textView
         )
-        let showsVertical = !textView.showMinimap && (usesLegacyStyle || verticalGeometry.isScrollable)
+        let showsVertical = !textView.isMinimapShown && (usesLegacyStyle || verticalGeometry.isScrollable)
         let showsHorizontal = horizontalGeometry.isScrollable
         let verticalSlot = showsVertical ? thickness : 0
         let horizontalSlot = showsHorizontal ? thickness : 0

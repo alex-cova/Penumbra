@@ -143,6 +143,28 @@ final class MinimapViewTests: XCTestCase {
     }
 
     @MainActor
+    func testEmptyDocumentHidesMinimapUntilTextArrives() {
+        let textView = makeTextView(text: "", enableMinimap: true)
+        let minimap = textView.minimapViewForTesting
+        assertMinimapChromeCollapsed(minimap)
+
+        textView.selectedRange = NSRange(location: 0, length: 0)
+        textView.insertText("hello")
+        textView.layoutIfNeeded()
+        XCTAssertFalse(minimap.isHidden)
+        XCTAssertEqual(minimap.frame.width, 100)
+
+        textView.selectedRange = NSRange(location: 0, length: 5)
+        textView.deleteBackward()
+        textView.layoutIfNeeded()
+        assertMinimapChromeCollapsed(minimap)
+
+        textView.setState(TextViewState(text: "a\nb", theme: DefaultTheme()))
+        textView.layoutIfNeeded()
+        XCTAssertFalse(minimap.isHidden)
+    }
+
+    @MainActor
     private func assertMinimapChromeCollapsed(_ minimap: MinimapView, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(minimap.isHidden, "minimap should be hidden when disabled", file: file, line: line)
         XCTAssertEqual(minimap.frame, .zero, "disabled minimap must not keep a trailing-edge frame", file: file, line: line)

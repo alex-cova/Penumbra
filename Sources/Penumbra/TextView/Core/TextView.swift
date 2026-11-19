@@ -1473,7 +1473,7 @@ public struct DocumentTextExport: Sendable {
     public var showMinimap = false {
         didSet {
             if showMinimap != oldValue {
-                if showMinimap {
+                if isMinimapShown {
                     minimapView.isHidden = false
                 } else {
                     minimapView.collapseOverlay()
@@ -1481,6 +1481,12 @@ public struct DocumentTextExport: Sendable {
                 setNeedsLayout()
             }
         }
+    }
+    /// Whether the minimap is on screen: ``showMinimap`` and a non-empty document. An empty
+    /// document has nothing to overview, so the minimap takes no room until text arrives (every
+    /// edit relayouts, which brings it back).
+    var isMinimapShown: Bool {
+        showMinimap && documentLength > 0
     }
     /// Whether floating overlay scrollers are shown when the content overflows. On by default.
     ///
@@ -1820,7 +1826,7 @@ public struct DocumentTextExport: Sendable {
     /// Where the pinned lines go: under the find bar, left of the minimap.
     var stickyLinesAvailableFrame: CGRect {
         let top = adjustedContentInset.top
-        let reservedMinimapWidth = showMinimap ? minimapWidth : 0
+        let reservedMinimapWidth = isMinimapShown ? minimapWidth : 0
         return CGRect(x: 0, y: top, width: max(bounds.width - reservedMinimapWidth, 0), height: max(bounds.height - top, 0))
     }
 
@@ -1957,7 +1963,7 @@ public struct DocumentTextExport: Sendable {
         onDidScroll = { [weak self] in
             guard let self else { return }
             self.editorFragmentPreview.dismiss()
-            if self.showMinimap {
+            if self.isMinimapShown {
                 self.minimapView.setNeedsDisplayForContentChange()
             }
             self.scrollerOverlay.handleScroll()
@@ -2028,7 +2034,7 @@ public struct DocumentTextExport: Sendable {
         // Reserve room on the trailing edge for the minimap so wrapped lines stop before
         // reaching it, matching how the gutter's width is already accounted for by
         // constrainingLineWidth on the leading edge.
-        let reservedMinimapWidth = showMinimap ? minimapWidth : 0
+        let reservedMinimapWidth = isMinimapShown ? minimapWidth : 0
         // Always-visible (legacy) system scrollers take a permanent strip; overlay scrollers
         // float over the text and reserve nothing.
         let reservedScrollerWidth = scrollerOverlay.reservedTrailingWidth(for: self)
@@ -2057,7 +2063,7 @@ public struct DocumentTextExport: Sendable {
             stickyLinesController.update()
             bringFixedOverlaySubviewToFront(stickyLinesController.view)
         }
-        if showMinimap {
+        if isMinimapShown {
             minimapView.isHidden = false
             minimapView.frame = CGRect(x: bounds.maxX - minimapWidth, y: 0, width: minimapWidth, height: bounds.height)
             bringSubviewToFront(minimapView)
@@ -2106,7 +2112,7 @@ public struct DocumentTextExport: Sendable {
         isUserInitiatedScroll = true
         super.scrollWheel(with: event)
         isUserInitiatedScroll = false
-        if showMinimap {
+        if isMinimapShown {
             minimapView.setNeedsDisplayForContentChange()
         }
         // Also covers a wheel event that hit the end of the document and didn't move it.
@@ -3385,7 +3391,7 @@ extension TextView: TextInputViewDelegate {
                 self?.scrollLocationToVisible(location, animateTypewriter: true)
             }
         }
-        if showMinimap {
+        if isMinimapShown {
             minimapView.setNeedsDisplayForContentChange()
         }
         findPanelController.refreshIfVisible()
@@ -3574,7 +3580,7 @@ extension TextView: TextInputViewDelegate {
     }
 
     func textInputViewDidFinishSyntaxParse(_ view: TextInputView) {
-        if showMinimap {
+        if isMinimapShown {
             minimapView.invalidateSyntaxColors()
             minimapView.setNeedsDisplayForContentChange()
         }
@@ -3782,7 +3788,7 @@ extension TextView {
     }
 
     func editorFragmentHit(at point: CGPoint) -> EditorFragmentHit? {
-        if showMinimap, !minimapView.isHidden, minimapView.frame.contains(point) {
+        if isMinimapShown, !minimapView.isHidden, minimapView.frame.contains(point) {
             let local = minimapView.convert(point, from: self)
             guard let sample = minimapView.editorFragmentDocumentY(atLocalPoint: local) else {
                 return nil
