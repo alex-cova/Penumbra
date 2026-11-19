@@ -51,7 +51,7 @@ final class IDETerminalHostView: NSView {
         firstResponderObservation = window?.observe(\.firstResponder, options: [.new]) { [weak self] _, change in
             guard let self, let responder = change.newValue ?? nil else { return }
             MainActor.assumeIsolated {
-                if responder === self.ghosttyView { self.onFocus?() }
+                if responder === self.ghosttyView || self.findBarOwns(responder) { self.onFocus?() }
             }
         }
     }
@@ -76,6 +76,17 @@ final class IDETerminalHostView: NSView {
         ghosttyView.recentText(lines: lines)
     }
 
+    /// The rows that fit inside the terminal view, as text (tests: what the user sees).
+    func visibleText() -> String? {
+        ghosttyView.visibleText()
+    }
+
+    /// The grid the terminal, and the PTY, are sized to.
+    var terminalGrid: GhosttyGridLayout { ghosttyView.gridLayout }
+
+    /// The terminal view itself (tests: first-responder checks).
+    var terminalView: NSView { ghosttyView }
+
     var workingDirectory: URL?
     var onTitleUpdate: ((String) -> Void)?
     var onDirectoryUpdate: ((URL) -> Void)?
@@ -97,6 +108,7 @@ final class IDETerminalHostView: NSView {
         ghosttyView.onTitleUpdate = { [weak self] in self?.onTitleUpdate?($0) }
         ghosttyView.onDirectoryUpdate = { [weak self] in self?.onDirectoryUpdate?($0) }
         ghosttyView.onProcessTerminated = { [weak self] in self?.handleProcessTerminated() }
+        ghosttyView.onSearchStateChange = { [weak self] in self?.findBar?.show($0) }
         ghosttyView.translatesAutoresizingMaskIntoConstraints = false
         // Inset so the prompt doesn't touch the bottom panel card's rounded edge; the host paints
         // the terminal's background so the inset reads as part of the terminal.
@@ -142,6 +154,7 @@ final class IDETerminalHostView: NSView {
     /// The UI colour scheme changed: the terminal follows it unless Settings ▸ Terminal has its own colours.
     func applyUIColorScheme() {
         refreshAppearance(editorFontName: lastEditorFont.name, editorFontSize: lastEditorFont.size)
+        findBar?.applyColors()
         ghosttyView.setNeedsDisplay(ghosttyView.bounds)
     }
 
@@ -264,6 +277,80 @@ final class IDETerminalHostView: NSView {
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    // MARK: - Find
+
+    /// This session's find bar, made on first ⌘F. Each terminal tab has its own, with its own needle
+    /// and matches, so searching one shell never touches another.
+    private(set) var findBar: GhosttyTerminalFindBar?
+
+    var isFindBarVisible: Bool { findBar.map { !$0.isHidden } ?? false }
+
+    /// ⌘F while this terminal has the keyboard (`IDEWorkspace.showFind`): shows the bar with the last
+    /// search selected, or, when it is already open, puts the keyboard back in its field.
+    func showFindBar() {
+        let bar = findBar ?? makeFindBar()
+        let wasHidden = bar.isHidden
+        bar.isHidden = false
+        if wasHidden, !bar.query.isEmpty {
+            ghosttyView.search(bar.query)
+        }
+        bar.focusField()
+    }
+
+    /// Escape in the bar, or its ×: ends the search, clears the highlights and gives the keyboard
+    /// back to the terminal.
+    func closeFindBar() {
+        guard let bar = findBar, !bar.isHidden else { return }
+        bar.isHidden = true
+        ghosttyView.endSearch()
+        window?.makeFirstResponder(ghosttyView)
+    }
+
+    private func makeFindBar() -> GhosttyTerminalFindBar {
+        let bar = GhosttyTerminalFindBar(frame: .zero)
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.isHidden = true
+        bar.onQueryChange = { [weak self] in self?.ghosttyView.search($0) }
+        bar.onNext = { [weak self] in self?.ghosttyView.findNext() }
+        bar.onPrevious = { [weak self] in self?.ghosttyView.findPrevious() }
+        bar.onClose = { [weak self] in self?.closeFindBar() }
+        addSubview(bar, positioned: .above, relativeTo: ghosttyView)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            // Clear of the overlay scroller.
+            bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+            bar.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 6),
+        ])
+        findBar = bar
+        return bar
+    }
+
+    /// Whether `responder` is the find bar's field, or the field editor typing into it.
+    private func findBarOwns(_ responder: NSResponder) -> Bool {
+        guard let bar = findBar else { return false }
+        if let view = Self.view(for: responder) { return view.isDescendant(of: bar) }
+        return false
+    }
+
+    /// The terminal session that `responder` belongs to: its terminal view, its find bar, or the
+    /// field editor typing into that bar. Nil for anything else (an editor, a panel's table).
+    static func owning(_ responder: NSResponder?) -> IDETerminalHostView? {
+        guard let responder, var view = view(for: responder) else { return nil }
+        while true {
+            if let host = view as? IDETerminalHostView { return host }
+            guard let parent = view.superview else { return nil }
+            view = parent
+        }
+    }
+
+    /// A field editor is a window-wide text view whose delegate is the field it edits.
+    private static func view(for responder: NSResponder) -> NSView? {
+        if let editor = responder as? NSTextView, editor.isFieldEditor, let field = editor.delegate as? NSView {
+            return field
+        }
+        return responder as? NSView
     }
 
     /// Ends the shell. SIGHUP is what a closing terminal sends, and shells

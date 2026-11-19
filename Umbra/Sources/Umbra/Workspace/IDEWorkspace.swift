@@ -1893,6 +1893,12 @@ public final class IDEWorkspace {
     }
 
     public func showFind() {
+        // The terminal (or its find bar) has the keyboard: find in that session's output, not in the
+        // editor behind it.
+        if let terminal = IDETerminalHostView.owning(window?.firstResponder) {
+            terminal.showFindBar()
+            return
+        }
         if workbench.activePane.selectedDocument?.contentKind == .binary {
             showHexFind()
             return

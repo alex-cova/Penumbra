@@ -15,14 +15,16 @@ struct GhosttyGridLayout: Equatable, Sendable {
     var cols: Int
     var rows: Int
 
-    /// Derives the grid that fits `boundsSize`, enforcing the minimum
-    /// 80×24 and at least 1×1 (the C terminal requires nonzero dimensions).
+    /// Derives the grid that fits `boundsSize`: whole cells only, at least 1×1 (the C terminal
+    /// requires nonzero dimensions). No larger floor: the PTY is told this size, and a row or column
+    /// the view cannot show is one where the shell's output, a prompt or a pager's first page
+    /// (psql's column headers) lands out of sight.
     static func fitting(
         boundsSize: CGSize,
         cellWidth: CGFloat,
         cellHeight: CGFloat,
-        minimumCols: Int = 80,
-        minimumRows: Int = 24
+        minimumCols: Int = 1,
+        minimumRows: Int = 1
     ) -> GhosttyGridLayout {
         let safeCellWidth = max(cellWidth, 1)
         let safeCellHeight = max(cellHeight, 1)
@@ -33,6 +35,12 @@ struct GhosttyGridLayout: Equatable, Sendable {
             cellHeight: safeCellHeight,
             cols: max(cols, minimumCols),
             rows: max(rows, minimumRows))
+    }
+
+    /// Whether `boundsSize` holds at least one whole cell. A view smaller than that (not laid out
+    /// yet, or mid-animation) keeps its previous grid rather than reflowing the screen to one column.
+    static func canFit(boundsSize: CGSize, cellWidth: CGFloat, cellHeight: CGFloat) -> Bool {
+        boundsSize.width >= max(cellWidth, 1) && boundsSize.height >= max(cellHeight, 1)
     }
 
     /// Cell size in pixels for `ghostty_terminal_resize`.
@@ -48,6 +56,21 @@ struct GhosttyGridLayout: Equatable, Sendable {
         (
             col: min(max(Int(point.x / cellWidth), 0), cols - 1),
             row: min(max(Int(point.y / cellHeight), 0), rows - 1))
+    }
+
+    /// View rects of an inclusive cell range that may span rows (a selection or a search match),
+    /// one per row, clipped to the grid. The ends may come in either order.
+    func rects(from a: (col: Int, row: Int), to b: (col: Int, row: Int)) -> [CGRect] {
+        let (start, end) = (a.row, a.col) <= (b.row, b.col) ? (a, b) : (b, a)
+        guard cols > 0, rows > 0, start.row < rows, end.row >= 0 else { return [] }
+        var result: [CGRect] = []
+        for row in max(start.row, 0)...min(end.row, rows - 1) {
+            let first = row == start.row ? max(start.col, 0) : 0
+            let last = row == end.row ? min(end.col, cols - 1) : cols - 1
+            guard first <= last, first < cols else { continue }
+            result.append(rectForCells(col: first, row: row, count: last - first + 1))
+        }
+        return result
     }
 
     /// View rect of a cell range on one row (origin bottom-left).

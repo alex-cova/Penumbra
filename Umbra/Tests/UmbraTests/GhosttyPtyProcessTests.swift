@@ -220,6 +220,42 @@ final class GhosttyPtyProcessTests: XCTestCase {
         XCTAssertTrue(waitForOutput(sink, containing: "30 100"), "TIOCSWINSZ must resize the PTY")
     }
 
+    /// A program that runs before the shell has printed anything must see the real size: closing the
+    /// parent's slave fd before spawn used to reset the tty to 0×0 until the first output.
+    func testWindowSizeIsSetBeforeTheFirstOutput() {
+        let sink = Sink()
+        let process = GhosttyPtyProcess()
+        process.onOutput = { [weak sink] in sink?.append($0) }
+        process.onExit = { [weak sink] in sink?.recordExit($0) }
+        XCTAssertTrue(process.start(
+            executable: "/bin/sh", execName: "sh", currentDirectory: workdir!,
+            arguments: ["-c", "printf 'size:%s\\n' \"$(stty size)\"; exec /bin/sleep 30"],
+            cols: 91, rows: 13))
+        defer { process.terminate() }
+        XCTAssertTrue(waitForOutput(sink, containing: "size:13 91"), "got: \(sink.text())")
+    }
+
+    func testChildEnvironmentDropsTheParentsTerminal() {
+        let parent = [
+            "PATH": "/bin", "HOME": "/tmp/h", "LINES": "60", "COLUMNS": "200",
+            "TERM": "xterm-ghostty", "COLORTERM": "truecolor", "TERM_PROGRAM": "ghostty",
+            "TERM_PROGRAM_VERSION": "1.2", "GHOSTTY_RESOURCES_DIR": "/x", "GHOSTTY_SURFACE_ID": "7",
+            "ITERM_SESSION_ID": "w0", "LC_TERMINAL": "iTerm2", "PAGER": "less",
+        ]
+        let child = GhosttyPtyProcess.childEnvironment(parent: parent, overrides: ["TERM": "xterm-256color"])
+        XCTAssertEqual(child["PATH"], "/bin")
+        XCTAssertEqual(child["HOME"], "/tmp/h")
+        XCTAssertEqual(child["PAGER"], "less", "the user's own choices stay")
+        XCTAssertEqual(child["TERM"], "xterm-256color")
+        XCTAssertEqual(child["COLORTERM"], "truecolor")
+        for key in ["LINES", "COLUMNS", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "GHOSTTY_RESOURCES_DIR",
+                    "GHOSTTY_SURFACE_ID", "ITERM_SESSION_ID", "LC_TERMINAL"] {
+            XCTAssertNil(child[key], "\(key) describes the launching terminal")
+        }
+        let explicit = GhosttyPtyProcess.childEnvironment(parent: parent, overrides: ["LINES": "40"])
+        XCTAssertEqual(explicit["LINES"], "40", "Settings ▸ Terminal may set one on purpose")
+    }
+
     func testExitCommandFiresOnce() {
         let sink = Sink()
         let process = startedProcess(sink: sink)

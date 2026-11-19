@@ -67,6 +67,21 @@ enum GhosttyTerminalModes {
     static var sgrMouse: GhosttyMode { dec(1006) }
     /// Bracketed paste (2004).
     static var bracketedPaste: GhosttyMode { dec(2004) }
+    /// Alternate scroll (1007): on the alternate screen the wheel sends cursor keys. On by default.
+    static var alternateScroll: GhosttyMode { dec(1007) }
+}
+
+/// What the wheel sends on the alternate screen under alternate-scroll mode (1007) when the
+/// program does not track the mouse: one cursor key per row, as Ghostty does, so `less`, `man`
+/// and other full-screen pagers scroll.
+enum GhosttyAlternateScroll {
+    /// `rows` > 0 scrolls up (toward older text). DECCKM picks `ESC O` over `CSI`.
+    static func bytes(rows: Int, applicationCursorKeys: Bool) -> Data {
+        guard rows != 0 else { return Data() }
+        let final = rows > 0 ? "A" : "B"
+        let key = (applicationCursorKeys ? "\u{1B}O" : "\u{1B}[") + final
+        return Data(String(repeating: key, count: min(abs(rows), 1_000)).utf8)
+    }
 }
 
 /// Swift ownership wrapper around one `GhosttyTerminal` (libghostty-vt).
@@ -89,6 +104,8 @@ final class GhosttyVtTerminal: @unchecked Sendable {
     let queue = DispatchQueue(label: "com.umbra.GhosttyVtTerminal", qos: .userInitiated)
     var terminal: GhosttyTerminal?
     var renderState: GhosttyRenderState?
+    /// The find bar's search (`GhosttyVtSearch.swift`), created on first use. Queue-only, like `terminal`.
+    var search: GhosttySearch?
     private let eventBox = GhosttyVtEventBox()
     /// Kept alive for the C side, which may borrow the XTGETTCAP name instead of copying it.
     private var termNameStorage: UnsafeMutablePointer<CChar>?
@@ -131,8 +148,11 @@ final class GhosttyVtTerminal: @unchecked Sendable {
     deinit {
         let term = terminal
         let state = renderState
+        let search = search
         // Never runs on `queue` (all queue work is self-free), so sync is safe.
         queue.sync {
+            // Before the terminal: freeing a live search releases state it tracks inside the terminal.
+            if let search { ghostty_search_free(search) }
             if let state { ghostty_render_state_free(state) }
             if let term { ghostty_terminal_free(term) }
         }
@@ -297,6 +317,18 @@ final class GhosttyVtTerminal: @unchecked Sendable {
                 return false
             }
             return config.value
+        }
+    }
+
+    /// Whether a full-screen program switched to the alternate screen (`less`, `vim`, `top`).
+    var isAlternateScreenActive: Bool {
+        queue.sync {
+            guard let term = self.terminal else { return false }
+            var screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY
+            guard ghostty_terminal_get(term, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen) == GHOSTTY_SUCCESS else {
+                return false
+            }
+            return screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE
         }
     }
 

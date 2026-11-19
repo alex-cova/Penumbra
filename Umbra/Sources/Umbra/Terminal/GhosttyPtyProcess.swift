@@ -23,12 +23,12 @@ final class GhosttyPtyProcess: @unchecked Sendable {
     private var masterFD: Int32 = -1
     private var childPid: pid_t = -1
     private var exitFired = false
-    /// Size to apply on first output. macOS zeroes t_winsize when the
-    /// session-leader child reopens the slave by path (which is also what
-    /// acquires the controlling terminal), so the openpty-time size does not
-    /// survive spawn. Re-applying on first output is race-free: the child
-    /// must have opened the slave to produce output, and nothing reopens it
-    /// afterwards.
+    /// Size to apply again on first output. `spawn` keeps the slave open across
+    /// posix_spawn and sets the size after it, so the child starts with the
+    /// right size (closing the last slave fd first used to reset it to 0×0 for
+    /// everything that ran before the first output). This is the backstop:
+    /// the child must have opened the slave to produce output, and nothing
+    /// reopens it afterwards.
     private var pendingSizeApply: (cols: Int, rows: Int)?
     /// Set by `terminate()`; makes the monitor tear down instead of reading.
     private var terminating = false
@@ -66,9 +66,10 @@ final class GhosttyPtyProcess: @unchecked Sendable {
     ///     `COLORTERM` here names this terminal; otherwise they are
     ///     `xterm-256color` and `truecolor`.
     ///   - parentEnvironment: Everything else the child inherits. Defaults to
-    ///     this process. `TERM` and `COLORTERM` in it are ignored: they name
-    ///     the parent's terminal, which is often `dumb` for a non-interactive
-    ///     host, not this PTY.
+    ///     this process. Variables that name the parent's terminal (`TERM`,
+    ///     `LINES`, `TERM_PROGRAM`, `GHOSTTY_*`…, see
+    ///     ``inheritedTerminalVariables``) are dropped: they describe whatever
+    ///     launched Umbra, not this PTY.
     @discardableResult
     func start(
         executable: String,
@@ -328,6 +329,32 @@ final class GhosttyPtyProcess: @unchecked Sendable {
         return -1
     }
 
+    /// Variables that describe the terminal Umbra itself was started from (`./run.sh` in Ghostty,
+    /// iTerm or Terminal.app), never this PTY. `LINES`/`COLUMNS` matter most: `less` (psql's pager)
+    /// prefers them over the window size, so a stale pair draws a page taller or wider than the view.
+    static let inheritedTerminalVariables: Set<String> = [
+        "TERM", "COLORTERM", "LINES", "COLUMNS",
+        "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID",
+        "LC_TERMINAL", "LC_TERMINAL_VERSION", "VTE_VERSION",
+    ]
+    static let inheritedTerminalPrefixes = ["GHOSTTY_", "ITERM_", "KITTY_", "WEZTERM_"]
+
+    /// The child's environment: the parent's, minus what describes the parent's terminal, plus
+    /// `overrides` (Settings ▸ Terminal, which may set any of them on purpose). `TERM` and
+    /// `COLORTERM` default to `xterm-256color` and `truecolor`.
+    static func childEnvironment(parent: [String: String], overrides: [String: String]?) -> [String: String] {
+        var merged = parent.filter { key, _ in
+            !inheritedTerminalVariables.contains(key)
+                && !inheritedTerminalPrefixes.contains(where: { key.hasPrefix($0) })
+        }
+        if let overrides {
+            for (key, value) in overrides { merged[key] = value }
+        }
+        if merged["TERM"]?.isEmpty != false { merged["TERM"] = "xterm-256color" }
+        if merged["COLORTERM"]?.isEmpty != false { merged["COLORTERM"] = "truecolor" }
+        return merged
+    }
+
     private static func spawn(
         executable: String,
         execName: String,
@@ -344,14 +371,17 @@ final class GhosttyPtyProcess: @unchecked Sendable {
         var master: Int32 = -1
         var slave: Int32 = -1
         guard openpty(&master, &slave, nil, nil, &ws) == 0 else { return nil }
-        // The slave fd is only needed for its device path: the child opens
-        // it *after* setsid, which is what makes it the controlling terminal.
+        // The child opens the slave by path *after* setsid, which is what makes it the controlling
+        // terminal. The parent's slave fd stays open until posix_spawn has returned: closing the last
+        // reference to a tty resets it, window size included, so a program that ran before the
+        // shell's first output (`stty size`, psql's pager decision) used to see 0×0.
+        // POSIX_SPAWN_CLOEXEC_DEFAULT keeps the child from inheriting it.
         guard let slavePath = ptsname(master).map({ String(cString: $0) }) else {
             Darwin.close(master)
             Darwin.close(slave)
             return nil
         }
-        Darwin.close(slave)
+        defer { Darwin.close(slave) }
 
         var attrs = posix_spawnattr_t?(nil)
         var actions = posix_spawn_file_actions_t?(nil)
@@ -372,17 +402,7 @@ final class GhosttyPtyProcess: @unchecked Sendable {
         posix_spawn_file_actions_addclose(&actions, 3)
         posix_spawn_file_actions_addchdir(&actions, currentDirectory)
 
-        var merged = parentEnvironment
-        // This PTY draws xterm-256color / truecolor. The parent's TERM names a
-        // different terminal and must not leak in (an agent shell is often `dumb`).
-        // A non-empty value in `environment` is an explicit override.
-        merged.removeValue(forKey: "TERM")
-        merged.removeValue(forKey: "COLORTERM")
-        if let environment {
-            for (key, value) in environment { merged[key] = value }
-        }
-        if merged["TERM"]?.isEmpty != false { merged["TERM"] = "xterm-256color" }
-        if merged["COLORTERM"]?.isEmpty != false { merged["COLORTERM"] = "truecolor" }
+        let merged = childEnvironment(parent: parentEnvironment, overrides: environment)
         let envStrings = merged.map { "\($0.key)=\($0.value)" }
         let argv: [String] = [execName] + arguments
 
@@ -396,6 +416,9 @@ final class GhosttyPtyProcess: @unchecked Sendable {
             Darwin.close(master)
             return nil
         }
+        // The child has opened the slave by the time posix_spawn returns (file actions run before
+        // exec); restating the size here covers a kernel that resets it on that open anyway.
+        applySize(fd: master, cols: cols, rows: rows)
         return (master, pid)
     }
 }

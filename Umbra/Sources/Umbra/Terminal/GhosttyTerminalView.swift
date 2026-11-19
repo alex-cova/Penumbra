@@ -23,6 +23,8 @@ final class GhosttyTerminalView: NSView {
     var onProcessTerminated: (() -> Void)?
     /// OSC 9 / OSC 777 while `desktop-notifications` is on: title (may be empty) and body.
     var onDesktopNotification: ((String, String) -> Void)?
+    /// The find bar's search moved on: new counts, a new selected match, or new highlights.
+    var onSearchStateChange: ((GhosttySearchState) -> Void)?
 
     /// Asks the user a yes/no question about what a program is doing (an unsafe paste, a clipboard read).
     /// The default is a sheet on the window; tests replace it. `completion` runs on the main actor.
@@ -174,6 +176,7 @@ final class GhosttyTerminalView: NSView {
     func feedOutput(_ text: String) {
         ensureBackend()
         terminal?.write(Data(text.utf8))
+        scheduleSearchRefresh()
         needsDisplay = true
     }
 
@@ -186,6 +189,19 @@ final class GhosttyTerminalView: NSView {
 
     func recentText(lines: Int) -> String? {
         terminal?.recentText(lines: lines)
+    }
+
+    /// The text of the viewport rows that fit inside the view's bounds, one line per row with trailing
+    /// blanks trimmed: what the user can actually see. Rows the grid has beyond the bounds are left out.
+    func visibleText() -> String? {
+        guard let snapshot = terminal?.renderSnapshot() else { return nil }
+        let fitting = Int(bounds.height / max(gridLayout.cellHeight, 1))
+        let rows = min(snapshot.grid.count, fitting)
+        return (0..<rows).map { row in
+            var line = snapshot.grid[row].cells.map { $0.text.isEmpty && $0.wide == .narrow ? " " : $0.text }.joined()
+            while line.hasSuffix(" ") { line.removeLast() }
+            return line
+        }.joined(separator: "\n")
     }
 
     func restartProcess() {
@@ -228,7 +244,10 @@ final class GhosttyTerminalView: NSView {
                 backend?.write(data)
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    if self.configuration.scrollToBottomOnOutput { self.snapToBottom() }
+                    // While the find bar is searching, output must not pull the viewport away from
+                    // the match the user is looking at; typing still does.
+                    if self.configuration.scrollToBottomOnOutput, !self.isSearching { self.snapToBottom() }
+                    self.scheduleSearchRefresh()
                     self.needsDisplay = true
                 }
             }
@@ -341,6 +360,16 @@ final class GhosttyTerminalView: NSView {
         // `adjust-cell-height`: a taller or shorter row, with the text kept in the middle of it.
         let adjusted = max(1, (metrics.height * (1 + CGFloat(configuration.cellHeightAdjustPercent) / 100)).rounded())
         textYOffset = ((adjusted - metrics.height) / 2).rounded()
+        // Not laid out yet, or squeezed below one cell mid-animation: keep the grid the shell has
+        // (a 1×1 resize would reflow the whole screen and scrollback to one column).
+        guard GhosttyGridLayout.canFit(boundsSize: bounds.size, cellWidth: metrics.width, cellHeight: adjusted) else {
+            if gridLayout.cellWidth != metrics.width || gridLayout.cellHeight != adjusted {
+                gridLayout.cellWidth = metrics.width
+                gridLayout.cellHeight = adjusted
+            }
+            scroller?.frame = scrollerFrame()
+            return
+        }
         let newLayout = GhosttyGridLayout.fitting(
             boundsSize: bounds.size,
             cellWidth: metrics.width,
@@ -359,6 +388,7 @@ final class GhosttyTerminalView: NSView {
                         cellWidthPx: Int(px.width), cellHeightPx: Int(px.height))
         }
         process.setWindowSize(cols: newLayout.cols, rows: newLayout.rows)
+        scheduleSearchRefresh()
         needsDisplay = true
     }
 
@@ -391,10 +421,12 @@ final class GhosttyTerminalView: NSView {
         // unaffected — only CTLineDraw reads the text matrix.
         context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
 
+        drawSearchHighlights(context: context, outlineSelected: false)
         let rows = min(snapshot.grid.count, gridLayout.rows)
         for row in 0..<rows {
             drawRow(snapshot.grid[row], row: row, snapshot: snapshot, context: context)
         }
+        drawSearchHighlights(context: context, outlineSelected: true)
         drawSelection(snapshot: snapshot, context: context)
         drawCursor(snapshot.cursor, context: context)
         lastCursorBlinking = snapshot.cursor.blinking
@@ -499,14 +531,32 @@ final class GhosttyTerminalView: NSView {
     private func drawSelection(snapshot: GhosttyRenderSnapshot, context: CGContext) {
         guard hasSelection, let selection = orderedSelection() else { return }
         (selectionColor ?? NSColor.selectedTextBackgroundColor.withAlphaComponent(0.35)).setFill()
-        let lastRow = min(selection.to.row, snapshot.grid.count - 1)
-        for row in selection.from.row...max(lastRow, selection.from.row) {
-            guard row < snapshot.grid.count, row < gridLayout.rows else { break }
-            let cells = snapshot.grid[row].cells.count
-            let startCol = (row == selection.from.row) ? selection.from.col : 0
-            let endCol = (row == selection.to.row) ? min(selection.to.col, cells - 1) : cells - 1
-            guard startCol <= endCol, startCol < cells else { continue }
-            context.fill(gridLayout.rectForCells(col: startCol, row: row, count: endCol - startCol + 1))
+        var grid = gridLayout
+        grid.rows = min(grid.rows, snapshot.grid.count)
+        grid.cols = min(grid.cols, snapshot.cols > 0 ? snapshot.cols : grid.cols)
+        for rect in grid.rects(from: selection.from, to: selection.to) {
+            context.fill(rect)
+        }
+    }
+
+    /// Find-bar matches on screen: every match filled under the glyphs, the selected one stronger and
+    /// outlined above them so it stays visible on coloured cells.
+    private func drawSearchHighlights(context: CGContext, outlineSelected: Bool) {
+        guard isSearching, !searchState.highlights.isEmpty else { return }
+        let all = NSColor.findHighlightColor.withAlphaComponent(0.45)
+        let current = NSColor.systemOrange.withAlphaComponent(0.8)
+        for highlight in searchState.highlights {
+            let rects = gridLayout.rects(from: (highlight.from.col, highlight.from.row),
+                                         to: (highlight.to.col, highlight.to.row))
+            if outlineSelected {
+                guard highlight.isSelected else { continue }
+                NSColor.systemOrange.setStroke()
+                context.setLineWidth(1.5)
+                for rect in rects { context.stroke(rect.insetBy(dx: 0.75, dy: 0.75)) }
+            } else {
+                (highlight.isSelected ? current : all).setFill()
+                for rect in rects { context.fill(rect) }
+            }
         }
     }
 
@@ -842,8 +892,16 @@ final class GhosttyTerminalView: NSView {
             }
         }
         guard rows != 0, let term = terminal else { return }
+        // The alternate screen has no scrollback to move through: under alternate-scroll mode the
+        // wheel becomes cursor keys for the program (a pager scrolls), as in Ghostty.
+        if term.isAlternateScreenActive, term.isModeSet(GhosttyTerminalModes.alternateScroll) {
+            process.write(GhosttyAlternateScroll.bytes(
+                rows: rows, applicationCursorKeys: term.isModeSet(GhosttyTerminalModes.cursorKeys)))
+            return
+        }
         term.scrollViewport(lines: -rows)
         refreshScrollState()
+        refreshSearchHighlightsNow()
         needsDisplay = true
     }
 
@@ -855,6 +913,7 @@ final class GhosttyTerminalView: NSView {
         isScrolledUp = false
         terminal?.scrollViewportToBottom()
         refreshScrollState()
+        refreshSearchHighlightsNow()
         needsDisplay = true
     }
 
@@ -899,6 +958,135 @@ final class GhosttyTerminalView: NSView {
         let row = UInt64((CGFloat(maxOffset) * sender.doubleValue).rounded())
         term.scrollViewport(toRow: min(row, maxOffset))
         refreshScrollState()
+        refreshSearchHighlightsNow()
+        needsDisplay = true
+    }
+
+    // MARK: - Find
+
+    /// The find bar's needle; nil while no search is running.
+    private(set) var searchNeedle: String?
+    /// The last state read from the search (counts, selected match, viewport highlights).
+    private(set) var searchState = GhosttySearchState.idle
+    /// Bumped per needle: a step that finishes for an older needle is dropped.
+    private var searchGeneration: UInt64 = 0
+    private var searchLoopActive = false
+    private var searchPassRequested = false
+    private var searchRefreshScheduled = false
+    /// Select the newest match as soon as the search finds one (a new needle, like a browser's find).
+    private var selectFirstMatchPending = false
+
+    var isSearching: Bool { searchNeedle != nil }
+
+    /// Searches the screen and scrollback for `needle` (ASCII case ignored); nil or empty ends the
+    /// search. Scrollback is searched in bounded steps off the main thread, so typing and output
+    /// carry on; results arrive through ``onSearchStateChange``.
+    func search(_ needle: String?) {
+        guard let needle, !needle.isEmpty else {
+            endSearch()
+            return
+        }
+        ensureBackend()
+        guard let terminal else { return }
+        let isNewNeedle = needle.lowercased() != searchNeedle?.lowercased()
+        searchNeedle = needle
+        terminal.setSearchNeedle(needle)
+        if isNewNeedle {
+            searchGeneration &+= 1
+            searchLoopActive = false
+            selectFirstMatchPending = true
+        }
+        requestSearchPass()
+    }
+
+    /// Return in the find bar: the next match toward older output, wrapping at the oldest.
+    func findNext() { selectMatch(forward: true) }
+
+    /// Shift-Return: the next match toward newer output, wrapping at the newest.
+    func findPrevious() { selectMatch(forward: false) }
+
+    /// Clears the needle, its results and the highlights. The viewport stays where it is.
+    func endSearch() {
+        guard searchNeedle != nil else { return }
+        searchNeedle = nil
+        searchGeneration &+= 1
+        searchLoopActive = false
+        searchPassRequested = false
+        selectFirstMatchPending = false
+        terminal?.setSearchNeedle(nil)
+        searchState = .idle
+        onSearchStateChange?(.idle)
+        needsDisplay = true
+    }
+
+    private func selectMatch(forward: Bool) {
+        guard isSearching, let terminal else { return }
+        selectFirstMatchPending = false
+        let state = terminal.selectSearchMatch(forward: forward)
+        // The library scrolled the viewport to the match; park it there (output will not yank it).
+        refreshScrollState()
+        apply(searchState: state)
+    }
+
+    /// New output, a resize or a scroll: one more pass soon, coalesced (at most one per 100 ms).
+    private func scheduleSearchRefresh() {
+        guard isSearching, !searchRefreshScheduled else { return }
+        searchRefreshScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard let self else { return }
+            self.searchRefreshScheduled = false
+            self.requestSearchPass()
+        }
+    }
+
+    /// The viewport moved: the highlights are re-read now, with one bounded feed, so they never draw
+    /// over the wrong rows for a frame.
+    private func refreshSearchHighlightsNow() {
+        guard isSearching, let terminal else { return }
+        apply(searchState: terminal.stepSearch(tickBudget: 0))
+    }
+
+    private func requestSearchPass() {
+        guard isSearching else { return }
+        if searchLoopActive {
+            searchPassRequested = true
+            return
+        }
+        searchLoopActive = true
+        searchPassRequested = false
+        stepSearchInBackground(generation: searchGeneration)
+    }
+
+    private func stepSearchInBackground(generation: UInt64) {
+        guard let terminal else { return }
+        // Not on the terminal queue itself: the step takes it, and if the view let the terminal go
+        // meanwhile, its deinit (which syncs onto that queue) must not run there.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let state = terminal.stepSearch()
+            Task { @MainActor [weak self] in
+                guard let self, generation == self.searchGeneration, self.isSearching else { return }
+                self.apply(searchState: state)
+                if state.status == .searching || self.searchPassRequested {
+                    self.searchPassRequested = false
+                    self.stepSearchInBackground(generation: generation)
+                } else {
+                    self.searchLoopActive = false
+                }
+            }
+        }
+    }
+
+    private func apply(searchState state: GhosttySearchState) {
+        guard isSearching else { return }
+        if selectFirstMatchPending, state.total > 0, state.selectedIndex == nil {
+            selectMatch(forward: true)
+            return
+        }
+        if state.total > 0 { selectFirstMatchPending = false }
+        guard state != searchState else { return }
+        searchState = state
+        onSearchStateChange?(state)
         needsDisplay = true
     }
 }
