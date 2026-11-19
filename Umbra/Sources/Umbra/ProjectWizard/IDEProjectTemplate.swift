@@ -80,7 +80,7 @@ struct IDEGeneratedFile: Equatable, Sendable {
 }
 
 /// A kind of project the wizard can create. Pure: it produces files and touches no disk, so the
-/// sheet can preview it and tests can read what it generates. Gradle templates conform to this too.
+/// sheet can preview it and tests can read what it generates.
 protocol IDEProjectTemplate: Sendable {
     var id: String { get }
     var family: IDEProjectFamily { get }
@@ -97,6 +97,7 @@ protocol IDEProjectTemplate: Sendable {
 enum IDEProjectTemplates {
     static let all: [any IDEProjectTemplate] =
         IDEXcodeProjectTemplates.all + IDESwiftPackageTemplates.all + IDEMavenTemplates.all
+        + [IDEGradleApplicationTemplate()]
 
     static func template(id: String) -> (any IDEProjectTemplate)? {
         all.first { $0.id == id }

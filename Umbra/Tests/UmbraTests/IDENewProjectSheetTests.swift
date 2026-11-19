@@ -88,6 +88,13 @@ final class IDENewProjectSheetTests: XCTestCase {
             model.previewRows.map(\.name),
             ["Sources", "Demo", "main.swift", "Tests", "DemoTests", "DemoTests.swift", ".gitignore", "Package.swift"]
         )
+
+        model.templateID = "java.gradle.application"
+        model.organizationIdentifier = "com.example"
+        XCTAssertEqual(model.previewPaths, [
+            ".gitignore", "build.gradle", "settings.gradle",
+            "src/main/java/com/example/demo/Main.java", "src/test/java/com/example/demo/MainTest.java",
+        ])
     }
 
     func testThePreviewTreeShowsFoldersBeforeTheirFiles() {

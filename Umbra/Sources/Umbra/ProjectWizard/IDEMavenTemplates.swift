@@ -8,7 +8,6 @@ enum IDEMavenTemplates {
 }
 
 struct IDEMavenApplicationTemplate: IDEProjectTemplate {
-    static let junitVersion = "5.11.4"
     static let surefireVersion = "3.5.2"
 
     var id: String { "java.maven.application" }
@@ -19,18 +18,14 @@ struct IDEMavenApplicationTemplate: IDEProjectTemplate {
     var fields: Set<IDENewProjectField> { [.organizationIdentifier] }
 
     func primaryFile(for options: IDENewProjectOptions) -> String? {
-        "src/main/java/\(packagePath(options))/Main.java"
+        IDEJavaApplicationSources(packageName: packageName(options)).mainPath
     }
 
     func files(for options: IDENewProjectOptions) throws -> [IDEGeneratedFile] {
-        let packageName = packageName(options)
-        let directory = packagePath(options)
         return [
             IDEGeneratedFile(path: "pom.xml", text: pom(options)),
             IDEGeneratedFile(path: ".gitignore", text: Self.gitignore),
-            IDEGeneratedFile(path: "src/main/java/\(directory)/Main.java", text: mainSource(packageName)),
-            IDEGeneratedFile(path: "src/test/java/\(directory)/MainTest.java", text: testSource(packageName)),
-        ]
+        ] + IDEJavaApplicationSources(packageName: packageName(options)).files
     }
 
     private func artifactId(_ options: IDENewProjectOptions) -> String {
@@ -47,10 +42,6 @@ struct IDEMavenApplicationTemplate: IDEProjectTemplate {
     private func packageName(_ options: IDENewProjectOptions) -> String {
         let organization = groupId(options).replacing("-", with: "_")
         return organization + "." + artifactId(options)
-    }
-
-    private func packagePath(_ options: IDENewProjectOptions) -> String {
-        packageName(options).replacing(".", with: "/")
     }
 
     /// The newest installed JDK, or 17 when none is found.
@@ -75,7 +66,7 @@ struct IDEMavenApplicationTemplate: IDEProjectTemplate {
             <dependency>
               <groupId>org.junit.jupiter</groupId>
               <artifactId>junit-jupiter</artifactId>
-              <version>\(Self.junitVersion)</version>
+              <version>\(IDEJavaApplicationSources.junitVersion)</version>
               <scope>test</scope>
             </dependency>
           </dependencies>
@@ -89,37 +80,6 @@ struct IDEMavenApplicationTemplate: IDEProjectTemplate {
             </plugins>
           </build>
         </project>
-
-        """
-    }
-
-    private func mainSource(_ packageName: String) -> String {
-        """
-        package \(packageName);
-
-        public class Main {
-            public static void main(String[] args) {
-                System.out.println("Hello, world!");
-            }
-        }
-
-        """
-    }
-
-    private func testSource(_ packageName: String) -> String {
-        """
-        package \(packageName);
-
-        import static org.junit.jupiter.api.Assertions.assertEquals;
-
-        import org.junit.jupiter.api.Test;
-
-        class MainTest {
-            @Test
-            void adds() {
-                assertEquals(2, 1 + 1);
-            }
-        }
 
         """
     }

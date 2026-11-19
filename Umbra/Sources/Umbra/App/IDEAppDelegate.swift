@@ -38,7 +38,10 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         var handled = false
-        if !flag {
+        // Settings counts as a visible window to AppKit, but a Dock click with only Settings open
+        // still has to bring an editor window back.
+        let hasVisibleEditor = Self.restorableWindows().contains { $0.isVisible }
+        if !flag || !hasVisibleEditor {
             let hidden = Self.restorableWindows().filter { !$0.isVisible }
             if hidden.isEmpty {
                 if let reopen = onReopenWithoutVisibleWindows {
@@ -96,8 +99,11 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
         IDESimulatorService.shared.shutdownBootedByUsBlocking()
     }
 
+    /// The editor windows. The Settings window is left out: SwiftUI keeps it after it is closed, and
+    /// reopening it here made a Dock click show Settings instead of (or beside) the editor.
     private static func restorableWindows() -> [NSWindow] {
-        NSApp.windows.filter { $0.canBecomeKey && $0.level == .normal }
+        let settings = IDESettingsPresentation.shared.window
+        return NSApp.windows.filter { $0.canBecomeKey && $0.level == .normal && $0 !== settings }
     }
 
     private static func activateAndKeyWindows() {

@@ -106,8 +106,24 @@ struct IDESettingsWindow: View {
         }
         .frame(minWidth: 780, minHeight: 520)
         .focusedSceneValue(\.ideSettingsWindow, true)
+        .background(IDESettingsWindowCapture().frame(width: 0, height: 0))
         .onAppear { presentation.ensureContext() }
         .onDisappear { presentation.clearContext() }
+    }
+}
+
+/// Hands the Settings scene's `NSWindow` to `IDESettingsPresentation`.
+private struct IDESettingsWindowCapture: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { CaptureView() }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class CaptureView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            let window = window
+            MainActor.assumeIsolated { IDESettingsPresentation.shared.adopt(window: window) }
+        }
     }
 }
 
@@ -116,6 +132,11 @@ final class IDESettingsPresentation {
     static let shared = IDESettingsPresentation()
     private(set) var workspace: IDEWorkspace?
     @ObservationIgnored private var openWindow: (() -> Void)?
+    /// The Settings `NSWindow`. SwiftUI keeps it after it is closed, hidden but still in `NSApp.windows`,
+    /// so the Dock-reopen code must be able to tell it from an editor window.
+    @ObservationIgnored private(set) weak var window: NSWindow?
+
+    func adopt(window: NSWindow?) { self.window = window }
 
     func setOpenWindowAction(_ action: @escaping () -> Void) { openWindow = action }
 

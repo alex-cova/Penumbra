@@ -45,7 +45,7 @@ final class IDEProjectTemplateTests: XCTestCase {
 
     // MARK: - Registry
 
-    func testRegistryListsSwiftTemplatesWithUniqueIDs() {
+    func testRegistryListsTemplatesWithUniqueIDs() {
         let ids = IDEProjectTemplates.all.map(\.id)
         XCTAssertEqual(Set(ids).count, ids.count)
         XCTAssertEqual(IDEProjectTemplates.families, [.swift, .java])
@@ -54,7 +54,7 @@ final class IDEProjectTemplateTests: XCTestCase {
             [
                 "swift.xcode.macos-app", "swift.xcode.command-line-tool",
                 "swift.package.executable", "swift.package.library",
-                "java.maven.application",
+                "java.maven.application", "java.gradle.application",
             ]
         )
     }
@@ -214,7 +214,7 @@ final class IDEProjectTemplateTests: XCTestCase {
         XCTAssertTrue(pom.contains("<groupId>com.example</groupId>"))
         XCTAssertTrue(pom.contains("<artifactId>my_app</artifactId>"))
         XCTAssertTrue(pom.contains("<artifactId>junit-jupiter</artifactId>"))
-        XCTAssertTrue(pom.contains("<version>\(IDEMavenApplicationTemplate.junitVersion)</version>"))
+        XCTAssertTrue(pom.contains("<version>\(IDEJavaApplicationSources.junitVersion)</version>"))
         XCTAssertTrue(pom.contains("<artifactId>maven-surefire-plugin</artifactId>"))
         XCTAssertTrue(pom.contains("<version>\(IDEMavenApplicationTemplate.surefireVersion)</version>"))
         let release = JDKLocator().discoverAll().map(\.featureVersion).max() ?? 17
@@ -242,6 +242,34 @@ final class IDEProjectTemplateTests: XCTestCase {
         XCTAssertEqual(module.languageLevel, release)
         XCTAssertEqual(model.javaProjectModel.gradleVersion, "maven")
         XCTAssertEqual(model.javaProjectModel.subprojects.first?.testTasks.first?.path, ":test")
+    }
+
+    // MARK: - Gradle
+
+    func testGradleApplicationCreatesTheBuildAndIdentifiesItsMainClass() throws {
+        let template = try template("java.gradle.application")
+        XCTAssertEqual(template.title, "Java Application (Gradle)")
+        XCTAssertEqual(template.fields, [.organizationIdentifier])
+        var app = options("switch")
+        app.organizationIdentifier = "java.9-tools"
+
+        let root = try IDEProjectWriter.create(template, options: app)
+        XCTAssertTrue(GradleProjectModelExtractor.isGradleProject(root))
+        let mainPath = try XCTUnwrap(template.primaryFile(for: app))
+        XCTAssertEqual(mainPath, "src/main/java/_java/_9_tools/_switch/Main.java")
+        let main = try String(contentsOf: root.appendingPathComponent(mainPath), encoding: .utf8)
+        XCTAssertTrue(main.contains("package _java._9_tools._switch;"))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("src/test/java/_java/_9_tools/_switch/MainTest.java").path
+        ))
+
+        let settings = try String(contentsOf: root.appendingPathComponent("settings.gradle"), encoding: .utf8)
+        XCTAssertEqual(settings, "rootProject.name = 'switch'\n")
+        let build = try String(contentsOf: root.appendingPathComponent("build.gradle"), encoding: .utf8)
+        XCTAssertTrue(build.contains("group = 'java.9-tools'"))
+        XCTAssertTrue(build.contains("mainClass = '_java._9_tools._switch.Main'"))
+        XCTAssertTrue(build.contains("options.release = 17"))
+        XCTAssertTrue(build.contains("useJUnitPlatform()"))
     }
 
     // MARK: - Writer

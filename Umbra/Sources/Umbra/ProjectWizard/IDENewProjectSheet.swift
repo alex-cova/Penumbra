@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// File ▸ New Project…: pick a template, name it, choose where it goes. Templates come from
-/// `IDEProjectTemplates`, so a new family (Gradle) shows up here without changes to this view.
+/// `IDEProjectTemplates`, so new templates show up here automatically.
 struct IDENewProjectSheet: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var model = IDENewProjectModel()
