@@ -249,7 +249,7 @@ final class IDEProjectTemplateTests: XCTestCase {
     func testGradleApplicationCreatesTheBuildAndIdentifiesItsMainClass() throws {
         let template = try template("java.gradle.application")
         XCTAssertEqual(template.title, "Java Application (Gradle)")
-        XCTAssertEqual(template.fields, [.organizationIdentifier])
+        XCTAssertEqual(template.fields, [.organizationIdentifier, .gradleDSL])
         var app = options("switch")
         app.organizationIdentifier = "java.9-tools"
 
@@ -263,9 +263,22 @@ final class IDEProjectTemplateTests: XCTestCase {
             atPath: root.appendingPathComponent("src/test/java/_java/_9_tools/_switch/MainTest.java").path
         ))
 
-        let settings = try String(contentsOf: root.appendingPathComponent("settings.gradle"), encoding: .utf8)
-        XCTAssertEqual(settings, "rootProject.name = 'switch'\n")
-        let build = try String(contentsOf: root.appendingPathComponent("build.gradle"), encoding: .utf8)
+        let settings = try String(contentsOf: root.appendingPathComponent("settings.gradle.kts"), encoding: .utf8)
+        XCTAssertEqual(settings, "rootProject.name = \"switch\"\n")
+        let kotlinBuild = try String(contentsOf: root.appendingPathComponent("build.gradle.kts"), encoding: .utf8)
+        XCTAssertTrue(kotlinBuild.contains("group = \"java.9-tools\""))
+        XCTAssertTrue(kotlinBuild.contains("mainClass.set(\"_java._9_tools._switch.Main\")"))
+        XCTAssertTrue(kotlinBuild.contains("options.release.set(17)"))
+        XCTAssertTrue(kotlinBuild.contains("useJUnitPlatform()"))
+
+        app.gradleDSL = .groovy
+        let groovyFiles = try template.files(for: app)
+        XCTAssertEqual(Set(groovyFiles.map(\.path)), [
+            ".gitignore", "build.gradle", "settings.gradle",
+            mainPath, "src/test/java/_java/_9_tools/_switch/MainTest.java",
+        ])
+        XCTAssertEqual(try text(of: "settings.gradle", in: groovyFiles), "rootProject.name = 'switch'\n")
+        let build = try text(of: "build.gradle", in: groovyFiles)
         XCTAssertTrue(build.contains("group = 'java.9-tools'"))
         XCTAssertTrue(build.contains("mainClass = '_java._9_tools._switch.Main'"))
         XCTAssertTrue(build.contains("options.release = 17"))

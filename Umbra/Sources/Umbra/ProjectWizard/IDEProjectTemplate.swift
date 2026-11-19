@@ -17,6 +17,7 @@ enum IDEProjectFamily: String, CaseIterable, Sendable {
 enum IDENewProjectField: Hashable, Sendable {
     case organizationIdentifier
     case minimumMacOS
+    case gradleDSL
 }
 
 /// What the user typed into the wizard.
@@ -26,6 +27,7 @@ struct IDENewProjectOptions: Equatable, Sendable {
     var parentDirectory: URL
     var minimumMacOS: String = "15.0"
     var swiftToolsVersion: String = "6.2"
+    var gradleDSL: IDEGradleDSL = .kotlin
 
     /// The folder the project is created in.
     var rootURL: URL {

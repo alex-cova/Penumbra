@@ -112,6 +112,7 @@ final class IDENewProjectModel {
     var name: String
     var organizationIdentifier: String
     var minimumMacOS: String
+    var gradleDSL: IDEGradleDSL = .kotlin
     var parentDirectory: URL?
     private(set) var isCreating = false
     private(set) var errorMessage: String?
@@ -138,6 +139,7 @@ final class IDENewProjectModel {
         )
         options.organizationIdentifier = organizationIdentifier
         options.minimumMacOS = minimumMacOS
+        options.gradleDSL = gradleDSL
         return options
     }
 

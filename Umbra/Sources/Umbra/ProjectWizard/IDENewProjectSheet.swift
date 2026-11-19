@@ -80,6 +80,18 @@ struct IDENewProjectSheet: View {
                         .frame(maxWidth: 140, alignment: .leading)
                     }
                 }
+                if template.fields.contains(.gradleDSL) {
+                    GridRow {
+                        label("Gradle DSL")
+                        Picker("Gradle DSL", selection: $model.gradleDSL) {
+                            ForEach(IDEGradleDSL.allCases) { dsl in
+                                Text(dsl.rawValue).tag(dsl)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 140, alignment: .leading)
+                    }
+                }
                 GridRow {
                     label("Location")
                     HStack(spacing: IDEAppearance.Spacing.sm) {

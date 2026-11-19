@@ -91,6 +91,12 @@ final class IDENewProjectSheetTests: XCTestCase {
 
         model.templateID = "java.gradle.application"
         model.organizationIdentifier = "com.example"
+        XCTAssertEqual(model.gradleDSL, .kotlin)
+        XCTAssertEqual(model.previewPaths, [
+            ".gitignore", "build.gradle.kts", "settings.gradle.kts",
+            "src/main/java/com/example/demo/Main.java", "src/test/java/com/example/demo/MainTest.java",
+        ])
+        model.gradleDSL = .groovy
         XCTAssertEqual(model.previewPaths, [
             ".gitignore", "build.gradle", "settings.gradle",
             "src/main/java/com/example/demo/Main.java", "src/test/java/com/example/demo/MainTest.java",
