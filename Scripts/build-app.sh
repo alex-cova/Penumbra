@@ -9,7 +9,14 @@ BUNDLE_ID="com.umbra.editor"
 VERSION="$(tr -d '[:space:]' < VERSION)"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-$root/dist}"
-APP_DIR="$DIST_DIR/$APP_NAME.app"
+FINAL_APP_DIR="$DIST_DIR/$APP_NAME.app"
+# Assemble and sign in a hidden staging folder, then move the finished bundle into place. Launch
+# Services routes document opens to any registered copy of com.umbra.editor, including a dev dist; a
+# launch that lands between `cp` of the binary and `codesign` dies in dyld with
+# "CODESIGNING, Invalid Page" before main.
+STAGING_DIR="$DIST_DIR/.staging"
+APP_DIR="$STAGING_DIR/$APP_NAME.app"
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 ENTITLEMENTS="$root/Umbra/Resources/Umbra.entitlements"
 INFO_PLIST_TEMPLATE="$root/Umbra/Resources/Info.plist"
 ICON_SOURCE="$root/Umbra/UmbraIcon.icon"
@@ -117,6 +124,13 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
 else
   echo "==> Skipping codesign (set CODESIGN_IDENTITY to sign)"
 fi
+
+rm -rf "$FINAL_APP_DIR"
+mv "$APP_DIR" "$FINAL_APP_DIR"
+rmdir "$STAGING_DIR" 2>/dev/null || true
+APP_DIR="$FINAL_APP_DIR"
+# A dist build is a release artifact, not the installed app: keep it from claiming .md/.java opens.
+"$LSREGISTER" -u "$APP_DIR" >/dev/null 2>&1 || true
 
 ZIP_PATH="$DIST_DIR/${APP_NAME}-${VERSION}-macOS.zip"
 rm -f "$ZIP_PATH"
