@@ -46,8 +46,6 @@ struct IDEPreferencesDetail: View {
             IDEPreferencesAppearancePane(preferences: preferences)
         case .terminal:
             IDEPreferencesTerminalPane(preferences: preferences)
-        case .focus:
-            IDEPreferencesFocusPane(preferences: preferences)
         case .project:
             IDEPreferencesProjectPane(preferences: preferences)
         case .agent:

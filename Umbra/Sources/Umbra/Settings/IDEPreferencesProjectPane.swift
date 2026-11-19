@@ -13,11 +13,6 @@ struct IDEPreferencesProjectPane: View {
                     Text(option.title).tag(option)
                 }
             }
-            IDESettingsToggle(
-                "Always Open with Empty File",
-                isOn: $preferences.opensWithEmptyFile,
-                detail: "A window with no files open starts with an empty Untitled tab instead of the Welcome screen."
-            )
         }
         IDESettingsSection("Explorer") {
             IDESettingsToggle(

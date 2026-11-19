@@ -50,7 +50,7 @@ struct IDESpringPanel: View {
     @ViewBuilder
     private func content(_ store: IDESpringStore) -> some View {
         switch store.phase {
-        case .idle, .loading where store.snapshot == nil:
+        case .idle where store.snapshot == nil, .loading where store.snapshot == nil:
             IDEEmptyState(title: "Analysing Spring beans…", isLoading: true)
         case .notSpring:
             IDEEmptyState(

@@ -2,8 +2,8 @@ import SwiftUI
 
 extension IDEPreferencesDomain {
     static let languageServers = IDEPreferencesDomain(
-        id: "language-servers", title: "Language Servers", symbol: "server.rack",
-        searchTerms: ["lsp", "rust-analyzer", "gopls", "clangd", "php", "ruby", "lua", "dart", "kotlin", "scala", "zig",
+        id: "language-servers", title: "LSP", symbol: "server.rack",
+        searchTerms: ["lsp", "language servers", "python", "pylsp", "python-lsp-server", "venv", "typescript", "typescript-language-server", "node", "javascript", "tsserver", "rust-analyzer", "gopls", "clangd", "php", "ruby", "lua", "dart", "kotlin", "scala", "zig",
                       "terraform", "bash", "c#", "r", "install", "restart", "language"]
     )
 }

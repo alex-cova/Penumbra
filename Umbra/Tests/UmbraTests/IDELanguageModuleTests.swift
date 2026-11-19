@@ -106,12 +106,12 @@ final class IDELanguageModuleTests: XCTestCase {
 
     func testSettingsPagesKeepTheirOrderWithTheJavaPageBetweenProjectAndAgent() {
         let modulePages = IDELanguageModules.preferencePanes.map(\.domain)
-        XCTAssertEqual(modulePages.map(\.id), ["java", "typescript", "swift", "swiftUIPreview", "python", "language-servers", "hex"])
+        XCTAssertEqual(modulePages.map(\.id), ["java", "swift", "swiftUIPreview", "language-servers", "hex"])
         XCTAssertEqual(
             IDEPreferencesDomain.ordered(with: modulePages).map(\.id),
-            ["general", "editor", "saving", "appearance", "terminal", "focus", "project", "java", "typescript", "swift", "swiftUIPreview", "python", "language-servers", "hex", "agent"]
+            ["general", "editor", "saving", "appearance", "terminal", "project", "java", "swift", "swiftUIPreview", "language-servers", "hex", "agent"]
         )
-        XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "saving", "appearance", "terminal", "focus", "project", "agent"])
+        XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "saving", "appearance", "terminal", "project", "agent"])
     }
 
     func testSettingsSearchStillFindsTheJavaPages() {

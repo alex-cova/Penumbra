@@ -25,11 +25,11 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
 
     static let general = IDEPreferencesDomain(
         id: "general", title: "General", symbol: "gearshape",
-        searchTerms: ["local history", "retention", "revisions", "days", "megabytes"]
+        searchTerms: ["local history", "retention", "revisions", "days", "megabytes", "open with empty file", "empty file", "untitled", "startup", "launch", "welcome"]
     )
     static let editor = IDEPreferencesDomain(
         id: "editor", title: "Editor", symbol: "chevron.left.forwardslash.chevron.right",
-        searchTerms: ["theme", "color", "font", "font size", "line height", "typography", "markdown headings", "tab width", "indent", "spaces", "line numbers", "folding", "word wrap", "minimap", "scrollbars", "right margin", "page guide", "method separators", "occurrences", "invisible characters", "metal", "renderer", "keymap", "keyboard", "sublime", "intellij", "shortcuts", "command completion", "full line", "inline", "postfix", "hugging face", "model", "download"],
+        searchTerms: ["theme", "color", "font", "font size", "line height", "typography", "markdown headings", "tab width", "indent", "spaces", "line numbers", "folding", "word wrap", "minimap", "scrollbars", "right margin", "page guide", "method separators", "occurrences", "invisible characters", "metal", "renderer", "keymap", "keyboard", "sublime", "intellij", "shortcuts", "command completion", "full line", "inline", "postfix", "hugging face", "model", "download", "focus", "typewriter", "distraction free", "focus mode", "writing"],
         showsTypePreview: true
     )
     static let saving = IDEPreferencesDomain(
@@ -44,10 +44,6 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
         id: "terminal", title: "Terminal", symbol: "apple.terminal",
         searchTerms: ["ghostty", "shell", "zsh", "bash", "login shell", "command", "arguments", "environment", "env", "term", "colorterm", "starting folder", "working-directory", "font-family", "font-size", "adjust-cell-height", "padding", "window-padding", "palette", "ansi", "colors", "foreground", "background", "selection", "cursor", "cursor-style", "cursor-style-blink", "blink", "faint-opacity", "scrollback", "scrollback-limit", "option as meta", "macos-option-as-alt", "alt", "bell", "bell-features", "copy-on-select", "copy on select", "mouse-hide-while-typing", "hide mouse", "scroll-to-bottom", "paste", "clipboard-paste-protection", "clipboard", "clipboard-read", "clipboard-write", "osc 52", "notifications", "desktop-notifications", "osc 9", "title", "title-report", "security"]
     )
-    static let focus = IDEPreferencesDomain(
-        id: "focus", title: "Focus", symbol: "scope",
-        searchTerms: ["typewriter", "distraction free", "focus mode", "writing"]
-    )
     static let project = IDEPreferencesDomain(
         id: "project", title: "Project", symbol: "folder", searchTerms: ["explorer", "flatten packages"]
     )
@@ -57,7 +53,7 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
     )
 
     /// The pages before the language modules' and the one after them.
-    static let leading: [IDEPreferencesDomain] = [.general, .editor, .saving, .appearance, .terminal, .focus, .project]
+    static let leading: [IDEPreferencesDomain] = [.general, .editor, .saving, .appearance, .terminal, .project]
 
     /// Built-in pages with `modules`' in the middle, in the order they have always had.
     static func ordered(with modules: [IDEPreferencesDomain]) -> [IDEPreferencesDomain] {

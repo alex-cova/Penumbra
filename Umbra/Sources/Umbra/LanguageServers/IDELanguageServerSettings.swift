@@ -5,14 +5,6 @@ extension IDEPreferencesDomain {
         id: "swift", title: "Swift", symbol: "swift",
         searchTerms: ["sourcekit", "sourcekit-lsp", "toolchain", "lsp"]
     )
-    static let typescript = IDEPreferencesDomain(
-        id: "typescript", title: "TypeScript", symbol: "curlybraces",
-        searchTerms: ["typescript-language-server", "node", "javascript", "tsserver", "lsp"]
-    )
-    static let python = IDEPreferencesDomain(
-        id: "python", title: "Python", symbol: "chevron.left.forward.slash.chevron.right",
-        searchTerms: ["pylsp", "python-lsp-server", "python", "venv", "lsp"]
-    )
 }
 
 extension IDESwiftModule {
@@ -21,12 +13,6 @@ extension IDESwiftModule {
             IDEPreferencesPane(domain: .swift) { _, _ in IDESwiftServerSettings() },
             IDEPreferencesPane(domain: .swiftUIPreview) { _, _ in IDESwiftUIPreviewSettingsPage() }
         ]
-    }
-}
-
-extension IDETypeScriptModule {
-    var preferencePanes: [IDEPreferencesPane] {
-        [IDEPreferencesPane(domain: .typescript) { _, _ in IDETypeScriptServerSettings() }]
     }
 }
 
@@ -46,7 +32,7 @@ private struct IDESwiftServerSettings: View {
     }
 }
 
-private struct IDETypeScriptServerSettings: View {
+struct IDETypeScriptServerSettings: View {
     @AppStorage(IDELanguageServerHost.enabledDefaultsKey) private var enabled = true
     @AppStorage(IDETypeScriptServer.pathKey) private var path = ""
 

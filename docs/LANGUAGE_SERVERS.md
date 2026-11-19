@@ -11,7 +11,7 @@ Umbra drives 14 external language servers (15 languages: one `clangd` serves C a
 | **Declarative registry** | `LanguageServers/Catalog/IDELanguageServerCatalog.swift` | One `IDELanguageServerSpec` per server: languages, executables, arguments, markers, install guidance, licence. |
 | Discovery | `Catalog/IDEServerLocator.swift` | override, project-local, process `PATH`, login-shell `PATH`, Homebrew, toolchain directories. |
 | Relevance | `Catalog/IDEServerProjectProbe.swift` | Bounded scan (400 entries for markers at the root and one level down, 1,500 entries / 3 levels for sources). |
-| Settings | Settings ▸ Language Servers (`IDELanguageServersSettings`) | Per-server on/off, path override, Restart, version, last stderr, install commands. Stored as `umbra.languageServers.<id>.{enabled,path}` in `UserDefaults`. |
+| Settings | Settings ▸ LSP (`IDELanguageServersSettings`, with Python's server section on top) | Per-server on/off, path override, Restart, version, last stderr, install commands. Stored as `umbra.languageServers.<id>.{enabled,path}` in `UserDefaults`. |
 
 **Adding a language** = one spec in the catalog + one `LanguageDefinition` in `LanguageDefinition+BuiltIns.swift` (extensions → identifier) + tests. No completion, diagnostics or sync code.
 

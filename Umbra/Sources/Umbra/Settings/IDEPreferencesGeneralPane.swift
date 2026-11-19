@@ -8,6 +8,14 @@ struct IDEPreferencesGeneralPane: View {
     @State private var automaticallyDownloadsUpdates = IDEAppUpdater.automaticallyDownloadsUpdates
 
     var body: some View {
+        IDESettingsSection("Startup") {
+            IDESettingsToggle(
+                "Open with empty file",
+                isOn: $preferences.opensWithEmptyFile,
+                detail: "A window with no files open starts with an empty Untitled tab instead of the Welcome screen."
+            )
+        }
+
         if IDEAppUpdater.isEnabled {
             IDESettingsSection("Updates") {
                 Toggle("Automatically check for updates", isOn: $automaticallyChecksForUpdates)

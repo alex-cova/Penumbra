@@ -288,7 +288,7 @@ private final class IDEACPUITestNpm: IDEACPNpmRunning, @unchecked Sendable {
         try fileManager.createDirectory(at: entry.deletingLastPathComponent(), withIntermediateDirectories: true)
         try IDEACPUITestAgent.script.write(to: entry, atomically: true, encoding: .utf8)
         let tarball = name.split(separator: "/").last.map(String.init) ?? name
-        var lock: [String: Any] = [
+        let lock: [String: Any] = [
             "lockfileVersion": 3,
             "packages": [
                 "": ["dependencies": [name: version]],

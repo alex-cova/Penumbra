@@ -345,6 +345,8 @@ struct IDEPreferencesEditorPane: View {
                 }
             }
         }
+
+        IDEPreferencesFocusPane(preferences: preferences)
     }
 
     @ViewBuilder private var inlineModelRows: some View {

@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// The "Writing Modes" section of Settings ▸ Editor.
 struct IDEPreferencesFocusPane: View {
     @Bindable var preferences: IDEPreferences
 
