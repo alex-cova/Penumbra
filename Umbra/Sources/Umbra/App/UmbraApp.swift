@@ -6,6 +6,10 @@ import SwiftUI
 struct UmbraApp: App {
     @NSApplicationDelegateAdaptor(IDEAppDelegate.self) private var appDelegate
 
+    /// A condition no external event carries: a scene with it never opens, or comes forward, for a
+    /// Dock drop, Open With, `open -a` or a URL. Those all go through `IDEAppDelegate`.
+    static let noExternalEvents: Set<String> = ["umbra-never-matches-an-event"]
+
     var body: some Scene {
         WindowGroup(id: "main") {
             IDEWindowScene()
@@ -15,7 +19,7 @@ struct UmbraApp: App {
         // SwiftUI must not open one itself: matching "*" opens a blank window per event, and an
         // empty set also suppresses the launch window. A name no event has matches nothing and
         // leaves the launch window alone.
-        .handlesExternalEvents(matching: ["umbra-never-matches-an-event"])
+        .handlesExternalEvents(matching: Self.noExternalEvents)
         .windowStyle(.hiddenTitleBar)
         .restorationBehavior(IDEACPUITestLaunch.isEnabled ? .disabled : .automatic)
         .commands {
@@ -25,6 +29,11 @@ struct UmbraApp: App {
         Window("Settings", id: "settings") {
             IDESettingsWindow()
         }
+        // Settings opens only from Umbra ▸ Settings… (⌘,) and the buttons that ask for it. A scene
+        // without this modifier is a candidate for every external event, and with the main group
+        // declining them all, SwiftUI picked this one: dropping a file on the Dock icon (or Open
+        // With, `open -a`) brought Settings up next to the file the app delegate had opened.
+        .handlesExternalEvents(matching: Self.noExternalEvents)
         .defaultSize(width: 1000, height: 700)
         .windowResizability(.contentMinSize)
         .restorationBehavior(IDEACPUITestLaunch.isEnabled ? .disabled : .automatic)
