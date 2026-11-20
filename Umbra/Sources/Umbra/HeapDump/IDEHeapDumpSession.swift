@@ -19,6 +19,8 @@ final class IDEHeapDumpSession: Identifiable {
         case summary = "Summary"
         case histogram = "Histogram"
         case dominators = "Dominators"
+        case reports = "Reports"
+        case threads = "Threads"
         var id: String { rawValue }
     }
 

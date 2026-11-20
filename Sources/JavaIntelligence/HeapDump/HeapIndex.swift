@@ -227,6 +227,9 @@ public final class HeapIndex: @unchecked Sendable {
         Darwin.close(fd)
     }
 
+    /// The dump file, open read-only, for reports that read many records in file order.
+    var dumpDescriptor: Int32 { fd }
+
     // MARK: - Objects
 
     public func number(ofID id: UInt64) -> Int32? { lookup.number(of: id) }
@@ -456,7 +459,7 @@ public final class HeapIndex: @unchecked Sendable {
     }
 
     /// Objects of one class (or array type) and their bytes.
-    public struct ClassTotal: Sendable, Hashable, Identifiable {
+    public struct ClassTotal: Sendable, Hashable, Identifiable, Codable {
         public let group: Int32
         public let name: String
         public let count: Int
@@ -535,7 +538,8 @@ public final class HeapIndex: @unchecked Sendable {
         }
         let isArrayClass = classes[Int(group)].name.hasSuffix("[]")
         if order == .address || (order == .largestFirst && sameSize && !isArrayClass) {
-            return (start..<min(end, start + limit)).map { members[$0] }
+            let stop = limit >= end - start ? end : start + limit
+            return (start..<stop).map { members[$0] }
         }
         // A min-heap of the `limit` largest (size, number), then sorted largest first.
         var heap: [(size: Int, n: Int32)] = []

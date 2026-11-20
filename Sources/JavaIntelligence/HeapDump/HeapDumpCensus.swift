@@ -109,7 +109,27 @@ public enum HeapDumpCensus {
         var segments: [Range<Int64>] = []
         var stackTraceCount = 0
         var stackFrameCount = 0
+        /// LOAD_CLASS serial → class object id (stack frames name their class by serial).
+        var classSerials: [UInt32: UInt64] = [:]
+        /// STACK_FRAME by frame id.
+        var frames: [UInt64: StackFrame] = [:]
+        /// STACK_TRACE by serial.
+        var traces: [UInt32: StackTrace] = [:]
         var truncatedAt: Int64?
+    }
+
+    struct StackFrame: Sendable {
+        let methodNameID: UInt64
+        let signatureID: UInt64
+        let sourceFileID: UInt64
+        let classSerial: UInt32
+        /// > 0 a line; -1 unknown, -2 compiled, -3 native.
+        let line: Int32
+    }
+
+    struct StackTrace: Sendable {
+        let threadSerial: UInt32
+        let frameIDs: [UInt64]
     }
 
     static func scanTopLevel(fd: Int32, fileSize: Int64, header: HprofHeader) throws -> TopLevel {
@@ -138,13 +158,34 @@ public enum HeapDumpCensus {
                 result.strings[id] = (reader.position, Int32(clamping: bodyEnd - reader.position))
             case .loadClass where length >= 8 + 2 * Int64(idSize):
                 let q = try reader.take(8 + 2 * idSize)
-                result.classNameIDs[HprofByteReader.id(q, 4, size: idSize)] = HprofByteReader.id(q, 8 + idSize, size: idSize)
+                let classID = HprofByteReader.id(q, 4, size: idSize)
+                result.classNameIDs[classID] = HprofByteReader.id(q, 8 + idSize, size: idSize)
+                result.classSerials[HprofByteReader.u4(q, 0)] = classID
             case .heapDump, .heapDumpSegment:
                 if bodyEnd > bodyStart { result.segments.append(bodyStart..<bodyEnd) }
-            case .stackTrace:
+            case .stackTrace where length >= 12:
                 result.stackTraceCount += 1
-            case .stackFrame:
+                let q = try reader.take(12)
+                let serial = HprofByteReader.u4(q, 0)
+                let thread = HprofByteReader.u4(q, 4)
+                let count = Int(min(Int64(HprofByteReader.u4(q, 8)), (length - 12) / Int64(idSize)))
+                var ids: [UInt64] = []
+                ids.reserveCapacity(count)
+                if count > 0 {
+                    let f = try reader.take(count * idSize)
+                    for index in 0..<count { ids.append(HprofByteReader.id(f, index * idSize, size: idSize)) }
+                }
+                result.traces[serial] = StackTrace(threadSerial: thread, frameIDs: ids)
+            case .stackFrame where length >= 4 * Int64(idSize) + 8:
                 result.stackFrameCount += 1
+                let q = try reader.take(4 * idSize + 8)
+                result.frames[HprofByteReader.id(q, 0, size: idSize)] = StackFrame(
+                    methodNameID: HprofByteReader.id(q, idSize, size: idSize),
+                    signatureID: HprofByteReader.id(q, 2 * idSize, size: idSize),
+                    sourceFileID: HprofByteReader.id(q, 3 * idSize, size: idSize),
+                    classSerial: HprofByteReader.u4(q, 4 * idSize),
+                    line: Int32(bitPattern: HprofByteReader.u4(q, 4 * idSize + 4))
+                )
             default:
                 break
             }

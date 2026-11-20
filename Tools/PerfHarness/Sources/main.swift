@@ -59,6 +59,7 @@ func printUsageAndExit() -> Never {
       java-coverage-bands synthetic [--lines N]
       heap-dump-census <file.hprof> [--threads N]
       heap-dump-index <file.hprof> [--into DIR] [--keep]
+      heap-dump-reports <file.hprof> [--into DIR]
       swift-syntax-parse <path|synthetic> [--lines N] [--samples N]
       swift-index <path|synthetic> [--files N]
       swift-completion <path|synthetic> [--files N] [--lines N]
@@ -254,6 +255,8 @@ do {
             depth: Int(flagValue("--depth", in: rest) ?? "") ?? 128,
             stacks: Int(flagValue("--stacks", in: rest) ?? "") ?? 2_000
         )
+    case "heap-dump-reports":
+        try HeapDumpProfile.runReports(path: path, into: flagValue("--into", in: rest))
     case "heap-dump-index":
         try HeapDumpProfile.runIndex(path: path, into: flagValue("--into", in: rest), keep: hasFlag("--keep", in: rest))
     case "heap-dump-census":

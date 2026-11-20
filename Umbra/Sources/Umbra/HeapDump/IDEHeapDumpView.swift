@@ -28,7 +28,7 @@ struct IDEHeapDumpView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 300)
+            .frame(width: 470)
             if session.mode == .histogram {
                 Picker("Group by", selection: $session.grouping) {
                     ForEach(IDEHeapDumpSession.Grouping.allCases) { Text("By \($0.rawValue)").tag($0) }
@@ -102,6 +102,8 @@ struct IDEHeapDumpView: View {
                 case .summary: IDEHeapDumpSummaryView(session: session, overview: overview)
                 case .histogram: IDEHeapDumpHistogramView(session: session)
                 case .dominators: IDEHeapDominatorsView(session: session)
+                case .reports: IDEHeapReportsView(session: session)
+                case .threads: IDEHeapThreadsView(session: session)
                 }
             }
         }
@@ -146,6 +148,9 @@ struct IDEHeapDumpSummaryView: View {
             VStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
                 if overview.truncatedAt != nil || !overview.problems.isEmpty {
                     problems
+                }
+                if let suspects = session.objects.suspects, !suspects.isEmpty {
+                    suspectStrip(suspects)
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: IDEAppearance.Spacing.md, alignment: .top)],
                           alignment: .leading, spacing: IDEAppearance.Spacing.md) {
@@ -233,6 +238,38 @@ struct IDEHeapDumpSummaryView: View {
             format: "Predicts %.1f%% of %@ sampled neighbour gaps. HPROF does not record the layout; sizes are estimates.",
             confidence * 100, overview.layoutSampleCount.formatted()
         )
+    }
+
+    /// One line per leak suspect, opening the Reports view.
+    private func suspectStrip(_ suspects: [HeapLeakSuspect]) -> some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            ForEach(suspects) { suspect in
+                Button {
+                    session.mode = .reports
+                } label: {
+                    HStack(spacing: IDEAppearance.Spacing.sm) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(IDEAppearance.ColorToken.error)
+                        Text(suspect.kind == .object
+                             ? "Leak suspect: one \(suspect.className) keeps \(String(format: "%.1f%%", suspect.share * 100)) of the live heap alive"
+                             : "Leak suspect: \(suspect.instanceCount.formatted()) \(suspect.className) keep \(String(format: "%.1f%%", suspect.share * 100)) of the live heap alive")
+                            .font(IDEAppearance.Typography.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: IDEAppearance.Spacing.sm)
+                        Text("Show Report")
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(IDEAppearance.ColorToken.accent)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(IDEAppearance.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IDEAppearance.ColorToken.error.opacity(IDEAppearance.Opacity.tintWash * 0.5),
+                    in: RoundedRectangle(cornerRadius: IDEAppearance.Radius.card))
     }
 
     private var problems: some View {

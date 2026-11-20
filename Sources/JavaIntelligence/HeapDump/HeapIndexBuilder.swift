@@ -28,7 +28,7 @@ public enum HeapIndexBuilder {
     }
 
     /// Format of what is written; a different number makes `HeapIndexStore` rebuild.
-    public static let formatVersion = 3
+    public static let formatVersion = 4
 
     /// Bytes of disk the build needs at its peak: per object about 130 (final arrays, the sort's
     /// records, the dominator pass's working arrays), per possible reference 12. Generous on purpose.
@@ -201,6 +201,8 @@ public enum HeapIndexBuilder {
         for array in written { try array.flushToDisk() }
         try classTable.write(to: directory.appendingPathComponent(Files.classTable))
         try writeRoots(roots, lookup: lookup, to: directory.appendingPathComponent(Files.roots))
+        let threads = try HeapThreadBuilder.make(topLevel: topLevel, roots: roots, lookup: lookup, fd: fd, fileSize: fileSize)
+        try JSONEncoder().encode(threads).write(to: directory.appendingPathComponent(HeapThreadBuilder.file), options: .atomic)
         let meta = HeapIndexMeta(
             formatVersion: formatVersion, dump: try HeapIndexMeta.DumpStamp(url),
             idSize: I, objectCount: objectCount, edgeCount: edgeCount, classCount: groupCount,

@@ -53,6 +53,25 @@ struct IDEHeapPathRow: Identifiable, Hashable, Sendable {
     let isWeak: Bool
 }
 
+/// One thread of the dump: its object, name, state, what it alone keeps alive, and its stack.
+struct IDEHeapThreadRow: Identifiable, Hashable, Sendable {
+    let id: UInt32
+    let object: Int32?
+    let name: String
+    let state: String
+    let retained: Int64
+    let frames: [HeapStackFrame]
+}
+
+/// A line of the selected thread's stack: a frame, or one of its locals under it.
+struct IDEHeapStackRow: Identifiable, Hashable, Sendable {
+    let id: Int
+    let frameIndex: Int
+    let text: String
+    /// Set on a local's line.
+    let local: Int32?
+}
+
 /// A class's instances' shortest paths to GC roots, folded from the root side.
 struct IDEHeapMergedPaths: Sendable {
     struct Row: Identifiable, Hashable, Sendable {
@@ -170,6 +189,30 @@ final class IDEHeapObjectExplorer {
 
     /// Called when an index opens or goes, so the histogram can show (or drop) retained sizes.
     @ObservationIgnored var onIndexChanged: (() -> Void)?
+
+    // Reports (phase 4). Suspects load as soon as an index opens; the inspections when the
+    // Reports view first shows (each is saved beside the index after its first run).
+    private(set) var suspects: [HeapLeakSuspect]?
+    private(set) var duplicateStrings: HeapDuplicateStrings?
+    private(set) var wastedCollections: HeapWastedCollections?
+    private(set) var zeroArrays: HeapZeroArrays?
+    private(set) var isLoadingInspections = false
+    private(set) var inspectionError: String?
+
+    // Threads.
+    private(set) var threads: [IDEHeapThreadRow]?
+    var selectedThread: UInt32? {
+        didSet { if selectedThread != oldValue { loadStack() } }
+    }
+    private(set) var stackRows: [IDEHeapStackRow] = []
+    var selectedStackRow: IDEHeapStackRow.ID? {
+        didSet {
+            guard selectedStackRow != oldValue, let id = selectedStackRow,
+                  let local = stackRows.first(where: { $0.id == id })?.local else { return }
+            inspect(local, startingOver: true)
+        }
+    }
+    @ObservationIgnored private var reportTicket = 0
     private(set) var forwardStack: [Int32] = []
 
     nonisolated static let instanceLimit = 1_000
@@ -268,6 +311,7 @@ final class IDEHeapObjectExplorer {
         indexFacts = nil
         clearInstances()
         dominatorRows = []
+        clearReports()
         onIndexChanged?()
         if let store {
             let url = url
@@ -287,6 +331,7 @@ final class IDEHeapObjectExplorer {
         inspectTicket += 1
         dominatorTicket += 1
         retainedSetTicket += 1
+        reportTicket += 1
     }
 
     private func apply(_ progress: HeapIndexBuilder.Progress, ticket: Int) {
@@ -299,7 +344,9 @@ final class IDEHeapObjectExplorer {
         state = .ready
         let facts = (index.diskBytes, index.referenceCount, index.danglingReferences, index.buildSeconds)
         indexFacts = facts
+        clearReports()
         onIndexChanged?()
+        loadSuspects()
         if let pending = pendingRow {
             pendingRow = nil
             showInstances(of: pending)
@@ -630,6 +677,100 @@ final class IDEHeapObjectExplorer {
             guard let self else { return }
             self.isLoadingMergedPaths = false
             self.mergedPaths = result
+        })
+    }
+
+    // MARK: - Reports
+
+    private func clearReports() {
+        reportTicket += 1
+        suspects = nil
+        duplicateStrings = nil
+        wastedCollections = nil
+        zeroArrays = nil
+        isLoadingInspections = false
+        inspectionError = nil
+        threads = nil
+        selectedThread = nil
+        stackRows = []
+    }
+
+    private func loadSuspects() {
+        guard let index else { return }
+        let ticket = reportTicket
+        track(Task { [weak self] in
+            let found = await Task.detached(priority: .utility) { HeapLeakSuspects.find(in: index) }.value
+            guard let self, self.reportTicket == ticket else { return }
+            self.suspects = found
+        })
+    }
+
+    /// Runs the three inspections once (off the main actor; cached on disk afterwards).
+    func loadInspectionsIfNeeded() {
+        guard let index, duplicateStrings == nil || wastedCollections == nil || zeroArrays == nil, !isLoadingInspections else { return }
+        isLoadingInspections = true
+        let ticket = reportTicket
+        track(Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<(HeapDuplicateStrings, HeapWastedCollections, HeapZeroArrays), Error> in
+                Result {
+                    (try HeapInspections.duplicateStrings(in: index), try HeapInspections.wastedCollections(in: index),
+                     try HeapInspections.zeroArrays(in: index))
+                }
+            }.value
+            guard let self, self.reportTicket == ticket else { return }
+            self.isLoadingInspections = false
+            switch result {
+            case .success(let (strings, collections, zeros)):
+                self.duplicateStrings = strings
+                self.wastedCollections = collections
+                self.zeroArrays = zeros
+            case .failure(let error):
+                self.inspectionError = String(describing: error)
+            }
+        })
+    }
+
+    func loadThreadsIfNeeded() {
+        guard let index, threads == nil else { return }
+        let ticket = reportTicket
+        track(Task { [weak self] in
+            let rows = await Task.detached(priority: .userInitiated) { () -> [IDEHeapThreadRow] in
+                index.threads().map { thread in
+                    IDEHeapThreadRow(
+                        id: thread.id, object: thread.object,
+                        name: thread.object.flatMap(index.threadName) ?? "Thread \(thread.id)",
+                        state: thread.object.flatMap(index.threadState)?.rawValue ?? "",
+                        retained: thread.object.map(index.retainedSize(of:)) ?? 0, frames: thread.frames
+                    )
+                }
+                .sorted { ($0.retained, $1.name) > ($1.retained, $0.name) }
+            }.value
+            guard let self, self.reportTicket == ticket else { return }
+            self.threads = rows
+        })
+    }
+
+    private func loadStack() {
+        guard let index, let selectedThread, let thread = threads?.first(where: { $0.id == selectedThread }) else {
+            stackRows = []
+            return
+        }
+        if let object = thread.object { inspect(object, startingOver: true) }
+        let ticket = reportTicket
+        track(Task { [weak self] in
+            let rows = await Task.detached(priority: .userInitiated) { () -> [IDEHeapStackRow] in
+                var rows: [IDEHeapStackRow] = []
+                for (position, frame) in thread.frames.enumerated() {
+                    rows.append(IDEHeapStackRow(id: rows.count, frameIndex: position, text: "at " + frame.description, local: nil))
+                    for local in frame.locals {
+                        let preview = index.preview(of: local).map { "  \($0)" } ?? ""
+                        rows.append(IDEHeapStackRow(id: rows.count, frameIndex: position, text: index.title(of: local) + preview, local: local))
+                    }
+                }
+                return rows
+            }.value
+            guard let self, self.reportTicket == ticket, self.selectedThread == selectedThread else { return }
+            self.stackRows = rows
         })
     }
 

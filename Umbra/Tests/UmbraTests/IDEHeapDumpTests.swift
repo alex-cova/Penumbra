@@ -615,6 +615,7 @@ final class IDEHeapObjectsRealDumpTests: XCTestCase {
         try await waitUntil { !objects.isLoadingObject && !objects.fields.isEmpty }
         snapshot("real-3-largest-byte-arrays")
         session.mode = .summary
+        try await waitUntil({ objects.suspects != nil }, seconds: 120)
         snapshot("real-4-summary")
 
         // Dominators: the biggest holder, expanded, with its path to a root.
@@ -645,6 +646,34 @@ final class IDEHeapObjectsRealDumpTests: XCTestCase {
         for line in objects.mergedPaths!.rows.prefix(8) {
             print("HEAPUI \(String(repeating: "  ", count: line.depth))\(line.title) ×\(line.count)")
         }
+        objects.mergedPaths = nil
+
+        // Reports: suspects and the three inspections.
+        session.mode = .reports
+        clock = Date()
+        objects.loadInspectionsIfNeeded()
+        try await waitUntil({ objects.duplicateStrings != nil && objects.zeroArrays != nil }, seconds: 300)
+        print("HEAPUI inspections in \(Date().timeIntervalSince(clock)) s")
+        if let suspect = objects.suspects?.first, let object = suspect.object {
+            objects.inspectorTab = .path
+            objects.inspect(object, startingOver: true)
+            try await waitUntil { !objects.isLoadingObject }
+        }
+        snapshot("real-8-reports")
+
+        // Threads: the one retaining most, its stack and a local.
+        session.mode = .threads
+        objects.loadThreadsIfNeeded()
+        try await waitUntil({ objects.threads != nil }, seconds: 60)
+        let busiest = try XCTUnwrap(objects.threads?.first { $0.frames.contains { !$0.locals.isEmpty } })
+        objects.selectedThread = busiest.id
+        try await waitUntil({ !objects.stackRows.isEmpty }, seconds: 30)
+        if let local = objects.stackRows.first(where: { $0.local != nil }) {
+            objects.inspectorTab = .fields
+            objects.selectedStackRow = local.id
+            try await waitUntil { !objects.isLoadingObject }
+        }
+        snapshot("real-9-threads")
     }
 }
 
@@ -806,5 +835,45 @@ final class IDEHeapWeakReachabilityTests: XCTestCase {
         try await waitUntil { !objects.isLoadingObject }
         XCTAssertTrue(objects.path.isEmpty)
         XCTAssertTrue(objects.inspectedSummary.contains("unreachable (garbage)"), objects.inspectedSummary)
+    }
+}
+
+
+@MainActor
+final class IDEHeapReportsUITests: XCTestCase {
+    func testSuspectsLoadWithTheIndexAndReportsAndThreadsFillIn() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("heap-reports-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("tiny.hprof")
+        try tinyHeapDump(weak: true).write(to: url)
+        let session = IDEHeapDumpSession(url: url, title: "tiny.hprof", indexStore: HeapIndexStore(root: directory.appendingPathComponent("indexes")))
+        session.load()
+        try await waitUntil { session.phase == .ready }
+        try await waitUntil { if case .absent = session.objects.state { true } else { false } }
+        let objects = session.objects
+        objects.build()
+        try await waitUntil { objects.state == .ready }
+        try await waitUntil { objects.suspects != nil }
+        XCTAssertEqual(objects.suspects?.first?.className, "com.acme.Cache", "the biggest holder of this tiny heap")
+
+        session.mode = .reports
+        objects.loadInspectionsIfNeeded()
+        try await waitUntil { objects.duplicateStrings != nil && objects.wastedCollections != nil && objects.zeroArrays != nil }
+        XCTAssertNil(objects.inspectionError)
+        XCTAssertEqual(objects.duplicateStrings?.stringCount, 0, "the tiny dump's strings have no value arrays")
+
+        session.mode = .threads
+        objects.loadThreadsIfNeeded()
+        try await waitUntil { objects.threads != nil }
+        XCTAssertEqual(objects.threads?.count, 1)
+        XCTAssertEqual(objects.threads?.first?.name, "Thread 1", "its object is not in the dump")
+        objects.selectedThread = objects.threads?.first?.id
+        XCTAssertTrue(objects.stackRows.isEmpty, "no trace was recorded")
+
+        // Deleting the index forgets the reports with it.
+        objects.deleteIndex()
+        XCTAssertNil(objects.suspects)
+        XCTAssertNil(objects.threads)
     }
 }

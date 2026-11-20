@@ -105,6 +105,49 @@ enum HeapDumpProfile {
         if !keep { try? FileManager.default.removeItem(at: into == nil ? store.root : target) }
     }
 
+    /// `heap-dump-reports <file> [--into DIR]`: phase 4 on an index (built, or reused from a store
+    /// at DIR): leak suspects, the three inspections and the threads, each timed.
+    static func runReports(path: String, into: String?) throws {
+        let url = URL(fileURLWithPath: path)
+        let store = HeapIndexStore(root: URL(fileURLWithPath: into ?? (NSTemporaryDirectory() + "heap-reports-\(getpid())")))
+        let index: HeapIndex
+        if let existing = store.openExisting(for: url) {
+            index = existing
+        } else {
+            let overview = try blocking { try await HeapDumpCensus.read(url) }
+            index = try blocking { try await store.build(dump: url, layout: overview.layout) }
+        }
+        defer { if into == nil { try? FileManager.default.removeItem(at: store.root) } }
+        for name in ["duplicate-strings", "wasted-collections", "zero-arrays"] {
+            try? FileManager.default.removeItem(at: index.directory.appendingPathComponent("report-\(name).json"))
+        }
+        var start = ContinuousClock.now
+        let suspects = HeapLeakSuspects.find(in: index)
+        print(String(format: "suspects_ms=%.0f count=%d", milliseconds(since: start), suspects.count))
+        for suspect in suspects { print("suspect \(suspect.summary)") }
+        start = .now
+        let duplicates = try HeapInspections.duplicateStrings(in: index)
+        print(String(format: "duplicate_strings_ms=%.0f strings=%d distinct=%d wasted=%lld", milliseconds(since: start), duplicates.stringCount, duplicates.distinctCount, duplicates.wastedBytes))
+        for group in duplicates.groups.prefix(5) { print("duplicate ×\(group.count) \(group.wastedBytes) \(group.text.prefix(60))") }
+        start = .now
+        let collections = try HeapInspections.wastedCollections(in: index)
+        print(String(format: "collections_ms=%.0f wasted=%lld", milliseconds(since: start), collections.wastedBytes))
+        for row in collections.rows.prefix(6) { print("collection \(row.className) \(row.problem) ×\(row.count) \(row.wastedBytes)") }
+        start = .now
+        let zeros = try HeapInspections.zeroArrays(in: index)
+        print(String(format: "zero_arrays_ms=%.0f bytes=%lld", milliseconds(since: start), zeros.bytes))
+        for row in zeros.rows.prefix(4) { print("zeros \(row.className) ×\(row.count) \(row.bytes)") }
+        start = .now
+        let threads = index.threads()
+        let named = threads.compactMap { $0.object }.map { (index.threadName($0) ?? "?", index.threadState($0)?.rawValue ?? "?", index.retainedSize(of: $0)) }
+        print(String(format: "threads_ms=%.0f count=%d frames=%d", milliseconds(since: start), threads.count, threads.reduce(0) { $0 + $1.frames.count }))
+        for (name, state, retained) in named.sorted(by: { $0.2 > $1.2 }).prefix(5) { print("thread \(name) \(state) retains \(retained)") }
+        if let main = threads.first(where: { $0.object.flatMap(index.threadName) == "AWT-EventQueue-0" }) ?? threads.first {
+            for frame in main.frames.prefix(6) { print("  at \(frame.description) locals=\(frame.locals.count)") }
+        }
+        print("peak_footprint_mb=\(peakFootprintMB())")
+    }
+
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {
         let duration = start.duration(to: .now)
         return Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15

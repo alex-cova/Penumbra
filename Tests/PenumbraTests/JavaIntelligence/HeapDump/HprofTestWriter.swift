@@ -23,11 +23,11 @@ struct HprofTestWriter {
 
     /// A class name (internal form, `java/lang/String`) with its string record. `nameID` defaults to
     /// a value derived from the class id so callers need not invent one.
-    mutating func loadClass(_ classID: UInt64, name: String, nameID: UInt64? = nil) {
+    mutating func loadClass(_ classID: UInt64, name: String, nameID: UInt64? = nil, serial: UInt32 = 1) {
         let nameID = nameID ?? (classID &+ 0x1_0000_0000)
         string(nameID, name)
         var body = Data()
-        body.appendU4(1)
+        body.appendU4(serial)
         body.appendID(classID, size: idSize)
         body.appendU4(0)
         body.appendID(nameID, size: idSize)
@@ -39,6 +39,29 @@ struct HprofTestWriter {
         body.appendU4(1)
         body.appendU4(1)
         body.appendU4(0)
+        record(HprofFormat.Tag.stackTrace.rawValue, body)
+    }
+
+    /// A STACK_FRAME naming its method, signature and file by new string records.
+    mutating func stackFrame(_ id: UInt64, method: String, signature: String, file: String?, classSerial: UInt32, line: Int32) {
+        let methodID = id &+ 0x2_0000_0000, signatureID = id &+ 0x3_0000_0000, fileID = id &+ 0x4_0000_0000
+        string(methodID, method)
+        string(signatureID, signature)
+        if let file { string(fileID, file) }
+        var body = Data()
+        for value in [id, methodID, signatureID, file == nil ? 0 : fileID] { body.appendID(value, size: idSize) }
+        body.appendU4(classSerial)
+        body.appendU4(UInt32(bitPattern: line))
+        record(HprofFormat.Tag.stackFrame.rawValue, body)
+    }
+
+    /// A STACK_TRACE of `frames`, innermost first.
+    mutating func stackTrace(serial: UInt32, threadSerial: UInt32, frames: [UInt64]) {
+        var body = Data()
+        body.appendU4(serial)
+        body.appendU4(threadSerial)
+        body.appendU4(UInt32(frames.count))
+        for frame in frames { body.appendID(frame, size: idSize) }
         record(HprofFormat.Tag.stackTrace.rawValue, body)
     }
 
@@ -153,6 +176,23 @@ struct HeapSegmentWriter {
         bytes.append(tag)
         bytes.appendID(id, size: idSize)
         bytes.append(Data(count: HeapDumpCensus.rootBodySize(kind, idSize: idSize) - idSize))
+    }
+
+    /// A root with its two extra words (thread serial, then frame number or stack trace serial).
+    mutating func root(_ kind: HprofRootKind, _ id: UInt64, first: UInt32, second: UInt32) {
+        let tag: UInt8
+        switch kind {
+        case .jniLocal: tag = HprofFormat.SubTag.rootJNILocal
+        case .javaFrame: tag = HprofFormat.SubTag.rootJavaFrame
+        case .threadObject: tag = HprofFormat.SubTag.rootThreadObject
+        default:
+            root(kind, id)
+            return
+        }
+        bytes.append(tag)
+        bytes.appendID(id, size: idSize)
+        bytes.appendU4(first)
+        bytes.appendU4(second)
     }
 
     mutating func raw(_ data: Data) {
