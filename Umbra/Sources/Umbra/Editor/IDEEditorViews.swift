@@ -18,6 +18,8 @@ final class IDEEditorPaneHost: NSView {
     let diagramViewer = IDEDiagramViewerView()
     /// Laid over the editor while a Java Flight Recorder profile tab is selected.
     let profileViewer = IDEProfilerViewerView()
+    /// Laid over the editor while a heap dump tab is selected.
+    let heapDumpViewer = IDEHeapDumpViewerView()
     /// True while this pane's JSON file is covered by its diagram.
     private(set) var isJSONDiagramVisible = false
     private var jsonDiagramSession: IDEDiagramSession?
@@ -104,6 +106,15 @@ final class IDEEditorPaneHost: NSView {
             profileViewer.leadingAnchor.constraint(equalTo: leadingAnchor),
             profileViewer.trailingAnchor.constraint(equalTo: trailingAnchor),
             profileViewer.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+
+        heapDumpViewer.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(heapDumpViewer)
+        NSLayoutConstraint.activate([
+            heapDumpViewer.topAnchor.constraint(equalTo: topAnchor),
+            heapDumpViewer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            heapDumpViewer.trailingAnchor.constraint(equalTo: trailingAnchor),
+            heapDumpViewer.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
         csvTableView.translatesAutoresizingMaskIntoConstraints = false

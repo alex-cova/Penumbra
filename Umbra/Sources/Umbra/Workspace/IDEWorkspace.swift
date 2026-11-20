@@ -34,6 +34,7 @@ public final class IDEWorkspace {
     /// Each diagram, Flight Recorder profile and hex tab's session, by document id (F-11).
     let diagramSessionStore = IDEDiagramSessionStore()
     let profileSessionStore = IDEProfilerSessionStore()
+    let heapDumpSessionStore = IDEHeapDumpSessionStore()
     /// Line costs of the profile being looked at, shown in the Java editors beside the code.
     let profileHints = IDEProfileLineHints()
     /// The profile tab that feeds ``profileHints``.
@@ -771,6 +772,10 @@ public final class IDEWorkspace {
             host.profileViewer.focus()
             return
         }
+        if workbench.activePane.selectedDocument?.contentKind == .heapDump {
+            host.heapDumpViewer.focus()
+            return
+        }
         if host.isCSVTableVisible {
             host.csvTableView.focus()
             return
@@ -1141,6 +1146,7 @@ public final class IDEWorkspace {
         closeAllDiffSessions()
         closeAllDiagramSessions()
         closeAllProfileSessions()
+        closeAllHeapDumpSessions()
         closeAllHexSessions()
         notifications.dismissToast()
         projectAccess.end()
@@ -3898,6 +3904,12 @@ public final class IDEWorkspace {
             openProfile(file: url)
             return
         }
+        // A heap dump is read by the heap dump analyzer, not loaded as bytes; Reopen as Hex reaches them.
+        if !asHex, HprofDetector.isHeapDump(at: url) {
+            recordRecentFile(url)
+            openHeapDump(file: url)
+            return
+        }
         // A jar is a folder of classes: its contents go to the Explorer rather than to a tab.
         // Open as Hex Editor on its row (or Reopen as Hex) reaches the bytes.
         if !asHex, IDEWorkspace.isJavaArchive(url) {
@@ -4078,6 +4090,8 @@ public final class IDEWorkspace {
                 host.diagramViewer.focus()
             } else if pane.selectedDocument?.contentKind == .profile {
                 host.profileViewer.focus()
+            } else if pane.selectedDocument?.contentKind == .heapDump {
+                host.heapDumpViewer.focus()
             } else if pane.selectedDocument?.contentKind == .binary {
                 host.hexViewer.focus()
             } else {
@@ -4494,6 +4508,7 @@ public final class IDEWorkspace {
         closeDiffSession(documentID, in: pane)
         closeDiagramSession(documentID, in: pane)
         closeProfileSession(documentID, in: pane)
+        closeHeapDumpSession(documentID, in: pane)
         let closingDocument = pane.documents.first(where: { $0.id == documentID })
         let closingURL = closingDocument?.url
         pane.closeDocument(documentID)
@@ -5136,7 +5151,8 @@ public final class IDEWorkspace {
                     isSelected: document.id == pane.selectedDocumentID,
                     symbolName: document.contentKind == .diagram
                         ? diagramSessionStore.session(for: document.id)?.request.symbolName
-                        : (document.contentKind == .profile ? "flame" : nil)
+                        : (document.contentKind == .profile ? "flame"
+                            : (document.contentKind == .heapDump ? "memorychip" : nil))
                 )
             }
         }
@@ -5685,6 +5701,7 @@ public final class IDEWorkspace {
             case .image: statusLanguage = "Image"
             case .diagram: statusLanguage = "Diagram"
             case .profile: statusLanguage = "Profile"
+            case .heapDump: statusLanguage = "Heap Dump"
             case .binary: statusLanguage = "Hex"
             case .diff: statusLanguage = "Diff"
             case .text: break
@@ -5807,8 +5824,13 @@ public final class IDEWorkspace {
     ) {
         guard let document = pane.selectedDocument else { return }
         if document.contentKind != .profile { host.profileViewer.hide() }
+        if document.contentKind != .heapDump { host.heapDumpViewer.hide() }
         if document.contentKind == .profile {
             showProfileDocument(document, in: pane, host: host)
+            return
+        }
+        if document.contentKind == .heapDump {
+            showHeapDumpDocument(document, in: pane, host: host)
             return
         }
         if document.contentKind == .binary {

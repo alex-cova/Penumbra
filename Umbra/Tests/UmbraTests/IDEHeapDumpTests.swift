@@ -1,0 +1,599 @@
+import AppKit
+import Foundation
+import JavaIntelligence
+import Penumbra
+import SwiftUI
+import XCTest
+@testable import Umbra
+
+/// A small HPROF 1.0.2 file: Object, String (int, ref) and `com.acme.Cache` (ref), three Strings,
+/// one Cache, a `byte[16]` and two roots. Written by hand here because `HprofTestWriter` lives in
+/// the library's test target.
+private func tinyHeapDump() -> Data {
+    var records = Data()
+    func u4(_ value: UInt32, into data: inout Data) { withUnsafeBytes(of: value.bigEndian) { data.append(contentsOf: $0) } }
+    func u8(_ value: UInt64, into data: inout Data) { withUnsafeBytes(of: value.bigEndian) { data.append(contentsOf: $0) } }
+    func u2(_ value: UInt16, into data: inout Data) { withUnsafeBytes(of: value.bigEndian) { data.append(contentsOf: $0) } }
+    func record(_ tag: UInt8, _ body: Data) {
+        records.append(tag)
+        u4(0, into: &records)
+        u4(UInt32(body.count), into: &records)
+        records.append(body)
+    }
+    func loadClass(_ id: UInt64, _ name: String) {
+        var string = Data()
+        u8(id + 0x1000, into: &string)
+        string.append(Data(name.utf8))
+        record(0x01, string)
+        var body = Data()
+        u4(1, into: &body)
+        u8(id, into: &body)
+        u4(0, into: &body)
+        u8(id + 0x1000, into: &body)
+        record(0x02, body)
+    }
+    // Field names: String (hash, value), Cache (entry).
+    for (id, name) in [(UInt64(0x9200), "hash"), (0x9201, "value"), (0x9300, "entry")] {
+        var string = Data()
+        u8(id, into: &string)
+        string.append(Data(name.utf8))
+        record(0x01, string)
+    }
+    loadClass(0x10, "java/lang/Object")
+    loadClass(0x20, "java/lang/String")
+    loadClass(0x30, "com/acme/Cache")
+    var heap = Data()
+    func classDump(_ id: UInt64, superID: UInt64, fields: [UInt8]) {
+        heap.append(0x20)
+        u8(id, into: &heap)
+        u4(0, into: &heap)
+        u8(superID, into: &heap)
+        for _ in 0..<5 { u8(0, into: &heap) }
+        u4(0, into: &heap)
+        u2(0, into: &heap)
+        u2(0, into: &heap)
+        u2(UInt16(fields.count), into: &heap)
+        for (index, type) in fields.enumerated() {
+            u8(UInt64(0x9000 + Int(id) * 16 + index), into: &heap)
+            heap.append(type)
+        }
+    }
+    func instance(_ id: UInt64, classID: UInt64, fieldBytes: Int, fields: Data? = nil) {
+        heap.append(0x21)
+        u8(id, into: &heap)
+        u4(0, into: &heap)
+        u8(classID, into: &heap)
+        u4(UInt32(fieldBytes), into: &heap)
+        heap.append(fields ?? Data(count: fieldBytes))
+    }
+    classDump(0x10, superID: 0, fields: [])
+    classDump(0x20, superID: 0x10, fields: [10, 2])
+    classDump(0x30, superID: 0x10, fields: [2])
+    for index in 0..<3 { instance(UInt64(0x10_0000 + index * 0x1000), classID: 0x20, fieldBytes: 12) }
+    // The cache's entry is the first String.
+    var entry = Data()
+    u8(0x10_0000, into: &entry)
+    instance(0x20_0000, classID: 0x30, fieldBytes: 8, fields: entry)
+    heap.append(0x23)
+    u8(0x30_0000, into: &heap)
+    u4(0, into: &heap)
+    u4(16, into: &heap)
+    heap.append(8)
+    heap.append(Data(count: 16))
+    heap.append(0x08)
+    u8(0x40_0000, into: &heap)
+    u4(1, into: &heap)
+    u4(0, into: &heap)
+    heap.append(0x05)
+    u8(0x20, into: &heap)
+    record(0x1C, heap)
+    record(0x2C, Data())
+
+    var file = Data("JAVA PROFILE 1.0.2".utf8)
+    file.append(0)
+    u4(8, into: &file)
+    u8(1_763_000_000_000, into: &file)
+    file.append(records)
+    return file
+}
+
+@MainActor
+private func waitUntil(_ condition: () -> Bool, seconds: Double = 10, file: StaticString = #filePath, line: UInt = #line) async throws {
+    let deadline = Date().addingTimeInterval(seconds)
+    while !condition(), Date() < deadline {
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertTrue(condition(), "timed out", file: file, line: line)
+}
+
+@MainActor
+final class IDEHeapDumpSessionTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("heap-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func dump() throws -> URL {
+        let url = directory.appendingPathComponent("tiny.hprof")
+        try tinyHeapDump().write(to: url)
+        return url
+    }
+
+    func testReadsAndShowsTheHistogram() async throws {
+        let session = IDEHeapDumpSession(url: try dump(), title: "tiny.hprof")
+        session.load()
+        try await waitUntil { session.phase == .ready }
+        let overview = try XCTUnwrap(session.overview)
+        XCTAssertEqual(overview.instanceCount, 4)
+        XCTAssertEqual(overview.primitiveArrayCount, 1)
+        XCTAssertEqual(overview.classCount, 3)
+        XCTAssertEqual(overview.threadCount, 1)
+        // Largest first: String (3 × 24), then the three class mirrors, byte[16] (32), Cache (16).
+        XCTAssertEqual(session.visibleRows.first?.name, "java.lang.String")
+        XCTAssertEqual(session.visibleRows.first?.shallowBytes, 72)
+
+        session.filterText = "acme"
+        XCTAssertEqual(session.visibleRows.map(\.name), ["com.acme.Cache"])
+
+        session.filterText = ""
+        session.grouping = .byPackage
+        XCTAssertEqual(Set(session.visibleRows.map(\.name)), ["java.lang", "com.acme", "(primitive arrays)"])
+        XCTAssertTrue(session.visibleRows.allSatisfy { $0.kind == .package })
+
+        session.grouping = .byClass
+        session.sortOrder = [KeyPathComparator(\.count, order: .reverse)]
+        XCTAssertEqual(session.visibleRows.first?.count, 3, "three Strings, or the three class mirrors")
+        XCTAssertEqual(session.visibleRows.last?.count, 1)
+
+        // A wider layout makes every String bigger: 16 + 4 + 8 = 28 → 32.
+        session.sortOrder = [KeyPathComparator(\.shallowBytes, order: .reverse)]
+        session.layoutOverride = .uncompressed
+        XCTAssertEqual(session.visibleRows.first { $0.name == "java.lang.String" }?.shallowBytes, 96)
+        session.layoutOverride = nil
+        XCTAssertEqual(session.visibleRows.first { $0.name == "java.lang.String" }?.shallowBytes, 72)
+
+        session.mode = .summary
+        session.showInHistogram("com.acme.Cache")
+        XCTAssertEqual(session.mode, .histogram)
+        XCTAssertEqual(session.visibleRows.map(\.name), ["com.acme.Cache"])
+    }
+
+    func testAFileThatIsNotADumpFailsWithASentence() async throws {
+        let url = directory.appendingPathComponent("notes.hprof")
+        try "not a heap dump\n".write(to: url, atomically: true, encoding: .utf8)
+        let session = IDEHeapDumpSession(url: url, title: "notes.hprof")
+        session.load()
+        try await waitUntil { if case .failed = session.phase { true } else { false } }
+        XCTAssertEqual(session.phase, .failed(HprofError.notAHeapDump.description))
+    }
+
+    func testCancelStopsTheReadItself() async throws {
+        let session = IDEHeapDumpSession(url: try dump(), title: "slow")
+        let observed = CancellationFlag()
+        session.reader = { _, _ in
+            do {
+                try await Task.sleep(nanoseconds: 30_000_000_000)
+            } catch {
+                observed.set()
+                throw error
+            }
+            throw HprofError.notAHeapDump
+        }
+        session.load()
+        if case .reading = session.phase {} else { XCTFail("reading") }
+        session.cancel()
+        XCTAssertEqual(session.phase, .idle)
+        try await waitUntil { observed.isSet }
+    }
+
+    func testAReloadDropsTheOlderResult() async throws {
+        let session = IDEHeapDumpSession(url: try dump(), title: "tiny")
+        let real = session.reader
+        // `load()` takes the reader it starts with, so the first read is the slow failing one.
+        session.reader = { _, _ in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            throw HprofError.notAHeapDump
+        }
+        session.load()
+        session.reader = real
+        session.load()
+        try await waitUntil { session.phase == .ready }
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(session.phase, .ready, "the first read's late failure is dropped")
+    }
+
+    func testSourceClassNames() {
+        func row(_ name: String, _ kind: HeapClassRow.Kind) -> HeapClassRow {
+            HeapClassRow(id: 0, name: name, kind: kind, count: 1, shallowBytes: 8)
+        }
+        XCTAssertEqual(IDEHeapDumpSession.sourceClassName(of: row("a.b.Foo$Bar", .instance)), "a.b.Foo$Bar")
+        XCTAssertEqual(IDEHeapDumpSession.sourceClassName(of: row("a.b.Foo[][]", .objectArray)), "a.b.Foo")
+        XCTAssertNil(IDEHeapDumpSession.sourceClassName(of: row("int[][]", .objectArray)))
+        XCTAssertNil(IDEHeapDumpSession.sourceClassName(of: row("byte[]", .primitiveArray)))
+        XCTAssertNil(IDEHeapDumpSession.sourceClassName(of: row("java.lang.Class", .classObject)))
+        XCTAssertNil(IDEHeapDumpSession.sourceClassName(of: row("a.b", .package)))
+    }
+}
+
+@MainActor
+final class IDEHeapDumpRoutingTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("heap-route-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        IDEWorkspace.isSessionPersistenceEnabled = true
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func heapDocuments(_ workspace: IDEWorkspace) -> [WorkbenchDocument] {
+        workspace.workbench.allDocuments().filter { $0.contentKind == .heapDump }
+    }
+
+    func testADumpOpensInTheAnalyzerByItsBytesAndASecondOpenReusesTheTab() async throws {
+        let workspace = IDEWorkspace()
+        workspace.bootstrap()
+        defer { workspace.teardown() }
+        // Renamed: found by its magic, not its name.
+        let url = directory.appendingPathComponent("java_pid42.bin")
+        try tinyHeapDump().write(to: url)
+
+        await workspace.openDocument(from: url)
+        XCTAssertEqual(heapDocuments(workspace).count, 1)
+        let document = try XCTUnwrap(heapDocuments(workspace).first)
+        XCTAssertEqual(document.displayName, "java_pid42.bin")
+        XCTAssertEqual(workspace.workbench.activePane.selectedDocument?.id, document.id)
+        let session = try XCTUnwrap(workspace.heapDumpSessionStore.session(for: document.id))
+        try await waitUntil { session.phase == .ready }
+
+        await workspace.openDocument(from: url)
+        XCTAssertEqual(heapDocuments(workspace).count, 1, "the same dump reuses its tab")
+
+        workspace.closeTab(document.id)
+        XCTAssertTrue(heapDocuments(workspace).isEmpty)
+        XCTAssertTrue(workspace.heapDumpSessionStore.sessions.isEmpty, "closing frees the session")
+    }
+
+    func testOpenAsHexBypassesTheAnalyzerAndATextFileNamedHprofStaysText() async throws {
+        let workspace = IDEWorkspace()
+        workspace.bootstrap()
+        defer { workspace.teardown() }
+        let dump = directory.appendingPathComponent("heap.hprof")
+        try tinyHeapDump().write(to: dump)
+        await workspace.openDocument(from: dump, asHex: true)
+        XCTAssertTrue(heapDocuments(workspace).isEmpty)
+        XCTAssertEqual(workspace.workbench.activePane.selectedDocument?.contentKind, .binary)
+
+        let notes = directory.appendingPathComponent("notes.hprof")
+        try "how to read a heap dump\n".write(to: notes, atomically: true, encoding: .utf8)
+        await workspace.openDocument(from: notes)
+        XCTAssertTrue(heapDocuments(workspace).isEmpty)
+        XCTAssertEqual(workspace.workbench.activePane.selectedDocument?.contentKind, .text)
+    }
+
+    func testReopenAsHexTurnsTheTabIntoBytes() async throws {
+        let workspace = IDEWorkspace()
+        workspace.bootstrap()
+        defer { workspace.teardown() }
+        let url = directory.appendingPathComponent("heap.hprof")
+        try tinyHeapDump().write(to: url)
+        await workspace.openDocument(from: url)
+        let document = try XCTUnwrap(heapDocuments(workspace).first)
+        let session = try XCTUnwrap(workspace.heapDumpSessionStore.session(for: document.id))
+
+        workspace.reopenHeapDumpAsHex(sessionID: session.id)
+        try await waitUntil { document.contentKind == .binary }
+        XCTAssertTrue(workspace.heapDumpSessionStore.sessions.isEmpty)
+        XCTAssertEqual(workspace.workbench.allDocuments().filter { $0.id == document.id }.count, 1, "same tab")
+    }
+}
+
+private final class CancellationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    func set() {
+        lock.lock()
+        value = true
+        lock.unlock()
+    }
+
+    var isSet: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
+/// Hosts the heap dump tab in a window so a crash or an empty render shows up in the run. Reads
+/// `UMBRA_HPROF` when set (a real dump), the tiny one otherwise; `UMBRA_VIEW_SNAPSHOTS=<dir>` keeps
+/// the images.
+@MainActor
+final class IDEHeapDumpViewsSmokeTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("heap-views-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func render(_ session: IDEHeapDumpSession, name: String, size: NSSize = NSSize(width: 1100, height: 720)) throws -> Double {
+        let host = NSHostingView(rootView: IDEHeapDumpView(session: session).preferredColorScheme(.dark))
+        host.frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        host.layoutSubtreeIfNeeded()
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        if let folder = ProcessInfo.processInfo.environment["UMBRA_VIEW_SNAPSHOTS"],
+           let png = rep.representation(using: .png, properties: [:]) {
+            try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+            try png.write(to: URL(fileURLWithPath: folder).appendingPathComponent("\(name).png"))
+        }
+        var counts: [UInt32: Int] = [:]
+        for y in stride(from: 0, to: rep.pixelsHigh, by: 3) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: 3) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let key = UInt32(color.redComponent * 255) << 16 | UInt32(color.greenComponent * 255) << 8 | UInt32(color.blueComponent * 255)
+                counts[key, default: 0] += 1
+            }
+        }
+        let total = counts.values.reduce(0, +)
+        guard total > 0, let common = counts.values.max() else { return 0 }
+        return 1 - Double(common) / Double(total)
+    }
+
+    func testTheTabRendersReadingSummaryHistogramAndFailure() async throws {
+        let url: URL
+        if let path = ProcessInfo.processInfo.environment["UMBRA_HPROF"] {
+            url = URL(fileURLWithPath: path)
+        } else {
+            url = directory.appendingPathComponent("tiny.hprof")
+            try tinyHeapDump().write(to: url)
+        }
+        let session = IDEHeapDumpSession(url: url, title: url.lastPathComponent)
+        let real = session.reader
+        session.reader = { url, progress in
+            progress(HeapDumpCensus.Progress(phase: .countingObjects, fraction: 0.4, bytesDone: 2_600_000_000, bytesTotal: 6_500_000_000))
+            try await Task.sleep(nanoseconds: 1_500_000_000)
+            return try await real(url, progress)
+        }
+        session.load()
+        try await waitUntil { if case .reading(let p) = session.phase { p.fraction > 0.3 } else { false } }
+        XCTAssertGreaterThan(try render(session, name: "heap-1-reading"), 0.005)
+
+        try await waitUntil({ session.phase == .ready }, seconds: 120)
+        XCTAssertGreaterThan(try render(session, name: "heap-2-summary"), 0.05)
+
+        session.mode = .histogram
+        XCTAssertGreaterThan(try render(session, name: "heap-3-histogram"), 0.05)
+        session.filterText = "HashMap"
+        XCTAssertGreaterThan(try render(session, name: "heap-4-histogram-filtered"), 0.01)
+        session.filterText = ""
+        session.grouping = .byPackage
+        XCTAssertGreaterThan(try render(session, name: "heap-5-packages"), 0.05)
+
+        let notes = directory.appendingPathComponent("notes.hprof")
+        try "not a dump\n".write(to: notes, atomically: true, encoding: .utf8)
+        let failing = IDEHeapDumpSession(url: notes, title: "notes.hprof")
+        failing.load()
+        try await waitUntil { if case .failed = failing.phase { true } else { false } }
+        XCTAssertGreaterThan(try render(failing, name: "heap-6-failed"), 0.001)
+    }
+}
+
+@MainActor
+final class IDEHeapObjectExplorerTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("heap-objects-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func readySession() async throws -> IDEHeapDumpSession {
+        let url = directory.appendingPathComponent("tiny.hprof")
+        if !FileManager.default.fileExists(atPath: url.path) { try tinyHeapDump().write(to: url) }
+        let store = HeapIndexStore(root: directory.appendingPathComponent("indexes"))
+        let session = IDEHeapDumpSession(url: url, title: "tiny.hprof", indexStore: store)
+        session.load()
+        try await waitUntil { session.phase == .ready }
+        return session
+    }
+
+    private func isAbsent(_ state: IDEHeapObjectExplorer.IndexState) -> Bool {
+        if case .absent = state { return true }
+        return false
+    }
+
+    func testBuildThenBrowseInstancesFieldsAndReferrers() async throws {
+        let session = try await readySession()
+        let objects = session.objects
+        try await waitUntil { self.isAbsent(objects.state) }
+        if case .absent(let estimated, _) = objects.state { XCTAssertGreaterThan(estimated, 0) }
+
+        objects.build()
+        try await waitUntil { objects.state == .ready }
+        XCTAssertEqual(objects.indexFacts?.references, 3, "the cache's entry, and String's and Cache's classes to Object")
+
+        // A histogram row picked before or after the index: its instances, largest first.
+        session.mode = .histogram
+        let stringRow = try XCTUnwrap(session.visibleRows.first { $0.name == "java.lang.String" })
+        session.selectedRowIDs = [stringRow.id]
+        try await waitUntil { objects.instances.count == 3 }
+        XCTAssertEqual(objects.groupName, "java.lang.String")
+        XCTAssertEqual(objects.instanceTotal, 3)
+        XCTAssertTrue(objects.instances.allSatisfy { $0.shallow == 24 })
+
+        // The cache: its field points to the first String, which lists the cache as its referrer.
+        let cacheRow = try XCTUnwrap(session.visibleRows.first { $0.name == "com.acme.Cache" })
+        session.selectedRowIDs = [cacheRow.id]
+        try await waitUntil { objects.instances.count == 1 }
+        objects.selectedInstance = objects.instances[0].id
+        try await waitUntil { !objects.isLoadingObject && !objects.fields.isEmpty }
+        XCTAssertEqual(objects.inspectedTitle, "com.acme.Cache @ 0x200000")
+        let entry = try XCTUnwrap(objects.fields.first)
+        XCTAssertEqual(entry.name, "entry")
+        let target = try XCTUnwrap(entry.target)
+        XCTAssertTrue(entry.value.hasPrefix("java.lang.String @ 0x100000"), entry.value)
+
+        objects.inspect(target)
+        try await waitUntil { objects.inspectedTitle == "java.lang.String @ 0x100000" && objects.referrerTotal == 1 }
+        XCTAssertEqual(objects.fields.map(\.name), ["hash", "value"])
+        XCTAssertEqual(objects.referrers.first?.via, "entry")
+        XCTAssertEqual(objects.referrers.first?.title, "com.acme.Cache @ 0x200000")
+        XCTAssertEqual(objects.backStack.count, 1)
+
+        objects.goBack()
+        try await waitUntil { objects.inspectedTitle == "com.acme.Cache @ 0x200000" }
+        XCTAssertEqual(objects.forwardStack.count, 1)
+        objects.goForward()
+        try await waitUntil { objects.inspectedTitle == "java.lang.String @ 0x100000" }
+
+        // Grouping by package shows no instances.
+        session.grouping = .byPackage
+        XCTAssertNil(objects.group)
+    }
+
+    func testASecondTabFindsTheIndexAndDeleteForgetsIt() async throws {
+        let first = try await readySession()
+        try await waitUntil { self.isAbsent(first.objects.state) }
+        first.objects.build()
+        try await waitUntil { first.objects.state == .ready }
+
+        let second = try await readySession()
+        try await waitUntil { second.objects.state == .ready }
+
+        second.objects.deleteIndex()
+        XCTAssertTrue(isAbsent(second.objects.state))
+        let third = try await readySession()
+        try await waitUntil { self.isAbsent(third.objects.state) }
+    }
+
+    func testCancellingABuildLeavesNoIndex() async throws {
+        let session = try await readySession()
+        try await waitUntil { self.isAbsent(session.objects.state) }
+        session.objects.build()
+        session.objects.cancelBuild()
+        try await waitUntil { self.isAbsent(session.objects.state) || session.objects.state == .ready }
+        if isAbsent(session.objects.state) {
+            let store = HeapIndexStore(root: directory.appendingPathComponent("indexes"))
+            XCTAssertNil(store.openExisting(for: session.url))
+        }
+    }
+
+    func testTheHistogramPaneRendersEachState() async throws {
+        let session = try await readySession()
+        session.mode = .histogram
+        try await waitUntil { self.isAbsent(session.objects.state) }
+        let host = NSHostingView(rootView: IDEHeapDumpView(session: session).preferredColorScheme(.dark))
+        host.frame = NSRect(x: 0, y: 0, width: 1100, height: 700)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        func snapshot(_ name: String) {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            guard let folder = ProcessInfo.processInfo.environment["UMBRA_VIEW_SNAPSHOTS"],
+                  let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: folder).appendingPathComponent("\(name).png"))
+        }
+        snapshot("heap-objects-1-absent")
+        session.objects.build()
+        try await waitUntil { session.objects.state == .ready }
+        let cache = try XCTUnwrap(session.visibleRows.first { $0.name == "com.acme.Cache" })
+        session.selectedRowIDs = [cache.id]
+        try await waitUntil { session.objects.instances.count == 1 }
+        session.objects.selectedInstance = session.objects.instances[0].id
+        try await waitUntil { !session.objects.isLoadingObject && !session.objects.fields.isEmpty }
+        snapshot("heap-objects-2-inspector")
+        session.objects.inspectorTab = .referrers
+        if let target = session.objects.fields.first?.target { session.objects.inspect(target) }
+        try await waitUntil { session.objects.referrerTotal == 1 }
+        snapshot("heap-objects-3-referrers")
+        session.mode = .summary
+        snapshot("heap-objects-4-summary")
+    }
+}
+
+/// The object pane on a real dump: `UMBRA_HPROF=<file>` and `UMBRA_HEAP_INDEX_ROOT=<dir>` holding
+/// an index built for it (`PerfHarness heap-dump-index <file> --into <dir> --keep`, release, since
+/// a debug build of a large index takes minutes). `UMBRA_VIEW_SNAPSHOTS=<dir>` keeps the images.
+@MainActor
+final class IDEHeapObjectsRealDumpTests: XCTestCase {
+    func testBrowsingARealDump() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["UMBRA_HPROF"], let root = environment["UMBRA_HEAP_INDEX_ROOT"] else {
+            throw XCTSkip("Set UMBRA_HPROF and UMBRA_HEAP_INDEX_ROOT to run")
+        }
+        let session = IDEHeapDumpSession(
+            url: URL(fileURLWithPath: path), title: "dump", indexStore: HeapIndexStore(root: URL(fileURLWithPath: root))
+        )
+        session.load()
+        try await waitUntil({ session.phase == .ready }, seconds: 120)
+        try await waitUntil({ session.objects.state == .ready }, seconds: 30)
+        session.mode = .histogram
+        let host = NSHostingView(rootView: IDEHeapDumpView(session: session).preferredColorScheme(.dark))
+        host.frame = NSRect(x: 0, y: 0, width: 1280, height: 760)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        func snapshot(_ name: String) {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+            guard let folder = environment["UMBRA_VIEW_SNAPSHOTS"],
+                  let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: folder).appendingPathComponent("\(name).png"))
+        }
+        let objects = session.objects
+        let started = Date()
+        let row = try XCTUnwrap(session.visibleRows.first { $0.name == "com.intellij.build.events.impl.OutputBuildEventImpl" }
+            ?? session.visibleRows.first { $0.kind == .instance })
+        session.selectedRowIDs = [row.id]
+        try await waitUntil({ objects.instances.count == min(row.count, IDEHeapObjectExplorer.instanceLimit) }, seconds: 30)
+        print("HEAPUI instances of \(row.name) in \(Date().timeIntervalSince(started)) s")
+        objects.selectedInstance = objects.instances[0].id
+        try await waitUntil { !objects.isLoadingObject && !objects.fields.isEmpty }
+        snapshot("real-1-instances-fields")
+        if let target = objects.fields.first(where: { $0.target != nil && $0.value.contains("String") })?.target
+            ?? objects.fields.first(where: { $0.target != nil })?.target {
+            objects.inspect(target)
+            try await waitUntil { objects.backStack.count == 1 && !objects.isLoadingObject }
+        }
+        objects.inspectorTab = .referrers
+        try await waitUntil { objects.referrerTotal > 0 }
+        snapshot("real-2-referrers")
+
+        let bytesRow = try XCTUnwrap(session.visibleRows.first { $0.name == "byte[]" })
+        session.selectedRowIDs = [bytesRow.id]
+        try await waitUntil({ objects.groupName == "byte[]" && !objects.instances.isEmpty }, seconds: 60)
+        objects.inspectorTab = .fields
+        objects.selectedInstance = objects.instances[0].id
+        try await waitUntil { !objects.isLoadingObject && !objects.fields.isEmpty }
+        snapshot("real-3-largest-byte-arrays")
+        session.mode = .summary
+        snapshot("real-4-summary")
+    }
+}

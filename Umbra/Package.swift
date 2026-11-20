@@ -124,6 +124,7 @@ let package = Package(
                 "Languages/CLAUDE.md",
                 "LocalHistory/CLAUDE.md",
                 "Profiler/CLAUDE.md",
+                "HeapDump/CLAUDE.md",
                 "Projects/CLAUDE.md",
                 "ProjectWizard/CLAUDE.md",
                 "Run/CLAUDE.md",

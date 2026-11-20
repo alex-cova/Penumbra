@@ -57,6 +57,8 @@ func printUsageAndExit() -> Never {
       java-goto-definition synthetic [--lines N] [--samples N]
       java-profile-import synthetic [--samples N] [--depth N] [--stacks N]
       java-coverage-bands synthetic [--lines N]
+      heap-dump-census <file.hprof> [--threads N]
+      heap-dump-index <file.hprof> [--into DIR] [--keep]
       swift-syntax-parse <path|synthetic> [--lines N] [--samples N]
       swift-index <path|synthetic> [--files N]
       swift-completion <path|synthetic> [--files N] [--lines N]
@@ -252,6 +254,10 @@ do {
             depth: Int(flagValue("--depth", in: rest) ?? "") ?? 128,
             stacks: Int(flagValue("--stacks", in: rest) ?? "") ?? 2_000
         )
+    case "heap-dump-index":
+        try HeapDumpProfile.runIndex(path: path, into: flagValue("--into", in: rest), keep: hasFlag("--keep", in: rest))
+    case "heap-dump-census":
+        try HeapDumpProfile.run(path: path, threads: Int(flagValue("--threads", in: rest) ?? ""))
     case "java-coverage-bands":
         try JavaInstrumentationProfile.runCoverageBands(lines: Int(flagValue("--lines", in: rest) ?? "") ?? 20_000)
     case "java-members":

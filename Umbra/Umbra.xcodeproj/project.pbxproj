@@ -61,6 +61,7 @@
 				Diff/CLAUDE.md,
 				Git/CLAUDE.md,
 				HTTP/CLAUDE.md,
+				HeapDump/CLAUDE.md,
 				Inspections/CLAUDE.md,
 				Languages/CLAUDE.md,
 				LocalHistory/CLAUDE.md,

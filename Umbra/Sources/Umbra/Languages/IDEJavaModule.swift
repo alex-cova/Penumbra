@@ -36,6 +36,8 @@ struct IDEJavaModule: IDELanguageModule {
                           action: { [weak workspace] in workspace?.runTestsInstrumented(.profile) }),
             EditorCommand(id: "app.java.openProfilerRecording", title: "Java: Open Profiler Recording…", group: "Java",
                           action: { [weak workspace] in workspace?.chooseProfilerRecording() }),
+            EditorCommand(id: "app.java.openHeapDump", title: "Java: Open Heap Dump…", group: "Java",
+                          action: { [weak workspace] in workspace?.chooseHeapDump() }),
             EditorCommand(id: "app.java.editRunConfiguration", title: "Java: Edit Configurations…", group: "Java",
                           action: { [weak workspace] in workspace?.editRunConfiguration() }),
             EditorCommand(id: "app.java.reloadGradleProject", title: "Java: Reload Gradle Project", group: "Java",

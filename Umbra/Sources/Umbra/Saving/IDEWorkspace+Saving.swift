@@ -108,7 +108,7 @@ extension IDEWorkspace {
             return await saveHex(document, interactive: reason.isInteractive)
         case .text:
             break
-        case .image, .diagram, .profile:
+        case .image, .diagram, .profile, .heapDump:
             return .clean
         }
         // A decompiled class is Java text over a `.class` file: saving it would replace the bytecode.

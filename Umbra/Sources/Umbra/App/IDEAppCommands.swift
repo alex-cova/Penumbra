@@ -151,6 +151,8 @@ private struct IDEFileCommands: View {
             .disabled(workspace == nil)
         Button("Open Profiler Recording…", systemImage: "flame") { workspace?.chooseProfilerRecording() }
             .disabled(workspace == nil)
+        Button("Open Heap Dump…", systemImage: "memorychip") { workspace?.chooseHeapDump() }
+            .disabled(workspace == nil)
         Button("Open Folder…", systemImage: "folder.badge.plus") {
             IDEWindowRegistry.shared.chooseFolder(from: origin)
         }
