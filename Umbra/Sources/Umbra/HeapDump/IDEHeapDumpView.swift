@@ -96,6 +96,36 @@ struct IDEHeapDumpView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .compressed:
+            VStack(spacing: IDEAppearance.Spacing.sm) {
+                Image(systemName: "doc.zipper")
+                    .font(.system(size: 28))
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Text("This heap dump is gzip-compressed.")
+                    .font(IDEAppearance.Typography.body)
+                Text("Decompressing writes the whole dump (often several times this file's size) to Umbra's caches, then opens it here.")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+                HStack {
+                    Button("Decompress and Open") { session.decompress() }
+                        .keyboardShortcut(.defaultAction)
+                    Button("Open as Hex") { session.openAsHex?() }
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .decompressing(let fraction):
+            VStack(spacing: IDEAppearance.Spacing.sm) {
+                ProgressView(value: fraction).frame(width: 260)
+                Text("Decompressing…")
+                    .font(IDEAppearance.Typography.body)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+                Button("Cancel") { session.cancel() }
+                    .controlSize(.small)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .ready:
             if let overview = session.overview {
                 switch session.mode {

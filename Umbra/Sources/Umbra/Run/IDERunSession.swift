@@ -92,6 +92,9 @@ final class IDERunSession: Identifiable {
         self.payload = payload
     }
 
+    /// The folder the program runs in, for relative paths it prints (a heap dump's).
+    var workingDirectory: URL? { launch?.workingDirectory }
+
     /// The program's process id while it runs, for what watches it from outside.
     var processIdentifier: Int32? {
         guard let pid = handle?.processIdentifier, pid > 0 else { return nil }

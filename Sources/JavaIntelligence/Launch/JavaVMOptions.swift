@@ -252,3 +252,16 @@ public enum JavaVMOptions {
         )
     ]
 }
+
+
+extension JavaVMOptions {
+    /// `-XX:HeapDumpPath=<directory>` when `vmArguments` turn on `-XX:+HeapDumpOnOutOfMemoryError`
+    /// and name no path of their own, so the dump goes to `directory` instead of the working
+    /// directory (a project folder). Nothing otherwise.
+    public static func heapDumpPathArguments(vmArguments: String, directory: URL) -> [String] {
+        let tokens = JavaCommandLine.split(vmArguments)
+        guard tokens.contains("-XX:+HeapDumpOnOutOfMemoryError"),
+              !tokens.contains(where: { $0.hasPrefix("-XX:HeapDumpPath") }) else { return [] }
+        return ["-XX:HeapDumpPath=\(directory.path)"]
+    }
+}

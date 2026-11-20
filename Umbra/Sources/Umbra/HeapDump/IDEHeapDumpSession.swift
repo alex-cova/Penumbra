@@ -13,6 +13,9 @@ final class IDEHeapDumpSession: Identifiable {
         case reading(HeapDumpCensus.Progress)
         case ready
         case failed(String)
+        /// A gzip'd dump (`.hprof.gz`): it must be decompressed before it can be read.
+        case compressed
+        case decompressing(Double)
     }
 
     enum Mode: String, CaseIterable, Identifiable {
@@ -81,6 +84,11 @@ final class IDEHeapDumpSession: Identifiable {
     @ObservationIgnored var openSource: ((String) -> Void)?
     @ObservationIgnored var openAsHex: (() -> Void)?
     @ObservationIgnored var revealInFinder: (() -> Void)?
+    /// Where a compressed dump is decompressed to, and what opens the result (the workspace
+    /// replaces this tab with the decompressed dump's).
+    @ObservationIgnored var decompressedFolder: URL?
+    @ObservationIgnored var onDecompressed: ((URL) -> Void)?
+    @ObservationIgnored private var decompressTask: Task<Void, Error>?
 
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var readTask: Task<HeapDumpOverview, Error>?
@@ -114,6 +122,15 @@ final class IDEHeapDumpSession: Identifiable {
 
     /// Reads the dump. A read in flight is replaced; its late results are dropped by ticket.
     func load() {
+        if HprofGzip.isGzip(at: url) {
+            // A decompressed copy newer than the archive opens at once; otherwise ask first, since
+            // decompressing writes the whole dump to disk.
+            if let target = decompressedTarget, Self.isNewer(target, than: url), HprofDetector.isHeapDump(at: target) {
+                onDecompressed?(target)
+            }
+            phase = .compressed
+            return
+        }
         readTask?.cancel()
         task?.cancel()
         ticket += 1
@@ -152,7 +169,57 @@ final class IDEHeapDumpSession: Identifiable {
         }
     }
 
+    /// `<folder>/<name without .gz>`.
+    var decompressedTarget: URL? {
+        guard let decompressedFolder else { return nil }
+        var name = url.lastPathComponent
+        if name.lowercased().hasSuffix(".gz") { name = String(name.dropLast(3)) }
+        if !name.lowercased().hasSuffix(".hprof") { name += ".hprof" }
+        return decompressedFolder.appendingPathComponent(name)
+    }
+
+    static func isNewer(_ a: URL, than b: URL) -> Bool {
+        let date = { (url: URL) in (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) ?? .distantPast }
+        return date(a) >= date(b)
+    }
+
+    /// Decompresses to `decompressedTarget` off the main actor, then hands the result on.
+    func decompress() {
+        guard let target = decompressedTarget else {
+            phase = .failed("There is nowhere to decompress the heap dump to.")
+            return
+        }
+        decompressTask?.cancel()
+        phase = .decompressing(0)
+        let source = url
+        let work = Task.detached(priority: .userInitiated) {
+            try HprofGzip.decompress(source, to: target) { fraction in
+                Task { @MainActor [weak self] in
+                    guard let self, case .decompressing(let current) = self.phase, fraction > current else { return }
+                    self.phase = .decompressing(fraction)
+                }
+            }
+        }
+        decompressTask = work
+        Task { [weak self] in
+            let result = await work.result
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.phase = .compressed
+                self.onDecompressed?(target)
+            case .failure(is CancellationError):
+                self.phase = .compressed
+            case .failure(let error as HprofGzip.Failure):
+                self.phase = .failed(error.description)
+            case .failure(let error):
+                self.phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
     func cancel() {
+        decompressTask?.cancel()
         objects.cancelAll()
         readTask?.cancel()
         readTask = nil

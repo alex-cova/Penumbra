@@ -102,6 +102,9 @@ public final class IDEPreferences {
         static let javaProfileSamplePeriod = "com.umbra.editor.javaProfileSamplePeriod"
         static let javaProfileOpensRecording = "com.umbra.editor.javaProfileOpensRecording"
         static let javaProfileConfirmMegabytes = "com.umbra.editor.javaProfileConfirmMegabytes"
+        static let javaHeapIndexCacheGigabytes = "com.umbra.editor.javaHeapIndexCacheGigabytes"
+        static let javaHeapSuspectThreshold = "com.umbra.editor.javaHeapSuspectThreshold"
+        static let javaHeapDumpsToUmbraFolder = "com.umbra.editor.javaHeapDumpsToUmbraFolder"
         static let javaProfileSettings = "com.umbra.editor.javaProfileSettings"
         static let javaProfileShowsLiveCharts = "com.umbra.editor.javaProfileShowsLiveCharts"
         static let javaProfileLineHints = "com.umbra.editor.javaProfileLineHints"
@@ -766,6 +769,23 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaProfileConfirmMegabytes, forKey: Keys.javaProfileConfirmMegabytes) }
     }
 
+    /// All heap dump object indexes together stay under this many gigabytes; the least recently
+    /// used go first. Kept on this Mac.
+    var javaHeapIndexCacheGigabytes: Int {
+        didSet { UserDefaults.standard.set(javaHeapIndexCacheGigabytes, forKey: Keys.javaHeapIndexCacheGigabytes) }
+    }
+
+    /// A leak suspect keeps at least this share of the live heap, in percent.
+    var javaHeapSuspectThreshold: Int {
+        didSet { UserDefaults.standard.set(javaHeapSuspectThreshold, forKey: Keys.javaHeapSuspectThreshold) }
+    }
+
+    /// Runs with `-XX:+HeapDumpOnOutOfMemoryError` and no path of their own write the dump to
+    /// Umbra's heap dump folder instead of the project folder.
+    var javaHeapDumpsToUmbraFolder: Bool {
+        didSet { UserDefaults.standard.set(javaHeapDumpsToUmbraFolder, forKey: Keys.javaHeapDumpsToUmbraFolder) }
+    }
+
     /// `3 usages` above classes, methods and constructors. A search per declaration, so off by default.
     var javaCodeVisionUsages: Bool {
         didSet { UserDefaults.standard.set(javaCodeVisionUsages, forKey: Keys.javaCodeVisionUsages) }
@@ -1250,6 +1270,9 @@ public final class IDEPreferences {
         javaProfileSamplePeriod = defaults.object(forKey: Keys.javaProfileSamplePeriod) as? Int ?? 0
         javaProfileOpensRecording = defaults.object(forKey: Keys.javaProfileOpensRecording) as? Bool ?? true
         javaProfileConfirmMegabytes = defaults.object(forKey: Keys.javaProfileConfirmMegabytes) as? Int ?? 500
+        javaHeapIndexCacheGigabytes = defaults.object(forKey: Keys.javaHeapIndexCacheGigabytes) as? Int ?? 30
+        javaHeapSuspectThreshold = defaults.object(forKey: Keys.javaHeapSuspectThreshold) as? Int ?? 10
+        javaHeapDumpsToUmbraFolder = defaults.object(forKey: Keys.javaHeapDumpsToUmbraFolder) as? Bool ?? true
         javaProfileSettings = defaults.string(forKey: Keys.javaProfileSettings) ?? "profile"
         javaProfileShowsLiveCharts = defaults.object(forKey: Keys.javaProfileShowsLiveCharts) as? Bool ?? true
         javaProfileLineHints = defaults.object(forKey: Keys.javaProfileLineHints) as? Bool ?? true

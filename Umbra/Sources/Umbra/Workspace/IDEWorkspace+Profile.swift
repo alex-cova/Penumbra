@@ -97,10 +97,14 @@ extension IDEWorkspace {
         session.openSnapshot = { [weak self] url in
             self?.openProfile(recordings: [url], title: "Snapshot: \(title)", runID: nil, project: self?.project.rootURL)
         }
+        session.openHeapDump = { [weak self] url in
+            self?.openHeapDump(file: url)
+        }
         let monitor = IDEProfilerLiveMonitor(
             runID: runID, jcmd: jcmd, jps: jps, snapshotDirectory: snapshotDirectory.appendingPathComponent("snapshots"),
             knownProcessID: processID
         )
+        monitor.heapDumpDirectory = Self.heapDumpFolder()
         let document = WorkbenchDocument(displayName: "Profile: \(title)")
         document.contentKind = .profile
         // Live before the tab shows: showing a session that is still idle reads its recording.

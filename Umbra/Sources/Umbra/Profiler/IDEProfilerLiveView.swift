@@ -64,6 +64,15 @@ struct IDEProfilerLiveView: View {
             }
             .disabled(monitor.pid == nil || monitor.isBusy)
             .help("Writes the recording so far and opens it, without stopping the program")
+            Menu("Capture Heap Dump") {
+                Button("Live Objects (Runs a Full GC First)") { captureHeapDump(monitor, allObjects: false) }
+                Button("All Objects, Garbage Included") { captureHeapDump(monitor, allObjects: true) }
+            } primaryAction: {
+                captureHeapDump(monitor, allObjects: false)
+            }
+            .fixedSize()
+            .disabled(monitor.pid == nil || monitor.isBusy)
+            .help("Writes the program's heap with jcmd and opens it in the heap dump analyzer")
             Button("Perform GC") { Task { await monitor.collectGarbage() } }
                 .disabled(monitor.pid == nil || monitor.isBusy)
             Button("Stop and Show Results") { session.stopRun?() }
@@ -72,6 +81,12 @@ struct IDEProfilerLiveView: View {
         .controlSize(.small)
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, IDEAppearance.Spacing.xs)
+    }
+
+    private func captureHeapDump(_ monitor: IDEProfilerLiveMonitor, allObjects: Bool) {
+        Task {
+            if let url = await monitor.captureHeapDump(allObjects: allObjects) { session.openHeapDump?(url) }
+        }
     }
 
     private func statusText(_ monitor: IDEProfilerLiveMonitor) -> String {

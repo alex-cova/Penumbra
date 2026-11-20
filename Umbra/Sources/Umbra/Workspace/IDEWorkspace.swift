@@ -3905,7 +3905,7 @@ public final class IDEWorkspace {
             return
         }
         // A heap dump is read by the heap dump analyzer, not loaded as bytes; Reopen as Hex reaches them.
-        if !asHex, HprofDetector.isHeapDump(at: url) {
+        if !asHex, HprofDetector.isHeapDump(at: url) || (HprofDetector.hasHeapDumpExtension(url) && HprofGzip.isGzip(at: url)) {
             recordRecentFile(url)
             openHeapDump(file: url)
             return

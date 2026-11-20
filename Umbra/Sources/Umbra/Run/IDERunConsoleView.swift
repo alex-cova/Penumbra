@@ -9,6 +9,8 @@ struct IDERunConsoleView: NSViewRepresentable {
     let fontName: String
     let fontSize: Double
     let onOpenFrame: (IDEStackFrameReference) -> Void
+    /// A heap dump path the JVM printed ("Dumping heap to …"), as printed: relative to the run's folder.
+    var onOpenHeapDump: (String) -> Void = { _ in }
     /// Bumped by "Scroll to End" so the view jumps to the bottom even after the reader scrolled up.
     var scrollToEndRequest = 0
 
@@ -46,6 +48,7 @@ struct IDERunConsoleView: NSViewRepresentable {
 
         context.coordinator.textView = textView
         context.coordinator.onOpenFrame = onOpenFrame
+        context.coordinator.onOpenHeapDump = onOpenHeapDump
         context.coordinator.render(log, fontName: fontName, fontSize: fontSize, fullReplace: true)
         return scrollView
     }
@@ -53,6 +56,7 @@ struct IDERunConsoleView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onOpenFrame = onOpenFrame
+        coordinator.onOpenHeapDump = onOpenHeapDump
         let fullReplace = coordinator.lastGeneration != log.generation
             || coordinator.lastFontName != fontName
             || coordinator.lastFontSize != fontSize
@@ -69,6 +73,7 @@ struct IDERunConsoleView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         weak var textView: NSTextView?
         var onOpenFrame: (IDEStackFrameReference) -> Void = { _ in }
+        var onOpenHeapDump: (String) -> Void = { _ in }
         var lastGeneration: UUID?
         var lastFontName: String?
         var lastFontSize: Double?
@@ -153,7 +158,9 @@ struct IDERunConsoleView: NSViewRepresentable {
             let result = NSMutableAttributedString(
                 string: segment.text, attributes: [.font: font, .foregroundColor: color]
             )
-            guard segment.stream == .stdout || segment.stream == .stderr, segment.text.contains("(") else { return result }
+            guard segment.stream == .stdout || segment.stream == .stderr else { return result }
+            linkHeapDumps(in: segment.text, into: result)
+            guard segment.text.contains("(") else { return result }
             let text = segment.text as NSString
             var lineStart = 0
             while lineStart < text.length {
@@ -176,6 +183,37 @@ struct IDERunConsoleView: NSViewRepresentable {
             return result
         }
 
+        /// HotSpot's `Dumping heap to java_pid123.hprof ...` (HeapDumpOnOutOfMemoryError): the path
+        /// becomes a link that opens the dump.
+        static func linkHeapDumps(in text: String, into result: NSMutableAttributedString) {
+            guard text.contains("Dumping heap to ") else { return }
+            let string = text as NSString
+            var lineStart = 0
+            while lineStart < string.length {
+                let lineRange = string.lineRange(for: NSRange(location: lineStart, length: 0))
+                let line = string.substring(with: lineRange)
+                if let path = heapDumpPath(inLine: line) {
+                    let found = (line as NSString).range(of: path)
+                    var components = URLComponents()
+                    components.scheme = "umbra-heapdump"
+                    components.host = "open"
+                    components.queryItems = [URLQueryItem(name: "path", value: path)]
+                    if found.location != NSNotFound, let url = components.url {
+                        result.addAttribute(.link, value: url, range: NSRange(location: lineRange.location + found.location, length: found.length))
+                    }
+                }
+                lineStart = NSMaxRange(lineRange)
+            }
+        }
+
+        /// The path in `Dumping heap to <path> ...`, or nil.
+        static func heapDumpPath(inLine line: String) -> String? {
+            guard let start = line.range(of: "Dumping heap to ") else { return nil }
+            var path = line[start.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if path.hasSuffix("...") { path = String(path.dropLast(3)).trimmingCharacters(in: .whitespaces) }
+            return path.isEmpty ? nil : path
+        }
+
         static func frameURL(_ frame: IDEStackFrameReference) -> URL? {
             var components = URLComponents()
             components.scheme = "umbra-frame"
@@ -189,6 +227,11 @@ struct IDERunConsoleView: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            if let url = link as? URL, url.scheme == "umbra-heapdump",
+               let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "path" })?.value {
+                onOpenHeapDump(path)
+                return true
+            }
             guard let url = link as? URL, url.scheme == "umbra-frame",
                   let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
                   let className = items.first(where: { $0.name == "class" })?.value,

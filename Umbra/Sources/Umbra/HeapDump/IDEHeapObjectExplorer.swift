@@ -219,6 +219,10 @@ final class IDEHeapObjectExplorer {
     nonisolated static let referrerLimit = 200
 
     @ObservationIgnored var layout: HeapObjectLayout?
+    /// All indexes together stay under this (Settings ▸ Java ▸ Heap Dumps).
+    @ObservationIgnored var maximumIndexBytes: Int64 = HeapIndexStore.defaultMaximumBytes
+    /// A leak suspect keeps at least this share of the live heap.
+    @ObservationIgnored var suspectThreshold = 0.1
     @ObservationIgnored private var buildTask: Task<HeapIndex, Error>?
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
     @ObservationIgnored private var buildTicket = 0
@@ -247,11 +251,12 @@ final class IDEHeapObjectExplorer {
         buildTicket += 1
         let ticket = buildTicket
         let url = url
+        let maximumBytes = maximumIndexBytes
         track(Task { [weak self] in
             let found = await Task.detached(priority: .userInitiated) { () -> HeapIndex? in
                 // Indexes of dumps that moved, changed or went are never opened again: sweep them
                 // (and the least recently used past the cap), keeping this dump's.
-                store.sweep(keeping: Set([try? store.directory(for: url)].compactMap { $0 }))
+                store.sweep(maximumBytes: maximumBytes, keeping: Set([try? store.directory(for: url)].compactMap { $0 }))
                 return store.openExisting(for: url)
             }.value
             let available = HeapIndexStore.availableBytes(at: store.root)
@@ -287,7 +292,8 @@ final class IDEHeapObjectExplorer {
             case .success(let index):
                 self.adopt(index)
                 let directory = index.directory
-                Task.detached(priority: .utility) { store.sweep(keeping: [directory]) }
+                let maximumBytes = self.maximumIndexBytes
+                Task.detached(priority: .utility) { store.sweep(maximumBytes: maximumBytes, keeping: [directory]) }
             case .failure(is CancellationError):
                 self.state = .absent(estimatedBytes: self.estimatedBytes, availableBytes: HeapIndexStore.availableBytes(at: store.root))
             case .failure(let error as HeapIndexError):
@@ -699,7 +705,8 @@ final class IDEHeapObjectExplorer {
         guard let index else { return }
         let ticket = reportTicket
         track(Task { [weak self] in
-            let found = await Task.detached(priority: .utility) { HeapLeakSuspects.find(in: index) }.value
+            let threshold = self?.suspectThreshold ?? 0.1
+            let found = await Task.detached(priority: .utility) { HeapLeakSuspects.find(in: index, threshold: threshold) }.value
             guard let self, self.reportTicket == ticket else { return }
             self.suspects = found
         })

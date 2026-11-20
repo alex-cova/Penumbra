@@ -86,6 +86,10 @@ extension IDEJavaRunProvider {
                 }
             }
         }
+        if IDEPreferences.shared.javaHeapDumpsToUmbraFolder, let folder = IDEWorkspace.outOfMemoryHeapDumpFolder() {
+            // An out-of-memory dump goes to Umbra's folder, not the project's; the console links it.
+            extraVMArguments += JavaVMOptions.heapDumpPathArguments(vmArguments: configuration.vmArguments, directory: folder)
+        }
         guard let launch = JavaLaunchCommand.makeProcessLaunch(
             configuration: configuration,
             javaHome: jdk.home,

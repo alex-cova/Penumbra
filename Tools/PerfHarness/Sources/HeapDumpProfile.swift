@@ -148,6 +148,20 @@ enum HeapDumpProfile {
         print("peak_footprint_mb=\(peakFootprintMB())")
     }
 
+    /// `heap-dump-gunzip <file.hprof.gz> --into DIR`: decompresses (phase 5) and times it.
+    static func runGunzip(path: String, into: String?) throws {
+        let source = URL(fileURLWithPath: path)
+        let folder = URL(fileURLWithPath: into ?? NSTemporaryDirectory())
+        let target = folder.appendingPathComponent(source.deletingPathExtension().lastPathComponent)
+        let start = ContinuousClock.now
+        try HprofGzip.decompress(source, to: target)
+        let seconds = milliseconds(since: start) / 1000
+        let bytes = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? Int64) ?? 0
+        print(String(format: "gunzip_s=%.2f out_bytes=%lld throughput_mb_s=%.0f", seconds, bytes, Double(bytes) / 1e6 / max(seconds, 0.001)))
+        print("peak_footprint_mb=\(peakFootprintMB())")
+        print("output=\(target.path)")
+    }
+
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {
         let duration = start.duration(to: .now)
         return Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15

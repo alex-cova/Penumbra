@@ -55,6 +55,14 @@ public enum JavaLiveCommands {
         )
     }
 
+    /// `jcmd <pid> GC.heap_dump [-all] <file>`: live objects only (after a full GC) unless `allObjects`.
+    public static func dumpHeap(jcmd: URL, pid: Int32, file: URL, allObjects: Bool) -> JavaToolInvocation {
+        JavaToolInvocation(
+            executable: jcmd,
+            arguments: [String(pid), "GC.heap_dump"] + (allObjects ? ["-all"] : []) + [file.path]
+        )
+    }
+
     public static func collectGarbage(jcmd: URL, pid: Int32) -> JavaToolInvocation {
         JavaToolInvocation(executable: jcmd, arguments: [String(pid), "GC.run"])
     }

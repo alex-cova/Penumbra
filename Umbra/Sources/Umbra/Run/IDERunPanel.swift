@@ -21,6 +21,9 @@ struct IDERunPanel: View {
                         fontName: workspace.preferences.fontName,
                         fontSize: workspace.preferences.fontSize,
                         onOpenFrame: { [weak workspace = workspace] in workspace?.openStackFrame($0) },
+                        onOpenHeapDump: { [weak workspace = workspace, weak session] path in
+                            workspace?.openPrintedHeapDump(path, relativeTo: session?.workingDirectory)
+                        },
                         scrollToEndRequest: isSelected ? workspace.runScrollToEndRequest : 0
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

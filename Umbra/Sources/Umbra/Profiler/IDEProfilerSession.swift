@@ -302,6 +302,8 @@ final class IDEProfilerSession {
     @ObservationIgnored var stopRun: (() -> Void)?
     /// Opens a snapshot of the running JVM as a profile tab of its own.
     @ObservationIgnored var openSnapshot: ((URL) -> Void)?
+    /// Opens a heap dump the live view captured.
+    @ObservationIgnored var openHeapDump: ((URL) -> Void)?
 
     /// Shows charts of a run's JVM until its recording exists.
     func beginLive(monitor: IDEProfilerLiveMonitor) {

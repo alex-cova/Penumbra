@@ -53,6 +53,9 @@ final class IDEProfilerLiveMonitor {
     private let jcmd: URL?
     private let jps: URL?
     private let snapshotDirectory: URL
+    /// Where Capture Heap Dump writes: a folder nothing prunes (a dump outlives the run's files,
+    /// which are cleaned up at 500 MB per project). Falls back to the snapshots folder.
+    var heapDumpDirectory: URL?
     /// The pid when the caller started the process itself.
     private let knownProcessID: (@MainActor () -> Int32?)?
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -199,6 +202,31 @@ final class IDEProfilerLiveMonitor {
             return nil
         }
         snapshots.append(file)
+        return file
+    }
+
+    /// Writes a heap dump of the running JVM next to the run's snapshots: live objects only (the
+    /// JVM runs a full collection first) unless `allObjects`. Big heaps take a while, so up to ten
+    /// minutes. `nil`, with ``notice`` saying why, when it could not be written.
+    func captureHeapDump(allObjects: Bool) async -> URL? {
+        guard let pid, let jcmd, !isBusy else {
+            notice = "A heap dump needs the running JVM and jcmd."
+            return nil
+        }
+        isBusy = true
+        defer { isBusy = false }
+        let folder = heapDumpDirectory ?? snapshotDirectory
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let stamp = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate, .withTime])
+        let file = folder.appendingPathComponent("heap-\(stamp)-pid\(pid)\(allObjects ? "-all" : "").hprof")
+        notice = "Writing a heap dump…"
+        let call = JavaLiveCommands.dumpHeap(jcmd: jcmd, pid: pid, file: file, allObjects: allObjects)
+        guard await Self.output(of: call, timeout: .seconds(600)) != nil,
+              FileManager.default.fileExists(atPath: file.path) else {
+            notice = "The JVM did not write a heap dump."
+            return nil
+        }
+        notice = nil
         return file
     }
 

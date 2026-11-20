@@ -877,3 +877,103 @@ final class IDEHeapReportsUITests: XCTestCase {
         XCTAssertNil(objects.threads)
     }
 }
+
+@MainActor
+final class IDEHeapDumpPhase5Tests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("heap-p5-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        IDEWorkspace.isSessionPersistenceEnabled = true
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func heapDocuments(_ workspace: IDEWorkspace) -> [WorkbenchDocument] {
+        workspace.workbench.allDocuments().filter { $0.contentKind == .heapDump }
+    }
+
+    func testTheConsoleLinksTheDumpTheJVMPrints() {
+        typealias C = IDERunConsoleView.Coordinator
+        XCTAssertEqual(C.heapDumpPath(inLine: "Dumping heap to java_pid4242.hprof ...\n"), "java_pid4242.hprof")
+        XCTAssertEqual(C.heapDumpPath(inLine: "Dumping heap to /Users/me/Library/Caches/dumps/java_pid1.hprof ..."), "/Users/me/Library/Caches/dumps/java_pid1.hprof")
+        XCTAssertNil(C.heapDumpPath(inLine: "java.lang.OutOfMemoryError: Java heap space"))
+        let text = "java.lang.OutOfMemoryError: Java heap space\nDumping heap to java_pid7.hprof ...\nHeap dump file created [123 bytes in 0.001 secs]\n"
+        let attributed = NSMutableAttributedString(string: text)
+        C.linkHeapDumps(in: text, into: attributed)
+        let location = (text as NSString).range(of: "java_pid7.hprof").location
+        let link = attributed.attribute(.link, at: location, effectiveRange: nil) as? URL
+        XCTAssertEqual(link?.scheme, "umbra-heapdump")
+        XCTAssertEqual(URLComponents(url: link!, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "java_pid7.hprof")
+        XCTAssertNil(attributed.attribute(.link, at: 0, effectiveRange: nil), "only the path is a link")
+    }
+
+    func testAPrintedRelativePathOpensFromTheRunsFolder() async throws {
+        let workspace = IDEWorkspace()
+        workspace.bootstrap()
+        defer { workspace.teardown() }
+        try tinyHeapDump().write(to: directory.appendingPathComponent("java_pid9.hprof"))
+        workspace.openPrintedHeapDump("java_pid9.hprof", relativeTo: directory)
+        XCTAssertEqual(heapDocuments(workspace).map(\.displayName), ["java_pid9.hprof"])
+    }
+
+    func testACompressedDumpDecompressesAndReplacesItsTab() async throws {
+        let workspace = IDEWorkspace()
+        workspace.bootstrap()
+        defer { workspace.teardown() }
+        let name = "dump-\(UUID().uuidString)"
+        let plain = directory.appendingPathComponent("\(name).hprof")
+        try tinyHeapDump().write(to: plain)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
+        process.arguments = [plain.path]   // replaces it with name.hprof.gz
+        try process.run()
+        process.waitUntilExit()
+        let compressed = directory.appendingPathComponent("\(name).hprof.gz")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: compressed.path))
+
+        await workspace.openDocument(from: compressed)
+        let tab = try XCTUnwrap(heapDocuments(workspace).first)
+        let session = try XCTUnwrap(workspace.heapDumpSessionStore.session(for: tab.id))
+        XCTAssertEqual(session.phase, .compressed)
+        let target = directory.appendingPathComponent("out", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        session.decompressedFolder = target
+
+        session.decompress()
+        try await waitUntil { self.heapDocuments(workspace).map(\.displayName) == ["\(name).hprof"] }
+        let decompressed = try XCTUnwrap(heapDocuments(workspace).first)
+        XCTAssertEqual(decompressed.url?.standardizedFileURL, target.appendingPathComponent("\(name).hprof").standardizedFileURL)
+        let opened = try XCTUnwrap(workspace.heapDumpSessionStore.session(for: decompressed.id))
+        try await waitUntil { opened.phase == .ready }
+        XCTAssertEqual(opened.overview?.instanceCount, 4)
+    }
+
+    func testCaptureHeapDumpRunsJcmdAndHandsTheFileOn() async throws {
+        // A stand-in jcmd: copies a dump to the path it is given (the last argument).
+        let source = directory.appendingPathComponent("source.hprof")
+        try tinyHeapDump().write(to: source)
+        let jcmd = directory.appendingPathComponent("jcmd")
+        try "#!/bin/sh\nfor last; do :; done\necho \"$@\" > \"\(directory.path)/args\"\ncp \"\(source.path)\" \"$last\"\n"
+            .write(to: jcmd, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: jcmd.path)
+        let monitor = IDEProfilerLiveMonitor(
+            runID: "r", jcmd: jcmd, jps: nil, snapshotDirectory: directory.appendingPathComponent("snapshots"), knownProcessID: nil
+        )
+        monitor.installForTesting(samples: [], status: .attached(pid: 4242))
+        let kept = directory.appendingPathComponent("kept", isDirectory: true)
+        monitor.heapDumpDirectory = kept
+        let captured = await monitor.captureHeapDump(allObjects: true)
+        let file = try XCTUnwrap(captured)
+        XCTAssertTrue(HprofDetector.isHeapDump(at: file))
+        XCTAssertEqual(file.deletingLastPathComponent().standardizedFileURL, kept.standardizedFileURL, "not in the pruned snapshots folder")
+        XCTAssertTrue(file.lastPathComponent.hasPrefix("heap-") && file.lastPathComponent.hasSuffix("-pid4242-all.hprof"), file.lastPathComponent)
+        let args = try String(contentsOf: directory.appendingPathComponent("args"), encoding: .utf8)
+        XCTAssertTrue(args.hasPrefix("4242 GC.heap_dump -all "), args)
+        XCTAssertNil(monitor.notice)
+    }
+}

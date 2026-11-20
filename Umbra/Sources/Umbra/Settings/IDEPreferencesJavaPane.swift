@@ -1,3 +1,4 @@
+import AppKit
 import EditorIntelligence
 import JavaIntelligence
 import Penumbra
@@ -15,6 +16,7 @@ struct IDEPreferencesJavaPane: View {
         IDEJavaRunSection(preferences: preferences)
         IDEJavaCoverageSection(preferences: preferences)
         IDEJavaProfilingSection(preferences: preferences)
+        IDEJavaHeapDumpSection(preferences: preferences)
         IDEJavaAnalysisSection(preferences: preferences)
         IDEJavaPostfixSection(preferences: preferences)
         IDEJavaImportsSection(preferences: preferences)
@@ -231,6 +233,73 @@ private struct IDEJavaProfilingSection: View {
                 valueWidth: 48,
                 valueSuffix: "MB"
             )
+        }
+    }
+}
+
+private struct IDEJavaHeapDumpSection: View {
+    @Bindable var preferences: IDEPreferences
+    @Environment(IDEWorkspace.self) private var workspace
+    @State private var usage: (indexes: Int64, dumps: Int64)?
+
+    var body: some View {
+        IDESettingsSection(
+            "Heap Dumps",
+            footer: "A heap dump (.hprof, or .hprof.gz) opens in the analyzer. Its object index (instances, references, dominators) is built on request in Umbra's caches and reused until the dump changes; indexes of dumps that moved or changed are removed. The cap and threshold apply to dumps opened afterwards."
+        ) {
+            IDEPreferencesStepper(
+                title: "Keep Object Indexes Under",
+                value: $preferences.javaHeapIndexCacheGigabytes,
+                range: 5...500,
+                step: 5,
+                valueWidth: 48,
+                valueSuffix: "GB"
+            )
+            IDEPreferencesStepper(
+                title: "Leak Suspects Hold at Least",
+                value: $preferences.javaHeapSuspectThreshold,
+                range: 1...50,
+                valueWidth: 40,
+                valueSuffix: "%"
+            )
+            IDESettingsToggle(
+                "Write Out-of-Memory Dumps to Umbra's Folder",
+                isOn: $preferences.javaHeapDumpsToUmbraFolder,
+                detail: "A run whose VM options turn on HeapDumpOnOutOfMemoryError without a HeapDumpPath writes its dump to Umbra's heap dump folder (in Application Support, never cleaned up, where Capture Heap Dump writes too) instead of the project folder. The Run console links the dump either way."
+            )
+            IDESettingsRow("On Disk") {
+                HStack(spacing: IDEAppearance.Spacing.sm) {
+                    Text(usageText)
+                        .font(IDEAppearance.Typography.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .monospacedDigit()
+                    Button("Show Dumps in Finder") {
+                        if let folder = IDEWorkspace.heapDumpFolder() {
+                            NSWorkspace.shared.activateFileViewerSelecting([folder])
+                        }
+                    }
+                    Button("Clear Object Indexes") {
+                        workspace.clearHeapDumpIndexes()
+                        refreshUsage()
+                    }
+                    .help("Deletes every object index except those of this window's open heap dump tabs. Dumps are kept.")
+                }
+                .controlSize(.small)
+            }
+        }
+        .onAppear { refreshUsage() }
+    }
+
+    private var usageText: String {
+        guard let usage else { return "…" }
+        let format = { (bytes: Int64) in ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+        return "Indexes \(format(usage.indexes)) · captured dumps \(format(usage.dumps))"
+    }
+
+    private func refreshUsage() {
+        Task {
+            let measured = await Task.detached(priority: .utility) { IDEWorkspace.heapDumpDiskUsage() }.value
+            usage = measured
         }
     }
 }
