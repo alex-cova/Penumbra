@@ -3548,16 +3548,16 @@ public final class IDEWorkspace {
         closedSidebarTabs = Set(session.closedSidebarTabs ?? []).subtracting([.explorer])
         seedPanelWidths(from: session)
         isProjectSidebarVisible = session.isProjectSidebarVisible
-        isTerminalVisible = session.isTerminalVisible
+        // The bottom panel always starts collapsed, whatever the window was showing when it was
+        // closed or the app quit; its height and shell are still restored for the next open.
+        isTerminalVisible = false
+        isBottomPanelExpanded = false
         terminalHeight = session.terminalHeight
         terminalTabs = session.terminalTabs ?? []
         selectedTerminalTabID = session.selectedTerminalTabID
         if let selectedID = selectedTerminalTabID,
            !terminalTabs.contains(where: { $0.id == selectedID }) {
             selectedTerminalTabID = terminalTabs.first?.id
-        }
-        if isTerminalVisible && terminalTabs.isEmpty {
-            addTerminalTab(saveSession: false)
         }
         // Same path as Open Folder, so a restored Gradle project syncs instead of only rebuilding
         // the sidebar. `restoreRoot` alone never reached `javaSupport.setProjectRoot`.
