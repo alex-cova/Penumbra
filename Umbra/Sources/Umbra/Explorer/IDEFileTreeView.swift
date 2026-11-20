@@ -391,13 +391,21 @@ struct IDEFileTreeView: View {
     /// chosen order, with single-child package chains merged under a source root.
     private func displayChildren(of node: IDEFileNode, underSourceRoot: Bool) -> [IDEFileNode] {
         let options = presentationOptions
-        let ordered = IDEExplorerPresentation.ordered(node.children ?? [], options: options)
+        let ordered = IDEExplorerPresentation.ordered(shownChildren(of: node), options: options)
         guard options.compactMiddlePackages, underSourceRoot else { return ordered }
         return ordered.map { child in
             IDEExplorerPresentation.compacted(child) {
-                IDEExplorerPresentation.ordered($0.children ?? [], options: options)
+                IDEExplorerPresentation.ordered(shownChildren(of: $0), options: options)
             }
         }
+    }
+
+    /// With Show Excluded Files off, git-ignored entries go too: they are drawn dimmed like the
+    /// build outputs, so the option hides everything it would otherwise dim.
+    private func shownChildren(of node: IDEFileNode) -> [IDEFileNode] {
+        let children = node.children ?? []
+        guard !showExcludedFiles, let gitStatus else { return children }
+        return children.filter { gitStatus.status(for: $0.url, isDirectory: $0.isDirectory) != .ignored }
     }
 
     /// While filtering, a row is kept when its name matches or a descendant does. Children of a

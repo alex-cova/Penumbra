@@ -28,7 +28,7 @@ struct IDEPreferencesProjectPane: View {
             IDESettingsToggle(
                 "Show Excluded Files",
                 isOn: $preferences.explorerShowExcludedFiles,
-                detail: "Lists build outputs (build, out, target, .gradle) dimmed. Off hides them."
+                detail: "Lists build outputs (build, out, target, .gradle) and git-ignored files dimmed. Off hides them."
             )
             IDESettingsToggle(
                 "Show External Libraries",

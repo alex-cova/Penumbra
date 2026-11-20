@@ -193,6 +193,10 @@ final class IDEGitStatusModel {
     @ObservationIgnored private var refreshToken: UUID?
     @ObservationIgnored private var needsAnotherPass = false
     @ObservationIgnored private var ignoredTask: Task<Void, Never>?
+    /// Absolute paths the last `--ignored` pass reported. A refresh's snapshot (run without
+    /// `--ignored`) keeps them until the next pass replaces them, so ignored rows in the Explorer
+    /// do not flash undimmed on every refresh.
+    @ObservationIgnored private var ignoredPaths: Set<String> = []
     @ObservationIgnored private var syncTask: Task<Void, Never>?
     @ObservationIgnored private var pendingInvalidations: Set<String> = []
     @ObservationIgnored private var mutationTasks: [UUID: Task<Void, Never>] = [:]
@@ -230,6 +234,7 @@ final class IDEGitStatusModel {
         refreshToken = nil
         ignoredTask?.cancel()
         ignoredTask = nil
+        ignoredPaths = []
         syncTask?.cancel()
         syncTask = nil
         for task in mutationTasks.values { task.cancel() }
@@ -360,6 +365,7 @@ final class IDEGitStatusModel {
     private func applyUnavailable(token: UUID) {
         repository = nil
         workspaceSnapshot = nil
+        ignoredPaths = []
         headMoved = repositoryRoot != nil
         refreshedRelativePaths = []
         pendingInvalidations = []
@@ -384,6 +390,9 @@ final class IDEGitStatusModel {
         publishGitDirectory(repo.gitDirectory)
         var published = snapshot
         published.sync = syncKeepingLists(from: infos, previous: sync)
+        for path in ignoredPaths where published.statuses[path] == nil {
+            published.statuses[path] = .ignored
+        }
         apply(published)
         headMoved = headChanged
         var affected = Set(published.changes.map(\.relativePath)).symmetricDifference(oldPaths)
@@ -487,20 +496,24 @@ final class IDEGitStatusModel {
         }
     }
 
-    /// Adds ignored paths without replacing the staged and unstaged rows from the hot snapshot.
+    /// Replaces the ignored paths without touching the staged and unstaged rows from the hot
+    /// snapshot: paths no longer ignored are dropped, new ones added.
     private func mergeIgnored(_ entries: [GitStatusEntry], toplevel: String) {
-        var next = statuses
-        var changed = false
+        var fresh: Set<String> = []
         for entry in entries where entry.isIgnored {
             var relative = entry.path
             if relative.hasSuffix("/") { relative.removeLast() }
-            let path = (toplevel as NSString).appendingPathComponent(relative)
-            if next[path] != .ignored {
-                next[path] = .ignored
-                changed = true
-            }
+            fresh.insert((toplevel as NSString).appendingPathComponent(relative))
         }
-        if changed { statuses = next }
+        var next = statuses
+        for path in ignoredPaths.subtracting(fresh) where next[path] == .ignored {
+            next[path] = nil
+        }
+        for path in fresh where next[path] == nil {
+            next[path] = .ignored
+        }
+        ignoredPaths = fresh
+        if next != statuses { statuses = next }
     }
 
     /// A branch, tag, HEAD or remote ref moved (the project watcher saw `.git/refs`, `packed-refs`,
