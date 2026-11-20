@@ -7,7 +7,66 @@ struct IDEHeapInstanceRow: Identifiable, Hashable, Sendable {
     let id: Int32
     let address: String
     let shallow: Int
+    let retained: Int64
     let preview: String?
+}
+
+/// One line of the dominator tree, flattened: an object, a "show more" line, the unreachable
+/// objects, or one class of them.
+struct IDEHeapDominatorRow: Identifiable, Hashable, Sendable {
+    enum Kind: Hashable, Sendable {
+        case object(Int32)
+        case more(parent: Int32, shown: Int, total: Int)
+        case weaklyReachable
+        case weaklyReachableClass(Int32)
+        case unreachable
+        case unreachableClass(Int32)
+    }
+
+    let id: String
+    let kind: Kind
+    let depth: Int
+    let title: String
+    let detail: String
+    let shallow: Int64?
+    let retained: Int64
+    let childCount: Int
+    var isExpanded = false
+
+    var object: Int32? {
+        if case .object(let n) = kind { return n }
+        return nil
+    }
+}
+
+/// One step of the path from the inspected object to its GC root.
+struct IDEHeapPathRow: Identifiable, Hashable, Sendable {
+    let id: Int
+    let object: Int32
+    let title: String
+    /// The field of this object that holds the previous row's (nil for the first row).
+    let via: String?
+    let preview: String?
+    /// The root records naming this object, on the last row.
+    let rootKinds: String?
+    /// The field holding the previous row's object is a `Reference.referent`.
+    let isWeak: Bool
+}
+
+/// A class's instances' shortest paths to GC roots, folded from the root side.
+struct IDEHeapMergedPaths: Sendable {
+    struct Row: Identifiable, Hashable, Sendable {
+        let id: Int
+        let object: Int32
+        let depth: Int
+        let count: Int
+        let title: String
+        let isTarget: Bool
+    }
+
+    let className: String
+    let objectCount: Int
+    let rows: [Row]
 }
 
 /// One field, static or element of the inspected object.
@@ -50,6 +109,8 @@ final class IDEHeapObjectExplorer {
     enum InspectorTab: String, CaseIterable, Identifiable {
         case fields = "Fields"
         case referrers = "Referrers"
+        case path = "Path to GC Roots"
+        case retains = "Retains"
         var id: String { rawValue }
     }
 
@@ -83,8 +144,32 @@ final class IDEHeapObjectExplorer {
     private(set) var referrerTotal = 0
     /// True from a new object's pick until its fields arrive; the old ones are gone meanwhile.
     private(set) var isLoadingObject = false
-    var inspectorTab: InspectorTab = .fields
+    var inspectorTab: InspectorTab = .fields {
+        didSet { if inspectorTab != oldValue, inspectorTab == .retains { loadRetainedSet() } }
+    }
+    private(set) var path: [IDEHeapPathRow] = []
+    private(set) var retainedSet: [HeapIndex.ClassTotal] = []
+    private(set) var retainedSetComplete = true
+    private(set) var isLoadingRetainedSet = false
     private(set) var backStack: [Int32] = []
+
+    // The dominator tree.
+    private(set) var dominatorRows: [IDEHeapDominatorRow] = []
+    private(set) var isLoadingDominators = false
+    var selectedDominatorRow: IDEHeapDominatorRow.ID? {
+        didSet {
+            guard selectedDominatorRow != oldValue, let id = selectedDominatorRow,
+                  let n = dominatorRows.first(where: { $0.id == id })?.object else { return }
+            inspect(n, startingOver: true)
+        }
+    }
+
+    // Merged paths of a class, shown in a sheet.
+    var mergedPaths: IDEHeapMergedPaths?
+    private(set) var isLoadingMergedPaths = false
+
+    /// Called when an index opens or goes, so the histogram can show (or drop) retained sizes.
+    @ObservationIgnored var onIndexChanged: (() -> Void)?
     private(set) var forwardStack: [Int32] = []
 
     nonisolated static let instanceLimit = 1_000
@@ -97,6 +182,9 @@ final class IDEHeapObjectExplorer {
     @ObservationIgnored private var instanceTicket = 0
     @ObservationIgnored private var inspectTicket = 0
     @ObservationIgnored private var estimatedBytes: Int64 = 0
+    @ObservationIgnored private var dominatorTicket = 0
+    @ObservationIgnored private var retainedSetTicket = 0
+    nonisolated static let dominatorPage = 100
 
     init(url: URL, store: HeapIndexStore?) {
         self.url = url
@@ -179,6 +267,8 @@ final class IDEHeapObjectExplorer {
         index = nil
         indexFacts = nil
         clearInstances()
+        dominatorRows = []
+        onIndexChanged?()
         if let store {
             let url = url
             Task.detached(priority: .utility) { store.delete(for: url) }
@@ -195,6 +285,8 @@ final class IDEHeapObjectExplorer {
         buildTicket += 1
         instanceTicket += 1
         inspectTicket += 1
+        dominatorTicket += 1
+        retainedSetTicket += 1
     }
 
     private func apply(_ progress: HeapIndexBuilder.Progress, ticket: Int) {
@@ -207,6 +299,7 @@ final class IDEHeapObjectExplorer {
         state = .ready
         let facts = (index.diskBytes, index.referenceCount, index.danglingReferences, index.buildSeconds)
         indexFacts = facts
+        onIndexChanged?()
         if let pending = pendingRow {
             pendingRow = nil
             showInstances(of: pending)
@@ -242,10 +335,11 @@ final class IDEHeapObjectExplorer {
         let layout = layout
         track(Task { [weak self] in
             let rows = await Task.detached(priority: .userInitiated) {
-                index.instances(ofGroup: group, limit: Self.instanceLimit).map { n in
+                index.instances(ofGroup: group, order: .largestRetainedFirst, limit: Self.instanceLimit).map { n in
                     IDEHeapInstanceRow(
                         id: n, address: "0x" + String(index.id(of: n), radix: 16),
-                        shallow: index.shallowSize(of: n, layout: layout), preview: index.preview(of: n)
+                        shallow: index.shallowSize(of: n, layout: layout), retained: index.retainedSize(of: n),
+                        preview: index.preview(of: n)
                     )
                 }
             }.value
@@ -300,8 +394,12 @@ final class IDEHeapObjectExplorer {
         fields = []
         referrers = []
         referrerTotal = 0
+        path = []
+        retainedSet = []
+        retainedSetComplete = true
         isLoadingObject = true
         inspectTicket += 1
+        if inspectorTab == .retains { loadRetainedSet() }
         let ticket = inspectTicket
         let layout = layout
         track(Task { [weak self] in
@@ -312,6 +410,7 @@ final class IDEHeapObjectExplorer {
             self.fields = loaded.fields
             self.referrers = loaded.referrers
             self.referrerTotal = loaded.referrerTotal
+            self.path = loaded.path
             self.isLoadingObject = false
         })
     }
@@ -322,11 +421,20 @@ final class IDEHeapObjectExplorer {
         let fields: [IDEHeapFieldRow]
         let referrers: [IDEHeapReferrerRow]
         let referrerTotal: Int
+        let path: [IDEHeapPathRow]
     }
 
     nonisolated private static func read(_ n: Int32, in index: HeapIndex, layout: HeapObjectLayout?) -> Loaded {
         let kind = index.kind(of: n)
         var summary = ByteCountFormatter.string(fromByteCount: Int64(index.shallowSize(of: n, layout: layout)), countStyle: .memory) + " shallow"
+        switch index.reachability(of: n) {
+        case .strong:
+            summary += " · " + ByteCountFormatter.string(fromByteCount: index.retainedSize(of: n), countStyle: .memory) + " retained"
+        case .weak:
+            summary += " · only weakly reachable"
+        case .unreachable:
+            summary += " · unreachable (garbage)"
+        }
         if kind == .objectArray || kind == .primitiveArray { summary += " · length \(index.length(of: n).formatted())" }
         if let preview = index.preview(of: n), kind == .instance { summary += " · \(preview)" }
         let className: String?
@@ -356,7 +464,173 @@ final class IDEHeapObjectExplorer {
                 preview: index.preview(of: edge.object), isWeak: edge.isWeak
             )
         }
-        return Loaded(summary: summary, className: className, fields: fields, referrers: referrers, referrerTotal: total)
+        let steps = index.pathToRoot(of: n, includingWeak: true)
+        let path = steps.enumerated().map { position, object in
+            let isLast = position == steps.count - 1
+            let kinds = isLast ? index.roots(of: object).map(\.kind.rawValue) : []
+            let isWeak = position > 0 && index.outbound(of: object).contains { $0.object == steps[position - 1] && $0.isWeak }
+                && !index.outbound(of: object).contains { $0.object == steps[position - 1] && !$0.isWeak }
+            return IDEHeapPathRow(
+                id: position, object: object, title: index.title(of: object),
+                via: position == 0 ? nil : index.referenceName(from: object, to: steps[position - 1]),
+                preview: index.preview(of: object),
+                rootKinds: kinds.isEmpty ? nil : Array(Set(kinds)).sorted().joined(separator: ", "),
+                isWeak: isWeak
+            )
+        }
+        return Loaded(summary: summary, className: className, fields: fields, referrers: referrers, referrerTotal: total, path: path)
+    }
+
+    // MARK: - Retained set
+
+    private func loadRetainedSet() {
+        guard let index, let n = inspected else { return }
+        retainedSetTicket += 1
+        let ticket = retainedSetTicket
+        isLoadingRetainedSet = true
+        track(Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) { index.retainedClasses(of: n) }.value
+            guard let self, self.retainedSetTicket == ticket else { return }
+            self.retainedSet = result.classes
+            self.retainedSetComplete = result.complete
+            self.isLoadingRetainedSet = false
+        })
+    }
+
+    // MARK: - Dominator tree
+
+    /// The top of the tree: the biggest objects kept alive, then the unreachable ones. Loaded once
+    /// per index, when the Dominators view first shows.
+    func loadDominatorsIfNeeded() {
+        guard let index, dominatorRows.isEmpty, !isLoadingDominators else { return }
+        isLoadingDominators = true
+        dominatorTicket += 1
+        let ticket = dominatorTicket
+        track(Task { [weak self] in
+            let rows = await Task.detached(priority: .userInitiated) { () -> [IDEHeapDominatorRow] in
+                var rows = Self.childRows(of: 0, from: 0, depth: 0, in: index)
+                if index.weaklyReachableCount > 0 {
+                    rows.append(IDEHeapDominatorRow(
+                        id: "weak", kind: .weaklyReachable, depth: 0, title: "Only weakly reachable objects",
+                        detail: "\(index.weaklyReachableCount.formatted()) objects only weak, soft or phantom references reach",
+                        shallow: index.weaklyReachableBytes, retained: index.weaklyReachableBytes, childCount: 1
+                    ))
+                }
+                if index.unreachableCount > 0 {
+                    rows.append(IDEHeapDominatorRow(
+                        id: "unreachable", kind: .unreachable, depth: 0, title: "Unreachable objects",
+                        detail: "\(index.unreachableCount.formatted()) objects no strong path from a root reaches",
+                        shallow: index.unreachableBytes, retained: index.unreachableBytes, childCount: 1
+                    ))
+                }
+                return rows
+            }.value
+            guard let self, self.dominatorTicket == ticket else { return }
+            self.dominatorRows = rows
+            self.isLoadingDominators = false
+        })
+    }
+
+    func toggle(_ row: IDEHeapDominatorRow) {
+        guard let position = dominatorRows.firstIndex(where: { $0.id == row.id }) else { return }
+        if dominatorRows[position].isExpanded {
+            var end = position + 1
+            while end < dominatorRows.count, dominatorRows[end].depth > row.depth { end += 1 }
+            dominatorRows.removeSubrange((position + 1)..<end)
+            dominatorRows[position].isExpanded = false
+            return
+        }
+        guard let index, row.childCount > 0 else { return }
+        dominatorRows[position].isExpanded = true
+        let ticket = dominatorTicket
+        let rowID = row.id
+        track(Task { [weak self] in
+            let children = await Task.detached(priority: .userInitiated) { () -> [IDEHeapDominatorRow] in
+                switch row.kind {
+                case .object(let n): return Self.childRows(of: n, from: 0, depth: row.depth + 1, in: index)
+                case .unreachable: return Self.bucketRows(index.unreachableClasses(limit: 200), weak: false, depth: row.depth + 1)
+                case .weaklyReachable: return Self.bucketRows(index.weaklyReachableClasses(limit: 200), weak: true, depth: row.depth + 1)
+                default: return []
+                }
+            }.value
+            guard let self, self.dominatorTicket == ticket,
+                  let at = self.dominatorRows.firstIndex(where: { $0.id == rowID }), self.dominatorRows[at].isExpanded else { return }
+            self.dominatorRows.insert(contentsOf: children, at: at + 1)
+        })
+    }
+
+    /// Replaces a "show more" line with the next page of its parent's children.
+    func showMore(_ row: IDEHeapDominatorRow) {
+        guard let index, case .more(let parent, let shown, _) = row.kind else { return }
+        let ticket = dominatorTicket
+        let rowID = row.id
+        track(Task { [weak self] in
+            let page = await Task.detached(priority: .userInitiated) {
+                Self.childRows(of: parent, from: shown, depth: row.depth, in: index)
+            }.value
+            guard let self, self.dominatorTicket == ticket,
+                  let at = self.dominatorRows.firstIndex(where: { $0.id == rowID }) else { return }
+            self.dominatorRows.replaceSubrange(at...at, with: page)
+        })
+    }
+
+    nonisolated private static func childRows(of parent: Int32, from start: Int, depth: Int, in index: HeapIndex) -> [IDEHeapDominatorRow] {
+        let total = index.dominatorChildCount(of: parent)
+        let page = index.dominatorChildren(of: parent, range: start..<(start + dominatorPage))
+        var rows = page.map { n -> IDEHeapDominatorRow in
+            let preview = index.preview(of: n).map { "  \($0)" } ?? ""
+            return IDEHeapDominatorRow(
+                id: "o\(n)", kind: .object(n), depth: depth, title: index.className(of: n) == "java.lang.Class"
+                    ? "class " + index.classes[Int(index.classIndex(of: n))].name : index.className(of: n),
+                detail: "0x" + String(index.id(of: n), radix: 16) + preview,
+                shallow: Int64(index.shallowSize(of: n)), retained: index.retainedSize(of: n),
+                childCount: index.dominatorChildCount(of: n)
+            )
+        }
+        let shown = start + page.count
+        if shown < total {
+            rows.append(IDEHeapDominatorRow(
+                id: "m\(parent)-\(shown)", kind: .more(parent: parent, shown: shown, total: total), depth: depth,
+                title: "Show \(min(dominatorPage, total - shown).formatted()) more of \((total - shown).formatted())",
+                detail: "", shallow: nil, retained: 0, childCount: 0
+            ))
+        }
+        return rows
+    }
+
+    nonisolated private static func bucketRows(_ totals: [HeapIndex.ClassTotal], weak: Bool, depth: Int) -> [IDEHeapDominatorRow] {
+        totals.map { total in
+            IDEHeapDominatorRow(
+                id: (weak ? "w" : "u") + "\(total.group)",
+                kind: weak ? .weaklyReachableClass(total.group) : .unreachableClass(total.group), depth: depth, title: total.name,
+                detail: "\(total.count.formatted()) objects", shallow: total.bytes, retained: total.bytes, childCount: 0
+            )
+        }
+    }
+
+    // MARK: - Merged paths
+
+    /// The shortest paths to GC roots of a class's instances (the 10,000 that retain most), merged.
+    func showMergedPaths(for row: HeapClassRow) {
+        guard let index, let group = index.groupIndex(for: row) else { return }
+        isLoadingMergedPaths = true
+        let name = row.name
+        track(Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) { () -> IDEHeapMergedPaths in
+                let objects = index.instances(ofGroup: group, order: .largestRetainedFirst, limit: 10_000)
+                let nodes = index.mergedPathsToRoots(of: objects)
+                let rows = nodes.map { node in
+                    IDEHeapMergedPaths.Row(
+                        id: node.id, object: node.object, depth: node.depth, count: node.count,
+                        title: index.title(of: node.object), isTarget: node.isTarget
+                    )
+                }
+                return IDEHeapMergedPaths(className: name, objectCount: objects.count, rows: rows)
+            }.value
+            guard let self else { return }
+            self.isLoadingMergedPaths = false
+            self.mergedPaths = result
+        })
     }
 
     nonisolated static func typeName(_ type: HprofBasicType) -> String {

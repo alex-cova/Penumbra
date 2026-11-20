@@ -15,6 +15,7 @@ public enum HeapIndexBuilder {
             case followingReferences = "Following references"
             case linkingReferrers = "Linking referrers"
             case groupingInstances = "Grouping instances"
+            case dominators = "Finding what keeps what alive"
         }
 
         public let phase: Phase
@@ -27,12 +28,12 @@ public enum HeapIndexBuilder {
     }
 
     /// Format of what is written; a different number makes `HeapIndexStore` rebuild.
-    public static let formatVersion = 1
+    public static let formatVersion = 3
 
-    /// Bytes of disk the build needs at its peak, from the dump's size: per object about 90 bytes
-    /// (final arrays plus the sort's records), per possible reference 12. Generous on purpose.
+    /// Bytes of disk the build needs at its peak: per object about 130 (final arrays, the sort's
+    /// records, the dominator pass's working arrays), per possible reference 12. Generous on purpose.
     public static func estimatedPeakBytes(objectCount: Int, referenceSlots: Int) -> Int64 {
-        Int64(objectCount) * 90 + Int64(referenceSlots) * 12 + (64 << 20)
+        Int64(objectCount) * 130 + Int64(referenceSlots) * 12 + (64 << 20)
     }
 
     public static func build(
@@ -147,7 +148,7 @@ public enum HeapIndexBuilder {
                 degrees: outOffsets, temp: directory.appendingPathComponent("edges-\(index).tmp")
             )
             let done = counter.add(Int64(ranges[index].count))
-            progress(Progress(phase: .followingReferences, fraction: 0.4 + 0.35 * Double(done) / Double(total)))
+            progress(Progress(phase: .followingReferences, fraction: 0.4 + 0.25 * Double(done) / Double(total)))
             return part
         }
         try Task.checkCancellation()
@@ -168,14 +169,14 @@ public enum HeapIndexBuilder {
         }
         let dangling = edgeParts.reduce(0) { $0 + $1.dangling }
         try Task.checkCancellation()
-        progress(Progress(phase: .linkingReferrers, fraction: 0.78))
+        progress(Progress(phase: .linkingReferrers, fraction: 0.66))
 
         // Referrers: the transpose of the references.
         let inOffsets = try HeapMappedArray<UInt32>.create(directory.appendingPathComponent(Files.inOffsets), count: total + 1)
         let inSources = try HeapMappedArray<UInt32>.create(directory.appendingPathComponent(Files.inSources), count: edgeCount)
         try transpose(outOffsets: outOffsets, outTargets: outTargets, total: total, inOffsets: inOffsets, inSources: inSources, directory: directory)
         try Task.checkCancellation()
-        progress(Progress(phase: .groupingInstances, fraction: 0.93))
+        progress(Progress(phase: .groupingInstances, fraction: 0.7))
 
         // Each class's objects, in number order.
         let groupCount = classTable.entries.count
@@ -183,6 +184,18 @@ public enum HeapIndexBuilder {
         let members = try HeapMappedArray<Int32>.create(directory.appendingPathComponent(Files.members), count: objectCount)
         groupMembers(total: total, classes: classes, kinds: kinds, mirrorGroup: classTable.mirrorGroup,
                      memberOffsets: memberOffsets, members: members, groupCount: groupCount)
+
+        try Task.checkCancellation()
+        progress(Progress(phase: .dominators, fraction: 0.72))
+
+        // Who keeps what alive: dominators, retained sizes, paths to roots, the unreachable.
+        let rootNumbers = roots.compactMap { lookup.number(of: $0.id) }
+        let facts = try HeapDominatorBuilder.build(
+            total: total, roots: rootNumbers, outOffsets: outOffsets, outTargets: outTargets,
+            inOffsets: inOffsets, inSources: inSources, kinds: kinds, classes: classes, lengths: lengths,
+            sizes: HeapShallowSizes(classes: classTable.entries, layout: layout), groupCount: groupCount,
+            mirrorGroup: classTable.mirrorGroup, directory: directory
+        ) { fraction in progress(Progress(phase: .dominators, fraction: 0.72 + 0.27 * fraction)) }
 
         let written: [any HeapFlushable] = [ids, offsets, classes, kinds, lengths, outOffsets, outTargets, inOffsets, inSources, memberOffsets, members]
         for array in written { try array.flushToDisk() }
@@ -192,12 +205,15 @@ public enum HeapIndexBuilder {
             formatVersion: formatVersion, dump: try HeapIndexMeta.DumpStamp(url),
             idSize: I, objectCount: objectCount, edgeCount: edgeCount, classCount: groupCount,
             rootCount: roots.count, layoutHeader: layout.headerSize, layoutReference: layout.referenceSize,
-            danglingReferences: dangling, buildSeconds: Date().timeIntervalSince(started), createdAt: Date()
+            danglingReferences: dangling, reachableCount: facts.reachableCount, reachableBytes: facts.reachableBytes,
+            weaklyReachableCount: facts.weaklyReachableCount, weaklyReachableBytes: facts.weaklyReachableBytes,
+            unreachableCount: facts.unreachableCount, unreachableBytes: facts.unreachableBytes,
+            buildSeconds: Date().timeIntervalSince(started), createdAt: Date()
         )
         try JSONEncoder().encode(meta).write(to: directory.appendingPathComponent(Files.meta), options: .atomic)
         try Data().write(to: directory.appendingPathComponent(Files.complete))
         succeeded = true
-        progress(Progress(phase: .groupingInstances, fraction: 1))
+        progress(Progress(phase: .dominators, fraction: 1))
         return try HeapIndex.open(directory: directory, dump: url)
     }
 

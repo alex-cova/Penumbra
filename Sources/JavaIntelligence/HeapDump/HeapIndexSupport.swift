@@ -326,6 +326,12 @@ struct HeapIndexMeta: Codable, Equatable {
     let layoutHeader: Int
     let layoutReference: Int
     let danglingReferences: Int
+    let reachableCount: Int
+    let reachableBytes: Int64
+    let weaklyReachableCount: Int
+    let weaklyReachableBytes: Int64
+    let unreachableCount: Int
+    let unreachableBytes: Int64
     let buildSeconds: Double
     let createdAt: Date
 }

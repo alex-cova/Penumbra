@@ -28,7 +28,7 @@ struct IDEHeapDumpView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 200)
+            .frame(width: 300)
             if session.mode == .histogram {
                 Picker("Group by", selection: $session.grouping) {
                     ForEach(IDEHeapDumpSession.Grouping.allCases) { Text("By \($0.rawValue)").tag($0) }
@@ -101,6 +101,7 @@ struct IDEHeapDumpView: View {
                 switch session.mode {
                 case .summary: IDEHeapDumpSummaryView(session: session, overview: overview)
                 case .histogram: IDEHeapDumpHistogramView(session: session)
+                case .dominators: IDEHeapDominatorsView(session: session)
                 }
             }
         }
@@ -127,9 +128,12 @@ struct IDEHeapDumpView: View {
     }
 }
 
-/// Every object in the file is counted, reachable or not: an out-of-memory dump is written
-/// without a collection first, and telling garbage apart needs the reference graph (phase 3).
-private let unreachableNote = "Counts and sizes cover every object in the file, including unreachable ones. An out-of-memory dump is written without a garbage collection, so totals can be larger than tools that drop garbage on open (Eclipse MAT) report."
+/// Once the index is open, reachable and unreachable are told apart.
+private let reachabilityNote = "Histogram counts and shallow sizes cover every object in the file. Retained sizes, the Dominators view and the Reachable line count only what a strong path from a GC root reaches. Objects only weak, soft or phantom references reach are not kept alive but are not garbage yet (caches live there): they are counted apart from the unreachable ones, which are garbage the dump was written with."
+
+/// Before the index, every object in the file is counted, reachable or not: an out-of-memory dump
+/// is written without a collection first, and telling garbage apart needs the reference graph.
+private let unreachableNote = "Counts and sizes cover every object in the file, including unreachable ones. An out-of-memory dump is written without a garbage collection, so totals can be larger than tools that drop garbage on open (Eclipse MAT) report. Build the object index to tell live objects from garbage."
 
 // MARK: - Summary
 
@@ -153,6 +157,11 @@ struct IDEHeapDumpSummaryView: View {
                         row("Primitive arrays", overview.primitiveArrayCount.formatted())
                         row("Classes", overview.classCount.formatted())
                         row("Class loaders", overview.classLoaderCount.formatted())
+                        if session.objects.state == .ready, let index = session.objects.index {
+                            row("Reachable", "\(index.reachableCount.formatted()) · \(IDEHeapDumpView.bytes(index.reachableBytes))")
+                            row("Only weakly reachable", "\(index.weaklyReachableCount.formatted()) · \(IDEHeapDumpView.bytes(index.weaklyReachableBytes))")
+                            row("Unreachable", "\(index.unreachableCount.formatted()) · \(IDEHeapDumpView.bytes(index.unreachableBytes))")
+                        }
                     }
                     card("GC Roots") {
                         row("Total", overview.rootCount.formatted())
@@ -172,8 +181,11 @@ struct IDEHeapDumpSummaryView: View {
                     layoutCard
                     IDEHeapIndexCard(objects: session.objects)
                 }
+                if session.objects.state == .ready, let index = session.objects.index {
+                    IDEHeapBiggestObjectsCard(session: session, index: index)
+                }
                 topClasses
-                Text(unreachableNote)
+                Text(session.objects.state == .ready ? reachabilityNote : unreachableNote)
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -326,6 +338,12 @@ struct IDEHeapDumpHistogramView: View {
             } secondary: {
                 IDEHeapObjectsPane(session: session)
             }
+            .sheet(item: Binding(
+                get: { session.objects.mergedPaths.map(IDEHeapMergedPathsBox.init) },
+                set: { if $0 == nil { session.objects.mergedPaths = nil } }
+            )) { box in
+                IDEHeapMergedPathsSheet(objects: session.objects, paths: box.paths)
+            }
         }
     }
 
@@ -355,6 +373,13 @@ struct IDEHeapDumpHistogramView: View {
                         .help("\(row.shallowBytes.formatted()) bytes")
                 }
                 .width(min: 60, ideal: 80, max: 130)
+                TableColumn("Retained", value: \.retainedSortKey) { row in
+                    Text(row.retainedBytes.map { IDEHeapDumpView.bytes($0) } ?? "")
+                        .font(IDEAppearance.Typography.monoSmall)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .help(row.retainedBytes.map { "Kept alive by this class's instances: \($0.formatted()) bytes" } ?? "Retained sizes need the object index.")
+                }
+                .width(min: 60, ideal: 84, max: 130)
                 TableColumn("% of Heap", value: \.shallowBytes) { row in
                     let share = Double(row.shallowBytes) / Double(total)
                     HStack(spacing: IDEAppearance.Spacing.xs) {
@@ -370,6 +395,9 @@ struct IDEHeapDumpHistogramView: View {
                 if let row = row(ids.first) {
                     if IDEHeapDumpSession.sourceClassName(of: row) != nil {
                         Button("Jump to Source") { session.openSource(of: row) }
+                    }
+                    if row.kind != .package, session.objects.state == .ready {
+                        Button("Merge Shortest Paths to GC Roots") { session.objects.showMergedPaths(for: row) }
                     }
                     if row.kind == .package {
                         Button("Show Classes in Package") {

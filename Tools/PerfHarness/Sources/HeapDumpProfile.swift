@@ -76,6 +76,32 @@ enum HeapDumpProfile {
             print(String(format: "referrers_ms=%.1f", milliseconds(since: queryStart)))
             print("object \(reopened.title(of: object)) referrers=\(reopened.inboundCount(of: object)) via \(names)")
         }
+        print("reachable=\(reopened.reachableCount) reachable_bytes=\(reopened.reachableBytes) weakly_reachable=\(reopened.weaklyReachableCount) weakly_bytes=\(reopened.weaklyReachableBytes) unreachable=\(reopened.unreachableCount) unreachable_bytes=\(reopened.unreachableBytes)")
+        let domStart = ContinuousClock.now
+        let top = reopened.dominatorChildren(of: 0, range: 0..<10)
+        print(String(format: "top_dominators_ms=%.1f", milliseconds(since: domStart)))
+        for n in top {
+            let share = Double(reopened.retainedSize(of: n)) / Double(max(reopened.reachableBytes, 1)) * 100
+            print(String(format: "dominator %6.2f%% %12lld  %@", share, reopened.retainedSize(of: n), reopened.title(of: n)))
+        }
+        for total in reopened.weaklyReachableClasses(limit: 5) {
+            print("weakly \(total.count) \(total.bytes) \(total.name)")
+        }
+        if let first = top.first {
+            let retainsStart = ContinuousClock.now
+            let held = reopened.retainedClasses(of: first)
+            print(String(format: "retains_ms=%.0f classes=%d complete=%@", milliseconds(since: retainsStart), held.classes.count, held.complete ? "yes" : "no"))
+            let mergedStart = ContinuousClock.now
+            if let row = overview.histogram.rows.first(where: { $0.kind == .instance && $0.name != "java.lang.String" }),
+               let group = reopened.groupIndex(for: row) {
+                let merged = reopened.mergedPathsToRoots(of: reopened.instances(ofGroup: group, order: .largestRetainedFirst, limit: 10_000))
+                print(String(format: "merged_paths_ms=%.0f lines=%d class=%@", milliseconds(since: mergedStart), merged.count, row.name))
+            }
+            let pathStart = ContinuousClock.now
+            let path = reopened.pathToRoot(of: reopened.dominatorChildren(of: first, range: 0..<1).first ?? first)
+            print(String(format: "path_ms=%.2f length=%d root=%@", milliseconds(since: pathStart), path.count,
+                         reopened.roots(of: path.last ?? 0).first?.kind.rawValue ?? "?"))
+        }
         if !keep { try? FileManager.default.removeItem(at: into == nil ? store.root : target) }
     }
 

@@ -121,13 +121,32 @@ public final class HeapIndex: @unchecked Sendable {
     let memberOffsets: HeapMappedArray<UInt32>
     let members: HeapMappedArray<Int32>
     let lookup: HeapIDLookup
+    let dominators: HeapMappedArray<Int32>
+    let retained: HeapMappedArray<UInt64>
+    let childOffsets: HeapMappedArray<UInt32>
+    let children: HeapMappedArray<Int32>
+    let pathParents: HeapMappedArray<Int32>
+    let classRetained: HeapMappedArray<UInt64>
+    let unreachable: HeapMappedArray<UInt64>
+    let weaklyReachable: HeapMappedArray<UInt64>
     private let table: ClassTable
     private let fd: Int32
-    /// Per class: primitive bytes and reference count of an instance (the whole chain).
-    private let shapes: [(primitiveBytes: Int, references: Int)]
-    private let classClassShape: (primitiveBytes: Int, references: Int)
+    private let sizes: HeapShallowSizes
     private let lock = NSLock()
     private var chainCache: [Int32: [HeapClass.Field]] = [:]
+    private var sizesByLayout: [HeapObjectLayout: HeapShallowSizes] = [:]
+    private var rootsByObject: [Int32: [HeapRoot]]?
+
+    /// Objects a strong path from a GC root reaches, and their shallow bytes (under `layout`).
+    public let reachableCount: Int
+    public let reachableBytes: Int64
+    /// Objects only `Reference.referent` links reach (weak, soft, phantom): not kept alive, but
+    /// not garbage yet either. A soft-reference cache lives here.
+    public let weaklyReachableCount: Int
+    public let weaklyReachableBytes: Int64
+    /// The rest: garbage the dump was written with (an out-of-memory dump is not collected first).
+    public let unreachableCount: Int
+    public let unreachableBytes: Int64
 
     /// Maps a finished index; `HeapIndexStore.openExisting` checks it is current first.
     public static func open(directory: URL, dump: URL) throws -> HeapIndex {
@@ -164,6 +183,21 @@ public final class HeapIndex: @unchecked Sendable {
         classes = table.entries
         mirrorGroup = table.mirrorGroup
         guard classes.count == meta.classCount else { throw HeapIndexError.corrupt("class count") }
+        typealias D = HeapDominatorBuilder.Files
+        dominators = try .open(url(D.dominators), count: total)
+        retained = try .open(url(D.retained), count: total)
+        childOffsets = try .open(url(D.childOffsets), count: total + 1)
+        children = try .open(url(D.children), count: meta.reachableCount)
+        pathParents = try .open(url(D.pathParents), count: total)
+        classRetained = try .open(url(D.classRetained), count: max(meta.classCount, 1))
+        unreachable = try .open(url(D.unreachable), count: meta.classCount * 2)
+        weaklyReachable = try .open(url(D.weaklyReachable), count: meta.classCount * 2)
+        weaklyReachableCount = meta.weaklyReachableCount
+        weaklyReachableBytes = meta.weaklyReachableBytes
+        reachableCount = meta.reachableCount
+        reachableBytes = meta.reachableBytes
+        unreachableCount = meta.unreachableCount
+        unreachableBytes = meta.unreachableBytes
 
         var reader = try HeapBinaryReader(Data(contentsOf: url(F.roots)))
         var roots: [HeapRoot] = []
@@ -182,25 +216,7 @@ public final class HeapIndex: @unchecked Sendable {
         }
         self.roots = roots
 
-        var shapes: [(primitiveBytes: Int, references: Int)] = []
-        shapes.reserveCapacity(table.entries.count)
-        for index in table.entries.indices {
-            var primitive = 0
-            var references = 0
-            var cursor = Int32(index)
-            var seen = Set<Int32>()
-            while cursor >= 0, Int(cursor) < table.entries.count, seen.insert(cursor).inserted {
-                let entry = table.entries[Int(cursor)]
-                for field in entry.fields {
-                    if field.type == .object { references += 1 } else { primitive += field.type.size(idSize: 8) }
-                }
-                cursor = entry.superIndex
-            }
-            shapes.append((primitive, references))
-        }
-        self.shapes = shapes
-        classClassShape = table.entries.firstIndex { $0.name == "java.lang.Class" && $0.kind == .loaded }
-            .map { shapes[$0] } ?? (0, 0)
+        sizes = HeapShallowSizes(classes: table.entries, layout: layout)
 
         let fd = Darwin.open(dump.path, O_RDONLY)
         guard fd >= 0 else { throw HprofError.cannotOpen(String(cString: strerror(errno))) }
@@ -248,31 +264,21 @@ public final class HeapIndex: @unchecked Sendable {
     }
 
     public func shallowSize(of n: Int32, layout override: HeapObjectLayout? = nil) -> Int {
-        let layout = override ?? layout
-        let index = Int(classIndex(of: n))
-        switch kind(of: n) {
-        case .superRoot:
-            return 0
-        case .instance:
-            guard index > 0, index < shapes.count, case .loaded = classes[index].kind else {
-                return HeapObjectLayout.align(layout.headerSize + Int(lengths[Int(n)]))
+        let calculator: HeapShallowSizes
+        if let override, override != layout {
+            lock.lock()
+            if let cached = sizesByLayout[override] {
+                calculator = cached
+            } else {
+                let made = HeapShallowSizes(classes: classes, layout: override)
+                sizesByLayout[override] = made
+                calculator = made
             }
-            return layout.instanceSize(primitiveBytes: shapes[index].primitiveBytes, references: shapes[index].references)
-        case .objectArray:
-            return layout.arraySize(length: Int(lengths[Int(n)]), elementSize: layout.referenceSize)
-        case .primitiveArray:
-            guard index >= 0, index < classes.count, case .primitiveArray(let type) = classes[index].kind else { return 0 }
-            return layout.arraySize(length: Int(lengths[Int(n)]), elementSize: type.size(idSize: 8))
-        case .classObject:
-            var primitive = classClassShape.primitiveBytes
-            var references = classClassShape.references
-            if index >= 0, index < classes.count {
-                for field in classes[index].statics {
-                    if field.type == .object { references += 1 } else { primitive += field.type.size(idSize: 8) }
-                }
-            }
-            return layout.instanceSize(primitiveBytes: primitive, references: references)
+            lock.unlock()
+        } else {
+            calculator = sizes
         }
+        return calculator.size(kind: kinds[Int(n)], classIndex: classIndexes[Int(n)], length: lengths[Int(n)])
     }
 
     /// `java.util.HashMap @ 0x7f0a1b2c8`
@@ -308,11 +314,206 @@ public final class HeapIndex: @unchecked Sendable {
         HeapEdge(object: Int32(bitPattern: stored & ~HeapIndexBuilder.weakBit), isWeak: stored & HeapIndexBuilder.weakBit != 0)
     }
 
+    // MARK: - Who keeps what alive
+
+    /// Whether a strong path from a root reaches the object (what dominators and retained sizes cover).
+    public func isReachable(_ n: Int32) -> Bool { n == 0 || dominators[Int(n)] >= 0 }
+
+    public enum Reachability: Sendable, Equatable {
+        /// A strong path from a GC root reaches it: it is kept alive.
+        case strong
+        /// Only paths through a `Reference.referent` reach it: collectable, but not garbage yet.
+        case weak
+        /// Nothing reaches it: garbage the dump was written with.
+        case unreachable
+    }
+
+    public func reachability(of n: Int32) -> Reachability {
+        if isReachable(n) { return .strong }
+        return pathParents[Int(n)] <= -2 ? .weak : .unreachable
+    }
+
+    /// Bytes that would be freed with the object: itself and everything only it keeps alive
+    /// (under the index's `layout`). For the super-root, every reachable byte; 0 when unreachable.
+    public func retainedSize(of n: Int32) -> Int64 { Int64(retained[Int(n)]) }
+
+    /// The object's immediate dominator: 0 for one kept alive by several roots or by a root
+    /// itself, nil for the super-root and for unreachable objects.
+    public func dominator(of n: Int32) -> Int32? {
+        let d = dominators[Int(n)]
+        return d >= 0 ? d : nil
+    }
+
+    public func dominatorChildCount(of n: Int32) -> Int {
+        Int(childOffsets[Int(n) + 1]) - Int(childOffsets[Int(n)])
+    }
+
+    /// What `n` alone keeps alive, directly: largest retained first.
+    public func dominatorChildren(of n: Int32, range: Range<Int>) -> [Int32] {
+        let start = Int(childOffsets[Int(n)])
+        return range.clamped(to: 0..<dominatorChildCount(of: n)).map { children[start + $0] }
+    }
+
+    /// A class's retained size: its instances' retained sizes, an instance counted only when no
+    /// dominator above it is of the same class (a linked list counts once).
+    public func retainedSize(ofGroup group: Int32) -> Int64 {
+        guard group >= 0, Int(group) < classes.count else { return 0 }
+        return Int64(classRetained[Int(group)])
+    }
+
+    /// The shortest strong path from the object to a GC root: `[n, …, root]`; empty when no
+    /// strong path exists. With `includingWeak`, an only weakly reachable object gets the path
+    /// through its `Reference.referent` link (`isWeakLink` says which steps are weak).
+    public func pathToRoot(of n: Int32, includingWeak: Bool = false, limit: Int = 1_000_000) -> [Int32] {
+        guard n > 0 else { return [] }
+        let first = pathParents[Int(n)]
+        guard first >= 0 || (includingWeak && first <= -2) else { return [] }
+        var path: [Int32] = [n]
+        var current = n
+        while path.count < limit {
+            let stored = pathParents[Int(current)]
+            let parent = stored >= 0 ? stored : -stored - 2
+            guard stored != -1, parent > 0 else { break }
+            current = parent
+            path.append(current)
+        }
+        return path
+    }
+
+    /// Whether the step from `n` to the next object up its path is a `Reference.referent` link,
+    /// or crosses one further up (an object reached only through a weak link).
+    public func isWeakLink(_ n: Int32) -> Bool {
+        n > 0 && pathParents[Int(n)] <= -2
+    }
+
+    /// The root records that name `n` (a thread, a Java frame, a sticky class…).
+    public func roots(of n: Int32) -> [HeapRoot] {
+        lock.lock()
+        defer { lock.unlock() }
+        if rootsByObject == nil {
+            var map: [Int32: [HeapRoot]] = [:]
+            for root in roots {
+                if let object = root.object { map[object, default: []].append(root) }
+            }
+            rootsByObject = map
+        }
+        return rootsByObject?[n] ?? []
+    }
+
+    /// One line of a merged-paths tree: an object on the way from roots to the chosen objects,
+    /// how many of them pass through it, at which depth (0 is a root).
+    public struct PathNode: Sendable, Hashable, Identifiable {
+        public let id: Int
+        public let object: Int32
+        public let depth: Int
+        public let count: Int
+        /// The chosen object itself (a leaf of the tree).
+        public let isTarget: Bool
+    }
+
+    /// MAT's "Merge Shortest Paths to GC Roots": the paths of `objects` folded from the root side,
+    /// the busiest branch first, at most `limit` lines.
+    public func mergedPathsToRoots(of objects: [Int32], limit: Int = 2_000) -> [PathNode] {
+        // Flat storage: a tree of objects owning their children is released one level per stack
+        // frame, and paths thousands of objects deep overflow a background thread's stack.
+        var nodeObject: [Int32] = [0]
+        var nodeCount: [Int] = [0]
+        var nodeIsTarget: [Bool] = [false]
+        var nodeChildren: [[Int32: Int]] = [[:]]
+        for n in objects where isReachable(n) {
+            let path = pathToRoot(of: n)
+            guard !path.isEmpty else { continue }
+            var node = 0
+            nodeCount[0] += 1
+            for object in path.reversed() {
+                if let next = nodeChildren[node][object] {
+                    node = next
+                } else {
+                    let next = nodeObject.count
+                    nodeObject.append(object)
+                    nodeCount.append(0)
+                    nodeIsTarget.append(false)
+                    nodeChildren.append([:])
+                    nodeChildren[node][object] = next
+                    node = next
+                }
+                nodeCount[node] += 1
+            }
+            nodeIsTarget[node] = true
+        }
+        func ordered(_ node: Int) -> [Int] {
+            nodeChildren[node].values.sorted { (nodeCount[$0], nodeObject[$1]) > (nodeCount[$1], nodeObject[$0]) }
+        }
+        var result: [PathNode] = []
+        var stack: [(node: Int, depth: Int)] = ordered(0).reversed().map { ($0, 0) }
+        while let (node, depth) = stack.popLast(), result.count < limit {
+            result.append(PathNode(
+                id: result.count, object: nodeObject[node], depth: depth, count: nodeCount[node], isTarget: nodeIsTarget[node]
+            ))
+            for child in ordered(node).reversed() { stack.append((child, depth + 1)) }
+        }
+        return result
+    }
+
+    /// Objects of one class (or array type) and their bytes.
+    public struct ClassTotal: Sendable, Hashable, Identifiable {
+        public let group: Int32
+        public let name: String
+        public let count: Int
+        public let bytes: Int64
+        public var id: Int32 { group }
+    }
+
+    /// What `n` keeps alive, by class (its dominator subtree, itself included), largest first.
+    /// Walks at most `visitLimit` objects; `complete` says whether it saw them all.
+    public func retainedClasses(of n: Int32, visitLimit: Int = 200_000_000) -> (classes: [ClassTotal], complete: Bool) {
+        var counts: [Int32: (count: Int, bytes: Int64)] = [:]
+        var stack: [Int32] = [n]
+        var visited = 0
+        while let v = stack.popLast() {
+            if v != 0 {
+                let g = groupIndex(of: v)
+                counts[g, default: (0, 0)].count += 1
+                counts[g, default: (0, 0)].bytes += Int64(shallowSize(of: v))
+            }
+            visited += 1
+            if visited >= visitLimit { break }
+            let start = Int(childOffsets[Int(v)])
+            let end = Int(childOffsets[Int(v) + 1])
+            if start < end { for index in start..<end { stack.append(children[index]) } }
+        }
+        let totals = counts.map { group, value in
+            ClassTotal(group: group, name: classes[Int(group)].name, count: value.count, bytes: value.bytes)
+        }
+        return (totals.sorted { ($0.bytes, $1.name) > ($1.bytes, $0.name) }, stack.isEmpty)
+    }
+
+    /// The unreachable objects (garbage) by class, largest first.
+    public func unreachableClasses(limit: Int = 200) -> [ClassTotal] {
+        totals(unreachable, limit: limit)
+    }
+
+    /// The only weakly reachable objects by class, largest first.
+    public func weaklyReachableClasses(limit: Int = 200) -> [ClassTotal] {
+        totals(weaklyReachable, limit: limit)
+    }
+
+    private func totals(_ table: HeapMappedArray<UInt64>, limit: Int) -> [ClassTotal] {
+        var totals: [ClassTotal] = []
+        for g in 0..<classes.count where table[2 * g] > 0 {
+            totals.append(ClassTotal(group: Int32(g), name: classes[g].name, count: Int(table[2 * g]), bytes: Int64(table[2 * g + 1])))
+        }
+        return Array(totals.sorted { ($0.bytes, $1.name) > ($1.bytes, $0.name) }.prefix(limit))
+    }
+
     // MARK: - Instances
 
     public enum InstanceOrder: Sendable {
         case address
+        /// By shallow size.
         case largestFirst
+        /// By retained size: what each instance keeps alive.
+        case largestRetainedFirst
     }
 
     public func instanceCount(ofGroup group: Int32) -> Int {
@@ -333,7 +534,7 @@ public final class HeapIndex: @unchecked Sendable {
         case .primitiveArray, .classMirrors: sameSize = false
         }
         let isArrayClass = classes[Int(group)].name.hasSuffix("[]")
-        if order == .address || (sameSize && !isArrayClass) {
+        if order == .address || (order == .largestFirst && sameSize && !isArrayClass) {
             return (start..<min(end, start + limit)).map { members[$0] }
         }
         // A min-heap of the `limit` largest (size, number), then sorted largest first.
@@ -365,7 +566,7 @@ public final class HeapIndex: @unchecked Sendable {
         }
         for position in start..<end {
             let n = members[position]
-            let entry = (size: shallowSize(of: n), n: n)
+            let entry = (size: order == .largestRetainedFirst ? Int(retained[Int(n)]) : shallowSize(of: n), n: n)
             if heap.count < limit {
                 heap.append(entry)
                 siftUp(heap.count - 1)

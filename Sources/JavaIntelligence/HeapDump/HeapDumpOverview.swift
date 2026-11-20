@@ -196,6 +196,11 @@ public struct HeapClassRow: Sendable, Identifiable, Hashable {
     public let shallowBytes: Int64
     /// The class object's id for an instance or object array row; nil for the rest.
     public let classID: UInt64?
+    /// The class's retained size once an object index with dominators is open; nil before, and
+    /// for package rows (a package's classes can dominate one another).
+    public var retainedBytes: Int64?
+    /// For sorting: rows without a retained size go last.
+    public var retainedSortKey: Int64 { retainedBytes ?? -1 }
 
     public init(id: Int, name: String, kind: Kind, count: Int, shallowBytes: Int64, classID: UInt64? = nil) {
         self.id = id

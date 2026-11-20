@@ -9,7 +9,7 @@ import XCTest
 /// A small HPROF 1.0.2 file: Object, String (int, ref) and `com.acme.Cache` (ref), three Strings,
 /// one Cache, a `byte[16]` and two roots. Written by hand here because `HprofTestWriter` lives in
 /// the library's test target.
-private func tinyHeapDump() -> Data {
+private func tinyHeapDump(weak: Bool = false) -> Data {
     var records = Data()
     func u4(_ value: UInt32, into data: inout Data) { withUnsafeBytes(of: value.bigEndian) { data.append(contentsOf: $0) } }
     func u8(_ value: UInt64, into data: inout Data) { withUnsafeBytes(of: value.bigEndian) { data.append(contentsOf: $0) } }
@@ -33,7 +33,7 @@ private func tinyHeapDump() -> Data {
         record(0x02, body)
     }
     // Field names: String (hash, value), Cache (entry).
-    for (id, name) in [(UInt64(0x9200), "hash"), (0x9201, "value"), (0x9300, "entry")] {
+    for (id, name) in [(UInt64(0x9200), "hash"), (0x9201, "value"), (0x9300, "entry"), (0x9400, "referent")] {
         var string = Data()
         u8(id, into: &string)
         string.append(Data(name.utf8))
@@ -42,6 +42,10 @@ private func tinyHeapDump() -> Data {
     loadClass(0x10, "java/lang/Object")
     loadClass(0x20, "java/lang/String")
     loadClass(0x30, "com/acme/Cache")
+    if weak {
+        loadClass(0x40, "java/lang/ref/Reference")
+        loadClass(0x50, "java/lang/ref/WeakReference")
+    }
     var heap = Data()
     func classDump(_ id: UInt64, superID: UInt64, fields: [UInt8]) {
         heap.append(0x20)
@@ -70,6 +74,18 @@ private func tinyHeapDump() -> Data {
     classDump(0x20, superID: 0x10, fields: [10, 2])
     classDump(0x30, superID: 0x10, fields: [2])
     for index in 0..<3 { instance(UInt64(0x10_0000 + index * 0x1000), classID: 0x20, fieldBytes: 12) }
+    if weak {
+        // A frame holds a WeakReference to the second String: only weakly reachable.
+        classDump(0x40, superID: 0x10, fields: [2])
+        classDump(0x50, superID: 0x40, fields: [])
+        var referent = Data()
+        u8(0x10_1000, into: &referent)
+        instance(0x50_0000, classID: 0x50, fieldBytes: 8, fields: referent)
+        heap.append(0x03)
+        u8(0x50_0000, into: &heap)
+        u4(1, into: &heap)
+        u4(1, into: &heap)
+    }
     // The cache's entry is the first String.
     var entry = Data()
     u8(0x10_0000, into: &entry)
@@ -86,6 +102,11 @@ private func tinyHeapDump() -> Data {
     u4(0, into: &heap)
     heap.append(0x05)
     u8(0x20, into: &heap)
+    // The cache is held by a Java frame: it and its entry are live, the other strings garbage.
+    heap.append(0x03)
+    u8(0x20_0000, into: &heap)
+    u4(1, into: &heap)
+    u4(0, into: &heap)
     record(0x1C, heap)
     record(0x2C, Data())
 
@@ -595,5 +616,195 @@ final class IDEHeapObjectsRealDumpTests: XCTestCase {
         snapshot("real-3-largest-byte-arrays")
         session.mode = .summary
         snapshot("real-4-summary")
+
+        // Dominators: the biggest holder, expanded, with its path to a root.
+        session.mode = .dominators
+        objects.loadDominatorsIfNeeded()
+        try await waitUntil({ !objects.dominatorRows.isEmpty }, seconds: 30)
+        objects.toggle(objects.dominatorRows[0])
+        try await waitUntil({ objects.dominatorRows.count > 1 && objects.dominatorRows[1].depth == 1 }, seconds: 30)
+        objects.selectedDominatorRow = objects.dominatorRows[0].id
+        objects.inspectorTab = .path
+        try await waitUntil { !objects.isLoadingObject && !objects.path.isEmpty }
+        snapshot("real-5-dominators-path")
+        var clock = Date()
+        objects.inspectorTab = .retains
+        try await waitUntil({ !objects.isLoadingRetainedSet && !objects.retainedSet.isEmpty }, seconds: 120)
+        print("HEAPUI retains of the biggest holder in \(Date().timeIntervalSince(clock)) s, complete=\(objects.retainedSetComplete)")
+        snapshot("real-6-retains")
+        if let child = objects.dominatorRows.first(where: { $0.depth == 1 }) {
+            objects.toggle(child)
+            try await waitUntil({ objects.dominatorRows.contains { $0.depth == 2 } }, seconds: 30)
+        }
+        snapshot("real-7-dominators-deeper")
+
+        clock = Date()
+        objects.showMergedPaths(for: row)
+        try await waitUntil({ objects.mergedPaths != nil }, seconds: 120)
+        print("HEAPUI merged paths of \(row.name) in \(Date().timeIntervalSince(clock)) s")
+        for line in objects.mergedPaths!.rows.prefix(8) {
+            print("HEAPUI \(String(repeating: "  ", count: line.depth))\(line.title) ×\(line.count)")
+        }
+    }
+}
+
+
+@MainActor
+final class IDEHeapDominatorUITests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("heap-dominators-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func indexedSession() async throws -> IDEHeapDumpSession {
+        let url = directory.appendingPathComponent("tiny.hprof")
+        try tinyHeapDump().write(to: url)
+        let session = IDEHeapDumpSession(url: url, title: "tiny.hprof", indexStore: HeapIndexStore(root: directory.appendingPathComponent("indexes")))
+        session.load()
+        try await waitUntil { session.phase == .ready }
+        try await waitUntil { if case .absent = session.objects.state { true } else { false } }
+        session.objects.build()
+        try await waitUntil { session.objects.state == .ready }
+        return session
+    }
+
+    func testRetainedSizesReachTheHistogramAndInstances() async throws {
+        let session = try await indexedSession()
+        session.mode = .histogram
+        try await waitUntil { session.visibleRows.contains { $0.retainedBytes != nil } }
+        let rows = Dictionary(uniqueKeysWithValues: session.visibleRows.map { ($0.name, $0) })
+        XCTAssertEqual(rows["com.acme.Cache"]?.retainedBytes, 16 + 24, "the cache keeps its entry")
+        XCTAssertEqual(rows["java.lang.String"]?.retainedBytes, 24, "only the live string")
+        XCTAssertEqual(rows["byte[]"]?.retainedBytes, 0, "garbage keeps nothing")
+        session.sortOrder = [KeyPathComparator(\.retainedSortKey, order: .reverse)]
+        XCTAssertEqual(session.visibleRows.first?.name, "com.acme.Cache")
+
+        session.selectedRowIDs = [try XCTUnwrap(rows["java.lang.String"]).id]
+        try await waitUntil { session.objects.instances.count == 3 }
+        XCTAssertEqual(session.objects.instances.map(\.retained), [24, 0, 0], "the live one first")
+
+        session.grouping = .byPackage
+        XCTAssertTrue(session.visibleRows.allSatisfy { $0.retainedBytes == nil }, "no retained size for a package")
+    }
+
+    func testTheDominatorTreeExpandsAndSeparatesGarbage() async throws {
+        let session = try await indexedSession()
+        let objects = session.objects
+        session.mode = .dominators
+        objects.loadDominatorsIfNeeded()
+        try await waitUntil { !objects.dominatorRows.isEmpty }
+        XCTAssertEqual(objects.dominatorRows.map(\.title), ["com.acme.Cache", "class java.lang.String", "Unreachable objects"])
+        XCTAssertEqual(objects.dominatorRows.first?.retained, 40)
+        let unreachable = try XCTUnwrap(objects.dominatorRows.last)
+        XCTAssertEqual(unreachable.shallow, 24 + 24 + 32 + 16, "two strings, the byte[] and the Cache class nobody holds")
+
+        objects.toggle(objects.dominatorRows[0])
+        try await waitUntil { objects.dominatorRows.count == 4 }
+        XCTAssertEqual(objects.dominatorRows[1].title, "java.lang.String")
+        XCTAssertEqual(objects.dominatorRows[1].depth, 1)
+
+        objects.toggle(objects.dominatorRows.last!)
+        try await waitUntil { objects.dominatorRows.count > 4 }
+        let garbage = objects.dominatorRows.filter { if case .unreachableClass = $0.kind { true } else { false } }
+        XCTAssertEqual(Set(garbage.map(\.title)), ["java.lang.String", "byte[]", "java.lang.Class"])
+        XCTAssertEqual(garbage.first { $0.title == "java.lang.String" }?.detail, "2 objects")
+
+        // Collapsing the cache removes its child and nothing else.
+        let before = objects.dominatorRows.count
+        objects.toggle(objects.dominatorRows[0])
+        XCTAssertEqual(objects.dominatorRows.count, before - 1)
+        XCTAssertEqual(objects.dominatorRows[1].title, "class java.lang.String")
+        XCTAssertFalse(objects.dominatorRows[0].isExpanded)
+    }
+
+    func testShortTitlesKeepTheClassAndAddress() {
+        XCTAssertEqual(IDEHeapInspectorView.shortTitle("com.acme.Outer$Inner @ 0x10"), "Outer$Inner @ 0x10")
+        XCTAssertEqual(IDEHeapInspectorView.shortTitle("class java.lang.String @ 0x20"), "class String @ 0x20")
+        XCTAssertEqual(IDEHeapInspectorView.shortTitle("byte[] @ 0x30"), "byte[] @ 0x30")
+        XCTAssertEqual(IDEHeapInspectorView.shortTitle("java.lang.Object[] @ 0x40"), "Object[] @ 0x40")
+    }
+
+    func testPathRetainsAndMergedPaths() async throws {
+        let session = try await indexedSession()
+        let objects = session.objects
+        session.mode = .histogram
+        let cache = try XCTUnwrap(session.visibleRows.first { $0.name == "com.acme.Cache" })
+        session.selectedRowIDs = [cache.id]
+        try await waitUntil { objects.instances.count == 1 }
+        objects.selectedInstance = objects.instances[0].id
+        try await waitUntil { !objects.isLoadingObject && !objects.fields.isEmpty }
+        XCTAssertTrue(objects.inspectedSummary.contains("40 bytes retained"), objects.inspectedSummary)
+        objects.inspectorTab = .retains
+        try await waitUntil { !objects.isLoadingRetainedSet && !objects.retainedSet.isEmpty }
+        XCTAssertEqual(objects.retainedSet.map(\.name), ["java.lang.String", "com.acme.Cache"])
+        XCTAssertTrue(objects.retainedSetComplete)
+
+        let target = try XCTUnwrap(objects.fields.first?.target)
+        objects.inspectorTab = .path
+        objects.inspect(target)
+        try await waitUntil { !objects.isLoadingObject && objects.path.count == 2 }
+        XCTAssertEqual(objects.path.map(\.title), ["java.lang.String @ 0x100000", "com.acme.Cache @ 0x200000"])
+        XCTAssertEqual(objects.path[1].via, "entry")
+        XCTAssertEqual(objects.path[1].rootKinds, "Java frame")
+
+        let string = try XCTUnwrap(session.visibleRows.first { $0.name == "java.lang.String" })
+        objects.showMergedPaths(for: string)
+        try await waitUntil { objects.mergedPaths != nil }
+        let merged = try XCTUnwrap(objects.mergedPaths)
+        XCTAssertEqual(merged.rows.map(\.title), ["com.acme.Cache @ 0x200000", "java.lang.String @ 0x100000"])
+        XCTAssertEqual(merged.rows.map(\.depth), [0, 1])
+        XCTAssertTrue(merged.rows[1].isTarget)
+    }
+}
+
+
+@MainActor
+final class IDEHeapWeakReachabilityTests: XCTestCase {
+    func testOnlyWeaklyHeldObjectsAreTheirOwnBucketWithAWeakPath() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("heap-weak-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("weak.hprof")
+        try tinyHeapDump(weak: true).write(to: url)
+        let session = IDEHeapDumpSession(url: url, title: "weak.hprof", indexStore: HeapIndexStore(root: directory.appendingPathComponent("indexes")))
+        session.load()
+        try await waitUntil { session.phase == .ready }
+        try await waitUntil { if case .absent = session.objects.state { true } else { false } }
+        let objects = session.objects
+        objects.build()
+        try await waitUntil { objects.state == .ready }
+        let index = try XCTUnwrap(objects.index)
+        XCTAssertEqual(index.weaklyReachableCount, 1)
+
+        session.mode = .dominators
+        objects.loadDominatorsIfNeeded()
+        try await waitUntil { !objects.dominatorRows.isEmpty }
+        let weakRow = try XCTUnwrap(objects.dominatorRows.first { $0.kind == .weaklyReachable })
+        XCTAssertEqual(weakRow.shallow, 24)
+        XCTAssertEqual(objects.dominatorRows.last?.kind, .unreachable, "garbage stays last, apart")
+        objects.toggle(weakRow)
+        try await waitUntil { objects.dominatorRows.contains { if case .weaklyReachableClass = $0.kind { true } else { false } } }
+
+        let weakString = try XCTUnwrap(index.number(ofID: 0x10_1000))
+        objects.inspectorTab = .path
+        objects.inspect(weakString, startingOver: true)
+        try await waitUntil { !objects.isLoadingObject && objects.path.count == 2 }
+        XCTAssertTrue(objects.inspectedSummary.contains("only weakly reachable"), objects.inspectedSummary)
+        XCTAssertEqual(objects.path[1].title, "java.lang.ref.WeakReference @ 0x500000")
+        XCTAssertEqual(objects.path[1].via, "referent")
+        XCTAssertTrue(objects.path[1].isWeak)
+        XCTAssertEqual(objects.path[1].rootKinds, "Java frame")
+
+        let garbage = try XCTUnwrap(index.number(ofID: 0x10_2000))
+        objects.inspect(garbage, startingOver: true)
+        try await waitUntil { !objects.isLoadingObject }
+        XCTAssertTrue(objects.path.isEmpty)
+        XCTAssertTrue(objects.inspectedSummary.contains("unreachable (garbage)"), objects.inspectedSummary)
     }
 }

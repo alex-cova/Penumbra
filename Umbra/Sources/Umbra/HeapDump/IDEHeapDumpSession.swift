@@ -18,6 +18,7 @@ final class IDEHeapDumpSession: Identifiable {
     enum Mode: String, CaseIterable, Identifiable {
         case summary = "Summary"
         case histogram = "Histogram"
+        case dominators = "Dominators"
         var id: String { rawValue }
     }
 
@@ -91,6 +92,20 @@ final class IDEHeapDumpSession: Identifiable {
         self.url = url
         self.title = title
         objects = IDEHeapObjectExplorer(url: url, store: indexStore)
+        objects.onIndexChanged = { [weak self] in self?.indexChanged() }
+    }
+
+    /// Retained size by histogram row id (class grouping), filled when an index opens.
+    @ObservationIgnored private var retainedByRow: [Int: Int64] = [:]
+
+    private func indexChanged() {
+        retainedByRow = [:]
+        if let index = objects.index, let overview {
+            for row in overview.histogram.rows {
+                if let group = index.groupIndex(for: row) { retainedByRow[row.id] = index.retainedSize(ofGroup: group) }
+            }
+        }
+        refreshRows(regroup: false)
     }
 
     var effectiveLayout: HeapObjectLayout? { layoutOverride ?? overview?.layout }
@@ -199,7 +214,11 @@ final class IDEHeapDumpSession: Identifiable {
             visibleRows = []
             return
         }
-        visibleRows = histogram.filtered(filterText).sorted(using: sortOrder)
+        var rows = histogram.filtered(filterText)
+        if grouping == .byClass, !retainedByRow.isEmpty {
+            for position in rows.indices { rows[position].retainedBytes = retainedByRow[rows[position].id] }
+        }
+        visibleRows = rows.sorted(using: sortOrder)
         selectedRowIDs = selectedRowIDs.filter { id in visibleRows.contains { $0.id == id } }
     }
 }
