@@ -53,6 +53,12 @@ final class IDEHeapDumpViewerView: NSView {
             return
         }
         let host = NSHostingView(rootView: root)
+        // The pane sizes this view from its edges; the content must not size the pane back. By
+        // default a hosting view turns its SwiftUI content's minimum and ideal size into Auto
+        // Layout constraints, and the build prompt's wrapped text (measured narrow, so very tall)
+        // stretched the whole window's layout past the window: only the prompt showed, with the
+        // toolbar, the tabs and the mode picker pushed out of reach.
+        host.sizingOptions = []
         host.translatesAutoresizingMaskIntoConstraints = false
         addSubview(host)
         NSLayoutConstraint.activate([

@@ -9,7 +9,7 @@ import XCTest
 /// A small HPROF 1.0.2 file: Object, String (int, ref) and `com.acme.Cache` (ref), three Strings,
 /// one Cache, a `byte[16]` and two roots. Written by hand here because `HprofTestWriter` lives in
 /// the library's test target.
-private func tinyHeapDump(weak: Bool = false) -> Data {
+func tinyHeapDump(weak: Bool = false) -> Data {
     var records = Data()
     func u4(_ value: UInt32, into data: inout Data) { withUnsafeBytes(of: value.bigEndian) { data.append(contentsOf: $0) } }
     func u8(_ value: UInt64, into data: inout Data) { withUnsafeBytes(of: value.bigEndian) { data.append(contentsOf: $0) } }
@@ -975,5 +975,48 @@ final class IDEHeapDumpPhase5Tests: XCTestCase {
         let args = try String(contentsOf: directory.appendingPathComponent("args"), encoding: .utf8)
         XCTAssertTrue(args.hasPrefix("4242 GC.heap_dump -all "), args)
         XCTAssertNil(monitor.notice)
+    }
+}
+
+/// The heap tab's view is laid over the editor pane and sized by it. Its content must never size
+/// the pane back: a tall ideal size (the build prompt in Dominators, Reports or Threads) stretched
+/// the whole window's layout far past the window, so only the prompt showed and the toolbar, tabs
+/// and the tab's own mode picker were out of reach.
+@MainActor
+final class IDEHeapDumpViewerSizingTests: XCTestCase {
+    func testNoModeGrowsThePaneItCovers() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("heap-sizing-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("tiny.hprof")
+        try tinyHeapDump().write(to: url)
+        let session = IDEHeapDumpSession(url: url, title: "tiny.hprof", indexStore: HeapIndexStore(root: directory.appendingPathComponent("indexes")))
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+        window.contentView = content
+        let viewer = IDEHeapDumpViewerView()
+        viewer.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(viewer)
+        NSLayoutConstraint.activate([
+            viewer.topAnchor.constraint(equalTo: content.topAnchor),
+            viewer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            viewer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            viewer.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+        ])
+        viewer.show(session)
+        try await waitUntil { session.phase == .ready }
+        try await waitUntil { if case .absent = session.objects.state { true } else { false } }
+
+        for mode in IDEHeapDumpSession.Mode.allCases {
+            session.mode = mode
+            for _ in 0..<5 {
+                content.layoutSubtreeIfNeeded()
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            content.layoutSubtreeIfNeeded()
+            XCTAssertEqual(window.contentLayoutRect.height, 600, accuracy: 1, "\(mode.rawValue) grew the window")
+            XCTAssertEqual(viewer.frame.height, 600, accuracy: 1, "\(mode.rawValue) grew the pane")
+        }
     }
 }
