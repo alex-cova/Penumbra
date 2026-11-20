@@ -32,24 +32,36 @@ struct IDELeftSidebar: View {
     }
 }
 
-/// The selected tab shows its title; the others are icons, so four tabs fit the narrowest sidebar.
+/// The selected tab shows its title; the others are icons. When they do not fit the sidebar's
+/// width the tabs scroll horizontally (the + menu stays pinned at the trailing edge), and the
+/// selected tab is scrolled into view when it changes.
 private struct IDESidebarTabBar: View {
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
         let active = workspace.activeSidebarTab
         HStack(spacing: IDEAppearance.Spacing.xxs) {
-            ForEach(workspace.sidebarTabs) { tab in
-                IDESidebarTabItem(
-                    tab: tab,
-                    isSelected: tab == active,
-                    badge: badge(for: tab),
-                    onSelect: { workspace.showSidebarTab(tab) },
-                    onClose: { workspace.closeSidebarTab(tab) }
-                )
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: IDEAppearance.Spacing.xxs) {
+                        ForEach(workspace.sidebarTabs) { tab in
+                            IDESidebarTabItem(
+                                tab: tab,
+                                isSelected: tab == active,
+                                badge: badge(for: tab),
+                                onSelect: { workspace.showSidebarTab(tab) },
+                                onClose: { workspace.closeSidebarTab(tab) }
+                            )
+                            .id(tab)
+                        }
+                    }
+                    .frame(maxHeight: .infinity)
+                }
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                .onChange(of: active) { _, tab in
+                    withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(tab) }
+                }
             }
-
-            Spacer(minLength: 0)
 
             addMenu
                 .disabled(workspace.reopenableSidebarTabs.isEmpty)
