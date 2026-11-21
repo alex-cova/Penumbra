@@ -94,6 +94,35 @@ final class IDETerminalInteractiveTests: XCTestCase {
         }, "visible:\n\(host.visibleText() ?? "")")
     }
 
+    func testExplicitTerminalCommandUsesPTYAndDoesNotRelaunchAfterExit() throws {
+        let marker = directory.appendingPathComponent("launches.txt")
+        let host = IDETerminalHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 240))
+        let command = IDETerminalCommand(IDETerminalLaunch(
+            executable: "/bin/sh",
+            execName: "sh",
+            arguments: ["-c", "test -t 0 && echo attached && echo launched >> \"$1\"", "sh", marker.path],
+            environment: [:],
+            directory: directory.path
+        ))
+        host.commandLaunch = command
+        defer { host.terminateProcess() }
+        host.layoutSubtreeIfNeeded()
+        host.setActive(true)
+
+        XCTAssertTrue(waitFor { host.visibleText()?.contains("attached") == true })
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        host.setActive(false)
+        host.setActive(true)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        let recreatedHost = IDETerminalHostView(frame: host.frame)
+        recreatedHost.commandLaunch = command
+        defer { recreatedHost.terminateProcess() }
+        recreatedHost.setActive(true)
+        recreatedHost.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "launched\n")
+    }
+
     func testAlternateScrollBytes() {
         XCTAssertEqual(GhosttyAlternateScroll.bytes(rows: 2, applicationCursorKeys: false), Data("\u{1B}[A\u{1B}[A".utf8))
         XCTAssertEqual(GhosttyAlternateScroll.bytes(rows: -1, applicationCursorKeys: false), Data("\u{1B}[B".utf8))

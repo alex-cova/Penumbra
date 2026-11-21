@@ -48,6 +48,10 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
         id: "terminal", title: "Terminal", symbol: "apple.terminal",
         searchTerms: ["ghostty", "shell", "zsh", "bash", "login shell", "command", "arguments", "environment", "env", "term", "colorterm", "starting folder", "working-directory", "font-family", "font-size", "adjust-cell-height", "padding", "window-padding", "palette", "ansi", "colors", "foreground", "background", "selection", "cursor", "cursor-style", "cursor-style-blink", "blink", "faint-opacity", "scrollback", "scrollback-limit", "option as meta", "macos-option-as-alt", "alt", "bell", "bell-features", "copy-on-select", "copy on select", "mouse-hide-while-typing", "hide mouse", "scroll-to-bottom", "paste", "clipboard-paste-protection", "clipboard", "clipboard-read", "clipboard-write", "osc 52", "notifications", "desktop-notifications", "osc 9", "title", "title-report", "security"]
     )
+    static let docker = IDEPreferencesDomain(
+        id: "docker", title: "Docker", symbol: "shippingbox",
+        searchTerms: ["container", "compose", "buildx", "executable", "cli", "context"]
+    )
     static let project = IDEPreferencesDomain(
         id: "project", title: "Project", symbol: "folder", searchTerms: ["explorer", "flatten packages"]
     )
@@ -57,7 +61,7 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
     )
 
     /// The pages before the language modules' and the one after them.
-    static let leading: [IDEPreferencesDomain] = [.general, .editor, .markdown, .saving, .appearance, .terminal, .project]
+    static let leading: [IDEPreferencesDomain] = [.general, .editor, .markdown, .saving, .appearance, .terminal, .docker, .project]
 
     /// Built-in pages with `modules`' in the middle, in the order they have always had.
     static func ordered(with modules: [IDEPreferencesDomain]) -> [IDEPreferencesDomain] {

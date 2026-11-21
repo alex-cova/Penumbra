@@ -88,6 +88,7 @@ final class IDETerminalHostView: NSView {
     var terminalView: NSView { ghosttyView }
 
     var workingDirectory: URL?
+    var commandLaunch: IDETerminalCommand?
     var onTitleUpdate: ((String) -> Void)?
     var onDirectoryUpdate: ((URL) -> Void)?
     /// OSC 9 / OSC 777 from a program in this terminal: title (may be empty) and body.
@@ -245,6 +246,7 @@ final class IDETerminalHostView: NSView {
                 kill(pid, SIGHUP)
             }
         }
+        commandLaunch?.hasLaunched = false
         startProcessIfNeeded()
     }
 
@@ -373,10 +375,12 @@ final class IDETerminalHostView: NSView {
         guard !ghosttyView.isProcessRunning else { return }
 
         // Settings ▸ Terminal ▸ Shell is read here, so a change reaches the next shell that starts.
-        let launch = IDETerminalLaunch.make(
+        guard commandLaunch?.hasLaunched != true else { return }
+        let launch = commandLaunch?.launch ?? IDETerminalLaunch.make(
             shell: IDEPreferences.shared.terminalShell,
             resolvedLoginShell: IDETerminalShell.resolvedShell(),
             projectDirectory: workingDirectory)
+        commandLaunch?.hasLaunched = true
         ghosttyView.startProcess(
             executable: launch.executable,
             execName: launch.execName,
@@ -386,7 +390,7 @@ final class IDETerminalHostView: NSView {
     }
 
     func handleProcessTerminated() {
-        guard runsShell, !mirrorsOutput else { return }
+        guard commandLaunch?.hasLaunched != true, runsShell, !mirrorsOutput else { return }
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             self?.startProcessIfNeeded()
@@ -399,6 +403,7 @@ final class IDETerminalHostView: NSView {
 private struct IDETerminalHostRepresentable: NSViewRepresentable {
     let tabID: UUID
     let workingDirectory: URL?
+    let commandLaunch: IDETerminalCommand?
     let isActive: Bool
     /// Shown in a column, selected or not.
     let isColumnVisible: Bool
@@ -423,6 +428,7 @@ private struct IDETerminalHostRepresentable: NSViewRepresentable {
         let view = IDETerminalHostView(frame: .zero)
         onHostCreated(view)
         view.workingDirectory = workingDirectory
+        view.commandLaunch = commandLaunch
         view.onTitleUpdate = onTitleUpdate
         view.onDirectoryUpdate = onDirectoryUpdate
         view.onDesktopNotification = onDesktopNotification
@@ -533,7 +539,7 @@ struct IDETerminalPanel: View {
                     .first(where: { $0.tab == workspace.selectedBottomTab })?.controls {
                     // A language module's tab brings its own header controls.
                     controls(workspace)
-                } else {
+                } else if !workspace.isBottomTabSelected(.docker) {
                     IDEIconButton(systemImage: "arrow.clockwise", help: "Restart shell") {
                         workspace.restartTerminal()
                     }
@@ -557,6 +563,10 @@ struct IDETerminalPanel: View {
 
             ZStack {
                 IDETerminalPanes()
+
+                if workspace.isBottomTabSelected(.docker) {
+                    IDEDockerPanel()
+                }
 
                 if workspace.showsProblemsTab {
                     IDEProblemsPanel()
@@ -634,6 +644,7 @@ struct IDETerminalPanes: View {
                     IDETerminalHostRepresentable(
                         tabID: tab.id,
                         workingDirectory: tab.workingDirectory,
+                        commandLaunch: tab.commandLaunch,
                         isActive: workspace.isTerminalVisible && isSelected,
                         isColumnVisible: workspace.isTerminalVisible && isShown,
                         terminalSettings: workspace.preferences.terminal,

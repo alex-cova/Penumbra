@@ -14,6 +14,7 @@ struct IDEBottomPanelTab: Hashable, CustomStringConvertible {
 
     /// A shell -- which one is `IDEWorkspace.selectedTerminalTabID`.
     static let terminal = IDEBottomPanelTab("terminal")
+    static let docker = IDEBottomPanelTab("docker")
     static let sourceControl = IDEBottomPanelTab("sourceControl")
     static let problems = IDEBottomPanelTab("problems")
     /// The results of the last Find Usages.
@@ -47,6 +48,7 @@ extension IDEBottomPanelTab {
     /// The positions of the strip items in the order they have always had. Terminal shells come
     /// first and have no number; the rest are sparse so a module can add one between two.
     enum Order {
+        static let docker = 5
         static let run = 10
         static let gradle = 20
         static let maven = 22

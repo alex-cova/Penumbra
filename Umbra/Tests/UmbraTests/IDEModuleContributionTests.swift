@@ -29,6 +29,38 @@ final class IDEModuleContributionTests: XCTestCase {
         return nil
     }
 
+    func testDockerUsesTheSharedBottomPanelAndSavesItsContextPerWindow() throws {
+        let workspace = IDEWorkspace()
+        let other = IDEWorkspace()
+        defer {
+            workspace.teardown()
+            other.teardown()
+        }
+        workspace.bootstrap()
+        other.bootstrap()
+        workspace.newFile()
+        workspace.addTerminalTab(saveSession: false)
+        let terminalID = try XCTUnwrap(workspace.selectedTerminalTabID)
+        let toolIDs = workspace.toolWindows.map(\.id)
+        let terminalIndex = try XCTUnwrap(toolIDs.firstIndex(of: "terminal"))
+        XCTAssertEqual(toolIDs.dropFirst(terminalIndex + 1).first, "docker")
+
+        workspace.setToolWindow("docker", open: true)
+        XCTAssertTrue(workspace.isBottomToolWindowOpen(.docker))
+        workspace.toggleBottomPanelExpanded()
+        XCTAssertTrue(workspace.isBottomPanelExpanded)
+        workspace.setToolWindow("terminal", open: true)
+        XCTAssertTrue(workspace.isBottomToolWindowOpen(.terminal))
+        XCTAssertEqual(workspace.selectedTerminalTabID, terminalID)
+
+        workspace.selectDockerContext("desktop-linux")
+        other.selectDockerContext("test-ssh")
+        let firstSession = try JSONEncoder().encode(workspace.makeSession())
+        let secondSession = try JSONEncoder().encode(other.makeSession())
+        XCTAssertEqual(try JSONDecoder().decode(IDEWindowSession.self, from: firstSession).dockerContext, "desktop-linux")
+        XCTAssertEqual(try JSONDecoder().decode(IDEWindowSession.self, from: secondSession).dockerContext, "test-ssh")
+    }
+
     // MARK: Toolbar
 
     func testAFileOfNoParticularLanguageGetsOnlyTheRunConfigurationPicker() {

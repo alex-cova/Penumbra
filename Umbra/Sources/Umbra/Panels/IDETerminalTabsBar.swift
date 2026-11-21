@@ -36,7 +36,19 @@ struct IDETerminalTabsBar: View {
     /// module's, in ``IDEBottomPanelTab/Order``.
     private var stripItems: [StripItem] {
         typealias Order = IDEBottomPanelTab.Order
-        var items: [StripItem] = []
+        var items = [StripItem(id: "docker", order: Order.docker, view: AnyView(
+            IDEChromeTabItem(
+                title: "Docker",
+                isSelected: workspace.isBottomTabSelected(.docker),
+                onSelect: { workspace.showBottomTab(.docker) }
+            ) {
+                Image(systemName: "shippingbox")
+                    .font(.system(size: IDEAppearance.IconSize.smallGlyph))
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            } trailing: {
+                EmptyView()
+            }
+        ))]
         if workspace.showsProblemsTab {
             items.append(StripItem(id: "problems", order: Order.problems, view: AnyView(IDEProblemsTabItem(
                 isSelected: workspace.isBottomTabSelected(.problems),

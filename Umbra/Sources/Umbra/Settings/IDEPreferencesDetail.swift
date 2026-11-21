@@ -48,6 +48,8 @@ struct IDEPreferencesDetail: View {
             IDEPreferencesAppearancePane(preferences: preferences)
         case .terminal:
             IDEPreferencesTerminalPane(preferences: preferences)
+        case .docker:
+            IDEDockerPreferencesPane()
         case .project:
             IDEPreferencesProjectPane(preferences: preferences)
         case .agent:

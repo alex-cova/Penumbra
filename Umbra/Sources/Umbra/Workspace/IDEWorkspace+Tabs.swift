@@ -21,6 +21,7 @@ struct IDETerminalTab: Identifiable, Equatable {
     var agentCommandID: UUID?
     /// Bumped when more output is waiting for this tab's view.
     var agentFeedGeneration: UInt64 = 0
+    var commandLaunch: IDETerminalCommand?
 
     static func defaultTitle(for directory: URL) -> String {
         let base = directory.lastPathComponent

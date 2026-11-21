@@ -188,6 +188,7 @@ struct IDEWindowSession: Codable {
     var terminalHeight = IDEAppearance.Spacing.terminalDefaultHeight
     var terminalTabs: [IDETerminalTab]?
     var selectedTerminalTabID: UUID?
+    var dockerContext: String?
     /// The agent panel, when it is docked beside the editor. A panel that was a page over the editor is
     /// not reopened: it would hide the files being restored.
     var isAgentPanelVisible: Bool?
@@ -217,6 +218,7 @@ struct IDEWindowSession: Codable {
         terminalHeight: Double = IDEAppearance.Spacing.terminalDefaultHeight,
         terminalTabs: [IDETerminalTab]? = nil,
         selectedTerminalTabID: UUID? = nil,
+        dockerContext: String? = nil,
         sidebarTab: IDESidebarTab? = nil,
         closedSidebarTabs: [IDESidebarTab]? = nil,
         isAgentPanelVisible: Bool? = nil,
@@ -242,6 +244,7 @@ struct IDEWindowSession: Codable {
         self.terminalHeight = terminalHeight
         self.terminalTabs = terminalTabs
         self.selectedTerminalTabID = selectedTerminalTabID
+        self.dockerContext = dockerContext
         self.isAgentPanelVisible = isAgentPanelVisible
         self.agentPanelWidth = agentPanelWidth
         self.agentChats = agentChats
@@ -283,6 +286,7 @@ struct IDEWindowSession: Codable {
             ?? IDEAppearance.Spacing.terminalDefaultHeight
         terminalTabs = try container.decodeIfPresent([IDETerminalTab].self, forKey: .terminalTabs)
         selectedTerminalTabID = try container.decodeIfPresent(UUID.self, forKey: .selectedTerminalTabID)
+        dockerContext = try container.decodeIfPresent(String.self, forKey: .dockerContext)
         isAgentPanelVisible = try container.decodeIfPresent(Bool.self, forKey: .isAgentPanelVisible)
         agentPanelWidth = try container.decodeIfPresent(Double.self, forKey: .agentPanelWidth)
         agentChats = try? container.decodeIfPresent([UUID].self, forKey: .agentChats)

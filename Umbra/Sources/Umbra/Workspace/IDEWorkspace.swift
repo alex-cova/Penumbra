@@ -597,6 +597,12 @@ public final class IDEWorkspace {
     /// The bottom panel: visibility, size, selected tab and the shell tabs (`IDEBottomPanelModel`). The
     /// properties below read through to it, so views and the session code keep their names.
     let bottomPanel = IDEBottomPanelModel()
+    var dockerContext = ""
+
+    func selectDockerContext(_ context: String) {
+        dockerContext = context
+        saveSession()
+    }
     var isTerminalVisible: Bool {
         get { bottomPanel.isVisible }
         set { bottomPanel.isVisible = newValue }
@@ -2163,6 +2169,23 @@ public final class IDEWorkspace {
         }
     }
 
+    func openDockerShell(container: IDEDockerContainer, context: String) throws {
+        let cli = try IDEDockerCLI.discover()
+        let executable = cli.executable
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+        let launch = IDETerminalLaunch(
+            executable: executable.path,
+            execName: executable.lastPathComponent,
+            arguments: ["--context", context, "container", "exec", "-it", container.id, "/bin/sh"],
+            environment: ["TERM": "xterm-256color", "PATH": cli.helperSearchPath],
+            directory: directory.path
+        )
+        bottomPanel.append(IDETerminalTab(
+            id: UUID(), title: container.name, workingDirectory: directory, commandLaunch: IDETerminalCommand(launch)
+        ))
+        requestTerminalFocus()
+    }
+
     /// Shows an agent command's output on a tab of its own, opened on the first line and not given
     /// the keyboard. The user's shell tabs are left alone. `nil` ends the command.
     func showAgentCommand(id: UUID, title: String, line: String?) {
@@ -3426,7 +3449,7 @@ public final class IDEWorkspace {
     ) -> IDEWindowSession {
         // Only one shell comes back: the selected one, else the first. Split panes and the other
         // shells are not restored (the next launch opens one console).
-        let allShells = terminalTabs.filter { $0.agentCommandID == nil }
+        let allShells = terminalTabs.filter { $0.agentCommandID == nil && $0.commandLaunch == nil }
         let keptShell = allShells.first { $0.id == selectedTerminalTabID } ?? allShells.first
         let shells = keptShell.map { [$0] } ?? []
         let selectedShell = keptShell?.id
@@ -3443,6 +3466,7 @@ public final class IDEWorkspace {
             terminalHeight: terminalHeight ?? self.terminalHeight,
             terminalTabs: shells.isEmpty ? nil : shells,
             selectedTerminalTabID: selectedShell,
+            dockerContext: dockerContext.isEmpty ? nil : dockerContext,
             sidebarTab: selectedSidebarTab,
             closedSidebarTabs: closedSidebarTabs.sorted { $0.rawValue < $1.rawValue },
             isAgentPanelVisible: agent.isPanelVisible && !agent.settings.opensAsPage,
@@ -3560,6 +3584,7 @@ public final class IDEWorkspace {
         isBottomPanelExpanded = false
         terminalHeight = session.terminalHeight
         terminalTabs = session.terminalTabs ?? []
+        dockerContext = session.dockerContext ?? ""
         selectedTerminalTabID = session.selectedTerminalTabID
         if let selectedID = selectedTerminalTabID,
            !terminalTabs.contains(where: { $0.id == selectedID }) {
@@ -4598,6 +4623,7 @@ public final class IDEWorkspace {
     }
 
     private func isBottomTabAvailable(_ tab: IDEBottomPanelTab) -> Bool {
+        if tab == .docker { return true }
         if tab == .problems { return showsProblemsTab }
         if tab == .debug { return showsDebugTab }
         if tab == .usages { return showsUsagesTab }
@@ -4923,6 +4949,8 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.toggleMetalRendering() }),
             EditorCommand(id: "app.toggleTerminal", title: "Toggle Terminal", group: "View",
                           action: { [weak self] in self?.toggleTerminal() }),
+            EditorCommand(id: "app.showDocker", title: "Show Docker", group: "View",
+                          action: { [weak self] in self?.showBottomTab(.docker) }),
             EditorCommand(id: "app.toggleProblems", title: "Toggle Problems", group: "View",
                           action: { [weak self] in self?.toggleProblems() }),
             EditorCommand(id: "app.toggleSourceControl", title: "Toggle Source Control", group: "View",

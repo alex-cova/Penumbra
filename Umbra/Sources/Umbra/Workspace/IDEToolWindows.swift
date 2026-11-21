@@ -37,6 +37,7 @@ struct IDEToolWindow: Identifiable {
         static let callHierarchy = 350
         static let problems = 360
         static let terminal = 370
+        static let docker = 375
         static let gradleSidebar = 400
         static let mavenSidebar = 405
         static let gradleConsole = 410
@@ -81,6 +82,11 @@ struct IDEBottomToolWindowDescriptor {
         IDEBottomToolWindowDescriptor(
             tab: .terminal, systemImage: "terminal", title: "Terminal",
             shortcut: "⌃`", tint: .secondary, order: IDEToolWindow.Order.terminal,
+            isAvailable: { _ in true }
+        ),
+        IDEBottomToolWindowDescriptor(
+            tab: .docker, systemImage: "shippingbox", title: "Docker",
+            shortcut: nil, tint: .secondary, order: IDEToolWindow.Order.docker,
             isAvailable: { _ in true }
         ),
     ]

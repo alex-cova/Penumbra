@@ -324,7 +324,7 @@ final class IDEBottomPanelModel {
     func resetShells(to directory: URL) {
         let title = IDETerminalTab.defaultTitle(for: directory)
         let path = directory.standardizedFileURL.path
-        for index in tabs.indices where tabs[index].agentCommandID == nil {
+        for index in tabs.indices where tabs[index].agentCommandID == nil && tabs[index].commandLaunch == nil {
             let same = tabs[index].workingDirectory.standardizedFileURL.path == path
             tabs[index].workingDirectory = directory
             tabs[index].title = title
