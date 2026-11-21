@@ -46,6 +46,10 @@ struct IDEACPProviderMenu: View {
                 }
             }
             Divider()
+            if agent.selected.isACPConversation {
+                Button("Restart Agent") { agent.selected.restartACP() }
+                    .help("Stop the agent's process; it starts again on the next message")
+            }
             Button("Manage Agents…", action: openSettings)
         } label: {
             HStack(spacing: IDEAppearance.Spacing.xs) {
@@ -125,20 +129,11 @@ struct IDEACPProviderMenu: View {
         }
     }
 
-    /// A row as it would be created from the preset, to ask the resolver what it would launch.
-    private func probe(_ preset: IDEACPPreset) -> IDEACPDefinition {
-        let launcher = preset.recordedLauncher
-        return IDEACPDefinition(
-            name: preset.name, command: launcher.command, args: launcher.args, presetID: preset.id, launchMode: .auto)
-    }
+    private var chooser: IDEACPAgentChooser { IDEACPAgentChooser(agent: agent, openSettings: openSettings) }
 
-    private func isAvailable(_ preset: IDEACPPreset) -> Bool {
-        manager.resolution(for: probe(preset), pathValue: settings.acpPathValue).launch != nil
-    }
+    private func isAvailable(_ preset: IDEACPPreset) -> Bool { chooser.isAvailable(preset) }
 
-    private func needsInstall(_ preset: IDEACPPreset) -> Bool {
-        !isAvailable(preset) && preset.entry?.isManaged == true && !manager.isSandboxed
-    }
+    private func needsInstall(_ preset: IDEACPPreset) -> Bool { chooser.needsInstall(preset) }
 
     private func presetLabel(_ preset: IDEACPPreset) -> String {
         if isAvailable(preset) { return preset.name }
@@ -153,12 +148,7 @@ struct IDEACPProviderMenu: View {
         return preset.launchers.first?.note ?? preset.summary
     }
 
-    private func availability(of definition: IDEACPDefinition) -> IDEACPAvailability {
-        let live = agent.conversations.contains {
-            $0.isACPConversation && $0.resolvedACPAgentID == definition.id && $0.acpLiveState == .connected
-        }
-        return manager.availability(of: definition, settings: settings, isLive: live)
-    }
+    private func availability(of definition: IDEACPDefinition) -> IDEACPAvailability { chooser.availability(of: definition) }
 
     private func item(_ name: String, isSelected: Bool, detail: String) -> some View {
         HStack {
@@ -174,46 +164,7 @@ struct IDEACPProviderMenu: View {
         .accessibilityLabel("\(name), \(detail)\(isSelected ? ", selected" : "")")
     }
 
-    private func choose(_ binding: IDEACPBinding) {
-        if let id = binding.agentID {
-            guard let definition = settings.acpAgents.first(where: { $0.id == id }) else { return }
-            // A catalog agent whose adapter is not installed cannot start: Settings installs it.
-            if availability(of: definition) == .adapterMissing {
-                openSettings()
-                return
-            }
-            guard ensureAllowed(definition) else { return }
-        }
-        agent.selectProvider(binding)
-    }
+    private func choose(_ binding: IDEACPBinding) { chooser.choose(binding) }
 
-    private func add(_ preset: IDEACPPreset) {
-        // An adapter that is not installed is installed in Settings, with the approval sheet.
-        // Choosing it here never downloads anything.
-        guard !needsInstall(preset) else {
-            openSettings()
-            return
-        }
-        let definition = settings.materializePreset(preset)
-        guard ensureAllowed(definition) else { return }
-        agent.selectProvider(.agent(definition.id))
-    }
-
-    /// Running an external agent starts a program on this Mac, so the first use asks.
-    private func ensureAllowed(_ definition: IDEACPDefinition) -> Bool {
-        guard !settings.acpAllowedAgentIDs.contains(definition.id) else { return true }
-        var alert = IDEAlert.confirm(
-            "Allow “\(definition.displayName)” to run?",
-            detail: consentDetail(definition),
-            confirm: "Allow")
-        guard alert.confirms() else { return false }
-        settings.setACPAllowed(true, agentID: definition.id)
-        return true
-    }
-
-    private func consentDetail(_ definition: IDEACPDefinition) -> String {
-        let command = manager.resolution(for: definition, pathValue: settings.acpPathValue).launch?.commandLine
-            ?? definition.commandLine
-        return "Umbra starts \(command) when you send a message or test the connection. File changes and commands still ask you first. Stop ends the process."
-    }
+    private func add(_ preset: IDEACPPreset) { chooser.add(preset) }
 }

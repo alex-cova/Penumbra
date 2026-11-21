@@ -77,6 +77,37 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
     }
 
+    /// The docked panel's message box: empty, then with a long draft that grows it to its cap.
+    func testTheDockedComposer() async throws {
+        workspace.openProjectFolder(base.appendingPathComponent("MyProject"))
+        workspace.agent.settings.acceptDisclosure(for: .anthropic)
+        let choice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        workspace.agent.selected.modelChoice = choice
+        try await renderDocked("docked-composer-empty")
+        workspace.agent.draft = (1...30).map { "Line \($0) of a long request that keeps going." }.joined(separator: "\n")
+        try await renderDocked("docked-composer-long")
+    }
+
+    private func renderDocked(_ name: String) async throws {
+        let view = IDEAgentPanel(agent: workspace.agent)
+            .environment(workspace)
+            .frame(width: 420, height: 820)
+            .background(IDEAppearance.ColorToken.panel)
+            .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: 420, height: 820)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        try? await Task.sleep(for: .milliseconds(400))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(host.fittingSize.width, 0)
+        guard let directory = ProcessInfo.processInfo.environment["AI_MODE_PNG_DIR"], let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
+    }
+
     func testChatEmptyAndWithAConversation() async throws {
         workspace.showAIMode(tab: .chat)
         try await render("chat-empty")

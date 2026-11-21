@@ -5,25 +5,31 @@ import AppKit
 import LocalModelStore
 import SwiftUI
 
-/// The agent panel's message row: attach button, the growing field, stop/send. Extracted from
+/// The agent panel's message box (`IDEAgentComposerCard`): the growing field on top, and below it, inside the
+/// card, attach (+), the chip row (permission, agent, model, context) and send/stop. Extracted from
 /// `IDEAgentPanel` so the panel body stays a composition of subviews.
 struct IDEAgentFieldRowView: View {
     let agent: IDEAgentController
+    let settings: IDEAgentSettings
     let isAIMode: Bool
     let composerState: IDEAgentComposerState
     @Binding var composerHeight: CGFloat
     let acceptRequest: Int
     @Binding var lastEscape: Date?
+    let openSettings: () -> Void
 
     @Environment(IDEWorkspace.self) private var workspace
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: IDEAppearance.Spacing.sm) {
-            @Bindable var agent = agent
-            IDEIconButton(
-                systemImage: "paperclip", help: "Attach an image",
-                tint: IDEAppearance.ColorToken.muted, action: pickImages)
-            let field = IDEAgentComposerField(
+        @Bindable var agent = agent
+        IDEAgentComposerCard(
+            isRunning: agent.isRunning,
+            canSend: !agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !agent.selected.pendingImages.isEmpty,
+            send: send, stop: agent.stop,
+            focus: { agent.composerFocusRequest += 1 }
+        ) {
+            IDEAgentComposerField(
                 text: $agent.draft, height: $composerHeight,
                 placeholder: placeholder,
                 state: composerState, focusRequest: agent.composerFocusRequest, acceptRequest: acceptRequest,
@@ -48,28 +54,13 @@ struct IDEAgentFieldRowView: View {
                 onPasteImage: { agent.selected.pasteImage($0) }
             )
             .frame(height: composerHeight)
-            if isAIMode {
-                field
-            } else {
-                field
-                    .padding(IDEAppearance.Spacing.sm)
-                    .background(IDEAppearance.ColorToken.card)
-                    .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous))
-            }
-
-            if agent.isRunning {
-                IDEIconButton(
-                    systemImage: "stop.fill", help: "Stop", tint: IDEAppearance.ColorToken.error, action: agent.stop)
-                    .accessibilityIdentifier(IDEACPAccessibility.stop)
-            } else {
-                IDEIconButton(
-                    systemImage: "arrow.up.circle.fill", help: "Send",
-                    tint: IDEAppearance.ColorToken.accent,
-                    isDisabled: agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        && agent.selected.pendingImages.isEmpty,
-                    action: send)
-                    .accessibilityIdentifier(IDEACPAccessibility.send)
-            }
+        } leading: {
+            IDEIconButton(
+                systemImage: "plus", help: "Attach images or files (you can also drop or paste them)",
+                tint: IDEAppearance.ColorToken.muted, action: pickImages)
+            IDEAgentPanelChipRow(agent: agent, settings: settings, isAIMode: isAIMode, openSettings: openSettings)
+        } trailing: {
+            EmptyView()
         }
     }
 

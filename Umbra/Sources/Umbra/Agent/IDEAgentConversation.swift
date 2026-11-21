@@ -204,11 +204,36 @@ final class IDEAgentConversation: Identifiable {
     private(set) var acpCurrentModelID: String?
     private(set) var acpAgentName: String?
 
-    /// Options for the config chip. A `mode` option is left out when the agent also sent `modes`,
-    /// which the mode chip already shows (Muse sends both).
+    /// Options for the config chip: what neither the mode chip nor the model picker shows. A `mode` option is
+    /// left out when the agent also sent `modes` (Muse sends both); the model, effort and speed options are in
+    /// `IDEACPModelPicker`.
     var acpDisplayedConfigOptions: [ACPConfigOption] {
-        guard !acpAvailableModes.isEmpty else { return acpConfigOptions }
-        return acpConfigOptions.filter { $0.category != "mode" }
+        let shown = Set([acpModelOption?.id, acpEffortOption?.id, acpSpeedOption?.id].compactMap { $0 })
+        return acpConfigOptions.filter { option in
+            if shown.contains(option.id) { return false }
+            return acpAvailableModes.isEmpty || option.category != "mode"
+        }
+    }
+
+    /// The model as a select config option, when the agent offers it that way instead of `models`.
+    var acpModelOption: ACPConfigOption? {
+        acpConfigOptions.first { $0.isModelOption && !$0.selectableChoices.isEmpty }
+    }
+
+    /// The agent's reasoning effort (`thought_level` in ACP; Kiro's `effortLevel`), when it advertised values
+    /// for it. Nothing is offered for an agent that sent none, or for a model without levels.
+    var acpEffortOption: ACPConfigOption? {
+        acpConfigOptions.first { $0.isEffortOption && !$0.selectableChoices.isEmpty }
+    }
+
+    /// A speed switch the agent advertised (`fast`, `speed`…), for the picker's bolt.
+    var acpSpeedOption: ACPConfigOption? {
+        acpConfigOptions.first { $0.isSpeedOption && !$0.isEffortOption && !$0.isModelOption }
+    }
+
+    /// Whether the model picker has anything to show: models (either form), effort or speed.
+    var acpHasModelControls: Bool {
+        !acpAvailableModels.isEmpty || acpModelOption != nil || acpEffortOption != nil || acpSpeedOption != nil
     }
 
     /// The catalog's description of this chat's agent (sign-in, extensions, mode mapping). A row the
@@ -664,6 +689,11 @@ final class IDEAgentConversation: Identifiable {
             acpLaunchFingerprint = fingerprint
             acpAgentName = definition.displayName
             acpLiveState = .connected
+            // Options can change outside a run (Kiro sends its effort levels after `session/new`, and new ones
+            // with each model), so the header follows `config_option_update` instead of waiting for a turn.
+            await created.observeConfigOptions { [weak self] _ in
+                Task { @MainActor in self?.refreshACPHeaderState() }
+            }
             refreshACPHeaderState()
             if let notice { appendNotice(notice) }
             // A newer adapter version is used by new processes only; a running chat is never moved.

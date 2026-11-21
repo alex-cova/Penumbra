@@ -4,8 +4,15 @@ import Security
 /// Where agent API keys live. One key per endpoint host; never `UserDefaults`, never a session file.
 public protocol IDEAgentKeyStore: Sendable {
     func load(account: String) throws -> String?
+    /// Whether a key is saved, without reading it. The Keychain answers this from the item's attributes, so it
+    /// never shows the "wants to use your confidential information" prompt; only `load` (a send) can.
+    func contains(account: String) throws -> Bool
     func save(_ key: String, account: String) throws
     func delete(account: String) throws
+}
+
+extension IDEAgentKeyStore {
+    public func contains(account: String) throws -> Bool { (try load(account: account))?.isEmpty == false }
 }
 
 public enum IDEAgentKeychainError: Error, Equatable, LocalizedError {
@@ -56,6 +63,17 @@ public struct IDEAgentKeychain: IDEAgentKeyStore {
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data else { throw IDEAgentKeychainError.loadFailed(status) }
         return String(data: data, encoding: .utf8)
+    }
+
+    public func contains(account: String) throws -> Bool {
+        var request = query(account: account)
+        request[kSecReturnAttributes as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        if status == errSecItemNotFound { return false }
+        guard status == errSecSuccess else { throw IDEAgentKeychainError.loadFailed(status) }
+        return true
     }
 
     public func delete(account: String) throws {

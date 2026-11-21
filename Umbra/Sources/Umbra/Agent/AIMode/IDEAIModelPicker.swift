@@ -43,10 +43,12 @@ struct IDEAIModelPicker: View {
         .fixedSize()
         .help(helpText)
         .accessibilityLabel("Model: \(plainLabel)")
-        // The lists of Ollama and Meta models are read when the menu is first shown, not on every redraw.
-        .task {
+        // The lists of Ollama and Meta models are read when the menu is first shown, not on every redraw. Meta's
+        // list needs the saved key, so it is fetched only for a chat that uses Meta (the API mode); opening AI mode
+        // must not read a key or call a provider.
+        .task(id: choice.provider) {
             await settings.refreshOllamaModels(adjustSelection: false)
-            await settings.refreshMetaModels()
+            if choice.provider == .meta { await settings.refreshMetaModels() }
             await settings.refreshAppleModels()
         }
     }

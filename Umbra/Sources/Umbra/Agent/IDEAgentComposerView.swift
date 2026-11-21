@@ -54,21 +54,28 @@ struct IDEAgentComposerView: View {
                 }
             }
             if isAIMode {
-                // One card holds the field and its chips, like the message box of a chat app.
-                VStack(spacing: IDEAppearance.Spacing.xs) {
+                // Codex's "This computer / Choose project" strip: the project and branch sit on a tray that the
+                // message box overlaps.
+                VStack(spacing: -IDEAgentComposerMetrics.cornerRadius) {
+                    HStack(spacing: IDEAppearance.Spacing.md) {
+                        IDEAIProjectChip()
+                        IDEAIBranchChip()
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, IDEAppearance.Spacing.md)
+                    .padding(.top, IDEAppearance.Spacing.snug)
+                    .padding(.bottom, IDEAppearance.Spacing.snug + IDEAgentComposerMetrics.cornerRadius)
+                    .background(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: IDEAgentComposerMetrics.cornerRadius,
+                            topTrailingRadius: IDEAgentComposerMetrics.cornerRadius,
+                            style: .continuous)
+                            .fill(IDEAppearance.ColorToken.controlHover))
+                    .padding(.horizontal, IDEAppearance.Spacing.md)
                     fieldRow
-                    IDEAgentPanelChipRow(agent: agent, settings: settings, isAIMode: isAIMode, openSettings: openSettings)
                 }
-                .padding(IDEAppearance.Spacing.sm)
-                .background(IDEAppearance.ColorToken.card)
-                .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous)
-                        .stroke(IDEAppearance.ColorToken.border, lineWidth: 1))
             } else {
                 fieldRow
-                IDEAgentPanelChipRow(agent: agent, settings: settings, isAIMode: isAIMode, openSettings: openSettings)
-                    .padding(.horizontal, IDEAppearance.Spacing.xs)
             }
         }
         .padding(IDEAppearance.Spacing.sm)
@@ -76,7 +83,8 @@ struct IDEAgentComposerView: View {
 
     private var fieldRow: some View {
         IDEAgentFieldRowView(
-            agent: agent, isAIMode: isAIMode, composerState: composerState,
-            composerHeight: $composerHeight, acceptRequest: acceptRequest, lastEscape: $lastEscape)
+            agent: agent, settings: settings, isAIMode: isAIMode, composerState: composerState,
+            composerHeight: $composerHeight, acceptRequest: acceptRequest, lastEscape: $lastEscape,
+            openSettings: openSettings)
     }
 }

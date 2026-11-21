@@ -39,7 +39,6 @@ struct IDEAgentPanel: View {
             } else {
                 transcript
                     .ideTransition(.opacity.combined(with: .move(edge: .bottom)))
-                if placement != .aiMode { Divider().overlay(IDEAppearance.ColorToken.border) }
             }
             // One composer for both states: a field that moved between the empty greeting and
             // the transcript would be destroyed and recreated, dropping focus on the first send.
@@ -161,7 +160,7 @@ struct IDEAgentPanel: View {
 
     @ViewBuilder private var transcript: some View {
         if agent.entries.isEmpty {
-            IDEAgentEmptyState(settings: settings, openSettings: { isSettingsPresented = true })
+            IDEAgentEmptyState(agent: agent, openSettings: { isSettingsPresented = true })
         } else {
             ScrollViewReader { proxy in
                 ScrollView {

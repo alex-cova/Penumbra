@@ -251,6 +251,27 @@ func acpPair() -> (ACPInMemoryTransport, ACPInMemoryTransport) { ACPInMemoryTran
         await connection.close()
     }
 
+    @Test func configOptionUpdatesReachTheObserver() async throws {
+        let (clientTransport, agentTransport) = acpPair()
+        let agent = await FakeACPAgent.make(transport: agentTransport)
+        agent.onPrompt = { agent, _ in
+            await agent.emit(update: .object([
+                "sessionUpdate": "config_option_update",
+                "configOptions": .array([.object([
+                    "id": "effortLevel", "name": "Effort", "category": "thought_level", "type": "select",
+                    "currentValue": "high", "options": .array([.object(["value": "high", "name": "High"])]),
+                ])]),
+            ]))
+            return "end_turn"
+        }
+        let session = ACPClientSession(transport: clientTransport, cwd: "/tmp/project")
+        let seen = ACPLocked<[[ACPConfigOption]]>([])
+        await session.observeConfigOptions { options in seen.mutate { $0.append(options) } }
+        _ = await collectACP(await session.send("Hi"))
+        #expect(seen.get().last?.first?.category == "thought_level")
+        #expect(await session.configOptions.first?.currentValueDescription == "high")
+    }
+
     @Test func clientSessionEndToEnd() async throws {
         let (clientTransport, agentTransport) = acpPair()
         let agent = await FakeACPAgent.make(transport: agentTransport)

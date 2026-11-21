@@ -76,19 +76,20 @@ final class IDEAgentComposerFieldTests: XCTestCase {
         XCTAssertEqual(harness.textView.string, "", "Send clearing the draft empties the field")
     }
 
-    func testTheFieldGrowsWithItsLinesAndStopsAtEight() async {
+    func testTheFieldGrowsWithItsLinesAndStopsAtItsCap() async {
         let harness = ComposerHarness()
         let oneLine = harness.height
         harness.textView.insertText("a\nb\nc", replacementRange: NSRange(location: 0, length: 0))
         await harness.settle()
         XCTAssertGreaterThan(harness.height, oneLine, "three lines are taller than one")
 
-        harness.textView.insertText("\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10", replacementRange: NSRange(location: 5, length: 0))
+        harness.textView.insertText((1...40).map { "\n\($0)" }.joined(), replacementRange: NSRange(location: 5, length: 0))
         await harness.settle()
         let capped = harness.height
+        XCTAssertEqual(capped, IDEAgentComposerField.maxTextHeight, accuracy: 0.5, "the card stops at about 340 pt, like Codex's")
         harness.textView.insertText("\nmore\nmore", replacementRange: NSRange(location: 0, length: 0))
         await harness.settle()
-        XCTAssertEqual(harness.height, capped, accuracy: 0.5, "past eight lines it scrolls instead of growing")
+        XCTAssertEqual(harness.height, capped, accuracy: 0.5, "past the cap it scrolls instead of growing")
 
         harness.text = ""
         harness.render()

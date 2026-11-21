@@ -24,7 +24,7 @@ struct IDEAgentModelChip: View {
                 .truncationMode(.middle)
         }
         .buttonStyle(.borderless)
-        .frame(maxWidth: 180)
+        .frame(maxWidth: 180, alignment: .trailing)
         .help(settings.provider.title)
         .accessibilityLabel("Model: \(title)")
     }

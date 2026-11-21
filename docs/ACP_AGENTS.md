@@ -132,6 +132,20 @@ built-in list. Measured against the installed CLIs on 2026-11-16.
 | Provider extensions | `_kiro.dev/*` ignored | `cursor/*` handled | – |
 | Images in prompts | advertised | advertised | advertised |
 
+**Kiro CLI 3.5.0** (checked 2026-11-21) changed shape: no `models` field and no `session/set_model`; the
+model is a `model` config option, its modes are `vibe`, `spec`, `plan`… (plus your own agents), and the
+reasoning effort is an `effortLevel` option of category `thought_level` whose levels depend on the model
+(Low…Max for Claude, None…High for GPT, none for `auto`). Umbra shows the model and effort together in the
+**model picker** under the message field (“claude-opus-5.5  High ›”): its popover has an effort slider with
+the agent's levels and the model list, each model with the credit multiplier Kiro sends (auto 1×, claude-opus-5.5 2×, gpt-5.6-sol 4.4×, claude-haiku-5.5 0.06×); picking either sends `session/set_config_option`. Any agent that
+advertises a `thought_level` option (Antigravity does) gets the slider, and one that advertises a speed
+option gets a ⚡ toggle. Restart Agent is in the agent menu in the panel header. The chip appears
+once the agent has started, which is on the first message: before that Umbra does not know what the agent
+offers.
+
+- **Effort follows the model.** After a model change Kiro sends the new levels in a `config_option_update`;
+  the chip updates right away, not on the next turn.
+
 Umbra advertises `fs.readTextFile`, `fs.writeTextFile` and `terminal` to every agent and serves them
 through the project jail, unsaved buffers, checkpoints and the permission policy. An agent that reads
 the disk itself (Muse) does not see unsaved edits.

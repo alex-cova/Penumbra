@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The chat's text field: an `NSTextView` that sends on Return, grows from one line to eight, and
+/// The chat's text field: an `NSTextView` that sends on Return, grows from one line to `maxTextHeight`, and
 /// feeds the suggestion list. A SwiftUI `TextField` cannot see ↑/↓/Tab/Esc/⇧Tab, nor where the caret is.
 struct IDEAgentComposerField: NSViewRepresentable {
     @Binding var text: String
@@ -27,7 +27,9 @@ struct IDEAgentComposerField: NSViewRepresentable {
     /// Image data pasted from the clipboard. `true` consumes the paste (the image became a chip).
     var onPasteImage: ((Data) -> Bool)?
 
-    static let maxLines = 8
+    /// How tall the text grows before it scrolls. With the composer card's bar and padding the card stops at
+    /// about 340 pt, like Codex's message box.
+    static let maxTextHeight: CGFloat = 282
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -167,7 +169,7 @@ struct IDEAgentComposerField: NSViewRepresentable {
             let line = layout.defaultLineHeight(for: font)
             let inset = textView.textContainerInset.height * 2
             let content = max(layout.usedRect(for: container).height, line) + inset
-            let height = min(content, line * CGFloat(IDEAgentComposerField.maxLines) + inset)
+            let height = min(content, IDEAgentComposerField.maxTextHeight)
             if abs(parent.height - height) > 0.5 {
                 // Not inside a view update: this runs from text changes and from updateNSView's
                 // own text sync, which SwiftUI would flag as a state change during a view update.

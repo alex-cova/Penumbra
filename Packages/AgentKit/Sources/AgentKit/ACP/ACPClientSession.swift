@@ -76,6 +76,12 @@ public actor ACPClientSession {
     public private(set) var modelState: ACPSessionModelState?
     public private(set) var configOptions: [ACPConfigOption] = []
     public private(set) var availableCommands: [String] = []
+    /// Told the agent's complete option list whenever it sends `config_option_update`, run or no run.
+    /// Kiro advertises its effort levels this way, and changes them with the model.
+    private var configOptionsObserver: (@Sendable ([ACPConfigOption]) -> Void)?
+    /// Counts `config_option_update`s, so a `set_config_option` answer does not overwrite an update that
+    /// was handled while the request was out.
+    private var configOptionsRevision = 0
 
     /// Checkpoints for files this agent writes through `fs/write_text_file`, so Revert Run works.
     public nonisolated let checkpoints: CheckpointLog?
@@ -293,15 +299,25 @@ public actor ACPClientSession {
         if sessionId == id { sessionId = nil }
     }
 
-    /// Sets a session config option, returning the agent's complete option list.
+    /// Calls `observer` with the agent's option list after each `config_option_update`; nil stops it.
+    public func observeConfigOptions(_ observer: (@Sendable ([ACPConfigOption]) -> Void)?) {
+        configOptionsObserver = observer
+    }
+
+    /// Sets a session config option, returning the agent's complete option list. When the agent sent a
+    /// `config_option_update` while the request was out, that update is kept: Kiro answers a model change with
+    /// the options as they were and sends the new model's effort levels in an update right after, and the
+    /// answer and the update can reach this actor in either order.
     @discardableResult
     public func setConfigOption(sessionId: String, configId: String, value: String) async throws -> [ACPConfigOption] {
         _ = try await connect()
         guard let connection else { throw ACPError.notConnected }
+        let revision = configOptionsRevision
         let raw = try await connection.request(
             method: "session/set_config_option",
             params: .object(["sessionId": .string(sessionId), "configId": .string(configId), "value": .string(value)]),
             timeout: requestTimeout)
+        guard configOptionsRevision == revision else { return configOptions }
         let options = (raw["configOptions"]?.arrayValue ?? []).map(ACPConfigOption.init(jsonValue:))
         configOptions = options
         return options
@@ -422,6 +438,7 @@ public actor ACPClientSession {
     /// Hard stop: closes the transport. The run ends with `.failed` via the close handler.
     public func close() async {
         await stop()
+        configOptionsObserver = nil
         if let connection {
             await connection.setRequestHandler(nil)
             await connection.setNotificationHandler(nil)
@@ -717,6 +734,8 @@ public actor ACPClientSession {
             continuation?.yield(.stateChanged(.streaming))
         case .configOptionUpdate(let options):
             configOptions = options
+            configOptionsRevision += 1
+            configOptionsObserver?(options)
         case .availableCommands(let commands):
             availableCommands = commands
         case .sessionInfoUpdate, .unknown:

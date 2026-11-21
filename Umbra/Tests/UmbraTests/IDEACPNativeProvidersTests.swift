@@ -1,5 +1,7 @@
 import AgentKit
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import Umbra
 
@@ -8,7 +10,9 @@ import XCTest
 /// One script that answers like Kiro, Cursor or Muse (argv[1]). The `initialize` and `session/new`
 /// shapes are trimmed from what the real CLIs answered on 2026-11-16 (Kiro CLI 2.24.1, Cursor CLI
 /// 2026.11.05, Muse 1.4.20). Every method it receives is logged, one line each, for assertions.
-/// A file `<log>.logged-out` makes `session/new` fail as a signed-out CLI does.
+/// A file `<log>.logged-out` makes `session/new` fail as a signed-out CLI does. `kiro3` answers like Kiro CLI
+/// 3.5.0 (captured 2026-11-21): the model and an `effortLevel` (`thought_level`) are config options, and a model
+/// change re-advertises the effort levels in a `config_option_update` outside any run.
 private let providerMockScript = #"""
 import json, os, sys
 provider, log_path, pid_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -33,8 +37,30 @@ def notify(method, params):
 def text(t):
     notify("session/update", {"sessionId": "s-1", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": t}}})
 
+def kiro3_options(model, effort):
+    levels = {"claude-opus-5.5": ["low", "medium", "high", "xhigh", "max"], "gpt-5.6-sol": ["none", "low", "medium", "high"]}.get(model, [])
+    options = [{"type": "select", "id": "mode", "name": "Mode", "category": "mode", "currentValue": "vibe",
+                "options": [{"value": "vibe", "name": "Default"}, {"value": "plan", "name": "Plan"}]},
+               {"type": "select", "id": "model", "name": "Model", "category": "model", "currentValue": model,
+                "options": [{"value": "auto", "name": "auto", "description": "Models chosen by task for optimal usage and consistent quality",
+                             "_meta": {"kiro": {"rateMultiplier": 1, "rateUnit": "Credit"}}},
+                            {"value": "claude-opus-5.5", "name": "claude-opus-5.5", "description": "Claude Opus 5.5 model with 1M context window",
+                             "_meta": {"kiro": {"rateMultiplier": 2, "rateUnit": "Credit"}}},
+                            {"value": "gpt-5.6-sol", "name": "gpt-5.6-sol", "description": "OpenAI GPT 5.6 Sol with 1M context window",
+                             "_meta": {"kiro": {"rateMultiplier": 4.4, "rateUnit": "Credit"}}},
+                            {"value": "claude-haiku-5.5", "name": "claude-haiku-5.5", "description": "Claude Haiku 5.5 model with 1M context window",
+                             "_meta": {"kiro": {"rateMultiplier": 0.06, "rateUnit": "Credit"}}}]}]
+    if levels:
+        options.append({"type": "select", "id": "effortLevel", "name": "Effort", "category": "thought_level",
+                        "currentValue": effort if effort in levels else levels[1],
+                        "options": [{"value": v, "name": v.capitalize()} for v in levels]})
+    options.append({"type": "select", "id": "autopilot", "name": "autopilot", "currentValue": "on",
+                    "options": [{"value": "on", "name": "on"}, {"value": "off", "name": "off"}]})
+    return options
+kiro3 = {"model": "claude-opus-5.5", "effort": "medium"}
+
 AUTH = {
-    "kiro": [],
+    "kiro": [], "kiro3": [],
     "cursor": [{"id": "cursor_login", "name": "Cursor Login", "description": "Run 'agent login' first if not logged in."}],
     "muse": [{"id": "muse-login", "name": "Log in to Muse", "description": "Sign in with a device code shown in your browser."}],
 }[provider]
@@ -43,6 +69,8 @@ SESSION = {
                 {"id": "kiro_default", "name": "kiro_default"}, {"id": "kiro_planner", "name": "kiro_planner"}]},
              "models": {"currentModelId": "auto", "availableModels": [
                 {"modelId": "auto", "name": "auto"}, {"modelId": "claude-sonnet-5.5", "name": "claude-sonnet-5.5"}]}},
+    "kiro3": {"modes": {"currentModeId": "vibe", "availableModes": [{"id": "vibe", "name": "Default"}, {"id": "plan", "name": "Plan"}]},
+              "configOptions": kiro3_options("claude-opus-5.5", "medium")},
     "cursor": {"modes": {"currentModeId": "agent", "availableModes": [
                 {"id": "agent", "name": "Agent"}, {"id": "plan", "name": "Plan"}, {"id": "ask", "name": "Ask"}]},
                "models": {"currentModelId": "composer-2.5[fast=true]", "availableModels": [
@@ -65,6 +93,7 @@ for line in sys.stdin:
     params = msg.get("params") or {}
     if method == "session/set_mode": log("session/set_mode " + params.get("modeId", ""))
     elif method == "session/set_model": log("session/set_model " + params.get("modelId", ""))
+    elif method == "session/set_config_option": log("session/set_config_option " + params.get("configId", "") + "=" + str(params.get("value", "")))
     else: log(method)
     if "id" not in msg: continue
     if method == "initialize":
@@ -80,6 +109,13 @@ for line in sys.stdin:
         else:
             result = {"sessionId": "s-1"}; result.update(SESSION)
             send({"jsonrpc": "2.0", "id": msg["id"], "result": result})
+    elif method == "session/set_config_option" and provider == "kiro3":
+        key = {"model": "model", "effortLevel": "effort"}.get(params.get("configId"))
+        if key: kiro3[key] = params.get("value")
+        # Like Kiro: the answer has the options as they were, the new effort levels follow in an update.
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"configOptions": kiro3_options(kiro3["model"], kiro3["effort"]) if key == "effort" else SESSION["configOptions"]}})
+        notify("session/update", {"sessionId": "s-1", "update": {"sessionUpdate": "config_option_update",
+               "configOptions": kiro3_options(kiro3["model"], kiro3["effort"])}})
     elif method in ("session/set_mode", "session/set_model", "session/set_config_option"):
         send({"jsonrpc": "2.0", "id": msg["id"], "result": {}})
     elif method == "session/prompt":
@@ -289,13 +325,13 @@ final class IDEACPNativeProviderConversationTests: XCTestCase {
 
     /// A row created from the provider's preset, pointed at the mock: a custom launch that keeps the
     /// provider's rules (auth policy, extensions, mode mapping).
-    private func chat(_ presetID: String) -> (IDEAgentConversation, IDEAgentSettings) {
+    private func chat(_ presetID: String, mock: String? = nil) -> (IDEAgentConversation, IDEAgentSettings) {
         let settings = IDEAgentSettings(
             defaults: UserDefaults(suiteName: "umbra.acp.providers.\(UUID().uuidString)")!, keyStore: IDEAgentMemoryKeyStore())
         let row = settings.materializePreset(IDEACPRegistry.preset(id: presetID)!)
         let script = project.appendingPathComponent("provider_mock.py").path
         XCTAssertTrue(settings.updateACPAgent(
-            id: row.id, name: row.name, commandLine: "/usr/bin/python3 \(script) \(presetID) \(log.path) \(pidFile.path)"))
+            id: row.id, name: row.name, commandLine: "/usr/bin/python3 \(script) \(mock ?? presetID) \(log.path) \(pidFile.path)"))
         settings.setACPAllowed(true, agentID: row.id)
         settings.acpActiveAgentID = row.id
         let conversation = IDEAgentConversation(settings: settings, store: nil, clientFactory: { _ in MockLLMClient(turns: []) })
@@ -336,6 +372,63 @@ final class IDEACPNativeProviderConversationTests: XCTestCase {
         XCTAssertFalse(logLines().contains { $0.contains("not-advertised") })
         XCTAssertFalse(logLines().contains("authenticate"))
         XCTAssertFalse(logLines().contains { $0.hasPrefix("session/set_mode ") }, "Kiro's modes are left as the user picks them")
+    }
+
+    func testKiroEffortHasItsOwnControlAndFollowsTheModel() async throws {
+        let (chat, _) = chat("kiro", mock: "kiro3")
+        let replied = await send(chat, "hi") { self.assistant(chat).contains("Hello from kiro3") }
+        XCTAssertTrue(replied, dump(chat))
+        let shown = await acpWaitUntil(5) { chat.acpEffortOption != nil }
+        XCTAssertTrue(shown, dump(chat))
+        let effort = try XCTUnwrap(chat.acpEffortOption)
+        XCTAssertEqual(effort.id, "effortLevel")
+        XCTAssertEqual(effort.selectableChoices.map(\.value), ["low", "medium", "high", "xhigh", "max"])
+        XCTAssertEqual(effort.currentChoiceTitle, "Medium")
+        XCTAssertTrue(chat.acpAvailableModels.isEmpty, "Kiro 3.5 offers the model as a config option")
+        XCTAssertEqual(chat.acpModelOption?.id, "model")
+        XCTAssertTrue(chat.acpHasModelControls)
+        XCTAssertEqual(chat.acpModelOption?.selectableChoiceDetails.map { $0.rate?.label },
+                       ["1×", "2×", "4.4×", "0.06×"], "Kiro's credit multipliers are shown on the model rows")
+        XCTAssertEqual(chat.acpModelOption?.selectableChoiceDetails.first?.rate?.unit, "Credit")
+        try renderForLooking(IDEACPModelPickerPopover(
+            conversation: chat,
+            models: chat.acpModelOption!.selectableChoiceDetails.map {
+                IDEACPModelPicker.Model(id: $0.value, title: $0.title, detail: $0.detail, rate: $0.rate)
+            },
+            currentModelID: chat.acpModelOption?.currentValueDescription), name: "acp-model-picker", size: NSSize(width: 300, height: 330))
+        XCTAssertEqual(chat.acpDisplayedConfigOptions.map(\.id), ["autopilot"],
+                       "the model picker shows the model and effort, the mode chip the mode")
+
+        chat.setACPConfig(id: "effortLevel", value: "high")
+        let raised = await acpWaitUntil(5) { chat.acpEffortOption?.currentValueDescription == "high" }
+        XCTAssertTrue(raised, dump(chat))
+        XCTAssertTrue(logLines().contains("session/set_config_option effortLevel=high"), dump(chat))
+
+        // A model change answers with the old options; the new levels arrive in an update, with no run going.
+        chat.setACPConfig(id: "model", value: "gpt-5.6-sol")
+        let followed = await acpWaitUntil(5) { chat.acpEffortOption?.selectableChoices.first?.value == "none" }
+        XCTAssertTrue(followed, dump(chat))
+        XCTAssertFalse(chat.isRunning)
+
+        chat.setACPConfig(id: "model", value: "auto")
+        let hidden = await acpWaitUntil(5) { chat.acpEffortOption == nil }
+        XCTAssertTrue(hidden, "a model with no effort levels shows no effort control")
+    }
+
+    /// Writes a PNG to `AI_MODE_PNG_DIR` to look at; does nothing without it.
+    private func renderForLooking<V: View>(_ view: V, name: String, size: NSSize) throws {
+        guard let directory = ProcessInfo.processInfo.environment["AI_MODE_PNG_DIR"] else { return }
+        let host = NSHostingView(rootView: view
+            .background(IDEAppearance.ColorToken.panel)
+            .preferredColorScheme(IDEAppearance.preferredColorScheme))
+        host.frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
     }
 
     func testAnUnknownAgentRequestIsAnsweredSoTheTurnFinishes() async throws {
@@ -399,7 +492,8 @@ final class IDEACPNativeProviderConversationTests: XCTestCase {
         let shown = await acpWaitUntil(5) { !chat.acpConfigOptions.isEmpty }
         XCTAssertTrue(shown)
         XCTAssertEqual(chat.acpCurrentModeID, "promptUnmatched")
-        XCTAssertEqual(chat.acpDisplayedConfigOptions.map(\.id), ["model"], "the mode chip shows the mode, so the option is not repeated")
+        XCTAssertEqual(chat.acpModelOption?.id, "model", "the model picker shows Muse's model option")
+        XCTAssertEqual(chat.acpDisplayedConfigOptions.map(\.id), [], "the mode chip shows the mode and the picker the model, so neither is repeated")
         XCTAssertTrue(chat.acpAvailableModels.isEmpty, "Muse offers its model as a config option, so there is no second picker")
         chat.setMode(.plan)
         let denied = await acpWaitUntil(5) { self.logLines().contains("session/set_mode denyUnmatched") }

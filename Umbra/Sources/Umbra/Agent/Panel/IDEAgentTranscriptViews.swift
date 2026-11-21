@@ -141,8 +141,12 @@ struct IDEAgentUserRow: View {
 }
 
 struct IDEAgentEmptyState: View {
-    let settings: IDEAgentSettings
+    let agent: IDEAgentController
     let openSettings: () -> Void
+
+    private var settings: IDEAgentSettings { agent.settings }
+    private var chooser: IDEACPAgentChooser { IDEACPAgentChooser(agent: agent, openSettings: openSettings) }
+    private var isNative: Bool { agent.selected.resolvedACPAgentID == nil }
 
     var body: some View {
         VStack(spacing: IDEAppearance.Spacing.sm) {
@@ -156,17 +160,56 @@ struct IDEAgentEmptyState: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .multilineTextAlignment(.center)
-            if let hint = settings.setupHint {
-                Text(hint)
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.error)
-                    .multilineTextAlignment(.center)
-                Button("Agent Settings…", action: openSettings)
-                    .controlSize(.small)
+            // An external agent's chat never asks about API keys. A native chat offers the agents installed on
+            // this Mac first; the API-key path (and its Keychain lookups) is only for a chat that stays native.
+            if isNative {
+                let suggestions = chooser.suggestions
+                if suggestions.isEmpty {
+                    if let hint = settings.setupHint {
+                        Text(hint)
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(IDEAppearance.ColorToken.error)
+                            .multilineTextAlignment(.center)
+                        Button("Agent Settings…", action: openSettings)
+                            .controlSize(.small)
+                    }
+                } else {
+                    IDEACPSuggestionList(suggestions: suggestions, use: chooser.use, openSettings: openSettings)
+                }
             }
         }
         .padding(IDEAppearance.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Agents found on this Mac, offered before Umbra Native's API and local models.
+private struct IDEACPSuggestionList: View {
+    let suggestions: [IDEACPAgentChooser.Suggestion]
+    let use: (IDEACPAgentChooser.Suggestion) -> Void
+    let openSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: IDEAppearance.Spacing.xs) {
+            Text(suggestions.count == 1 ? "Found on this Mac" : "Agents found on this Mac")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+            ForEach(suggestions) { suggestion in
+                Button {
+                    use(suggestion)
+                } label: {
+                    Label("Use \(suggestion.name)", systemImage: "terminal")
+                        .frame(maxWidth: 220)
+                }
+                .controlSize(.regular)
+                .help("Runs \(suggestion.commandLine) when you send a message. Umbra asks before the first start.")
+            }
+            Button("Use Umbra Native with an API key or local model…", action: openSettings)
+                .buttonStyle(.link)
+                .font(IDEAppearance.Typography.caption)
+                .padding(.top, IDEAppearance.Spacing.xs)
+        }
+        .padding(.top, IDEAppearance.Spacing.sm)
     }
 }
 

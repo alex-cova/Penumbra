@@ -441,4 +441,91 @@ extension ACPConfigOption {
             return (value, option["name"]?.stringValue ?? value)
         }
     }
+
+    /// The advertised values with the agent's description of each and its price multiplier, for the model list.
+    var selectableChoiceDetails: [(value: String, title: String, detail: String?, rate: ACPChoiceRate?)] {
+        (raw["options"]?.arrayValue ?? []).compactMap { option in
+            guard let value = option["value"]?.stringValue ?? option["id"]?.stringValue, !value.isEmpty else { return nil }
+            let detail = option["description"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
+            return (value, option["name"]?.stringValue ?? value, detail, ACPChoiceRate(option: option))
+        }
+    }
+
+    /// The model as a config option (Muse, Kiro 3.x): ACP's `model` category, or an uncategorized `model` id.
+    var isModelOption: Bool {
+        if let category { return category == "model" }
+        return id.lowercased() == "model"
+    }
+
+    /// A speed switch (`fast`, `fastMode`, `speed`…). ACP has no category for it, so only the name says so;
+    /// nothing is shown for an agent that does not advertise one.
+    var isSpeedOption: Bool {
+        guard category == nil || category == "speed", !selectableChoices.isEmpty else { return false }
+        let key = (id + " " + name).lowercased()
+        return key.contains("speed") || key.contains("fast")
+    }
+
+    /// Whether `value` of a speed option means the fast setting.
+    static func isFastValue(_ value: String?) -> Bool {
+        guard let value = value?.lowercased() else { return false }
+        return ["on", "true", "1", "yes", "enabled"].contains(value) || value.contains("fast")
+    }
+
+    /// ACP's `thought_level` category, or an uncategorized option named for effort or reasoning
+    /// (`effort`, `reasoning_effort`, …) from an agent that predates the category.
+    var isEffortOption: Bool {
+        if let category { return category == "thought_level" }
+        let key = id.lowercased()
+        return key.contains("effort") || key.contains("reasoning") || key == "thought_level"
+    }
+
+    /// The advertised title of the current value ("High" for `high`).
+    var currentChoiceTitle: String? {
+        guard let current = currentValueDescription else { return nil }
+        return selectableChoices.first { $0.value == current }?.title ?? current
+    }
+}
+
+/// What a choice costs relative to the agent's base rate, from its `_meta` (Kiro sends
+/// `_meta.kiro.rateMultiplier` and `rateUnit: "Credit"` on each model: `auto` 1, claude-opus-5.5 2,
+/// gpt-5.6-sol 4.4, claude-haiku-5.5 0.06). Read from any vendor key, since ACP has no standard field for it.
+struct ACPChoiceRate: Equatable {
+    let multiplier: Double
+    /// The agent's unit ("Credit"), when it named one.
+    let unit: String?
+
+    init?(option: JSONValue) {
+        guard case .object(let meta)? = option["_meta"] else { return nil }
+        for key in meta.keys.sorted() {
+            guard case .object(let vendor)? = meta[key] else { continue }
+            let number: Double?
+            switch vendor["rateMultiplier"] {
+            case .int(let value)?: number = Double(value)
+            case .double(let value)?: number = value
+            default: number = nil
+            }
+            guard let number, number.isFinite, number >= 0 else { continue }
+            multiplier = number
+            unit = vendor["rateUnit"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
+            return
+        }
+        return nil
+    }
+
+    init(multiplier: Double, unit: String?) {
+        self.multiplier = multiplier
+        self.unit = unit
+    }
+
+    /// "2×", "0.06×", "4.4×".
+    var label: String {
+        let text = multiplier.formatted(.number.precision(.fractionLength(0...2)).locale(Locale(identifier: "en_US_POSIX")))
+        return text + "×"
+    }
+
+    /// "Uses 2× the credits of the base rate per request."
+    var help: String {
+        let unit = (unit ?? "usage").lowercased()
+        return "Uses \(label) the \(unit == "credit" ? "credits" : unit) of the base rate."
+    }
 }

@@ -697,18 +697,19 @@ final class IDEAgentSettings {
         refreshWebSearchKeyState()
     }
 
+    /// Which hosts have a saved key, from the Keychain items' attributes: no key is read and no access prompt
+    /// can appear. The keys themselves are read only when a Umbra Native (API) client is built for a send.
     func refreshKeyState() {
         didLoadKeyState = true
-        do {
-            _ = try keyStore.load(account: endpointHost)
-            keyError = nil
-        } catch {
-            keyError = error.localizedDescription
-        }
+        keyError = nil
         var hosts: Set<String> = []
         for provider in IDEAgentProvider.allCases where provider.hasEndpoint {
             let host = endpointHost(for: provider)
-            if (try? keyStore.load(account: host))?.isEmpty == false { hosts.insert(host) }
+            do {
+                if try keyStore.contains(account: host) { hosts.insert(host) }
+            } catch {
+                if host == endpointHost { keyError = error.localizedDescription }
+            }
         }
         savedKeyHosts = hosts
     }
@@ -748,7 +749,7 @@ final class IDEAgentSettings {
 
     func refreshWebSearchKeyState() {
         didLoadKeyState = true
-        _hasWebSearchKey = (try? keyStore.load(account: Self.webSearchAccount))?.isEmpty == false
+        _hasWebSearchKey = (try? keyStore.contains(account: Self.webSearchAccount)) == true
     }
 
     func saveWebSearchKey(_ key: String) {
@@ -908,7 +909,8 @@ final class IDEAgentSettings {
     /// nothing to ask with, and the curated fallback stays; a failed fetch keeps the last list
     /// (or the fallback) and records why in `metaError` for Settings to show.
     func refreshMetaModels() async {
-        guard let url = endpointURL(for: .meta), let key = apiKey(for: .meta), !key.isEmpty else { return }
+        // The attribute check first: no saved key means no Keychain read at all.
+        guard hasAPIKey(for: .meta), let url = endpointURL(for: .meta), let key = apiKey(for: .meta), !key.isEmpty else { return }
         isLoadingMetaModels = true
         defer { isLoadingMetaModels = false }
         do {
@@ -984,7 +986,7 @@ final class IDEAgentSettings {
         let local = provider.isLocal && provider.appleKind == nil
         let prices = maxRunCostCents > 0 ? priceTableText : ""
         let helper = helperChoice.map { "\($0.provider.rawValue)|\($0.model)|\($0.reasoningEffort)" } ?? "none"
-        return "\(provider.rawValue)|\(baseURL(for: provider))|\(choice.model)|\(choice.reasoningEffort)|\(local ? String(effectiveContextLength(for: choice)) : "")|\(iterationCap)|\(maxRunTokens)|\(maxRunSeconds)|\(maxRunCostCents)|\(prices)|\(contextWindow(for: choice) ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(hasWebSearchKey)|\(webFetchEnabled)|\(browserToolsEnabled)|\(runTestsBeforeFinishing)|\(memoryEnabled)|\(saveMemoriesWithoutAsking)|\(sandboxCommands)|\(sandboxBlockNetwork)|\(helper)"
+        return "\(provider.rawValue)|\(baseURL(for: provider))|\(choice.model)|\(choice.reasoningEffort)|\(local ? String(effectiveContextLength(for: choice)) : "")|\(iterationCap)|\(maxRunTokens)|\(maxRunSeconds)|\(maxRunCostCents)|\(prices)|\(contextWindow(for: choice) ?? 0)|\(secretFilePatternsText)|\(webSearchEnabled)|\(webSearchEnabled && hasWebSearchKey)|\(webFetchEnabled)|\(browserToolsEnabled)|\(runTestsBeforeFinishing)|\(memoryEnabled)|\(saveMemoriesWithoutAsking)|\(sandboxCommands)|\(sandboxBlockNetwork)|\(helper)"
     }
 
     func makeClient() throws -> any LLMClient { try makeClient(for: currentChoice) }

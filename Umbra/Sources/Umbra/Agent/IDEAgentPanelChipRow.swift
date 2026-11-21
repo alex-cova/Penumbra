@@ -5,8 +5,9 @@ import AppKit
 import LocalModelStore
 import SwiftUI
 
-/// The row of chips under the agent panel's field: project/branch (AI mode), permission mode,
-/// ACP mode/config, model, context meter and model picker. Extracted from `IDEAgentPanel`.
+/// The chips in the composer card's bar (project and branch sit on the tray above it in AI mode): permission mode,
+/// ACP mode, model/effort/speed (`IDEACPModelPicker`) and other options, context meter and model picker.
+/// Restart Agent is in the header's provider menu. Extracted from `IDEAgentPanel`.
 struct IDEAgentPanelChipRow: View {
     let agent: IDEAgentController
     let settings: IDEAgentSettings
@@ -17,37 +18,21 @@ struct IDEAgentPanelChipRow: View {
 
     private var choice: IDEAIModelChoice { agent.selected.effectiveChoice }
 
-    private func restartAgent() {
-        agent.selected.restartACP()
-    }
-
     private func compactConversation() {
         let chat = agent.selected
         Task { await chat.compact(focus: nil) }
     }
 
+    /// Left: how the agent may act (permission, the agent's own mode, its other options). Right, beside send:
+    /// the context ring and what answers (the model picker), as in Codex's message box.
     var body: some View {
         HStack {
-            if isAIMode {
-                IDEAIProjectChip()
-                IDEAIBranchChip()
-            }
             IDEAgentPermissionChip(mode: agent.mode) { agent.selected.setMode($0) }
             if agent.selected.isACPConversation {
                 IDEACPModeChip(conversation: agent.selected)
-                if !agent.selected.acpAvailableModels.isEmpty {
-                    IDEACPModelChip(conversation: agent.selected)
-                }
                 if !agent.selected.acpDisplayedConfigOptions.isEmpty {
                     IDEACPConfigChip(conversation: agent.selected)
                 }
-                Button("Restart Agent", action: restartAgent)
-                    .buttonStyle(.borderless)
-                    .font(IDEAppearance.Typography.caption)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .help("Kill the ACP agent process; it restarts on the next message")
-            } else if !isAIMode {
-                IDEAgentModelChip(settings: settings, openSettings: openSettings)
             }
             Spacer(minLength: IDEAppearance.Spacing.sm)
             if let fraction = agent.selected.contextFraction {
@@ -58,11 +43,17 @@ struct IDEAgentPanelChipRow: View {
                     compact: compactConversation
                 )
             }
-            if isAIMode, !agent.selected.isACPConversation {
+            if agent.selected.isACPConversation {
+                if agent.selected.acpHasModelControls {
+                    IDEACPModelPicker(conversation: agent.selected)
+                }
+            } else if isAIMode {
                 IDEAIModelPicker(
                     settings: settings, choice: choice, mode: .code,
                     onSelect: { workspace.selectAIModel($0, for: .code) },
                     onManage: { workspace.isAIModelsPresented = true })
+            } else {
+                IDEAgentModelChip(settings: settings, openSettings: openSettings)
             }
         }
     }

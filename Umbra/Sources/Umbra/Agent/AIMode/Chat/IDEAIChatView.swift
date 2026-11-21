@@ -156,50 +156,38 @@ struct IDEAIChatView: View {
                     acceptRequest += 1
                 }
             }
-            VStack(spacing: IDEAppearance.Spacing.xs) {
+            IDEAgentComposerCard(
+                isRunning: conversation.isRunning, canSend: conversation.canSend,
+                send: send, stop: conversation.stop,
+                focus: { chat.composerFocusRequest += 1 }
+            ) {
                 @Bindable var conversation = conversation
-                HStack(alignment: .bottom, spacing: IDEAppearance.Spacing.sm) {
-                    IDEAgentComposerField(
-                        text: $conversation.draft, height: $composerHeight,
-                        placeholder: "Message the model",
-                        state: composerState, focusRequest: chat.composerFocusRequest, acceptRequest: acceptRequest,
-                        suggestions: { chat.suggestions(for: $0) },
-                        onSend: send,
-                        onStop: { conversation.stop() },
-                        onAccept: { chat.perform($0) })
-                        .frame(height: composerHeight)
-                    if conversation.isRunning {
-                        IDEIconButton(
-                            systemImage: "stop.fill", help: "Stop", tint: IDEAppearance.ColorToken.error, action: conversation.stop)
-                    } else {
-                        IDEIconButton(
-                            systemImage: "arrow.up.circle.fill", help: "Send", tint: IDEAppearance.ColorToken.accent,
-                            isDisabled: !conversation.canSend, action: send)
+                IDEAgentComposerField(
+                    text: $conversation.draft, height: $composerHeight,
+                    placeholder: "Message the model",
+                    state: composerState, focusRequest: chat.composerFocusRequest, acceptRequest: acceptRequest,
+                    suggestions: { chat.suggestions(for: $0) },
+                    onSend: send,
+                    onStop: { conversation.stop() },
+                    onAccept: { chat.perform($0) })
+                    .frame(height: composerHeight)
+            } leading: {
+                EmptyView()
+            } trailing: {
+                if let fraction = conversation.contextFraction {
+                    IDEAgentContextMeter(
+                        fraction: fraction, tokens: conversation.contextTokens ?? 0,
+                        window: workspace.agent.settings.contextWindow(for: conversation.effectiveChoice) ?? 0,
+                        isBusy: conversation.isRunning
+                    ) {
+                        let target = conversation
+                        Task { await target.compact() }
                     }
                 }
-                HStack(spacing: IDEAppearance.Spacing.sm) {
-                    Spacer(minLength: 0)
-                    if let fraction = conversation.contextFraction {
-                        IDEAgentContextMeter(
-                            fraction: fraction, tokens: conversation.contextTokens ?? 0,
-                            window: workspace.agent.settings.contextWindow(for: conversation.effectiveChoice) ?? 0,
-                            isBusy: conversation.isRunning
-                        ) {
-                            let target = conversation
-                            Task { await target.compact() }
-                        }
-                    }
-                    IDEAIModelPicker(
-                        settings: workspace.agent.settings, choice: conversation.effectiveChoice, mode: .chat,
-                        onSelect: { workspace.selectAIModel($0, for: .chat) }, onManage: { workspace.isAIModelsPresented = true })
-                }
+                IDEAIModelPicker(
+                    settings: workspace.agent.settings, choice: conversation.effectiveChoice, mode: .chat,
+                    onSelect: { workspace.selectAIModel($0, for: .chat) }, onManage: { workspace.isAIModelsPresented = true })
             }
-            .padding(IDEAppearance.Spacing.sm)
-            .background(IDEAppearance.ColorToken.card)
-            .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: IDEAppearance.Radius.panel, style: .continuous)
-                    .stroke(IDEAppearance.ColorToken.border, lineWidth: 1))
         }
         .frame(maxWidth: Self.columnWidth)
         .padding(.horizontal, IDEAppearance.Spacing.md)
