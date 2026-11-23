@@ -25,7 +25,7 @@ extension IDEWorkspace: IDEAgentHost {
         if agent.isPanelVisible {
             hideAgentPage()
         } else {
-            agent.showPanel()
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { agent.showPanel() }
         }
     }
 
@@ -92,7 +92,7 @@ extension IDEWorkspace: IDEAgentHost {
     /// Closes the chat page and puts the caret back in the editor.
     func hideAgentPage() {
         guard agent.isPanelVisible else { return }
-        agent.isPanelVisible = false
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { agent.isPanelVisible = false }
         focusActiveEditor()
     }
 

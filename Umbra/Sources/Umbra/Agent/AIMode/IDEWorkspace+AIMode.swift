@@ -26,14 +26,16 @@ extension IDEWorkspace {
     /// opens AI mode on Code first, since the panel is Code's.
     func toggleAIInspector(tab: IDEAIInspectorTab? = nil) {
         if !isAIMode || aiTab != .code { showAIMode(tab: .code) }
-        if let tab {
-            // Asking for the tab that is already showing hides the panel; any other tab switches to it.
-            if showsAIInspector, aiInspectorTab == tab { showsAIInspector = false } else {
-                aiInspectorTab = tab
-                showsAIInspector = true
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) {
+            if let tab {
+                // Asking for the tab that is already showing hides the panel; any other tab switches to it.
+                if showsAIInspector, aiInspectorTab == tab { showsAIInspector = false } else {
+                    aiInspectorTab = tab
+                    showsAIInspector = true
+                }
+            } else {
+                showsAIInspector.toggle()
             }
-        } else {
-            showsAIInspector.toggle()
         }
     }
 

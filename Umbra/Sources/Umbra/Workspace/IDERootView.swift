@@ -129,7 +129,7 @@ public struct IDERootView: View {
                                 // Expanded chat covers the editor, which stays mounted. Side Panel docks it.
                                 IDEAgentPage(agent: workspace.agent, onClose: workspace.hideAgentPage)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .transition(.opacity)
+                                    .ideTransition(.opacity)
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -182,7 +182,7 @@ public struct IDERootView: View {
                     IDESwiftUIPreviewPanel(session: preview, onClose: workspace.hideSwiftUIPreview)
                         .frame(width: swiftUIPreviewWidth)
                         .idePanel()
-                        .transition(.opacity)
+                        .ideTransition(.opacity)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 }
@@ -193,7 +193,7 @@ public struct IDERootView: View {
                     IDEAgentPanel(agent: workspace.agent)
                         .frame(width: agentPanelWidth)
                         .idePanel()
-                        .transition(.opacity)
+                        .ideTransition(.opacity)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 }
@@ -204,12 +204,23 @@ public struct IDERootView: View {
                     projectSystem.makeSidebar()
                         .frame(width: projectSidebarWidth)
                         .idePanel()
+                        .ideTransition(.opacity)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
                 }
 
                 Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
             }
+            // Every sidebar slides with the same spring, whichever control toggled it. The animation
+            // lives here rather than only in the toggles, so the stripe, palette, shortcuts, reveals
+            // and Hide All Tool Windows all move the same way. Mounted panels share the fade above.
+            .ideAnimation(IDEAppearance.Motion.pane, value: workspace.showsSidebar)
+            .ideAnimation(IDEAppearance.Motion.pane, value: isAgentPageShown)
+            .ideAnimation(IDEAppearance.Motion.pane, value: workspace.isTerminalVisible)
+            .ideAnimation(IDEAppearance.Motion.pane, value: workspace.isBottomPanelExpanded)
+            .ideAnimation(IDEAppearance.Motion.pane, value: workspace.isSwiftUIPreviewVisible)
+            .ideAnimation(IDEAppearance.Motion.pane, value: isAgentDocked)
+            .ideAnimation(IDEAppearance.Motion.pane, value: workspace.showsProjectSidebar)
             // AI mode covers the editor, which stays mounted: its carets and scroll positions survive.
             .opacity(isAIMode ? 0 : 1)
             .allowsHitTesting(!isAIMode)

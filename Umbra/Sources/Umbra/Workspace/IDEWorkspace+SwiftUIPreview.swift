@@ -25,7 +25,7 @@ extension IDEWorkspace {
         }
         let session = swiftUIPreview ?? makeSwiftUIPreviewSession()
         swiftUIPreview = session
-        isSwiftUIPreviewVisible = true
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isSwiftUIPreviewVisible = true }
         swiftUIPreviewDocumentID = workbench.activePane.selectedDocument?.id
         session.select(blockIndex)
     }
@@ -42,13 +42,13 @@ extension IDEWorkspace {
         }
         let session = swiftUIPreview ?? makeSwiftUIPreviewSession()
         swiftUIPreview = session
-        isSwiftUIPreviewVisible = true
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isSwiftUIPreviewVisible = true }
         swiftUIPreviewDocumentID = workbench.activePane.selectedDocument?.id
         session.refresh()
     }
 
     func hideSwiftUIPreview() {
-        isSwiftUIPreviewVisible = false
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isSwiftUIPreviewVisible = false }
         swiftUIPreviewSwitchTask?.cancel()
         swiftUIPreviewSwitchTask = nil
         swiftUIPreviewDocumentID = nil

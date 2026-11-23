@@ -18,6 +18,7 @@ struct IDEAIModeView: View {
                 IDEAISidebar()
                     .frame(width: sidebarWidth)
                     .idePanel()
+                    .ideTransition(.opacity)
                 IDESidebarResizeHandle(width: $sidebarWidth, edge: .leading)
             }
             IDEAIMainView()
@@ -28,9 +29,13 @@ struct IDEAIModeView: View {
                 IDEAIInspector()
                     .frame(width: inspectorWidth)
                     .idePanel()
+                    .ideTransition(.opacity)
             }
             Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
         }
+        // Same spring and fade as the editor's sidebars.
+        .ideAnimation(IDEAppearance.Motion.pane, value: workspace.showsAISidebar)
+        .ideAnimation(IDEAppearance.Motion.pane, value: showsInspector)
         // No status bar in this mode, so the cards need their own gap at the bottom.
         .padding(.bottom, IDEAppearance.Spacing.panelGap)
         .sheet(isPresented: Bindable(workspace).isAIModelsPresented) {

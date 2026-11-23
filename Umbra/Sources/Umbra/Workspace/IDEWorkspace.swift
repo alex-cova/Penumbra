@@ -678,7 +678,7 @@ public final class IDEWorkspace {
         if tab == .problems, !showsProblemsTab { return }
         selectedBottomTab = tab
         if !isTerminalVisible {
-            isTerminalVisible = true
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isTerminalVisible = true }
             saveSession()
         }
         if tab == .sourceControl {
@@ -2068,7 +2068,7 @@ public final class IDEWorkspace {
 
     func toggleBottomPanelExpanded() {
         guard isTerminalVisible else { return }
-        isBottomPanelExpanded.toggle()
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isBottomPanelExpanded.toggle() }
         if isBottomPanelExpanded {
             // Otherwise keystrokes keep going to the editor hidden under the panel.
             window?.makeFirstResponder(nil)
@@ -2972,9 +2972,11 @@ public final class IDEWorkspace {
     /// the next press brings back exactly the ones that were showing.
     func toggleAllToolWindows() {
         if let saved = hiddenToolWindows {
-            isSidebarVisible = saved.sidebar
-            isProjectSidebarVisible = saved.gradle
-            isTerminalVisible = saved.bottomPanel
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) {
+                isSidebarVisible = saved.sidebar
+                isProjectSidebarVisible = saved.gradle
+                isTerminalVisible = saved.bottomPanel
+            }
             hiddenToolWindows = nil
             saveSession()
             return
@@ -2986,10 +2988,12 @@ public final class IDEWorkspace {
         )
         guard saved.sidebar || saved.gradle || saved.bottomPanel else { return }
         hiddenToolWindows = saved
-        isSidebarVisible = false
-        isProjectSidebarVisible = false
-        isTerminalVisible = false
-        isBottomPanelExpanded = false
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) {
+            isSidebarVisible = false
+            isProjectSidebarVisible = false
+            isTerminalVisible = false
+            isBottomPanelExpanded = false
+        }
         focusActiveEditor()
         saveSession()
     }
@@ -3012,9 +3016,11 @@ public final class IDEWorkspace {
     /// tab bar uses this so a click while typing does not steal the editor.
     func showSidebarTab(_ tab: IDESidebarTab) {
         guard isSidebarTabAvailable(tab) else { return }
-        closedSidebarTabs.remove(tab)
-        selectedSidebarTab = tab
-        isSidebarVisible = true
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) {
+            closedSidebarTabs.remove(tab)
+            selectedSidebarTab = tab
+            isSidebarVisible = true
+        }
         IDESidebarTabs.descriptor(for: tab)?.onShow(self)
         saveSession()
     }
@@ -3029,7 +3035,7 @@ public final class IDEWorkspace {
     /// shortcut of any other tab switches to it. Showing focuses the pane; hiding restores the editor.
     func toggleSidebarTab(_ tab: IDESidebarTab) {
         if showsSidebar && activeSidebarTab == tab {
-            isSidebarVisible = false
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isSidebarVisible = false }
             pendingSidebarFocusTab = nil
             saveSession()
             focusActiveEditor()
@@ -3040,8 +3046,10 @@ public final class IDEWorkspace {
 
     /// Reveal and create commands act on the Explorer, whatever tab the sidebar was on.
     private func showExplorer() {
-        selectedSidebarTab = .explorer
-        isSidebarVisible = true
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) {
+            selectedSidebarTab = .explorer
+            isSidebarVisible = true
+        }
     }
 
     func closeSidebarTab(_ tab: IDESidebarTab) {
@@ -3052,7 +3060,7 @@ public final class IDEWorkspace {
     }
 
     public func toggleProjectSidebar() {
-        isProjectSidebarVisible.toggle()
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isProjectSidebarVisible.toggle() }
         if isProjectSidebarVisible {
             requestProjectSidebarFocus()
         } else {
@@ -3081,7 +3089,7 @@ public final class IDEWorkspace {
                 selectedBottomTab = .terminal
                 selectTerminalTab(id)
                 if !isTerminalVisible {
-                    isTerminalVisible = true
+                    IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isTerminalVisible = true }
                     saveSession()
                 }
             } else {
@@ -3097,7 +3105,7 @@ public final class IDEWorkspace {
         default:
             selectedBottomTab = tab
             if !isTerminalVisible {
-                isTerminalVisible = true
+                IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isTerminalVisible = true }
                 saveSession()
             }
         }
