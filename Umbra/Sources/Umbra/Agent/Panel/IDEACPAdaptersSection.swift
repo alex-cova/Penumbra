@@ -27,7 +27,7 @@ struct IDEACPAdaptersSection: View {
                     identifier: IDEACPAccessibility.adaptersSandbox)
             } else if manager.node == .missing {
                 banner(
-                    IDEACPAdapterError.nodeMissing.localizedDescription ?? "Node.js was not found.",
+                    IDEACPAdapterError.nodeMissing.errorDescription ?? "Node.js was not found.",
                     identifier: IDEACPAccessibility.adaptersNode)
             }
             if manager.states.values.contains(where: { if case .offline? = $0.checkError { true } else { false } }) {

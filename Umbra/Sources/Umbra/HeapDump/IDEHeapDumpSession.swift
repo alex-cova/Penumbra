@@ -140,9 +140,10 @@ final class IDEHeapDumpSession: Identifiable {
         phase = .reading(HeapDumpCensus.Progress(phase: .scanningRecords, fraction: 0, bytesDone: 0, bytesTotal: 0))
         // The read itself is the task cancelled on close: awaiting a detached task from another
         // task would not pass the cancellation on, and a 6 GB read would run to its end.
+        weak let owner = self
         let read = Task.detached(priority: .userInitiated) {
             try await reader(url) { progress in
-                Task { @MainActor [weak self] in self?.apply(progress, ticket: ticket) }
+                Task { @MainActor [owner] in owner?.apply(progress, ticket: ticket) }
             }
         }
         readTask = read
@@ -192,10 +193,11 @@ final class IDEHeapDumpSession: Identifiable {
         decompressTask?.cancel()
         phase = .decompressing(0)
         let source = url
+        weak let owner = self
         let work = Task.detached(priority: .userInitiated) {
             try HprofGzip.decompress(source, to: target) { fraction in
-                Task { @MainActor [weak self] in
-                    guard let self, case .decompressing(let current) = self.phase, fraction > current else { return }
+                Task { @MainActor [owner] in
+                    guard let self = owner, case .decompressing(let current) = self.phase, fraction > current else { return }
                     self.phase = .decompressing(fraction)
                 }
             }

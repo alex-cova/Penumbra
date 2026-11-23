@@ -39,7 +39,7 @@ struct Scanner {
     buffer[1] = started_heredoc;
     buffer[2] = heredoc_allows_indent;
     heredoc_delimiter.copy(&buffer[3], heredoc_delimiter.length());
-    return heredoc_delimiter.length() + 3;
+    return (unsigned)(heredoc_delimiter.length() + 3);
   }
 
   void deserialize(const char *buffer, unsigned length) {

@@ -362,7 +362,7 @@ struct Scanner {
       buffer[i++] = *typ_itr;
       buffer[i++] = *len_itr;
     }
-    return i;
+    return (unsigned)i;
   }
 
   void deserialize(const char *buffer, unsigned length) {

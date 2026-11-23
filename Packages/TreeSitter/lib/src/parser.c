@@ -394,7 +394,7 @@ static unsigned ts_parser__external_scanner_serialize(
   if (ts_language_is_wasm(self->language)) {
     length = ts_wasm_store_call_scanner_serialize(
       self->wasm_store,
-      (uintptr_t)self->external_scanner_payload,
+      (uint32_t)(uintptr_t)self->external_scanner_payload,
       self->lexer.debug_buffer
     );
     if (ts_wasm_store_has_error(self->wasm_store)) {
@@ -424,7 +424,7 @@ static void ts_parser__external_scanner_deserialize(
   if (ts_language_is_wasm(self->language)) {
     ts_wasm_store_call_scanner_deserialize(
       self->wasm_store,
-      (uintptr_t)self->external_scanner_payload,
+      (uint32_t)(uintptr_t)self->external_scanner_payload,
       data,
       length
     );
@@ -447,7 +447,7 @@ static bool ts_parser__external_scanner_scan(
   if (ts_language_is_wasm(self->language)) {
     bool result = ts_wasm_store_call_scanner_scan(
       self->wasm_store,
-      (uintptr_t)self->external_scanner_payload,
+      (uint32_t)(uintptr_t)self->external_scanner_payload,
       external_lex_state * self->language->external_token_count
     );
     if (ts_wasm_store_has_error(self->wasm_store)) {

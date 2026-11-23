@@ -278,9 +278,10 @@ final class IDEHeapObjectExplorer {
         let layout = layout ?? .compressed
         state = .building(HeapIndexBuilder.Progress(phase: .readingClasses, fraction: 0))
         // Stored and cancelled itself: closing the tab stops the build, not only the wait for it.
+        weak let owner = self
         let work = Task.detached(priority: .userInitiated) {
             try await store.build(dump: url, layout: layout) { progress in
-                Task { @MainActor [weak self] in self?.apply(progress, ticket: ticket) }
+                Task { @MainActor [owner] in owner?.apply(progress, ticket: ticket) }
             }
         }
         buildTask = work

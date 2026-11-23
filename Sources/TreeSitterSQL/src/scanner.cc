@@ -29,7 +29,7 @@ struct Scanner {
     if (dollar_quoted_string_tag.length() + 1>= TREE_SITTER_SERIALIZATION_BUFFER_SIZE) return 0;
     buffer[0] = dollar_quoted_string_started;
     dollar_quoted_string_tag.copy(&buffer[1], dollar_quoted_string_tag.length());
-    return dollar_quoted_string_tag.length() + 1;
+    return (unsigned)(dollar_quoted_string_tag.length() + 1);
   }
 
   void deserialize(const char *buffer, unsigned length) {
