@@ -36,7 +36,9 @@ final class IDERootViewInvalidationTests: XCTestCase {
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: IDERootView().environment(workspace))
+        // The same minimum as `IDEWindowScene`: without it the window's minimum size follows the
+        // content and SwiftUI re-sets the window frame on every tick of a resize.
+        window.contentView = NSHostingView(rootView: IDERootView().environment(workspace).frame(minWidth: 960, minHeight: 640))
         window.orderFront(nil)
     }
 
@@ -174,6 +176,44 @@ final class IDERootViewInvalidationTests: XCTestCase {
         XCTAssertEqual(clicks["IDEEditorLayoutNode"], 0, "or the editor layout")
         _ = await evaluations("toggling the sidebar") { workspace.isSidebarVisible.toggle() }
         _ = await evaluations("toggling the bottom terminal") { workspace.isTerminalVisible.toggle() }
+    }
+
+    /// A live window resize: every tick is a synchronous layout of the whole window. Prints the body
+    /// evaluations per watched view and the main-thread time per tick (`RESIZECOST`).
+    func testLiveResizeCost() async throws {
+        let file = try write("Resize.java", lines: 3_000)
+        await workspace.openDocument(from: file)
+        await settle(1.5)
+        let ticks = Int(ProcessInfo.processInfo.environment["RESIZE_TICKS"] ?? "") ?? 60
+        var tickTimes: [Double] = []
+        let deltas = await evaluations("live resize, \(ticks) ticks") {
+            let origin = window.frame.origin
+            for tick in 0..<ticks {
+                let width = 1200 + Double(tick % 2 == 0 ? tick : -tick) * 3
+                let start = DispatchTime.now().uptimeNanoseconds
+                window.setFrame(NSRect(x: origin.x, y: origin.y, width: width, height: 800), display: true)
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                tickTimes.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+                await Task.yield()
+            }
+        }
+        let sorted = tickTimes.sorted()
+        print(String(
+            format: "RESIZECOST ticks=%d median=%.2fms p90=%.2fms max=%.2fms",
+            ticks, sorted[ticks / 2], sorted[ticks * 9 / 10], sorted.last ?? 0
+        ))
+        XCTAssertEqual(deltas["IDEStatusPositionLabel"] ?? 0, 0, "a resize does not move the caret")
+        var toggle: [Double] = []
+        for _ in 0..<6 {
+            let start = DispatchTime.now().uptimeNanoseconds
+            workspace.isSidebarVisible.toggle()
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            toggle.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            await settle(0.2)
+        }
+        print("RESIZECOST sidebar toggles ms: " + toggle.map { String(format: "%.2f", $0) }.joined(separator: " "))
     }
 
     /// Chrome follows a new colour scheme because its tokens are read from the observable

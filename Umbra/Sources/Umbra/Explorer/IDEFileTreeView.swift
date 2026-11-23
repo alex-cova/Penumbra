@@ -83,6 +83,9 @@ struct IDEFileTreeView: View {
                     ScrollView([.vertical, .horizontal]) {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(nodes) { item in
+                                // The selection and rename state are read in the row's own body,
+                                // so a click does not re-run this one's walk over every row.
+                                IDEOwnObservationScope {
                                 IDEFileTreeRow(
                                     node: item.node,
                                     depth: item.depth,
@@ -105,8 +108,10 @@ struct IDEFileTreeView: View {
                                     onSelect: { project.selectedPath = item.node.id },
                                     onOpen: { onOpenFile(item.node.url) }
                                 )
+                                }
                             }
                             ForEach(libraryRows) { item in
+                                IDEOwnObservationScope {
                                 IDEExternalLibraryRow(
                                     item: item,
                                     isSelected: project.selectedPath == nil && externalLibraries?.selectedID == item.id,
@@ -117,12 +122,13 @@ struct IDEFileTreeView: View {
                                     onCloseArchive: { onCloseArchive?(item) },
                                     onOpenAsHex: { onOpenArchiveAsHex?(item) }
                                 )
+                                }
                             }
                         }
                         .padding(.vertical, IDEAppearance.Spacing.xs)
                         .frame(minWidth: max(proxy.size.width, contentWidth(of: nodes, libraryRows: libraryRows)), minHeight: proxy.size.height, alignment: .topLeading)
                         .contentShape(Rectangle())
-                        .contextMenu { creationContextMenu(for: creationDirectory) }
+                        .contextMenu { IDEOwnObservationScope { creationContextMenu(for: creationDirectory) } }
                     }
                     .focusable(actions != nil)
                     .ideFocus(onRequest: focusRequestID, consume: { consumeFocus?() ?? false })
@@ -166,9 +172,10 @@ struct IDEFileTreeView: View {
             weight: .semibold
         )
         let chrome = CGFloat(12 + 14 + IDEAppearance.Spacing.xs * 2 + IDEAppearance.Spacing.sm * 2)
+        let widths = IDEExplorerTextWidths.shared
+        widths.use(font)
         func width(_ name: String, depth: Int) -> CGFloat {
-            let textWidth = (name as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
-            return CGFloat(depth) * 14 + chrome + textWidth
+            CGFloat(depth) * 14 + chrome + widths.width(of: name)
         }
         let files = nodes.reduce(CGFloat(0)) { widest, item in
             max(widest, width(item.node.displayName ?? item.node.name, depth: item.depth))
@@ -490,6 +497,41 @@ struct IDEFileTreeView: View {
     }
 
     private static let matchOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+}
+
+/// Evaluates `content` in a body of its own, so the observable state it reads (a selection, a
+/// rename) invalidates this view alone and not the parent that built the closure.
+struct IDEOwnObservationScope<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+}
+
+/// Row-name widths for `IDEFileTreeView.contentWidth`. The body runs on every selection change and
+/// every tick of a sidebar-width drag, and measuring each row's name with Core Text then cost most
+/// of a frame on a large expanded tree. A name's width only changes with the font.
+@MainActor
+final class IDEExplorerTextWidths {
+    static let shared = IDEExplorerTextWidths()
+    private var font: NSFont?
+    private var widths: [String: CGFloat] = [:]
+    /// Names are file names, so this only fills up in a very large tree; then it starts over.
+    private static let capacity = 50_000
+
+    func use(_ font: NSFont) {
+        guard font != self.font else { return }
+        self.font = font
+        widths.removeAll(keepingCapacity: true)
+    }
+
+    func width(of name: String) -> CGFloat {
+        if let width = widths[name] { return width }
+        guard let font else { return 0 }
+        if widths.count >= Self.capacity { widths.removeAll(keepingCapacity: true) }
+        let width = (name as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
+        widths[name] = width
+        return width
+    }
 }
 
 private struct IDEFileTreeRow: View {

@@ -34,6 +34,8 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         /// one step, so repeated moves don't accumulate `Float` rounding.
         var glyphs: [GlyphInstance]
         var glyphsOrigin: CGPoint = .zero
+        /// The typeset width of the line, which bounds the glyphs (`relevantEmitRect`).
+        var glyphWidth: CGFloat?
         var alignedGlyphs: [GlyphInstance]?
         var colorSamples: [GlyphColorSample]
         var decorations: MetalDecorationGeometry
@@ -411,7 +413,10 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
 
     func upsertFragment(_ spec: LineFragmentPaintSpec) {
         let emitRect = MetalProjection.emitRect(canvasFrame: canvasFrame)
-        let keyEmitRect = GlyphExtractCacheKey.relevantEmitRect(emitRect, fragmentFrame: spec.frame, scale: scale)
+        let glyphWidth = CGFloat(CTLineGetTypographicBounds(spec.line, nil, nil, nil))
+        let keyEmitRect = GlyphExtractCacheKey.relevantEmitRect(
+            emitRect, fragmentFrame: spec.frame, glyphWidth: glyphWidth, scale: scale
+        )
         let keyFocus = GlyphExtractCacheKey.Focus(
             unfocusedAlpha: spec.decorations.unfocusedAlpha,
             focusedRanges: spec.decorations.focusedRanges
@@ -460,6 +465,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         let frameChanged = previousFrame != spec.frame
         fragment.frame = spec.frame
         fragment.lineID = spec.lineID
+        fragment.glyphWidth = glyphWidth
         // A vertical move (every line below a Return) reuses the glyphs: the key's emit rect is
         // fragment-relative. That holds while highlighting is pending too: an equal key means the
         // same typeset and the same carried-over `colorSamples` (only a non-pending extract
@@ -576,7 +582,9 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             guard let fragment = fragments[id], let cacheKey = fragment.cacheKey else {
                 return false
             }
-            let keyEmitRect = GlyphExtractCacheKey.relevantEmitRect(emitRect, fragmentFrame: fragment.frame, scale: scale)
+            let keyEmitRect = GlyphExtractCacheKey.relevantEmitRect(
+                emitRect, fragmentFrame: fragment.frame, glyphWidth: fragment.glyphWidth, scale: scale
+            )
             return cacheKey.emitRect == keyEmitRect
                 && !cacheKey.isPending
                 && !fragment.decorationNeedsRetry

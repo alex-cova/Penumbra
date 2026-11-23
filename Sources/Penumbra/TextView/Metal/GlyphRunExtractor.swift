@@ -146,11 +146,25 @@ struct GlyphExtractCacheKey: Equatable {
     /// The result is relative to the fragment's origin, so a fragment that only moved (every line
     /// below a Return) also keeps its key: extraction is otherwise a translation of the frame,
     /// which `MetalRenderer` applies to the glyphs it has.
-    static func relevantEmitRect(_ emitRect: CGRect, fragmentFrame: CGRect, scale: CGFloat) -> CGRect {
+    ///
+    /// `glyphWidth` is the typeset line's width. A fragment's frame is as wide as the content,
+    /// which follows the view's width, so without it every resize tick (a window drag, a sidebar
+    /// toggle) changed every visible key and re-extracted every line. Glyphs never reach past the
+    /// typeset width plus the margins, so the narrower reach gives the same instances.
+    static func relevantEmitRect(
+        _ emitRect: CGRect,
+        fragmentFrame: CGRect,
+        glyphWidth: CGFloat? = nil,
+        scale: CGFloat
+    ) -> CGRect {
         let pad = CGFloat(GlyphRunExtractor.padPixels) / max(scale, 0.001)
         let horizontalMargin = CGFloat(GlyphRunExtractor.maxGlyphExtentPixels) / max(scale, 0.001) + pad
         let verticalMargin = fragmentFrame.height + pad
-        let reach = fragmentFrame.insetBy(dx: -horizontalMargin, dy: -verticalMargin)
+        var glyphFrame = fragmentFrame
+        if let glyphWidth, glyphWidth.isFinite, glyphWidth >= 0 {
+            glyphFrame.size.width = min(fragmentFrame.width, glyphWidth.rounded(.up))
+        }
+        let reach = glyphFrame.insetBy(dx: -horizontalMargin, dy: -verticalMargin)
         let clipped = emitRect.intersection(reach)
         return clipped.isNull ? .zero : clipped.offsetBy(dx: -fragmentFrame.minX, dy: -fragmentFrame.minY)
     }
