@@ -13,6 +13,29 @@ final class MetalTextCanvasViewTests: XCTestCase {
         XCTAssertNil(canvas.hitTest(NSPoint(x: -10, y: -10)))
     }
 
+    /// A resize changes the layer's bounds before a drawable of the new size is presented. With the
+    /// default `.resize` gravity Core Animation stretched the old drawable over the new bounds, so
+    /// the text slid sideways by a few pixels on every tick of a window or sidebar resize.
+    func testStaleDrawableIsPinnedToTheVisualTopLeftNotStretched() throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let canvas = MetalTextCanvasView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        window.contentView?.addSubview(canvas)
+        canvas.layoutSubviews()
+        let layer = try XCTUnwrap(canvas.layer as? CAMetalLayer)
+        // Gravity is in the layer's own space: in a flipped layer `.bottomLeft` is the visual top.
+        let expected: CALayerContentsGravity = layer.contentsAreFlipped() ? .bottomLeft : .topLeft
+        XCTAssertEqual(layer.contentsGravity, expected)
+        XCTAssertNotNil(layer.backgroundColor, "The strip a stale drawable leaves uncovered needs the editor background")
+    }
+
     func testCanvasIsHiddenBehindFragmentsByDefault() {
         let textView = TextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
         textView.setState(TextViewState(text: "hello\nworld", theme: DefaultTheme()))

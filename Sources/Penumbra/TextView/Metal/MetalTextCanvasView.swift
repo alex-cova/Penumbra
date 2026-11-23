@@ -52,6 +52,9 @@ final class MetalTextCanvasView: EditorView {
     private var presentRetryScheduled = false
     private var deferredPresentScheduled = false
     private var opaqueClearColor = MTLClearColor(red: 1, green: 1, blue: 1, alpha: 1)
+    /// Fills the strip a stale drawable leaves uncovered while a resize waits for the next present
+    /// (see `contentsGravity`). Re-applied with the geometry: AppKit resets a backing layer's color.
+    private var layerBackgroundColor = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
     /// Non-zero while `withCoalescedPresent` is running. A layout pass fires several
     /// `setNeedsDisplay`-triggering calls (`setViewport`, each `upsertFragment`) before its own
     /// explicit present; suppressing the deferred present while nested keeps a half-updated pass
@@ -101,6 +104,13 @@ final class MetalTextCanvasView: EditorView {
         // drawable, leaving a clear canvas (offscreen encode still had glyphs).
         // Present immediately; layout already moved the canvas and carets.
         metalLayer.presentsWithTransaction = false
+        // The default `.resize` gravity stretches the last drawable over new bounds until a
+        // drawable of the new size is presented. Presents are not in the CA transaction that
+        // resizes the layer, so every tick of a window/sidebar resize showed the text scaled
+        // horizontally by a few pixels. Pinning the stale drawable to the top-left at 1:1 keeps the
+        // glyphs still; the uncovered strip shows `backgroundColor` (the editor background).
+        metalLayer.contentsGravity = .topLeft
+        metalLayer.needsDisplayOnBoundsChange = false
         return metalLayer
     }
 
@@ -141,6 +151,11 @@ final class MetalTextCanvasView: EditorView {
             return
         }
         opaqueClearColor = updated
+        layerBackgroundColor = CGColor(
+            colorSpace: colorSpace.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+            components: [CGFloat(updated.red), CGFloat(updated.green), CGFloat(updated.blue), 1]
+        ) ?? layerBackgroundColor
+        updateMetalLayerGeometry()
         setNeedsDisplay()
     }
 
@@ -518,6 +533,15 @@ private extension MetalTextCanvasView {
         let scale = effectiveBackingScale
         metalLayer.colorspace = effectiveColorSpace.cgColorSpace
         metalLayer.contentsScale = scale
+        // Gravity is read in the layer's own space: a flipped view's layer reports
+        // `contentsAreFlipped`, and there `.bottomLeft` is the visual top-left.
+        let gravity: CALayerContentsGravity = metalLayer.contentsAreFlipped() ? .bottomLeft : .topLeft
+        if metalLayer.contentsGravity != gravity {
+            metalLayer.contentsGravity = gravity
+        }
+        if metalLayer.backgroundColor != layerBackgroundColor {
+            metalLayer.backgroundColor = layerBackgroundColor
+        }
         let width = max(bounds.width * scale, 1)
         let height = max(bounds.height * scale, 1)
         if metalLayer.drawableSize.width != width || metalLayer.drawableSize.height != height {
