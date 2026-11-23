@@ -75,7 +75,7 @@ struct IDEDockerPanel: View {
 
     @ViewBuilder
     private var containerControls: some View {
-        Button("Refresh", systemImage: "arrow.clockwise") { refresh += 1 }
+        Button("Refresh", systemImage: "arrow.clockwise", action: refreshContainers)
             .disabled(operation != nil)
         if outputKind != nil {
             Button("Containers", systemImage: "chevron.left") { outputKind = nil }
@@ -93,22 +93,11 @@ struct IDEDockerPanel: View {
                 }
             }
             .disabled(!canUseSelection || selectedContainer?.state != "running")
-            Menu("Actions", systemImage: "ellipsis.circle") {
-                if let container = selectedContainer {
-                    Button("Start") { begin(.start, container: container) }
-                        .disabled(container.state != "created" && container.state != "exited")
-                    Button("Stop") { begin(.stop, container: container) }
-                        .disabled(container.state != "running" && container.state != "restarting")
-                    Button("Restart") { begin(.restart, container: container) }
-                        .disabled(container.state != "running")
-                }
+            Button("Restart", systemImage: "arrow.clockwise.circle") {
+                guard let container = selectedContainer else { return }
+                begin(.restart, container: container)
             }
-            .disabled(!canUseSelection)
-        }
-        if let operation {
-            ProgressView()
-                .controlSize(.small)
-                .accessibilityLabel("\(operation.action.title) \(operation.name)")
+            .disabled(!canUseSelection || selectedContainer?.state != "running")
         }
     }
 
@@ -130,12 +119,14 @@ struct IDEDockerPanel: View {
         } else if containers.isEmpty {
             ContentUnavailableView("No containers", systemImage: "shippingbox")
         } else {
-            Table(containers, selection: $selection) {
-                TableColumn("Name", value: \.name)
-                TableColumn("Image", value: \.image)
-                TableColumn("Status", value: \.status)
-                TableColumn("Ports", value: \.ports)
-            }
+            IDEDockerContainersTable(
+                context: workspace.dockerContext,
+                containers: containers,
+                selection: $selection,
+                busyContainerID: operation?.id,
+                perform: begin
+            )
+            .id(workspace.dockerContext)
         }
     }
 
@@ -145,11 +136,15 @@ struct IDEDockerPanel: View {
     }
 
     private var canUseSelection: Bool {
-        !loading && operation == nil && selectedContainer != nil
+        canUseContainerActions && selectedContainer != nil
+    }
+
+    private var canUseContainerActions: Bool {
+        !loading && operation == nil && listedContext == workspace.dockerContext
     }
 
     private func begin(_ action: IDEDockerContainerAction, container: IDEDockerContainer) {
-        guard canUseSelection, selectedContainer?.id == container.id else { return }
+        guard canUseContainerActions else { return }
         operation = Operation(action: action, id: container.id, name: container.name, context: workspace.dockerContext)
     }
 
@@ -162,6 +157,11 @@ struct IDEDockerPanel: View {
         }
         guard !Task.isCancelled else { return }
         self.operation = nil
+        refreshContainers()
+    }
+
+    private func refreshContainers() {
+        loading = true
         refresh += 1
     }
 

@@ -8,6 +8,14 @@ struct IDEDockerContainer: Decodable, Identifiable {
     let state: String
     let ports: String
 
+    var primaryAction: IDEDockerContainerAction? {
+        switch state {
+        case "created", "exited": .start
+        case "running", "restarting": .stop
+        default: nil
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id = "ID"
         case name = "Names"
@@ -75,6 +83,13 @@ struct IDEDockerCLI {
     func containers(in context: String) async throws -> [IDEDockerContainer] {
         let output = try await run([
             "--context", context, "container", "ls", "--all", "--no-trunc", "--format", "{{json .}}",
+        ])
+        return try Self.decodeLines(output)
+    }
+
+    func containerUsage(in context: String) async throws -> [IDEDockerContainerUsage] {
+        let output = try await run([
+            "--context", context, "container", "stats", "--no-stream", "--no-trunc", "--format", "{{json .}}",
         ])
         return try Self.decodeLines(output)
     }
