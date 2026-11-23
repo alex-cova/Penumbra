@@ -1,6 +1,7 @@
 import AgentKit
 import EditorIntelligence
 import Foundation
+import GitIntelligence
 
 /// A problem as the agent sees it: project-relative, 1-based lines.
 struct IDEAgentProblem: Sendable, Equatable {
@@ -61,6 +62,12 @@ protocol IDEAgentHost: AnyObject {
     /// Asks the user whether these MCP servers, which the project's own files list, may run on this Mac.
     /// Returns the fingerprints they allowed.
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String>
+    /// Asks whether `repository` may be changed (its hooks and configured programs would run): the
+    /// window's trust gate, the same one the Changes buttons pass. A host without git has none.
+    func agentConfirmGitTrust(_ repository: GitRepository) async -> Bool
+    /// The runner the window's git model uses, so the agent's reads neutralize an untrusted
+    /// repository's filters like the window's own.
+    func agentGitRunner() -> any GitRunning
     /// Asks the user whether these hooks, which the project's own settings files list, may run
     /// their shell commands on this Mac. `true` approves exactly this block; a changed block asks
     /// again. Hooks from an unapproved block never run.
@@ -131,6 +138,8 @@ extension IDEAgentHost {
     // Optional capabilities: a host without them simply doesn't get the tools that need them.
     func agentProblemsAfterEdit(relativePaths: [String], timeout: TimeInterval) async -> String? { nil }
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> { [] }
+    func agentConfirmGitTrust(_ repository: GitRepository) async -> Bool { true }
+    func agentGitRunner() -> any GitRunning { SystemGitRunner() }
     func agentConfirmToolHooks(_ hooks: [IDEAgentHookEntry]) async -> Bool { false }
     func agentConfirmSkillTools(kind: String, name: String, source: String, tools: [String]) async -> Bool { false }
     func agentJavaNavigator() -> (any IDEAgentNavigating)? { nil }
@@ -194,6 +203,17 @@ final class IDEAgentHostBox: @unchecked Sendable {
     func createFile(relativePath: String, contents: String) async throws {
         guard let host else { throw AgentWorkspaceError.readOnly }
         try await host.agentCreateFile(relativePath: relativePath, contents: contents)
+    }
+
+    /// The window's trust question; a closed window answers no.
+    @MainActor
+    func confirmGitTrust(_ repository: GitRepository) async -> Bool {
+        guard let host else { return false }
+        return await host.agentConfirmGitTrust(repository)
+    }
+
+    func gitRunner() async -> any GitRunning {
+        await MainActor.run { host?.agentGitRunner() ?? SystemGitRunner() }
     }
 
     func commandEnvironment() async -> [String: String] {

@@ -336,6 +336,12 @@ struct IDEChangesPanel: View {
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
                 .lineLimit(1)
             Spacer(minLength: 0)
+            Button("Cancel") { gitStatus.cancelNetworkActions() }
+                .buttonStyle(.plain)
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+                .help("Stop the running fetch, update or push")
+                .accessibilityLabel("Cancel the running network command")
         }
         .padding(.horizontal, IDEAppearance.Spacing.md)
         .padding(.bottom, IDEAppearance.Spacing.xs)

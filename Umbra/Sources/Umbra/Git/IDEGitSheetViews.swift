@@ -574,8 +574,11 @@ struct IDEGitConfirmationSheet: View {
         IDEGitSheetLayout(title: confirmation.title, subtitle: confirmation.message, width: 380) {
             EmptyView()
         } buttons: {
-            Button("Cancel") { workspace.gitStatus.sheets.finish(sheetID) }
-                .keyboardShortcut(.cancelAction)
+            Button("Cancel") {
+                workspace.gitStatus.sheets.finish(sheetID)
+                confirmation.onCancel?()
+            }
+            .keyboardShortcut(.cancelAction)
             Button(confirmation.confirmTitle, role: confirmation.isDestructive ? .destructive : nil) {
                 workspace.gitStatus.sheets.finish(sheetID)
                 confirmation.action()

@@ -141,3 +141,15 @@ public enum GitRevision: Sendable, Hashable {
         }
     }
 }
+
+/// A staged rename (or copy) to undo with ``GitRepository/discardStagedRenames(_:)``.
+public struct GitRenameDiscard: Sendable, Equatable {
+    public var newPath: String
+    /// The path HEAD has; nil for a copy, whose original was never removed.
+    public var oldPath: String?
+
+    public init(newPath: String, oldPath: String?) {
+        self.newPath = newPath
+        self.oldPath = oldPath
+    }
+}

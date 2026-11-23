@@ -64,7 +64,7 @@ final class IDEGitSheetQueue {
     /// The system dismissed the current sheet (Esc, a click outside): it counts as Cancel.
     func dismissCurrent() {
         guard let current else { return }
-        if case .credential(let request) = current { request.resolve(.cancel) }
+        Self.cancel(current)
         finish(current.id)
     }
 
@@ -73,8 +73,14 @@ final class IDEGitSheetQueue {
         let all = ([current] + pending).compactMap { $0 }
         current = nil
         pending = []
-        for sheet in all {
-            if case .credential(let request) = sheet { request.resolve(.cancel) }
+        for sheet in all { Self.cancel(sheet) }
+    }
+
+    private static func cancel(_ sheet: IDEGitSheet) {
+        switch sheet {
+        case .credential(let request): request.resolve(.cancel)
+        case .confirm(let confirmation): confirmation.onCancel?()
+        default: break
         }
     }
 }
@@ -148,6 +154,8 @@ struct IDEGitConfirmation: Identifiable {
     let confirmTitle: String
     var isDestructive = false
     let action: @MainActor () -> Void
+    /// Runs when the sheet goes away without the confirm button (Cancel, Esc, the project closing).
+    var onCancel: (@MainActor () -> Void)?
 }
 
 struct IDEGitCloneRequest: Identifiable {

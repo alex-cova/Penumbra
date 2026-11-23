@@ -2,22 +2,27 @@ import Foundation
 
 /// `git status --porcelain=v1 -z`.
 public enum GitStatusParser {
-    public static func parse(_ porcelain: String) -> [GitStatusEntry] {
-        let records = porcelain.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
+    public static func parse(_ porcelain: String) -> [GitStatusEntry] { parse(Data(porcelain.utf8)) }
+
+    /// Reads the records as bytes: two status letters, a space, then the path. Slicing by
+    /// `Character` would fold a path's leading combining mark into the space before it.
+    public static func parse(_ data: Data) -> [GitStatusEntry] {
+        let records = data.split(separator: 0, omittingEmptySubsequences: true)
         var entries: [GitStatusEntry] = []
         var index = 0
         while index < records.count {
             let record = records[index]
             index += 1
             guard record.count > 3 else { continue }
-            let chars = Array(record.prefix(2))
-            let path = String(record.dropFirst(3))
+            let bytes = Array(record)
+            let indexCode = Character(UnicodeScalar(bytes[0])), worktreeCode = Character(UnicodeScalar(bytes[1]))
+            let path = String(decoding: bytes[3...], as: UTF8.self)
             var original: String?
-            if chars.contains("R") || chars.contains("C") {
-                if index < records.count { original = records[index] }
+            if indexCode == "R" || indexCode == "C" || worktreeCode == "R" || worktreeCode == "C" {
+                if index < records.count { original = String(decoding: records[index], as: UTF8.self) }
                 index += 1
             }
-            entries.append(GitStatusEntry(path: path, originalPath: original, indexCode: chars[0], worktreeCode: chars[1]))
+            entries.append(GitStatusEntry(path: path, originalPath: original, indexCode: indexCode, worktreeCode: worktreeCode))
         }
         return entries
     }

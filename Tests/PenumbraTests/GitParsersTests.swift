@@ -187,4 +187,25 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(GitSwitchConflictParser.parse(stderr), ["a.txt", "dir/b.txt"])
         XCTAssertNil(GitSwitchConflictParser.parse("fatal: invalid reference: nope"))
     }
+
+    /// G-16: a name that starts with a combining mark is one `Character` with the space before it, so
+    /// slicing by `Character` dropped the mark. The record is bytes: two status letters, a space, the path.
+    func testALeadingCombiningMarkSurvivesInAPath() {
+        let entries = GitStatusParser.parse(" M \u{0301}x.txt\0")
+        XCTAssertEqual(entries.map(\.path), ["\u{0301}x.txt"])
+        XCTAssertEqual(entries.first?.worktreeCode, "M")
+        XCTAssertEqual(entries.first?.indexCode, " ")
+    }
+
+    func testRenameRecordsStillPairWithTheirOldPathAfterTheByteParse() {
+        let entries = GitStatusParser.parse("R  \u{0301}new.txt\0old name.txt\0?? z.txt\0")
+        XCTAssertEqual(entries.map(\.path), ["\u{0301}new.txt", "z.txt"])
+        XCTAssertEqual(entries.first?.originalPath, "old name.txt")
+        XCTAssertTrue(entries.last?.isUntracked == true)
+    }
+
+    func testTheDataOverloadReadsTheSameRecordsAsTheStringOne() {
+        let raw = "A  a.txt\0 M b.txt\0?? c.txt\0"
+        XCTAssertEqual(GitStatusParser.parse(Data(raw.utf8)), GitStatusParser.parse(raw))
+    }
 }

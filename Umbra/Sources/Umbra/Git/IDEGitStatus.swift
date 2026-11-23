@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import GitIntelligence
+import JavaIntelligence
 import Observation
 
 enum IDEGitFileStatus: Equatable {
@@ -37,6 +38,19 @@ struct IDEGitCommit: Identifiable, Equatable, Sendable {
     let subject: String
 
     var id: String { hash }
+}
+
+/// Resumes a trust question's continuation once, whichever of confirm, cancel or close comes first.
+@MainActor
+private final class TrustAnswer {
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) { self.continuation = continuation }
+
+    func resolve(_ value: Bool) {
+        continuation?.resume(returning: value)
+        continuation = nil
+    }
 }
 
 /// Hands the paths a background revert changed back to the main actor.
@@ -105,8 +119,10 @@ final class IDEGitStatusModel {
     /// The progress line of the fetch, pull or push that is running (nil when none is, or git has
     /// said nothing yet). The status bar and the Changes header show it.
     private(set) var networkProgress: GitProgress?
-    /// True while a fetch, pull, push or clone runs. Only one runs at a time; local commands
-    /// (stage, commit) still go through meanwhile.
+    /// True while a fetch, update, push or tag push runs. These take no part in the local
+    /// mutation lane (a slow or stalled remote must not hold Stage and Commit), so one running does
+    /// not delay a stage or a commit; git's own `index.lock` settles the rare overlap with an
+    /// update that rewrites the working tree. `cancelNetworkActions()` stops them.
     private(set) var isNetworkBusy = false
     /// Every local and remote-tracking branch with its upstream and ahead/behind, from the last refresh.
     private(set) var branchInfos: [GitBranch] = []
@@ -157,6 +173,11 @@ final class IDEGitStatusModel {
     /// Bumped when a refresh is requested, a mutation starts, or the root changes.
     /// A load applies only when this is still the value it captured.
     private(set) var refreshEpoch: UInt64 = 0
+    /// Bumped only when a mutation starts or the root changes: the events after which a load that
+    /// began earlier shows a state that is no longer true. A plain `refresh()` does not move it, so
+    /// a status that finishes while more refreshes were requested still publishes (and the queued
+    /// pass then runs), instead of being dropped by every request that arrived meanwhile.
+    private(set) var mutationEpoch: UInt64 = 0
     /// The epoch of the snapshot now showing. Older loads record ``lastDroppedRefreshEpoch`` instead.
     private(set) var lastAppliedRefreshEpoch: UInt64 = 0
     private(set) var lastDroppedRefreshEpoch: UInt64?
@@ -192,6 +213,9 @@ final class IDEGitStatusModel {
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var refreshToken: UUID?
     @ObservationIgnored private var needsAnotherPass = false
+    /// The commit HEAD named at the last applied snapshot; a different one means HEAD moved even
+    /// when the branch kept its name.
+    @ObservationIgnored private var lastHeadCommit: String?
     @ObservationIgnored private var ignoredTask: Task<Void, Never>?
     /// Absolute paths the last `--ignored` pass reported. A refresh's snapshot (run without
     /// `--ignored`) keeps them until the next pass replaces them, so ignored rows in the Explorer
@@ -200,11 +224,18 @@ final class IDEGitStatusModel {
     @ObservationIgnored private var syncTask: Task<Void, Never>?
     @ObservationIgnored private var pendingInvalidations: Set<String> = []
     @ObservationIgnored private var mutationTasks: [UUID: Task<Void, Never>] = [:]
+    /// The running network actions, so Cancel can stop them and nothing else.
+    @ObservationIgnored private var networkTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var networkBusyCount = 0
     @ObservationIgnored private var historyTask: Task<Void, Never>?
     @ObservationIgnored private var commitDetailTask: Task<Void, Never>?
     @ObservationIgnored var autoFetchTask: Task<Void, Never>?
     @ObservationIgnored private var busyCount = 0
+    /// Which repositories may run their own hooks and config-named programs when Umbra changes
+    /// them. Tests replace it; the app shares one store across windows.
+    @ObservationIgnored let gitTrust: ProjectTrustStore
+    /// The trust question being asked, so two actions started together share one sheet.
+    @ObservationIgnored private var trustPrompt: Task<Bool, Never>?
     /// Names this window's credential prompts to the askpass server.
     @ObservationIgnored let askPassSession = UUID().uuidString
     /// Refs changed (or may have) since the log was loaded. A status refresh alone does not reload
@@ -213,8 +244,9 @@ final class IDEGitStatusModel {
     /// New commits may have new authors; typing in the search box must not re-read them.
     @ObservationIgnored private var authorsStale = true
 
-    init(runner: any GitRunning = IDEGitSupport.runner) {
-        gitRunner = runner
+    init(runner: any GitRunning = IDEGitSupport.runner, trust: ProjectTrustStore = IDESharedServices.shared.gitTrust) {
+        gitTrust = trust
+        gitRunner = IDEGitTrustRunner(base: runner, trust: trust)
         // Lives as long as the workspace (the app), so the observer is never removed.
         NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
@@ -237,7 +269,10 @@ final class IDEGitStatusModel {
         ignoredPaths = []
         syncTask?.cancel()
         syncTask = nil
-        for task in mutationTasks.values { task.cancel() }
+        // A local action that is running (a commit with its hooks, a rebase) is not cancelled: git
+        // would be killed halfway, and its result is simply no longer shown. Network actions are.
+        for task in networkTasks.values { task.cancel() }
+        networkTasks.removeAll()
         mutationTasks.removeAll()
         networkBusyCount = 0
         historyTask?.cancel()
@@ -252,6 +287,8 @@ final class IDEGitStatusModel {
         registerAskPass(active: url != nil)
         repository = nil
         refreshEpoch &+= 1
+        mutationEpoch &+= 1
+        lastHeadCommit = nil
         refreshState = .unavailable
         workspaceSnapshot = nil
         headMoved = false
@@ -297,6 +334,7 @@ final class IDEGitStatusModel {
     /// A mutation has started. An in-flight status from before it must not apply.
     func invalidateForMutation() {
         refreshEpoch &+= 1
+        mutationEpoch &+= 1
         if refreshTask != nil { needsAnotherPass = true }
         if let snapshot = workspaceSnapshot {
             refreshState = .stale(last: snapshot)
@@ -315,14 +353,15 @@ final class IDEGitStatusModel {
         ignoredTask?.cancel()
         let token = UUID()
         refreshToken = token
+        let mutationAtStart = mutationEpoch
         refreshTask = Task { [weak self] in
             let loaded = await Self.loadSnapshot(root: rootURL, existing: existing, runner: runner)
             guard let self else { return }
             guard self.refreshToken == token else { return }
-            let superseded = self.refreshEpoch != epoch
+            let superseded = self.mutationEpoch != mutationAtStart
             let cancelled = Task.isCancelled || self.rootURL != rootURL
             if cancelled {
-                if self.refreshEpoch == epoch { self.refreshState = previousState }
+                if self.mutationEpoch == mutationAtStart { self.refreshState = previousState }
                 self.endRefresh(token: token)
                 return
             }
@@ -367,6 +406,7 @@ final class IDEGitStatusModel {
         workspaceSnapshot = nil
         ignoredPaths = []
         headMoved = repositoryRoot != nil
+        lastHeadCommit = nil
         refreshedRelativePaths = []
         pendingInvalidations = []
         apply(GitSnapshot())
@@ -385,7 +425,8 @@ final class IDEGitStatusModel {
         // Captured before `apply` replaces `changes`. An unstaged rename's tab is keyed by the
         // old path, which is gone from the next snapshot once the rename is committed or reverted.
         let previousOriginalPaths = changes.compactMap(\.originalPath)
-        let headChanged = state.head != repositoryState.head
+        let headChanged = state.head != repositoryState.head || snapshot.headCommit != lastHeadCommit
+        lastHeadCommit = snapshot.headCommit
         repository = repo
         publishGitDirectory(repo.gitDirectory)
         var published = snapshot
@@ -422,7 +463,7 @@ final class IDEGitStatusModel {
             loadHistory()
             loadStashes()
         }
-        startIgnoredPass(repo: repo, epoch: epoch)
+        startIgnoredPass(repo: repo, mutation: mutationEpoch)
         fillSyncCommitsIfNeeded()
         onRefreshed?()
         endRefresh(token: token)
@@ -464,14 +505,14 @@ final class IDEGitStatusModel {
     private func fillSyncCommitsIfNeeded() {
         guard let sync, (sync.ahead > 0 || sync.behind > 0), sync.outgoing.isEmpty, sync.incoming.isEmpty else { return }
         guard let rootURL, let repository else { return }
-        let epoch = refreshEpoch
+        let mutation = mutationEpoch
         let ahead = sync.ahead
         let behind = sync.behind
         let upstream = sync.upstream
         syncTask?.cancel()
         syncTask = Task { [weak self] in
             let lists = await repository.upstreamCommitLists()
-            guard let self, !Task.isCancelled, self.refreshEpoch == epoch, self.rootURL == rootURL else { return }
+            guard let self, !Task.isCancelled, self.mutationEpoch == mutation, self.rootURL == rootURL else { return }
             guard var current = self.sync, current.upstream == upstream, current.ahead == ahead, current.behind == behind else { return }
             current = GitSyncStatus(
                 upstream: current.upstream, ahead: current.ahead, behind: current.behind,
@@ -481,27 +522,27 @@ final class IDEGitStatusModel {
         }
     }
 
-    private func startIgnoredPass(repo: GitRepository, epoch: UInt64) {
+    private func startIgnoredPass(repo: GitRepository, mutation: UInt64) {
         ignoredTask?.cancel()
         let root = rootURL
         ignoredTask = Task { [weak self] in
-            let entries: [GitStatusEntry]
+            let entries: [String]
             do {
-                entries = try await repo.status(includingIgnored: true)
+                entries = try await repo.ignoredPaths()
             } catch {
                 return
             }
-            guard let self, !Task.isCancelled, self.refreshEpoch == epoch, self.rootURL == root else { return }
+            guard let self, !Task.isCancelled, self.mutationEpoch == mutation, self.rootURL == root else { return }
             self.mergeIgnored(entries, toplevel: repo.root.standardizedFileURL.path)
         }
     }
 
     /// Replaces the ignored paths without touching the staged and unstaged rows from the hot
     /// snapshot: paths no longer ignored are dropped, new ones added.
-    private func mergeIgnored(_ entries: [GitStatusEntry], toplevel: String) {
+    private func mergeIgnored(_ entries: [String], toplevel: String) {
         var fresh: Set<String> = []
-        for entry in entries where entry.isIgnored {
-            var relative = entry.path
+        for path in entries {
+            var relative = path
             if relative.hasSuffix("/") { relative.removeLast() }
             fresh.insert((toplevel as NSString).appendingPathComponent(relative))
         }
@@ -704,9 +745,18 @@ final class IDEGitStatusModel {
 
     /// Unstages every absolute path that has a staged side, as one command.
     func unstage(paths: [String]) {
-        let relative = relativePaths(paths, keeping: { $0.staged != nil && $0.staged != .conflicted })
+        var relative = relativePaths(paths, keeping: { $0.staged != nil && $0.staged != .conflicted })
         guard !relative.isEmpty else { return }
-        runGitAction({ try await $0.unstage(paths: relative); return "" }, activity: "Unstaging…")
+        // A staged rename is a deletion of the old path plus an addition of the new one: unstaging
+        // only the new path would leave the old one's deletion staged.
+        let byPath = Dictionary(changes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        for path in paths {
+            guard let change = byPath[path], change.indexCode == "R", let original = change.originalPath,
+                  !original.isEmpty, !relative.contains(original) else { continue }
+            relative.append(original)
+        }
+        let toUnstage = relative
+        runGitAction({ try await $0.unstage(paths: toUnstage); return "" }, activity: "Unstaging…")
     }
 
     func stageAll() {
@@ -762,18 +812,51 @@ final class IDEGitStatusModel {
     ) {
         let requested = paths.compactMap { path in relativePath(for: path).map { (path, $0) } }
         guard !requested.isEmpty else { return }
-        let absoluteByRelative = Dictionary(requested.map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        // A staged rename has no committed version under its new name: discarding it puts the old
+        // name back and takes the new one out of the index (the file stays, untracked).
+        let byPath = Dictionary(changes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        var renames: [GitRenameDiscard] = []
+        var plain: [(String, String)] = []
+        for item in requested {
+            if let change = byPath[item.0], change.indexCode == "R" || change.indexCode == "C",
+               let original = change.originalPath, !original.isEmpty {
+                renames.append(GitRenameDiscard(newPath: item.1, oldPath: change.indexCode == "R" ? original : nil))
+            } else {
+                plain.append(item)
+            }
+        }
+        let root = repositoryRoot
+        var absoluteByRelative = Dictionary(plain.map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        for rename in renames {
+            if let old = rename.oldPath, let root { absoluteByRelative[old] = (root as NSString).appendingPathComponent(old) }
+        }
         let outcome = RevertOutcome()
+        let plainPaths = plain, renameList = renames, absolutePaths = absoluteByRelative
         runGitAction({ repo in
-            let result = try await repo.revert(paths: requested.map(\.1))
-            outcome.set(Set(result.reverted.compactMap { absoluteByRelative[$0] }))
-            if result.reverted.isEmpty {
-                let what = result.skipped.count == 1 ? "\(result.skipped[0]) is not" : "None of the \(result.skipped.count) files are"
+            var revertedPaths: [String] = []
+            var skippedPaths: [String] = []
+            if !plainPaths.isEmpty {
+                let result = try await repo.revert(paths: plainPaths.map(\.1))
+                revertedPaths += result.reverted
+                skippedPaths += result.skipped
+            }
+            if !renameList.isEmpty {
+                try await repo.discardStagedRenames(renameList)
+                revertedPaths += renameList.compactMap(\.oldPath)
+            }
+            outcome.set(Set(revertedPaths.compactMap { absolutePaths[$0] }))
+            if revertedPaths.isEmpty && renameList.isEmpty {
+                let what = skippedPaths.count == 1 ? "\(skippedPaths[0]) is not" : "None of the \(skippedPaths.count) files are"
                 throw GitError.failed(status: 1, stderr: "\(what) in the last commit, so there is nothing to revert to.", stdout: Data())
             }
-            var line = result.reverted.count == 1 ? "Reverted \(result.reverted[0])" : "Reverted \(result.reverted.count) files"
-            if !result.skipped.isEmpty {
-                line += "; skipped \(result.skipped.count) not in the last commit"
+            let count = revertedPaths.count + renameList.filter { $0.oldPath == nil }.count
+            var line = count == 1 && revertedPaths.count == 1 ? "Reverted \(revertedPaths[0])" : (count == 1 ? "Reverted 1 file" : "Reverted \(count) files")
+            if !renameList.isEmpty {
+                let kept = renameList.map(\.newPath)
+                line += kept.count == 1 ? "; \(kept[0]) is kept as an untracked file" : "; \(kept.count) renamed files are kept as untracked files"
+            }
+            if !skippedPaths.isEmpty {
+                line += "; skipped \(skippedPaths.count) not in the last commit"
             }
             return line
         }, activity: "Discarding…", onSuccess: { then?(outcome.value) }, onFailure: onFailure)
@@ -890,7 +973,7 @@ final class IDEGitStatusModel {
         case .workingTree(let path):
             return await Task.detached(priority: .userInitiated) {
                 guard let data = FileManager.default.contents(atPath: path) else { return IDEDiffContent.text("") }
-                return Self.diffContent(of: data)
+                return Self.diffContent(of: data, flagsLossyText: true)
             }.value
         case .revision(let revision, let path):
             guard let rootURL else { return .failed("This folder is not a git repository.") }
@@ -914,6 +997,7 @@ final class IDEGitStatusModel {
         do {
             let repo = try await IDEGitSupport.repository(for: rootURL, existing: repository, runner: gitRunner)
             let gitDirectory = repo.gitDirectory
+            guard await confirmTrusted(repo) else { return Self.untrustedMessage }
             try await GitMutationLane.shared.perform(gitDirectory: gitDirectory) {
                 await self.invalidateForMutation()
                 try Task.checkCancellation()
@@ -949,9 +1033,12 @@ final class IDEGitStatusModel {
     }
 
     /// Text, unless a NUL in the first 8 KB says it is binary (git's own test).
-    nonisolated static func diffContent(of data: Data) -> IDEDiffContent {
+    nonisolated static func diffContent(of data: Data, flagsLossyText: Bool = false) -> IDEDiffContent {
         if data.prefix(8_000).contains(0) { return .binary }
-        return .text(String(decoding: data, as: UTF8.self))
+        if let text = String(data: data, encoding: .utf8) { return .text(text) }
+        let lossy = String(decoding: data, as: UTF8.self)
+        // Only the working tree can be written back, so only it needs to say the text is not exact.
+        return flagsLossyText ? .lossyText(lossy) : .text(lossy)
     }
 
     /// Runs `action` against the repository off the main actor and reports its one-line outcome.
@@ -989,6 +1076,7 @@ final class IDEGitStatusModel {
             guard let self else { return }
             defer {
                 self.mutationTasks[taskID] = nil
+                self.networkTasks[taskID] = nil
                 self.busyCount -= 1
                 self.isBusy = self.busyCount > 0
                 if network {
@@ -1003,10 +1091,26 @@ final class IDEGitStatusModel {
                 if let environment { configured = configured.withNetwork(environment) }
                 if let progress { configured = configured.withProgress(progress) }
                 let operation = configured
-                let reported = try await GitMutationLane.shared.perform(gitDirectory: repo.gitDirectory) {
-                    await self.invalidateForMutation()
+                guard await self.confirmTrusted(repo) else { throw GitError.invalidRequest(Self.untrustedMessage) }
+                let reported: String
+                if network {
+                    // No lane: a stalled remote must not hold Stage and Commit. The task is the
+                    // handle `cancelNetworkActions()` cancels; cancelling it ends the git process.
+                    await self.invalidateForMutation(ifRoot: rootURL)
                     try Task.checkCancellation()
-                    return try await action(operation)
+                    reported = try await action(operation)
+                } else {
+                    // The lane's body runs in a task of its own: closing the window (`setRoot`)
+                    // cancels this one, and a commit or rebase that is already running must finish
+                    // rather than be killed with its index half written. Only what follows
+                    // (callbacks, refresh) is skipped for a window that moved on.
+                    let lane = Task.detached { [gitDirectory = repo.gitDirectory] () -> String in
+                        try await GitMutationLane.shared.perform(gitDirectory: gitDirectory) {
+                            await self.invalidateForMutation(ifRoot: rootURL)
+                            return try await action(operation)
+                        }
+                    }
+                    reported = try await lane.value
                 }
                 guard !Task.isCancelled else { return }
                 self.repository = repo
@@ -1022,9 +1126,13 @@ final class IDEGitStatusModel {
                 onSuccess?()
                 self.refresh()
             } catch is CancellationError {
+                self.noteNetworkCancelled(network: network, activity: activityCaption, root: rootURL)
                 return
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else {
+                    self.noteNetworkCancelled(network: network, activity: activityCaption, root: rootURL)
+                    return
+                }
                 // A rebase or merge that stopped on a conflict moved refs and left state behind.
                 self.noteRefsChanged()
                 self.refresh()
@@ -1035,6 +1143,74 @@ final class IDEGitStatusModel {
             }
         }
         mutationTasks[taskID] = task
+        if network { networkTasks[taskID] = task }
+    }
+
+    /// Stops the fetch, update or push that is running (Cancel in the Changes tab). The git process
+    /// gets SIGTERM; a local action in progress is not touched.
+    func cancelNetworkActions() {
+        for task in networkTasks.values { task.cancel() }
+    }
+
+    /// A cancelled network action is neither a success nor a failure: say so once, if this window
+    /// is still on the project it started in.
+    private func noteNetworkCancelled(network: Bool, activity: String?, root: URL) {
+        guard network, rootURL == root else { return }
+        refresh()
+        actionStatus = "Cancelled"
+        actionFailed = false
+    }
+
+    /// Starts a mutation: an in-flight status from before it must not apply. Skipped when the
+    /// window has moved to another project (a commit that outlived its window).
+    func invalidateForMutation(ifRoot root: URL) {
+        guard rootURL == root else { return }
+        invalidateForMutation()
+    }
+
+    static let untrustedMessage = "Not done: this repository was not trusted to run its hooks and configured programs."
+
+    /// True when `repo` may be changed: it names no program to run, or the user trusted it (now, or
+    /// before). Staging runs clean filters and committing runs hooks, so a repository that came from
+    /// elsewhere gets one question first, listing what would run. Reading never needs the answer.
+    func confirmTrusted(_ repo: GitRepository) async -> Bool {
+        let root = repo.root
+        if gitTrust.isTrusted(root) { return true }
+        if let pending = trustPrompt { return await pending.value }
+        let exposure = await repo.executableExposure()
+        if exposure.isEmpty { return true }
+        if let pending = trustPrompt { return await pending.value }
+        let store = gitTrust
+        let task = Task { @MainActor [weak self] () -> Bool in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                let answer = TrustAnswer(continuation)
+                guard let self else { return answer.resolve(false) }
+                self.sheets.present(.confirm(IDEGitConfirmation(
+                    title: "Trust This Repository?",
+                    message: Self.trustMessage(exposure),
+                    confirmTitle: "Trust and Continue",
+                    action: {
+                        store.setTrusted(true, for: root)
+                        answer.resolve(true)
+                    },
+                    onCancel: { answer.resolve(false) }
+                )))
+            }
+        }
+        trustPrompt = task
+        let result = await task.value
+        trustPrompt = nil
+        return result
+    }
+
+    static func trustMessage(_ exposure: [GitExecutableExposure]) -> String {
+        let shown = exposure.prefix(8).map { item in
+            item.kind == .hook ? "• hook \(item.name)" : "• \(item.name)"
+        }
+        let more = exposure.count > 8 ? ["• and \(exposure.count - 8) more"] : []
+        return "Staging, committing, switching branches and syncing in this repository run programs that its "
+            + "own files name:\n\n" + (shown + more).joined(separator: "\n")
+            + "\n\nContinue only if you trust where this repository came from."
     }
 
     /// What a successful commit leaves behind in the panel.
@@ -1073,6 +1249,8 @@ final class IDEGitStatusModel {
         var dirtyDirectories: Set<String> = []
         var repositoryRoot: String?
         var currentBranch: String?
+        /// The commit HEAD names; nil on an unborn branch.
+        var headCommit: String?
         var localBranches: [String] = []
         var branchInfos: [GitBranch] = []
         var changes: [IDEGitChange] = []
@@ -1142,14 +1320,20 @@ final class IDEGitStatusModel {
             return .failed(IDEGitSupport.describe(error))
         }
         if Task.isCancelled { return .cancelled }
-        let branch = await repo.currentBranch()
+        // The branch name is in .git/HEAD (an unborn branch has a name and no commit); only a
+        // detached or unusual HEAD needs git to spell it. One rev-parse gives the commit.
+        let state = repo.state()
+        let branch: String?
+        if case .branch(let name) = state.head { branch = name } else { branch = await repo.currentBranch() }
+        let headCommit = await repo.headCommit()
         var snapshot = parse(entries: entries, toplevel: repo.root.standardizedFileURL.path, branch: branch)
+        snapshot.headCommit = headCommit
         let infos = (try? await repo.branchList()) ?? []
         snapshot.branchInfos = infos
         snapshot.localBranches = infos
             .compactMap { $0.kind == .local ? $0.name : nil }
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        snapshot.state = repo.state()
+        snapshot.state = state
         return .loaded(repo, snapshot, entries, snapshot.state, infos)
     }
 
@@ -1227,7 +1411,7 @@ final class IDEGitStatusModel {
         for entry in entries {
             var relative = entry.path
             if relative.hasSuffix("/") { relative.removeLast() }
-            let path = (toplevel as NSString).appendingPathComponent(relative)
+            let path = Self.join(toplevel, relative)
             if entry.isIgnored {
                 snapshot.statuses[path] = .ignored
                 continue
@@ -1239,7 +1423,7 @@ final class IDEGitStatusModel {
             if let combined {
                 snapshot.statuses[path] = combined
                 if combined != .ignored {
-                    markDirty(path: path, toplevel: toplevel, snapshot: &snapshot)
+                    markDirty(relative: relative, toplevel: toplevel, snapshot: &snapshot)
                     if staged != nil || unstaged != nil {
                         changeMap[path] = IDEGitChange(
                             path: path,
@@ -1267,16 +1451,20 @@ final class IDEGitStatusModel {
         return index
     }
 
+    /// The index column (X) of a porcelain pair. `?` and `!` never reach here as a staged side: an
+    /// untracked or ignored file has nothing in the index.
     nonisolated private static func statusFromIndexChar(_ char: Character) -> IDEGitFileStatus? {
         switch char {
-        case " ": return nil
+        case " ", "?", "!": return nil
         case "A": return .added
         case "U": return .conflicted
-        case "M", "D", "R", "C": return .modified
+        case "M", "D", "R", "C", "T": return .modified
+        // A letter a newer git adds: show it as a change rather than hide it.
         default: return .modified
         }
     }
 
+    /// The work-tree column (Y) of a porcelain pair.
     nonisolated private static func statusFromWorkTreeChar(_ char: Character) -> IDEGitFileStatus? {
         switch char {
         case " ": return nil
@@ -1284,7 +1472,7 @@ final class IDEGitStatusModel {
         case "!": return .ignored
         case "A": return .added
         case "U": return .conflicted
-        case "M", "D", "R", "C": return .modified
+        case "M", "D", "R", "C", "T": return .modified
         default: return .modified
         }
     }
@@ -1298,11 +1486,20 @@ final class IDEGitStatusModel {
         return nil
     }
 
-    nonisolated private static func markDirty(path: String, toplevel: String, snapshot: inout GitSnapshot) {
-        var ancestor = (path as NSString).deletingLastPathComponent
-        while ancestor.count > toplevel.count, ancestor.hasPrefix(toplevel) {
-            snapshot.dirtyDirectories.insert(ancestor)
-            ancestor = (ancestor as NSString).deletingLastPathComponent
+    /// `toplevel/relative`, without the bridging `NSString.appendingPathComponent` costs per entry.
+    nonisolated private static func join(_ toplevel: String, _ relative: String) -> String {
+        toplevel.hasSuffix("/") ? toplevel + relative : toplevel + "/" + relative
+    }
+
+    /// Marks every folder above `relative` (and the repository root) as holding a change. It walks
+    /// up from the deepest folder and stops at one that is already marked: its own ancestors were
+    /// marked when it was, so a folder with a hundred changed files is visited once, not a hundred times.
+    nonisolated private static func markDirty(relative: String, toplevel: String, snapshot: inout GitSnapshot) {
+        var end = relative.endIndex
+        while let slash = relative[..<end].lastIndex(of: "/") {
+            let folder = join(toplevel, String(relative[..<slash]))
+            if !snapshot.dirtyDirectories.insert(folder).inserted { break }
+            end = slash
         }
         snapshot.dirtyDirectories.insert(toplevel)
     }

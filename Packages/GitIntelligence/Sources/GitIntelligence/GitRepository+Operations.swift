@@ -122,7 +122,7 @@ extension GitRepository {
 
     /// The paths with unresolved conflicts, relative to the root.
     public func conflictedFiles() async throws -> [String] {
-        let out = try await readOnly(["diff", "--name-only", "--diff-filter=U", "-z"])
+        let out = try await readOnly(["diff", "--no-ext-diff", "--no-textconv", "--name-only", "--diff-filter=U", "-z"])
         return out.text.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
     }
 

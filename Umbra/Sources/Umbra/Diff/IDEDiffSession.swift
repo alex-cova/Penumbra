@@ -51,6 +51,9 @@ struct IDEDiffSettings: Equatable {
 /// One side as loaded.
 enum IDEDiffContent: Sendable, Equatable {
     case text(String)
+    /// Text that was not valid UTF-8, decoded with replacement characters. Fine to show, never
+    /// to write back: saving it would rewrite the file's bytes.
+    case lossyText(String)
     /// Not text (a NUL in its first bytes): there is nothing to compare line by line.
     case binary
     case failed(String)
@@ -173,6 +176,12 @@ final class IDEDiffSession {
         if chunks.isEmpty { state = .loading }
         loadTask = Task { [weak self] in
             guard let self, let loadContent = self.loadContent else { return }
+            // The index blob id is read before the texts: if the index moves while they load, the id
+            // is the older one, so a hunk built from the newer text is refused instead of applied.
+            var baseBlobID: String?
+            if let path = request.repositoryRelativePath, request.indexAction != nil {
+                baseBlobID = await self.indexBlobID?(path)
+            }
             async let leftContent = loadContent(request.left.source)
             async let rightContent = loadContent(request.right.source)
             let (leftLoaded, rightLoaded) = await (leftContent, rightContent)
@@ -186,9 +195,13 @@ final class IDEDiffSession {
                 self.state = .binary
                 self.chunks = []
                 self.onTextsLoaded?()
-            case (.text(let leftText), .text(let rightText)):
+            case (.text(let leftText), .text(let rightText)), (.lossyText(let leftText), .text(let rightText)),
+                 (.text(let leftText), .lossyText(let rightText)), (.lossyText(let leftText), .lossyText(let rightText)):
                 if request.workingTreePath != nil { self.loadedWorkingTreeText = rightText }
-                let readOnlyReason = request.workingTreePath.flatMap { self.readOnlyReasonProvider?($0) }
+                var readOnlyReason = request.workingTreePath.flatMap { self.readOnlyReasonProvider?($0) }
+                if readOnlyReason == nil, request.workingTreePath != nil, case .lossyText = rightLoaded {
+                    readOnlyReason = Self.notUTF8Reason
+                }
                 if self.state == .ready, leftText == self.left.string, rightText == self.right.string {
                     // Nothing moved (a refresh after an unrelated change): keep the views as they are.
                     if readOnlyReason != self.readOnlyReason {
@@ -197,11 +210,7 @@ final class IDEDiffSession {
                     }
                     return
                 }
-                if let path = request.repositoryRelativePath, request.indexAction != nil {
-                    self.hunkBaseBlobID = await self.indexBlobID?(path)
-                } else {
-                    self.hunkBaseBlobID = nil
-                }
+                self.hunkBaseBlobID = baseBlobID
                 self.left = IDEDiffText(leftText)
                 self.right = IDEDiffText(rightText)
                 self.isRightDirty = false
@@ -279,9 +288,14 @@ final class IDEDiffSession {
         reload()
     }
 
+    /// A `\r` that is not the first half of `\r\n`.
+    private static let bareCarriageReturn = /\r(?!\n)/
+
+    static let notUTF8Reason = "This file is not UTF-8; edit it in the editor tab"
+
     // MARK: Hunks
 
-    /// Stages (or, for HEAD ↔ index, unstages) one chunk through `git apply --cached`.
+    /// Stages (or, for HEAD ↔ index, unstages) one chunk: git swaps those lines in the index blob the diff was read from.
     func applyToIndex(chunkAt index: Int) {
         guard let action = request.indexAction, chunks.indices.contains(index),
               let path = request.repositoryRelativePath, let applyIndexPatch else { return }
@@ -293,8 +307,13 @@ final class IDEDiffSession {
             message = "This change renames or copies the file. Stage or unstage the whole file."
             return
         }
-        guard IDEDiffPatchBuilder.headerPath(path) != nil else {
-            message = "This file name cannot be staged as a hunk. Stage the whole file instead."
+        if readOnlyReason == Self.notUTF8Reason {
+            message = "This file is not UTF-8. Stage the whole file instead."
+            return
+        }
+        // Umbra ends a line at a bare CR; git does not, so the hunk's line numbers would not be git's.
+        if left.string.contains(Self.bareCarriageReturn) || right.string.contains(Self.bareCarriageReturn) {
+            message = "This file contains a lone carriage return, which git does not count as a line break. Stage the whole file instead."
             return
         }
         guard let patch = IDEDiffPatchBuilder.patch(for: chunks[index], left: left, right: right, path: path) else {
@@ -318,12 +337,16 @@ final class IDEDiffSession {
     func save() {
         guard isRightDirty, let path = request.workingTreePath, let text = currentRightText?() else { return }
         let url = URL(fileURLWithPath: path)
-        // A missing or undecodable file is not a conflict: there is nothing readable to lose.
-        if let loaded = loadedWorkingTreeText,
-           let data = try? Data(contentsOf: url), let disk = String(data: data, encoding: .utf8),
-           disk != loaded, !(confirmOverwrite?(path) ?? true) {
-            message = "Not saved: \((path as NSString).lastPathComponent) changed on disk."
-            return
+        if let data = try? Data(contentsOf: url) {
+            // Writing UTF-8 over bytes that are not would change every character outside ASCII.
+            guard let disk = String(data: data, encoding: .utf8) else {
+                message = "Not saved: \((path as NSString).lastPathComponent) is not UTF-8. Edit it in the editor tab."
+                return
+            }
+            if let loaded = loadedWorkingTreeText, disk != loaded, !(confirmOverwrite?(path) ?? true) {
+                message = "Not saved: \((path as NSString).lastPathComponent) changed on disk."
+                return
+            }
         }
         do {
             try text.write(to: url, atomically: true, encoding: .utf8)

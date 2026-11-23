@@ -11,13 +11,13 @@ extension GitRepository {
     /// Runs a command that changes the repository, with network credentials when `network` is set.
     func mutate(
         _ args: [String], network usesNetwork: Bool = false, extraEnvironment: [String: String] = [:],
-        stdin: Data? = nil, onProgress: GitProgressHandler? = nil
+        stdin: Data? = nil, onProgress: GitProgressHandler? = nil, timeout: Duration? = nil
     ) async throws -> GitOutput {
         var environment = usesNetwork ? await networkEnvironment() : [:]
         environment.merge(extraEnvironment) { _, new in new }
         return try await runner.run(
             args, in: root, stdin: stdin, environment: environment.isEmpty ? nil : environment,
-            onProgress: onProgress ?? progress
+            onProgress: onProgress ?? progress, timeout: timeout
         )
     }
 
@@ -29,7 +29,9 @@ extension GitRepository {
     /// `fetch` of one remote, or of all of them when `remote` is nil. `prune` drops remote-tracking
     /// branches that no longer exist on the remote.
     @discardableResult
-    public func fetch(remote: String? = nil, prune: Bool = true, onProgress: GitProgressHandler? = nil) async throws -> String {
+    public func fetch(
+        remote: String? = nil, prune: Bool = true, onProgress: GitProgressHandler? = nil, timeout: Duration? = nil
+    ) async throws -> String {
         var args = ["fetch", "--progress"]
         if prune { args.append("--prune") }
         if let remote {
@@ -38,7 +40,7 @@ extension GitRepository {
         } else {
             args.append("--all")
         }
-        return report(try await mutate(args, network: true, onProgress: onProgress))
+        return report(try await mutate(args, network: true, onProgress: onProgress, timeout: timeout))
     }
 
     /// Updates the current branch from its upstream. `autostash` saves and restores uncommitted

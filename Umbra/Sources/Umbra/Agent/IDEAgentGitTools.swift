@@ -9,6 +9,10 @@ struct IDEAgentGitSource: Sendable {
     var secretPatterns: [GlobPattern] = []
     var unsavedBuffers: @Sendable () async -> [String: String] = { [:] }
     var runner: any GitRunning = SystemGitRunner()
+    /// Asked before the agent changes the repository (a commit runs its hooks, a branch switch
+    /// runs checkout hooks and filters). The window answers with its trust gate; "approved" on the
+    /// agent's card is not "trusted". Allows by default, for a source built without a window.
+    var confirmTrust: @Sendable (GitRepository) async -> Bool = { _ in true }
 
     struct Change: Sendable {
         var entry: GitStatusEntry
@@ -178,6 +182,7 @@ struct IDEGitLogTool: AgentTool {
 }
 
 struct IDEGitCommitTool: AgentTool {
+    static let untrusted = "Not done: this repository was not trusted to run its hooks and configured programs. The user can trust it from the Changes tab."
     let source: IDEAgentGitSource
 
     var risk: ToolRisk { .command }
@@ -245,6 +250,7 @@ struct IDEGitCommitTool: AgentTool {
         }
         do {
             let repository = snapshot.repository
+            guard await source.confirmTrust(repository) else { throw ToolError(Self.untrusted) }
             let output = try await GitMutationLane.shared.perform(gitDirectory: repository.gitDirectory) {
                 try await repository.commitFiles(
                     message: message, paths: repoPaths, untrackedPaths: untracked, signoff: signoff)
@@ -298,6 +304,7 @@ struct IDEGitBranchTool: AgentTool {
         do { snapshot = try await source.snapshot() } catch { throw ToolError(error.localizedDescription) }
         do {
             let repository = snapshot.repository
+            guard await source.confirmTrust(repository) else { throw ToolError(IDEGitCommitTool.untrusted) }
             let output = try await GitMutationLane.shared.perform(gitDirectory: repository.gitDirectory) {
                 action == "create"
                     ? try await repository.createBranch(name)

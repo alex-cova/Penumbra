@@ -2,6 +2,7 @@ import AgentKit
 import AppKit
 import EditorIntelligence
 import Foundation
+import GitIntelligence
 
 extension IDEWorkspace: IDEAgentHost {
     /// The open project, else (in AI mode only) a scratch folder, so Code can answer without one. The
@@ -375,6 +376,12 @@ extension IDEWorkspace: IDEAgentHost {
     /// One question for all the servers a project's files list, naming each command line or URL,
     /// because what runs is the program with this user's permissions, and what is contacted gets
     /// the project's headers.
+    func agentConfirmGitTrust(_ repository: GitRepository) async -> Bool {
+        await gitStatus.confirmTrusted(repository)
+    }
+
+    func agentGitRunner() -> any GitRunning { gitStatus.gitRunner }
+
     func agentConfirmMCPServers(_ servers: [MCPServerConfig]) async -> Set<String> {
         guard !servers.isEmpty else { return [] }
         let listing = servers.prefix(8).map { server -> String in

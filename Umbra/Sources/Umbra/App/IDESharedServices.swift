@@ -29,6 +29,9 @@ final class IDESharedServices {
     /// Which folders the user trusted to run `xcodebuild` (build phases can run scripts). Its own file.
     let xcodeTrust: ProjectTrustStore
     let dockerTrust: ProjectTrustStore
+    /// Which repositories the user trusted to run their own hooks and config-named programs (clean
+    /// filters, credential helpers…) when Umbra stages, commits or syncs. Its own file.
+    let gitTrust: ProjectTrustStore
     let jdkSelection: JDKSelectionStore
     /// The run configurations kept on this Mac and the ones a project shares in `.umbra/runConfigurations`.
     let runConfigurations: JavaRunConfigurationCatalog
@@ -52,6 +55,8 @@ final class IDESharedServices {
         xcodeTrust = ProjectTrustStore(storeURL: store(IDEXcodeProjectSystem.defaultTrustStoreURL))
         dockerTrust = ProjectTrustStore(storeURL: store(IDEGradleProjectSystem.defaultTrustStoreURL
             .deletingLastPathComponent().appendingPathComponent("docker-trust.json")))
+        gitTrust = ProjectTrustStore(storeURL: store(IDEGradleProjectSystem.defaultTrustStoreURL
+            .deletingLastPathComponent().appendingPathComponent("git-trust.json")))
         jdkSelection = JDKSelectionStore(storeURL: store(IDEJDKSelection.defaultStoreURL))
         runConfigurations = JavaRunConfigurationCatalog(
             store: JavaRunConfigurationStore(storeURL: store(IDEWorkspace.defaultRunConfigurationsURL))

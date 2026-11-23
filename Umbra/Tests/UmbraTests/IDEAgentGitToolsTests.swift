@@ -138,6 +138,34 @@ final class IDEAgentGitToolsTests: XCTestCase {
         XCTAssertTrue(card?.command.contains("A.txt") ?? false && (card?.command.contains("B.txt") ?? false))
     }
 
+    // MARK: - trust (the agent's commits and branch switches pass the same gate as the buttons)
+
+    func testACommitIsRefusedWhenTheRepositoryIsNotTrusted() async throws {
+        try commitBase()
+        try write("A.txt", "one\nchanged\n")
+        var untrusting = source()
+        untrusting.confirmTrust = { _ in false }
+        let refused = await run(IDEGitCommitTool(source: untrusting), #"{"message":"nope","paths":["A.txt"]}"#)
+        XCTAssertTrue(refused.isError, refused.text)
+        XCTAssertTrue(refused.text.contains("trusted"), refused.text)
+        let log = try git("log", "--format=%s")
+        XCTAssertFalse(log.contains("nope"), "nothing may be committed")
+
+        var trusting = source()
+        trusting.confirmTrust = { _ in true }
+        let allowed = await run(IDEGitCommitTool(source: trusting), #"{"message":"yes","paths":["A.txt"]}"#)
+        XCTAssertFalse(allowed.isError, allowed.text)
+    }
+
+    func testABranchSwitchIsRefusedWhenTheRepositoryIsNotTrusted() async throws {
+        try commitBase()
+        var untrusting = source()
+        untrusting.confirmTrust = { _ in false }
+        let refused = await run(IDEGitBranchTool(source: untrusting), #"{"action":"create","name":"feature"}"#)
+        XCTAssertTrue(refused.isError && refused.text.contains("trusted"), refused.text)
+        XCTAssertEqual(try git("branch", "--show-current").trimmingCharacters(in: .whitespacesAndNewlines), "main")
+    }
+
     // MARK: - git_branch
 
     func testBranchCreateAndSwitch() async throws {

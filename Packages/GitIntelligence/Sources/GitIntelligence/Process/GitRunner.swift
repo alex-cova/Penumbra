@@ -6,6 +6,11 @@ public struct GitOutput: Sendable {
     public let stderr: String
 
     public var text: String { String(decoding: stdout, as: UTF8.self) }
+
+    public init(stdout: Data, stderr: String) {
+        self.stdout = stdout
+        self.stderr = stderr
+    }
 }
 
 public enum GitError: Error, Sendable, LocalizedError {
@@ -13,6 +18,8 @@ public enum GitError: Error, Sendable, LocalizedError {
     case failed(status: Int32, stderr: String, stdout: Data)
     case notARepository
     case invalidBranchName
+    /// A command that was given a time limit ran past it and was stopped.
+    case timedOut(Duration)
     /// A request the caller built wrongly (an empty name, a plan that starts with a squash…).
     case invalidRequest(String)
 
@@ -21,6 +28,7 @@ public enum GitError: Error, Sendable, LocalizedError {
         case .gitNotFound: return "git was not found at /usr/bin/git."
         case .notARepository: return "This folder is not a git repository."
         case .invalidBranchName: return "Enter a valid branch name."
+        case .timedOut(let limit): return "git took longer than \(limit.formatted(.units(allowed: [.minutes, .seconds], width: .wide))) and was stopped."
         case .invalidRequest(let message): return message
         case .failed(let status, let stderr, let stdout):
             var message = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -41,6 +49,29 @@ public protocol GitRunning: Sendable {
 }
 
 public extension GitRunning {
+    /// Runs the command and stops it (the task is cancelled, which ends the child process) when it
+    /// has not finished after `timeout`. A nil `timeout` is no limit. Works for any runner.
+    func run(
+        _ arguments: [String], in directory: URL, stdin: Data?, environment: [String: String]?,
+        onProgress: GitProgressHandler?, timeout: Duration?
+    ) async throws -> GitOutput {
+        guard let timeout else {
+            return try await run(arguments, in: directory, stdin: stdin, environment: environment, onProgress: onProgress)
+        }
+        return try await withThrowingTaskGroup(of: GitOutput.self) { group in
+            group.addTask {
+                try await self.run(arguments, in: directory, stdin: stdin, environment: environment, onProgress: onProgress)
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw GitError.timedOut(timeout)
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else { throw CancellationError() }
+            return first
+        }
+    }
+
     func run(_ arguments: [String], in directory: URL, stdin: Data?, environment: [String: String]?) async throws -> GitOutput {
         try await run(arguments, in: directory, stdin: stdin, environment: environment, onProgress: nil)
     }
@@ -56,6 +87,11 @@ public extension GitRunning {
 public struct SystemGitRunner: GitRunning {
     public static let executablePath = "/usr/bin/git"
 
+    /// Config every command runs with. `core.quotepath=off` keeps non-ASCII names readable.
+    /// `core.fsmonitor=false` stops a repository's own config from naming a program that `status`
+    /// and `ls-files` would run on every automatic refresh; the built-in daemon is not used either.
+    static let fixedConfiguration = ["-c", "core.quotepath=off", "-c", "core.fsmonitor=false"]
+
     private let observer: (any GitCommandObserving)?
 
     public init(observer: (any GitCommandObserving)? = nil) {
@@ -67,7 +103,7 @@ public struct SystemGitRunner: GitRunning {
         onProgress: GitProgressHandler?
     ) async throws -> GitOutput {
         guard FileManager.default.isExecutableFile(atPath: Self.executablePath) else { throw GitError.gitNotFound }
-        var request = SubprocessRequest(executable: Self.executablePath, arguments: ["-c", "core.quotepath=off"] + arguments)
+        var request = SubprocessRequest(executable: Self.executablePath, arguments: Self.fixedConfiguration + arguments)
         request.workingDirectory = directory
         if let environment {
             request.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
@@ -95,6 +131,26 @@ public struct SystemGitRunner: GitRunning {
             throw GitError.failed(status: result.exit.status, stderr: err, stdout: result.stdout.data)
         }
         return GitOutput(stdout: result.stdout.data, stderr: err)
+    }
+}
+
+/// Runs every command with extra `-c key=value` settings in front, so a host can switch off what a
+/// repository's config would make git run (see ``GitRepository/filterOverrides()``).
+public struct GitConfigOverridingRunner: GitRunning {
+    private let base: any GitRunning
+    private let prefix: [String]
+
+    /// `overrides` is a flat list of `-c`, `key=value` pairs.
+    public init(base: any GitRunning, overrides: [String]) {
+        self.base = base
+        self.prefix = overrides
+    }
+
+    public func run(
+        _ arguments: [String], in directory: URL, stdin: Data?, environment: [String: String]?,
+        onProgress: GitProgressHandler?
+    ) async throws -> GitOutput {
+        try await base.run(prefix + arguments, in: directory, stdin: stdin, environment: environment, onProgress: onProgress)
     }
 }
 

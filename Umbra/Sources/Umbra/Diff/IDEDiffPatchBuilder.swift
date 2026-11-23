@@ -1,7 +1,8 @@
 import Foundation
 
-/// Builds a one-hunk patch with no context lines, for `git apply --unidiff-zero` to stage or
-/// unstage a single change from the diff viewer.
+/// Builds a one-hunk patch with no context lines: the description of one change that
+/// `GitRepository.applyHunk` swaps into the index blob. It is also a valid `git apply --unidiff-zero`
+/// patch, which the tests check against real git.
 enum IDEDiffPatchBuilder {
     /// The patch turning `chunk`'s left lines into its right lines in `path` (relative to the
     /// repository root), or nil when the chunk is only the editor's empty last line (a final line
@@ -12,7 +13,8 @@ enum IDEDiffPatchBuilder {
         var leftRange = chunk.left.clamped(to: 0 ..< leftLines.count)
         var rightRange = chunk.right.clamped(to: 0 ..< rightLines.count)
         guard !leftRange.isEmpty || !rightRange.isEmpty else { return nil }
-        guard let quoted = headerPath(path) else { return nil }
+        let oldName = headerPath("a/" + path)
+        let newName = headerPath("b/" + path)
         // Adding after a last line that has no line break changes that line too (it gains one):
         // take it into the hunk on both sides.
         let appendsToUnterminatedLeft = leftRange.isEmpty && leftRange.lowerBound == leftLines.count
@@ -24,7 +26,7 @@ enum IDEDiffPatchBuilder {
             leftRange = leftRange.lowerBound - 1 ..< leftRange.upperBound
             rightRange = rightRange.lowerBound - 1 ..< rightRange.upperBound
         }
-        var patch = "diff --git a/\(quoted) b/\(quoted)\n--- a/\(quoted)\n+++ b/\(quoted)\n"
+        var patch = "diff --git \(oldName) \(newName)\n--- \(oldName)\n+++ \(newName)\n"
         patch += "@@ -\(header(leftRange)) +\(header(rightRange)) @@\n"
         for index in leftRange {
             patch += "-" + leftLines.line(index)
@@ -35,13 +37,30 @@ enum IDEDiffPatchBuilder {
         return patch
     }
 
-    /// A path git's diff header can carry. Spaces are quoted. A newline, quote, or backslash is rejected.
-    static func headerPath(_ path: String) -> String? {
-        if path.isEmpty || path.contains("\n") || path.contains("\r") || path.contains("\"") || path.contains("\\") {
-            return nil
+    /// A name as git writes it in a diff header (`a/dir/file`): C-quoted, prefix inside the quotes
+    /// (`"a/tab\\tname.txt"`), when it holds a quote, a backslash or a control character; plain
+    /// otherwise (a space needs no quotes).
+    static func headerPath(_ path: String) -> String {
+        guard path.unicodeScalars.contains(where: { $0 == "\"" || $0 == "\\" || $0.value < 0x20 || $0.value == 0x7F }) else {
+            return path
         }
-        if path.contains(" ") || path.contains("\t") { return "\"\(path)\"" }
-        return path
+        var quoted = ""
+        for scalar in path.unicodeScalars {
+            switch scalar {
+            case "\"": quoted += "\\\""
+            case "\\": quoted += "\\\\"
+            case "\t": quoted += "\\t"
+            case "\n": quoted += "\\n"
+            case "\r": quoted += "\\r"
+            default:
+                if scalar.value < 0x20 || scalar.value == 0x7F {
+                    quoted += "\\" + String(format: "%03o", scalar.value)
+                } else {
+                    quoted.unicodeScalars.append(scalar)
+                }
+            }
+        }
+        return "\"" + quoted + "\""
     }
 
     /// `start,count`, where an empty range names the line before it, as zero-context hunks do.

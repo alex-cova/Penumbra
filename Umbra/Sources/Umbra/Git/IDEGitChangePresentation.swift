@@ -145,6 +145,11 @@ struct IDEGitChangeSelection: Equatable, Sendable {
         if let newRoot, let current = repositoryRoot, current != newRoot {
             return IDEGitChangeSelection(repositoryRoot: newRoot)
         }
+        // Nothing selected: nothing to carry over, and a Set of every row (10,000 in a big change
+        // set) is the cost of finding that out.
+        guard primary != nil || !rows.isEmpty else {
+            return IDEGitChangeSelection(primary: nil, rows: [], repositoryRoot: newRoot ?? repositoryRoot)
+        }
         let present = Set(visible)
         var kept = Set<IDEGitListedChange>()
         for row in rows {
@@ -358,12 +363,17 @@ enum IDEGitDiscardPrompt {
         var confirm: String
     }
 
-    static func changes(revertable: [String], skipped: [String], unsavedEditors: Int) -> Confirmation {
+    static func changes(revertable: [String], skipped: [String], unsavedEditors: Int, keptAsUntracked: [String] = []) -> Confirmation {
         let names = nameList(revertable)
         var detail = "This discards every change to \(revertable.count == 1 ? names : "these files") since the last commit, staged or not. It cannot be undone.\n\n\(revertable.count == 1 ? "" : names)"
         if unsavedEditors > 0 {
             let verb = unsavedEditors == 1 ? "has" : "have"
             detail += "\n\n\(unsavedEditors) of them \(verb) unsaved edits in an open editor; those are discarded too."
+        }
+        if !keptAsUntracked.isEmpty {
+            let kept = keptAsUntracked.count == 1 ? keptAsUntracked[0] : nameList(keptAsUntracked, limit: 5)
+            detail += "\n\nThe original name is restored from the last commit. \(kept) stays on disk as an untracked file; delete it yourself if you do not want it."
+            if keptAsUntracked.count == 1 { detail = detail.replacingOccurrences(of: "\(kept) stays on disk as an untracked file; delete it yourself if you do not want it.", with: "\(kept) stays on disk as an untracked file.") }
         }
         if !skipped.isEmpty {
             detail += "\n\nNot discarded (not in the last commit): \(nameList(skipped, limit: 5))"

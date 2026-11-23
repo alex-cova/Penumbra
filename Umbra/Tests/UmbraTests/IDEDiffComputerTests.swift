@@ -165,15 +165,46 @@ final class IDEDiffPatchBuilderTests: XCTestCase {
         XCTAssertNil(patch("a", "a\n"))
     }
 
-    func testASpaceInThePathIsQuotedAndANewlineIsRejected() {
-        let left = IDEDiffText("1\n")
-        let right = IDEDiffText("2\n")
-        let chunks = IDEDiffComputer.chunks(left: left, right: right, whitespace: .none, highlight: .lines)
-        let quoted = IDEDiffPatchBuilder.patch(for: chunks[0], left: left, right: right, path: "my file.txt")
-        XCTAssertTrue(quoted?.contains("a/\"my file.txt\"") == true, quoted ?? "")
-        XCTAssertNil(IDEDiffPatchBuilder.headerPath("line\nbreak.txt"))
-        XCTAssertNil(IDEDiffPatchBuilder.patch(for: chunks[0], left: left, right: right, path: "line\nbreak.txt"))
-        XCTAssertEqual(IDEDiffPatchBuilder.headerPath("a.txt"), "a.txt")
+    /// G-08: git's own header quoting is `"a/tab\\tname.txt"` (prefix inside the quotes) and a space needs
+    /// none; and a hunk of such a file really reaches the index through `applyHunk`.
+    @MainActor
+    func testAHunkOfAFileWithASpaceOrATabInItsNameStagesThroughTheModel() async throws {
+        XCTAssertEqual(IDEDiffPatchBuilder.headerPath("a/my file.txt"), "a/my file.txt")
+        XCTAssertEqual(IDEDiffPatchBuilder.headerPath("a/tab\tname.txt"), "\"a/tab\\tname.txt\"")
+        XCTAssertEqual(IDEDiffPatchBuilder.headerPath("a/we\"ird\\.txt"), "\"a/we\\\"ird\\\\.txt\"")
+
+        let runner = SystemGitRunner()
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath), "git is not installed at \(SystemGitRunner.executablePath)")
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diff-names-\(UUID().uuidString)").resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [["init", "-q", "-b", "main"], ["config", "user.name", "T"], ["config", "user.email", "t@e.com"],
+                     ["config", "commit.gpgsign", "false"], ["config", "core.autocrlf", "false"]] {
+            _ = try await runner.run(args, in: directory)
+        }
+        let names = ["my file.txt", "tab\tname.txt"]
+        for name in names {
+            try "1\n2\n3\n".write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
+            _ = try await runner.run(["add", "--", name], in: directory)
+        }
+        _ = try await runner.run(["commit", "-qm", "base"], in: directory)
+        let model = IDEGitStatusModel()
+        model.setRoot(directory)
+        let deadline = Date().addingTimeInterval(10)
+        while model.workspaceSnapshot == nil, Date() < deadline { try await Task.sleep(nanoseconds: 30_000_000) }
+
+        for name in names {
+            let left = IDEDiffText("1\n2\n3\n")
+            let right = IDEDiffText("1\nTWO\n3\n")
+            let chunks = IDEDiffComputer.chunks(left: left, right: right, whitespace: .none, highlight: .lines)
+            let patch = try XCTUnwrap(IDEDiffPatchBuilder.patch(for: chunks[0], left: left, right: right, path: name))
+            let blob = await model.indexBlobID(relativePath: name)
+            let failure = await model.applyHunk(GitHunkApply(relativePath: name, baseBlobID: blob, patch: patch, reverse: false))
+            XCTAssertNil(failure, "\(name.debugDescription): \(failure ?? "")")
+            let cached = try await runner.run(["diff", "--cached", "--no-color", "--", name], in: directory).text
+            XCTAssertTrue(cached.contains("-2\n+TWO"), "\(name.debugDescription) was not staged:\n\(cached)")
+        }
     }
 
     func testCRLFLinesKeepTheirLineBreaks() {

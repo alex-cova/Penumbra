@@ -2372,7 +2372,8 @@ public final class IDEWorkspace {
         let prompt = IDEGitDiscardPrompt.changes(
             revertable: revertable.map(\.relativePath),
             skipped: skipped.map(\.relativePath),
-            unsavedEditors: unsaved
+            unsavedEditors: unsaved,
+            keptAsUntracked: revertable.filter { $0.indexCode == "R" || $0.indexCode == "C" }.map(\.relativePath)
         )
         var alert = IDEAlert.confirm(prompt.title, detail: prompt.detail, confirm: prompt.confirm, isDestructive: true)
         guard alert.confirms() else { return }
@@ -5107,9 +5108,15 @@ public final class IDEWorkspace {
         }]
     }
 
-    private func applyProjectRoot(_ url: URL?) {
-        // One held access per window, released when the project changes or the window closes.
-        projectAccess.begin(url)
+    private func applyProjectRoot(_ requested: URL?) {
+        // Git reports paths under the work tree's resolved spelling, so a project opened through a
+        // symlink (`~/work` → `/Volumes/Data/work`) has the real folder as its root: every lookup
+        // the Explorer, the gutter and the Changes list make then agrees with git's paths. Recents,
+        // the window title and the saved session show that folder. The same rule as the open router's.
+        let url = requested.map { URL(fileURLWithPath: IDEOpenRouter.normalizedPath($0), isDirectory: true) }
+        // One held access per window, released when the project changes or the window closes. It is
+        // taken on the URL the user granted, not on what it resolves to.
+        projectAccess.begin(requested)
         inspections.setRoot(url)
         project.setRoot(url)
         externalLibraries.clear()

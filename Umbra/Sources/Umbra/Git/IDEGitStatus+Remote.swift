@@ -51,8 +51,12 @@ extension IDEGitStatusModel {
         guard let rootURL,
               let repo = try? await IDEGitSupport.repository(for: rootURL, existing: repository)
         else { return }
+        // A repository that names programs (ssh command, credential helper) and is not trusted yet
+        // is not fetched behind the user's back; a fetch they start asks first.
+        if !gitTrust.isTrusted(repo.root), !(await repo.executableExposure()).isEmpty { return }
         // Batch mode: no askpass, so nothing can open a sheet while the user is doing something else.
-        _ = try? await repo.withNetwork(.batchMode).fetch()
+        // A remote that never answers must not leave a fetch hanging for the life of the window.
+        _ = try? await repo.withNetwork(.batchMode).fetch(timeout: .seconds(300))
         noteRefsChanged()
         refresh()
     }

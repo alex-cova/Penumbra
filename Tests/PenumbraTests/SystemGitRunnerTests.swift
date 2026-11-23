@@ -130,4 +130,43 @@ final class SystemGitRunnerTests: XCTestCase {
         XCTAssertFalse(box.values.isEmpty, "clone --progress writes to stderr")
         XCTAssertTrue(box.values.contains { $0.text.contains("Cloning into") })
     }
+
+    func testATimeLimitStopsAnyRunnerAndThrowsTimedOut() async throws {
+        let slow = NeverFinishingRunner()
+        let started = Date()
+        do {
+            _ = try await slow.run(["fetch"], in: URL(fileURLWithPath: "/tmp"), stdin: nil, environment: nil, onProgress: nil, timeout: .milliseconds(150))
+            XCTFail("expected a timeout")
+        } catch GitError.timedOut {
+            XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+        }
+        XCTAssertTrue(slow.wasCancelled, "the command must be cancelled so its process ends")
+        let quick = try await SystemGitRunner().run(["--version"], in: URL(fileURLWithPath: "/tmp"), stdin: nil, environment: nil, onProgress: nil, timeout: .seconds(30))
+        XCTAssertTrue(quick.text.hasPrefix("git version"))
+    }
+
+    func testATimeLimitEndsARealSlowGitCommand() async throws {
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: SystemGitRunner.executablePath))
+        let started = Date()
+        do {
+            _ = try await SystemGitRunner().run(
+                ["-c", "alias.slow=!sleep 20", "slow"], in: URL(fileURLWithPath: "/tmp"), stdin: nil, environment: nil,
+                onProgress: nil, timeout: .milliseconds(300)
+            )
+            XCTFail("expected a timeout")
+        } catch GitError.timedOut {}
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10)
+    }
+}
+
+private final class NeverFinishingRunner: GitRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var wasCancelled: Bool { lock.withLock { cancelled } }
+
+    func run(_ arguments: [String], in directory: URL, stdin: Data?, environment: [String: String]?, onProgress: GitProgressHandler?) async throws -> GitOutput {
+        while !Task.isCancelled { try? await Task.sleep(nanoseconds: 10_000_000) }
+        lock.withLock { cancelled = true }
+        throw CancellationError()
+    }
 }

@@ -768,4 +768,86 @@ final class GitRepositoryIntegrationTests: XCTestCase {
         let url = URL(fileURLWithPath: directory.path + "/" + name, isDirectory: false)
         return String(decoding: try Data(contentsOf: url), as: UTF8.self)
     }
+
+    // MARK: - Audit WP3
+
+    /// G-09: `restore --staged` needs a HEAD to restore from.
+    func testUnstageWorksBeforeTheFirstCommit() async throws {
+        let repo = try await makeRepo()
+        try write("a.txt", "a\n")
+        try write("b.txt", "b\n")
+        _ = try await runner.run(["add", "a.txt", "b.txt"], in: directory)
+        try await repo.unstage(paths: ["a.txt"])
+        var status = try await repo.status()
+        XCTAssertEqual(status.first { $0.path == "a.txt" }.map { "\($0.indexCode)\($0.worktreeCode)" }, "??")
+        XCTAssertEqual(status.first { $0.path == "b.txt" }.map { "\($0.indexCode)\($0.worktreeCode)" }, "A ")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("a.txt").path), "unstaging must never touch the file")
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("a.txt"), encoding: .utf8), "a\n")
+
+        try await repo.unstageAll()
+        status = try await repo.status()
+        XCTAssertEqual(Set(status.map { "\($0.path) \($0.indexCode)\($0.worktreeCode)" }), ["a.txt ??", "b.txt ??"])
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("b.txt"), encoding: .utf8), "b\n")
+    }
+
+    func testUnstageAWorkTreeEditedFileBeforeTheFirstCommitKeepsTheEdit() async throws {
+        let repo = try await makeRepo()
+        try write("a.txt", "one\n")
+        _ = try await runner.run(["add", "a.txt"], in: directory)
+        try write("a.txt", "one\ntwo\n")   // the index holds a different version: rm --cached needs -f
+        try await repo.unstage(paths: ["a.txt"])
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("a.txt"), encoding: .utf8), "one\ntwo\n")
+        let status = try await repo.status()
+        XCTAssertEqual(status.map { "\($0.path) \($0.indexCode)\($0.worktreeCode)" }, ["a.txt ??"])
+    }
+
+    /// G-15: a bare repository and a `.git` folder have no work tree; that is "not a repository", not a failure.
+    func testABareRepositoryAndADotGitFolderAreNotRepositories() async throws {
+        try write("a.txt", "a\n")
+        _ = try await runner.run(["add", "a.txt"], in: directory)
+        _ = try await runner.run(["commit", "-qm", "base"], in: directory)
+        let bare = directory.deletingLastPathComponent().appendingPathComponent("bare-\(UUID().uuidString).git")
+        defer { try? FileManager.default.removeItem(at: bare) }
+        _ = try await runner.run(["clone", "-q", "--bare", directory.path, bare.path], in: directory)
+        let bareOutcome = try await GitRepository.discoverOutcome(from: bare)
+        guard case .notARepository = bareOutcome else { return XCTFail("bare clone: \(bareOutcome)") }
+        let insideGit = try await GitRepository.discoverOutcome(from: directory.appendingPathComponent(".git"))
+        guard case .notARepository = insideGit else { return XCTFail(".git folder: \(insideGit)") }
+    }
+
+    func testUnstageAllOfAnEmptyUnbornIndexIsNotAnError() async throws {
+        let repo = try await makeRepo()
+        try await repo.unstageAll()
+    }
+
+    // MARK: - Audit WP5
+
+    /// G-12: `ls-files --others --ignored --directory` is the same set as status's `!!` entries,
+    /// without walking untracked trees through the status machinery.
+    func testIgnoredPathsAreTheSameSetAsStatusReports() async throws {
+        let repo = try await makeRepo()
+        try write(".gitignore", "*.log\nbuild/\nnested/*.tmp\n/.env\n!keep.log\n")
+        try write("a.txt", "a\n")
+        _ = try await runner.run(["add", ".gitignore", "a.txt"], in: directory)
+        _ = try await runner.run(["commit", "-qm", "base"], in: directory)
+        let fm = FileManager.default
+        try fm.createDirectory(at: directory.appendingPathComponent("build/classes"), withIntermediateDirectories: true)
+        try write("build/classes/X.class", "x")
+        try fm.createDirectory(at: directory.appendingPathComponent("nested/deep"), withIntermediateDirectories: true)
+        try write("nested/one.tmp", "t")
+        try write("nested/two.txt", "kept visible")      // untracked, not ignored: shares the directory
+        try write("nested/deep/three.tmp", "not matched by nested/*.tmp")
+        try write("debug.log", "l")
+        try write("keep.log", "negated")
+        try write(".env", "SECRET=1")
+        try write("untracked.txt", "u")
+
+        let fromStatus = Set(try await repo.status(includingIgnored: true).filter(\.isIgnored).map(\.path))
+        let fromList = Set(try await repo.ignoredPaths())
+        XCTAssertEqual(fromList, fromStatus)
+        XCTAssertTrue(fromList.contains("build/"), "a wholly ignored directory comes back with a trailing slash: \(fromList)")
+        XCTAssertTrue(fromList.contains("nested/one.tmp"))
+        XCTAssertFalse(fromList.contains("keep.log"))
+        XCTAssertFalse(fromList.contains("untracked.txt"))
+    }
 }

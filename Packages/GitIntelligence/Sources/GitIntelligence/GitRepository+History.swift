@@ -105,7 +105,7 @@ extension GitRepository {
         guard start >= 1, end >= start, !path.hasPrefix("-") else { throw GitError.invalidRequest("Select some lines first.") }
         let marker = "\u{1d}"
         let out = try await readOnly([
-            "log", "--no-color", "-n", "\(limit)", "-L", "\(start),\(end):\(path)",
+            "log", "--no-color", "--no-ext-diff", "--no-textconv", "-n", "\(limit)", "-L", "\(start),\(end):\(path)",
             "--format=\(marker)" + GitLogParser.format
         ])
         var entries: [GitLineHistoryEntry] = []

@@ -1084,9 +1084,11 @@ final class IDEAgentConversation: Identifiable {
         sources.skill = { [weak self] name in self?.commandCatalog?.skillCatalog.skill(named: name) }
         if let workspace = agentWorkspace, let host {
             let box = IDEAgentHostBox(host)
-            let git = IDEAgentGitSource(
+            var git = IDEAgentGitSource(
                 projectRoot: root, secretPatterns: secrets,
                 unsavedBuffers: { await box.read(default: [:]) { $0.agentUnsavedBuffers() } })
+            git.runner = host.agentGitRunner()
+            git.confirmTrust = { await box.confirmGitTrust($0) }
             sources.gitDiff = {
                 guard await GitRepository.discover(from: root, runner: git.runner) != nil else { return nil }
                 let context = ToolContext(workspace: workspace, ledger: ReadLedger(), callID: "mention")
@@ -1867,9 +1869,11 @@ final class IDEAgentConversation: Identifiable {
         let exploreModel: String? = helperOK ? "helper" : nil
         tools += [TodoTool(), AskUserTool(), ExitPlanModeTool(), ExploreTool(model: exploreModel), TaskTool(catalog: agents)]
         if let memoryDirectory { tools.append(RememberTool(memoryDirectory: memoryDirectory)) }
-        let git = IDEAgentGitSource(
+        var git = IDEAgentGitSource(
             projectRoot: root, secretPatterns: SecretFilePolicy.patterns(from: settings.secretFilePatterns),
             unsavedBuffers: { await box.read(default: [:]) { $0.agentUnsavedBuffers() } })
+        git.runner = await box.gitRunner()
+        git.confirmTrust = { await box.confirmGitTrust($0) }
         if await GitRepository.discover(from: root, runner: git.runner) != nil {
             tools += [
                 IDEGitStatusTool(source: git), IDEGitDiffTool(source: git),

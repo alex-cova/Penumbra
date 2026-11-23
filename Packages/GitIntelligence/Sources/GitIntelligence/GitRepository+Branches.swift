@@ -128,7 +128,7 @@ extension GitRepository {
         let rightRef = try validatedBranchName(right)
         async let onlyLeft = commits(in: "\(rightRef)..\(leftRef)", limit: commitLimit)
         async let onlyRight = commits(in: "\(leftRef)..\(rightRef)", limit: commitLimit)
-        let diff = try await readOnly(["diff", "--name-status", "-z", "-M", leftRef, rightRef, "--"])
+        let diff = try await readOnly(["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", leftRef, rightRef, "--"])
         return GitComparison(
             left: leftRef, right: rightRef,
             onlyInLeft: try await onlyLeft, onlyInRight: try await onlyRight,

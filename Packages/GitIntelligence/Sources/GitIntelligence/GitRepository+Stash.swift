@@ -130,7 +130,7 @@ extension GitRepository {
 
     /// The files `stash` changes against the commit it was made on, plus the untracked files it saved.
     public func stashChanges(_ stash: GitStash) async throws -> [GitStashChange] {
-        let tracked = try await readOnly(["diff", "--name-status", "-z", "-M", stash.hash + "^1", stash.hash, "--"])
+        let tracked = try await readOnly(["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", stash.hash + "^1", stash.hash, "--"])
         var changes = GitNameStatusParser.parse(tracked.text).map { GitStashChange(file: $0, isUntracked: false) }
         // `stash push --include-untracked` keeps new files on a third parent commit.
         if (try? await readOnly(["rev-parse", "-q", "--verify", stash.hash + "^3"])) != nil {

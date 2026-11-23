@@ -55,6 +55,11 @@ public struct GitRepository: Sendable {
         GitRepository(root: root, runner: runner, network: network, gitDirectory: gitDirectory, progress: progress)
     }
 
+    /// The same repository running its commands through `runner`.
+    public func withRunner(_ runner: any GitRunning) -> GitRepository {
+        GitRepository(root: root, runner: runner, network: network, gitDirectory: gitDirectory, progress: progress)
+    }
+
     /// The same repository reporting the progress of fetch, pull, push and clone to `handler`.
     public func withProgress(_ handler: GitProgressHandler?) -> GitRepository {
         GitRepository(root: root, runner: runner, network: network, gitDirectory: gitDirectory, progress: handler)
@@ -109,7 +114,9 @@ public struct GitRepository: Sendable {
     private static func isNotARepository(_ error: GitError) -> Bool {
         guard case .failed(_, let stderr, let stdout) = error else { return false }
         let text = stderr.isEmpty ? String(decoding: stdout, as: UTF8.self) : stderr
+        // A bare repository and the `.git` folder itself are repositories git cannot use as a work tree.
         return text.contains("not a git repository") || text.contains("not a git work tree")
+            || text.contains("must be run in a work tree")
     }
 
     /// HEAD and the operation in progress, read from disk with no process.
@@ -168,6 +175,14 @@ public struct GitRepository: Sendable {
 
     // MARK: - Queries
 
+    /// The commit id HEAD names, or nil on an unborn branch. One `rev-parse`; a branch moves under the
+    /// same name when it is committed to, so this is what tells a host that HEAD moved.
+    public func headCommit() async -> String? {
+        guard let out = try? await readOnly(["rev-parse", "-q", "--verify", "HEAD"]) else { return nil }
+        let id = out.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.isEmpty ? nil : id
+    }
+
     public func currentBranch() async -> String? {
         if let out = try? await readOnly(["symbolic-ref", "--short", "-q", "HEAD"]) {
             let name = out.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -225,7 +240,16 @@ public struct GitRepository: Sendable {
         var args = ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]
         if includingIgnored { args.append("--ignored") }
         let out = try await readOnly(args)
-        return GitStatusParser.parse(out.text)
+        return GitStatusParser.parse(out.stdout)
+    }
+
+    /// Paths git ignores, repository-relative, with a trailing `/` on a directory that is ignored as a
+    /// whole: the same set as `status --ignored`'s `!!` entries. It lists the ignore matches from the
+    /// index and the exclude rules instead of running status over every untracked tree, which on a
+    /// large checkout is the difference between tens of milliseconds and a second or two.
+    public func ignoredPaths() async throws -> [String] {
+        let out = try await readOnly(["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])
+        return out.text.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
     }
 
     public func remotes() async -> Set<String> {
@@ -337,15 +361,15 @@ public struct GitRepository: Sendable {
     }
 
     public func commitDiff(hash: String, path: String) async throws -> String {
-        try await readOnly(["--literal-pathspecs", "show", "--format=", "-M", "--first-parent", hash, "--", path]).text
+        try await readOnly(["--literal-pathspecs", "show", "--no-ext-diff", "--no-textconv", "--format=", "-M", "--first-parent", hash, "--", path]).text
     }
 
     public func unstagedDiff(path: String) async throws -> String {
-        try await readOnly(["--literal-pathspecs", "diff", "--", path]).text
+        try await readOnly(["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--", path]).text
     }
 
     public func stagedDiff(path: String) async throws -> String {
-        try await readOnly(["--literal-pathspecs", "diff", "--cached", "--", path]).text
+        try await readOnly(["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--cached", "--", path]).text
     }
 
     /// The file at `path` (relative to the root) as stored in `revision`, or nil when that version
@@ -360,7 +384,7 @@ public struct GitRepository: Sendable {
 
     /// `git show --stat --patch` for the commit detail pane.
     public func show(hash: String) async throws -> String {
-        try await readOnly(["show", "--no-color", "--stat", "--patch", hash]).text
+        try await readOnly(["show", "--no-color", "--no-ext-diff", "--no-textconv", "--stat", "--patch", hash]).text
     }
 
     public func authors(limit: Int = 5000) async throws -> [String] {
@@ -372,9 +396,9 @@ public struct GitRepository: Sendable {
     }
 
     public func workingTreeDiff(path: String, isUntracked: Bool) async throws -> String {
-        guard isUntracked else { return try await readOnly(["--literal-pathspecs", "diff", "HEAD", "--", path]).text }
+        guard isUntracked else { return try await readOnly(["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", path]).text }
         do {
-            return try await readOnly(["--literal-pathspecs", "diff", "--no-index", "--", "/dev/null", path]).text
+            return try await readOnly(["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-index", "--", "/dev/null", path]).text
         } catch GitError.failed(let status, _, let stdout) where status == 1 {
             // `--no-index` exits 1 when the files differ, which is the normal case here.
             return String(decoding: stdout, as: UTF8.self)
@@ -383,7 +407,7 @@ public struct GitRepository: Sendable {
 
     /// Blame of `relativePath`, using `contents` (the live buffer) so unsaved edits read as uncommitted.
     public func blame(relativePath: String, contents: Data) async throws -> [GitBlameLine] {
-        let out = try await readOnly(["--literal-pathspecs", "blame", "--porcelain", "--contents", "-", "--", relativePath], stdin: contents)
+        let out = try await readOnly(["--literal-pathspecs", "blame", "--no-textconv", "--porcelain", "--contents", "-", "--", relativePath], stdin: contents)
         return GitBlameParser.parse(out.text)
     }
 
@@ -400,7 +424,19 @@ public struct GitRepository: Sendable {
     }
 
     public func unstage(paths: [String]) async throws {
+        // Before the first commit there is no HEAD to restore from: take the entries out of the index
+        // instead. `-f` only waives the "index differs from the file" refusal; with `--cached` the
+        // working tree is never touched.
+        if await !hasCommits() {
+            try await mutateEachChunk(paths, command: ["rm", "--cached", "-q", "-f", "-r"])
+            return
+        }
         try await mutateEachChunk(paths, command: ["restore", "--staged"])
+    }
+
+    /// False on an unborn branch (`git init`, no commit yet).
+    func hasCommits() async -> Bool {
+        (try? await readOnly(["rev-parse", "-q", "--verify", "HEAD"])) != nil
     }
 
     public func stageAll() async throws {
@@ -408,6 +444,14 @@ public struct GitRepository: Sendable {
     }
 
     public func unstageAll() async throws {
+        if await !hasCommits() {
+            do {
+                _ = try await runner.run(["rm", "--cached", "-q", "-f", "-r", "--", "."], in: root, stdin: nil, environment: nil)
+            } catch GitError.failed(_, let stderr, _) where stderr.contains("did not match any files") {
+                // An empty index: nothing was staged.
+            }
+            return
+        }
         _ = try await runner.run(["restore", "--staged", "."], in: root, stdin: nil, environment: nil)
     }
 
@@ -430,16 +474,6 @@ public struct GitRepository: Sendable {
         guard let out = try? await readOnly(["rev-parse", "-q", "--verify", spec]) else { return nil }
         let id = out.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return id.isEmpty ? nil : id
-    }
-
-    /// Applies `request` to the index when `:path` is still `baseBlobID`.
-    /// Does not read the work tree and does not write it. A changed index is refused before `git apply`.
-    public func applyHunk(_ request: GitHunkApply) async throws {
-        let current = await indexBlobID(request.relativePath)
-        guard current == request.baseBlobID else {
-            throw GitError.invalidRequest("The index changed after this hunk was read. Refresh the diff and try again.")
-        }
-        try await applyPatch(request.patch, toIndex: true, reverse: request.reverse)
     }
 
     /// Commits only `paths` (plus any `untrackedPaths`, which are added first), whatever else is staged.
@@ -517,6 +551,18 @@ public struct GitRepository: Sendable {
         let skipped = unique.filter { !inHead.contains($0) }
         try await revertToHead(paths: reverted)
         return GitRevertResult(reverted: reverted, skipped: skipped)
+    }
+
+    /// Undoes staged renames (and copies): the old name comes back from HEAD, the new one leaves the
+    /// index and stays on disk as an untracked file. A copy has no old name to restore (`oldPath` nil).
+    public func discardStagedRenames(_ renames: [GitRenameDiscard]) async throws {
+        let olds = renames.compactMap(\.oldPath)
+        for chunk in Self.chunks(olds) {
+            _ = try await mutate(["--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--"] + chunk)
+        }
+        for chunk in Self.chunks(renames.map(\.newPath)) {
+            _ = try await mutate(["--literal-pathspecs", "rm", "--cached", "-q", "-f", "--"] + chunk)
+        }
     }
 
     public func push() async throws -> String {
