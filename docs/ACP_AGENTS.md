@@ -139,12 +139,30 @@ reasoning effort is an `effortLevel` option of category `thought_level` whose le
 **model picker** under the message field (“claude-opus-5.5  High ›”): its popover has an effort slider with
 the agent's levels and the model list, each model with the credit multiplier Kiro sends (auto 1×, claude-opus-5.5 2×, gpt-5.6-sol 4.4×, claude-haiku-5.5 0.06×); picking either sends `session/set_config_option`. Any agent that
 advertises a `thought_level` option (Antigravity does) gets the slider, and one that advertises a speed
-option gets a ⚡ toggle. Restart Agent is in the agent menu in the panel header. The chip appears
-once the agent has started, which is on the first message: before that Umbra does not know what the agent
-offers.
+option gets a ⚡ toggle. Restart Agent is in the agent menu in the panel header. Before the first
+message the chip reads “Model ›”; opening it starts the agent and fills in its choices a moment later (if the
+start fails, for example Kiro is signed out, the popover and the chat say why). Just choosing or looking at a
+chat starts nothing, so no empty “New Session” lands in Kiro's history.
 
 - **Effort follows the model.** After a model change Kiro sends the new levels in a `config_option_update`;
   the chip updates right away, not on the next turn.
+
+### What each agent offers the model picker (real handshakes, 2026-11-21)
+
+`initialize` + `session/new` against each agent installed on the development Mac, no prompt sent. The mocks
+in `IDEACPNativeProvidersTests` are trimmed from these.
+
+| Agent | Model | Effort | Speed | Left on the ⚙ chip |
+|---|---|---|---|---|
+| Claude Code (`claude-agent-acp` 0.109.1) | `model` option (Default, Opus 5.5, Sonnet 5.5, Fable 5.2, Haiku 5.5…) | `effort` (Default, Low…Max) | `fast` (category `speed`) | – |
+| Codex (`codex-acp` 2.9.0) | `model` option (GPT-6.2 Sol, Astra…) | `reasoning_effort` (Low…Max, Ultra) | `fast-mode` (category `speed`) | `collaboration_mode` |
+| Kiro (3.5.0) | `model` option, with credit multipliers | `effortLevel`, per model | – | `autopilot` and others |
+| Cursor (cursor-agent) | `model` option, 49 fixed variants | in the variant id (`effort=medium`), shown, not settable | in the variant id (`fast=true`), shown | – |
+| Antigravity (agy) | `model` option | `thought_level` (Low, Medium, High) | – | – |
+| Muse | `model` option | – (always reasons) | – | – |
+| GitHub Copilot | none | none | none | `allow_all` |
+
+Copilot advertises no model, so its chat has no model picker once it has started.
 
 Umbra advertises `fs.readTextFile`, `fs.writeTextFile` and `terminal` to every agent and serves them
 through the project jail, unsaved buffers, checkpoints and the permission policy. An agent that reads

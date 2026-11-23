@@ -44,7 +44,7 @@ struct IDEAgentPanelChipRow: View {
                 )
             }
             if agent.selected.isACPConversation {
-                if agent.selected.acpHasModelControls {
+                if agent.selected.acpShowsModelPicker {
                     IDEACPModelPicker(conversation: agent.selected)
                 }
             } else if isAIMode {

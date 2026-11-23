@@ -19,6 +19,15 @@ struct IDEACPModelPicker: View {
         let detail: String?
         /// The price multiplier the agent advertised (Kiro's credits), shown on the row.
         var rate: ACPChoiceRate?
+
+        /// Settings written into the id (Cursor's `name[effort=…,fast=…]`), shown when the agent gave no description.
+        var variant: ACPModelVariant? { ACPModelVariant(modelID: id) }
+
+        var shownDetail: String? {
+            if let detail { return detail }
+            guard let summary = variant?.summary, !summary.isEmpty else { return nil }
+            return summary
+        }
     }
 
     private var models: [Model] {
@@ -41,14 +50,23 @@ struct IDEACPModelPicker: View {
         return models.first { $0.id == id }?.title ?? id
     }
 
-    private var effortTitle: String? { conversation.acpEffortOption?.currentChoiceTitle }
+    /// The variant of the current model, when its id carries settings (Cursor).
+    private var currentVariant: ACPModelVariant? { currentModelID.flatMap { ACPModelVariant(modelID: $0) } }
+
+    private var effortTitle: String? {
+        conversation.acpEffortOption?.currentChoiceTitle ?? currentVariant?.effort.map(ACPModelVariant.effortTitle)
+    }
 
     private var isFast: Bool {
-        ACPConfigOption.isFastValue(conversation.acpSpeedOption?.currentValueDescription)
+        if let speed = conversation.acpSpeedOption { return ACPConfigOption.isFastValue(speed.currentValueDescription) }
+        return currentVariant?.isFast == true
     }
 
     var body: some View {
         Button {
+            // The agent is started here, not when a chat is shown: looking at chats starts no process and
+            // leaves no empty session in the agent's own history.
+            if !isPresented { conversation.prepareACP() }
             isPresented.toggle()
         } label: {
             HStack(spacing: 4) {
@@ -93,6 +111,9 @@ struct IDEACPModelPickerPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            if !conversation.acpHasModelControls {
+                startingState
+            }
             if conversation.acpEffortOption != nil || conversation.acpSpeedOption != nil {
                 header
                 if let effort = conversation.acpEffortOption {
@@ -119,6 +140,32 @@ struct IDEACPModelPickerPopover: View {
         }
         .padding(IDEAppearance.Spacing.md)
         .frame(width: 280)
+    }
+
+    /// Before the agent answered: starting, why it could not start, or that it offers no choices.
+    @ViewBuilder private var startingState: some View {
+        switch conversation.acpLiveState {
+        case .idle, .connecting:
+            HStack(spacing: IDEAppearance.Spacing.sm) {
+                ProgressView().controlSize(.small)
+                Text("Starting the agent to read its models…")
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+        case .connected:
+            Text("This agent offers no model or effort choices.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.muted)
+        case .authenticationRequired(let method):
+            Text("The agent needs you to sign in (\(method)). The chat says how.")
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.error)
+        case .failed(let message):
+            Text(message)
+                .font(IDEAppearance.Typography.caption)
+                .foregroundStyle(IDEAppearance.ColorToken.error)
+                .lineLimit(6)
+        }
     }
 
     private var header: some View {
@@ -180,7 +227,7 @@ struct IDEACPModelPickerPopover: View {
                     Text(model.title)
                         .font(IDEAppearance.Typography.body)
                         .foregroundStyle(IDEAppearance.ColorToken.foreground)
-                    if let detail = model.detail {
+                    if let detail = model.shownDetail {
                         Text(detail)
                             .font(IDEAppearance.Typography.caption)
                             .foregroundStyle(IDEAppearance.ColorToken.muted)
@@ -205,7 +252,7 @@ struct IDEACPModelPickerPopover: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help([model.detail ?? model.id, model.rate?.help].compactMap { $0 }.joined(separator: "\n"))
+        .help([model.shownDetail ?? model.id, model.rate?.help].compactMap { $0 }.joined(separator: "\n"))
         .accessibilityLabel("\(model.title)\(model.rate.map { ", \($0.label) \($0.unit?.lowercased() ?? "rate")" } ?? "")\(model.id == currentModelID ? ", selected" : "")")
     }
 

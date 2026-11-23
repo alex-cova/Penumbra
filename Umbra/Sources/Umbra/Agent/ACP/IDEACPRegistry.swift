@@ -457,10 +457,13 @@ extension ACPConfigOption {
         return id.lowercased() == "model"
     }
 
-    /// A speed switch (`fast`, `fastMode`, `speed`…). ACP has no category for it, so only the name says so;
-    /// nothing is shown for an agent that does not advertise one.
+    /// A speed switch: category `speed` (the Codex and Claude Code adapters: `fast-mode` / `fast`, Off and On,
+    /// captured 2026-11-21), or an uncategorized option named for it (`fast`, `speed`…). Nothing is shown for an
+    /// agent that does not advertise one.
     var isSpeedOption: Bool {
-        guard category == nil || category == "speed", !selectableChoices.isEmpty else { return false }
+        guard !selectableChoices.isEmpty else { return false }
+        if category == "speed" { return true }
+        guard category == nil else { return false }
         let key = (id + " " + name).lowercased()
         return key.contains("speed") || key.contains("fast")
     }
@@ -527,5 +530,54 @@ struct ACPChoiceRate: Equatable {
     var help: String {
         let unit = (unit ?? "usage").lowercased()
         return "Uses \(label) the \(unit == "credit" ? "credits" : unit) of the base rate."
+    }
+}
+
+/// The settings an agent writes into a model id. Cursor offers each model as fixed variants named like
+/// `claude-opus-5-5[context=300k,effort=medium,fast=false]` (captured from cursor-agent on 2026-11-21): the effort
+/// and speed cannot be set apart from the model, so Umbra only shows them, on the chip and the model's row.
+struct ACPModelVariant: Equatable {
+    /// The parameters in the order the agent wrote them.
+    let parameters: [Parameter]
+
+    struct Parameter: Equatable {
+        let key: String
+        let value: String
+    }
+
+    init?(modelID: String) {
+        guard modelID.hasSuffix("]"), let open = modelID.lastIndex(of: "[") else { return nil }
+        let body = modelID[modelID.index(after: open)..<modelID.index(before: modelID.endIndex)]
+        let pairs: [Parameter] = body.split(separator: ",").compactMap { part in
+            let kv = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard kv.count == 2, !kv[0].isEmpty, !kv[1].isEmpty else { return nil }
+            return Parameter(key: kv[0].lowercased(), value: kv[1])
+        }
+        guard !pairs.isEmpty else { return nil }
+        parameters = pairs
+    }
+
+    private func value(_ keys: String...) -> String? {
+        parameters.first { keys.contains($0.key) }?.value
+    }
+
+    /// `effort`, `reasoning_effort` or `reasoning`, as written ("medium", "xhigh").
+    var effort: String? { value("effort", "reasoning_effort", "reasoning") }
+
+    var isFast: Bool { value("fast")?.lowercased() == "true" }
+
+    /// "300k context · effort medium · thinking · fast", for the model's row.
+    var summary: String {
+        var parts: [String] = []
+        if let context = value("context") { parts.append("\(context) context") }
+        if let effort { parts.append("effort \(effort)") }
+        if value("thinking")?.lowercased() == "true" { parts.append("thinking") }
+        if isFast { parts.append("fast") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// "Medium", "xHigh", for the chip.
+    static func effortTitle(_ effort: String) -> String {
+        effort.lowercased() == "xhigh" ? "xHigh" : effort.prefix(1).uppercased() + effort.dropFirst()
     }
 }

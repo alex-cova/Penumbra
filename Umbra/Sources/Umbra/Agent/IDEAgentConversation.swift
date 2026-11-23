@@ -236,6 +236,10 @@ final class IDEAgentConversation: Identifiable {
         !acpAvailableModels.isEmpty || acpModelOption != nil || acpEffortOption != nil || acpSpeedOption != nil
     }
 
+    /// Whether the composer shows the model picker: once the agent advertised choices, and before it has started
+    /// (it reads "Model ›" then, and opening it starts the agent). An agent that started and offers none has no picker.
+    var acpShowsModelPicker: Bool { acpHasModelControls || acpLiveState != .connected }
+
     /// The catalog's description of this chat's agent (sign-in, extensions, mode mapping). A row the
     /// user pointed at their own copy of the CLI is still that provider.
     private var acpProviderEntry: IDEACPAdapterEntry? { IDEACPAdapterCatalog.entry(presetID: acpDefinition?.presetID) }
@@ -564,6 +568,8 @@ final class IDEAgentConversation: Identifiable {
         runTask = Task { [weak self] in
             guard let self else { return }
             let snapshotTask = Task.detached { IDEACPWorkspaceSnapshot.capture(root: root) }
+            // An early start that is still connecting becomes this run's session.
+            await self.acpPrepareTask?.value
             let active: ACPClientSession
             do {
                 active = try await self.currentACPSession(root: root, host: host)
@@ -583,6 +589,30 @@ final class IDEAgentConversation: Identifiable {
             }
             if self.stopRequested { await active.stop() }
             await self.consumeACP(stream, session: active, snapshot: snapshot, root: root)
+        }
+    }
+
+    /// An early start of the agent (see `prepareACP`), which a send waits for instead of starting a second process.
+    @ObservationIgnored private var acpPrepareTask: Task<Void, Never>?
+
+    /// Starts the chosen agent and its session before the first message, so the model, effort and mode it
+    /// advertises (Kiro's are only in its `session/new` answer) can be picked. Called when the user opens the
+    /// model picker, never just because a chat is shown: each start is a process and, for Kiro, a saved
+    /// "New Session". Nothing starts for an agent that was not allowed, a running chat, or one already started.
+    func prepareACP() {
+        guard isACPConversation, acpSession == nil, acpPrepareTask == nil, !isRunning,
+              acpLiveState != .connecting, acpLiveState != .connected,
+              let host, let root = host.agentProjectRoot
+        else { return }
+        acpPrepareTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.acpPrepareTask = nil }
+            do {
+                _ = try await self.currentACPSession(root: root, host: host)
+            } catch {
+                // The header's dot already says connecting failed or a sign-in is needed; this says why.
+                self.appendNotice(IDEACPSecretScrubber.scrub(error.localizedDescription))
+            }
         }
     }
 

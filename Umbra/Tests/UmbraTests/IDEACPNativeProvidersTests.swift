@@ -60,7 +60,7 @@ def kiro3_options(model, effort):
 kiro3 = {"model": "claude-opus-5.5", "effort": "medium"}
 
 AUTH = {
-    "kiro": [], "kiro3": [],
+    "kiro": [], "kiro3": [], "cursor1121": [], "antigravity": [], "copilot": [], "codex": [], "claude": [],
     "cursor": [{"id": "cursor_login", "name": "Cursor Login", "description": "Run 'agent login' first if not logged in."}],
     "muse": [{"id": "muse-login", "name": "Log in to Muse", "description": "Sign in with a device code shown in your browser."}],
 }[provider]
@@ -71,6 +71,68 @@ SESSION = {
                 {"modelId": "auto", "name": "auto"}, {"modelId": "claude-sonnet-5.5", "name": "claude-sonnet-5.5"}]}},
     "kiro3": {"modes": {"currentModeId": "vibe", "availableModes": [{"id": "vibe", "name": "Default"}, {"id": "plan", "name": "Plan"}]},
               "configOptions": kiro3_options("claude-opus-5.5", "medium")},
+    # Trimmed from the real handshakes of 2026-11-21 (cursor-agent, agy, copilot --acp).
+    "cursor1121": {"modes": {"currentModeId": "agent", "availableModes": [
+                {"id": "agent", "name": "Agent"}, {"id": "plan", "name": "Plan"}, {"id": "ask", "name": "Ask"}]},
+               "models": {"currentModelId": "composer-2.5[fast=true]", "availableModels": [
+                {"modelId": "default[]", "name": "Auto"}, {"modelId": "composer-2.5[fast=true]", "name": "composer-2.5"},
+                {"modelId": "claude-opus-5-5[context=300k,effort=medium,fast=false]", "name": "claude-opus-5-5"}]},
+               "configOptions": [
+                {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "agent",
+                 "options": [{"value": "agent", "name": "Agent"}, {"value": "plan", "name": "Plan"}, {"value": "ask", "name": "Ask"}]},
+                {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "composer-2.5[fast=true]",
+                 "options": [{"value": "default[]", "name": "Auto"}, {"value": "composer-2.5[fast=true]", "name": "composer-2.5"},
+                             {"value": "claude-opus-5-5[context=300k,effort=medium,fast=false]", "name": "claude-opus-5-5"}]}]},
+    "antigravity": {"modes": {"currentModeId": "default", "availableModes": [
+                {"id": "default", "name": "Default"}, {"id": "accept-edits", "name": "Accept edits"},
+                {"id": "auto", "name": "Auto"}, {"id": "plan", "name": "Plan"}]},
+               "models": {"currentModelId": "gemini-3.8-flash-high", "availableModels": [
+                {"modelId": "gemini-3.8-flash-high", "name": "Gemini 3.8 Flash (High)"}]},
+               "configOptions": [
+                {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "gemini-3.8-flash",
+                 "options": [{"value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"},
+                             {"value": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6 (Thinking)"}]},
+                {"id": "thought_level", "name": "Thinking", "category": "thought_level", "type": "select", "currentValue": "high",
+                 "options": [{"value": "low", "name": "Low"}, {"value": "medium", "name": "Medium"}, {"value": "high", "name": "High"}]},
+                {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "default",
+                 "options": [{"value": "default", "name": "Default"}, {"value": "plan", "name": "Plan"}]}]},
+    # The managed adapters as installed on 2026-11-21: codex-acp 2.9.0, claude-agent-acp 0.109.1.
+    "codex": {"modes": {"currentModeId": "agent", "availableModes": [
+                {"id": "read-only", "name": "Read-only"}, {"id": "agent", "name": "Auto review"}]},
+              "models": {"currentModelId": "gpt-6.2-sol[medium]", "availableModels": [
+                {"modelId": "gpt-6.2-sol[medium]", "name": "6.2 Sol (medium)"}]},
+              "configOptions": [
+                {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "gpt-6.2-sol",
+                 "options": [{"value": "gpt-6.2-sol", "name": "6.2 Sol"}, {"value": "gpt-6.2-astra", "name": "6.2 Astra"}]},
+                {"id": "reasoning_effort", "name": "Reasoning effort", "category": "thought_level", "type": "select", "currentValue": "medium",
+                 "options": [{"value": v, "name": v.capitalize()} for v in ["low", "medium", "high", "xhigh", "max", "ultra"]]},
+                {"id": "fast-mode", "name": "Fast mode", "category": "speed", "type": "select", "currentValue": "off",
+                 "options": [{"value": "off", "name": "Off"}, {"value": "on", "name": "On"}]},
+                {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "agent",
+                 "options": [{"value": "read-only", "name": "Read-only"}, {"value": "agent", "name": "Auto review"}]},
+                {"id": "collaboration_mode", "name": "Collaboration mode", "category": "collaboration_mode", "type": "select",
+                 "currentValue": "default", "options": [{"value": "default", "name": "Default"}, {"value": "plan", "name": "Plan"}]}]},
+    "claude": {"modes": {"currentModeId": "auto", "availableModes": [
+                {"id": "default", "name": "Manual"}, {"id": "acceptEdits", "name": "Accept edits"}, {"id": "auto", "name": "Auto"}]},
+               "configOptions": [
+                {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "default",
+                 "options": [{"value": "default", "name": "Default (recommended)"}, {"value": "opus", "name": "Opus 5.5"},
+                             {"value": "sonnet", "name": "Sonnet 5.5"}]},
+                {"id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": "high",
+                 "options": [{"value": v, "name": v.capitalize()} for v in ["default", "low", "medium", "high", "xhigh", "max"]]},
+                {"id": "fast", "name": "Fast", "category": "speed", "type": "select", "currentValue": "off",
+                 "options": [{"value": "off", "name": "Off"}, {"value": "on", "name": "On"}]},
+                {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "auto",
+                 "options": [{"value": "default", "name": "Manual"}, {"value": "auto", "name": "Auto"}]}]},
+    "copilot": {"modes": {"currentModeId": "https://agentclientprotocol.com/protocol/session-modes#agent", "availableModes": [
+                {"id": "https://agentclientprotocol.com/protocol/session-modes#agent", "name": "Agent"},
+                {"id": "https://agentclientprotocol.com/protocol/session-modes#plan", "name": "Plan"}]},
+               "configOptions": [
+                {"id": "mode", "name": "Mode", "category": "mode", "type": "select",
+                 "currentValue": "https://agentclientprotocol.com/protocol/session-modes#agent",
+                 "options": [{"value": "https://agentclientprotocol.com/protocol/session-modes#agent", "name": "Agent"}]},
+                {"id": "allow_all", "name": "Allow all", "category": "permissions", "type": "select", "currentValue": "off",
+                 "options": [{"value": "on", "name": "On"}, {"value": "off", "name": "Off"}]}]},
     "cursor": {"modes": {"currentModeId": "agent", "availableModes": [
                 {"id": "agent", "name": "Agent"}, {"id": "plan", "name": "Plan"}, {"id": "ask", "name": "Ask"}]},
                "models": {"currentModelId": "composer-2.5[fast=true]", "availableModels": [
@@ -372,6 +434,95 @@ final class IDEACPNativeProviderConversationTests: XCTestCase {
         XCTAssertFalse(logLines().contains { $0.contains("not-advertised") })
         XCTAssertFalse(logLines().contains("authenticate"))
         XCTAssertFalse(logLines().contains { $0.hasPrefix("session/set_mode ") }, "Kiro's modes are left as the user picks them")
+    }
+
+    /// What each agent installed on this Mac advertised on 2026-11-21 reaches the model picker as it should.
+    func testTodaysCursorAntigravityAndCopilotHandshakesFillThePicker() async throws {
+        let (cursor, _) = chat("cursor", mock: "cursor1121")
+        cursor.prepareACP()
+        let cursorReady = await acpWaitUntil(10) { cursor.acpModelOption != nil }
+        XCTAssertTrue(cursorReady, dump(cursor))
+        XCTAssertTrue(cursor.acpAvailableModels.isEmpty, "Cursor sends both forms; the config option is the one used")
+        XCTAssertNil(cursor.acpEffortOption, "Cursor's effort is part of each model, not an option")
+        let current = try XCTUnwrap(cursor.acpModelOption?.currentValueDescription)
+        XCTAssertEqual(ACPModelVariant(modelID: current)?.isFast, true)
+        let opus = try XCTUnwrap(ACPModelVariant(modelID: "claude-opus-5-5[context=300k,effort=medium,fast=false]"))
+        XCTAssertEqual(opus.summary, "300k context · effort medium")
+        XCTAssertEqual(opus.effort.map(ACPModelVariant.effortTitle), "Medium")
+        XCTAssertNil(ACPModelVariant(modelID: "default[]"))
+        XCTAssertEqual(cursor.acpDisplayedConfigOptions.map(\.id), [])
+        cursor.setACPConfig(id: "model", value: "claude-opus-5-5[context=300k,effort=medium,fast=false]")
+        let switched = await acpWaitUntil(5) {
+            self.logLines().contains("session/set_config_option model=claude-opus-5-5[context=300k,effort=medium,fast=false]")
+        }
+        XCTAssertTrue(switched, dump(cursor))
+
+        let (antigravity, _) = chat("antigravity", mock: "antigravity")
+        antigravity.prepareACP()
+        let agyReady = await acpWaitUntil(10) { antigravity.acpEffortOption != nil }
+        XCTAssertTrue(agyReady, dump(antigravity))
+        XCTAssertEqual(antigravity.acpEffortOption?.selectableChoices.map(\.value), ["low", "medium", "high"])
+        XCTAssertEqual(antigravity.acpModelOption?.selectableChoices.count, 2)
+        XCTAssertEqual(antigravity.acpDisplayedConfigOptions.map(\.id), [])
+
+        let (copilot, _) = chat("copilot", mock: "copilot")
+        XCTAssertTrue(copilot.acpShowsModelPicker, "before it starts the chip offers to start it")
+        copilot.prepareACP()
+        let copilotReady = await acpWaitUntil(10) { copilot.acpLiveState == .connected }
+        XCTAssertTrue(copilotReady, dump(copilot))
+        XCTAssertFalse(copilot.acpHasModelControls, "Copilot advertises no model or effort")
+        XCTAssertFalse(copilot.acpShowsModelPicker, "so the picker goes away once it has started")
+        XCTAssertEqual(copilot.acpDisplayedConfigOptions.map(\.id), ["allow_all"])
+    }
+
+    /// The Codex and Claude Code adapters advertise all three: model, effort (`thought_level`) and speed (`speed`).
+    func testCodexAndClaudeCodeGetModelEffortAndSpeed() async throws {
+        for (preset, mock, effortID, speedID) in [
+            ("codex", "codex", "reasoning_effort", "fast-mode"), ("claude-code", "claude", "effort", "fast"),
+        ] {
+            let (chat, _) = chat(preset, mock: mock)
+            chat.prepareACP()
+            let ready = await acpWaitUntil(10) { chat.acpSpeedOption != nil }
+            XCTAssertTrue(ready, "\(preset): \(dump(chat))")
+            XCTAssertEqual(chat.acpModelOption?.id, "model", preset)
+            XCTAssertEqual(chat.acpEffortOption?.id, effortID, preset)
+            XCTAssertEqual(chat.acpSpeedOption?.id, speedID, preset)
+            XCTAssertFalse(ACPConfigOption.isFastValue(chat.acpSpeedOption?.currentValueDescription), preset)
+            try renderForLooking(IDEACPModelPickerPopover(
+                conversation: chat,
+                models: chat.acpModelOption!.selectableChoiceDetails.map {
+                    IDEACPModelPicker.Model(id: $0.value, title: $0.title, detail: $0.detail, rate: $0.rate)
+                },
+                currentModelID: chat.acpModelOption?.currentValueDescription),
+                name: "acp-model-picker-\(mock)", size: NSSize(width: 300, height: 220))
+            let leftovers = chat.acpDisplayedConfigOptions.map(\.id)
+            XCTAssertEqual(leftovers, preset == "codex" ? ["collaboration_mode"] : [], "\(preset) ⚙ chip")
+            chat.setACPConfig(id: speedID, value: "on")
+            let logged = await acpWaitUntil(5) { self.logLines().contains("session/set_config_option \(speedID)=on") }
+            XCTAssertTrue(logged, preset)
+        }
+    }
+
+    /// Opening the model picker (`prepareACP`) starts Kiro; nothing else before the first message does.
+    func testOpeningThePickerStartsKiroBeforeTheFirstMessage() async throws {
+        let (chat, _) = chat("kiro", mock: "kiro3")
+        XCTAssertTrue(chat.acpShowsModelPicker, "before the agent starts the chip reads Model and starts it")
+        try? await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(logLines().contains("initialize"), "showing the chat starts nothing")
+        try renderForLooking(
+            IDEACPModelPickerPopover(conversation: chat, models: [], currentModelID: nil),
+            name: "acp-model-picker-starting", size: NSSize(width: 300, height: 60))
+        chat.prepareACP()
+        let ready = await acpWaitUntil(10) { chat.acpEffortOption != nil && chat.acpModelOption != nil }
+        XCTAssertTrue(ready, dump(chat))
+        XCTAssertEqual(chat.acpLiveState, .connected)
+        XCTAssertFalse(logLines().contains("session/prompt"), "nothing is sent to start it")
+        chat.prepareACP()
+
+        let replied = await send(chat, "hi") { self.assistant(chat).contains("Hello from kiro3") }
+        XCTAssertTrue(replied, dump(chat))
+        XCTAssertEqual(logLines().filter { $0 == "initialize" }.count, 1, "the first message uses the process started early")
+        XCTAssertEqual(logLines().filter { $0 == "session/new" }.count, 1)
     }
 
     func testKiroEffortHasItsOwnControlAndFollowsTheModel() async throws {
