@@ -76,14 +76,24 @@ public struct IDERootView: View {
             HStack(spacing: 0) {
                 Color.clear.frame(width: IDEAppearance.Spacing.panelGap)
 
-                if workspace.showsSidebar {
+                if workspace.hasSidebarContent {
+                    // Mounted while there is something to show, hidden or not, like the terminal
+                    // panel: hiding it clips it to no width while its content keeps its own width,
+                    // so showing it again is a resize of the editor, not a new Explorer (building
+                    // one cost ~40 ms per toggle), and the Explorer keeps its filter and scroll.
+                    let shown = workspace.showsSidebar
                     IDELeftSidebar()
                         .frame(width: sidebarWidth)
                         .idePanel()
-                        .opacity(workspace.chromeOpacity)
-                        .allowsHitTesting(workspace.chromeOpacity > 0.05)
+                        .frame(width: shown ? sidebarWidth : 0, alignment: .leading)
+                        .clipped()
+                        .opacity(shown ? workspace.chromeOpacity : 0)
+                        .allowsHitTesting(shown && workspace.chromeOpacity > 0.05)
+                        .accessibilityHidden(!shown)
 
-                    IDESidebarResizeHandle(width: $sidebarWidth, edge: .leading)
+                    if shown {
+                        IDESidebarResizeHandle(width: $sidebarWidth, edge: .leading)
+                    }
                 }
 
                 VStack(spacing: 0) {

@@ -216,6 +216,47 @@ final class IDERootViewInvalidationTests: XCTestCase {
         print("RESIZECOST sidebar toggles ms: " + toggle.map { String(format: "%.2f", $0) }.joined(separator: " "))
     }
 
+    /// Showing and hiding the left sidebar in a project of 600 files with one editor open: the
+    /// main-thread time of each, separately (`SIDEBARCOST`). `SIDEBAR_TOGGLES` repeats it for
+    /// profiling.
+    func testSidebarToggleCost() async throws {
+        for folder in 0..<20 {
+            let sub = directory.appendingPathComponent("src/package\(folder)", isDirectory: true)
+            try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+            for file in 0..<30 {
+                try Data().write(to: sub.appendingPathComponent("SomeReasonablyNamedClass\(file).java"))
+            }
+        }
+        workspace.openProjectFolder(directory)
+        let file = try write("Main.java", lines: 2_000)
+        await workspace.openDocument(from: file)
+        workspace.project.expandAll()
+        await settle(1.5)
+        XCTAssertTrue(workspace.showsSidebar)
+        let toggles = Int(ProcessInfo.processInfo.environment["SIDEBAR_TOGGLES"] ?? "") ?? 12
+        var show: [Double] = []
+        var hide: [Double] = []
+        for _ in 0..<toggles {
+            for _ in 0..<2 {
+                let showing = !workspace.isSidebarVisible
+                let start = DispatchTime.now().uptimeNanoseconds
+                workspace.isSidebarVisible.toggle()
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+                if showing { show.append(ms) } else { hide.append(ms) }
+                await settle(0.05)
+            }
+        }
+        func summary(_ times: [Double]) -> String {
+            let sorted = times.sorted()
+            return String(format: "median=%.2fms p90=%.2fms max=%.2fms",
+                          sorted[sorted.count / 2], sorted[sorted.count * 9 / 10], sorted.last ?? 0)
+        }
+        print("SIDEBARCOST show " + summary(show))
+        print("SIDEBARCOST hide " + summary(hide))
+    }
+
     /// Chrome follows a new colour scheme because its tokens are read from the observable
     /// `IDEThemeStore`, with no epoch counter and no `.id` to bump.
     func testChangingTheColourSchemeRepaintsTheChromeThroughObservation() async throws {

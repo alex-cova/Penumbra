@@ -737,7 +737,11 @@ public final class IDEWorkspace {
     /// What `IDERootView` should actually render: the user's sidebar toggle, once a folder or a
     /// document is open (the stripe offers no Explorer button before that).
     var showsSidebar: Bool {
-        isSidebarVisible && (hasOpenProject || hasOpenDocuments || externalLibraries.hasOpenedArchives)
+        isSidebarVisible && hasSidebarContent
+    }
+    /// The left sidebar has something to show. While this holds it stays mounted, hidden or not.
+    var hasSidebarContent: Bool {
+        hasOpenProject || hasOpenDocuments || externalLibraries.hasOpenedArchives
     }
     /// A tab is offered when it has something to show: Changes needs a git repository. Structure
     /// stays offered for any file (it explains itself outside Java) so the tab does not come and
