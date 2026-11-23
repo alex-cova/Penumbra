@@ -28,6 +28,7 @@ final class IDELanguageModuleTests: XCTestCase {
             "app.java.runTests", "app.java.runLastConfiguration",
             "app.java.runWithCoverage", "app.java.runTestsWithCoverage", "app.java.clearCoverage",
             "app.java.profile", "app.java.profileTests", "app.java.openProfilerRecording",
+            "app.java.openHeapDump",
             "app.java.editRunConfiguration", "app.java.reloadGradleProject", "app.java.showGradleOutput",
             "app.java.reloadMavenProject", "app.java.showMavenOutput",
             "app.java.showClassDiagram", "app.java.showPackageDiagram", "app.java.showProjectDiagram",
@@ -109,9 +110,9 @@ final class IDELanguageModuleTests: XCTestCase {
         XCTAssertEqual(modulePages.map(\.id), ["java", "swift", "swiftUIPreview", "language-servers", "hex"])
         XCTAssertEqual(
             IDEPreferencesDomain.ordered(with: modulePages).map(\.id),
-            ["general", "editor", "markdown", "saving", "appearance", "terminal", "project", "java", "swift", "swiftUIPreview", "language-servers", "hex", "agent"]
+            ["general", "editor", "markdown", "saving", "appearance", "terminal", "docker", "project", "java", "swift", "swiftUIPreview", "language-servers", "hex", "agent"]
         )
-        XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "markdown", "saving", "appearance", "terminal", "project", "agent"])
+        XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "markdown", "saving", "appearance", "terminal", "docker", "project", "agent"])
     }
 
     func testSettingsSearchStillFindsTheJavaPages() {

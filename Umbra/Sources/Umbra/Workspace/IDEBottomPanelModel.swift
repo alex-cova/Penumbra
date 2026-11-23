@@ -81,6 +81,20 @@ final class IDEBottomPanelModel {
     func columnHeightChanged(_ available: Double) {
         availableHeight = available
         resolveSizePreset()
+        clampHeightToColumn()
+    }
+
+    /// Keeps the stored height inside the column: at least the terminal minimum,
+    /// at most the static maximum or what leaves the editor its minimum height,
+    /// whichever is smaller (Silica's `clampedTerminalHeight`).
+    private func clampHeightToColumn() {
+        guard availableHeight > 0 else { return }
+        let ceiling = min(
+            IDEAppearance.Spacing.terminalMaxHeight,
+            max(IDEAppearance.Spacing.terminalMinHeight, availableHeight - IDEAppearance.Spacing.editorMinHeight)
+        )
+        let clamped = min(max(height, IDEAppearance.Spacing.terminalMinHeight), ceiling)
+        if height != clamped { height = clamped }
     }
 
     private func resolveSizePreset() {

@@ -109,14 +109,14 @@ public struct HeapDumpOverview: Sendable {
             var sizes = SIMD8<Int64>()
             let classShape = shape(of: classID)
             for (index, layout) in layouts.enumerated() {
-                let each: Int
+                let perInstance: Int
                 if let classShape {
-                    each = layout.instanceSize(primitiveBytes: classShape.primitiveBytes, references: classShape.references)
+                    perInstance = layout.instanceSize(primitiveBytes: classShape.primitiveBytes, references: classShape.references)
                 } else {
                     // No class dump: the dump's own field bytes, which count references at the id size.
-                    each = HeapObjectLayout.align(layout.headerSize + tally.fieldBytes / max(tally.count, 1))
+                    perInstance = HeapObjectLayout.align(layout.headerSize + tally.fieldBytes / max(tally.count, 1))
                 }
-                sizes[index] = Int64(each) * Int64(tally.count)
+                sizes[index] = Int64(perInstance) * Int64(tally.count)
             }
             aggregates.append(Aggregate(name: name(classID), kind: .instance, count: tally.count, sizes: sizes, classID: classID))
         }

@@ -14,6 +14,9 @@ extension IDEAppearance {
         static let standard = Animation.easeOut(duration: 0.16)
         /// Whole-page changes (empty chat to conversation).
         static let panel = Animation.easeOut(duration: 0.35)
+        /// Editor panes opening, closing and re-spreading, and the terminal/sidebar
+        /// cards sliding with them: a spring without bounce (Silica's `paneAnimation`).
+        static let pane = Animation.smooth(duration: 0.3)
 
         /// The system-wide Reduce Motion switch, for code outside a view.
         static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }

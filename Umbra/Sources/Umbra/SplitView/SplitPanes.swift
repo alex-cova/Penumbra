@@ -49,6 +49,13 @@ struct SplitPanes<Primary: View, Secondary: View, Divider: SplitDivider>: View {
     /// down *both* panes, including anything stateful like a hosted `NSViewRepresentable`. `nil`
     /// shows both.
     var hiddenSide: SplitSide?
+    /// Animate changes to the divider fraction not made by dragging (a split opening,
+    /// closing or re-spreading). Dragging itself is never animated: `Split` only
+    /// publishes the settled fraction, which already matches the cursor.
+    var animatesFraction: Bool = false
+    /// A double-click on the divider returns it to `defaultFraction`, evening the
+    /// two sides out as this link was opened.
+    var dividerResetsOnDoubleClick: Bool = false
     @ViewBuilder var primary: () -> Primary
     @ViewBuilder var secondary: () -> Secondary
     /// The view drawn between the panes. Defaults to `HandleSplitter`.
@@ -76,6 +83,8 @@ struct SplitPanes<Primary: View, Secondary: View, Divider: SplitDivider>: View {
         storageKey: String? = nil,
         priority: SplitSide? = .primary,
         hiddenSide: SplitSide? = nil,
+        animatesFraction: Bool = false,
+        dividerResetsOnDoubleClick: Bool = false,
         onResize: ((_ primary: CGFloat, _ secondary: CGFloat) -> Void)? = nil,
         @ViewBuilder primary: @escaping () -> Primary,
         @ViewBuilder secondary: @escaping () -> Secondary,
@@ -92,6 +101,8 @@ struct SplitPanes<Primary: View, Secondary: View, Divider: SplitDivider>: View {
         self.storageKey = storageKey
         self.priority = priority
         self.hiddenSide = hiddenSide
+        self.animatesFraction = animatesFraction
+        self.dividerResetsOnDoubleClick = dividerResetsOnDoubleClick
         self.onResize = onResize
         self.primary = primary
         self.secondary = secondary
@@ -112,18 +123,19 @@ struct SplitPanes<Primary: View, Secondary: View, Divider: SplitDivider>: View {
                 switch axis {
                 case .horizontal:
                     HSplit(left: primary, right: secondary)
-                        .splitter(divider)
+                        .splitter { resettableDivider }
                         .fraction(fraction)
                         .constraints(minPFraction: bounds.primary, minSFraction: bounds.secondary, priority: priority)
                         .hide(hideHolder)
                 case .vertical:
                     VSplit(top: primary, bottom: secondary)
-                        .splitter(divider)
+                        .splitter { resettableDivider }
                         .fraction(fraction)
                         .constraints(minPFraction: bounds.primary, minSFraction: bounds.secondary, priority: priority)
                         .hide(hideHolder)
                 }
             }
+            .ideAnimation(animatesFraction ? IDEAppearance.Motion.pane : nil, value: fraction.value)
             .frame(width: geo.size.width, height: geo.size.height)
             // Umbra: synchronous, so the opening width is resolved before the first frame is
             // drawn instead of flashing the panes at `defaultFraction` (upstream used `task`).
@@ -140,6 +152,16 @@ struct SplitPanes<Primary: View, Secondary: View, Divider: SplitDivider>: View {
             // the user's and stay put.
             guard idealPrimary == 0, idealSecondary == 0, storageKey == nil else { return }
             fraction.value = newValue
+        }
+    }
+
+    /// The divider, evening the two sides out on a double-click when asked.
+    private var resettableDivider: ResettableDivider<Divider> {
+        ResettableDivider(base: divider()) {
+            guard dividerResetsOnDoubleClick else { return }
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) {
+                fraction.value = defaultFraction
+            }
         }
     }
 
@@ -206,6 +228,19 @@ struct SplitPanes<Primary: View, Secondary: View, Divider: SplitDivider>: View {
     }
 }
 
+/// A divider that also reports a double-click, forwarding the wrapped
+/// divider's styling so `Split` lays out exactly as before.
+private struct ResettableDivider<Base: SplitDivider>: SplitDivider {
+    let base: Base
+    let onDoubleClick: () -> Void
+
+    var styling: SplitStyling { base.styling }
+
+    var body: some View {
+        base.onTapGesture(count: 2, perform: onDoubleClick)
+    }
+}
+
 extension SplitPanes where Divider == HandleSplitter {
     /// The common case: the standard Umbra divider, no `divider:` closure needed.
     init(
@@ -220,6 +255,8 @@ extension SplitPanes where Divider == HandleSplitter {
         storageKey: String? = nil,
         priority: SplitSide? = .primary,
         hiddenSide: SplitSide? = nil,
+        animatesFraction: Bool = false,
+        dividerResetsOnDoubleClick: Bool = false,
         onResize: ((_ primary: CGFloat, _ secondary: CGFloat) -> Void)? = nil,
         @ViewBuilder primary: @escaping () -> Primary,
         @ViewBuilder secondary: @escaping () -> Secondary
@@ -236,6 +273,8 @@ extension SplitPanes where Divider == HandleSplitter {
             storageKey: storageKey,
             priority: priority,
             hiddenSide: hiddenSide,
+            animatesFraction: animatesFraction,
+            dividerResetsOnDoubleClick: dividerResetsOnDoubleClick,
             onResize: onResize,
             primary: primary,
             secondary: secondary,

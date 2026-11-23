@@ -106,6 +106,7 @@ public struct IDERootView: View {
                             if workspace.hasOpenDocuments {
                                 IDEEditorLayoutNode(layout: workspace.editorLayout)
                                     .id(workspace.layoutEpoch)
+                                    .coordinateSpace(name: IDEEditorTabsBar.panesSpace)
                             } else {
                                 // The welcome page, or in a project the quieter empty editor.
                                 IDENoDocumentView()
@@ -144,21 +145,25 @@ public struct IDERootView: View {
                     }
                 }
                 .overlay(alignment: .bottom) {
-                    if workspace.isTerminalVisible {
-                        let expanded = workspace.isBottomPanelExpanded
-                        IDETerminalPanel()
-                            .frame(
-                                minHeight: expanded ? 0 : workspace.terminalHeight,
-                                maxHeight: expanded ? .infinity : workspace.terminalHeight
-                            )
-                            .idePanel()
-                            .opacity(workspace.chromeOpacity)
-                            .allowsHitTesting(workspace.chromeOpacity > 0.05)
-                            .accessibilityHidden(workspace.chromeOpacity <= 0.05)
-                    }
+                    // Always mounted: hiding the panel must not dismantle the
+                    // terminal hosts, whose dismantle ends their shells. Hidden
+                    // means transparent and inert, at its real height.
+                    let expanded = workspace.isBottomPanelExpanded
+                    IDETerminalPanel()
+                        .frame(
+                            minHeight: expanded ? 0 : workspace.terminalHeight,
+                            maxHeight: expanded ? .infinity : workspace.terminalHeight
+                        )
+                        .idePanel()
+                        .opacity(workspace.isTerminalVisible ? workspace.chromeOpacity : 0)
+                        .allowsHitTesting(workspace.isTerminalVisible && workspace.chromeOpacity > 0.05)
+                        .accessibilityHidden(!workspace.isTerminalVisible || workspace.chromeOpacity <= 0.05)
                 }
                 .onGeometryChange(for: Double.self) { Double($0.size.height) } action: {
                     workspace.bottomPanel.columnHeightChanged($0)
+                }
+                .onGeometryChange(for: CGSize.self) { $0.size } action: {
+                    workspace.editorAreaSize = $0
                 }
 
                 if workspace.isSwiftUIPreviewVisible, let preview = workspace.swiftUIPreview {

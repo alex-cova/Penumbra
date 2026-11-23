@@ -586,6 +586,20 @@ public final class IDEWorkspace {
         set { if position.selectionLength != newValue { position.selectionLength = newValue } }
     }
     var tabsByPane: [UUID: [IDETabRow]] = [:]
+    /// The pane a tab being dragged would move to if dropped now.
+    var tabDropPaneID: UUID?
+    /// Pane frames in the editor panes' coordinate space, for tab drags.
+    @ObservationIgnored var editorPaneFrames: [UUID: CGRect] = [:]
+
+    /// The pane at a point in the editor panes' space, for a dragged tab.
+    /// Frames of panes that have since closed are ignored.
+    func editorPane(at point: CGPoint) -> UUID? {
+        editorPaneFrames.first {
+            workbench.layout.findPane(id: $0.key) != nil && $0.value.contains(point)
+        }?.key
+    }
+    /// Editor area size reported by the root view, for the split guard.
+    @ObservationIgnored var editorAreaSize: CGSize = .zero
     /// Derived from `tabsByPane` so the toolbar's close group does not re-evaluate on every tab
     /// click (`tabsByPane` is rewritten, and so notifies, on every `refreshPresentation()`).
     private(set) var hasMultiplePanes = false
@@ -2130,7 +2144,7 @@ public final class IDEWorkspace {
     }
 
     public func toggleTerminal() {
-        isTerminalVisible.toggle()
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isTerminalVisible.toggle() }
         if !isTerminalVisible { isBottomPanelExpanded = false }
         if isTerminalVisible {
             // Leave the Gradle console showing if that's what's already selected; only a shell
@@ -2814,7 +2828,28 @@ public final class IDEWorkspace {
     /// two views on the same file, like Sublime Text/VS Code. The two panes reconcile on focus
     /// switch (`activatePane`'s outgoing sync + `showDocument`'s same-document refresh) rather
     /// than mirroring edits live.
+    /// Whether the active pane can be divided along `edge`'s axis with every
+    /// pane keeping its minimum length (Silica's `canSplit`). Before the root
+    /// view has reported a size there is nothing to go by, so splitting is allowed.
+    func canSplitActivePane(along edge: EditorSplitEdge) -> Bool {
+        guard editorAreaSize != .zero else { return true }
+        let horizontal = edge == .leading || edge == .trailing
+        // Panes along the split axis after dividing, each at its minimum, plus
+        // the terminal's minimum height when it is showing.
+        let paneCount = Double(workbench.panes.count + 1)
+        let minimum = IDEAppearance.Spacing.editorPaneMinLength
+        if horizontal {
+            return paneCount * minimum <= Double(editorAreaSize.width)
+        }
+        let terminal = isTerminalVisible ? IDEAppearance.Spacing.terminalMinHeight : 0
+        return paneCount * minimum + terminal <= Double(editorAreaSize.height)
+    }
+
     private func split(edge: EditorSplitEdge) {
+        guard canSplitActivePane(along: edge) else {
+            NSSound.beep()
+            return
+        }
         let sourcePane = workbench.activePane
         let sourceHost = host(for: sourcePane.id)
         let document = sourcePane.selectedDocument
@@ -2823,12 +2858,61 @@ public final class IDEWorkspace {
             // starts at the same spot, not wherever it was last explicitly synced.
             syncTextViewToDocument(sourceHost.textView, document: document, from: sourceHost)
         }
-        let newPane = workbench.splitActivePane(edge: edge)
+        let newPane = IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) {
+            workbench.splitActivePane(edge: edge)
+        }
         if let document {
             workbench.openDocument(document, in: newPane)
         }
         rebuildLayoutHosts()
         activatePane(workbench.activePaneID)
+        Task { await workspaceBridge.syncWorkbench(workbench) }
+    }
+
+    /// Moves a tab to another place in its pane's bar (dragging it there).
+    func reorderTab(_ documentID: UUID, in paneID: UUID, to index: Int) {
+        guard let pane = workbench.layout.findPane(id: paneID),
+              let current = pane.documents.firstIndex(where: { $0.id == documentID }) else { return }
+        let target = min(max(index, 0), pane.documents.count - 1)
+        guard target != current else { return }
+        let document = pane.documents.remove(at: current)
+        pane.documents.insert(document, at: target)
+        refreshPresentation()
+    }
+
+    /// Moves a tab from one pane to the end of another's bar (dragging it onto
+    /// that pane) and shows it there. No close prompt: nothing is closed. A
+    /// source pane left without tabs closes, as when its last tab is closed.
+    func moveTab(_ documentID: UUID, from sourceID: UUID, toPane targetID: UUID) {
+        guard sourceID != targetID,
+              let source = workbench.layout.findPane(id: sourceID),
+              let target = workbench.layout.findPane(id: targetID),
+              let index = source.documents.firstIndex(where: { $0.id == documentID }) else { return }
+        // Flush the source pane's live state into the document first.
+        if let document = source.selectedDocument {
+            syncTextViewToDocument(host(for: source.id).textView, document: document, from: host(for: source.id))
+        }
+        let document = source.documents[index]
+        let wasTemporary = source.temporaryDocumentID == documentID
+        source.documents.remove(at: index)
+        if source.temporaryDocumentID == documentID { source.temporaryDocumentID = nil }
+        if source.selectedDocumentID == documentID {
+            source.selectedDocumentID = source.documents.last?.id
+        }
+        source.tabHistory.remove(documentID: documentID)
+        if let existing = target.documents.firstIndex(where: { $0.id == documentID }) {
+            target.documents.remove(at: existing)
+        }
+        target.documents.append(document)
+        if wasTemporary { target.temporaryDocumentID = documentID }
+        target.selectDocument(documentID)
+        if source.documents.isEmpty {
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { closePane(sourceID) }
+        }
+        rebuildLayoutHosts()
+        activatePane(targetID)
+        focusActiveEditor()
+        refreshPresentation()
         Task { await workspaceBridge.syncWorkbench(workbench) }
     }
 
@@ -2907,7 +2991,7 @@ public final class IDEWorkspace {
     }
 
     public func toggleSidebar() {
-        isSidebarVisible.toggle()
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { isSidebarVisible.toggle() }
         if isSidebarVisible {
             requestSidebarFocus()
         } else {
@@ -3363,7 +3447,7 @@ public final class IDEWorkspace {
         let otherPaneIDs = workbench.panes.map(\.id).filter { $0 != paneID }
         guard !otherPaneIDs.isEmpty else { return }
         for otherPaneID in otherPaneIDs {
-            workbench.closePane(otherPaneID)
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { workbench.closePane(otherPaneID) }
             hostCache.remove(otherPaneID)
             hostedPaneIDs.remove(otherPaneID)
         }
@@ -4578,7 +4662,7 @@ public final class IDEWorkspace {
     }
 
     private func closePane(_ paneID: UUID) {
-        workbench.closePane(paneID)
+        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { workbench.closePane(paneID) }
         hostCache.remove(paneID)
         hostedPaneIDs.remove(paneID)
         rebuildLayoutHosts()

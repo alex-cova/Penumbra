@@ -397,12 +397,15 @@ struct IDETextViewRepresentable: NSViewRepresentable {
 struct IDEEditorLayoutNode: View {
     @Environment(IDEWorkspace.self) private var workspace
     let layout: EditorLayout
+    /// The edge a pane in this node grows from when it opens and shrinks to when it
+    /// closes: away from the other side of its split. `nil` for the only pane.
+    var growthEdge: Edge? = nil
 
     var body: some View {
         let _ = IDEBodyDiagnostics.note("IDEEditorLayoutNode")
         switch layout {
         case .pane(let pane):
-            IDEEditorPaneView(paneID: pane.id)
+            IDEEditorPaneView(paneID: pane.id, growthEdge: growthEdge)
                 .id(pane.id)
         case .horizontal(let data):
             // `.horizontal` means children sit left/right (see `EditorSplitData.split`), i.e. an
@@ -416,9 +419,49 @@ struct IDEEditorLayoutNode: View {
     }
 }
 
+/// Puts a pane in its allocated frame, growing from `edge` as `presence` runs
+/// 0 → 1 on open and shrinking back to it on close (Silica's `PanePlacement`,
+/// re-expressed without layout frames: the pane measures its own allocation).
+private struct PanePresence: ViewModifier, Animatable {
+    let edge: Edge?
+    var presence: CGFloat
+
+    nonisolated var animatableData: CGFloat {
+        get { presence }
+        set { presence = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        if let edge {
+            GeometryReader { proxy in
+                let sideways = edge == .leading || edge == .trailing
+                content
+                    .frame(
+                        width: sideways ? proxy.size.width * presence : proxy.size.width,
+                        height: sideways ? proxy.size.height : proxy.size.height * presence
+                    )
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: alignment(of: edge))
+                    .clipped()
+            }
+        } else {
+            content
+        }
+    }
+
+    private func alignment(of edge: Edge) -> Alignment {
+        switch edge {
+        case .leading: return .leading
+        case .trailing: return .trailing
+        case .top: return .top
+        case .bottom: return .bottom
+        }
+    }
+}
+
 struct IDEEditorPaneView: View {
     @Environment(IDEWorkspace.self) private var workspace
     let paneID: UUID
+    var growthEdge: Edge? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -440,6 +483,22 @@ struct IDEEditorPaneView: View {
                 }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(IDEEditorTabsBar.panesSpace)) } action: {
+            workspace.editorPaneFrames[paneID] = $0
+        }
+        .onDisappear { workspace.editorPaneFrames[paneID] = nil }
+        // Where a tab dragged from another pane would land.
+        .overlay {
+            if workspace.tabDropPaneID == paneID {
+                Rectangle()
+                    .fill(IDEAppearance.ColorToken.accent.opacity(0.14))
+                    .allowsHitTesting(false)
+            }
+        }
+        .transition(.modifier(
+            active: PanePresence(edge: growthEdge, presence: 0),
+            identity: PanePresence(edge: growthEdge, presence: 1)
+        ))
     }
 }
 
@@ -456,6 +515,14 @@ struct IDEEditorSplitChain: View {
     let axis: SplitLayout
     let children: [EditorLayout]
     var start = 0
+    /// Growth edge of the first child; later children are the second side of
+    /// their link and grow from the opposite edge. Computed from `axis` when nil.
+    var firstGrowthEdge: Edge? = nil
+
+    private var firstEdge: Edge {
+        firstGrowthEdge ?? (axis == .horizontal ? .leading : .top)
+    }
+    private var restEdge: Edge { axis == .horizontal ? .trailing : .bottom }
 
     var body: some View {
         let remaining = children.count - start
@@ -463,7 +530,7 @@ struct IDEEditorSplitChain: View {
             if remaining <= 0 {
                 Color.clear
             } else if remaining == 1 {
-                IDEEditorLayoutNode(layout: children[start])
+                IDEEditorLayoutNode(layout: children[start], growthEdge: firstEdge)
             } else {
                 SplitPanes(
                     axis: axis,
@@ -471,11 +538,13 @@ struct IDEEditorSplitChain: View {
                     minSecondary: IDEAppearance.Spacing.editorPaneMinLength * CGFloat(remaining - 1),
                     defaultFraction: 1 / CGFloat(remaining),
                     // Panes scale together with the window rather than one keeping its size.
-                    priority: nil
+                    priority: nil,
+                    animatesFraction: true,
+                    dividerResetsOnDoubleClick: true
                 ) {
-                    IDEEditorLayoutNode(layout: children[start])
+                    IDEEditorLayoutNode(layout: children[start], growthEdge: firstEdge)
                 } secondary: {
-                    IDEEditorSplitChain(axis: axis, children: children, start: start + 1)
+                    IDEEditorSplitChain(axis: axis, children: children, start: start + 1, firstGrowthEdge: restEdge)
                 }
             }
         }
