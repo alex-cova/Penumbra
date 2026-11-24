@@ -692,8 +692,10 @@ final class IDEAgentConversation: Identifiable {
         var services = IDEACPHostServices.make(workspace: workspace, root: root, environment: environment)
         services.askText = { [weak self] prompt in await self?.askElicitation(prompt) }
         let provider = acpProviderEntry
+        // `UMBRA_ACP_RECORD_DIR` records this process's traffic for replay tests (`IDEACPRecorder`).
+        let recorder = IDEACPRecorder.make(agent: definition.displayName, version: launch.version)
         let created = ACPClientSession(
-            transport: transport,
+            transport: recorder?.wrap(transport) ?? transport,
             hostServices: services,
             cwd: root.path,
             mode: mode,

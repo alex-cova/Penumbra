@@ -496,6 +496,50 @@ final class IDEACPTests: XCTestCase {
         await acpEventually("agent process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
     }
 
+    func testAChatCanBeRecordedAndTheRecordingReplays() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("acp-rec-\(UUID().uuidString)", isDirectory: true)
+        setenv(IDEACPRecorder.environmentKey, folder.path, 1)
+        defer {
+            unsetenv(IDEACPRecorder.environmentKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let (root, script, log, pid) = try makeProject()
+        let (conversation, host, _) = makeConversation(root: root, script: script, log: log, pid: pid)
+        XCTAssertNotNil(host.agentProjectRoot)
+        conversation.submit(text: "hello")
+        await acpEventually("reply") { !conversation.isRunning && conversation.entries.contains { $0.kind == .assistant } }
+        conversation.teardown()
+        await acpEventually("agent process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
+
+        let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+        let file = try XCTUnwrap(files.first { $0.lastPathComponent.hasPrefix("script-agent-") }, "\(files)")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(text.hasPrefix("// Script Agent"), text)
+        let entries = try ACPRecording.entries(from: text)
+        let methods = entries.compactMap { $0.side == .client ? $0.frame?["method"]?.stringValue : nil }
+        XCTAssertEqual(Array(methods.prefix(2)), ["initialize", "session/new"])
+        XCTAssertTrue(methods.contains("session/prompt"))
+        XCTAssertTrue(text.contains("Hello from ACP"))
+
+        // The recording drives a fresh client the way the agent did.
+        let replay = ACPReplayTransport(entries)
+        let session = ACPClientSession(transport: replay, cwd: root.path)
+        var replayed = ""
+        for await event in await session.send(prompt: [.text("[Editor state]\n[End editor state]\n\nhello")]) {
+            if case .textDelta(let delta) = event { replayed += delta }
+        }
+        XCTAssertTrue(replay.mismatches.isEmpty, "\(replay.mismatches)")
+        XCTAssertTrue(replayed.contains("Hello from ACP"), replayed)
+        await session.close()
+    }
+
+    func testRecordingsScrubTheHomeFolderAndSecrets() {
+        let scrubbed = IDEACPRecorder.scrub(NSHomeDirectory() + "/code token=sk-abcdefghijklmnop")
+        XCTAssertTrue(scrubbed.hasPrefix("~/code"), scrubbed)
+        XCTAssertFalse(scrubbed.contains("sk-abcdefghijklmnop"), scrubbed)
+        XCTAssertNil(IDEACPRecorder.make(agent: "x", version: nil, environment: [:]), "off unless the folder is named")
+    }
+
     func testSettlingLeavesFinishedCallsAndPlansAlone() {
         var done = IDEAgentEntry(kind: .toolCall(name: "read_file"), text: "{}")
         done.output = ToolOutput("ok")

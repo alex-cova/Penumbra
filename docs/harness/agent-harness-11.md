@@ -2,7 +2,7 @@
 
 Part of the series `agent-harness-1.md` to `agent-harness-11.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-11-24, against the T3 Code tree (`docs/internals/*.md`, `docs/user/*.md`). The largest item from the same comparison, portable handoffs, has its own doc: `agent-harness-10.md`.
 
-**Status:** items 1, 4 and 5 built 2026-11-24; items 2 and 3 are proposals. Each item is independent.
+**Status:** items 1, 4 and 5 built 2026-11-24; item 3's tooling built the same day, its recordings of real agents not made yet; item 2 is a proposal. Each item is independent.
 
 ## Already equal or better (checked, no work)
 
@@ -45,6 +45,15 @@ Webhooks and multi-step workflows stay out of scope: they need a listening serve
 - A `ReplayTransport` in `AgentKit/Testing` that plays a file back and fails on an unexpected client frame.
 - Record one turn each from Claude Code, Codex, Kiro and Muse, covering a tool call, a permission request, a Stop and a disconnect. Kiro's late `config_option_update` and Muse's sign-in message are the quirks that have broken before.
 **Size:** small to medium. It catches adapter upgrades that change wire behaviour, which is what the managed-adapter updates risk.
+
+**Tooling built 2026-11-24** (no setting: a developer switch).
+- *Format* (`ACPRecording`, AgentKit): one JSON object per line, `{"from":"client"|"agent","frame":{…}}`, `{"from":"agent","closed":true}` where the agent went away; `//` lines are notes.
+- *Recording*: `ACPRecordingTransport` wraps any transport and hands each frame to the host. In Umbra, `UMBRA_ACP_RECORD_DIR=/some/folder` makes every ACP agent process write `<agent>-<version>-<time>.jsonl` there (`IDEACPRecorder`, 0600): every string scrubbed with `IDEACPSecretScrubber` and the home folder turned into `~`, without breaking the JSON. Prompts, replies and paths remain, so a recording is read before it is committed.
+- *Replay*: `ACPReplayTransport` (AgentKit `Testing/`) plays the agent's side to a live `ACPClientSession`, matching each client frame (requests and notifications by method, answers by id and kind; a run of client frames may arrive in any order) and putting the live request ids into the recorded answers. Anything else is a `mismatch` and the stream ends like a disconnect.
+- Found on the way: a session its caller dropped before the run task started never ended its stream; it now ends with `.runEnded(.stopped)` (`ACPDroppedSessionTests`).
+- Tests: `ACPReplayTests` (record the scripted agent, replay, same events; a changed client is a mismatch; a recorded disconnect fails the run alike), `IDEACPTests.testAChatCanBeRecordedAndTheRecordingReplays`, `testRecordingsScrubTheHomeFolderAndSecrets`.
+
+**To record** (uses the agent's account, so a person starts it): `UMBRA_ACP_RECORD_DIR=~/acp-recordings ./run.sh`, then per agent one chat that reads a file, asks permission for a command (answer it), and is stopped mid-reply; a disconnect is Restart Agent mid-run. Put the files under `Packages/AgentKit/Tests/AgentKitTests/Fixtures/ACPRecordings/` and add a replay test per file asserting what the client must make of it.
 
 ## 4. Startup phase from real signals (built 2026-11-24)
 

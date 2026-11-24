@@ -358,7 +358,12 @@ public actor ACPClientSession {
         timedOutCalls = []
         activeContinuation = continuation
         let task = Task { [weak self] in
-            guard let self else { return }
+            // A session dropped by its caller still ends the stream, exactly once.
+            guard let self else {
+                continuation.yield(.runEnded(.stopped))
+                continuation.finish()
+                return
+            }
             await self.runPrompt(blocks: blocks, continuation: continuation)
         }
         activeRunTask = task
