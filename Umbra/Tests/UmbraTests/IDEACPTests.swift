@@ -117,6 +117,7 @@ def request(method, params):
         if msg.get("method"): log(msg["method"])
         if msg.get("id") == rid: return msg
 cwd = ""
+servers = []
 for line in sys.stdin:
     if not line.strip(): continue
     msg = json.loads(line)
@@ -138,9 +139,13 @@ for line in sys.stdin:
             send({"jsonrpc":"2.0","id":msg["id"],"error":{"code":-32000,"message":"login required token=sk-abcdefghijklmnop"}})
         else:
             cwd = msg["params"].get("cwd","")
+            servers = msg["params"].get("mcpServers",[])
+            log("mcp=" + (",".join(s.get("name","?") for s in servers) or "none"))
             send({"jsonrpc":"2.0","id":msg["id"],"result":session_result()})
     elif method == "session/new":
         cwd = msg["params"].get("cwd","")
+        servers = msg["params"].get("mcpServers",[])
+        log("mcp=" + (",".join(s.get("name","?") for s in servers) or "none"))
         send({"jsonrpc":"2.0","id":msg["id"],"result":session_result()})
     elif method == "session/set_mode":
         send({"jsonrpc":"2.0","id":msg["id"],"result":{}})
@@ -190,6 +195,29 @@ for line in sys.stdin:
             send({"jsonrpc":"2.0","id":msg["id"],"result":{"stopReason":"end_turn"}})
             continue
         text_chunk("Hello from ACP")
+        if "recall" in prompt:
+            # Start the session's MCP server the way an agent does and ask it for the earlier messages.
+            import subprocess
+            if not servers:
+                text_chunk(" recalled:none")
+            else:
+                server = servers[0]
+                child = subprocess.Popen([server["command"]] + server["args"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+                for frame in [
+                    {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fake","version":"1"}}},
+                    {"jsonrpc":"2.0","method":"notifications/initialized"},
+                    {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_conversation","arguments":{"query":"hello"}}}]:
+                    child.stdin.write(json.dumps(frame) + "\n")
+                child.stdin.flush()
+                answer = "no answer"
+                for line in child.stdout:
+                    reply = json.loads(line)
+                    if reply.get("id") == 2:
+                        answer = reply["result"]["content"][0]["text"]
+                        break
+                child.stdin.close()
+                child.wait(timeout=10)
+                text_chunk(" recalled:" + answer)
         if "elicit" in prompt:
             resp = request("elicitation/create", {"sessionId": "script-1", "message": "What color?", "mode": "form", "requestedSchema": {"type": "object", "title": "What color?", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}})
             result = resp.get("result", {})
@@ -1177,6 +1205,57 @@ final class IDEACPTests: XCTestCase {
         }
         let after = (try String(contentsOf: log, encoding: .utf8))
         XCTAssertEqual(occurrences(of: "handoff=yes", in: after), 1, after)
+        next.teardown()
+        await acpEventually("agent process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
+    }
+
+    func testAHandedOffACPSessionCanReadTheEarlierMessagesThroughUmbrasMCPServer() async throws {
+        let helper = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
+            .appendingPathComponent(IDEACPConversationServer.helperName)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: helper.path), "the test target builds the helper")
+        let previous = IDEACPConversationServer.locateHelper
+        IDEACPConversationServer.locateHelper = { helper }
+        defer { IDEACPConversationServer.locateHelper = previous }
+
+        let (root, script, log, pid) = try makeProject()
+        let (snapshot, settings) = try await finishedHello(root: root, script: script, log: log, pid: pid)
+        try setMode(pid, "stale")
+        let (next, nextHost) = reload(snapshot, settings: settings, root: root)
+        XCTAssertNotNil(nextHost.agentProjectRoot)
+        next.submit(text: "recall what I said")
+        await acpEventually("handed-off turn finishes") {
+            !next.isRunning && next.entries.filter { $0.kind == .assistant }.count == 2
+        }
+        let logText = (try String(contentsOf: log, encoding: .utf8))
+        // The first chat had nothing to hand off; the session that replaced the stale one is given the server.
+        XCTAssertEqual(occurrences(of: "mcp=none", in: logText), 1, logText)
+        XCTAssertEqual(occurrences(of: "mcp=umbra", in: logText), 1, logText)
+        let answer = next.entries.filter { $0.kind == .assistant }.map(\.text).joined()
+        XCTAssertTrue(answer.contains("recalled:"), answer)
+        XCTAssertTrue(answer.contains("#1 [user] hello"), answer)
+        XCTAssertEqual(next.conversationArchive.first?.text, "hello")
+        next.teardown()
+        await acpEventually("agent process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
+    }
+
+    func testWithoutTheHelperAnACPSessionGetsNoServer() async throws {
+        let previous = IDEACPConversationServer.locateHelper
+        IDEACPConversationServer.locateHelper = { nil }
+        defer { IDEACPConversationServer.locateHelper = previous }
+        let (root, script, log, pid) = try makeProject()
+        let (snapshot, settings) = try await finishedHello(root: root, script: script, log: log, pid: pid)
+        try setMode(pid, "stale")
+        let (next, nextHost) = reload(snapshot, settings: settings, root: root)
+        XCTAssertNotNil(nextHost.agentProjectRoot)
+        next.submit(text: "recall what I said")
+        await acpEventually("turn finishes") {
+            !next.isRunning && next.entries.filter { $0.kind == .assistant }.count == 2
+        }
+        let logText = (try String(contentsOf: log, encoding: .utf8))
+        XCTAssertFalse(logText.contains("mcp=umbra"), logText)
+        let answer = next.entries.filter { $0.kind == .assistant }.map(\.text).joined()
+        XCTAssertTrue(answer.contains("recalled:none"), answer)
+        XCTAssertTrue(next.conversationArchive.isEmpty, "nothing is archived for a server that was not given")
         next.teardown()
         await acpEventually("agent process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
     }

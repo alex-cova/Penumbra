@@ -32,6 +32,7 @@ let package = Package(
     products: [
         .library(name: "UmbraAgentSupport", targets: ["UmbraAgentSupport"]),
         .executable(name: "umbra-agent", targets: ["UmbraAgent"]),
+        .executable(name: "umbra-conversation-mcp", targets: ["UmbraConversationMCP"]),
     ],
     dependencies: [
         .package(name: "Penumbra", path: ".."),
@@ -82,6 +83,15 @@ let package = Package(
             name: "UmbraAgent",
             dependencies: [
                 "UmbraAgentSupport",
+            ],
+            swiftSettings: swift6
+        ),
+        // The MCP server an external ACP agent gets for `read_conversation` after a handoff
+        // (docs/harness/agent-harness-10.md). Ships beside the app binary in Contents/MacOS.
+        .executableTarget(
+            name: "UmbraConversationMCP",
+            dependencies: [
+                .product(name: "AgentKit", package: "AgentKit"),
             ],
             swiftSettings: swift6
         ),
@@ -158,6 +168,8 @@ let package = Package(
             name: "UmbraTests",
             dependencies: [
                 "Umbra",
+                // Built for the tests that start it the way an external agent does.
+                "UmbraConversationMCP",
                 "UmbraAgentSupport",
                 .product(name: "Penumbra", package: "Penumbra"),
                 .product(name: "PenumbraLanguages", package: "Penumbra"),

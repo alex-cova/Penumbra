@@ -15,48 +15,6 @@ import UmbraAgentSupport
 /// Phase 3): every provider through the shared factory, the same permission files, the
 /// host-independent `run_command`, and project MCP servers behind `--allow-mcp`. Command
 /// approvals reach the ACP client as `session/request_permission` (see `ACPAgentEndpoint`).
-final class ACPStdioTransport: ACPTransport, @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: AsyncStream<Data>.Continuation?
-    private var closedFlag = false
-    let incoming: AsyncStream<Data>
-
-    init() {
-        var captured: AsyncStream<Data>.Continuation?
-        incoming = AsyncStream<Data> { captured = $0 }
-        continuation = captured
-        FileHandle.standardInput.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard let self else { return }
-            if data.isEmpty {
-                FileHandle.standardInput.readabilityHandler = nil
-                self.lock.withLock { self.continuation }?.finish()
-            } else {
-                self.lock.withLock { self.continuation }?.yield(data)
-            }
-        }
-    }
-
-    func send(_ line: Data) async throws {
-        lock.withLock {
-            if closedFlag { return }
-            var frame = line
-            if !frame.isEmpty, frame.last != UInt8(ascii: "\n") { frame.append(UInt8(ascii: "\n")) }
-            FileHandle.standardOutput.write(frame)
-        }
-    }
-
-    func close() async {
-        let continuation: AsyncStream<Data>.Continuation? = lock.withLock {
-            closedFlag = true
-            let captured = self.continuation
-            self.continuation = nil
-            return captured
-        }
-        FileHandle.standardInput.readabilityHandler = nil
-        continuation?.finish()
-    }
-}
 
 struct ACPOptions {
     var provider: String
@@ -156,7 +114,7 @@ struct UmbraACP {
             FileHandle.standardError.write(Data("UmbraACP: \(error)\n".utf8))
             exit(2)
         }
-        let transport = ACPStdioTransport()
+        let transport = ACPStandardIOTransport()
         // Tests and operators can redirect session storage; otherwise the app's own store is used.
         let store: URL? = ProcessInfo.processInfo.environment["UMBRA_ACP_SESSIONS_DIR"].map { URL(fileURLWithPath: $0) }
             ?? (try? SessionStore.defaultDirectory(appFolder: "com.umbra.editor"))

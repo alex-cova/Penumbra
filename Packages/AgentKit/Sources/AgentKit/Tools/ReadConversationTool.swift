@@ -32,7 +32,12 @@ public struct ReadConversationTool: AgentTool {
     }
 
     public func run(_ arguments: ToolArguments, context: ToolContext) async throws -> String {
-        let all = ConversationHandoff.readable(await turns())
+        try Self.read(await turns(), arguments: arguments)
+    }
+
+    /// The tool's answer over `turns`, without a session: Umbra's MCP helper serves it to external agents.
+    public static func read(_ turns: [HandoffTurn], arguments: ToolArguments) throws -> String {
+        let all = ConversationHandoff.readable(turns)
         guard !all.isEmpty else { return "[No earlier messages are saved for this conversation.]" }
         if let query = try arguments.optionalString("query")?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty {
             return search(all, query: query)
@@ -78,7 +83,7 @@ public struct ReadConversationTool: AgentTool {
         return result
     }
 
-    private func search(_ all: [HandoffTurn], query: String) -> String {
+    private static func search(_ all: [HandoffTurn], query: String) -> String {
         var shown: [String] = []
         var total = 0
         for (index, turn) in all.enumerated() {

@@ -187,6 +187,8 @@ final class IDEAgentConversation: Identifiable {
     /// A new external session replaced one that had a transcript: the next prompt carries the earlier
     /// messages (`ConversationHandoff`, `docs/harness/agent-harness-10.md`).
     @ObservationIgnored private var acpOwesHandoff = false
+    /// This chat's external session was given the `read_conversation` MCP server (`IDEACPConversationServer`).
+    @ObservationIgnored private var acpServesArchive = false
     /// The conversation of the chat this one continues on another agent (`IDEAgentController.selectProvider`),
     /// sent with the first message, whichever backend takes it. Not saved: the chat is empty until then.
     @ObservationIgnored var carriedTurns: [HandoffTurn] = []
@@ -701,11 +703,17 @@ final class IDEAgentConversation: Identifiable {
             let earlier = acpHasEarlierTranscript
             let savedID = lastACPSessionID
             var notice: String?
-            switch IDEACPSessionResume.plan(
+            let plan = IDEACPSessionResume.plan(
                 savedSessionID: savedID,
                 agentSupportsLoad: response.agentCapabilities.loadSession,
                 hasEarlierTranscript: earlier)
-            {
+            // A new session that will be handed earlier messages, or a restored one that was, can read the rest.
+            let servesArchive: Bool = switch plan {
+            case .load: !conversationArchive.isEmpty
+            case .create: earlier || !carriedTurns.isEmpty
+            }
+            await serveConversationArchive(to: created, if: servesArchive)
+            switch plan {
             case .load(let id):
                 do {
                     _ = try await created.loadSession(id: id)
@@ -719,6 +727,8 @@ final class IDEAgentConversation: Identifiable {
                     // Authentication stays on this agent. A stale id is not reused.
                     if IDEACPAuth.isAuthenticationFailure(error) { throw error }
                     lastACPSessionID = nil
+                    // The new session will be handed the transcript, so it gets the server whatever the load had.
+                    await serveConversationArchive(to: created, if: earlier || !carriedTurns.isEmpty)
                     _ = try await created.newSession()
                     acpOwesHandoff = earlier
                     notice = IDEACPSessionResume.staleNotice
@@ -814,11 +824,41 @@ final class IDEAgentConversation: Identifiable {
     private func acpPrompt(_ message: String, before entryID: UUID?) -> [ACPContentBlock] {
         guard acpOwesHandoff || !carriedTurns.isEmpty else { return [.text(message)] }
         acpOwesHandoff = false
+        let turns = entryID == nil ? carriedTurns + IDEACPHandoff.turns(from: entries) : pendingHandoffTurns(before: entryID)
+        // What `read_conversation` reads: the turns of this handoff, by its numbers. Written before the prompt goes.
+        var served = false
+        if acpServesArchive {
+            conversationArchive = ConversationHandoff.readable(turns)
+            served = IDEACPConversationServer.write(conversationArchive, to: conversationArchiveURL)
+        }
         guard let handoff = takeHandoff(
             before: entryID, contextWindow: nil, requestBytes: message.utf8.count,
-            turns: entryID == nil ? carriedTurns + IDEACPHandoff.turns(from: entries) : nil)
+            turns: turns, retrievalTool: served ? ReadConversationTool.name : nil)
         else { return [.text(message)] }
         return [.text(handoff), .text(message)]
+    }
+
+    private var conversationArchiveURL: URL {
+        IDEACPConversationServer.archiveURL(
+            store: store, projectRoot: host?.agentProjectRoot?.path, conversationID: conversationID)
+    }
+
+    /// Lists the `read_conversation` server for the session about to be made, when `condition` holds and the
+    /// helper is there; writes the saved archive first, so a restored session reads what it was handed.
+    private func serveConversationArchive(to session: ACPClientSession, if condition: Bool) async {
+        guard condition, let helper = IDEACPConversationServer.locateHelper() else {
+            acpServesArchive = false
+            await session.setMCPServers([])
+            return
+        }
+        let url = conversationArchiveURL
+        guard IDEACPConversationServer.write(conversationArchive, to: url) else {
+            acpServesArchive = false
+            await session.setMCPServers([])
+            return
+        }
+        acpServesArchive = true
+        await session.setMCPServers([IDEACPConversationServer.entry(helper: helper, archive: url)])
     }
 
     /// The handoff block for a backend that has not seen this chat's earlier messages: the carried chat's,

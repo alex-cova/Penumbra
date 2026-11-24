@@ -237,6 +237,7 @@ final class IDEAgentController {
             for run in IDEAgentSavedTranscript.decode(snapshot.host).checkpoints { blobs.removeRun(run.id) }
         }
         IDEAgentToolOutputs(store: store, projectRoot: root.path, conversationID: id).removeConversation()
+        IDEACPConversationServer.removeArchive(store: store, projectRoot: root.path, conversationID: id)
         store.delete(id, projectRoot: root.path)
         refreshHistory()
     }
@@ -247,6 +248,7 @@ final class IDEAgentController {
         store.deleteAll(projectRoot: root.path)
         IDEAgentCheckpointBlobs(store: store, projectRoot: root.path).removeAll()
         IDEAgentToolOutputs(store: store, projectRoot: root.path, conversationID: UUID()).removeAll()
+        IDEACPConversationServer.removeAll(store: store, projectRoot: root.path)
         promptHistory()?.clear()
         history = []
     }
