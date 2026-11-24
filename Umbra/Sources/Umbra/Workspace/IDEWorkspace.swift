@@ -4356,6 +4356,10 @@ public final class IDEWorkspace {
                 action: .showGradleOutput
             )
         case .failed(let summary):
+            // A failed sync leaves the reason in the Gradle console: reveal it, so the failure
+            // is visible without hunting the notification. Idempotent with the `syncFailed`
+            // environment hook, which asks for the same tab.
+            showGradleOutput()
             notifications.post("Gradle sync failed", detail: summary, category: .gradle, severity: .error, action: .showGradleOutput)
         case .cancelled:
             notifications.post("Gradle sync cancelled", category: .gradle, severity: .info, action: .showGradleOutput)
