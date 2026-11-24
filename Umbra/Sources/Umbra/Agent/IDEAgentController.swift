@@ -39,6 +39,7 @@ final class IDEAgentController {
     var isShowingSchedules = false
     /// What this project's chats were asked, by project folder.
     @ObservationIgnored private var promptHistories: [String: IDEAgentPromptHistory] = [:]
+    @ObservationIgnored private var promptStashes: [String: IDEAgentPromptStash] = [:]
     /// Whether the user is looking at this window (it is the key window). Without an answer, assume yes.
     @ObservationIgnored var isUserWatching: (() -> Bool)?
     /// Tells the user something about a chat they are not looking at: the chat's id, a title, a detail.
@@ -474,6 +475,39 @@ final class IDEAgentController {
         let created = IDEAgentPromptHistory(file: file)
         promptHistories[key] = created
         return created
+    }
+
+    /// This project's stashed drafts, beside its prompt history.
+    func promptStash() -> IDEAgentPromptStash? {
+        guard let root = host?.agentProjectRoot else { return nil }
+        let key = root.standardizedFileURL.path
+        if let existing = promptStashes[key] { return existing }
+        let file = store.map { $0.projectDirectory(for: root.path).appendingPathComponent("stash.json") }
+        let created = IDEAgentPromptStash(file: file)
+        promptStashes[key] = created
+        return created
+    }
+
+    /// ⌃S: puts the selected chat's draft and its images aside and empties the field.
+    func stashDraft() {
+        guard let stash = promptStash(),
+              stash.add(text: selected.draft, images: selected.pendingImages) != nil
+        else { return }
+        selected.draft = ""
+        selected.pendingImages = []
+        selected.promptRecall.reset()
+    }
+
+    /// Brings a stashed draft back into the field. What the field held is stashed first, so nothing is lost.
+    func restoreStashed(_ id: UUID) {
+        guard let stash = promptStash() else { return }
+        let current = (text: selected.draft, images: selected.pendingImages)
+        guard let restored = stash.take(id) else { return }
+        stash.add(text: current.text, images: current.images)
+        selected.draft = restored.text
+        selected.pendingImages = restored.images
+        selected.promptRecall.reset()
+        composerFocusRequest += 1
     }
 
     /// ↑ (`-1`) and ↓ (`1`) in the message field: the text to show, or `nil` for none.

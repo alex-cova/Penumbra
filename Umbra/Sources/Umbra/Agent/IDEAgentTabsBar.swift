@@ -1,3 +1,4 @@
+import AgentKit
 import SwiftUI
 
 /// The chat tabs above the transcript. It only appears with two or more chats; a single chat is just
@@ -16,6 +17,7 @@ struct IDEAgentTabsBar: View {
                 ForEach(agent.conversations) { conversation in
                     IDEAgentTabItem(
                         conversation: conversation,
+                        saved: conversation.pendingLoadID.flatMap { id in agent.history.first { $0.id == id } },
                         isSelected: conversation.id == agent.selectedID,
                         onSelect: { agent.select(conversation.id) },
                         onClose: { requestClose(conversation) }
@@ -70,6 +72,8 @@ struct IDEAgentTabsBar: View {
 
 private struct IDEAgentTabItem: View {
     let conversation: IDEAgentConversation
+    /// The saved summary of a tab not read yet, for its tooltip.
+    let saved: SessionSummary?
     let isSelected: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
@@ -83,7 +87,9 @@ private struct IDEAgentTabItem: View {
             IDEChromeTabCloseButton(side: 14, onClose: onClose)
         }
         .frame(maxWidth: 220)
-        .help(conversation.title)
+        // What it is doing, its last reply, what it changed and cost (a native tooltip: a popover on
+        // hover would take the keyboard from the message field).
+        .help(IDEAgentTabPreview.text(for: conversation, saved: saved))
     }
 
     @ViewBuilder private var status: some View {

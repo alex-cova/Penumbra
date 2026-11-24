@@ -86,6 +86,13 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         try await renderDocked("docked-composer-empty")
         workspace.agent.draft = (1...30).map { "Line \($0) of a long request that keeps going." }.joined(separator: "\n")
         try await renderDocked("docked-composer-long")
+
+        // Two drafts put aside: the tray button with its count appears beside +.
+        workspace.agent.stashDraft()
+        workspace.agent.draft = "Then add a test for the price column"
+        workspace.agent.stashDraft()
+        XCTAssertEqual(workspace.agent.promptStash()?.entries.count, 2)
+        try await renderDocked("docked-composer-stash")
     }
 
     /// The banner lane over the docked composer: an approval whose card has scrolled away, then a retry wait.

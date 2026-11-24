@@ -26,6 +26,8 @@ struct IDEAgentComposerField: NSViewRepresentable {
     var onDropFiles: (([URL]) -> String)?
     /// Image data pasted from the clipboard. `true` consumes the paste (the image became a chip).
     var onPasteImage: ((Data) -> Bool)?
+    /// ⌃S: put the draft aside. Without it the key does what the text view does.
+    var onStash: (() -> Void)?
 
     /// How tall the text grows before it scrolls. With the composer card's bar and padding the card stops at
     /// about 340 pt, like Codex's message box.
@@ -239,6 +241,9 @@ struct IDEAgentComposerField: NSViewRepresentable {
             case .searchHistory:
                 parent.state.isSearchingHistory.toggle()
                 if parent.state.isSearchingHistory { refreshSuggestions() } else { parent.state.dismiss() }
+            case .stashDraft:
+                guard let stash = parent.onStash else { return false }
+                stash()
             }
             return true
         }

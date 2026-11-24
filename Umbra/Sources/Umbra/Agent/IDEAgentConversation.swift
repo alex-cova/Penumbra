@@ -19,7 +19,11 @@ final class IDEAgentConversation: Identifiable {
     private(set) var entries: [IDEAgentEntry] = []
     private(set) var isRunning = false {
         // A wait to retry belongs to a run; however the run ended, it is over.
-        didSet { if !isRunning, retryState != nil { retryState = nil } }
+        didSet {
+            guard !isRunning else { return }
+            if retryState != nil { retryState = nil }
+            if oldValue { lastActivity = Date() }
+        }
     }
     /// What the run is doing right now, for the panel's status line.
     private(set) var status: String?
@@ -2768,6 +2772,9 @@ final class IDEAgentConversation: Identifiable {
 
     /// What the provider last said is left of its rate limit; explains a wait in the status line.
     @ObservationIgnored private var rateLimit: RateLimitStatus?
+
+    /// When a run of this chat last ended, for the tab's tooltip.
+    private(set) var lastActivity: Date?
 
     /// A failed request waiting to be sent again: drawn as a banner over the composer instead of the status line.
     private(set) var retryState: IDEAgentRetryState?

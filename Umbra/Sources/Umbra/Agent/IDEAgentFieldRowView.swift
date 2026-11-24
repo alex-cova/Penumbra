@@ -51,13 +51,22 @@ struct IDEAgentFieldRowView: View {
                 onUserEdit: { agent.selected.promptRecall.reset() },
                 onHistory: { agent.recallPrompt($0) },
                 onDropFiles: { agent.selected.droppedFilesInsertion($0) },
-                onPasteImage: { agent.selected.pasteImage($0) }
+                onPasteImage: { agent.selected.pasteImage($0) },
+                onStash: { agent.stashDraft() }
             )
             .frame(height: composerHeight)
         } leading: {
             IDEIconButton(
                 systemImage: "plus", help: "Attach images or files (you can also drop or paste them)",
                 tint: IDEAppearance.ColorToken.muted, action: pickImages)
+                .contextMenu {
+                    Button("Stash Draft (⌃S)") { agent.stashDraft() }
+                        .disabled(agent.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && agent.selected.pendingImages.isEmpty)
+                }
+            if let stash = agent.promptStash(), !stash.entries.isEmpty {
+                IDEAgentStashButton(agent: agent, stash: stash)
+            }
             IDEAgentPanelChipRow(agent: agent, settings: settings, isAIMode: isAIMode, openSettings: openSettings)
         } trailing: {
             EmptyView()
