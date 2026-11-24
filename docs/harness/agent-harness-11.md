@@ -2,7 +2,7 @@
 
 Part of the series `agent-harness-1.md` to `agent-harness-11.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-11-24, against the T3 Code tree (`docs/internals/*.md`, `docs/user/*.md`). The largest item from the same comparison, portable handoffs, has its own doc: `agent-harness-10.md`.
 
-**Status:** items 4 and 5 built 2026-11-24; items 1–3 are proposals. Each item is independent.
+**Status:** items 1, 4 and 5 built 2026-11-24; items 2 and 3 are proposals. Each item is independent.
 
 ## Already equal or better (checked, no work)
 
@@ -14,12 +14,14 @@ These came up in the comparison and Umbra already does them:
 - **Passive health checks.** `prepareACP()` starts an agent only when the model picker opens, never because a chat is shown.
 - **Never offer what is not advertised.** `setModel` refuses a model the agent did not list. `selectableChoices` never invents options.
 
-## 1. A cross-chat usage view
+## 1. A cross-chat usage view (built 2026-11-24)
 
 **Today:** cost and `usageByModel` are saved per chat in `SessionStore`. No view adds them up (none found under `Umbra/Sources/Umbra`).
 **T3:** one Usage page across providers: tokens, cache savings, cost per model, trends, and a 90-day retention setting.
 **Proposal:** a "Usage" sheet (Settings ▸ Agent, or `/usage`) that reads the saved chats of the current project, or of all projects. It shows totals by model and by day, cache-read share, and local models at $0. Read the store, never re-price history; old rows use the prices saved with them.
 **Size:** small. No harness change.
+
+**Built:** `/usage` opens `IDEAgentUsageSheet` from the agent panel (docked, page and AI mode's Code): This Project or All Projects (which adds AI mode's Chat), 7/30/90 days or all time; tiles for cost, input (with the cached share), output and chats; cost per day (tokens per day when nothing in the period has a cost); tables by model and, for all projects, by project. `IDEAgentUsageLoader` reads the saved files off the main actor, decodes only the usage fields, skips files last written before the period, and stops at the newest 5,000. Nothing is re-priced: a chat's recorded cost goes, whole, to the model that did most of its work (helper models are priced at 0 anyway). A chat counts on the day it was last used, since that is all a file says. Chats now save their per-model split (`IDEAgentSavedTranscript.usageByModel`); an older file puts its total on its model, else "Model not recorded". Not built: retention settings (the store is the history), ACP agents that never report usage show no tokens. Tests: `IDEAgentUsageTests` (report, loader over a real `SessionStore`, the saved split; `AI_MODE_PNG_DIR=… --filter testTheSheetRendersSeededChats` writes `usage-sheet.png`).
 
 ## 2. Scheduled prompts that survive a relaunch
 

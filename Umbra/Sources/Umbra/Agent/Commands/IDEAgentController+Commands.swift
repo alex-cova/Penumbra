@@ -298,6 +298,8 @@ extension IDEAgentController {
             selected.appendNotice(Self.costNotice(
                 usage: selected.usage, cost: selected.cost,
                 usageByModel: selected.usageByModel, helperName: settings.helperChoice?.model))
+        case .usage:
+            isShowingUsage = true
         case .local:
             guard selected.canRunCommands else { return }
             selected.runLocal(prompt: arguments)

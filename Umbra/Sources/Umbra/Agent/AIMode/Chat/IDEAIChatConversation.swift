@@ -47,7 +47,7 @@ final class IDEAIChatConversation: Identifiable {
     @ObservationIgnored var onRunFinished: (() -> Void)?
 
     /// The root every chat is saved under. It is not a folder: a chat belongs to no project.
-    static let storeRoot = "/Umbra/Chats"
+    nonisolated static let storeRoot = "/Umbra/Chats"
 
     init(
         settings: IDEAgentSettings,

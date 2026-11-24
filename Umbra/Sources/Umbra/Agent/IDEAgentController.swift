@@ -24,6 +24,8 @@ final class IDEAgentController {
     var settingsRequest = 0
     /// Set to show the rewind sheet (`/rewind`, a message's Rewind button, Esc Esc).
     var rewindRequest: IDEAgentRewindRequest?
+    /// `/usage`: the sheet of token use and cost across saved chats.
+    var isShowingUsage = false
     /// What this project's chats were asked, by project folder.
     @ObservationIgnored private var promptHistories: [String: IDEAgentPromptHistory] = [:]
     /// Whether the user is looking at this window (it is the key window). Without an answer, assume yes.
@@ -67,6 +69,8 @@ final class IDEAgentController {
         set { hostReference = newValue }
     }
     @ObservationIgnored private let store: SessionStore?
+    /// Where the usage view reads this window's chats.
+    var usageStore: SessionStore? { store }
     @ObservationIgnored private let appPermissionsFile: URL?
     @ObservationIgnored private let clientFactory: @MainActor (IDEAgentSettings) throws -> any LLMClient
     /// Builds the client for a chat that has its own model choice (AI mode); tests replace it.

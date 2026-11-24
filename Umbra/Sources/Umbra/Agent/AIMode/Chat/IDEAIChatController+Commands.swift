@@ -123,7 +123,7 @@ extension IDEAIChatController {
             }
         case .help:
             selected.appendNotice(helpText())
-        case .rewind, .fork, .plan, .mode, .permissions, .history, .loop, .initialize, .local:
+        case .rewind, .fork, .plan, .mode, .permissions, .history, .loop, .initialize, .local, .usage:
             selected.appendNotice("There is no /\(command.rawValue) in Chat.")
         }
     }

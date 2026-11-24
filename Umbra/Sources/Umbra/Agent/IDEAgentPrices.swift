@@ -133,4 +133,7 @@ struct IDEAgentSavedTranscript: Codable {
     /// The earlier conversation a native session was handed (`ConversationHandoff`), which
     /// `read_conversation` reads by the handoff's numbers. Absent when no handoff happened.
     var conversationArchive: [HandoffTurn]? = nil
+    /// Tokens per model id (main and helper models), for the usage view. Absent on older files, which
+    /// attribute the session's total to the chat's model.
+    var usageByModel: [String: TokenUsage]? = nil
 }

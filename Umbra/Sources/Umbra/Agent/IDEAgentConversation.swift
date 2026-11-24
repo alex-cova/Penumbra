@@ -1712,9 +1712,10 @@ final class IDEAgentConversation: Identifiable {
         todos = saved.todos
         restoredTodos = saved.todos
         usage = snapshot.totalUsage
-        // The saved file keeps no per-model split; attribute the restored total to the current
-        // model so the split still adds up to it.
-        usageByModel = snapshot.totalUsage == TokenUsage() ? [:] : [effectiveChoice.model: snapshot.totalUsage]
+        // The saved split, or for a file from before it was saved, the whole total on the current model
+        // so the split still adds up to it.
+        usageByModel = !saved.usageByModel.isEmpty ? saved.usageByModel
+            : snapshot.totalUsage == TokenUsage() ? [:] : [effectiveChoice.model: snapshot.totalUsage]
         // Provider items only the model that produced them may be sent back; the transcript is enough.
         restoredItems = droppingOpaque(snapshot.items)
         // Idle subagents come back with the conversation, so `session:` continues them by id.
@@ -1812,7 +1813,7 @@ final class IDEAgentConversation: Identifiable {
                 acpPinnedAgentID: acpPin?.agentID,
                 acpPinnedNative: acpPin != nil && acpPin?.agentID == nil,
                 acpSessionID: lastACPSessionID, acpLaunchFingerprint: acpLaunchFingerprint,
-                conversationArchive: conversationArchive),
+                conversationArchive: conversationArchive, usageByModel: usageByModel),
             children: children ?? restoredChildren)
         // A write failure only costs the history; it is not worth interrupting the user for.
         try? store.save(snapshot)

@@ -58,6 +58,11 @@ struct IDEAgentPanel: View {
         .sheet(item: Bindable(agent).rewindRequest) { request in
             IDEAgentRewindSheet(agent: agent, request: request) { agent.rewindRequest = nil }
         }
+        .sheet(isPresented: Bindable(agent).isShowingUsage) {
+            IDEAgentUsageSheet(sources: .init(
+                agentStore: agent.usageStore, projectRoot: agent.host?.agentProjectRoot?.path,
+                chatStore: workspace.aiChat.usageStore)) { agent.isShowingUsage = false }
+        }
         .onChange(of: agent.settingsRequest) { isSettingsPresented = true }
     }
 
