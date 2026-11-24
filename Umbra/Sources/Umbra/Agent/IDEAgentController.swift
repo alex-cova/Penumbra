@@ -29,6 +29,8 @@ final class IDEAgentController {
     /// The find bar over the transcript is open. Kept here, not in the view, so a panel that is rebuilt
     /// (docked ↔ page) keeps it.
     var isFindBarOpen = false
+    /// The commands drawer between the transcript and the message box is open.
+    var isCommandsDrawerOpen = false
     /// The panel's find field has the keyboard, so ⌘F stays in the panel.
     @ObservationIgnored var isFindFieldFocused = false
     /// Set to show the rewind sheet (`/rewind`, a message's Rewind button, Esc Esc).
@@ -148,6 +150,12 @@ final class IDEAgentController {
         }
         conversation.onAttention = { [weak self, weak conversation] attention in
             guard let self, let conversation else { return }
+            if case .finished(let ending, _) = attention {
+                self.scheduler.runEnded(
+                    conversationID: conversation.conversationID, ending: ending,
+                    filesChanged: IDEAIChangedFiles.summarize(conversation.entries).filter { !$0.isReverted }.count,
+                    cost: conversation.cost, iterationLimit: self.settings.iterationCap)
+            }
             self.notify(attention, from: conversation)
         }
         conversation.onRunFinished = { [weak self, weak conversation] in

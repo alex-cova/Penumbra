@@ -179,6 +179,23 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         XCTAssertEqual(workspace.agent.findRequest, 1, "AI mode's Chat is not the agent panel")
     }
 
+    /// The commands drawer open over a chat that ran two commands, the newest still streaming.
+    func testTheCommandsDrawer() async throws {
+        workspace.openProjectFolder(base.appendingPathComponent("MyProject"))
+        workspace.agent.settings.acceptDisclosure(for: .anthropic)
+        let chat = workspace.agent.selected
+        chat.modelChoice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        chat.appendEntryForTesting(IDEAgentEntry(kind: .user, text: "Build and test"))
+        var build = IDEAgentEntry(kind: .toolCall(name: "gradle"), text: #"{"tasks":["build"]}"#)
+        build.output = ToolOutput("BUILD SUCCESSFUL in 4s")
+        chat.appendEntryForTesting(build)
+        var tests = IDEAgentEntry(kind: .toolCall(name: "run_command"), text: #"{"command":"swift test --filter CalcTests"}"#)
+        tests.liveOutput = (1...30).map { "Test Case CalcTests.test\($0) passed (0.001 seconds)" }.joined(separator: "\n")
+        chat.appendEntryForTesting(tests)
+        workspace.agent.isCommandsDrawerOpen = true
+        try await renderDocked("docked-commands-drawer")
+    }
+
     private func renderDocked(_ name: String) async throws {
         let view = IDEAgentPanel(agent: workspace.agent)
             .environment(workspace)

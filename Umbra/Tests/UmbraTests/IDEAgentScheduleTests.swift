@@ -116,6 +116,40 @@ final class IDEAgentSchedulerTests: XCTestCase {
         controller.teardown()
     }
 
+    func testAScheduledRunIsLoggedWhenItStartsAndWhenItEnds() async throws {
+        let (controller, _) = makeController([.text("Build is green."), .text("checked")])
+        let start = Date()
+        controller.scheduler.tick(now: start)
+        let schedule = IDEAgentSchedule(
+            name: "check the build", prompt: "check the build", interval: 3_600, mode: .acceptEdits, createdAt: start)
+        controller.scheduler.add(schedule)
+        controller.scheduler.runNow(schedule.id)
+
+        let run = try XCTUnwrap(controller.conversations.last)
+        XCTAssertEqual(controller.scheduler.runs.count, 1)
+        XCTAssertEqual(controller.scheduler.runs.first?.conversationID, run.conversationID)
+        XCTAssertNil(controller.scheduler.runs.first?.endedAt, "running")
+
+        await waitFor("the run ends and is logged") { controller.scheduler.runs.first?.endedAt != nil }
+        let logged = try XCTUnwrap(controller.scheduler.runs.first)
+        XCTAssertEqual(logged.outcome, "Completed")
+        XCTAssertFalse(logged.isError)
+        XCTAssertEqual(logged.scheduleName, "check the build")
+
+        // Saved beside the schedules, so the sheet shows it after a relaunch.
+        let store = SessionStore(directory: storeDirectory)
+        let loaded = IDEAgentScheduleRunLog.load(store: store, projectRoot: project.standardizedFileURL.path)
+        XCTAssertEqual(loaded.map(\.id), [logged.id])
+        XCTAssertEqual(loaded.first?.outcome, "Completed")
+
+        // A run the user started by hand in another chat is not a scheduled run.
+        controller.draft = "hello"
+        controller.send()
+        await waitFor("the other chat answers") { !controller.isRunning }
+        XCTAssertEqual(controller.scheduler.runs.count, 1)
+        controller.teardown()
+    }
+
     func testADueScheduleRunsInAChatOfItsOwnWithoutTakingTheSelection() async throws {
         let (controller, client) = makeController()
         let start = Date()
@@ -215,5 +249,82 @@ final class IDEAgentSchedulerTests: XCTestCase {
         host.cacheDisplay(in: host.bounds, to: rep)
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("schedules-sheet.png"))
+    }
+}
+
+final class IDEAgentScheduleRunLogTests: XCTestCase {
+    private let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func run(_ chat: UUID, startedAt: Date) -> IDEAgentScheduleRun {
+        IDEAgentScheduleRun(scheduleID: UUID(), scheduleName: "check", conversationID: chat, startedAt: startedAt)
+    }
+
+    func testTheEndingGoesOnThatChatsNewestUnfinishedRun() throws {
+        let chat = UUID()
+        var runs = IDEAgentScheduleRunLog.started(run(chat, startedAt: start), in: [])
+        runs = IDEAgentScheduleRunLog.started(run(UUID(), startedAt: start.addingTimeInterval(10)), in: runs)
+        let ended = try XCTUnwrap(IDEAgentScheduleRunLog.ended(
+            conversationID: chat, ending: .failed("The API key was rejected."), at: start.addingTimeInterval(75),
+            filesChanged: 2, cost: 0.03, iterationLimit: 50, in: runs))
+        XCTAssertNil(ended[0].endedAt, "the other chat's run is untouched")
+        XCTAssertEqual(ended[1].outcome, "The API key was rejected.")
+        XCTAssertTrue(ended[1].isError)
+        XCTAssertEqual(ended[1].filesChanged, 2)
+
+        XCTAssertNil(IDEAgentScheduleRunLog.ended(
+            conversationID: chat, ending: .completed, at: start, filesChanged: 0, cost: nil, iterationLimit: 50, in: ended),
+            "already recorded")
+        XCTAssertNil(IDEAgentScheduleRunLog.ended(
+            conversationID: UUID(), ending: .completed, at: start, filesChanged: 0, cost: nil, iterationLimit: 50, in: ended),
+            "not a scheduled run")
+    }
+
+    func testTheLogKeepsTheNewestRuns() {
+        var runs: [IDEAgentScheduleRun] = []
+        for index in 0..<5 { runs = IDEAgentScheduleRunLog.started(run(UUID(), startedAt: start.addingTimeInterval(Double(index))), in: runs, limit: 3) }
+        XCTAssertEqual(runs.map(\.startedAt), [4, 3, 2].map { start.addingTimeInterval($0) })
+    }
+
+    func testARowSaysHowLongItTookAndHowItEnded() {
+        XCTAssertEqual(IDEAgentScheduleRunLog.duration(from: start, to: start.addingTimeInterval(12)), "12 s")
+        XCTAssertEqual(IDEAgentScheduleRunLog.duration(from: start, to: start.addingTimeInterval(250)), "4 min")
+        XCTAssertEqual(IDEAgentScheduleRunLog.duration(from: start, to: start.addingTimeInterval(3_900)), "1 h 5 min")
+
+        var finished = run(UUID(), startedAt: start)
+        finished.endedAt = start.addingTimeInterval(30)
+        finished.outcome = "Completed"
+        finished.filesChanged = 1
+        let state = IDEAgentScheduleRunRow.describe(finished, isRunning: false)
+        XCTAssertEqual(state.symbol, "checkmark.circle")
+        XCTAssertTrue(state.detail.hasSuffix("30 s · Completed · 1 file changed"), state.detail)
+
+        let unfinished = run(UUID(), startedAt: start)
+        XCTAssertTrue(IDEAgentScheduleRunRow.describe(unfinished, isRunning: true).detail.hasSuffix("Running"))
+        XCTAssertEqual(IDEAgentScheduleRunRow.describe(unfinished, isRunning: false).symbol, "questionmark.circle")
+    }
+}
+
+final class IDEAgentCommandLogTests: XCTestCase {
+    private func call(_ name: String, _ arguments: String, output: ToolOutput? = nil, live: String = "") -> IDEAgentEntry {
+        var entry = IDEAgentEntry(kind: .toolCall(name: name), text: arguments)
+        entry.output = output
+        entry.liveOutput = live
+        return entry
+    }
+
+    func testTheChatsCommandsInOrderWithTheirOutput() {
+        let entries = [
+            call("run_command", #"{"command":"ls -la"}"#, output: ToolOutput("summary"), live: "total 8\nfile"),
+            call("read_file", #"{"path":"A.txt"}"#, output: ToolOutput("text")),
+            call("gradle", #"{"tasks":["build"]}"#, output: ToolOutput("FAILED", isError: true)),
+            call("maven", #"{"goals":["clean","test"],"options":["-q"]}"#, live: "Running…"),
+            IDEAgentEntry(kind: .assistant, text: "ok"),
+        ]
+        let items = IDEAgentCommandLog.items(entries)
+        XCTAssertEqual(items.map(\.line), ["ls -la", "gradle build", "mvn clean test -q"])
+        XCTAssertEqual(items.map(\.output), ["total 8\nfile", "FAILED", "Running…"], "streamed output first, like the card")
+        XCTAssertEqual(items.map(\.isRunning), [false, false, true])
+        XCTAssertEqual(items.map(\.isError), [false, true, false])
+        XCTAssertEqual(items.first?.id, entries[0].id)
     }
 }

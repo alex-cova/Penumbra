@@ -62,6 +62,11 @@ struct IDEAgentPanel: View {
                 transcript
                     .ideTransition(.opacity.combined(with: .move(edge: .bottom)))
             }
+            if agent.isCommandsDrawerOpen, hasCommands {
+                IDEAgentCommandsDrawer(
+                    items: commandItems, close: { agent.isCommandsDrawerOpen = false }, showInTranscript: reveal)
+                    .ideTransition(.move(edge: .bottom).combined(with: .opacity))
+            }
             // One composer for both states: a field that moved between the empty greeting and
             // the transcript would be destroyed and recreated, dropping focus on the first send.
             IDEAgentComposerView(
@@ -162,6 +167,14 @@ struct IDEAgentPanel: View {
                 }
                 .onAppear { agent.restoreLatestIfNeeded() }
             }
+            if hasCommands {
+                IDEIconButton(
+                    systemImage: "terminal", help: "Commands this chat ran, with their output",
+                    isActive: agent.isCommandsDrawerOpen
+                ) {
+                    IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) { agent.isCommandsDrawerOpen.toggle() }
+                }
+            }
             if placement == .docked {
                 IDEIconButton(systemImage: "arrow.up.left.and.arrow.down.right", help: "Expand over the editor") {
                     expandOverEditor()
@@ -252,6 +265,16 @@ struct IDEAgentPanel: View {
     }
 
     private var minimapItems: [IDEAgentMinimapItem] { IDEAgentMinimapItems.make(agent.entries) }
+
+    private var commandItems: [IDEAgentCommandItem] { IDEAgentCommandLog.items(agent.entries) }
+
+    /// Whether the chat ran a command, by tool name only, so the header does not parse arguments on every
+    /// streamed update.
+    private var hasCommands: Bool {
+        agent.entries.contains { entry in
+            if case .toolCall(let name) = entry.kind { IDEAgentTranscriptRows.commandTools.contains(name) } else { false }
+        }
+    }
 
     /// From four messages on, and not in a docked panel too narrow to spare the width.
     private var showsMinimap: Bool {

@@ -31,6 +31,8 @@ struct IDEAgentSchedulesSheet: View {
                 .frame(minHeight: 140, idealHeight: 320, maxHeight: 460)
             }
 
+            if !scheduler.runs.isEmpty { runsSection }
+
             HStack {
                 Spacer()
                 Button("Done", action: dismiss)
@@ -92,6 +94,56 @@ struct IDEAgentSchedulesSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
     }
 
+    // MARK: - Runs
+
+    /// What the schedules' runs did, newest first: the last 50 of the log.
+    private var runsSection: some View {
+        VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+            Text("Runs")
+                .font(IDEAppearance.Typography.sectionHeader)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(scheduler.runs.prefix(50)) { run in
+                        runRow(run)
+                        Divider().overlay(IDEAppearance.ColorToken.border.opacity(0.5))
+                    }
+                }
+            }
+            .frame(minHeight: 80, idealHeight: 200, maxHeight: 240)
+            .background(IDEAppearance.ColorToken.editor)
+            .clipShape(RoundedRectangle(cornerRadius: IDEAppearance.Radius.control, style: .continuous))
+        }
+    }
+
+    private func runRow(_ run: IDEAgentScheduleRun) -> some View {
+        let state = IDEAgentScheduleRunRow.describe(
+            run, isRunning: agent.conversations.contains { $0.conversationID == run.conversationID && $0.isRunning })
+        return HStack(alignment: .firstTextBaseline, spacing: IDEAppearance.Spacing.sm) {
+            Image(systemName: state.symbol)
+                .foregroundStyle(state.isError ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(run.scheduleName)
+                    .font(IDEAppearance.Typography.body)
+                    .lineLimit(1)
+                Text(state.detail)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(state.isError ? IDEAppearance.ColorToken.error : IDEAppearance.ColorToken.muted)
+                    .lineLimit(2)
+                    .help(state.detail)
+            }
+            Spacer(minLength: 0)
+            Button("Open") {
+                agent.resume(run.conversationID)
+                dismiss()
+            }
+            .controlSize(.small)
+            .help("Open this run's chat")
+        }
+        .padding(.horizontal, IDEAppearance.Spacing.sm)
+        .padding(.vertical, IDEAppearance.Spacing.xs)
+        .accessibilityElement(children: .combine)
+    }
+
     private func timing(_ schedule: IDEAgentSchedule) -> String {
         var parts = [IDEAgentScheduler.describe(interval: schedule.interval).capitalizedFirst]
         if !schedule.isPaused { parts.append("next \(IDEAgentScheduler.describe(schedule.nextDue))") }
@@ -102,4 +154,27 @@ struct IDEAgentSchedulesSheet: View {
 
 private extension String {
     var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+}
+
+/// What a run's row says. Pure, for tests.
+enum IDEAgentScheduleRunRow {
+    struct State: Equatable {
+        var symbol: String
+        var detail: String
+        var isError: Bool
+    }
+
+    static func describe(_ run: IDEAgentScheduleRun, isRunning: Bool) -> State {
+        var parts = [IDEAgentScheduler.describe(run.startedAt)]
+        guard let end = run.endedAt, let outcome = run.outcome else {
+            parts.append(isRunning ? "Running" : "No ending recorded (Umbra closed, or the chat was closed)")
+            return State(symbol: isRunning ? "clock" : "questionmark.circle", detail: parts.joined(separator: " · "), isError: false)
+        }
+        parts.append(IDEAgentScheduleRunLog.duration(from: run.startedAt, to: end))
+        parts.append(outcome)
+        if run.filesChanged > 0 { parts.append("\(run.filesChanged) \(run.filesChanged == 1 ? "file" : "files") changed") }
+        if let cost = run.cost, cost > 0 { parts.append("~" + IDEAgentPrices.format(cost)) }
+        let symbol = run.isError ? "xmark.circle" : (outcome == "Completed" ? "checkmark.circle" : "pause.circle")
+        return State(symbol: symbol, detail: parts.joined(separator: " · "), isError: run.isError)
+    }
 }

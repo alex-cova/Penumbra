@@ -11,6 +11,8 @@ final class IDEAgentScheduler {
     nonisolated(unsafe) static var tickInterval: Duration = .seconds(30)
 
     private(set) var schedules: [IDEAgentSchedule] = []
+    /// The runs this project's schedules started, newest first (`IDEAgentScheduleRunLog`).
+    private(set) var runs: [IDEAgentScheduleRun] = []
     @ObservationIgnored private let store: SessionStore?
     @ObservationIgnored private(set) var root: String?
     @ObservationIgnored private var watchingSince = Date()
@@ -65,6 +67,7 @@ final class IDEAgentScheduler {
         root = current
         watchingSince = now
         schedules = current.map { IDEAgentScheduleFile.load(store: store, projectRoot: $0) } ?? []
+        runs = current.map { IDEAgentScheduleRunLog.load(store: store, projectRoot: $0) } ?? []
     }
 
     private func run(at index: Int, now: Date) {
@@ -80,6 +83,11 @@ final class IDEAgentScheduler {
         if let chat = controller.startScheduledRun(schedule, at: now) {
             schedules[index].lastChatID = chat.conversationID
             schedules[index].lastNote = nil
+            runs = IDEAgentScheduleRunLog.started(
+                IDEAgentScheduleRun(
+                    scheduleID: schedule.id, scheduleName: schedule.name, conversationID: chat.conversationID, startedAt: now),
+                in: runs)
+            saveRuns()
         } else {
             schedules[index].lastNote = "Could not start \(Self.describe(now)): the model is not set up, or sending to it was not allowed yet."
         }
@@ -114,6 +122,23 @@ final class IDEAgentScheduler {
         guard let index = schedules.firstIndex(where: { $0.id == id }) else { return }
         run(at: index, now: Date())
         save()
+    }
+
+    /// A chat's run ended; if it was one a schedule started, its ending goes in the run log.
+    func runEnded(
+        conversationID: UUID, ending: RunEnding, filesChanged: Int, cost: Double?, iterationLimit: Int, at date: Date = Date()
+    ) {
+        guard let updated = IDEAgentScheduleRunLog.ended(
+            conversationID: conversationID, ending: ending, at: date, filesChanged: filesChanged, cost: cost,
+            iterationLimit: iterationLimit, in: runs)
+        else { return }
+        runs = updated
+        saveRuns()
+    }
+
+    private func saveRuns() {
+        guard let store, let root else { return }
+        IDEAgentScheduleRunLog.save(runs, store: store, projectRoot: root)
     }
 
     private func save() {
