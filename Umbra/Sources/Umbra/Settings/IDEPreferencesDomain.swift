@@ -55,13 +55,17 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
     static let project = IDEPreferencesDomain(
         id: "project", title: "Project", symbol: "folder", searchTerms: ["explorer", "flatten packages"]
     )
+    static let github = IDEPreferencesDomain(
+        id: "github", title: "GitHub", symbol: "arrow.triangle.branch",
+        searchTerms: ["accounts", "repository", "sign in", "authentication"]
+    )
     static let agent = IDEPreferencesDomain(
         id: "agent", title: "Agent", symbol: "sparkles",
         searchTerms: ["agent", "ai", "model", "openai", "ollama", "mlx", "api key", "provider", "plan", "approve edits", "autonomy", "context", "compaction", "history", "conversations", "secrets", "protected files", "environment", "steps", "iterations", "adapters", "acp", "codex", "claude code", "gemini", "opencode", "install", "update", "node", "npm", "version", "rollback"]
     )
 
     /// The pages before the language modules' and the one after them.
-    static let leading: [IDEPreferencesDomain] = [.general, .editor, .markdown, .saving, .appearance, .terminal, .docker, .project]
+    static let leading: [IDEPreferencesDomain] = [.general, .editor, .markdown, .saving, .appearance, .terminal, .docker, .project, .github]
 
     /// Built-in pages with `modules`' in the middle, in the order they have always had.
     static func ordered(with modules: [IDEPreferencesDomain]) -> [IDEPreferencesDomain] {

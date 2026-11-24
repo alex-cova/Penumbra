@@ -7,6 +7,7 @@ enum GitHubTransportError: Error, Equatable {
     case responseTooLarge
     case httpStatus(Int)
     case invalidPayload
+    case rateLimited(until: Date)
 }
 
 struct GitHubIdentity: Codable, Equatable, Sendable {
@@ -43,10 +44,28 @@ struct GitHubTransport: Sendable {
 
     @concurrent
     func repository(_ remote: GitHubRemote, accessToken: String) async throws -> GitHubRepositoryMetadata {
-        let request = try authenticatedGET(path: "/repos/\(remote.owner)/\(remote.repository)", accessToken: accessToken)
-        let metadata = try await send(request, decoding: GitHubRepositoryMetadata.self)
-        guard metadata.id > 0, !metadata.fullName.isEmpty else { throw GitHubTransportError.invalidPayload }
-        return metadata
+        try await repository(remote, accessToken: accessToken, cached: nil).metadata
+    }
+
+    struct RepositoryResponse: Sendable {
+        let metadata: GitHubRepositoryMetadata
+        let etag: String?
+    }
+
+    @concurrent
+    func repository(
+        _ remote: GitHubRemote, accessToken: String, cached: RepositoryResponse?
+    ) async throws -> RepositoryResponse {
+        var request = try authenticatedGET(path: "/repos/\(remote.owner)/\(remote.repository)", accessToken: accessToken)
+        request.setValue(cached?.etag, forHTTPHeaderField: "If-None-Match")
+        let response = try await receive(request, allowsNotModified: cached?.etag != nil)
+        if response.status == 304, let cached { return cached }
+        let metadata = try decode(GitHubRepositoryMetadata.self, from: response.body)
+        guard metadata.id > 0, (1...256).contains(metadata.fullName.utf8.count),
+              metadata.defaultBranch.utf8.count <= 1024, metadata.visibility.utf8.count <= 32
+        else { throw GitHubTransportError.invalidPayload }
+        let etag = response.etag.flatMap { $0.utf8.count <= 512 ? $0 : nil }
+        return RepositoryResponse(metadata: metadata, etag: etag)
     }
 
     private func authenticatedGET(path: String, accessToken: String) throws -> URLRequest {
@@ -116,11 +135,46 @@ struct GitHubTransport: Sendable {
     }
 
     private func send<Response: Decodable>(_ request: URLRequest, decoding: Response.Type) async throws -> Response {
+        let response = try await receive(request)
+        return try decode(decoding, from: response.body)
+    }
+
+    private func decode<Response: Decodable>(_ type: Response.Type, from body: Data) throws -> Response {
+        do {
+            return try JSONDecoder().decode(type, from: body)
+        } catch {
+            throw GitHubTransportError.invalidPayload
+        }
+    }
+
+    private struct ResponseBody {
+        let body: Data
+        let status: Int
+        let etag: String?
+    }
+
+    private func receive(_ request: URLRequest, allowsNotModified: Bool = false) async throws -> ResponseBody {
         do {
             let (bytes, response) = try await session.bytes(for: request)
             defer { bytes.task.cancel() }
             guard let response = response as? HTTPURLResponse else { throw GitHubTransportError.invalidResponse }
-            guard (200...299).contains(response.statusCode) else {
+            let status = response.statusCode
+            if status == 304, allowsNotModified {
+                try Task.checkCancellation()
+                return ResponseBody(body: Data(), status: status, etag: nil)
+            }
+            let retryAfter = response.value(forHTTPHeaderField: "Retry-After")
+            let remaining = response.value(forHTTPHeaderField: "X-RateLimit-Remaining")
+            if status == 429 || (status == 403 && (retryAfter != nil || remaining == "0")) {
+                let now = Date()
+                let delay = retryAfter.flatMap(Int.init).flatMap { $0 >= 0 ? $0 : nil }
+                let reset = response.value(forHTTPHeaderField: "X-RateLimit-Reset").flatMap(Int.init)
+                let until = delay.map { now.addingTimeInterval(Double($0)) }
+                    ?? reset.map { Date(timeIntervalSince1970: Double($0)) }
+                    ?? now.addingTimeInterval(60)
+                throw GitHubTransportError.rateLimited(until: max(now, until))
+            }
+            guard (200...299).contains(status) else {
                 throw GitHubTransportError.httpStatus(response.statusCode)
             }
             let length = response.expectedContentLength
@@ -132,11 +186,7 @@ struct GitHubTransport: Sendable {
                 body.append(byte)
             }
             try Task.checkCancellation()
-            do {
-                return try JSONDecoder().decode(decoding, from: body)
-            } catch {
-                throw GitHubTransportError.invalidPayload
-            }
+            return ResponseBody(body: body, status: status, etag: response.value(forHTTPHeaderField: "ETag"))
         } catch let error as GitHubTransportError {
             try Task.checkCancellation()
             throw error

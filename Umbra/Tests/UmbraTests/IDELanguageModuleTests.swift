@@ -110,9 +110,9 @@ final class IDELanguageModuleTests: XCTestCase {
         XCTAssertEqual(modulePages.map(\.id), ["java", "swift", "swiftUIPreview", "language-servers", "hex"])
         XCTAssertEqual(
             IDEPreferencesDomain.ordered(with: modulePages).map(\.id),
-            ["general", "editor", "markdown", "saving", "appearance", "terminal", "docker", "project", "java", "swift", "swiftUIPreview", "language-servers", "hex", "agent"]
+            ["general", "editor", "markdown", "saving", "appearance", "terminal", "docker", "project", "github", "java", "swift", "swiftUIPreview", "language-servers", "hex", "agent"]
         )
-        XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "markdown", "saving", "appearance", "terminal", "docker", "project", "agent"])
+        XCTAssertEqual(IDEPreferencesDomain.ordered(with: []).map(\.id), ["general", "editor", "markdown", "saving", "appearance", "terminal", "docker", "project", "github", "agent"])
     }
 
     func testSettingsSearchStillFindsTheJavaPages() {
@@ -198,11 +198,11 @@ final class IDELanguageModuleTests: XCTestCase {
     func testTheSidebarKeepsItsTabsInOrder() {
         XCTAssertEqual(
             IDESidebarTabs.all.map(\.tab.rawValue),
-            ["explorer", "structure", "changes", "breakpoints", "bookmarks", "history", "spring", "database"]
+            ["explorer", "structure", "changes", "github", "breakpoints", "bookmarks", "history", "spring", "database"]
         )
         XCTAssertEqual(
             IDESidebarTabs.all.map(\.title),
-            ["Explorer", "Structure", "Changes", "Breakpoints", "Bookmarks", "History", "Spring", "Database"]
+            ["Explorer", "Structure", "Changes", "GitHub", "Breakpoints", "Bookmarks", "History", "Spring", "Database"]
         )
         XCTAssertEqual(IDESidebarTab.breakpoints.systemImage, "circle.fill")
         XCTAssertEqual(IDESidebarTabs.descriptor(for: .breakpoints)?.iconSize, 8)
@@ -216,7 +216,7 @@ final class IDELanguageModuleTests: XCTestCase {
     func testOnlyTheBreakpointsTabComesFromTheJavaModule() {
         XCTAssertEqual(IDEJavaModule().sidebarTabs.map(\.tab), [.breakpoints])
         XCTAssertTrue(IDEHTTPModule().sidebarTabs.isEmpty)
-        XCTAssertEqual(IDESidebarTabs.builtIn.map(\.tab.rawValue), ["explorer", "structure", "changes", "bookmarks", "history"])
+        XCTAssertEqual(IDESidebarTabs.builtIn.map(\.tab.rawValue), ["explorer", "structure", "changes", "github", "bookmarks", "history"])
     }
 
     func testAFreshWindowOffersEveryTabButChangesWithoutARepository() {

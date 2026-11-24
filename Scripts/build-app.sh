@@ -101,6 +101,17 @@ cp "$INFO_PLIST_TEMPLATE" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP_DIR/Contents/Info.plist"
 
+if [[ -n "${UMBRA_GITHUB_CLIENT_ID:-}" ]]; then
+  plutil -replace UmbraGitHubClientID -string "$UMBRA_GITHUB_CLIENT_ID" "$APP_DIR/Contents/Info.plist"
+else
+  plutil -remove UmbraGitHubClientID "$APP_DIR/Contents/Info.plist"
+fi
+if [[ -n "${UMBRA_GITHUB_APP_SLUG:-}" ]]; then
+  plutil -replace UmbraGitHubAppSlug -string "$UMBRA_GITHUB_APP_SLUG" "$APP_DIR/Contents/Info.plist"
+else
+  plutil -remove UmbraGitHubAppSlug "$APP_DIR/Contents/Info.plist"
+fi
+
 if [[ -d "$ICON_SOURCE" ]]; then
   echo "==> Compiling app icon from UmbraIcon.icon…"
   ICON_STAGING="$(mktemp -d)"

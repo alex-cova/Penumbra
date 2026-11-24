@@ -87,6 +87,7 @@ public final class IDEWorkspace {
     /// The Explorer's External Libraries section: the JDK and the project's dependency jars.
     let externalLibraries = IDEExternalLibrariesModel()
     let gitStatus = IDEGitStatusModel()
+    let github = IDEGitHubWorkspaceModel()
     /// Git blame in the editor gutter, per file.
     let blame = IDEBlameController()
     /// Lines that differ from `HEAD`, in the gutter next to the line numbers.
@@ -330,6 +331,7 @@ public final class IDEWorkspace {
         }
         gitStatus.onRefreshed = { [weak self] in
             guard let self else { return }
+            self.github.updateRepository(self.gitStatus.repository, upstream: self.gitStatus.workspaceSnapshot?.upstream?.name)
             self.refreshBlameInOpenEditors()
             if case .unavailable = self.gitStatus.refreshState {
                 self.diffSessionStore.reloadAll()
@@ -435,6 +437,11 @@ public final class IDEWorkspace {
     var requestedSettingsDomain: IDEPreferencesDomain?
     /// The intention Settings › Java › Intentions should scroll to, set by Edit intention settings.
     var focusedIntentionID: String?
+
+    func showGitHubSettings() {
+        requestedSettingsDomain = .github
+        showSettings()
+    }
 
     func showSettings() {
         IDESettingsPresentation.shared.open(from: self)
@@ -1144,6 +1151,8 @@ public final class IDEWorkspace {
         runs.stopAll()
         projectWatcher.onBatch = []
         projectWatcher.stop()
+        github.deactivate()
+        github.updateRepository(nil, upstream: nil)
         gitStatus.setRoot(nil)
         fileIndexer.setRoot(nil)
         runProviders.stopAll()
@@ -5082,6 +5091,13 @@ public final class IDEWorkspace {
         palette.commandRegistry.register([
             EditorCommand(id: "app.replaceInFiles", title: "Replace in Files…", group: "Edit",
                           action: { [weak self] in self?.showReplaceInFiles() }),
+            EditorCommand(id: "app.github.settings", title: "GitHub: Manage Accounts…", group: "Git",
+                          action: { [weak self] in self?.showGitHubSettings() }),
+            EditorCommand(id: "app.github.repository", title: "GitHub: Show Repository", group: "Git",
+                          action: { [weak self] in
+                              guard let self, self.isSidebarTabAvailable(.github) else { return }
+                              self.showAndFocusSidebarTab(.github)
+                          }),
             EditorCommand(id: "app.git.pull", title: "Git: Update Project (Pull)", group: "Git",
                           action: { [weak self] in self?.pullProject() }),
             EditorCommand(id: "app.git.push", title: "Git: Push", group: "Git",
@@ -5182,6 +5198,7 @@ public final class IDEWorkspace {
             let openFiles = batch.paths.union(batch.openFilePaths)
             self.diskSync.handle(paths: openFiles)
             self.noteExternalChange(of: Array(openFiles))
+            if batch.gitConfigChanged { self.github.refreshRemotes() }
             // The rest is about the folder; a batch of open files outside it leaves it alone.
             guard !batch.paths.isEmpty || batch.gitMetadataChanged
                 || batch.gitRefsChanged || batch.gitOperationChanged
@@ -5221,6 +5238,7 @@ public final class IDEWorkspace {
         project.setRoot(url)
         externalLibraries.clear()
         localHistory.setRoot(url)
+        github.updateRepository(nil, upstream: nil)
         gitStatus.setRoot(url)
         fileIndexer.setRoot(url)
         subscribeToProjectWatcher()

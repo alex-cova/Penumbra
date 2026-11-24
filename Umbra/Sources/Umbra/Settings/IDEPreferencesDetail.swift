@@ -52,6 +52,8 @@ struct IDEPreferencesDetail: View {
             IDEDockerPreferencesPane()
         case .project:
             IDEPreferencesProjectPane(preferences: preferences)
+        case .github:
+            IDEGitHubSettingsView(accounts: .shared)
         case .agent:
             IDEPreferencesAgentPane(agent: workspace.agent)
         default:

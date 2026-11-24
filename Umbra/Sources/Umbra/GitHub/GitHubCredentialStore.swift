@@ -24,9 +24,17 @@ enum GitHubCredentialError: Error, Equatable {
 /// The account actor serializes these synchronous Security.framework operations off the main actor.
 struct GitHubKeychain: GitHubCredentialStore {
     private let service: String
+    private let usesDataProtection: Bool
 
     init(distributionIdentifier: String, clientID: String) {
         service = "\(distributionIdentifier).github.v1.\(clientID)"
+        if let task = SecTaskCreateFromSelf(nil) {
+            let identifier = SecTaskCopyValueForEntitlement(task, "com.apple.application-identifier" as CFString, nil)
+            let groups = SecTaskCopyValueForEntitlement(task, "keychain-access-groups" as CFString, nil)
+            usesDataProtection = (identifier as? String)?.isEmpty == false || (groups as? [String])?.isEmpty == false
+        } else {
+            usesDataProtection = false
+        }
     }
 
     func identities() throws -> [GitHubIdentity] {
@@ -72,7 +80,9 @@ struct GitHubKeychain: GitHubCredentialStore {
         guard update == errSecItemNotFound else { return try Self.requireSuccess(update) }
 
         var item = match.merging(values) { _, value in value }
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        if usesDataProtection {
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        }
         let add = SecItemAdd(item as CFDictionary, nil)
         if add == errSecDuplicateItem {
             try Self.requireSuccess(SecItemUpdate(match as CFDictionary, values as CFDictionary))
@@ -89,11 +99,14 @@ struct GitHubKeychain: GitHubCredentialStore {
     private func query(userID: Int64? = nil) -> [String: Any] {
         var match: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecUseDataProtectionKeychain as String: true,
-            kSecAttrSynchronizable as String: false,
             kSecAttrService as String: service
         ]
-        // The data-protection Keychain's default access control requires an unlocked device.
+        // Unprovisioned Developer ID builds use the file-based Keychain's app access controls.
+        // Select the backend from the signature so an operation failure never changes it.
+        if usesDataProtection {
+            match[kSecUseDataProtectionKeychain as String] = true
+            match[kSecAttrSynchronizable as String] = false
+        }
         if let userID { match[kSecAttrAccount as String] = String(userID) }
         return match
     }

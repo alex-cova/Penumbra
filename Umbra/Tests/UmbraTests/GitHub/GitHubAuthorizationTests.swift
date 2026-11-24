@@ -1,4 +1,5 @@
 import Foundation
+import GitIntelligence
 import Synchronization
 import Testing
 @testable import Umbra
@@ -227,6 +228,101 @@ struct GitHubAuthorizationTests {
         }
     }
 
+    @Test func metadataCacheRevalidatesPerAccountAndHonorsRateLimit() async throws {
+        let metadata = #"{"id":25,"full_name":"Octocat/Example","default_branch":"main","visibility":"private","archived":false}"#
+        GitHubStubProtocol.prepare([
+            .init(metadata, headers: ["ETag": "\"v1\""]),
+            .init("", status: 304),
+            .init("", status: 304),
+            .init("", status: 429, headers: ["Retry-After": "120"])
+        ])
+        let transport = GitHubTransport(protocolClasses: [GitHubStubProtocol.self])
+        let accounts = GitHubAccounts(
+            transport: transport, clientID: "test", clock: ContinuousClock(), store: try Self.activeAccounts()
+        )
+        let client = GitHubMetadataClient(transport: transport)
+        let remote = try #require(GitHubRemote(fetchURL: "https://github.com/octocat/example"))
+        let first = try await client.repository(remote, userID: 42, accounts: accounts)
+        let second = try await client.repository(remote, userID: 42, accounts: accounts)
+        #expect(first == second)
+        await #expect(throws: GitHubTransportError.httpStatus(304)) {
+            try await client.repository(remote, userID: 21, accounts: accounts)
+        }
+        for _ in 0..<2 {
+            do {
+                _ = try await client.repository(remote, userID: 42, accounts: accounts)
+                Issue.record("Expected a rate limit")
+            } catch let GitHubTransportError.rateLimited(until) {
+                #expect(until.timeIntervalSinceNow > 90)
+            } catch {
+                Issue.record("Expected a rate-limit error")
+            }
+        }
+        let requests = GitHubStubProtocol.requests
+        #expect(requests.count == 4)
+        #expect(requests.map { $0.value(forHTTPHeaderField: "If-None-Match") } == [nil, "\"v1\"", nil, "\"v1\""])
+        #expect(requests.allSatisfy { $0.httpMethod == "GET" })
+    }
+
+    @Test @MainActor func closingWorkspaceCancelsMetadataAndClearsSelection() async throws {
+        let workspace = IDEWorkspace()
+        defer { workspace.teardown() }
+        let model = workspace.github
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let git = GitRepository(root: directory, runner: FixtureRemotes())
+        model.updateRepository(git, upstream: "upstream/main")
+        #expect(model.remotes.isEmpty)
+        model.activate()
+        try await Self.waitUntil { !model.discovering }
+        #expect(model.selectedRemote == "upstream")
+        #expect(model.remotes.map(\.name) == ["origin", "upstream"])
+        model.selectRemote("origin")
+        model.updateRepository(git, upstream: "upstream/other")
+        #expect(model.selectedRemote == "origin")
+
+        GitHubStubProtocol.prepare([.init("", suspended: true)])
+        let transport = GitHubTransport(protocolClasses: [GitHubStubProtocol.self])
+        let service = GitHubAccounts(
+            transport: transport, clientID: "test", clock: ContinuousClock(), store: try Self.activeAccounts()
+        )
+        let accounts = IDEGitHubAccounts(service: service, transport: transport)
+        await accounts.reload()
+        #expect(model.accountID(accounts.identities) == nil)
+        model.selectAccount(42)
+        #expect(model.accountID(accounts.identities.filter { $0.id != 42 }) == nil)
+        let loading = Task { await model.loadMetadata(using: accounts) }
+        defer { loading.cancel() }
+        try await Self.waitUntil { GitHubStubProtocol.requests.count == 1 }
+        #expect(model.loading)
+        workspace.teardown()
+        try await Self.waitUntil { GitHubStubProtocol.stoppedRequests > 0 }
+        await loading.value
+        #expect(!model.loading)
+        #expect(model.remotes.isEmpty)
+        #expect(model.metadata == nil)
+        #expect(model.failure == nil)
+    }
+
+    @MainActor
+    private static func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                throw GitHubTransportError.connectionFailed
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private static func activeAccounts() throws -> GitHubMemoryCredentialStore {
+        let store = GitHubMemoryCredentialStore()
+        let response = try JSONDecoder().decode(GitHubTokenResponse.self, from: Data(tokenJSON.utf8))
+        let pair = try GitHubTokenPair(response: response, now: Date())
+        store.save(GitHubCredential(identity: GitHubIdentity(id: 42, login: "octocat"), tokens: pair))
+        store.save(GitHubCredential(identity: GitHubIdentity(id: 21, login: "hubot"), tokens: pair))
+        return store
+    }
+
     private static func body(_ request: URLRequest) -> String? {
         if let data = request.httpBody { return String(decoding: data, as: UTF8.self) }
         guard let stream = request.httpBodyStream else { return nil }
@@ -268,17 +364,20 @@ private final class GitHubStubProtocol: URLProtocol, @unchecked Sendable {
         let body: Data
         let status: Int
         let headers: [String: String]
+        let suspended: Bool
 
-        init(_ body: String, status: Int = 200, headers: [String: String] = [:]) {
+        init(_ body: String, status: Int = 200, headers: [String: String] = [:], suspended: Bool = false) {
             self.body = Data(body.utf8)
             self.status = status
             self.headers = headers
+            self.suspended = suspended
         }
     }
 
     private struct State {
         var responses: [Response]
         var requests: [URLRequest] = []
+        var stoppedRequests = 0
     }
 
     private static let state = Mutex(State(responses: []))
@@ -288,6 +387,8 @@ private final class GitHubStubProtocol: URLProtocol, @unchecked Sendable {
     }
 
     static var requests: [URLRequest] { state.withLock { $0.requests } }
+
+    static var stoppedRequests: Int { state.withLock { $0.stoppedRequests } }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -305,12 +406,15 @@ private final class GitHubStubProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))
             return
         }
+        guard !next.suspended else { return }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: next.body)
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        Self.state.withLock { $0.stoppedRequests += 1 }
+    }
 }
 
 private final class GitHubMemoryCredentialStore: GitHubCredentialStore {
@@ -320,4 +424,20 @@ private final class GitHubMemoryCredentialStore: GitHubCredentialStore {
     func load(userID: Int64) -> GitHubCredential? { records.withLock { $0[userID] } }
     func save(_ credential: GitHubCredential) { records.withLock { $0[credential.identity.id] = credential } }
     func remove(userID: Int64) { records.withLock { _ = $0.removeValue(forKey: userID) } }
+}
+
+private struct FixtureRemotes: GitRunning {
+    func run(
+        _ arguments: [String], in directory: URL, stdin: Data?, environment: [String: String]?,
+        onProgress: GitProgressHandler?
+    ) async throws -> GitOutput {
+        guard arguments == ["--no-optional-locks", "remote", "-v"] else { throw GitError.invalidRequest("Unexpected fixture command") }
+        let output = """
+            origin\thttps://github.com/octocat/fork.git (fetch)
+            origin\thttps://example.test/octocat/fork.git (push)
+            upstream\tgit@github.com:example/repo.git (fetch)
+            upstream\tgit@github.com:example/repo.git (push)
+            """
+        return GitOutput(stdout: Data(output.utf8), stderr: "")
+    }
 }
