@@ -145,3 +145,13 @@ import Testing
         #expect(metrics(0, content: 200).isAtBottom)
     }
 }
+
+@Suite struct IDEAgentChangesPillTests {
+    @Test func theLineCountsFilesAndSaysTheLinesToVoiceOver() {
+        #expect(IDEAgentChangesPill.label(files: 1) == "1 file changed")
+        #expect(IDEAgentChangesPill.label(files: 3) == "3 files changed")
+        #expect(IDEAgentChangesPill.accessibilityLabel(files: 2, added: 12, removed: 3)
+            == "2 files changed, 12 lines added, 3 removed. Show the changes")
+        #expect(IDEAgentChangesPill.accessibilityLabel(files: 1, added: 0, removed: 0) == "1 file changed. Show the changes")
+    }
+}

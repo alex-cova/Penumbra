@@ -108,6 +108,41 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         try await renderDocked("docked-banner-retry")
     }
 
+    /// The docked panel after a run that edited a file: the Changes line under the header, with totals.
+    func testTheDockedChangesLine() async throws {
+        let project = base.appendingPathComponent("MyProject")
+        try "one\ntwo\nthree\n".write(to: project.appendingPathComponent("A.txt"), atomically: true, encoding: .utf8)
+        workspace.openProjectFolder(project)
+        let settings = workspace.agent.settings
+        settings.acceptDisclosure(for: .anthropic)
+        settings.saveAPIKey("sk-ant-test", for: .anthropic)
+        let client = MockLLMClient(turns: [
+            .toolCalls((id: "r", name: "read_file", arguments: #"{"path":"A.txt"}"#)),
+            .toolCalls((id: "e", name: "edit_file", arguments: #"{"path":"A.txt","old_string":"two","new_string":"2\n2.5"}"#)),
+            .text("Changed the second line."), .text("checked"),
+        ])
+        workspace.agent.choiceClientFactory = { _, _ in client }
+        let choice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        workspace.agent.newChatChoice = choice
+        workspace.agent.selected.modelChoice = choice
+        workspace.agent.draft = "Change the second line of A.txt"
+        workspace.agent.send()
+        for _ in 0..<500 where workspace.agent.isRunning || !workspace.agent.entries.contains(where: { $0.kind == .changes }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        try await renderDocked("docked-changes-line")
+        XCTAssertEqual(workspace.aiChanges.totals.added, 2)
+        XCTAssertEqual(workspace.aiChanges.totals.removed, 1)
+
+        // Reverted, nothing is left to show.
+        let cards = workspace.agent.entries.filter { $0.kind == .changes }.map(\.id)
+        workspace.agent.selected.revertRuns(entryIDs: cards)
+        for _ in 0..<300 where IDEAIChangedFiles.summarize(workspace.agent.entries).contains(where: { !$0.isReverted }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(IDEAIChangedFiles.summarize(workspace.agent.entries).allSatisfy(\.isReverted))
+    }
+
     private func renderDocked(_ name: String) async throws {
         let view = IDEAgentPanel(agent: workspace.agent)
             .environment(workspace)

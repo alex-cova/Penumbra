@@ -39,6 +39,8 @@ struct IDEAgentPanel: View {
             if placement != .aiMode, agent.conversations.count > 1 { IDEAgentTabsBar(agent: agent) }
             // The Plan tab beside the conversation shows the checklist, so the strip would say it twice.
             if !agent.todos.isEmpty, !isChecklistInInspector { IDEAgentTodoListView(items: agent.todos) }
+            // AI mode has the Changes tab beside the conversation.
+            if placement != .aiMode { IDEAgentChangesPill(agent: agent) }
             if placement == .aiMode, agent.entries.isEmpty {
                 aiEmptyGreeting
                     .ideTransition(.move(edge: .top).combined(with: .opacity))
