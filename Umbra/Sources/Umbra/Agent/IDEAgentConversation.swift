@@ -190,6 +190,9 @@ final class IDEAgentConversation: Identifiable {
     /// The conversation of the chat this one continues on another agent (`IDEAgentController.selectProvider`),
     /// sent with the first message, whichever backend takes it. Not saved: the chat is empty until then.
     @ObservationIgnored var carriedTurns: [HandoffTurn] = []
+    /// What a native session of this chat was handed (`nativeHandoff`), fixed when that session is made and
+    /// saved with the chat: `read_conversation` reads it by the handoff's numbers. Empty when none happened.
+    @ObservationIgnored private(set) var conversationArchive: [HandoffTurn] = []
     /// Initialize and session calls. A prompt itself is not limited by this.
     var acpRequestTimeout: Duration = .seconds(30)
     /// Unanswered permission cards are cancelled after this. Zero waits until Stop.
@@ -811,19 +814,23 @@ final class IDEAgentConversation: Identifiable {
     private func acpPrompt(_ message: String, before entryID: UUID?) -> [ACPContentBlock] {
         guard acpOwesHandoff || !carriedTurns.isEmpty else { return [.text(message)] }
         acpOwesHandoff = false
-        guard let handoff = takeHandoff(before: entryID, contextWindow: nil, requestBytes: message.utf8.count)
+        guard let handoff = takeHandoff(
+            before: entryID, contextWindow: nil, requestBytes: message.utf8.count,
+            turns: entryID == nil ? carriedTurns + IDEACPHandoff.turns(from: entries) : nil)
         else { return [.text(message)] }
         return [.text(handoff), .text(message)]
     }
 
     /// The handoff block for a backend that has not seen this chat's earlier messages: the carried chat's,
     /// then this transcript's before `entryID`. Says so when some were left out. Clears `carriedTurns`.
-    private func takeHandoff(before entryID: UUID?, contextWindow: Int?, requestBytes: Int) -> String? {
-        let end = entryID.flatMap { id in entries.firstIndex { $0.id == id } } ?? entries.endIndex
-        let turns = carriedTurns + IDEACPHandoff.turns(from: entries[..<end])
+    private func takeHandoff(
+        before entryID: UUID?, contextWindow: Int?, requestBytes: Int,
+        turns given: [HandoffTurn]? = nil, retrievalTool: String? = nil
+    ) -> String? {
+        let turns = given ?? pendingHandoffTurns(before: entryID)
         carriedTurns = []
         guard let handoff = ConversationHandoff.make(
-            turns: turns, contextWindow: contextWindow, requestBytes: requestBytes)
+            turns: turns, contextWindow: contextWindow, requestBytes: requestBytes, retrievalTool: retrievalTool)
         else { return nil }
         if let notice = IDEACPHandoff.partialNotice(handoff) { appendNotice(notice) }
         return handoff.text
@@ -832,17 +839,33 @@ final class IDEAgentConversation: Identifiable {
     /// For Umbra Native: a session whose history holds no message yet, in a chat that already has some
     /// (it ran on an external agent before, or continues another chat), gets them with this message.
     private func nativeHandoff(before entryID: UUID, session: AgentSession, requestBytes: Int) async -> String? {
-        let sawConversation = await session.items.contains { item in
+        let sawConversation = Self.holdsConversation(await session.items)
+        guard !sawConversation else {
+            carriedTurns = []
+            return nil
+        }
+        // The session was made with `read_conversation` over the archive when one was fixed for it.
+        let archive = conversationArchive
+        return takeHandoff(
+            before: entryID, contextWindow: await session.contextWindow, requestBytes: requestBytes,
+            turns: archive.isEmpty ? nil : archive,
+            retrievalTool: archive.isEmpty ? nil : ReadConversationTool.name)
+    }
+
+    static func holdsConversation(_ items: [ConversationItem]) -> Bool {
+        items.contains { item in
             switch item {
             case .user, .userParts, .assistant: true
             default: false
             }
         }
-        guard !sawConversation else {
-            carriedTurns = []
-            return nil
-        }
-        return takeHandoff(before: entryID, contextWindow: await session.contextWindow, requestBytes: requestBytes)
+    }
+
+    /// The carried chat's turns, then this transcript's before `entryID` (before the newest user message when nil).
+    private func pendingHandoffTurns(before entryID: UUID?) -> [HandoffTurn] {
+        let end = entryID.flatMap { id in entries.firstIndex { $0.id == id } }
+            ?? entries.lastIndex { $0.kind == .user } ?? entries.endIndex
+        return carriedTurns + IDEACPHandoff.turns(from: entries[..<end])
     }
 
     /// Messages already in the transcript, not counting the one being sent now.
@@ -1561,6 +1584,7 @@ final class IDEAgentConversation: Identifiable {
         acpExplainedFreshSession = false
         acpOwesHandoff = false
         carriedTurns = []
+        conversationArchive = []
         fileClaims?.release(tab: id)
     }
 
@@ -1630,6 +1654,7 @@ final class IDEAgentConversation: Identifiable {
         stopLoop(silent: true)
         endSession()
         let saved = IDEAgentSavedTranscript.decode(snapshot.host)
+        conversationArchive = saved.conversationArchive
         rootOverride = saved.chatRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
         let blobs = checkpointBlobs()
         entries = saved.entries.compactMap { $0.restoredEntry(blobs: blobs) }
@@ -1738,7 +1763,8 @@ final class IDEAgentConversation: Identifiable {
                 chatRoot: rootOverride?.path,
                 acpPinnedAgentID: acpPin?.agentID,
                 acpPinnedNative: acpPin != nil && acpPin?.agentID == nil,
-                acpSessionID: lastACPSessionID, acpLaunchFingerprint: acpLaunchFingerprint),
+                acpSessionID: lastACPSessionID, acpLaunchFingerprint: acpLaunchFingerprint,
+                conversationArchive: conversationArchive),
             children: children ?? restoredChildren)
         // A write failure only costs the history; it is not worth interrupting the user for.
         try? store.save(snapshot)
@@ -1861,9 +1887,17 @@ final class IDEAgentConversation: Identifiable {
             confirm: { [weak host, hookEntries] in
                 await host?.agentConfirmToolHooks(hookEntries.filter { $0.origin != .app }) ?? false
             })
+        // A session about to be handed this chat's earlier messages (`nativeHandoff`) gets `read_conversation`
+        // over them, so the archive is fixed now, before the tool list is.
+        if conversationArchive.isEmpty {
+            let known = await session?.items ?? restoredItems ?? []
+            if !Self.holdsConversation(known) {
+                conversationArchive = ConversationHandoff.readable(pendingHandoffTurns(before: nil))
+            }
+        }
         let fingerprint = settings.fingerprint(for: choice) + "|" + root.path + "|" + String(host.agentIsGradleProject) + String(host.agentIsMavenProject) + "|" + (skills?.fingerprint ?? "")
             + "|" + agents.fingerprint + "|" + mcpFingerprint + "|" + ProjectMemory.fingerprint(of: memoryText)
-            + "|" + IDEAgentHookTrust.fingerprint(of: hookEntries)
+            + "|" + IDEAgentHookTrust.fingerprint(of: hookEntries) + (conversationArchive.isEmpty ? "" : "|conversation-archive")
         if let session, sessionFingerprint == fingerprint { return session }
 
         let client = modelChoice == nil ? try clientFactory(settings) : try choiceClientFactory(settings, choice)
@@ -1887,6 +1921,10 @@ final class IDEAgentConversation: Identifiable {
         let support = IDEAgentCommandSupport(root: root, box: box)
         var tools: [any AgentTool] = ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns)
             + [IDEShowFileTool(root: root, box: box)]
+        if !conversationArchive.isEmpty {
+            let archive = conversationArchive
+            tools.append(ReadConversationTool { archive })
+        }
         if let search = IDEAgentWebSearch.tool(settings: settings) { tools.append(search) }
         if settings.webFetchEnabled { tools.append(WebFetchTool()) }
         if settings.browserToolsEnabled, let info = host.agentBrowserPageInfo {
@@ -2582,9 +2620,11 @@ final class IDEAgentConversation: Identifiable {
     }
 
     /// Makes this (new, empty) chat a fork of another.
-    func adoptFork(entries newEntries: [IDEAgentEntry], items: [ConversationItem], title: String) {
+    func adoptFork(entries newEntries: [IDEAgentEntry], items: [ConversationItem], title: String, archive: [HandoffTurn] = []) {
         guard isEmpty, !isRunning else { return }
         entries = newEntries
+        // The forked history may hold a handoff whose notes point at `read_conversation`.
+        conversationArchive = Self.holdsConversation(items) ? archive : []
         restoredItems = items
         todos = TodoList.latest(in: items)
         restoredTodos = todos

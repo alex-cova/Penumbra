@@ -403,7 +403,7 @@ final class IDEAgentController {
         loadPendingIfNeeded(source)
         guard let state = await source.forkState(before: entryID) else { return nil }
         let created = addConversation()
-        created.adoptFork(entries: state.entries, items: state.items, title: state.title)
+        created.adoptFork(entries: state.entries, items: state.items, title: state.title, archive: source.conversationArchive)
         return created
     }
 

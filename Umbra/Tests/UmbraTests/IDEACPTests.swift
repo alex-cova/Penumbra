@@ -638,6 +638,12 @@ final class IDEACPTests: XCTestCase {
         XCTAssertTrue(sent.contains("Hello from ACP"), sent)
         let message = try XCTUnwrap(sent.range(of: "what did I say?"), sent)
         XCTAssertLessThan(handoff.lowerBound, message.lowerBound)
+        let toolNames = try XCTUnwrap(mock.requests.first?.tools.map(\.name))
+        XCTAssertTrue(toolNames.contains(ReadConversationTool.name), "\(toolNames)")
+        // What `read_conversation` reads: the carried chat, numbered like the handoff.
+        XCTAssertEqual(next.conversationArchive.map(\.role), [.user, .assistant])
+        XCTAssertEqual(next.conversationArchive.first?.text, "hello")
+        XCTAssertFalse(original.conversationArchive.contains { _ in true }, "the ACP chat was never handed anything")
 
         next.submit(text: "and now?")
         await acpEventually("second native reply") {

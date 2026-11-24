@@ -41,4 +41,13 @@ final class IDEACPHandoffTests: XCTestCase {
         XCTAssertTrue(carried.contains("continues “Fix the build”"), carried)
         XCTAssertTrue(carried.contains("Your first message brings that conversation with it."), carried)
     }
+
+    func testTheArchiveIsSavedWithTheChatAndOlderFilesHaveNone() throws {
+        let archive = [HandoffTurn(role: .user, text: "Use Postgres."), HandoffTurn(role: .assistant, text: "OK.")]
+        let data = try XCTUnwrap(IDEAgentSavedTranscript.encode(entries: [], cost: nil, conversationArchive: archive))
+        XCTAssertEqual(IDEAgentSavedTranscript.decode(data).conversationArchive, archive)
+        let none = try XCTUnwrap(IDEAgentSavedTranscript.encode(entries: [], cost: nil))
+        XCTAssertFalse(String(decoding: none, as: UTF8.self).contains("conversationArchive"))
+        XCTAssertEqual(IDEAgentSavedTranscript.decode(none).conversationArchive, [])
+    }
 }

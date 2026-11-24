@@ -130,4 +130,7 @@ struct IDEAgentSavedTranscript: Codable {
     /// Agent, command, arguments, and workspace the session id was created with. A later launch
     /// that does not match does not reuse the id.
     var acpLaunchFingerprint: String? = nil
+    /// The earlier conversation a native session was handed (`ConversationHandoff`), which
+    /// `read_conversation` reads by the handoff's numbers. Absent when no handoff happened.
+    var conversationArchive: [HandoffTurn]? = nil
 }

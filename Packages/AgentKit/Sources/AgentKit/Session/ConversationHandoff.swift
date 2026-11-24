@@ -1,8 +1,8 @@
 import Foundation
 
 /// One message of a saved transcript, as a handoff sees it.
-public struct HandoffTurn: Sendable, Equatable {
-    public enum Role: String, Sendable {
+public struct HandoffTurn: Sendable, Equatable, Codable {
+    public enum Role: String, Sendable, Codable {
         case user
         case assistant
         /// One line about what happened between messages (tools used, a command that failed).
@@ -16,6 +16,8 @@ public struct HandoffTurn: Sendable, Equatable {
         self.role = role
         self.text = text
     }
+
+    var isBlank: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 }
 
 /// Earlier messages handed to an agent that did not see them: a new session after the old one could not
@@ -60,14 +62,23 @@ public struct ConversationHandoff: Sendable, Equatable {
         return max(0, min(max(cap, 0), window - reserve - max(requestBytes, 0)))
     }
 
-    /// Nil when there is nothing to hand off or no room for it.
+    /// The turns a handoff numbers, 1-based: blank ones dropped. `ReadConversationTool` uses the same list,
+    /// so a marker's numbers are the tool's.
+    public static func readable(_ turns: [HandoffTurn]) -> [HandoffTurn] {
+        turns.filter { !$0.isBlank }
+    }
+
+    /// Nil when there is nothing to hand off or no room for it. With `retrievalTool`, the markers for what was
+    /// left out name it and the message numbers to pass, so the agent can read the rest.
     public static func make(
-        turns: [HandoffTurn], contextWindow: Int? = nil, cap: Int = defaultCap, requestBytes: Int = 0
+        turns: [HandoffTurn], contextWindow: Int? = nil, cap: Int = defaultCap, requestBytes: Int = 0,
+        retrievalTool: String? = nil
     ) -> ConversationHandoff? {
-        let turns = turns.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let turns = readable(turns)
         guard !turns.isEmpty else { return nil }
         // Room for the frame and two gap markers (before the first request, and between it and the newest).
-        let frame = opening.utf8.count + closing.utf8.count + 2 * gapMarker(turns.count).utf8.count
+        let widest = gapMarker(start: turns.count, count: turns.count, tool: retrievalTool).utf8.count
+        let frame = opening.utf8.count + closing.utf8.count + 2 * widest
         var budget = allowance(contextWindow: contextWindow, cap: cap, requestBytes: requestBytes) - frame
         guard budget >= minimumUseful else { return nil }
 
@@ -75,20 +86,20 @@ public struct ConversationHandoff: Sendable, Equatable {
         // The first request says what the conversation is for; it may take up to a quarter of the budget.
         let first = turns.firstIndex { $0.role == .user }
         if let first {
-            let piece = render(turns[first], limit: max(budget / 4, minimumUseful))
+            let piece = render(turns[first], number: first + 1, limit: max(budget / 4, minimumUseful), tool: retrievalTool)
             pieces[first] = piece
             budget -= piece.utf8.count
         }
         // Then the newest messages, whole, until one does not fit. Only the newest may be cut.
         for index in turns.indices.reversed() where index != first {
-            let whole = render(turns[index], limit: nil)
+            let whole = render(turns[index], number: index + 1, limit: nil, tool: retrievalTool)
             if whole.utf8.count <= budget {
                 pieces[index] = whole
                 budget -= whole.utf8.count
                 continue
             }
             if pieces.count == (first == nil ? 0 : 1), budget >= minimumUseful {
-                let cut = render(turns[index], limit: budget)
+                let cut = render(turns[index], number: index + 1, limit: budget, tool: retrievalTool)
                 pieces[index] = cut
                 budget -= cut.utf8.count
             }
@@ -102,26 +113,31 @@ public struct ConversationHandoff: Sendable, Equatable {
                 gap += 1
                 continue
             }
-            if gap > 0 { text += gapMarker(gap) }
+            if gap > 0 { text += gapMarker(start: index - gap + 1, count: gap, tool: retrievalTool) }
             gap = 0
             text += piece
         }
-        if gap > 0 { text += gapMarker(gap) }
+        if gap > 0 { text += gapMarker(start: turns.count - gap + 1, count: gap, tool: retrievalTool) }
         text += closing
         return ConversationHandoff(text: text, sentCount: pieces.count, totalCount: turns.count)
     }
 
-    static func gapMarker(_ count: Int) -> String {
-        "[\(count) earlier \(count == 1 ? "message" : "messages") left out]\n\n"
+    /// `start` is the 1-based number of the first message left out.
+    static func gapMarker(start: Int, count: Int, tool: String?) -> String {
+        let what = "\(count) earlier \(count == 1 ? "message" : "messages")"
+        guard let tool else { return "[\(what) left out]\n\n" }
+        let range = count == 1 ? "message \(start)" : "messages \(start)–\(start + count - 1)"
+        return "[\(what) left out (\(range)); \(tool)(from: \(start)) shows them]\n\n"
     }
 
     /// `[role]`, the text, a blank line. With a limit, the text is cut on a scalar boundary and says so.
-    static func render(_ turn: HandoffTurn, limit: Int?) -> String {
+    static func render(_ turn: HandoffTurn, number: Int, limit: Int?, tool: String?) -> String {
         let header = "[\(turn.role.rawValue)]\n"
         let body = escaped(turn.text.trimmingCharacters(in: .whitespacesAndNewlines))
         let whole = header + body + "\n\n"
         guard let limit, whole.utf8.count > limit else { return whole }
-        let note = "\n[… \(body.utf8.count) bytes in all; the rest was left out]"
+        let rest = tool.map { "\($0)(from: \(number)) shows it whole" } ?? "the rest was left out"
+        let note = "\n[… \(body.utf8.count) bytes in all; \(rest)]"
         let room = max(0, limit - header.utf8.count - note.utf8.count - 2)
         return header + prefix(of: body, bytes: room) + note + "\n\n"
     }

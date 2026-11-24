@@ -127,7 +127,7 @@ extension IDEAgentSavedTranscript {
         entries: [IDEAgentEntry], cost: Double?, todos: [TodoItem] = [], customTitle: String? = nil, checkpoints: [RunSnapshot] = [],
         modelChoice: IDEAIModelChoice? = nil, runInProgress: Bool = false, queued: [String] = [], chatRoot: String? = nil,
         acpPinnedAgentID: UUID? = nil, acpPinnedNative: Bool = false, acpSessionID: String? = nil,
-        acpLaunchFingerprint: String? = nil
+        acpLaunchFingerprint: String? = nil, conversationArchive: [HandoffTurn] = []
     ) -> Data? {
         try? JSONEncoder().encode(IDEAgentSavedTranscript(
             entries: entries.compactMap(IDEAgentPersistedEntry.init), cost: cost, todos: todos.isEmpty ? nil : todos,
@@ -135,25 +135,28 @@ extension IDEAgentSavedTranscript {
             checkpoints: checkpoints.isEmpty ? nil : checkpoints, chatRoot: chatRoot,
             runInProgress: runInProgress ? true : nil, queued: runInProgress && !queued.isEmpty ? queued : nil,
             acpPinnedAgentID: acpPinnedAgentID, acpPinnedNative: acpPinnedNative ? true : nil,
-            acpSessionID: acpSessionID, acpLaunchFingerprint: acpLaunchFingerprint))
+            acpSessionID: acpSessionID, acpLaunchFingerprint: acpLaunchFingerprint,
+            conversationArchive: conversationArchive.isEmpty ? nil : conversationArchive))
     }
 
     /// A blob from before cost was saved is a bare array of rows; it reads as having no known cost.
     static func decode(_ data: Data?) -> (
         entries: [IDEAgentPersistedEntry], cost: Double?, todos: [TodoItem], customTitle: String?, checkpoints: [RunSnapshot],
         modelChoice: IDEAIModelChoice?, runInProgress: Bool, queued: [String], chatRoot: String?,
-        acpPinnedAgentID: UUID?, acpPinnedNative: Bool, acpSessionID: String?, acpLaunchFingerprint: String?
+        acpPinnedAgentID: UUID?, acpPinnedNative: Bool, acpSessionID: String?, acpLaunchFingerprint: String?,
+        conversationArchive: [HandoffTurn]
     ) {
-        guard let data else { return ([], 0, [], nil, [], nil, false, [], nil, nil, false, nil, nil) }
+        guard let data else { return ([], 0, [], nil, [], nil, false, [], nil, nil, false, nil, nil, []) }
         if let saved = try? JSONDecoder().decode(IDEAgentSavedTranscript.self, from: data) {
             return (
                 saved.entries, saved.cost, saved.todos ?? [], saved.customTitle, saved.checkpoints ?? [], saved.modelChoice,
                 saved.runInProgress ?? false, saved.queued ?? [], saved.chatRoot,
-                saved.acpPinnedAgentID, saved.acpPinnedNative ?? false, saved.acpSessionID, saved.acpLaunchFingerprint)
+                saved.acpPinnedAgentID, saved.acpPinnedNative ?? false, saved.acpSessionID, saved.acpLaunchFingerprint,
+                saved.conversationArchive ?? [])
         }
         if let rows = try? JSONDecoder().decode([IDEAgentPersistedEntry].self, from: data) {
-            return (rows, nil, [], nil, [], nil, false, [], nil, nil, false, nil, nil)
+            return (rows, nil, [], nil, [], nil, false, [], nil, nil, false, nil, nil, [])
         }
-        return ([], 0, [], nil, [], nil, false, [], nil, nil, false, nil, nil)
+        return ([], 0, [], nil, [], nil, false, [], nil, nil, false, nil, nil, [])
     }
 }
