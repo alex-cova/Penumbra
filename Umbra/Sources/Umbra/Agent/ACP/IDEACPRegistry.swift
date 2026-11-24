@@ -263,6 +263,24 @@ enum IDEACPAvailabilityResolver {
     }
 }
 
+/// What an external agent's start is waiting on, for the status line. `ready` hands back to the run's own
+/// "Thinking…", which lasts until the first output.
+enum IDEACPStartupStep: Equatable {
+    case starting(String)
+    case loadingSession(String)
+    case creatingSession(String)
+    case ready
+
+    var status: String {
+        switch self {
+        case .starting(let agent): "Starting \(agent)…"
+        case .loadingSession(let agent): "Loading the \(agent) session…"
+        case .creatingSession(let agent): "Starting a \(agent) session…"
+        case .ready: "Thinking…"
+        }
+    }
+}
+
 /// How a saved ACP session id is used on the next connection. The live `initialize`
 /// result is the authority. A saved id is never assumed to still exist.
 enum IDEACPSessionResume {

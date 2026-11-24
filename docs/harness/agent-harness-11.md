@@ -2,7 +2,7 @@
 
 Part of the series `agent-harness-1.md` to `agent-harness-11.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-11-24, against the T3 Code tree (`docs/internals/*.md`, `docs/user/*.md`). The largest item from the same comparison, portable handoffs, has its own doc: `agent-harness-10.md`.
 
-**Status:** proposals, not built. Each item is independent.
+**Status:** items 4 and 5 built 2026-11-24; items 1–3 are proposals. Each item is independent.
 
 ## Already equal or better (checked, no work)
 
@@ -44,16 +44,16 @@ Webhooks and multi-step workflows stay out of scope: they need a listening serve
 - Record one turn each from Claude Code, Codex, Kiro and Muse, covering a tool call, a permission request, a Stop and a disconnect. Kiro's late `config_option_update` and Muse's sign-in message are the quirks that have broken before.
 **Size:** small to medium. It catches adapter upgrades that change wire behaviour, which is what the managed-adapter updates risk.
 
-## 4. Startup phase from real signals
+## 4. Startup phase from real signals (built 2026-11-24)
 
 **T3 rule:** a starting turn shows which step it is on ("starting agent", "signing in", "loading session", "waiting for model") only from protocol signals, never from a timer, and clears the step at the first output.
 **Today:** `acpLiveState` has `.connecting`/`.connected`. Check whether the chat's status line distinguishes `initialize`, `authenticate`, `session/load` and the first `session/update`. If it does not, map those four awaited requests to status text in `currentACPSession`. A slow Claude Code cold start currently looks the same as a hung one.
-**Size:** small.
+**Built:** it did not. `IDEACPStartupStep` now sets the status from the request the start waits on: "Starting <agent>…" around `initialize` (process launch included), "Loading the <agent> session…" around `session/load`, "Starting a <agent> session…" around `session/new`, then back to "Thinking…" until the first output. Only while a run shows a status (an early start from the model picker sets nothing). Sign-in inside `connect`/`newSession` is not told apart. Test: `IDEACPTests.testTheStatusSaysWhichStartupStepASlowAgentIsOn` (the fake agent answers slowly in `slow` mode).
 
-## 5. Tool cards still running after a disconnect (check)
+## 5. Tool cards still running after a disconnect (fixed 2026-11-24)
 
 `handleClose` finishes calls that are waiting for approval. A tool call the agent reported as `in_progress` that was not waiting for approval is not in that set. Confirm that `IDEAgentConversation` marks such cards finished when `.runEnded(.failed)` arrives. If it does not, settle `knownToolCalls` whose status is not terminal in `handleClose` as well. This is T3's "terminal settlement must settle open tool calls".
-**Size:** tiny, once confirmed.
+**Confirmed and fixed:** the conversation settled approval, question and input cards at `.runEnded` but not plain tool cards, so a call the agent reported `in_progress` before disconnecting spun forever, also after a relaunch. `IDEAgentEntry.settlingUnfinishedCalls` now gives every unfinished tool card (not a plan card) an error outcome, "No result: the run ended before this call finished. It may have partly run.", at `.runEnded` and when a saved chat loads. Tests: `IDEACPTests.testAToolCallTheAgentNeverFinishedIsSettledWhenItDisconnects` (fails without the fix), `testSettlingLeavesFinishedCallsAndPlansAlone`.
 
 ## Not taken, on purpose
 

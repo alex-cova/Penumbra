@@ -125,6 +125,7 @@ for line in sys.stdin:
     if method: log(method)
     flag = control()
     if method == "initialize":
+        if flag == "slow": time.sleep(1.5)
         auth = [{"id":"chatgpt","name":"Sign in"}] if flag == "authload" else []
         send({"jsonrpc":"2.0","id":msg["id"],"result":{"protocolVersion":1,"agentCapabilities":{"loadSession": flag != "noload"},"authMethods":auth}})
     elif method == "authenticate":
@@ -143,6 +144,7 @@ for line in sys.stdin:
             log("mcp=" + (",".join(s.get("name","?") for s in servers) or "none"))
             send({"jsonrpc":"2.0","id":msg["id"],"result":session_result()})
     elif method == "session/new":
+        if flag == "slow": time.sleep(1.5)
         cwd = msg["params"].get("cwd","")
         servers = msg["params"].get("mcpServers",[])
         log("mcp=" + (",".join(s.get("name","?") for s in servers) or "none"))
@@ -155,6 +157,11 @@ for line in sys.stdin:
     elif method == "session/prompt":
         prompt = "".join(b.get("text","") for b in msg["params"].get("prompt",[]) if b.get("type")=="text")
         log("prompt handoff=%s first=%s" % ("yes" if "<earlier-conversation>" in prompt else "no", "yes" if "[user]\nhello" in prompt else "no"))
+        if "toolcrash" in prompt:
+            notify_update({"sessionUpdate":"tool_call","toolCallId":"t-crash","title":"Read file","kind":"read","status":"in_progress"})
+            sys.stdout.flush()
+            time.sleep(0.2)
+            os._exit(3)
         if "crash" in prompt:
             text_chunk("dying")
             sys.stdout.flush()
@@ -458,6 +465,48 @@ final class IDEACPTests: XCTestCase {
         XCTAssertNoThrow(try settings.saveACPEnvValue("x", agentID: id, key: "K"))
         settings.removeACPAgent(id: id)
         XCTAssertNil(try? keys.load(account: IDEAgentSettings.acpEnvAccount(agentID: id, key: "K")))
+    }
+
+    func testAToolCallTheAgentNeverFinishedIsSettledWhenItDisconnects() async throws {
+        let (root, script, log, pid) = try makeProject()
+        let (conversation, host, _) = makeConversation(root: root, script: script, log: log, pid: pid)
+        XCTAssertNotNil(host.agentProjectRoot)
+        conversation.submit(text: "toolcrash")
+        await acpEventually("the run ends after the disconnect") {
+            !conversation.isRunning && conversation.entries.contains { $0.kind == .toolCall(name: "Read file") }
+        }
+        let card = try XCTUnwrap(conversation.entries.first { $0.kind == .toolCall(name: "Read file") })
+        XCTAssertEqual(card.output?.isError, true, "the card no longer spins")
+        XCTAssertEqual(card.output?.text, IDEAgentEntry.unfinishedCallNote)
+        conversation.teardown()
+    }
+
+    func testTheStatusSaysWhichStartupStepASlowAgentIsOn() async throws {
+        let (root, script, log, pid) = try makeProject()
+        try setMode(pid, "slow")
+        defer { try? setMode(pid, nil) }
+        let (conversation, host, _) = makeConversation(root: root, script: script, log: log, pid: pid)
+        XCTAssertNotNil(host.agentProjectRoot)
+        conversation.submit(text: "hello")
+        await acpEventually("waiting on initialize") { conversation.status == "Starting Script Agent…" }
+        await acpEventually("waiting on session/new") { conversation.status == "Starting a Script Agent session…" }
+        await acpEventually("the reply arrives") { !conversation.isRunning && conversation.entries.contains { $0.kind == .assistant } }
+        XCTAssertNil(conversation.status)
+        conversation.teardown()
+        await acpEventually("agent process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
+    }
+
+    func testSettlingLeavesFinishedCallsAndPlansAlone() {
+        var done = IDEAgentEntry(kind: .toolCall(name: "read_file"), text: "{}")
+        done.output = ToolOutput("ok")
+        var plan = IDEAgentEntry(kind: .toolCall(name: "exit_plan_mode"), text: "{}")
+        plan.plan = "1. Do it"
+        var entries = [done, plan, IDEAgentEntry(kind: .toolCall(name: "grep"), text: "{}"), IDEAgentEntry(kind: .user, text: "hi")]
+        IDEAgentEntry.settlingUnfinishedCalls(&entries)
+        XCTAssertEqual(entries[0].output?.text, "ok")
+        XCTAssertNil(entries[1].output)
+        XCTAssertEqual(entries[2].output?.text, IDEAgentEntry.unfinishedCallNote)
+        XCTAssertNil(entries[3].output)
     }
 
     func testCrashThenRestartLoadsSession() async throws {

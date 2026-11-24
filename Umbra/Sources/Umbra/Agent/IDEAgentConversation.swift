@@ -632,6 +632,14 @@ final class IDEAgentConversation: Identifiable {
         }
     }
 
+    /// The status line while an external agent starts, set from the request it is waiting on (T3: startup
+    /// phases come from real signals, never a timer). Only while a run shows a status; an early start from
+    /// the model picker says nothing here.
+    private func showStartupStep(_ step: IDEACPStartupStep) {
+        guard isRunning else { return }
+        status = step.status
+    }
+
     private func currentACPSession(root: URL, host: any IDEAgentHost) async throws -> ACPClientSession {
         guard let definition = acpDefinition else {
             throw ACPError.agentError(JSONRPCError(code: -32000, message: "No ACP agent is selected and allowed in Settings ▸ Agent."))
@@ -699,6 +707,7 @@ final class IDEAgentConversation: Identifiable {
         acpSession = created
         acpFingerprint = fingerprint
         do {
+            showStartupStep(.starting(definition.displayName))
             let response = try await created.connect()
             let earlier = acpHasEarlierTranscript
             let savedID = lastACPSessionID
@@ -716,6 +725,7 @@ final class IDEAgentConversation: Identifiable {
             switch plan {
             case .load(let id):
                 do {
+                    showStartupStep(.loadingSession(definition.displayName))
                     _ = try await created.loadSession(id: id)
                     // The agent still has the conversation itself.
                     acpOwesHandoff = false
@@ -729,11 +739,13 @@ final class IDEAgentConversation: Identifiable {
                     lastACPSessionID = nil
                     // The new session will be handed the transcript, so it gets the server whatever the load had.
                     await serveConversationArchive(to: created, if: earlier || !carriedTurns.isEmpty)
+                    showStartupStep(.creatingSession(definition.displayName))
                     _ = try await created.newSession()
                     acpOwesHandoff = earlier
                     notice = IDEACPSessionResume.staleNotice
                 }
             case .create(let createdNotice):
+                showStartupStep(.creatingSession(definition.displayName))
                 _ = try await created.newSession()
                 acpOwesHandoff = earlier
                 if let createdNotice, !acpExplainedFreshSession {
@@ -743,6 +755,7 @@ final class IDEAgentConversation: Identifiable {
             }
             // An agent that runs tools itself (Muse) gets Umbra's permission mode as its own approval mode.
             await applyAgentMode(for: mode, session: created)
+            showStartupStep(.ready)
             lastACPSessionID = IDEACPSessionResume.normalizedSessionID(await created.sessionId)
             acpLaunchFingerprint = fingerprint
             acpAgentName = definition.displayName
@@ -1691,6 +1704,8 @@ final class IDEAgentConversation: Identifiable {
         rootOverride = saved.chatRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
         let blobs = checkpointBlobs()
         entries = saved.entries.compactMap { $0.restoredEntry(blobs: blobs) }
+        // A chat saved mid-run (an interrupted run) can hold calls that never finished.
+        IDEAgentEntry.settlingUnfinishedCalls(&entries)
         restoredRuns = saved.checkpoints
         checkpointLog = nil
         cost = saved.cost
@@ -2950,6 +2965,8 @@ final class IDEAgentConversation: Identifiable {
                 entries[index].elicitation = nil
             }
             isAwaitingUser = entries.contains { $0.plan != nil }
+            // T3's "terminal settlement": a call the agent started and never finished is settled too.
+            IDEAgentEntry.settlingUnfinishedCalls(&entries)
             if case .failed(let message) = ending, IDEAgentNetworkFailure.offersRetry(message) {
                 // The turn never landed in the history. Drop its partial text so Retry starts clean.
                 dropUncommittedTurn()

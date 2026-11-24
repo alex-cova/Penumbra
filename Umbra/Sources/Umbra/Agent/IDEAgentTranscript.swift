@@ -58,6 +58,21 @@ struct IDEAgentEntry: Identifiable, Equatable {
     var isFinishedToolCall: Bool { output != nil }
 }
 
+extension IDEAgentEntry {
+    /// What a tool card says when its run ended without the call reporting a result (an external agent that
+    /// disconnected or was stopped mid-call, an app that closed). Without it the card would spin forever.
+    static let unfinishedCallNote = "No result: the run ended before this call finished. It may have partly run."
+
+    /// Gives every unfinished tool card an outcome. A plan card keeps its own handling.
+    static func settlingUnfinishedCalls(_ entries: inout [IDEAgentEntry]) {
+        for index in entries.indices {
+            guard case .toolCall = entries[index].kind, entries[index].output == nil, entries[index].plan == nil
+            else { continue }
+            entries[index].output = ToolOutput(unfinishedCallNote, isError: true)
+        }
+    }
+}
+
 /// A failed send the user can try again: the provider was not there, or the connection dropped.
 /// Automatic retries cover rate limits and server errors; these are the ones that stop the run.
 enum IDEAgentNetworkFailure {
