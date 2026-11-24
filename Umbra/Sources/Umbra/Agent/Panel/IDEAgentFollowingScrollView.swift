@@ -35,6 +35,8 @@ struct IDEAgentFollowingScrollView<Content: View>: View {
     var pinKey: AnyHashable?
     /// What the pill says when something needs the user ("Waiting for you").
     var attention: String?
+    /// Set to an entry's id to bring it to the middle of the view; reset to nil once done.
+    var scrollTarget: Binding<UUID?> = .constant(nil)
     @ViewBuilder var content: () -> Content
 
     @State private var isPinned = true
@@ -73,6 +75,11 @@ struct IDEAgentFollowingScrollView<Content: View>: View {
             .onAppear { scrollToBottom(proxy) }
             .onChange(of: resetKey) { pin(proxy) }
             .onChange(of: pinKey) { pin(proxy) }
+            .onChange(of: scrollTarget.wrappedValue) {
+                guard let target = scrollTarget.wrappedValue else { return }
+                IDEAppearance.Motion.animate(IDEAppearance.Motion.standard) { proxy.scrollTo(target, anchor: .center) }
+                scrollTarget.wrappedValue = nil
+            }
             .overlay(alignment: .bottom) {
                 if !isPinned {
                     pill { pin(proxy) }

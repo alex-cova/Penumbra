@@ -17,7 +17,10 @@ final class IDEAgentConversation: Identifiable {
     static let flushInterval: Duration = .milliseconds(50)
 
     private(set) var entries: [IDEAgentEntry] = []
-    private(set) var isRunning = false
+    private(set) var isRunning = false {
+        // A wait to retry belongs to a run; however the run ended, it is over.
+        didSet { if !isRunning, retryState != nil { retryState = nil } }
+    }
     /// What the run is doing right now, for the panel's status line.
     private(set) var status: String?
     private(set) var usage = TokenUsage()
@@ -1612,6 +1615,7 @@ final class IDEAgentConversation: Identifiable {
         todos = []
         restoredTodos = []
         status = nil
+        retryState = nil
         restoredItems = nil
         restoredChildren = []
         chatRules = PermissionRules()
@@ -2350,7 +2354,7 @@ final class IDEAgentConversation: Identifiable {
             case .deny: "Denied"
             }
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
         if let session { Task { await session.resolveApproval(callID: callID, decision: decision) } }
         if let acpSession { Task { await acpSession.resolveApproval(callID: callID, decision: decision) } }
     }
@@ -2362,7 +2366,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].question = nil
             entries[index].questionOutcome = text == nil ? "Skipped" : "Answered"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
         if let session { Task { await session.answerQuestion(callID: callID, answer: text) } }
         if let acpSession { Task { await acpSession.answerQuestion(callID: callID, answer: text) } }
     }
@@ -2373,7 +2377,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].elicitation = nil
             entries[index].elicitationOutcome = text == nil ? "Declined" : "Answered"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
         if let continuation = pendingElicitations.removeValue(forKey: callID) {
             continuation.resume(returning: text)
         }
@@ -2404,7 +2408,7 @@ final class IDEAgentConversation: Identifiable {
             if let index = toolIndex(callID) { entries[index].elicitation = nil }
             continuation.resume(returning: nil)
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
     }
 
     // MARK: - Reverting
@@ -2418,7 +2422,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].plan = nil
             entries[index].planOutcome = "Approved · \(mode.displayName)"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
         if let session {
             if mode != .plan { self.mode = mode }
             Task { await session.resolvePlan(callID: routed, decision: .approve(mode)) }
@@ -2437,7 +2441,7 @@ final class IDEAgentConversation: Identifiable {
                 entries[index].plan = nil
                 entries[index].planOutcome = "Changes requested"
             }
-            isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+            isAwaitingUser = entries.contains(where: \.isWaitingForUser)
             Task { await acpSession.resolvePlan(callID: callID, decision: .revise(feedback)) }
             return
         }
@@ -2447,7 +2451,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].plan = nil
             entries[index].planOutcome = "Changes requested"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
         Task { await session.resolvePlan(callID: routed, decision: .revise(feedback)) }
     }
 
@@ -2762,6 +2766,15 @@ final class IDEAgentConversation: Identifiable {
     /// What the provider last said is left of its rate limit; explains a wait in the status line.
     @ObservationIgnored private var rateLimit: RateLimitStatus?
 
+    /// A failed request waiting to be sent again: drawn as a banner over the composer instead of the status line.
+    private(set) var retryState: IDEAgentRetryState?
+
+    /// The entry the user has to act on (an approval, a question, a plan), the first one when several wait.
+    var pendingDecision: IDEAgentEntry? {
+        guard isAwaitingUser else { return nil }
+        return entries.first(where: \.isWaitingForUser)
+    }
+
     /// The summary of the model's reasoning for the turn in progress, as it streams.
     @ObservationIgnored private var reasoningSummary = ""
 
@@ -2776,6 +2789,14 @@ final class IDEAgentConversation: Identifiable {
     }
 
     func handle(_ event: AgentEvent) {
+        if retryState != nil, !IDEAgentRetryState.keeps(event) {
+            // The resent request is answering (or the run ended): the wait is over.
+            retryState = nil
+            switch event {
+            case .textDelta, .reasoningDelta, .toolCallOutput: status = "Thinking…"
+            default: break // sets its own status below
+            }
+        }
         if case .textDelta(let delta) = event {
             if !reasoningSummary.isEmpty {
                 // The answer has started; the summary of the thinking before it is no longer news.
@@ -2824,6 +2845,8 @@ final class IDEAgentConversation: Identifiable {
             rateLimit = latest
         case .retryScheduled(let attempt, let delay):
             status = IDEAgentToolSummary.retryStatus(attempt: attempt, delay: delay, rateLimit: rateLimit)
+            retryState = IDEAgentRetryState(
+                attempt: attempt, nextAttemptAt: Date().addingTimeInterval(delay), exhaustedLimit: rateLimit?.exhausted)
         case .assistantMessage(let text):
             // The turn's finished text. Its streamed copy is already in the transcript, ahead of
             // any tool cards the same turn produced (a tool call closes the streaming entry), so
@@ -2849,7 +2872,7 @@ final class IDEAgentConversation: Identifiable {
                 entries[index].plan = nil
                 entries[index].elicitation = nil
             }
-            if !entries.contains(where: { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }) {
+            if !entries.contains(where: \.isWaitingForUser) {
                 isAwaitingUser = false
             }
         case .toolCallOutput:

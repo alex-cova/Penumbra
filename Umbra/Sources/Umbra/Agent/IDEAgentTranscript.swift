@@ -56,6 +56,37 @@ struct IDEAgentEntry: Identifiable, Equatable {
     var canResume = false
 
     var isFinishedToolCall: Bool { output != nil }
+
+    /// An approval, question, elicitation or plan that is still open on this row.
+    var isWaitingForUser: Bool { approval != nil || question != nil || elicitation != nil || plan != nil }
+}
+
+/// A request that failed with something worth retrying and waits to be sent again.
+struct IDEAgentRetryState: Equatable {
+    var attempt: Int
+    var nextAttemptAt: Date
+    /// The rate limit the provider said is used up ("requests" or "tokens"), when it said so.
+    var exhaustedLimit: String?
+
+    var title: String {
+        exhaustedLimit.map { "The provider's \($0) rate limit is used up" } ?? "The provider is busy or unreachable"
+    }
+
+    /// "Retrying in 12 s (try 2)", "Retrying in 3 min (try 1)", or "Retrying now…" once the time has come.
+    func countdown(now: Date) -> String {
+        let seconds = Int(nextAttemptAt.timeIntervalSince(now).rounded(.up))
+        if seconds <= 0 { return "Retrying now…" }
+        let wait = seconds < 90 ? "\(seconds) s" : "\((seconds + 30) / 60) min"
+        return "Retrying in \(wait) (try \(attempt))"
+    }
+
+    /// The events that belong to the wait itself; anything else means it is over.
+    static func keeps(_ event: AgentEvent) -> Bool {
+        switch event {
+        case .retryScheduled, .turnRestarted, .rateLimit: true
+        default: false
+        }
+    }
 }
 
 extension IDEAgentEntry {

@@ -20,6 +20,10 @@ struct IDEAgentPanel: View {
     @State private var isDiscardWorktreePresented = false
     /// Work groups the user opened or closed, by group id; the others follow `isLive`.
     @State private var groupToggles: [UUID: Bool] = [:]
+    /// Whether each card waiting on the user is on screen, as its row reports it. A card that never
+    /// reported (not built yet, far below) counts as hidden after a moment.
+    @State private var pendingVisibility: [UUID: Bool] = [:]
+    @State private var scrollTarget: UUID?
 
     @Environment(IDEWorkspace.self) private var workspace
 
@@ -47,7 +51,15 @@ struct IDEAgentPanel: View {
             IDEAgentComposerView(
                 agent: agent, settings: settings, isAIMode: isAIMode, composerState: composerState,
                 composerHeight: $composerHeight, acceptRequest: $acceptRequest, lastEscape: $lastEscape,
-                openSettings: { isSettingsPresented = true })
+                openSettings: { isSettingsPresented = true },
+                isPendingCardVisible: agent.selected.pendingDecision.map { pendingVisibility[$0.id] ?? true } ?? true,
+                showEntry: { scrollTarget = $0 })
+        }
+        .task(id: agent.selected.pendingDecision?.id) {
+            // A card that has not said whether it is on screen (its row was never built) is out of view.
+            guard let id = agent.selected.pendingDecision?.id else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            if !Task.isCancelled, pendingVisibility[id] == nil { pendingVisibility[id] = false }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(placement == .docked ? IDEAppearance.ColorToken.panel : Color.clear)
@@ -175,11 +187,17 @@ struct IDEAgentPanel: View {
             IDEAgentFollowingScrollView(
                 resetKey: agent.selectedID,
                 pinKey: agent.entries.last(where: { $0.kind == .user })?.id,
-                attention: agent.selected.isAwaitingUser ? "Waiting for you" : nil
+                attention: agent.selected.isAwaitingUser ? "Waiting for you" : nil,
+                scrollTarget: $scrollTarget
             ) {
                 LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
                     ForEach(IDEAgentTranscriptRows.make(agent.entries, isRunning: agent.isRunning)) { row in
                         switch row {
+                        case .entry(let entry) where entry.isWaitingForUser:
+                            IDEAgentEntryView(entry: entry).id(entry.id)
+                                .onScrollVisibilityChange(threshold: 0.3) { pendingVisibility[entry.id] = $0 }
+                                // A lazy row that is dropped reports no change; gone is out of view.
+                                .onDisappear { pendingVisibility[entry.id] = false }
                         case .entry(let entry):
                             IDEAgentEntryView(entry: entry).id(entry.id)
                         case .work(let group):

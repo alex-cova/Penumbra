@@ -88,6 +88,26 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         try await renderDocked("docked-composer-long")
     }
 
+    /// The banner lane over the docked composer: an approval whose card has scrolled away, then a retry wait.
+    func testTheDockedBanners() async throws {
+        workspace.openProjectFolder(base.appendingPathComponent("MyProject"))
+        workspace.agent.settings.acceptDisclosure(for: .anthropic)
+        let chat = workspace.agent.selected
+        chat.modelChoice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        chat.handle(.toolCallStarted(id: "a", name: "run_command"))
+        chat.handle(.toolCallArguments(id: "a", name: "run_command", arguments: #"{"command":"./gradlew test --tests CalcTest"}"#))
+        chat.handle(.approvalRequested(ApprovalRequest(
+            title: "Run a command", command: "./gradlew test --tests CalcTest", callID: "a", toolName: "run_command")))
+        // Rows below the card push it out of view (notices, since each assistant message replaces the last).
+        for _ in 1...40 { chat.handle(.unreadableToolCall(detail: "")) }
+        try await renderDocked("docked-banner-approval")
+
+        chat.handle(.toolCallFinished(id: "a", name: "run_command", output: ToolOutput("ok")))
+        chat.handle(.rateLimit(RateLimitStatus(limitTokens: 400_000, remainingTokens: 0)))
+        chat.handle(.retryScheduled(attempt: 2, delay: 42))
+        try await renderDocked("docked-banner-retry")
+    }
+
     private func renderDocked(_ name: String) async throws {
         let view = IDEAgentPanel(agent: workspace.agent)
             .environment(workspace)
