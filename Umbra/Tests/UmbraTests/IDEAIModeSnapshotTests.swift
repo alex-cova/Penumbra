@@ -86,6 +86,114 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         try await renderDocked("docked-composer-empty")
         workspace.agent.draft = (1...30).map { "Line \($0) of a long request that keeps going." }.joined(separator: "\n")
         try await renderDocked("docked-composer-long")
+
+        // Two drafts put aside: the tray button with its count appears beside +.
+        workspace.agent.stashDraft()
+        workspace.agent.draft = "Then add a test for the price column"
+        workspace.agent.stashDraft()
+        XCTAssertEqual(workspace.agent.promptStash()?.entries.count, 2)
+        try await renderDocked("docked-composer-stash")
+    }
+
+    /// The banner lane over the docked composer: an approval whose card has scrolled away, then a retry wait.
+    func testTheDockedBanners() async throws {
+        workspace.openProjectFolder(base.appendingPathComponent("MyProject"))
+        workspace.agent.settings.acceptDisclosure(for: .anthropic)
+        let chat = workspace.agent.selected
+        chat.modelChoice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        chat.handle(.toolCallStarted(id: "a", name: "run_command"))
+        chat.handle(.toolCallArguments(id: "a", name: "run_command", arguments: #"{"command":"./gradlew test --tests CalcTest"}"#))
+        chat.handle(.approvalRequested(ApprovalRequest(
+            title: "Run a command", command: "./gradlew test --tests CalcTest", callID: "a", toolName: "run_command")))
+        // Rows below the card push it out of view (notices, since each assistant message replaces the last).
+        for _ in 1...40 { chat.handle(.unreadableToolCall(detail: "")) }
+        try await renderDocked("docked-banner-approval")
+
+        chat.handle(.toolCallFinished(id: "a", name: "run_command", output: ToolOutput("ok")))
+        chat.handle(.rateLimit(RateLimitStatus(limitTokens: 400_000, remainingTokens: 0)))
+        chat.handle(.retryScheduled(attempt: 2, delay: 42))
+        try await renderDocked("docked-banner-retry")
+    }
+
+    /// The docked panel after a run that edited a file: the Changes line under the header, with totals.
+    func testTheDockedChangesLine() async throws {
+        let project = base.appendingPathComponent("MyProject")
+        try "one\ntwo\nthree\n".write(to: project.appendingPathComponent("A.txt"), atomically: true, encoding: .utf8)
+        workspace.openProjectFolder(project)
+        let settings = workspace.agent.settings
+        settings.acceptDisclosure(for: .anthropic)
+        settings.saveAPIKey("sk-ant-test", for: .anthropic)
+        let client = MockLLMClient(turns: [
+            .toolCalls((id: "r", name: "read_file", arguments: #"{"path":"A.txt"}"#)),
+            .toolCalls((id: "e", name: "edit_file", arguments: #"{"path":"A.txt","old_string":"two","new_string":"2\n2.5"}"#)),
+            .text("Changed the second line."), .text("checked"),
+        ])
+        workspace.agent.choiceClientFactory = { _, _ in client }
+        let choice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        workspace.agent.newChatChoice = choice
+        workspace.agent.selected.modelChoice = choice
+        workspace.agent.draft = "Change the second line of A.txt"
+        workspace.agent.send()
+        for _ in 0..<500 where workspace.agent.isRunning || !workspace.agent.entries.contains(where: { $0.kind == .changes }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        try await renderDocked("docked-changes-line")
+        XCTAssertEqual(workspace.aiChanges.totals.added, 2)
+        XCTAssertEqual(workspace.aiChanges.totals.removed, 1)
+
+        // Reverted, nothing is left to show.
+        let cards = workspace.agent.entries.filter { $0.kind == .changes }.map(\.id)
+        workspace.agent.selected.revertRuns(entryIDs: cards)
+        for _ in 0..<300 where IDEAIChangedFiles.summarize(workspace.agent.entries).contains(where: { !$0.isReverted }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(IDEAIChangedFiles.summarize(workspace.agent.entries).allSatisfy(\.isReverted))
+    }
+
+    /// ⌘F in the agent's find field stays in the chat; the bar opens over the transcript, with the minimap
+    /// rail beside a chat of several messages. In AI mode's Chat, ⌘F is not the agent's.
+    func testFindInChatAndTheMinimap() async throws {
+        workspace.openProjectFolder(base.appendingPathComponent("MyProject"))
+        workspace.agent.settings.acceptDisclosure(for: .anthropic)
+        let chat = workspace.agent.selected
+        chat.modelChoice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        let prompts = ["Read the menu", "Add a price column", "Run the tests", "Fix the failing test", "Summarize"]
+        for (index, prompt) in prompts.enumerated() {
+            chat.appendEntryForTesting(IDEAgentEntry(kind: .user, text: prompt))
+            chat.handle(.toolCallStarted(id: "u\(index)", name: "read_file"))
+            chat.handle(.toolCallFinished(id: "u\(index)", name: "read_file", output: ToolOutput("ok")))
+            chat.appendEntryForTesting(IDEAgentEntry(
+                kind: .assistant, text: "\(prompt): done. " + String(repeating: "More detail about the step. ", count: 8)))
+        }
+
+        workspace.agent.isFindFieldFocused = true
+        workspace.showFind()
+        XCTAssertEqual(workspace.agent.findRequest, 1)
+        XCTAssertTrue(workspace.agent.isFindBarOpen)
+        try await renderDocked("docked-find-minimap")
+
+        workspace.agent.isFindFieldFocused = false
+        workspace.showAIMode(tab: .chat)
+        workspace.agent.isFindFieldFocused = true
+        workspace.showFind()
+        XCTAssertEqual(workspace.agent.findRequest, 1, "AI mode's Chat is not the agent panel")
+    }
+
+    /// The commands drawer open over a chat that ran two commands, the newest still streaming.
+    func testTheCommandsDrawer() async throws {
+        workspace.openProjectFolder(base.appendingPathComponent("MyProject"))
+        workspace.agent.settings.acceptDisclosure(for: .anthropic)
+        let chat = workspace.agent.selected
+        chat.modelChoice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        chat.appendEntryForTesting(IDEAgentEntry(kind: .user, text: "Build and test"))
+        var build = IDEAgentEntry(kind: .toolCall(name: "gradle"), text: #"{"tasks":["build"]}"#)
+        build.output = ToolOutput("BUILD SUCCESSFUL in 4s")
+        chat.appendEntryForTesting(build)
+        var tests = IDEAgentEntry(kind: .toolCall(name: "run_command"), text: #"{"command":"swift test --filter CalcTests"}"#)
+        tests.liveOutput = (1...30).map { "Test Case CalcTests.test\($0) passed (0.001 seconds)" }.joined(separator: "\n")
+        chat.appendEntryForTesting(tests)
+        workspace.agent.isCommandsDrawerOpen = true
+        try await renderDocked("docked-commands-drawer")
     }
 
     private func renderDocked(_ name: String) async throws {

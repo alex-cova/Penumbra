@@ -56,6 +56,52 @@ struct IDEAgentEntry: Identifiable, Equatable {
     var canResume = false
 
     var isFinishedToolCall: Bool { output != nil }
+
+    /// An approval, question, elicitation or plan that is still open on this row.
+    var isWaitingForUser: Bool { approval != nil || question != nil || elicitation != nil || plan != nil }
+}
+
+/// A request that failed with something worth retrying and waits to be sent again.
+struct IDEAgentRetryState: Equatable {
+    var attempt: Int
+    var nextAttemptAt: Date
+    /// The rate limit the provider said is used up ("requests" or "tokens"), when it said so.
+    var exhaustedLimit: String?
+
+    var title: String {
+        exhaustedLimit.map { "The provider's \($0) rate limit is used up" } ?? "The provider is busy or unreachable"
+    }
+
+    /// "Retrying in 12 s (try 2)", "Retrying in 3 min (try 1)", or "Retrying now…" once the time has come.
+    func countdown(now: Date) -> String {
+        let seconds = Int(nextAttemptAt.timeIntervalSince(now).rounded(.up))
+        if seconds <= 0 { return "Retrying now…" }
+        let wait = seconds < 90 ? "\(seconds) s" : "\((seconds + 30) / 60) min"
+        return "Retrying in \(wait) (try \(attempt))"
+    }
+
+    /// The events that belong to the wait itself; anything else means it is over.
+    static func keeps(_ event: AgentEvent) -> Bool {
+        switch event {
+        case .retryScheduled, .turnRestarted, .rateLimit: true
+        default: false
+        }
+    }
+}
+
+extension IDEAgentEntry {
+    /// What a tool card says when its run ended without the call reporting a result (an external agent that
+    /// disconnected or was stopped mid-call, an app that closed). Without it the card would spin forever.
+    static let unfinishedCallNote = "No result: the run ended before this call finished. It may have partly run."
+
+    /// Gives every unfinished tool card an outcome. A plan card keeps its own handling.
+    static func settlingUnfinishedCalls(_ entries: inout [IDEAgentEntry]) {
+        for index in entries.indices {
+            guard case .toolCall = entries[index].kind, entries[index].output == nil, entries[index].plan == nil
+            else { continue }
+            entries[index].output = ToolOutput(unfinishedCallNote, isError: true)
+        }
+    }
 }
 
 /// A failed send the user can try again: the provider was not there, or the connection dropped.

@@ -162,7 +162,9 @@ final class IDEACPManagedAdapterConversationTests: XCTestCase {
         XCTAssertNotEqual(nativeChat.id, codexChat.id)
         XCTAssertFalse(nativeChat.isACPConversation, "a native chat never launches an adapter")
         XCTAssertNil(nativeChat.resolvedACPAgentID)
-        XCTAssertFalse(nativeChat.entries.contains { $0.text.contains("Hello from") || $0.text.contains("first chat") })
+        // The transcript is not copied: the conversation goes along as `carriedTurns`, sent with the first message.
+        XCTAssertFalse(nativeChat.entries.contains { [.user, .assistant].contains($0.kind) })
+        XCTAssertEqual(nativeChat.carriedTurns.first?.text, "first chat")
         XCTAssertEqual(nativeChat.effectiveChoice.provider, .mlx)
         XCTAssertEqual(codexChat.resolvedACPAgentID, row.id)
         XCTAssertEqual(root.leases.count(adapterID: "codex-acp", version: "1.0.0"), 1, "only the Codex chat holds the adapter")

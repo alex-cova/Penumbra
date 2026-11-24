@@ -608,7 +608,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     private static func summarize(_ error: Error) -> String {
         switch error {
         case let GradleProjectModelExtractionError.syncFailed(result):
-            "Gradle exited \(result.exitCode)"
+            Self.syncFailedSummary(result: result)
         case GradleProjectModelExtractionError.missingOutput:
             "Gradle produced no model"
         case GradleProjectModelExtractionError.decodingFailed:
@@ -624,6 +624,31 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         default:
             String(describing: error)
         }
+    }
+
+    /// Why a sync failed, for the notification, the sidebar placeholder and the console's last
+    /// line: the exit plus the most useful error output, not just the exit code.
+    private static func syncFailedSummary(result: GradleCommandResult) -> String {
+        let header = "Gradle exited \(result.exitCode)"
+        let tail = Self.failureTail(stdout: result.stdout, stderr: result.stderr)
+        guard !tail.isEmpty else { return header }
+        return ([header] + tail).joined(separator: "\n")
+    }
+
+    /// The last few non-empty lines of a failed invocation: stderr when it says anything, stdout
+    /// otherwise (some failures only echo there). Capped so a stack trace doesn't flood the
+    /// notification or the sidebar.
+    private static func failureTail(stdout: String, stderr: String, maxLines: Int = 5) -> [String] {
+        let source = stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stdout : stderr
+        var lines: [String] = []
+        for part in source.split(separator: "\n") {
+            let line = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !line.isEmpty { lines.append(line) }
+        }
+        if lines.count > maxLines {
+            lines.removeFirst(lines.count - maxLines)
+        }
+        return lines
     }
 
     // MARK: - Tasks

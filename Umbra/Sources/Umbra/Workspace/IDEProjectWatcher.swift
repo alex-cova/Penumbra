@@ -19,6 +19,8 @@ final class IDEProjectWatcher {
         var openFilePaths: Set<String> = []
         /// `.git/index` or `.git/HEAD` changed: a stage, commit, or checkout.
         var gitMetadataChanged = false
+        /// Repository remote or branch configuration changed.
+        var gitConfigChanged = false
         /// A ref moved: `HEAD`, `refs/**` (branches, tags, remotes, the stash), `packed-refs`,
         /// `ORIG_HEAD` or `FETCH_HEAD`. The log and the branch lists are stale.
         var gitRefsChanged = false
@@ -173,7 +175,7 @@ final class IDEProjectWatcher {
             self.pending = Batch()
             self.flushTask = nil
             guard !batch.paths.isEmpty || !batch.openFilePaths.isEmpty || batch.gitMetadataChanged
-                || batch.gitRefsChanged || batch.gitOperationChanged
+                || batch.gitRefsChanged || batch.gitOperationChanged || batch.gitConfigChanged
             else { return }
             for handler in self.onBatch { handler(batch) }
         }
@@ -201,6 +203,7 @@ final class IDEProjectWatcher {
     }
 
     private func note(_ tail: Substring) {
+        if tail == "config" || tail == "config.worktree" { pending.gitConfigChanged = true }
         let kind = Self.classifyGitTail(tail)
         if kind.metadata { pending.gitMetadataChanged = true }
         if kind.refs { pending.gitRefsChanged = true }
@@ -209,7 +212,7 @@ final class IDEProjectWatcher {
 
     /// Index, refs, and operation files only. Object files are not a reason to refresh.
     nonisolated static func isGitDirectorySignal(_ tail: Substring) -> Bool {
-        tail == "index" || isRefsFile(tail) || isOperationFile(tail)
+        tail == "index" || tail == "config" || tail == "config.worktree" || isRefsFile(tail) || isOperationFile(tail)
     }
 
     /// Everything outside the directories the Explorer never lists, plus the `.git` files that
@@ -217,7 +220,7 @@ final class IDEProjectWatcher {
     nonisolated private static func isRelevant(_ path: String) -> Bool {
         if let range = path.range(of: "/.git/") {
             let tail = path[range.upperBound...]
-            return tail == "index" || isRefsFile(tail) || isOperationFile(tail)
+            return tail == "index" || tail == "config" || tail == "config.worktree" || isRefsFile(tail) || isOperationFile(tail)
         }
         if path.hasSuffix("/.git") { return false }
         for component in path.split(separator: "/") where IDEProjectModel.ignoredDirectoryNames.contains(String(component)) {

@@ -117,6 +117,47 @@ final class IDEAgentQueueTests: XCTestCase {
         XCTAssertFalse(controller.entries.contains { $0.text == "never mind this" })
     }
 
+    func testAnEditedQueuedMessageIsDeliveredAsEdited() async throws {
+        let (controller, client) = makeController([slowRead(), .text("done")])
+        await start(controller, "first")
+        controller.draft = "look at B"
+        controller.submit()
+        let queued = try XCTUnwrap(controller.selected.queue.first)
+        XCTAssertTrue(controller.selected.updateQueued(queued.id, text: "  look at C instead \n"))
+        XCTAssertEqual(controller.selected.queue.map(\.text), ["look at C instead"], "trimmed, same place")
+        XCTAssertEqual(controller.selected.queue.first?.id, queued.id)
+        await waitFor("finished") { !controller.isRunning && controller.selected.queue.isEmpty }
+        XCTAssertEqual(try XCTUnwrap(client.requests.last).items.last, .user("look at C instead"))
+    }
+
+    func testAnEmptyEditTakesTheMessageBack() async throws {
+        let (controller, _) = makeController([slowRead(), .text("done")])
+        await start(controller, "first")
+        controller.draft = "look at B"
+        controller.submit()
+        let queued = try XCTUnwrap(controller.selected.queue.first)
+        XCTAssertTrue(controller.selected.updateQueued(queued.id, text: "   "))
+        XCTAssertTrue(controller.selected.queue.isEmpty)
+        await waitFor("finished") { !controller.isRunning }
+        XCTAssertFalse(controller.entries.contains { $0.text == "look at B" })
+    }
+
+    func testEditingAMessageTheRunAlreadyTookFailsAndTheEditCanGoToTheField() async throws {
+        let (controller, _) = makeController([slowRead(), .text("done")])
+        await start(controller, "first")
+        controller.draft = "look at B"
+        controller.submit()
+        let queued = try XCTUnwrap(controller.selected.queue.first)
+        await waitFor("delivered") { controller.selected.queue.isEmpty }
+        XCTAssertFalse(controller.selected.updateQueued(queued.id, text: "too late"))
+
+        XCTAssertTrue(controller.selected.keepEditOfDeliveredMessage("too late"))
+        XCTAssertEqual(controller.draft, "too late")
+        XCTAssertFalse(controller.selected.keepEditOfDeliveredMessage("another"), "text in the field is never replaced")
+        XCTAssertEqual(controller.draft, "too late")
+        await waitFor("finished") { !controller.isRunning }
+    }
+
     func testSeveralQueuedMessagesArriveInOrder() async throws {
         let (controller, client) = makeController([slowRead(), .text("done")])
         await start(controller, "first")

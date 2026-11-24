@@ -21,6 +21,8 @@ final class IDEAIChatController {
     let settings: IDEAgentSettings
     @ObservationIgnored let aiSettings: IDEAISettings
     @ObservationIgnored private let store: SessionStore?
+    /// Where the usage view reads AI mode's chats.
+    var usageStore: SessionStore? { store }
     @ObservationIgnored private let clientFactory: @MainActor (IDEAgentSettings, IDEAIModelChoice) throws -> any LLMClient
 
     /// Chats live beside the project conversations, in a folder of their own.

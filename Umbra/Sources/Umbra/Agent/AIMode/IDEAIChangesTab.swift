@@ -66,15 +66,35 @@ final class IDEAIChangesModel {
 }
 
 /// What the Changes tab's diffs are computed from; a change restarts the work.
-private struct IDEAIChangesRefreshKey: Hashable {
+struct IDEAIChangesRefreshKey: Hashable {
     var files: [String]
     var isRunning: Bool
     var root: URL?
+
+    init(files: [IDEAIChangedFile], isRunning: Bool, root: URL?) {
+        self.files = files.map { "\($0.path)|\($0.entryIDs.count)|\($0.isReverted)" }
+        self.isRunning = isRunning
+        self.root = root
+    }
+}
+
+extension View {
+    /// Keeps the window's `aiChanges` diffs current for these files: worked out again off the main actor
+    /// whenever the list, the run state or the project changes.
+    func ideAIChangesRefresh(files: [IDEAIChangedFile], isRunning: Bool, workspace: IDEWorkspace) -> some View {
+        task(id: IDEAIChangesRefreshKey(files: files, isRunning: isRunning, root: workspace.agentProjectRoot)) {
+            await workspace.aiChanges.update(
+                files: files, root: workspace.agentProjectRoot, unsaved: workspace.agentUnsavedBuffers())
+        }
+    }
 }
 
 /// Every file the selected chat's runs changed, with its diff against the file before the chat: expand a
 /// row to read it, open it in the diff viewer, or revert all the runs.
 struct IDEAIChangesTab: View {
+    /// Set when the list is shown in a popover (the docked panel's Changes pill): Escape and opening a
+    /// diff or file close it.
+    var onDismiss: (() -> Void)?
     @Environment(IDEWorkspace.self) private var workspace
     @State private var expanded: Set<String> = []
     @State private var selectedPath: String?
@@ -87,9 +107,6 @@ struct IDEAIChangesTab: View {
         let entries = conversation.entries
         let files = IDEAIChangedFiles.summarize(entries)
         let pending = IDEAIChangedFiles.pendingPaths(in: entries, isRunning: conversation.isRunning)
-        let key = IDEAIChangesRefreshKey(
-            files: files.map { "\($0.path)|\($0.entryIDs.count)|\($0.isReverted)" },
-            isRunning: conversation.isRunning, root: workspace.agentProjectRoot)
         Group {
             if files.isEmpty && pending.isEmpty {
                 IDEAIInspectorEmptyState(
@@ -123,10 +140,7 @@ struct IDEAIChangesTab: View {
                 }
             }
         }
-        .task(id: key) {
-            await workspace.aiChanges.update(
-                files: files, root: workspace.agentProjectRoot, unsaved: workspace.agentUnsavedBuffers())
-        }
+        .ideAIChangesRefresh(files: files, isRunning: conversation.isRunning, workspace: workspace)
     }
 
     // MARK: - Header
@@ -230,12 +244,12 @@ struct IDEAIChangesTab: View {
             .opacity(file.isReverted ? 0.55 : 1)
             .contextMenu {
                 Button("Open Diff in Editor") { openDiff(file) }
-                Button("Open File") { Task { await workspace.openAgentCitedFile(.init(path: file.path)) } }
-                Divider()
-                Button("Copy Path") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(file.path, forType: .string)
+                Button("Open File") {
+                    onDismiss?()
+                    Task { await workspace.openAgentCitedFile(.init(path: file.path)) }
                 }
+                Divider()
+                Button("Copy Path") { IDEAgentPathCopy.copy(file.path) }
             }
             .help(file.path)
             .accessibilityLabel("\(file.path), \(file.isCreation ? "created" : "modified")\(file.isReverted ? ", reverted" : "")")
@@ -295,7 +309,7 @@ struct IDEAIChangesTab: View {
             return .handled
         case .escape:
             typeahead.reset()
-            workspace.focusActiveEditor()
+            if let onDismiss { onDismiss() } else { workspace.focusActiveEditor() }
             return .handled
         default:
             guard let character = IDEListTypeahead.character(from: press) else { return .ignored }
@@ -313,6 +327,7 @@ struct IDEAIChangesTab: View {
     }
 
     private func openDiff(_ file: IDEAIChangedFile) {
+        onDismiss?()
         conversation.showDiff(for: IDEAgentFileChange(path: file.path, original: file.original))
     }
 }

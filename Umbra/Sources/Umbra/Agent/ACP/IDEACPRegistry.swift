@@ -263,13 +263,31 @@ enum IDEACPAvailabilityResolver {
     }
 }
 
+/// What an external agent's start is waiting on, for the status line. `ready` hands back to the run's own
+/// "Thinking…", which lasts until the first output.
+enum IDEACPStartupStep: Equatable {
+    case starting(String)
+    case loadingSession(String)
+    case creatingSession(String)
+    case ready
+
+    var status: String {
+        switch self {
+        case .starting(let agent): "Starting \(agent)…"
+        case .loadingSession(let agent): "Loading the \(agent) session…"
+        case .creatingSession(let agent): "Starting a \(agent) session…"
+        case .ready: "Thinking…"
+        }
+    }
+}
+
 /// How a saved ACP session id is used on the next connection. The live `initialize`
 /// result is the authority. A saved id is never assumed to still exist.
 enum IDEACPSessionResume {
     static let restoredNotice = "Restored the remote session. Earlier messages were not sent again."
-    static let unsupportedNotice = "This agent cannot resume a remote session. The transcript was kept, and a new session was started. Earlier messages were not sent again."
-    static let staleNotice = "The previous remote session is no longer available. The transcript was kept, and a new session was started. Earlier messages were not sent again."
-    static let freshHistoryNotice = "This transcript was kept. A new remote session was started. Earlier messages were not sent again."
+    static let unsupportedNotice = "This agent cannot resume a remote session, so a new session was started. Your next message brings the earlier conversation with it."
+    static let staleNotice = "The previous remote session is no longer available, so a new session was started. Your next message brings the earlier conversation with it."
+    static let freshHistoryNotice = "A new remote session was started for this transcript. Your next message brings the earlier conversation with it."
 
     enum Plan: Equatable {
         case load(String)

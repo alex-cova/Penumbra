@@ -56,7 +56,7 @@ public actor ACPClientSession {
     private let clientInfo: ACPImplementation?
     private let cwd: String
     private let additionalDirectories: [String]
-    private let mcpServers: [JSONValue]
+    private var mcpServers: [JSONValue]
     private let requestTimeout: Duration
     /// How long a permission card may sit unanswered before it is cancelled. Zero waits forever.
     private let permissionTimeout: Duration
@@ -358,7 +358,12 @@ public actor ACPClientSession {
         timedOutCalls = []
         activeContinuation = continuation
         let task = Task { [weak self] in
-            guard let self else { return }
+            // A session dropped by its caller still ends the stream, exactly once.
+            guard let self else {
+                continuation.yield(.runEnded(.stopped))
+                continuation.finish()
+                return
+            }
             await self.runPrompt(blocks: blocks, continuation: continuation)
         }
         activeRunTask = task
@@ -636,6 +641,9 @@ public actor ACPClientSession {
     public func setMode(_ mode: PermissionMode) { permissionMode = mode }
 
     public func setRules(_ rules: PermissionRules) { permissionRules = rules }
+
+    /// The MCP servers the next `session/new` or `session/load` lists. A session already made keeps its own.
+    public func setMCPServers(_ servers: [JSONValue]) { mcpServers = servers }
 
     /// Switches the agent's mode via `session/set_mode`.
     public func setAgentMode(_ modeId: String) async throws {

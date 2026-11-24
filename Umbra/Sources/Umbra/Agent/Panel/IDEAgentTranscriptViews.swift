@@ -65,7 +65,7 @@ struct IDEAgentUserRow: View {
     @State private var isHovering = false
 
     private var agent: IDEAgentController { workspace.agent }
-    private var canGoBack: Bool { entry.itemIndex != nil && !agent.selected.isRunning }
+    private var canGoBack: Bool { agent.selected.canRewind(to: entry) }
 
     var body: some View {
         content

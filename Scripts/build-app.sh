@@ -48,6 +48,14 @@ fi
 cp "$BINARY" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
+# The MCP server an external ACP agent starts to read the earlier messages of a chat it was handed
+# (docs/harness/agent-harness-10.md). Umbra looks for it next to its own binary and does without it.
+HELPER_NAME="umbra-conversation-mcp"
+echo "==> Building ${HELPER_NAME}…"
+swift build --package-path "$PACKAGE_PATH" -c "$CONFIGURATION" --build-system "$BUILD_SYSTEM" --product "$HELPER_NAME"
+cp "$BIN_PATH/$HELPER_NAME" "$APP_DIR/Contents/MacOS/$HELPER_NAME"
+chmod +x "$APP_DIR/Contents/MacOS/$HELPER_NAME"
+
 SPARKLE_FRAMEWORK="$(find "$PACKAGE_PATH/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework" -path '*/Sparkle.framework' -print -quit)"
 if [[ -z "$SPARKLE_FRAMEWORK" || ! -d "$SPARKLE_FRAMEWORK" ]]; then
   echo "error: Sparkle.framework not found; run 'swift build --package-path Umbra -c $CONFIGURATION --product Umbra' first" >&2
@@ -93,6 +101,17 @@ cp "$INFO_PLIST_TEMPLATE" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP_DIR/Contents/Info.plist"
 
+if [[ -n "${UMBRA_GITHUB_CLIENT_ID:-}" ]]; then
+  plutil -replace UmbraGitHubClientID -string "$UMBRA_GITHUB_CLIENT_ID" "$APP_DIR/Contents/Info.plist"
+else
+  plutil -remove UmbraGitHubClientID "$APP_DIR/Contents/Info.plist"
+fi
+if [[ -n "${UMBRA_GITHUB_APP_SLUG:-}" ]]; then
+  plutil -replace UmbraGitHubAppSlug -string "$UMBRA_GITHUB_APP_SLUG" "$APP_DIR/Contents/Info.plist"
+else
+  plutil -remove UmbraGitHubAppSlug "$APP_DIR/Contents/Info.plist"
+fi
+
 if [[ -d "$ICON_SOURCE" ]]; then
   echo "==> Compiling app icon from UmbraIcon.icon…"
   ICON_STAGING="$(mktemp -d)"
@@ -117,6 +136,8 @@ fi
 SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 if [[ -n "$SIGN_IDENTITY" ]]; then
   echo "==> Signing with identity: $SIGN_IDENTITY"
+  # The helper is signed on its own first (no entitlements: it reads one file and talks on stdio).
+  codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_DIR/Contents/MacOS/$HELPER_NAME"
   codesign --force --deep --options runtime \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGN_IDENTITY" \

@@ -55,6 +55,13 @@ final class IDEAgentComposerKeyMapTests: XCTestCase {
         XCTAssertEqual(action(Keys.upArrow, .option), .passThrough)
     }
 
+    func testControlSStashesTheDraftAndCommandSIsLeftAlone() {
+        XCTAssertEqual(action(Keys.s, .control), .stashDraft)
+        XCTAssertEqual(action(Keys.s, .command), .passThrough)
+        XCTAssertEqual(action(Keys.s, [.control, .shift]), .passThrough)
+        XCTAssertEqual(action(Keys.s, .control, marked: true), .passThrough, "an input method owns the key")
+    }
+
     func testControlRStartsASearchOfEarlierPrompts() {
         XCTAssertEqual(action(15, .control), .searchHistory)
         XCTAssertEqual(action(15, .control, suggestions: true), .searchHistory, "it also leaves the search")

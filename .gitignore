@@ -18,6 +18,7 @@ Umbra/Umbra.xcodeproj/xcuserdata/
 Umbra/Umbra.xcodeproj/project.xcworkspace/xcuserdata/
 # Planning notes under docs/ (AGENT_HARNESS_PLAN.md, GIT_CLIENT_PLAN.md, …)
 docs/**/*PLAN.md
+!docs/github/IMPLEMENTATION_PLAN.md
 # JaCoCo agent and CLI, fetched by Umbra/Sources/Umbra/Tools/JaCoCo/fetch.sh
 Umbra/Sources/Umbra/Tools/JaCoCo/build/
 # Python bytecode cache (e.g. Tools/JavaReceiverOracle/__pycache__/)

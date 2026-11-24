@@ -18,6 +18,7 @@ struct IDESidebarTab: RawRepresentable, Codable, Hashable, Identifiable {
 
     static let explorer = IDESidebarTab(rawValue: "explorer")
     static let structure = IDESidebarTab(rawValue: "structure")
+    static let github = IDESidebarTab(rawValue: "github")
     static let changes = IDESidebarTab(rawValue: "changes")
     static let bookmarks = IDESidebarTab(rawValue: "bookmarks")
     static let history = IDESidebarTab(rawValue: "history")
@@ -58,6 +59,7 @@ enum IDESidebarTabs {
         static let explorer = 0
         static let structure = 10
         static let changes = 20
+        static let github = 25
         static let breakpoints = 30
         static let bookmarks = 35
         static let history = 40
@@ -85,6 +87,11 @@ enum IDESidebarTabs {
                 badge: { $0.gitStatus.changes.count },
                 onShow: { $0.gitStatus.refresh() },
                 content: { AnyView(IDEChangesPanel(gitStatus: $0.gitStatus)) }
+            ),
+            IDESidebarTabDescriptor(
+                tab: .github, title: "GitHub", systemImage: "point.3.connected.trianglepath.dotted",
+                order: Order.github, isAvailable: { $0.showsSourceControlTab },
+                content: { AnyView(IDEGitHubToolWindow(workspace: $0, accounts: .shared, model: $0.github)) }
             ),
             IDESidebarTabDescriptor(
                 tab: .bookmarks, title: "Bookmarks", systemImage: "bookmark", order: Order.bookmarks,

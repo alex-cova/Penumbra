@@ -20,12 +20,28 @@ final class IDEAgentController {
     @ObservationIgnored private(set) var commandCatalog: IDEAgentCommandCatalog!
     /// The window's MCP servers, shared by its chats.
     @ObservationIgnored let mcp: IDEMCPManager
+    /// The project's schedules (`/schedule`), run while this window has it open.
+    let scheduler: IDEAgentScheduler
     /// Bumped by `/model`, so the panel opens its settings sheet.
     var settingsRequest = 0
+    /// Bumped by ⌘F while the panel has the keyboard: the panel focuses its find bar.
+    var findRequest = 0
+    /// The find bar over the transcript is open. Kept here, not in the view, so a panel that is rebuilt
+    /// (docked ↔ page) keeps it.
+    var isFindBarOpen = false
+    /// The commands drawer between the transcript and the message box is open.
+    var isCommandsDrawerOpen = false
+    /// The panel's find field has the keyboard, so ⌘F stays in the panel.
+    @ObservationIgnored var isFindFieldFocused = false
     /// Set to show the rewind sheet (`/rewind`, a message's Rewind button, Esc Esc).
     var rewindRequest: IDEAgentRewindRequest?
+    /// `/usage`: the sheet of token use and cost across saved chats.
+    var isShowingUsage = false
+    /// `/schedule` with no arguments: the project's schedules.
+    var isShowingSchedules = false
     /// What this project's chats were asked, by project folder.
     @ObservationIgnored private var promptHistories: [String: IDEAgentPromptHistory] = [:]
+    @ObservationIgnored private var promptStashes: [String: IDEAgentPromptStash] = [:]
     /// Whether the user is looking at this window (it is the key window). Without an answer, assume yes.
     @ObservationIgnored var isUserWatching: (() -> Bool)?
     /// Tells the user something about a chat they are not looking at: the chat's id, a title, a detail.
@@ -67,6 +83,8 @@ final class IDEAgentController {
         set { hostReference = newValue }
     }
     @ObservationIgnored private let store: SessionStore?
+    /// Where the usage view reads this window's chats.
+    var usageStore: SessionStore? { store }
     @ObservationIgnored private let appPermissionsFile: URL?
     @ObservationIgnored private let clientFactory: @MainActor (IDEAgentSettings) throws -> any LLMClient
     /// Builds the client for a chat that has its own model choice (AI mode); tests replace it.
@@ -103,6 +121,7 @@ final class IDEAgentController {
         self.appPermissionsFile = appPermissionsFile
         self.clientFactory = clientFactory
         self.mcp = IDEMCPManager(store: settings.mcp)
+        self.scheduler = IDEAgentScheduler(store: store)
         let first = IDEAgentConversation(
             settings: settings, store: store, appPermissionsFile: appPermissionsFile, clientFactory: clientFactory)
         conversations = [first]
@@ -131,6 +150,12 @@ final class IDEAgentController {
         }
         conversation.onAttention = { [weak self, weak conversation] attention in
             guard let self, let conversation else { return }
+            if case .finished(let ending, _) = attention {
+                self.scheduler.runEnded(
+                    conversationID: conversation.conversationID, ending: ending,
+                    filesChanged: IDEAIChangedFiles.summarize(conversation.entries).filter { !$0.isReverted }.count,
+                    cost: conversation.cost, iterationLimit: self.settings.iterationCap)
+            }
             self.notify(attention, from: conversation)
         }
         conversation.onRunFinished = { [weak self, weak conversation] in
@@ -162,11 +187,16 @@ final class IDEAgentController {
     func attach(host: any IDEAgentHost) {
         self.host = host
         for conversation in conversations { conversation.host = host }
+        scheduler.controller = self
+        scheduler.start()
     }
 
     /// Cancels every run and drops the sessions. A session that outlives its window would keep the
     /// workspace alive through its tools.
     func teardown() {
+        scheduler.stop()
+        releaseClosed()
+        toastTask?.cancel()
         for conversation in conversations { conversation.teardown() }
         mcp.shutdown()
         host = nil
@@ -213,6 +243,8 @@ final class IDEAgentController {
     /// Shows a saved conversation: in the tab that already has it, else in the selected chat if that is
     /// empty, else in a new one. Never over a chat that has something in it.
     func resume(_ id: UUID) {
+        // A chat closed a moment ago is opened from disk now; its Undo would bring back a second tab of it.
+        releaseClosed(holding: id)
         if let open = conversations.first(where: { $0.conversationID == id }) {
             select(open.id)
             didRestore = true
@@ -227,9 +259,10 @@ final class IDEAgentController {
     /// Deletes a saved conversation. A chat showing it is closed, unless it is running.
     func deleteConversation(_ id: UUID) {
         guard let store, let root = host?.agentProjectRoot else { return }
+        releaseClosed(holding: id)
         if let open = conversations.first(where: { $0.conversationID == id }) {
             guard !open.isRunning else { return }
-            close(open.id)
+            close(open.id, undoable: false)
         }
         // The originals kept for its runs go with it.
         if let snapshot = store.load(id, projectRoot: root.path) {
@@ -237,6 +270,7 @@ final class IDEAgentController {
             for run in IDEAgentSavedTranscript.decode(snapshot.host).checkpoints { blobs.removeRun(run.id) }
         }
         IDEAgentToolOutputs(store: store, projectRoot: root.path, conversationID: id).removeConversation()
+        IDEACPConversationServer.removeArchive(store: store, projectRoot: root.path, conversationID: id)
         store.delete(id, projectRoot: root.path)
         refreshHistory()
     }
@@ -247,6 +281,7 @@ final class IDEAgentController {
         store.deleteAll(projectRoot: root.path)
         IDEAgentCheckpointBlobs(store: store, projectRoot: root.path).removeAll()
         IDEAgentToolOutputs(store: store, projectRoot: root.path, conversationID: UUID()).removeAll()
+        IDEACPConversationServer.removeAll(store: store, projectRoot: root.path)
         promptHistory()?.clear()
         history = []
     }
@@ -255,19 +290,52 @@ final class IDEAgentController {
 
     /// A new, empty chat, selected.
     @discardableResult
-    func addConversation() -> IDEAgentConversation {
+    func addConversation(selecting: Bool = true) -> IDEAgentConversation {
         let created = IDEAgentConversation(
             settings: settings, store: store, appPermissionsFile: appPermissionsFile, clientFactory: clientFactory)
         created.modelChoice = newChatChoice
         wire(created)
         conversations.append(created)
-        select(created.id)
+        if selecting { select(created.id) } else { layoutChanged() }
         didRestore = true
         return created
     }
 
+    // MARK: - Schedules
+
+    /// A chat for one run of a schedule, beside the others and not selected, set up as the schedule says.
+    private func scheduledChat(_ schedule: IDEAgentSchedule, title: String) -> IDEAgentConversation {
+        let chat = addConversation(selecting: false)
+        if let choice = schedule.modelChoice { chat.modelChoice = choice }
+        if let binding = schedule.binding { chat.bindProvider(binding) }
+        chat.setMode(schedule.mode)
+        chat.rename(title)
+        return chat
+    }
+
+    /// Starts one run of `schedule`. Nil (and no chat left behind) when the send did not start.
+    func startScheduledRun(_ schedule: IDEAgentSchedule, at date: Date) -> IDEAgentConversation? {
+        let chat = scheduledChat(schedule, title: "\(schedule.name) · \(IDEAgentScheduler.describe(date))")
+        chat.submit(text: schedule.prompt)
+        guard chat.isRunning else {
+            close(chat.id, undoable: false)
+            return nil
+        }
+        return chat
+    }
+
+    /// A run that fell due while the project was not open: its prompt waits in a chat of its own, and sending it
+    /// is the run. Never sent on its own, since edits apply without asking.
+    func offerMissedScheduledRun(_ schedule: IDEAgentSchedule, due: Date) {
+        let chat = scheduledChat(schedule, title: "\(schedule.name) · missed")
+        chat.appendNotice("“\(schedule.name)” was due \(IDEAgentScheduler.describe(due)), while this project was not open. Send the message below to run it now.")
+        chat.draft = schedule.prompt
+        onNotify?(chat.id, "Scheduled prompt “\(schedule.name)” was missed", "Open the chat to run it now.", .warning)
+    }
+
     /// Points the visible chat at an agent. A chat that already has a transcript is left
-    /// alone, including while it is running, and another chat takes the new agent.
+    /// alone, including while it is running, and another chat takes the new agent. That chat
+    /// continues the idle one: its conversation goes with the first message (`carriedTurns`).
     func selectProvider(_ binding: IDEACPBinding) {
         let defaultID = settings.agentIDForNewChats(in: projectRoot)
         let current = providerRef(selected)
@@ -282,12 +350,26 @@ final class IDEAgentController {
             let previous = conversations.first { $0.id == keeping }
             let previousName = providerName(previous?.resolvedACPAgentID)
             let nextName = providerName(binding.agentID)
-            if let existing, let destination = conversations.first(where: { $0.id == existing }) {
-                select(destination.id)
+            // An idle chat's conversation goes along (`docs/harness/agent-harness-10.md`, phase 3), with what it
+            // was itself carrying if nothing was sent yet; a running one is still writing it, so nothing goes.
+            let carried = previousIsRunning
+                ? [] : previous.map { $0.carriedTurns + IDEACPHandoff.turns(from: $0.entries) } ?? []
+            let destination: IDEAgentConversation
+            let isNew: Bool
+            if let existing, let found = conversations.first(where: { $0.id == existing }) {
+                destination = found
+                isNew = false
+                select(found.id)
             } else {
-                let created = addConversation()
-                created.bindProvider(binding)
-                created.appendNotice("This chat uses \(nextName). \(previousName) stays in its own chat.")
+                destination = addConversation()
+                destination.bindProvider(binding)
+                isNew = true
+            }
+            destination.carriedTurns = carried
+            // A reused empty chat stays empty unless it now carries something to say.
+            if isNew || !carried.isEmpty {
+                destination.appendNotice(IDEACPHandoff.switchNotice(
+                    next: nextName, previous: previousName, title: previous?.title, carries: !carried.isEmpty))
             }
             if previousIsRunning {
                 previous?.appendNotice("Still running on \(previousName). Switching agents did not stop it.")
@@ -364,21 +446,137 @@ final class IDEAgentController {
         select(conversations[(index + step + conversations.count) % conversations.count].id)
     }
 
-    /// Closes a chat, ending its run. The last chat is emptied instead, so there is always one.
-    func close(_ id: UUID) {
+    // MARK: - Toasts
+
+    /// The message at the bottom of the panel (`IDEAgentToastLane`).
+    private(set) var toast: IDEAgentToast?
+    @ObservationIgnored private var toastTask: Task<Void, Never>?
+
+    /// Shows `toast` in place of the one showing, for its timeout.
+    func showToast(_ toast: IDEAgentToast) {
+        toastTask?.cancel()
+        self.toast = toast
+        let id = toast.id
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: toast.timeout)
+            guard !Task.isCancelled else { return }
+            self?.dismissToast(id)
+        }
+    }
+
+    /// Hides the toast if it is still `id` (a newer one is left alone).
+    func dismissToast(_ id: UUID) {
+        guard toast?.id == id else { return }
+        toastTask?.cancel()
+        toastTask = nil
+        toast = nil
+    }
+
+    // MARK: - Closing, with Undo
+
+    /// How long a closed chat can be brought back.
+    @ObservationIgnored var closeUndoWindow: Duration = .seconds(8)
+
+    /// Chats closed by one action, kept (stopped, sessions still held) until the undo window passes.
+    private struct ClosedGroup {
+        let id = UUID()
+        /// Each chat with the index it had, in ascending index order.
+        var members: [(conversation: IDEAgentConversation, index: Int)]
+        var releaseTask: Task<Void, Never>?
+        /// The toast that offers Undo, hidden when the group is released.
+        var toastID: UUID?
+    }
+
+    @ObservationIgnored private var closedGroup: ClosedGroup?
+
+    /// The chats that a toast's Undo would bring back, for tests.
+    var pendingCloseForTesting: [UUID] { closedGroup?.members.map(\.conversation.id) ?? [] }
+
+    /// Closes a chat, stopping its run. The last chat is emptied instead, so there is always one (no undo).
+    /// Otherwise a toast offers Undo for `closeUndoWindow`, unless `undoable` is false (a chat whose saved
+    /// conversation is being deleted, a scheduled run that did not start), which ends it at once.
+    func close(_ id: UUID, undoable: Bool = true) {
         guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
         guard conversations.count > 1 else {
             conversations[0].reset()
             return
         }
-        let closed = conversations.remove(at: index)
-        closed.teardown()
-        if selectedID == id { select(conversations[min(index, conversations.count - 1)].id) } else { layoutChanged() }
+        guard undoable else {
+            let closed = conversations.remove(at: index)
+            closed.teardown()
+            if selectedID == id { select(conversations[min(index, conversations.count - 1)].id) } else { layoutChanged() }
+            return
+        }
+        closeGroup([id])
     }
 
     func closeOthers(keeping id: UUID) {
-        for conversation in conversations where conversation.id != id { close(conversation.id) }
+        guard conversations.contains(where: { $0.id == id }) else { return }
+        closeGroup(conversations.map(\.id).filter { $0 != id })
         select(id)
+    }
+
+    private func closeGroup(_ ids: [UUID]) {
+        let wanted = Set(ids)
+        let members = conversations.enumerated()
+            .filter { wanted.contains($0.element.id) }
+            .map { (conversation: $0.element, index: $0.offset) }
+        guard !members.isEmpty, members.count < conversations.count else { return }
+        // Only the latest close can be undone: an earlier one is finished now.
+        releaseClosed()
+        let selectedIndex = conversations.firstIndex { $0.id == selectedID } ?? 0
+        let selectionClosed = wanted.contains(selectedID)
+        conversations.removeAll { wanted.contains($0.id) }
+        for member in members { member.conversation.stopForClose() }
+        var group = ClosedGroup(members: members)
+        let groupID = group.id
+        let window = closeUndoWindow
+        group.releaseTask = Task { [weak self] in
+            try? await Task.sleep(for: window)
+            guard !Task.isCancelled, let self, self.closedGroup?.id == groupID else { return }
+            self.releaseClosed()
+        }
+        closedGroup = group
+        if selectionClosed {
+            let before = members.filter { $0.index < selectedIndex }.count
+            select(conversations[min(selectedIndex - before, conversations.count - 1)].id)
+        } else {
+            layoutChanged()
+        }
+        let title = members.count == 1 ? "Closed “\(members[0].conversation.title)”" : "Closed \(members.count) chats"
+        let toast = IDEAgentToast(
+            title: title, timeout: window,
+            action: .init(label: "Undo") { [weak self] in self?.undoClose() })
+        closedGroup?.toastID = toast.id
+        showToast(toast)
+    }
+
+    /// Brings back the chats the latest close removed, at the places they had, and selects the first of them.
+    func undoClose() {
+        guard let group = closedGroup else { return }
+        group.releaseTask?.cancel()
+        closedGroup = nil
+        for member in group.members {
+            conversations.insert(member.conversation, at: min(member.index, conversations.count))
+        }
+        if let toastID = group.toastID { dismissToast(toastID) }
+        if let first = group.members.first { select(first.conversation.id) }
+    }
+
+    /// Ends the chats waiting in the undo window if one of them shows the saved conversation `conversationID`.
+    private func releaseClosed(holding conversationID: UUID) {
+        if closedGroup?.members.contains(where: { $0.conversation.conversationID == conversationID }) == true {
+            releaseClosed()
+        }
+    }
+
+    /// Ends the chats waiting in the undo window now: on a newer close, on window close, and when it passes.
+    private func releaseClosed() {
+        guard let group = closedGroup else { return }
+        closedGroup = nil
+        group.releaseTask?.cancel()
+        if let toastID = group.toastID { dismissToast(toastID) }
+        for member in group.members { member.conversation.release() }
     }
 
     /// A new chat that starts from another's conversation, up to before the message `entryID` (all of it if `nil`).
@@ -388,7 +586,12 @@ final class IDEAgentController {
         loadPendingIfNeeded(source)
         guard let state = await source.forkState(before: entryID) else { return nil }
         let created = addConversation()
-        created.adoptFork(entries: state.entries, items: state.items, title: state.title)
+        if source.isACPConversation {
+            // A fork stays on its agent; it starts a new session there.
+            created.modelChoice = source.modelChoice
+            created.bindProvider(IDEACPBinding(agentID: source.resolvedACPAgentID))
+        }
+        created.adoptFork(entries: state.entries, items: state.items, title: state.title, archive: source.conversationArchive)
         return created
     }
 
@@ -401,6 +604,39 @@ final class IDEAgentController {
         let created = IDEAgentPromptHistory(file: file)
         promptHistories[key] = created
         return created
+    }
+
+    /// This project's stashed drafts, beside its prompt history.
+    func promptStash() -> IDEAgentPromptStash? {
+        guard let root = host?.agentProjectRoot else { return nil }
+        let key = root.standardizedFileURL.path
+        if let existing = promptStashes[key] { return existing }
+        let file = store.map { $0.projectDirectory(for: root.path).appendingPathComponent("stash.json") }
+        let created = IDEAgentPromptStash(file: file)
+        promptStashes[key] = created
+        return created
+    }
+
+    /// ⌃S: puts the selected chat's draft and its images aside and empties the field.
+    func stashDraft() {
+        guard let stash = promptStash(),
+              stash.add(text: selected.draft, images: selected.pendingImages) != nil
+        else { return }
+        selected.draft = ""
+        selected.pendingImages = []
+        selected.promptRecall.reset()
+    }
+
+    /// Brings a stashed draft back into the field. What the field held is stashed first, so nothing is lost.
+    func restoreStashed(_ id: UUID) {
+        guard let stash = promptStash() else { return }
+        let current = (text: selected.draft, images: selected.pendingImages)
+        guard let restored = stash.take(id) else { return }
+        stash.add(text: current.text, images: current.images)
+        selected.draft = restored.text
+        selected.pendingImages = restored.images
+        selected.promptRecall.reset()
+        composerFocusRequest += 1
     }
 
     /// ↑ (`-1`) and ↓ (`1`) in the message field: the text to show, or `nil` for none.
@@ -475,6 +711,7 @@ final class IDEAgentController {
     func resume() { selected.resume() }
 
     func stop() { selected.stop() }
+    func retryNow() { selected.retryNow() }
 
     /// Stops the subagent started by one `task`/`explore` call and leaves the rest of the run going.
     func stopSubagentCall(callID: String) { selected.stopSubagentsForCall(callID) }

@@ -62,7 +62,14 @@ struct HTTPStreamClient: Sendable {
                         attempt += 1
                         if let status = output.rateLimit { continuation.yield(.rateLimit(status)) }
                         continuation.yield(.retrying(attempt: attempt, after: delay))
-                        do { try await Task.sleep(for: .seconds(delay)) } catch {
+                        // A session's waker lets the user end the wait early (Retry Now).
+                        do {
+                            if let waker = RetryWaker.current {
+                                try await waker.sleep(for: delay)
+                            } else {
+                                try await Task.sleep(for: .seconds(delay))
+                            }
+                        } catch {
                             continuation.finish(throwing: CancellationError())
                             return
                         }

@@ -203,11 +203,12 @@ final class IDEGradleProjectSystemTests: XCTestCase {
         harness.requestTrust = { _ in true }
         harness.setRoot(project)
 
-        await eventually("state: \(harness.state)") { harness.state == .failed(summary: "Gradle exited 1") }
+        await eventually("state: \(harness.state)") { harness.state == .failed(summary: "Gradle exited 1\nboom") }
         XCTAssertNil(harness.modelModuleCount)
         XCTAssertEqual(harness.failures, 1)
-        XCTAssertEqual(harness.outcomes, [.failed(summary: "Gradle exited 1")])
+        XCTAssertEqual(harness.outcomes, [.failed(summary: "Gradle exited 1\nboom")])
         XCTAssertTrue(harness.consoleText.contains("Gradle exited 1"))
+        XCTAssertTrue(harness.consoleText.contains("boom"), "the console keeps the error the notification summarizes")
         XCTAssertFalse(harness.isBusy)
     }
 

@@ -17,6 +17,8 @@ enum IDEAgentComposerAction: Equatable {
     case historyNext
     /// Ctrl-R: search the prompts sent before.
     case searchHistory
+    /// ⌃S: put the draft aside (the stash) and empty the field.
+    case stashDraft
     case passThrough
 }
 
@@ -37,6 +39,7 @@ enum IDEAgentComposerKeyMap {
         static let tab: UInt16 = 48
         static let escape: UInt16 = 53
         static let r: UInt16 = 15
+        static let s: UInt16 = 1
         static let downArrow: UInt16 = 125
         static let upArrow: UInt16 = 126
     }
@@ -72,6 +75,9 @@ enum IDEAgentComposerKeyMap {
 
         case KeyCode.r:
             return flags == [.control] ? .searchHistory : .passThrough
+
+        case KeyCode.s:
+            return flags == [.control] ? .stashDraft : .passThrough
 
         default:
             return .passThrough

@@ -187,6 +187,16 @@ public actor AgentSession {
         runTask?.cancel()
     }
 
+    /// Ends the wait before a failed request is sent again, so it is sent now ("Retry Now"). Returns
+    /// `false` when no retry was waiting. Only the session's own turns wait through it; a child's are its own.
+    @discardableResult
+    public nonisolated func retryNow() -> Bool {
+        retryWaker.wake()
+    }
+
+    /// What the retry waits of this session's turns sleep through, so `retryNow()` can end them.
+    private nonisolated let retryWaker = RetryWaker()
+
     /// Answers an `.approvalRequested` event, including one a child raised (forwarded wrapped as
     /// `.subagent(id:event:)`). A call with no pending request anywhere is ignored, so a late or
     /// repeated answer from the UI is harmless.
@@ -1596,7 +1606,9 @@ public actor AgentSession {
         }
 
         do {
-            for try await event in client.stream(request) {
+            // The stream's task inherits the waker, so its retry waits can be ended by `retryNow()`.
+            let events = RetryWaker.$current.withValue(retryWaker) { client.stream(request) }
+            for try await event in events {
                 switch event {
                 case .textDelta(let delta):
                     turn.text += delta

@@ -17,6 +17,10 @@ struct IDEAgentComposerView: View {
     @Binding var acceptRequest: Int
     @Binding var lastEscape: Date?
     let openSettings: () -> Void
+    /// Whether the card of the decision the chat waits on is on screen (the banner lane stands in for it when not).
+    var isPendingCardVisible = true
+    /// Scrolls the transcript to an entry.
+    var showEntry: (UUID) -> Void = { _ in }
 
     @Environment(IDEWorkspace.self) private var workspace
 
@@ -24,10 +28,16 @@ struct IDEAgentComposerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            IDEAgentToastLane(agent: agent)
             if !agent.selected.hasConsent {
                 IDEAgentDisclosureCard(settings: settings, provider: choice.provider)
             }
-            if let status = agent.status {
+            IDEAgentBannerLane(
+                conversation: agent.selected, isPendingCardVisible: isPendingCardVisible,
+                decide: { agent.decide(callID: $0, $1) }, stop: { agent.stop() }, retryNow: { agent.retryNow() },
+                showEntry: showEntry)
+            // The retry banner says what the status line would, with a countdown.
+            if let status = agent.status, agent.selected.retryState == nil {
                 HStack(spacing: IDEAppearance.Spacing.xs) {
                     IDEATypingDots()
                     Text(status)
@@ -36,7 +46,7 @@ struct IDEAgentComposerView: View {
                 }
             }
             if !agent.selected.queue.isEmpty {
-                IDEAgentQueuedMessages(queue: agent.selected.queue) { agent.selected.removeQueued($0) }
+                IDEAgentQueuedMessages(conversation: agent.selected, toast: { agent.showToast($0) })
             }
             if !agent.selected.pendingImages.isEmpty {
                 IDEAgentImageChips(images: agent.selected.pendingImages) { agent.selected.removePendingImage($0) }
@@ -76,6 +86,15 @@ struct IDEAgentComposerView: View {
                 }
             } else {
                 fieldRow
+            }
+            if let warning = IDEAgentComposerLimits.validationMessage(for: agent.draft) {
+                Text(warning)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, IDEAppearance.Spacing.xs)
+                    .accessibilityAddTraits(.isStaticText)
+                    .accessibilityIdentifier("agent.composer.lengthWarning")
             }
         }
         .padding(IDEAppearance.Spacing.sm)

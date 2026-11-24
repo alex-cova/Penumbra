@@ -72,6 +72,10 @@
 	<string>26.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>UmbraGitHubClientID</key>
+	<string>$(UMBRA_GITHUB_CLIENT_ID)</string>
+	<key>UmbraGitHubAppSlug</key>
+	<string>$(UMBRA_GITHUB_APP_SLUG)</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

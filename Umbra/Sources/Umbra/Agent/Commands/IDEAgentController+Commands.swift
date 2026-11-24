@@ -291,6 +291,8 @@ extension IDEAgentController {
             exportTranscript(arguments: arguments)
         case .loop:
             startLoopCommand(arguments: arguments)
+        case .schedule:
+            scheduleCommand(arguments: arguments)
         case .initialize:
             guard selected.canRunCommands else { return }
             selected.submit(text: "/init", modelText: Self.initPrompt)
@@ -298,6 +300,8 @@ extension IDEAgentController {
             selected.appendNotice(Self.costNotice(
                 usage: selected.usage, cost: selected.cost,
                 usageByModel: selected.usageByModel, helperName: settings.helperChoice?.model))
+        case .usage:
+            isShowingUsage = true
         case .local:
             guard selected.canRunCommands else { return }
             selected.runLocal(prompt: arguments)
@@ -386,6 +390,48 @@ extension IDEAgentController {
         }
         selected.startLoop(interval: interval, prompt: prompt, maxRuns: maxRuns)
     }
+
+    /// `/schedule` lists the project's schedules; `/schedule <interval> [--auto] <prompt>` adds one, with this
+    /// chat's model or agent and its mode (Auto only with `--auto`).
+    func scheduleCommand(arguments: String) {
+        guard !arguments.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            isShowingSchedules = true
+            return
+        }
+        guard projectRoot != nil, usageStore != nil else {
+            selected.appendNotice("Schedules belong to a saved project: open a project folder first.")
+            return
+        }
+        var words = arguments.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let intervalText = words.first, let interval = IDEAgentLoopInterval.parse(intervalText) else {
+            selected.appendNotice(Self.scheduleUsage)
+            return
+        }
+        words.removeFirst()
+        guard interval >= IDEAgentSchedule.minimumInterval else {
+            selected.appendNotice("A schedule runs at most every 5 minutes. For a quicker repeat in this chat, use /loop.")
+            return
+        }
+        let auto = words.first == "--auto"
+        if auto { words.removeFirst() }
+        let prompt = words.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else {
+            selected.appendNotice(Self.scheduleUsage)
+            return
+        }
+        let mode: PermissionMode = auto ? .auto : (selected.mode == .auto ? .acceptEdits : selected.mode)
+        let schedule = IDEAgentSchedule(
+            name: IDEAgentSchedule.name(for: prompt), prompt: prompt, interval: interval, mode: mode,
+            modelChoice: selected.modelChoice, binding: IDEACPBinding(agentID: selected.resolvedACPAgentID),
+            createdAt: Date())
+        scheduler.add(schedule)
+        selected.appendNotice(
+            "Scheduled “\(schedule.name)” \(IDEAgentScheduler.describe(interval: interval)) in this project, in \(mode.title). "
+            + "It runs while a window has this project open, each run in a chat of its own; a run missed while it was closed is offered, not run. /schedule lists them.")
+    }
+
+    static let scheduleUsage =
+        "Schedule runs a prompt in this project on a cadence: /schedule <interval> [--auto] <prompt>, e.g. /schedule 1h check the build. At least 5m; 1h, 1d. --auto lets its runs act without asking."
 
     static let loopUsage =
         "Loop repeats a prompt on a timer: /loop <interval> [count] <prompt>, e.g. /loop 5m check git status. Intervals like 30s, 5m or 1h; a bare number means minutes."

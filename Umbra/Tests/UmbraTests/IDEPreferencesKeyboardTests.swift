@@ -23,7 +23,7 @@ final class IDEPreferencesKeyboardTests: XCTestCase {
         XCTAssertEqual(IDEPreferencesDomain.moving(from: .general, in: pages, by: -1), .general)
         XCTAssertEqual(IDEPreferencesDomain.moving(from: .general, in: pages, by: 1), .editor)
         XCTAssertEqual(IDEPreferencesDomain.moving(from: .agent, in: pages, by: 1), .agent)
-        XCTAssertEqual(IDEPreferencesDomain.moving(from: .agent, in: pages, by: -1).id, "project")
+        XCTAssertEqual(IDEPreferencesDomain.moving(from: .agent, in: pages, by: -1), .github)
     }
 
     func testAnUnknownPageStartsFromTheFirstVisibleRow() {

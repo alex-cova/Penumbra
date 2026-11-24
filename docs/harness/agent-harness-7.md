@@ -1,6 +1,6 @@
 # Harness gap 7: smaller items
 
-Part of the series `agent-harness-1.md` to `agent-harness-9.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-10-26. Each item is independent and small; none blocks parity.
+Part of the series `agent-harness-1.md` to `agent-harness-11.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-10-26. Each item is independent and small; none blocks parity.
 
 **Status:** items 1–4 built (checked 2026-11-02): the measurement is saved (with the caveat in item 1), `/export json` writes a scrubbed `SessionStore` snapshot, the navigation text and `IDEJavaAgentNavigator` are cleaned up and `hover` and `rename_symbol` exist, and `/loop` ships. Items 5 and 6 stay on demand.
 

@@ -17,7 +17,14 @@ final class IDEAgentConversation: Identifiable {
     static let flushInterval: Duration = .milliseconds(50)
 
     private(set) var entries: [IDEAgentEntry] = []
-    private(set) var isRunning = false
+    private(set) var isRunning = false {
+        // A wait to retry belongs to a run; however the run ended, it is over.
+        didSet {
+            guard !isRunning else { return }
+            if retryState != nil { retryState = nil }
+            if oldValue { lastActivity = Date() }
+        }
+    }
     /// What the run is doing right now, for the panel's status line.
     private(set) var status: String?
     private(set) var usage = TokenUsage()
@@ -184,6 +191,17 @@ final class IDEAgentConversation: Identifiable {
     /// Set once a restore or fresh-session notice has been shown for this process.
     @ObservationIgnored private var acpExplainedSessionID: String?
     @ObservationIgnored private var acpExplainedFreshSession = false
+    /// A new external session replaced one that had a transcript: the next prompt carries the earlier
+    /// messages (`ConversationHandoff`, `docs/harness/agent-harness-10.md`).
+    @ObservationIgnored private var acpOwesHandoff = false
+    /// This chat's external session was given the `read_conversation` MCP server (`IDEACPConversationServer`).
+    @ObservationIgnored private var acpServesArchive = false
+    /// The conversation of the chat this one continues on another agent (`IDEAgentController.selectProvider`),
+    /// sent with the first message, whichever backend takes it. Not saved: the chat is empty until then.
+    @ObservationIgnored var carriedTurns: [HandoffTurn] = []
+    /// What a native session of this chat was handed (`nativeHandoff`), fixed when that session is made and
+    /// saved with the chat: `read_conversation` reads it by the handoff's numbers. Empty when none happened.
+    @ObservationIgnored private(set) var conversationArchive: [HandoffTurn] = []
     /// Initialize and session calls. A prompt itself is not limited by this.
     var acpRequestTimeout: Duration = .seconds(30)
     /// Unanswered permission cards are cancelled after this. Zero waits until Stop.
@@ -246,7 +264,7 @@ final class IDEAgentConversation: Identifiable {
 
     /// Whether this chat is driven by an external ACP agent (its own choice, else the one selected in Settings ▸ Agent).
     var isACPConversation: Bool { acpDefinition != nil }
-    /// Rewind/compact/checkpoints owned by AgentKit are not available for ACP conversations.
+    /// What only Umbra Native can do: `/compact`. Rewind and fork work for ACP chats through a new session.
     var supportsAgentKitOnlyFeatures: Bool { !isACPConversation }
     @ObservationIgnored private var runTask: Task<Void, Never>?
     @ObservationIgnored private var pendingText = ""
@@ -297,6 +315,9 @@ final class IDEAgentConversation: Identifiable {
 
     /// For tests that look at the live session's state (its checklist).
     var currentSessionForTesting: AgentSession? { session }
+
+    /// Adds a row as a run would, for views tested without a model (a user message cannot come from `handle`).
+    func appendEntryForTesting(_ entry: IDEAgentEntry) { entries.append(entry) }
     /// For tests: how many history items the last finished step of the run in progress left.
     var finishedStepItemCountForTesting: Int? { stepItems?.count }
 
@@ -447,12 +468,16 @@ final class IDEAgentConversation: Identifiable {
                 }
                 if self.stopRequested { return nil }
                 if let index = self.entries.lastIndex(where: \.canRetry) { self.entries[index].canRetry = false }
-                return await acp.send(context + "\n\n" + body + resolution.modelBlock)
+                let message = context + "\n\n" + body + resolution.modelBlock
+                return await acp.send(prompt: self.acpPrompt(message, before: entryID))
             }
             return
         }
         openRun(root: root, host: host) { session in
-            let framed = await self.frame(context: context, body: body, entryID: entryID, root: root, session: session)
+            var framed = await self.frame(context: context, body: body, entryID: entryID, root: root, session: session)
+            if let handoff = await self.nativeHandoff(before: entryID, session: session, requestBytes: framed.utf8.count) {
+                framed = handoff + "\n\n" + framed
+            }
             if self.stopRequested { return nil }
             // The new message is on its way, so the previous failure's Retry no longer applies, nor Resume.
             if let index = self.entries.lastIndex(where: \.canRetry) { self.entries[index].canRetry = false }
@@ -484,8 +509,9 @@ final class IDEAgentConversation: Identifiable {
         dismissRetryError = true
         if isACPConversation {
             // The message is already in the transcript; resend its text to the external agent.
-            let text = entries.last(where: { $0.kind == .user })?.text ?? ""
-            openACPRun(root: root, host: host) { acp in await acp.send(text) }
+            let last = entries.last(where: { $0.kind == .user })
+            let text = last?.text ?? ""
+            openACPRun(root: root, host: host) { acp in await acp.send(prompt: self.acpPrompt(text, before: last?.id)) }
             return
         }
         openRun(root: root, host: host) { session in
@@ -616,6 +642,14 @@ final class IDEAgentConversation: Identifiable {
         }
     }
 
+    /// The status line while an external agent starts, set from the request it is waiting on (T3: startup
+    /// phases come from real signals, never a timer). Only while a run shows a status; an early start from
+    /// the model picker says nothing here.
+    private func showStartupStep(_ step: IDEACPStartupStep) {
+        guard isRunning else { return }
+        status = step.status
+    }
+
     private func currentACPSession(root: URL, host: any IDEAgentHost) async throws -> ACPClientSession {
         guard let definition = acpDefinition else {
             throw ACPError.agentError(JSONRPCError(code: -32000, message: "No ACP agent is selected and allowed in Settings ▸ Agent."))
@@ -668,8 +702,10 @@ final class IDEAgentConversation: Identifiable {
         var services = IDEACPHostServices.make(workspace: workspace, root: root, environment: environment)
         services.askText = { [weak self] prompt in await self?.askElicitation(prompt) }
         let provider = acpProviderEntry
+        // `UMBRA_ACP_RECORD_DIR` records this process's traffic for replay tests (`IDEACPRecorder`).
+        let recorder = IDEACPRecorder.make(agent: definition.displayName, version: launch.version)
         let created = ACPClientSession(
-            transport: transport,
+            transport: recorder?.wrap(transport) ?? transport,
             hostServices: services,
             cwd: root.path,
             mode: mode,
@@ -683,18 +719,28 @@ final class IDEAgentConversation: Identifiable {
         acpSession = created
         acpFingerprint = fingerprint
         do {
+            showStartupStep(.starting(definition.displayName))
             let response = try await created.connect()
             let earlier = acpHasEarlierTranscript
             let savedID = lastACPSessionID
             var notice: String?
-            switch IDEACPSessionResume.plan(
+            let plan = IDEACPSessionResume.plan(
                 savedSessionID: savedID,
                 agentSupportsLoad: response.agentCapabilities.loadSession,
                 hasEarlierTranscript: earlier)
-            {
+            // A new session that will be handed earlier messages, or a restored one that was, can read the rest.
+            let servesArchive: Bool = switch plan {
+            case .load: !conversationArchive.isEmpty
+            case .create: earlier || !carriedTurns.isEmpty
+            }
+            await serveConversationArchive(to: created, if: servesArchive)
+            switch plan {
             case .load(let id):
                 do {
+                    showStartupStep(.loadingSession(definition.displayName))
                     _ = try await created.loadSession(id: id)
+                    // The agent still has the conversation itself.
+                    acpOwesHandoff = false
                     if earlier, acpExplainedSessionID != id {
                         acpExplainedSessionID = id
                         notice = IDEACPSessionResume.restoredNotice
@@ -703,11 +749,17 @@ final class IDEAgentConversation: Identifiable {
                     // Authentication stays on this agent. A stale id is not reused.
                     if IDEACPAuth.isAuthenticationFailure(error) { throw error }
                     lastACPSessionID = nil
+                    // The new session will be handed the transcript, so it gets the server whatever the load had.
+                    await serveConversationArchive(to: created, if: earlier || !carriedTurns.isEmpty)
+                    showStartupStep(.creatingSession(definition.displayName))
                     _ = try await created.newSession()
+                    acpOwesHandoff = earlier
                     notice = IDEACPSessionResume.staleNotice
                 }
             case .create(let createdNotice):
+                showStartupStep(.creatingSession(definition.displayName))
                 _ = try await created.newSession()
+                acpOwesHandoff = earlier
                 if let createdNotice, !acpExplainedFreshSession {
                     acpExplainedFreshSession = true
                     notice = createdNotice
@@ -715,6 +767,7 @@ final class IDEAgentConversation: Identifiable {
             }
             // An agent that runs tools itself (Muse) gets Umbra's permission mode as its own approval mode.
             await applyAgentMode(for: mode, session: created)
+            showStartupStep(.ready)
             lastACPSessionID = IDEACPSessionResume.normalizedSessionID(await created.sessionId)
             acpLaunchFingerprint = fingerprint
             acpAgentName = definition.displayName
@@ -789,6 +842,95 @@ final class IDEAgentConversation: Identifiable {
         }
         guard isEmpty, !isRunning else { return }
         releaseACPProcess()
+    }
+
+    /// The prompt for an external agent: the message, after the earlier conversation when this session is new
+    /// and the agent never saw it. `entryID` is the message's own row; only what comes before it is handed off.
+    private func acpPrompt(_ message: String, before entryID: UUID?) -> [ACPContentBlock] {
+        guard acpOwesHandoff || !carriedTurns.isEmpty else { return [.text(message)] }
+        acpOwesHandoff = false
+        let turns = entryID == nil ? carriedTurns + IDEACPHandoff.turns(from: entries) : pendingHandoffTurns(before: entryID)
+        // What `read_conversation` reads: the turns of this handoff, by its numbers. Written before the prompt goes.
+        var served = false
+        if acpServesArchive {
+            conversationArchive = ConversationHandoff.readable(turns)
+            served = IDEACPConversationServer.write(conversationArchive, to: conversationArchiveURL)
+        }
+        guard let handoff = takeHandoff(
+            before: entryID, contextWindow: nil, requestBytes: message.utf8.count,
+            turns: turns, retrievalTool: served ? ReadConversationTool.name : nil)
+        else { return [.text(message)] }
+        return [.text(handoff), .text(message)]
+    }
+
+    private var conversationArchiveURL: URL {
+        IDEACPConversationServer.archiveURL(
+            store: store, projectRoot: host?.agentProjectRoot?.path, conversationID: conversationID)
+    }
+
+    /// Lists the `read_conversation` server for the session about to be made, when `condition` holds and the
+    /// helper is there; writes the saved archive first, so a restored session reads what it was handed.
+    private func serveConversationArchive(to session: ACPClientSession, if condition: Bool) async {
+        guard condition, let helper = IDEACPConversationServer.locateHelper() else {
+            acpServesArchive = false
+            await session.setMCPServers([])
+            return
+        }
+        let url = conversationArchiveURL
+        guard IDEACPConversationServer.write(conversationArchive, to: url) else {
+            acpServesArchive = false
+            await session.setMCPServers([])
+            return
+        }
+        acpServesArchive = true
+        await session.setMCPServers([IDEACPConversationServer.entry(helper: helper, archive: url)])
+    }
+
+    /// The handoff block for a backend that has not seen this chat's earlier messages: the carried chat's,
+    /// then this transcript's before `entryID`. Says so when some were left out. Clears `carriedTurns`.
+    private func takeHandoff(
+        before entryID: UUID?, contextWindow: Int?, requestBytes: Int,
+        turns given: [HandoffTurn]? = nil, retrievalTool: String? = nil
+    ) -> String? {
+        let turns = given ?? pendingHandoffTurns(before: entryID)
+        carriedTurns = []
+        guard let handoff = ConversationHandoff.make(
+            turns: turns, contextWindow: contextWindow, requestBytes: requestBytes, retrievalTool: retrievalTool)
+        else { return nil }
+        if let notice = IDEACPHandoff.partialNotice(handoff) { appendNotice(notice) }
+        return handoff.text
+    }
+
+    /// For Umbra Native: a session whose history holds no message yet, in a chat that already has some
+    /// (it ran on an external agent before, or continues another chat), gets them with this message.
+    private func nativeHandoff(before entryID: UUID, session: AgentSession, requestBytes: Int) async -> String? {
+        let sawConversation = Self.holdsConversation(await session.items)
+        guard !sawConversation else {
+            carriedTurns = []
+            return nil
+        }
+        // The session was made with `read_conversation` over the archive when one was fixed for it.
+        let archive = conversationArchive
+        return takeHandoff(
+            before: entryID, contextWindow: await session.contextWindow, requestBytes: requestBytes,
+            turns: archive.isEmpty ? nil : archive,
+            retrievalTool: archive.isEmpty ? nil : ReadConversationTool.name)
+    }
+
+    static func holdsConversation(_ items: [ConversationItem]) -> Bool {
+        items.contains { item in
+            switch item {
+            case .user, .userParts, .assistant: true
+            default: false
+            }
+        }
+    }
+
+    /// The carried chat's turns, then this transcript's before `entryID` (before the newest user message when nil).
+    private func pendingHandoffTurns(before entryID: UUID?) -> [HandoffTurn] {
+        let end = entryID.flatMap { id in entries.firstIndex { $0.id == id } }
+            ?? entries.lastIndex { $0.kind == .user } ?? entries.endIndex
+        return carriedTurns + IDEACPHandoff.turns(from: entries[..<end])
     }
 
     /// Messages already in the transcript, not counting the one being sent now.
@@ -968,14 +1110,7 @@ final class IDEAgentConversation: Identifiable {
         runRules = PermissionRules()
         fileClaims?.release(tab: id)
         // Transcript persistence via the host blob; items are synthesized from the transcript.
-        let items: [ConversationItem] = entries.compactMap { entry in
-            switch entry.kind {
-            case .user: .user(entry.text)
-            case .assistant: .assistant(entry.text)
-            default: nil
-            }
-        }
-        persist(items: items, checkpoints: await session.checkpoints?.snapshot() ?? [])
+        persist(items: Self.acpItems(entries), checkpoints: await session.checkpoints?.snapshot() ?? [])
         onRunFinished?()
         if let ending = lastEnding {
             let lastAnswer = entries.last(where: { $0.kind == .assistant })?.text ?? ""
@@ -1248,6 +1383,27 @@ final class IDEAgentConversation: Identifiable {
         queue.removeAll { $0.id == id }
     }
 
+    /// Changes a message that is still waiting. False when it has already gone to the model (the queue is
+    /// emptied at a turn boundary), so the caller can keep the edit elsewhere. An edit that leaves nothing
+    /// takes the message back.
+    @discardableResult
+    func updateQueued(_ id: UUID, text: String) -> Bool {
+        guard let index = queue.firstIndex(where: { $0.id == id }) else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { queue.remove(at: index) } else { queue[index].text = trimmed }
+        return true
+    }
+
+    /// An edit to a queued message that was delivered while it was being written: it goes into the message
+    /// field when that is empty. False when the field has text, which is never replaced.
+    func keepEditOfDeliveredMessage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        draft = trimmed
+        promptRecall.reset()
+        return true
+    }
+
     /// Called by the session at a turn boundary: moves the queue into the transcript, resolving each
     /// message's `@` mentions, and returns what the model is to be sent.
     private func deliverQueued(itemCount: Int) async -> [String] {
@@ -1487,6 +1643,7 @@ final class IDEAgentConversation: Identifiable {
         todos = []
         restoredTodos = []
         status = nil
+        retryState = nil
         restoredItems = nil
         restoredChildren = []
         chatRules = PermissionRules()
@@ -1505,6 +1662,9 @@ final class IDEAgentConversation: Identifiable {
         acpLaunchFingerprint = nil
         acpExplainedSessionID = nil
         acpExplainedFreshSession = false
+        acpOwesHandoff = false
+        carriedTurns = []
+        conversationArchive = []
         fileClaims?.release(tab: id)
     }
 
@@ -1574,18 +1734,22 @@ final class IDEAgentConversation: Identifiable {
         stopLoop(silent: true)
         endSession()
         let saved = IDEAgentSavedTranscript.decode(snapshot.host)
+        conversationArchive = saved.conversationArchive
         rootOverride = saved.chatRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
         let blobs = checkpointBlobs()
         entries = saved.entries.compactMap { $0.restoredEntry(blobs: blobs) }
+        // A chat saved mid-run (an interrupted run) can hold calls that never finished.
+        IDEAgentEntry.settlingUnfinishedCalls(&entries)
         restoredRuns = saved.checkpoints
         checkpointLog = nil
         cost = saved.cost
         todos = saved.todos
         restoredTodos = saved.todos
         usage = snapshot.totalUsage
-        // The saved file keeps no per-model split; attribute the restored total to the current
-        // model so the split still adds up to it.
-        usageByModel = snapshot.totalUsage == TokenUsage() ? [:] : [effectiveChoice.model: snapshot.totalUsage]
+        // The saved split, or for a file from before it was saved, the whole total on the current model
+        // so the split still adds up to it.
+        usageByModel = !saved.usageByModel.isEmpty ? saved.usageByModel
+            : snapshot.totalUsage == TokenUsage() ? [:] : [effectiveChoice.model: snapshot.totalUsage]
         // Provider items only the model that produced them may be sent back; the transcript is enough.
         restoredItems = droppingOpaque(snapshot.items)
         // Idle subagents come back with the conversation, so `session:` continues them by id.
@@ -1610,6 +1774,8 @@ final class IDEAgentConversation: Identifiable {
         acpLaunchFingerprint = saved.acpLaunchFingerprint
         acpExplainedSessionID = nil
         acpExplainedFreshSession = false
+        acpOwesHandoff = false
+        carriedTurns = []
         status = nil
         if saved.runInProgress {
             if saved.acpPinnedAgentID != nil || saved.acpSessionID != nil {
@@ -1680,7 +1846,8 @@ final class IDEAgentConversation: Identifiable {
                 chatRoot: rootOverride?.path,
                 acpPinnedAgentID: acpPin?.agentID,
                 acpPinnedNative: acpPin != nil && acpPin?.agentID == nil,
-                acpSessionID: lastACPSessionID, acpLaunchFingerprint: acpLaunchFingerprint),
+                acpSessionID: lastACPSessionID, acpLaunchFingerprint: acpLaunchFingerprint,
+                conversationArchive: conversationArchive, usageByModel: usageByModel),
             children: children ?? restoredChildren)
         // A write failure only costs the history; it is not worth interrupting the user for.
         try? store.save(snapshot)
@@ -1722,6 +1889,20 @@ final class IDEAgentConversation: Identifiable {
     func teardown() {
         stopLoop(silent: true)
         saveInterrupted()
+        release()
+    }
+
+    /// The first half of closing a tab that can still be undone: a loop ends, a run is stopped as Stop would
+    /// (so it ends with its "Stopped." notice and is saved), and its file claims go at once. The session stays,
+    /// so Undo brings back a chat that works; `release()` drops it when the undo window passes.
+    func stopForClose() {
+        stopLoop(silent: true)
+        if isRunning || shellTask != nil { stop() }
+        fileClaims?.release(tab: id)
+    }
+
+    /// The second half of closing: drops the session and the window. Nothing runs after it.
+    func release() {
         endSession()
         host = nil
     }
@@ -1803,9 +1984,17 @@ final class IDEAgentConversation: Identifiable {
             confirm: { [weak host, hookEntries] in
                 await host?.agentConfirmToolHooks(hookEntries.filter { $0.origin != .app }) ?? false
             })
+        // A session about to be handed this chat's earlier messages (`nativeHandoff`) gets `read_conversation`
+        // over them, so the archive is fixed now, before the tool list is.
+        if conversationArchive.isEmpty {
+            let known = await session?.items ?? restoredItems ?? []
+            if !Self.holdsConversation(known) {
+                conversationArchive = ConversationHandoff.readable(pendingHandoffTurns(before: nil))
+            }
+        }
         let fingerprint = settings.fingerprint(for: choice) + "|" + root.path + "|" + String(host.agentIsGradleProject) + String(host.agentIsMavenProject) + "|" + (skills?.fingerprint ?? "")
             + "|" + agents.fingerprint + "|" + mcpFingerprint + "|" + ProjectMemory.fingerprint(of: memoryText)
-            + "|" + IDEAgentHookTrust.fingerprint(of: hookEntries)
+            + "|" + IDEAgentHookTrust.fingerprint(of: hookEntries) + (conversationArchive.isEmpty ? "" : "|conversation-archive")
         if let session, sessionFingerprint == fingerprint { return session }
 
         let client = modelChoice == nil ? try clientFactory(settings) : try choiceClientFactory(settings, choice)
@@ -1829,6 +2018,10 @@ final class IDEAgentConversation: Identifiable {
         let support = IDEAgentCommandSupport(root: root, box: box)
         var tools: [any AgentTool] = ReadOnlyTools.all(secretPatterns: settings.secretFilePatterns)
             + [IDEShowFileTool(root: root, box: box)]
+        if !conversationArchive.isEmpty {
+            let archive = conversationArchive
+            tools.append(ReadConversationTool { archive })
+        }
         if let search = IDEAgentWebSearch.tool(settings: settings) { tools.append(search) }
         if settings.webFetchEnabled { tools.append(WebFetchTool()) }
         if settings.browserToolsEnabled, let info = host.agentBrowserPageInfo {
@@ -2203,7 +2396,7 @@ final class IDEAgentConversation: Identifiable {
             case .deny: "Denied"
             }
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
         if let session { Task { await session.resolveApproval(callID: callID, decision: decision) } }
         if let acpSession { Task { await acpSession.resolveApproval(callID: callID, decision: decision) } }
     }
@@ -2215,7 +2408,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].question = nil
             entries[index].questionOutcome = text == nil ? "Skipped" : "Answered"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
         if let session { Task { await session.answerQuestion(callID: callID, answer: text) } }
         if let acpSession { Task { await acpSession.answerQuestion(callID: callID, answer: text) } }
     }
@@ -2226,7 +2419,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].elicitation = nil
             entries[index].elicitationOutcome = text == nil ? "Declined" : "Answered"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
         if let continuation = pendingElicitations.removeValue(forKey: callID) {
             continuation.resume(returning: text)
         }
@@ -2257,7 +2450,7 @@ final class IDEAgentConversation: Identifiable {
             if let index = toolIndex(callID) { entries[index].elicitation = nil }
             continuation.resume(returning: nil)
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
     }
 
     // MARK: - Reverting
@@ -2271,7 +2464,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].plan = nil
             entries[index].planOutcome = "Approved · \(mode.displayName)"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
         if let session {
             if mode != .plan { self.mode = mode }
             Task { await session.resolvePlan(callID: routed, decision: .approve(mode)) }
@@ -2290,7 +2483,7 @@ final class IDEAgentConversation: Identifiable {
                 entries[index].plan = nil
                 entries[index].planOutcome = "Changes requested"
             }
-            isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+            isAwaitingUser = entries.contains(where: \.isWaitingForUser)
             Task { await acpSession.resolvePlan(callID: callID, decision: .revise(feedback)) }
             return
         }
@@ -2300,7 +2493,7 @@ final class IDEAgentConversation: Identifiable {
             entries[index].plan = nil
             entries[index].planOutcome = "Changes requested"
         }
-        isAwaitingUser = entries.contains { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }
+        isAwaitingUser = entries.contains(where: \.isWaitingForUser)
         Task { await session.resolvePlan(callID: routed, decision: .revise(feedback)) }
     }
 
@@ -2435,7 +2628,24 @@ final class IDEAgentConversation: Identifiable {
     /// The messages this chat can go back to, newest first. Empty for ACP conversations:
     /// rewind is an AgentKit-session feature an external agent cannot honour.
     var rewindTargets: [IDEAgentRewindTarget] {
-        supportsAgentKitOnlyFeatures ? IDEAgentRewind.targets(in: entries) : []
+        IDEAgentRewind.targets(in: isACPConversation ? IDEAgentRewind.withTranscriptPositions(entries) : entries)
+    }
+
+    /// Whether the hover controls on a message can go back to it.
+    func canRewind(to entry: IDEAgentEntry) -> Bool {
+        guard !isRunning, entry.kind == .user else { return false }
+        return isACPConversation || entry.itemIndex != nil
+    }
+
+    /// An external agent's chat saved as history: its user and assistant messages, in order.
+    static func acpItems(_ entries: some Sequence<IDEAgentEntry>) -> [ConversationItem] {
+        entries.compactMap { entry in
+            switch entry.kind {
+            case .user: .user(entry.text)
+            case .assistant: .assistant(entry.text)
+            default: nil
+            }
+        }
     }
 
     /// Goes back to before the user message `entryID`: its conversation, the files the agent changed since,
@@ -2469,6 +2679,7 @@ final class IDEAgentConversation: Identifiable {
             return true
         }
 
+        if isACPConversation { return await rewindACPConversation(at: position, report: report) }
         let itemIndex = target.itemIndex
         if let session {
             do { try await session.rewind(toBeforeItem: itemIndex) } catch {
@@ -2495,6 +2706,33 @@ final class IDEAgentConversation: Identifiable {
         return true
     }
 
+    /// The conversation half of a rewind in an external agent's chat. The agent keeps its own history and ACP
+    /// cannot cut it, so its session is closed rather than left holding what was removed; the next message starts
+    /// a new one and carries the conversation up to here (`acpOwesHandoff`, `docs/harness/agent-harness-10.md`).
+    private func rewindACPConversation(at position: Int, report: RevertReport?) async -> Bool {
+        let text = entries[position].text
+        entries.removeSubrange(position...)
+        draft = text
+        status = nil
+        releaseACPProcess()
+        lastACPSessionID = nil
+        acpLaunchFingerprint = nil
+        // This notice says what the session notice would.
+        acpExplainedFreshSession = true
+        let agent = acpAgentName ?? acpDefinition?.displayName ?? "The agent"
+        let carried = IDEACPHandoff.turns(from: entries).isEmpty
+            ? "Your next message starts a new session."
+            : "Your next message starts a new session and brings the conversation up to here."
+        let prefix = "Went back to before that message. \(agent)'s session was closed, since it would still remember what was removed. \(carried)"
+        if let report {
+            announce(report, prefix: prefix)
+        } else {
+            append(.init(kind: .notice, text: prefix))
+        }
+        persist(items: Self.acpItems(entries), checkpoints: await checkpointLog?.snapshot() ?? restoredRuns)
+        return true
+    }
+
     /// The cards of the runs a revert reached show what happened to their files.
     private func markReverted(_ report: RevertReport, inEntriesAfter position: Int) {
         for index in entries.indices where index > position && entries[index].kind == .changes {
@@ -2509,6 +2747,18 @@ final class IDEAgentConversation: Identifiable {
     /// `nil`). "Files changed" cards are left out: their originals belong to this chat. `nil` while a run is going.
     func forkState(before entryID: UUID?) async -> (entries: [IDEAgentEntry], items: [ConversationItem], title: String)? {
         guard !isRunning else { return nil }
+        if isACPConversation {
+            // The agent's own history cannot be copied; the fork's first message hands its transcript to a
+            // new session instead (`acpOwesHandoff`).
+            var keptEntries = entries
+            if let entryID {
+                guard let position = entries.firstIndex(where: { $0.id == entryID }), entries[position].kind == .user
+                else { return nil }
+                keptEntries = Array(entries[..<position])
+            }
+            keptEntries.removeAll { $0.kind == .changes }
+            return (keptEntries, Self.acpItems(keptEntries), title)
+        }
         let allItems = await session?.items ?? restoredItems ?? []
         var keptEntries = entries
         var keptItems = allItems
@@ -2524,9 +2774,11 @@ final class IDEAgentConversation: Identifiable {
     }
 
     /// Makes this (new, empty) chat a fork of another.
-    func adoptFork(entries newEntries: [IDEAgentEntry], items: [ConversationItem], title: String) {
+    func adoptFork(entries newEntries: [IDEAgentEntry], items: [ConversationItem], title: String, archive: [HandoffTurn] = []) {
         guard isEmpty, !isRunning else { return }
         entries = newEntries
+        // The forked history may hold a handoff whose notes point at `read_conversation`.
+        conversationArchive = Self.holdsConversation(items) ? archive : []
         restoredItems = items
         todos = TodoList.latest(in: items)
         restoredTodos = todos
@@ -2556,6 +2808,25 @@ final class IDEAgentConversation: Identifiable {
     /// What the provider last said is left of its rate limit; explains a wait in the status line.
     @ObservationIgnored private var rateLimit: RateLimitStatus?
 
+    /// When a run of this chat last ended, for the tab's tooltip.
+    private(set) var lastActivity: Date?
+
+    /// A failed request waiting to be sent again: drawn as a banner over the composer instead of the status line.
+    private(set) var retryState: IDEAgentRetryState?
+
+    /// Sends the request that is waiting to be retried now instead of when its wait ends. Does nothing
+    /// when no retry is waiting.
+    func retryNow() {
+        guard retryState != nil, let session, session.retryNow() else { return }
+        retryState?.nextAttemptAt = Date()
+    }
+
+    /// The entry the user has to act on (an approval, a question, a plan), the first one when several wait.
+    var pendingDecision: IDEAgentEntry? {
+        guard isAwaitingUser else { return nil }
+        return entries.first(where: \.isWaitingForUser)
+    }
+
     /// The summary of the model's reasoning for the turn in progress, as it streams.
     @ObservationIgnored private var reasoningSummary = ""
 
@@ -2570,6 +2841,14 @@ final class IDEAgentConversation: Identifiable {
     }
 
     func handle(_ event: AgentEvent) {
+        if retryState != nil, !IDEAgentRetryState.keeps(event) {
+            // The resent request is answering (or the run ended): the wait is over.
+            retryState = nil
+            switch event {
+            case .textDelta, .reasoningDelta, .toolCallOutput: status = "Thinking…"
+            default: break // sets its own status below
+            }
+        }
         if case .textDelta(let delta) = event {
             if !reasoningSummary.isEmpty {
                 // The answer has started; the summary of the thinking before it is no longer news.
@@ -2618,6 +2897,8 @@ final class IDEAgentConversation: Identifiable {
             rateLimit = latest
         case .retryScheduled(let attempt, let delay):
             status = IDEAgentToolSummary.retryStatus(attempt: attempt, delay: delay, rateLimit: rateLimit)
+            retryState = IDEAgentRetryState(
+                attempt: attempt, nextAttemptAt: Date().addingTimeInterval(delay), exhaustedLimit: rateLimit?.exhausted)
         case .assistantMessage(let text):
             // The turn's finished text. Its streamed copy is already in the transcript, ahead of
             // any tool cards the same turn produced (a tool call closes the streaming entry), so
@@ -2643,7 +2924,7 @@ final class IDEAgentConversation: Identifiable {
                 entries[index].plan = nil
                 entries[index].elicitation = nil
             }
-            if !entries.contains(where: { $0.approval != nil || $0.question != nil || $0.plan != nil || $0.elicitation != nil }) {
+            if !entries.contains(where: \.isWaitingForUser) {
                 isAwaitingUser = false
             }
         case .toolCallOutput:
@@ -2762,6 +3043,8 @@ final class IDEAgentConversation: Identifiable {
                 entries[index].elicitation = nil
             }
             isAwaitingUser = entries.contains { $0.plan != nil }
+            // T3's "terminal settlement": a call the agent started and never finished is settled too.
+            IDEAgentEntry.settlingUnfinishedCalls(&entries)
             if case .failed(let message) = ending, IDEAgentNetworkFailure.offersRetry(message) {
                 // The turn never landed in the history. Drop its partial text so Retry starts clean.
                 dropUncommittedTurn()

@@ -102,32 +102,27 @@ struct IDEAIChatView: View {
 
     // MARK: - Transcript
 
-    private static let bottomID = "chat-bottom"
-
     private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
-                    ForEach(conversation.entries) { entry in
-                        IDEAIChatMessageView(entry: entry, retry: conversation.retry).id(entry.id)
-                    }
-                    if let status = conversation.status {
-                        HStack(spacing: IDEAppearance.Spacing.xs) {
-                            IDEATypingDots()
-                            Text(status)
-                                .font(IDEAppearance.Typography.caption)
-                                .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        }
-                    }
-                    Color.clear.frame(height: 1).id(Self.bottomID)
+        IDEAgentFollowingScrollView(
+            resetKey: conversation.id,
+            pinKey: conversation.entries.last(where: { $0.kind == .user })?.id
+        ) {
+            LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
+                ForEach(conversation.entries) { entry in
+                    IDEAIChatMessageView(entry: entry, retry: conversation.retry).id(entry.id)
                 }
-                .frame(maxWidth: IDEAIChatView.columnWidth)
-                .padding(IDEAppearance.Spacing.md)
-                .frame(maxWidth: .infinity)
+                if let status = conversation.status {
+                    HStack(spacing: IDEAppearance.Spacing.xs) {
+                        IDEATypingDots()
+                        Text(status)
+                            .font(IDEAppearance.Typography.caption)
+                            .foregroundStyle(IDEAppearance.ColorToken.muted)
+                    }
+                }
             }
-            .onChange(of: conversation.entries.count) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
-            .onChange(of: conversation.entries.last?.text) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
-            .onChange(of: conversation.id) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+            .frame(maxWidth: IDEAIChatView.columnWidth)
+            .padding(IDEAppearance.Spacing.md)
+            .frame(maxWidth: .infinity)
         }
     }
 
