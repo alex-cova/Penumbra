@@ -28,6 +28,7 @@ struct IDEAgentComposerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+            IDEAgentToastLane(agent: agent)
             if !agent.selected.hasConsent {
                 IDEAgentDisclosureCard(settings: settings, provider: choice.provider)
             }
@@ -45,7 +46,7 @@ struct IDEAgentComposerView: View {
                 }
             }
             if !agent.selected.queue.isEmpty {
-                IDEAgentQueuedMessages(queue: agent.selected.queue) { agent.selected.removeQueued($0) }
+                IDEAgentQueuedMessages(conversation: agent.selected, toast: { agent.showToast($0) })
             }
             if !agent.selected.pendingImages.isEmpty {
                 IDEAgentImageChips(images: agent.selected.pendingImages) { agent.selected.removePendingImage($0) }
@@ -85,6 +86,15 @@ struct IDEAgentComposerView: View {
                 }
             } else {
                 fieldRow
+            }
+            if let warning = IDEAgentComposerLimits.validationMessage(for: agent.draft) {
+                Text(warning)
+                    .font(IDEAppearance.Typography.caption)
+                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, IDEAppearance.Spacing.xs)
+                    .accessibilityAddTraits(.isStaticText)
+                    .accessibilityIdentifier("agent.composer.lengthWarning")
             }
         }
         .padding(IDEAppearance.Spacing.sm)

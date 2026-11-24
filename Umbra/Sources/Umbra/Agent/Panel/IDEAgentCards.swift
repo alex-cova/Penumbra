@@ -32,6 +32,7 @@ struct IDEAgentChangesCard: View {
             let conflictPaths = Set(entry.conflicts.map(\.path))
             ForEach(entry.fileChanges) { change in
                 let isConflict = conflictPaths.contains(change.path)
+                HStack(spacing: IDEAppearance.Spacing.xs) {
                 Button {
                     agent.showDiff(for: change)
                 } label: {
@@ -55,6 +56,8 @@ struct IDEAgentChangesCard: View {
                 .help("Show what changed")
                 .accessibilityIdentifier(IDEACPAccessibility.change(change.path))
                 .accessibilityLabel("Show changes in \(change.path)")
+                IDEAgentCopyPathButton(path: change.path) { agent.showToast(.copyFailed(change.path)) }
+                }
             }
         }
         .accessibilityElement(children: .contain)
@@ -73,6 +76,8 @@ struct IDEAgentApprovalView: View {
     let decide: (ApprovalDecision) -> Void
     /// Approves this call and also changes what is asked from now on (an "always allow" rule, or Accept Edits).
     let approveWith: (IDEAgentConversation.ApprovalShortcut) -> Void
+    /// Told when the diff header's Copy Path could not write to the pasteboard.
+    var onCopyFailed: (String) -> Void = { _ in }
 
     @State private var command: String
     @State private var isEditing = false
@@ -81,11 +86,13 @@ struct IDEAgentApprovalView: View {
 
     init(
         request: ApprovalRequest, decide: @escaping (ApprovalDecision) -> Void,
-        approveWith: @escaping (IDEAgentConversation.ApprovalShortcut) -> Void
+        approveWith: @escaping (IDEAgentConversation.ApprovalShortcut) -> Void,
+        onCopyFailed: @escaping (String) -> Void = { _ in }
     ) {
         self.request = request
         self.decide = decide
         self.approveWith = approveWith
+        self.onCopyFailed = onCopyFailed
         _command = State(initialValue: request.command)
     }
 
@@ -105,9 +112,15 @@ struct IDEAgentApprovalView: View {
             }
 
             if let diff = request.diff {
-                Text(request.command)
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .textSelection(.enabled)
+                HStack(spacing: IDEAppearance.Spacing.xs) {
+                    Text(request.command)
+                        .font(IDEAppearance.Typography.monoSmall)
+                        .textSelection(.enabled)
+                    Spacer(minLength: 0)
+                    if let path = IDEAgentPathCopy.path(fromUnifiedDiff: diff) {
+                        IDEAgentCopyPathButton(path: path, onFailure: { onCopyFailed(path) })
+                    }
+                }
                 IDEAgentDiffView(diff: diff)
             } else if isEditing {
                 TextField("Command", text: $command, axis: .vertical)
@@ -256,7 +269,8 @@ struct IDEAgentToolCard: View {
                 IDEAgentApprovalView(
                     request: request,
                     decide: { workspace.agent.decide(callID: request.callID, $0) },
-                    approveWith: { workspace.agent.selected.approve(callID: request.callID, shortcut: $0) })
+                    approveWith: { workspace.agent.selected.approve(callID: request.callID, shortcut: $0) },
+                    onCopyFailed: { workspace.agent.showToast(.copyFailed($0)) })
             }
 
             if let question = entry.question, entry.output == nil {

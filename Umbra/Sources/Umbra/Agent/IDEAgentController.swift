@@ -195,6 +195,8 @@ final class IDEAgentController {
     /// workspace alive through its tools.
     func teardown() {
         scheduler.stop()
+        releaseClosed()
+        toastTask?.cancel()
         for conversation in conversations { conversation.teardown() }
         mcp.shutdown()
         host = nil
@@ -241,6 +243,8 @@ final class IDEAgentController {
     /// Shows a saved conversation: in the tab that already has it, else in the selected chat if that is
     /// empty, else in a new one. Never over a chat that has something in it.
     func resume(_ id: UUID) {
+        // A chat closed a moment ago is opened from disk now; its Undo would bring back a second tab of it.
+        releaseClosed(holding: id)
         if let open = conversations.first(where: { $0.conversationID == id }) {
             select(open.id)
             didRestore = true
@@ -255,9 +259,10 @@ final class IDEAgentController {
     /// Deletes a saved conversation. A chat showing it is closed, unless it is running.
     func deleteConversation(_ id: UUID) {
         guard let store, let root = host?.agentProjectRoot else { return }
+        releaseClosed(holding: id)
         if let open = conversations.first(where: { $0.conversationID == id }) {
             guard !open.isRunning else { return }
-            close(open.id)
+            close(open.id, undoable: false)
         }
         // The originals kept for its runs go with it.
         if let snapshot = store.load(id, projectRoot: root.path) {
@@ -313,7 +318,7 @@ final class IDEAgentController {
         let chat = scheduledChat(schedule, title: "\(schedule.name) · \(IDEAgentScheduler.describe(date))")
         chat.submit(text: schedule.prompt)
         guard chat.isRunning else {
-            close(chat.id)
+            close(chat.id, undoable: false)
             return nil
         }
         return chat
@@ -441,21 +446,137 @@ final class IDEAgentController {
         select(conversations[(index + step + conversations.count) % conversations.count].id)
     }
 
-    /// Closes a chat, ending its run. The last chat is emptied instead, so there is always one.
-    func close(_ id: UUID) {
+    // MARK: - Toasts
+
+    /// The message at the bottom of the panel (`IDEAgentToastLane`).
+    private(set) var toast: IDEAgentToast?
+    @ObservationIgnored private var toastTask: Task<Void, Never>?
+
+    /// Shows `toast` in place of the one showing, for its timeout.
+    func showToast(_ toast: IDEAgentToast) {
+        toastTask?.cancel()
+        self.toast = toast
+        let id = toast.id
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: toast.timeout)
+            guard !Task.isCancelled else { return }
+            self?.dismissToast(id)
+        }
+    }
+
+    /// Hides the toast if it is still `id` (a newer one is left alone).
+    func dismissToast(_ id: UUID) {
+        guard toast?.id == id else { return }
+        toastTask?.cancel()
+        toastTask = nil
+        toast = nil
+    }
+
+    // MARK: - Closing, with Undo
+
+    /// How long a closed chat can be brought back.
+    @ObservationIgnored var closeUndoWindow: Duration = .seconds(8)
+
+    /// Chats closed by one action, kept (stopped, sessions still held) until the undo window passes.
+    private struct ClosedGroup {
+        let id = UUID()
+        /// Each chat with the index it had, in ascending index order.
+        var members: [(conversation: IDEAgentConversation, index: Int)]
+        var releaseTask: Task<Void, Never>?
+        /// The toast that offers Undo, hidden when the group is released.
+        var toastID: UUID?
+    }
+
+    @ObservationIgnored private var closedGroup: ClosedGroup?
+
+    /// The chats that a toast's Undo would bring back, for tests.
+    var pendingCloseForTesting: [UUID] { closedGroup?.members.map(\.conversation.id) ?? [] }
+
+    /// Closes a chat, stopping its run. The last chat is emptied instead, so there is always one (no undo).
+    /// Otherwise a toast offers Undo for `closeUndoWindow`, unless `undoable` is false (a chat whose saved
+    /// conversation is being deleted, a scheduled run that did not start), which ends it at once.
+    func close(_ id: UUID, undoable: Bool = true) {
         guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
         guard conversations.count > 1 else {
             conversations[0].reset()
             return
         }
-        let closed = conversations.remove(at: index)
-        closed.teardown()
-        if selectedID == id { select(conversations[min(index, conversations.count - 1)].id) } else { layoutChanged() }
+        guard undoable else {
+            let closed = conversations.remove(at: index)
+            closed.teardown()
+            if selectedID == id { select(conversations[min(index, conversations.count - 1)].id) } else { layoutChanged() }
+            return
+        }
+        closeGroup([id])
     }
 
     func closeOthers(keeping id: UUID) {
-        for conversation in conversations where conversation.id != id { close(conversation.id) }
+        guard conversations.contains(where: { $0.id == id }) else { return }
+        closeGroup(conversations.map(\.id).filter { $0 != id })
         select(id)
+    }
+
+    private func closeGroup(_ ids: [UUID]) {
+        let wanted = Set(ids)
+        let members = conversations.enumerated()
+            .filter { wanted.contains($0.element.id) }
+            .map { (conversation: $0.element, index: $0.offset) }
+        guard !members.isEmpty, members.count < conversations.count else { return }
+        // Only the latest close can be undone: an earlier one is finished now.
+        releaseClosed()
+        let selectedIndex = conversations.firstIndex { $0.id == selectedID } ?? 0
+        let selectionClosed = wanted.contains(selectedID)
+        conversations.removeAll { wanted.contains($0.id) }
+        for member in members { member.conversation.stopForClose() }
+        var group = ClosedGroup(members: members)
+        let groupID = group.id
+        let window = closeUndoWindow
+        group.releaseTask = Task { [weak self] in
+            try? await Task.sleep(for: window)
+            guard !Task.isCancelled, let self, self.closedGroup?.id == groupID else { return }
+            self.releaseClosed()
+        }
+        closedGroup = group
+        if selectionClosed {
+            let before = members.filter { $0.index < selectedIndex }.count
+            select(conversations[min(selectedIndex - before, conversations.count - 1)].id)
+        } else {
+            layoutChanged()
+        }
+        let title = members.count == 1 ? "Closed “\(members[0].conversation.title)”" : "Closed \(members.count) chats"
+        let toast = IDEAgentToast(
+            title: title, timeout: window,
+            action: .init(label: "Undo") { [weak self] in self?.undoClose() })
+        closedGroup?.toastID = toast.id
+        showToast(toast)
+    }
+
+    /// Brings back the chats the latest close removed, at the places they had, and selects the first of them.
+    func undoClose() {
+        guard let group = closedGroup else { return }
+        group.releaseTask?.cancel()
+        closedGroup = nil
+        for member in group.members {
+            conversations.insert(member.conversation, at: min(member.index, conversations.count))
+        }
+        if let toastID = group.toastID { dismissToast(toastID) }
+        if let first = group.members.first { select(first.conversation.id) }
+    }
+
+    /// Ends the chats waiting in the undo window if one of them shows the saved conversation `conversationID`.
+    private func releaseClosed(holding conversationID: UUID) {
+        if closedGroup?.members.contains(where: { $0.conversation.conversationID == conversationID }) == true {
+            releaseClosed()
+        }
+    }
+
+    /// Ends the chats waiting in the undo window now: on a newer close, on window close, and when it passes.
+    private func releaseClosed() {
+        guard let group = closedGroup else { return }
+        closedGroup = nil
+        group.releaseTask?.cancel()
+        if let toastID = group.toastID { dismissToast(toastID) }
+        for member in group.members { member.conversation.release() }
     }
 
     /// A new chat that starts from another's conversation, up to before the message `entryID` (all of it if `nil`).

@@ -1383,6 +1383,27 @@ final class IDEAgentConversation: Identifiable {
         queue.removeAll { $0.id == id }
     }
 
+    /// Changes a message that is still waiting. False when it has already gone to the model (the queue is
+    /// emptied at a turn boundary), so the caller can keep the edit elsewhere. An edit that leaves nothing
+    /// takes the message back.
+    @discardableResult
+    func updateQueued(_ id: UUID, text: String) -> Bool {
+        guard let index = queue.firstIndex(where: { $0.id == id }) else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { queue.remove(at: index) } else { queue[index].text = trimmed }
+        return true
+    }
+
+    /// An edit to a queued message that was delivered while it was being written: it goes into the message
+    /// field when that is empty. False when the field has text, which is never replaced.
+    func keepEditOfDeliveredMessage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        draft = trimmed
+        promptRecall.reset()
+        return true
+    }
+
     /// Called by the session at a turn boundary: moves the queue into the transcript, resolving each
     /// message's `@` mentions, and returns what the model is to be sent.
     private func deliverQueued(itemCount: Int) async -> [String] {
@@ -1868,6 +1889,20 @@ final class IDEAgentConversation: Identifiable {
     func teardown() {
         stopLoop(silent: true)
         saveInterrupted()
+        release()
+    }
+
+    /// The first half of closing a tab that can still be undone: a loop ends, a run is stopped as Stop would
+    /// (so it ends with its "Stopped." notice and is saved), and its file claims go at once. The session stays,
+    /// so Undo brings back a chat that works; `release()` drops it when the undo window passes.
+    func stopForClose() {
+        stopLoop(silent: true)
+        if isRunning || shellTask != nil { stop() }
+        fileClaims?.release(tab: id)
+    }
+
+    /// The second half of closing: drops the session and the window. Nothing runs after it.
+    func release() {
         endSession()
         host = nil
     }

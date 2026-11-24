@@ -199,6 +199,106 @@ final class IDEAgentTabsTests: XCTestCase {
         XCTAssertEqual(controller.selected.id, b.id)
     }
 
+    // MARK: - Undo close
+
+    func testUndoBringsAClosedChatBackInPlaceWithItsTranscript() async throws {
+        let controller = makeController([MockLLMClient(turns: [.text("hello")]), MockLLMClient(turns: [])])
+        let a = controller.selected
+        send(a, "hi")
+        await waitFor("done") { !a.isRunning }
+        let b = controller.addConversation()
+        let c = controller.addConversation()
+        controller.select(a.id)
+
+        controller.close(a.id)
+        XCTAssertEqual(controller.conversations.map(\.id), [b.id, c.id])
+        XCTAssertEqual(controller.selected.id, b.id)
+        XCTAssertEqual(controller.toast?.title, "Closed “hi”")
+        XCTAssertEqual(controller.toast?.action?.label, "Undo")
+
+        controller.toast?.action?.perform()
+        XCTAssertEqual(controller.conversations.map(\.id), [a.id, b.id, c.id], "back at its old place")
+        XCTAssertEqual(controller.selected.id, a.id)
+        XCTAssertEqual(a.entries.map(\.text), ["hi", "hello"])
+        XCTAssertNil(controller.toast)
+        XCTAssertTrue(controller.pendingCloseForTesting.isEmpty)
+    }
+
+    func testClosingStopsTheRunAtOnceAndUndoKeepsTheSession() async throws {
+        let controller = makeController([MockLLMClient(turns: [slow("long answer", seconds: 3)]), MockLLMClient(turns: [])])
+        let a = controller.selected
+        controller.addConversation()
+        send(a, "go")
+        await waitFor("a runs with its session") { a.isRunning && a.currentSessionForTesting != nil }
+        let session = try XCTUnwrap(a.currentSessionForTesting)
+
+        controller.close(a.id)
+        await waitFor("closing stopped the run") { !a.isRunning }
+        XCTAssertTrue(a.entries.contains { $0.text == "Stopped." }, "stopped as Stop would, with its notice")
+        controller.undoClose()
+        XCTAssertTrue(controller.conversations.contains { $0.id == a.id })
+        XCTAssertTrue(a.currentSessionForTesting === session, "the session was kept through the undo window")
+    }
+
+    func testAClosedChatIsReleasedWhenTheUndoWindowPasses() async throws {
+        let controller = makeController([MockLLMClient(turns: [])])
+        controller.closeUndoWindow = .milliseconds(50)
+        let b = controller.addConversation()
+        controller.close(b.id)
+        XCTAssertEqual(controller.pendingCloseForTesting, [b.id])
+        await waitFor("released") { controller.pendingCloseForTesting.isEmpty }
+        XCTAssertNil(controller.toast, "the toast went with it")
+        controller.undoClose()
+        XCTAssertFalse(controller.conversations.contains { $0.id == b.id }, "nothing to undo any more")
+    }
+
+    func testCloseOthersIsOneUndo() {
+        let controller = makeController([MockLLMClient(turns: [])])
+        let a = controller.selected
+        let b = controller.addConversation()
+        let c = controller.addConversation()
+        let d = controller.addConversation()
+
+        controller.closeOthers(keeping: c.id)
+        XCTAssertEqual(controller.conversations.map(\.id), [c.id])
+        XCTAssertEqual(controller.toast?.title, "Closed 3 chats")
+        controller.undoClose()
+        XCTAssertEqual(controller.conversations.map(\.id), [a.id, b.id, c.id, d.id])
+    }
+
+    func testANewCloseFinishesTheEarlierOne() {
+        let controller = makeController([MockLLMClient(turns: [])])
+        let b = controller.addConversation()
+        let c = controller.addConversation()
+        controller.close(b.id)
+        controller.close(c.id)
+        XCTAssertEqual(controller.pendingCloseForTesting, [c.id], "only the latest close can be undone")
+        controller.undoClose()
+        XCTAssertEqual(controller.conversations.count, 2)
+        XCTAssertFalse(controller.conversations.contains { $0.id == b.id })
+    }
+
+    func testDeletingAChatOffersNoUndo() async throws {
+        let id = await savedConversation("topic")
+        let controller = makeController([MockLLMClient(turns: [])])
+        controller.resume(id)
+        controller.addConversation()
+        controller.deleteConversation(id)
+        XCTAssertNil(controller.toast)
+        XCTAssertTrue(controller.pendingCloseForTesting.isEmpty)
+    }
+
+    func testANewerToastReplacesTheOldOneAndTheTimeoutClearsIt() async {
+        let controller = makeController([MockLLMClient(turns: [])])
+        controller.showToast(IDEAgentToast(title: "first", timeout: .seconds(10)))
+        let second = IDEAgentToast(title: "second", timeout: .milliseconds(50))
+        controller.showToast(second)
+        XCTAssertEqual(controller.toast?.title, "second")
+        controller.dismissToast(UUID())
+        XCTAssertEqual(controller.toast?.id, second.id, "dismissing another toast leaves this one")
+        await waitFor("timed out") { controller.toast == nil }
+    }
+
     // MARK: - Titles
 
     func testATabIsNamedAfterItsFirstMessageAndTheUserCanRenameIt() async {

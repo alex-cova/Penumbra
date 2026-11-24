@@ -249,10 +249,7 @@ struct IDEAIChangesTab: View {
                     Task { await workspace.openAgentCitedFile(.init(path: file.path)) }
                 }
                 Divider()
-                Button("Copy Path") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(file.path, forType: .string)
-                }
+                Button("Copy Path") { IDEAgentPathCopy.copy(file.path) }
             }
             .help(file.path)
             .accessibilityLabel("\(file.path), \(file.isCreation ? "created" : "modified")\(file.isReverted ? ", reverted" : "")")
