@@ -24,6 +24,13 @@ final class IDEAgentController {
     let scheduler: IDEAgentScheduler
     /// Bumped by `/model`, so the panel opens its settings sheet.
     var settingsRequest = 0
+    /// Bumped by ⌘F while the panel has the keyboard: the panel focuses its find bar.
+    var findRequest = 0
+    /// The find bar over the transcript is open. Kept here, not in the view, so a panel that is rebuilt
+    /// (docked ↔ page) keeps it.
+    var isFindBarOpen = false
+    /// The panel's find field has the keyboard, so ⌘F stays in the panel.
+    @ObservationIgnored var isFindFieldFocused = false
     /// Set to show the rewind sheet (`/rewind`, a message's Rewind button, Esc Esc).
     var rewindRequest: IDEAgentRewindRequest?
     /// `/usage`: the sheet of token use and cost across saved chats.

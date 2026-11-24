@@ -4,6 +4,8 @@ import SwiftUI
 struct IDEAgentWorkGroupView: View {
     let group: IDEAgentWorkGroup
     @Binding var isExpanded: Bool
+    /// The current find match, outlined when it is one of this group's calls.
+    var highlightedID: UUID?
 
     private var summary: String { group.summary.text(isLive: group.isLive) }
 
@@ -36,6 +38,7 @@ struct IDEAgentWorkGroupView: View {
                 VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
                     ForEach(group.entries) { entry in
                         IDEAgentEntryView(entry: entry).id(entry.id)
+                            .ideFindHighlight(entry.id == highlightedID)
                     }
                 }
                 .padding(.leading, IDEAppearance.Spacing.sm)
@@ -46,6 +49,20 @@ struct IDEAgentWorkGroupView: View {
                         .padding(.leading, 3)
                 }
                 .ideTransition(.opacity)
+            }
+        }
+    }
+}
+
+extension View {
+    /// The outline around the transcript row that holds the current find match.
+    func ideFindHighlight(_ isCurrent: Bool) -> some View {
+        overlay {
+            if isCurrent {
+                RoundedRectangle(cornerRadius: IDEAppearance.Radius.card, style: .continuous)
+                    .strokeBorder(IDEAppearance.ColorToken.accent, lineWidth: 1.5)
+                    .padding(-3)
+                    .allowsHitTesting(false)
             }
         }
     }

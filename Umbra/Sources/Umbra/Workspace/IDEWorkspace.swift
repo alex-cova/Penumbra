@@ -1932,6 +1932,14 @@ public final class IDEWorkspace {
     }
 
     public func showFind() {
+        // The agent's message field (or its find field) has the keyboard: find in the chat. AI mode's
+        // Chat tab has its own conversation and no find bar.
+        let isAIChat = windowMode == .ai && aiTab == .chat
+        if !isAIChat, window?.firstResponder is IDEAgentComposerTextView || agent.isFindFieldFocused {
+            agent.isFindBarOpen = true
+            agent.findRequest += 1
+            return
+        }
         // The terminal (or its find bar) has the keyboard: find in that session's output, not in the
         // editor behind it.
         if let terminal = IDETerminalHostView.owning(window?.firstResponder) {

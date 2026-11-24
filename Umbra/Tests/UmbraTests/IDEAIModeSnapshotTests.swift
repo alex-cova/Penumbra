@@ -143,6 +143,35 @@ final class IDEAIModeSnapshotTests: XCTestCase {
         XCTAssertTrue(IDEAIChangedFiles.summarize(workspace.agent.entries).allSatisfy(\.isReverted))
     }
 
+    /// ⌘F in the agent's find field stays in the chat; the bar opens over the transcript, with the minimap
+    /// rail beside a chat of several messages. In AI mode's Chat, ⌘F is not the agent's.
+    func testFindInChatAndTheMinimap() async throws {
+        workspace.openProjectFolder(base.appendingPathComponent("MyProject"))
+        workspace.agent.settings.acceptDisclosure(for: .anthropic)
+        let chat = workspace.agent.selected
+        chat.modelChoice = IDEAIModelChoice(provider: .anthropic, model: "claude-sonnet-5-5", reasoningEffort: "high")
+        let prompts = ["Read the menu", "Add a price column", "Run the tests", "Fix the failing test", "Summarize"]
+        for (index, prompt) in prompts.enumerated() {
+            chat.appendEntryForTesting(IDEAgentEntry(kind: .user, text: prompt))
+            chat.handle(.toolCallStarted(id: "u\(index)", name: "read_file"))
+            chat.handle(.toolCallFinished(id: "u\(index)", name: "read_file", output: ToolOutput("ok")))
+            chat.appendEntryForTesting(IDEAgentEntry(
+                kind: .assistant, text: "\(prompt): done. " + String(repeating: "More detail about the step. ", count: 8)))
+        }
+
+        workspace.agent.isFindFieldFocused = true
+        workspace.showFind()
+        XCTAssertEqual(workspace.agent.findRequest, 1)
+        XCTAssertTrue(workspace.agent.isFindBarOpen)
+        try await renderDocked("docked-find-minimap")
+
+        workspace.agent.isFindFieldFocused = false
+        workspace.showAIMode(tab: .chat)
+        workspace.agent.isFindFieldFocused = true
+        workspace.showFind()
+        XCTAssertEqual(workspace.agent.findRequest, 1, "AI mode's Chat is not the agent panel")
+    }
+
     private func renderDocked(_ name: String) async throws {
         let view = IDEAgentPanel(agent: workspace.agent)
             .environment(workspace)

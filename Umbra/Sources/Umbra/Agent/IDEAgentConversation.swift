@@ -311,6 +311,9 @@ final class IDEAgentConversation: Identifiable {
 
     /// For tests that look at the live session's state (its checklist).
     var currentSessionForTesting: AgentSession? { session }
+
+    /// Adds a row as a run would, for views tested without a model (a user message cannot come from `handle`).
+    func appendEntryForTesting(_ entry: IDEAgentEntry) { entries.append(entry) }
     /// For tests: how many history items the last finished step of the run in progress left.
     var finishedStepItemCountForTesting: Int? { stepItems?.count }
 

@@ -37,6 +37,8 @@ struct IDEAgentFollowingScrollView<Content: View>: View {
     var attention: String?
     /// Set to an entry's id to bring it to the middle of the view; reset to nil once done.
     var scrollTarget: Binding<UUID?> = .constant(nil)
+    /// Told where the view stands on every scroll, for a view that draws it (the minimap's band).
+    var position: IDEAgentScrollPosition?
     @ViewBuilder var content: () -> Content
 
     @State private var isPinned = true
@@ -63,6 +65,7 @@ struct IDEAgentFollowingScrollView<Content: View>: View {
                     viewportHeight: geometry.containerSize.height)
             } action: { old, new in
                 metrics = new
+                if let position, position.metrics != new { position.metrics = new }
                 let pinned = IDEAgentScrollPin.isPinned(wasPinned: isPinned, from: old, to: new, userIsScrolling: isUserScrolling)
                 if pinned != isPinned { isPinned = pinned }
                 if pinned {

@@ -24,6 +24,12 @@ struct IDEAgentPanel: View {
     /// reported (not built yet, far below) counts as hidden after a moment.
     @State private var pendingVisibility: [UUID: Bool] = [:]
     @State private var scrollTarget: UUID?
+    @State private var findQuery = ""
+    @State private var findMatches: [UUID] = []
+    @State private var findCurrent: UUID?
+    @State private var findFocusRequest = 0
+    @State private var scrollPosition = IDEAgentScrollPosition()
+    @State private var transcriptWidth: CGFloat = 0
 
     @Environment(IDEWorkspace.self) private var workspace
 
@@ -41,6 +47,14 @@ struct IDEAgentPanel: View {
             if !agent.todos.isEmpty, !isChecklistInInspector { IDEAgentTodoListView(items: agent.todos) }
             // AI mode has the Changes tab beside the conversation.
             if placement != .aiMode { IDEAgentChangesPill(agent: agent) }
+            if agent.isFindBarOpen {
+                IDEAgentFindBar(
+                    query: $findQuery,
+                    position: IDEAgentTranscriptFind.position(of: findCurrent, in: findMatches),
+                    hasMatches: !findMatches.isEmpty, focusRequest: findFocusRequest,
+                    step: stepFind, close: closeFind,
+                    focusChanged: { agent.isFindFieldFocused = $0 })
+            }
             if placement == .aiMode, agent.entries.isEmpty {
                 aiEmptyGreeting
                     .ideTransition(.move(edge: .top).combined(with: .opacity))
@@ -56,6 +70,19 @@ struct IDEAgentPanel: View {
                 openSettings: { isSettingsPresented = true },
                 isPendingCardVisible: agent.selected.pendingDecision.map { pendingVisibility[$0.id] ?? true } ?? true,
                 showEntry: { scrollTarget = $0 })
+        }
+        .onChange(of: agent.findRequest) { findFocusRequest += 1 }
+        .onChange(of: findQuery) { findCurrent = nil }
+        .onChange(of: agent.selectedID) { findCurrent = nil }
+        .task(id: FindKey(query: agent.isFindBarOpen ? findQuery : "", chat: agent.selectedID, count: agent.entries.count)) {
+            // Typing settles first; the transcript growing finds again without moving the view.
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            findMatches = IDEAgentTranscriptFind.matches(agent.isFindBarOpen ? findQuery : "", in: agent.entries)
+            if findCurrent.map({ !findMatches.contains($0) }) ?? true {
+                findCurrent = findMatches.first
+                if let findCurrent { reveal(findCurrent) }
+            }
         }
         .task(id: agent.selected.pendingDecision?.id) {
             // A card that has not said whether it is on screen (its row was never built) is out of view.
@@ -190,25 +217,84 @@ struct IDEAgentPanel: View {
                 resetKey: agent.selectedID,
                 pinKey: agent.entries.last(where: { $0.kind == .user })?.id,
                 attention: agent.selected.isAwaitingUser ? "Waiting for you" : nil,
-                scrollTarget: $scrollTarget
+                scrollTarget: $scrollTarget,
+                position: scrollPosition
             ) {
                 LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
                     ForEach(IDEAgentTranscriptRows.make(agent.entries, isRunning: agent.isRunning)) { row in
                         switch row {
                         case .entry(let entry) where entry.isWaitingForUser:
                             IDEAgentEntryView(entry: entry).id(entry.id)
+                                .ideFindHighlight(entry.id == findCurrent)
                                 .onScrollVisibilityChange(threshold: 0.3) { pendingVisibility[entry.id] = $0 }
                                 // A lazy row that is dropped reports no change; gone is out of view.
                                 .onDisappear { pendingVisibility[entry.id] = false }
                         case .entry(let entry):
                             IDEAgentEntryView(entry: entry).id(entry.id)
+                                .ideFindHighlight(entry.id == findCurrent)
                         case .work(let group):
-                            IDEAgentWorkGroupView(group: group, isExpanded: expansion(of: group)).id(group.id)
+                            IDEAgentWorkGroupView(group: group, isExpanded: expansion(of: group), highlightedID: findCurrent)
+                                .id(group.id)
                         }
                     }
                 }
                 .padding(IDEAppearance.Spacing.md)
+                .padding(.trailing, showsMinimap ? IDEAgentMinimapRail.width : 0)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { transcriptWidth = $0 }
+            .overlay(alignment: .trailing) {
+                if showsMinimap {
+                    IDEAgentMinimapRail(items: minimapItems, position: scrollPosition, select: reveal)
+                        .padding(.trailing, 2)
+                }
+            }
+        }
+    }
+
+    private var minimapItems: [IDEAgentMinimapItem] { IDEAgentMinimapItems.make(agent.entries) }
+
+    /// From four messages on, and not in a docked panel too narrow to spare the width.
+    private var showsMinimap: Bool {
+        transcriptWidth >= 380
+            && agent.entries.lazy.filter { $0.kind == .user }.prefix(IDEAgentMinimapItems.minimumTurns).count
+                >= IDEAgentMinimapItems.minimumTurns
+    }
+
+    // MARK: - Find
+
+    private struct FindKey: Hashable {
+        var query: String
+        var chat: UUID
+        var count: Int
+    }
+
+    private func stepFind(_ step: Int) {
+        guard let next = IDEAgentTranscriptFind.next(after: findCurrent, by: step, in: findMatches) else { return }
+        findCurrent = next
+        reveal(next)
+    }
+
+    private func closeFind() {
+        agent.isFindBarOpen = false
+        findCurrent = nil
+        findMatches = []
+        agent.isFindFieldFocused = false
+        agent.composerFocusRequest += 1
+    }
+
+    /// Scrolls to an entry, opening the work group it is folded into first.
+    private func reveal(_ entryID: UUID) {
+        let rows = IDEAgentTranscriptRows.make(agent.entries, isRunning: agent.isRunning)
+        guard let rowID = IDEAgentTranscriptRows.rowID(containing: entryID, in: rows) else { return }
+        if rowID != entryID, groupToggles[rowID] != true {
+            groupToggles[rowID] = true
+            // The group's cards exist only after it has opened.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(60))
+                scrollTarget = entryID
+            }
+        } else {
+            scrollTarget = entryID
         }
     }
 
