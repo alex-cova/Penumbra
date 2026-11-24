@@ -146,6 +146,7 @@ for line in sys.stdin:
         send({"jsonrpc":"2.0","id":msg["id"],"result":{"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":value,"options":[{"value":"script-1","name":"Script"},{"value":"other","name":"Other"}]}]}})
     elif method == "session/prompt":
         prompt = "".join(b.get("text","") for b in msg["params"].get("prompt",[]) if b.get("type")=="text")
+        log("prompt handoff=%s first=%s" % ("yes" if "<earlier-conversation>" in prompt else "no", "yes" if "[user]\nhello" in prompt else "no"))
         if "crash" in prompt:
             text_chunk("dying")
             sys.stdout.flush()
@@ -599,6 +600,58 @@ final class IDEACPTests: XCTestCase {
         await acpEventually("auth probe process is gone", timeout: 5) { kill(agentPid(authProject.pid), 0) != 0 }
     }
 
+    func testSwitchingAnIdleACPChatToNativeCarriesItsConversation() async throws {
+        let (root, script, log, pid) = try makeProject()
+        let defaults = UserDefaults(suiteName: "umbra.acp.tests.\(UUID().uuidString)")!
+        let settings = IDEAgentSettings(defaults: defaults, keyStore: IDEAgentMemoryKeyStore())
+        settings.provider = .mlx
+        settings.addACPAgent(name: "Script Agent", commandLine: "/usr/bin/python3 \(script.path) \(log.path) \(pid.path)")
+        let agentID = settings.acpAgents[0].id
+        settings.setACPAllowed(true, agentID: agentID)
+        settings.acpActiveAgentID = agentID
+        let mock = MockLLMClient(turns: [.text("Native here"), .text("Again")])
+        let controller = IDEAgentController(settings: settings, store: nil, clientFactory: { _ in mock })
+        let host = ACPHost(root: root)
+        controller.attach(host: host)
+        let original = controller.selected
+        XCTAssertTrue(original.isACPConversation)
+        original.submit(text: "hello")
+        await acpEventually("ACP reply") {
+            !original.isRunning && original.entries.contains { $0.kind == .assistant && $0.text.contains("Hello from ACP") }
+        }
+
+        controller.selectProvider(.native)
+        let next = controller.selected
+        XCTAssertNotEqual(next.id, original.id)
+        XCTAssertFalse(next.isACPConversation)
+        XCTAssertTrue(next.entries.contains { $0.kind == .notice && $0.text.contains("continues") }, "\(next.entries.map(\.text))")
+        XCTAssertTrue(original.entries.contains { $0.kind == .user && $0.text == "hello" }, "the old chat is left as it was")
+
+        next.submit(text: "what did I say?")
+        await acpEventually("native reply") {
+            !next.isRunning && next.entries.contains { $0.kind == .assistant && $0.text == "Native here" }
+        }
+        let firstItems = try XCTUnwrap(mock.requests.first?.items)
+        let sent = firstItems.compactMap { item -> String? in if case .user(let text) = item { text } else { nil } }.joined()
+        let handoff = try XCTUnwrap(sent.range(of: "<earlier-conversation>"), sent)
+        XCTAssertTrue(sent.contains("[user]\nhello"), sent)
+        XCTAssertTrue(sent.contains("Hello from ACP"), sent)
+        let message = try XCTUnwrap(sent.range(of: "what did I say?"), sent)
+        XCTAssertLessThan(handoff.lowerBound, message.lowerBound)
+
+        next.submit(text: "and now?")
+        await acpEventually("second native reply") {
+            !next.isRunning && next.entries.contains { $0.kind == .assistant && $0.text == "Again" }
+        }
+        let secondItems = try XCTUnwrap(mock.requests.last?.items)
+        let handoffs = secondItems.reduce(0) { count, item in
+            if case .user(let text) = item, text.contains("<earlier-conversation>") { count + 1 } else { count }
+        }
+        XCTAssertEqual(handoffs, 1, "the second message does not send the earlier conversation again")
+        controller.teardown()
+        await acpEventually("agent process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
+    }
+
     func testSwitchingDuringARunKeepsThatSessionAndOpensNative() async throws {
         let (root, script, log, pid) = try makeProject()
         let defaults = UserDefaults(suiteName: "umbra.acp.tests.\(UUID().uuidString)")!
@@ -962,6 +1015,8 @@ final class IDEACPTests: XCTestCase {
         }
         XCTAssertTrue(next.entries.contains { $0.kind == .notice && $0.text == IDEACPSessionResume.restoredNotice })
         let logText = (try String(contentsOf: log, encoding: .utf8))
+        // The agent loaded its own copy of the conversation, so nothing is handed off.
+        XCTAssertFalse(logText.contains("handoff=yes"), logText)
         XCTAssertEqual(occurrences(of: "session/load", in: logText), 1, logText)
         XCTAssertEqual(occurrences(of: "session/prompt", in: logText), 2, logText)
         XCTAssertEqual(occurrences(of: "session/new", in: logText), 1, logText)
@@ -980,6 +1035,7 @@ final class IDEACPTests: XCTestCase {
             !next.isRunning && next.entries.contains { $0.text == IDEACPSessionResume.unsupportedNotice }
         }
         let logText = (try String(contentsOf: log, encoding: .utf8))
+        XCTAssertEqual(occurrences(of: "prompt handoff=yes first=yes", in: logText), 1, logText)
         XCTAssertFalse(logText.contains("session/load"), logText)
         XCTAssertEqual(occurrences(of: "session/new", in: logText), 2, logText)
         XCTAssertEqual(occurrences(of: "session/prompt", in: logText), 2, logText)
@@ -987,7 +1043,7 @@ final class IDEACPTests: XCTestCase {
         await acpEventually("agent process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
     }
 
-    func testStaleSessionStartsANewOneAndDoesNotResend() async throws {
+    func testStaleSessionStartsANewOneAndHandsOffTheTranscript() async throws {
         let (root, script, log, pid) = try makeProject()
         let (snapshot, settings) = try await finishedHello(root: root, script: script, log: log, pid: pid)
         try setMode(pid, "stale")
@@ -1003,6 +1059,15 @@ final class IDEACPTests: XCTestCase {
         XCTAssertEqual(occurrences(of: "session/load", in: logText), 1, logText)
         XCTAssertEqual(occurrences(of: "session/new", in: logText), 2, logText)
         XCTAssertEqual(occurrences(of: "session/prompt", in: logText), 2, logText)
+        // The earlier messages ride with the next prompt, once; the first prompt had nothing to hand off.
+        XCTAssertEqual(occurrences(of: "prompt handoff=yes first=yes", in: logText), 1, logText)
+        XCTAssertEqual(occurrences(of: "prompt handoff=no", in: logText), 1, logText)
+        next.submit(text: "third")
+        await acpEventually("third finishes") {
+            !next.isRunning && next.entries.filter { $0.kind == .user }.count == 3
+        }
+        let after = (try String(contentsOf: log, encoding: .utf8))
+        XCTAssertEqual(occurrences(of: "handoff=yes", in: after), 1, after)
         next.teardown()
         await acpEventually("agent process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
     }

@@ -267,9 +267,9 @@ enum IDEACPAvailabilityResolver {
 /// result is the authority. A saved id is never assumed to still exist.
 enum IDEACPSessionResume {
     static let restoredNotice = "Restored the remote session. Earlier messages were not sent again."
-    static let unsupportedNotice = "This agent cannot resume a remote session. The transcript was kept, and a new session was started. Earlier messages were not sent again."
-    static let staleNotice = "The previous remote session is no longer available. The transcript was kept, and a new session was started. Earlier messages were not sent again."
-    static let freshHistoryNotice = "This transcript was kept. A new remote session was started. Earlier messages were not sent again."
+    static let unsupportedNotice = "This agent cannot resume a remote session, so a new session was started. Your next message brings the earlier conversation with it."
+    static let staleNotice = "The previous remote session is no longer available, so a new session was started. Your next message brings the earlier conversation with it."
+    static let freshHistoryNotice = "A new remote session was started for this transcript. Your next message brings the earlier conversation with it."
 
     enum Plan: Equatable {
         case load(String)

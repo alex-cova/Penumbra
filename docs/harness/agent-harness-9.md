@@ -1,6 +1,6 @@
 # Harness gap 9: Muse (Meta) as a first-class provider
 
-Part of the series `agent-harness-1.md` to `agent-harness-9.md` (there is no index file; `ls docs/harness`). Checked against the code and against the live API on 2026-11-02.
+Part of the series `agent-harness-1.md` to `agent-harness-11.md` (there is no index file; `ls docs/harness`). Checked against the code and against the live API on 2026-11-02.
 
 **Status:** all six phases built or measured 2026-11-02. Phases 1 and 2: the four things that were wrong, pinned against the real API. Phase 3: the 1,048,576-token window and the overflow error are measured, prices and limits are checked against Meta's rate sheet. Phase 4: rate limits reach the retry status line. Phase 5: the 14-task suite ran on the production id, with a reasoning sweep and `muse-wonder-1.0`. Phase 6: reasoning summaries stream and are shown as the status line. What stays open is under *Open questions*. **`muse-spark-1.3-contributor` is out of scope for now** (decision of 2026-11-02): nothing below builds, measures or special-cases it. It stays selectable and priced as before, and the 2026-10-29 eval files that used it are history, not a baseline for the production id.
 

@@ -1,6 +1,6 @@
 # Harness gap 1: MCP beyond local stdio servers
 
-Part of the series `agent-harness-1.md` to `agent-harness-9.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-10-26.
+Part of the series `agent-harness-1.md` to `agent-harness-11.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-10-26.
 
 **Status:** phases 1, 2 and 4 built 2026-11-02 (streamable HTTP with header secrets, session ids, no-cross-host redirects; `list_changed` refresh at turn boundaries). Open: OAuth (3), prompts and resources (5), per-server sign-in status (6). SSE (legacy transport) deliberately not built; see the open question. Review of 2026-11-02 added two things the first version missed: the negotiated `MCP-Protocol-Version` header on every request after `initialize` (and on the closing `DELETE`), which the 2025-06-18 spec requires, and a 404 on a request that carried `Mcp-Session-Id`, which now ends the transport (`ACPError.transportClosed`) so `MCPHub` starts the server again with a fresh session. Neither has been tried against a strict hosted server yet.
 

@@ -184,6 +184,12 @@ final class IDEAgentConversation: Identifiable {
     /// Set once a restore or fresh-session notice has been shown for this process.
     @ObservationIgnored private var acpExplainedSessionID: String?
     @ObservationIgnored private var acpExplainedFreshSession = false
+    /// A new external session replaced one that had a transcript: the next prompt carries the earlier
+    /// messages (`ConversationHandoff`, `docs/harness/agent-harness-10.md`).
+    @ObservationIgnored private var acpOwesHandoff = false
+    /// The conversation of the chat this one continues on another agent (`IDEAgentController.selectProvider`),
+    /// sent with the first message, whichever backend takes it. Not saved: the chat is empty until then.
+    @ObservationIgnored var carriedTurns: [HandoffTurn] = []
     /// Initialize and session calls. A prompt itself is not limited by this.
     var acpRequestTimeout: Duration = .seconds(30)
     /// Unanswered permission cards are cancelled after this. Zero waits until Stop.
@@ -447,12 +453,16 @@ final class IDEAgentConversation: Identifiable {
                 }
                 if self.stopRequested { return nil }
                 if let index = self.entries.lastIndex(where: \.canRetry) { self.entries[index].canRetry = false }
-                return await acp.send(context + "\n\n" + body + resolution.modelBlock)
+                let message = context + "\n\n" + body + resolution.modelBlock
+                return await acp.send(prompt: self.acpPrompt(message, before: entryID))
             }
             return
         }
         openRun(root: root, host: host) { session in
-            let framed = await self.frame(context: context, body: body, entryID: entryID, root: root, session: session)
+            var framed = await self.frame(context: context, body: body, entryID: entryID, root: root, session: session)
+            if let handoff = await self.nativeHandoff(before: entryID, session: session, requestBytes: framed.utf8.count) {
+                framed = handoff + "\n\n" + framed
+            }
             if self.stopRequested { return nil }
             // The new message is on its way, so the previous failure's Retry no longer applies, nor Resume.
             if let index = self.entries.lastIndex(where: \.canRetry) { self.entries[index].canRetry = false }
@@ -484,8 +494,9 @@ final class IDEAgentConversation: Identifiable {
         dismissRetryError = true
         if isACPConversation {
             // The message is already in the transcript; resend its text to the external agent.
-            let text = entries.last(where: { $0.kind == .user })?.text ?? ""
-            openACPRun(root: root, host: host) { acp in await acp.send(text) }
+            let last = entries.last(where: { $0.kind == .user })
+            let text = last?.text ?? ""
+            openACPRun(root: root, host: host) { acp in await acp.send(prompt: self.acpPrompt(text, before: last?.id)) }
             return
         }
         openRun(root: root, host: host) { session in
@@ -695,6 +706,8 @@ final class IDEAgentConversation: Identifiable {
             case .load(let id):
                 do {
                     _ = try await created.loadSession(id: id)
+                    // The agent still has the conversation itself.
+                    acpOwesHandoff = false
                     if earlier, acpExplainedSessionID != id {
                         acpExplainedSessionID = id
                         notice = IDEACPSessionResume.restoredNotice
@@ -704,10 +717,12 @@ final class IDEAgentConversation: Identifiable {
                     if IDEACPAuth.isAuthenticationFailure(error) { throw error }
                     lastACPSessionID = nil
                     _ = try await created.newSession()
+                    acpOwesHandoff = earlier
                     notice = IDEACPSessionResume.staleNotice
                 }
             case .create(let createdNotice):
                 _ = try await created.newSession()
+                acpOwesHandoff = earlier
                 if let createdNotice, !acpExplainedFreshSession {
                     acpExplainedFreshSession = true
                     notice = createdNotice
@@ -789,6 +804,45 @@ final class IDEAgentConversation: Identifiable {
         }
         guard isEmpty, !isRunning else { return }
         releaseACPProcess()
+    }
+
+    /// The prompt for an external agent: the message, after the earlier conversation when this session is new
+    /// and the agent never saw it. `entryID` is the message's own row; only what comes before it is handed off.
+    private func acpPrompt(_ message: String, before entryID: UUID?) -> [ACPContentBlock] {
+        guard acpOwesHandoff || !carriedTurns.isEmpty else { return [.text(message)] }
+        acpOwesHandoff = false
+        guard let handoff = takeHandoff(before: entryID, contextWindow: nil, requestBytes: message.utf8.count)
+        else { return [.text(message)] }
+        return [.text(handoff), .text(message)]
+    }
+
+    /// The handoff block for a backend that has not seen this chat's earlier messages: the carried chat's,
+    /// then this transcript's before `entryID`. Says so when some were left out. Clears `carriedTurns`.
+    private func takeHandoff(before entryID: UUID?, contextWindow: Int?, requestBytes: Int) -> String? {
+        let end = entryID.flatMap { id in entries.firstIndex { $0.id == id } } ?? entries.endIndex
+        let turns = carriedTurns + IDEACPHandoff.turns(from: entries[..<end])
+        carriedTurns = []
+        guard let handoff = ConversationHandoff.make(
+            turns: turns, contextWindow: contextWindow, requestBytes: requestBytes)
+        else { return nil }
+        if let notice = IDEACPHandoff.partialNotice(handoff) { appendNotice(notice) }
+        return handoff.text
+    }
+
+    /// For Umbra Native: a session whose history holds no message yet, in a chat that already has some
+    /// (it ran on an external agent before, or continues another chat), gets them with this message.
+    private func nativeHandoff(before entryID: UUID, session: AgentSession, requestBytes: Int) async -> String? {
+        let sawConversation = await session.items.contains { item in
+            switch item {
+            case .user, .userParts, .assistant: true
+            default: false
+            }
+        }
+        guard !sawConversation else {
+            carriedTurns = []
+            return nil
+        }
+        return takeHandoff(before: entryID, contextWindow: await session.contextWindow, requestBytes: requestBytes)
     }
 
     /// Messages already in the transcript, not counting the one being sent now.
@@ -1505,6 +1559,8 @@ final class IDEAgentConversation: Identifiable {
         acpLaunchFingerprint = nil
         acpExplainedSessionID = nil
         acpExplainedFreshSession = false
+        acpOwesHandoff = false
+        carriedTurns = []
         fileClaims?.release(tab: id)
     }
 
@@ -1610,6 +1666,8 @@ final class IDEAgentConversation: Identifiable {
         acpLaunchFingerprint = saved.acpLaunchFingerprint
         acpExplainedSessionID = nil
         acpExplainedFreshSession = false
+        acpOwesHandoff = false
+        carriedTurns = []
         status = nil
         if saved.runInProgress {
             if saved.acpPinnedAgentID != nil || saved.acpSessionID != nil {

@@ -267,7 +267,8 @@ final class IDEAgentController {
     }
 
     /// Points the visible chat at an agent. A chat that already has a transcript is left
-    /// alone, including while it is running, and another chat takes the new agent.
+    /// alone, including while it is running, and another chat takes the new agent. That chat
+    /// continues the idle one: its conversation goes with the first message (`carriedTurns`).
     func selectProvider(_ binding: IDEACPBinding) {
         let defaultID = settings.agentIDForNewChats(in: projectRoot)
         let current = providerRef(selected)
@@ -282,12 +283,26 @@ final class IDEAgentController {
             let previous = conversations.first { $0.id == keeping }
             let previousName = providerName(previous?.resolvedACPAgentID)
             let nextName = providerName(binding.agentID)
-            if let existing, let destination = conversations.first(where: { $0.id == existing }) {
-                select(destination.id)
+            // An idle chat's conversation goes along (`docs/harness/agent-harness-10.md`, phase 3), with what it
+            // was itself carrying if nothing was sent yet; a running one is still writing it, so nothing goes.
+            let carried = previousIsRunning
+                ? [] : previous.map { $0.carriedTurns + IDEACPHandoff.turns(from: $0.entries) } ?? []
+            let destination: IDEAgentConversation
+            let isNew: Bool
+            if let existing, let found = conversations.first(where: { $0.id == existing }) {
+                destination = found
+                isNew = false
+                select(found.id)
             } else {
-                let created = addConversation()
-                created.bindProvider(binding)
-                created.appendNotice("This chat uses \(nextName). \(previousName) stays in its own chat.")
+                destination = addConversation()
+                destination.bindProvider(binding)
+                isNew = true
+            }
+            destination.carriedTurns = carried
+            // A reused empty chat stays empty unless it now carries something to say.
+            if isNew || !carried.isEmpty {
+                destination.appendNotice(IDEACPHandoff.switchNotice(
+                    next: nextName, previous: previousName, title: previous?.title, carries: !carried.isEmpty))
             }
             if previousIsRunning {
                 previous?.appendNotice("Still running on \(previousName). Switching agents did not stop it.")
