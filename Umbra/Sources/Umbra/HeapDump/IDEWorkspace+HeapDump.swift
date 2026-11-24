@@ -53,8 +53,10 @@ extension IDEWorkspace {
     /// disk is low, and nothing of Umbra's prunes this folder either; the dumps are the user's.
     /// Settings ▸ Java ▸ Heap Dumps shows it. Created on demand.
     static func heapDumpFolder() -> URL? {
-        guard let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("com.umbra.editor/HeapDumps", isDirectory: true) else { return nil }
+        let support = IDESharedServices.testStoreDirectory
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("com.umbra.editor", isDirectory: true)
+        guard let folder = support?.appendingPathComponent("HeapDumps", isDirectory: true) else { return nil }
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
     }

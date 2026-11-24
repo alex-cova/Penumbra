@@ -261,6 +261,15 @@ final class IDEHeapDumpRoutingTests: XCTestCase {
         workspace.workbench.allDocuments().filter { $0.contentKind == .heapDump }
     }
 
+    func testGeneratedHeapDumpsUseIsolatedTestStorage() throws {
+        let root = try XCTUnwrap(IDESharedServices.testStoreDirectory)
+        let folder = try XCTUnwrap(IDEWorkspace.heapDumpFolder())
+        XCTAssertEqual(folder.standardizedFileURL, root.appendingPathComponent("HeapDumps", isDirectory: true).standardizedFileURL)
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+    }
+
     func testADumpOpensInTheAnalyzerByItsBytesAndASecondOpenReusesTheTab() async throws {
         let workspace = IDEWorkspace()
         workspace.bootstrap()
