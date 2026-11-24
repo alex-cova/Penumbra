@@ -403,6 +403,11 @@ final class IDEAgentController {
         loadPendingIfNeeded(source)
         guard let state = await source.forkState(before: entryID) else { return nil }
         let created = addConversation()
+        if source.isACPConversation {
+            // A fork stays on its agent; it starts a new session there.
+            created.modelChoice = source.modelChoice
+            created.bindProvider(IDEACPBinding(agentID: source.resolvedACPAgentID))
+        }
         created.adoptFork(entries: state.entries, items: state.items, title: state.title, archive: source.conversationArchive)
         return created
     }

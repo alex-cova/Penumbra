@@ -22,7 +22,10 @@ private final class ACPHost: IDEAgentHost {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try contents.write(to: url, atomically: true, encoding: .utf8)
     }
-    func agentTrashFile(relativePath: String) async throws { throw AgentWorkspaceError.readOnly }
+    func agentTrashFile(relativePath: String) async throws {
+        guard let root = agentProjectRoot else { throw AgentWorkspaceError.readOnly }
+        try FileManager.default.removeItem(at: root.appendingPathComponent(relativePath))
+    }
     func agentShowDiff(relativePath: String, original: String?) {}
     func agentCommandEnvironment() async -> [String: String] { AgentCommandEnvironment.make(javaHome: nil) }
     func agentSaveBuffers(relativePaths: [String]) async {}
@@ -1028,6 +1031,106 @@ final class IDEACPTests: XCTestCase {
         XCTAssertEqual(occurrences(of: "session/new", in: logText), 1, logText)
         next.teardown()
         await acpEventually("restored process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
+    }
+
+    func testRewindingAnACPChatStartsANewSessionWithTheConversationUpToThere() async throws {
+        let (root, script, log, pid) = try makeProject()
+        let (conversation, host, _) = makeConversation(root: root, script: script, log: log, pid: pid)
+        XCTAssertNotNil(host.agentProjectRoot)
+        conversation.submit(text: "hello")
+        await acpEventually("first reply") { !conversation.isRunning && conversation.entries.contains { $0.kind == .assistant } }
+        conversation.submit(text: "second")
+        await acpEventually("second reply") {
+            !conversation.isRunning && conversation.entries.filter { $0.kind == .assistant }.count == 2
+        }
+        let second = try XCTUnwrap(conversation.entries.last { $0.kind == .user })
+        XCTAssertTrue(conversation.canRewind(to: second))
+        XCTAssertEqual(conversation.rewindTargets.map(\.text), ["second", "hello"])
+        XCTAssertEqual(conversation.rewindTargets.first?.itemIndex, 2)
+
+        let went = await conversation.rewind(to: second.id, scope: .conversation)
+        XCTAssertTrue(went)
+        XCTAssertEqual(conversation.draft, "second")
+        XCTAssertEqual(conversation.entries.filter { $0.kind == .user }.map(\.text), ["hello"])
+        XCTAssertTrue(conversation.entries.contains { $0.kind == .notice && $0.text.contains("session was closed") })
+
+        conversation.submit(text: "instead")
+        await acpEventually("reply after the rewind") {
+            !conversation.isRunning && conversation.entries.filter { $0.kind == .assistant }.count == 2
+        }
+        let logText = (try String(contentsOf: log, encoding: .utf8))
+        XCTAssertEqual(occurrences(of: "session/new", in: logText), 2, logText)
+        XCTAssertEqual(occurrences(of: "prompt handoff=yes first=yes", in: logText), 1, logText)
+        XCTAssertFalse(conversation.entries.contains { $0.text == IDEACPSessionResume.freshHistoryNotice },
+                       "the rewind notice already said a new session starts")
+        conversation.teardown()
+        await acpEventually("agent process is gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
+    }
+
+    func testRewindingAnACPChatsCodeRevertsItsRunAndKeepsTheSession() async throws {
+        let (root, script, log, pid) = try makeProject()
+        try "disk".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let (conversation, host, _) = makeConversation(root: root, script: script, log: log, pid: pid)
+        XCTAssertNotNil(host.agentProjectRoot)
+        conversation.submit(text: "full please")
+        await acpEventually("approval card appears") { conversation.entries.contains { $0.approval != nil } }
+        if let approval = conversation.entries.first(where: { $0.approval != nil })?.approval {
+            conversation.decide(callID: approval.callID, .approve)
+        }
+        await acpEventually("run finishes with a changes card") {
+            !conversation.isRunning && conversation.entries.contains { $0.kind == .changes }
+        }
+        let written = root.appendingPathComponent("b.txt")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: written.path))
+        let message = try XCTUnwrap(conversation.entries.first { $0.kind == .user })
+        XCTAssertEqual(conversation.rewindTargets.first?.runs.count, 1)
+        // The fake agent's own pid and log files sit in the project and are reverted too.
+        let pidValue = agentPid(pid)
+
+        let went = await conversation.rewind(to: message.id, scope: .code)
+        XCTAssertTrue(went)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: written.path), "the file the agent created is gone")
+        XCTAssertTrue(conversation.entries.contains { $0.kind == .changes && $0.isReverted })
+        XCTAssertTrue(conversation.entries.contains { $0.kind == .user && $0.text == "full please" }, "the conversation stays")
+        XCTAssertFalse(conversation.entries.contains { $0.text.contains("session was closed") })
+        XCTAssertEqual(conversation.acpLiveState, .connected, "Code only leaves the agent's session alone")
+        conversation.teardown()
+        await acpEventually("agent process is gone", timeout: 5) { kill(pidValue, 0) != 0 }
+    }
+
+    func testForkingAnACPChatStaysOnItsAgentAndHandsOffTheTranscript() async throws {
+        let (root, script, log, pid) = try makeProject()
+        let defaults = UserDefaults(suiteName: "umbra.acp.tests.\(UUID().uuidString)")!
+        let settings = IDEAgentSettings(defaults: defaults, keyStore: IDEAgentMemoryKeyStore())
+        settings.provider = .mlx
+        settings.addACPAgent(name: "Script Agent", commandLine: "/usr/bin/python3 \(script.path) \(log.path) \(pid.path)")
+        let agentID = settings.acpAgents[0].id
+        settings.setACPAllowed(true, agentID: agentID)
+        settings.acpActiveAgentID = agentID
+        let controller = IDEAgentController(settings: settings, store: nil, clientFactory: { _ in MockLLMClient(turns: []) })
+        let host = ACPHost(root: root)
+        controller.attach(host: host)
+        let original = controller.selected
+        original.submit(text: "hello")
+        await acpEventually("ACP reply") { !original.isRunning && original.entries.contains { $0.kind == .assistant } }
+
+        let forked = await controller.fork(original.id)
+        let fork = try XCTUnwrap(forked)
+        XCTAssertNotEqual(fork.id, original.id)
+        XCTAssertTrue(fork.isACPConversation)
+        XCTAssertEqual(fork.resolvedACPAgentID, agentID)
+        XCTAssertEqual(fork.entries.filter { $0.kind == .user }.map(\.text), ["hello"])
+
+        settings.acpActiveAgentID = nil
+        XCTAssertEqual(fork.resolvedACPAgentID, agentID, "the fork is pinned to its agent, not the default")
+        fork.submit(text: "go on")
+        await acpEventually("fork reply") {
+            !fork.isRunning && fork.entries.filter { $0.kind == .assistant }.count == 2
+        }
+        let logText = (try String(contentsOf: log, encoding: .utf8))
+        XCTAssertEqual(occurrences(of: "prompt handoff=yes first=yes", in: logText), 1, logText)
+        controller.teardown()
+        await acpEventually("agent processes are gone", timeout: 5) { kill(agentPid(pid), 0) != 0 }
     }
 
     func testSessionRestoreWithoutLoadSessionKeepsTheTranscript() async throws {

@@ -32,6 +32,25 @@ enum IDEAgentRewind {
         return targets.reversed()
     }
 
+    /// An external agent's chat records no history positions, and its saved history is its user and assistant
+    /// messages in order (`IDEAgentConversation.acpItems`). Each message's position is counted from that.
+    static func withTranscriptPositions(_ entries: [IDEAgentEntry]) -> [IDEAgentEntry] {
+        var entries = entries
+        var count = 0
+        for index in entries.indices {
+            switch entries[index].kind {
+            case .user:
+                entries[index].itemIndex = count
+                count += 1
+            case .assistant:
+                count += 1
+            default:
+                continue
+            }
+        }
+        return entries
+    }
+
     enum Scope: Equatable, CaseIterable {
         /// Take the conversation back to before the message; the files stay as they are.
         case conversation

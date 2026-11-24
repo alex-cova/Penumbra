@@ -255,7 +255,7 @@ final class IDEAgentConversation: Identifiable {
 
     /// Whether this chat is driven by an external ACP agent (its own choice, else the one selected in Settings ▸ Agent).
     var isACPConversation: Bool { acpDefinition != nil }
-    /// Rewind/compact/checkpoints owned by AgentKit are not available for ACP conversations.
+    /// What only Umbra Native can do: `/compact`. Rewind and fork work for ACP chats through a new session.
     var supportsAgentKitOnlyFeatures: Bool { !isACPConversation }
     @ObservationIgnored private var runTask: Task<Void, Never>?
     @ObservationIgnored private var pendingText = ""
@@ -1045,14 +1045,7 @@ final class IDEAgentConversation: Identifiable {
         runRules = PermissionRules()
         fileClaims?.release(tab: id)
         // Transcript persistence via the host blob; items are synthesized from the transcript.
-        let items: [ConversationItem] = entries.compactMap { entry in
-            switch entry.kind {
-            case .user: .user(entry.text)
-            case .assistant: .assistant(entry.text)
-            default: nil
-            }
-        }
-        persist(items: items, checkpoints: await session.checkpoints?.snapshot() ?? [])
+        persist(items: Self.acpItems(entries), checkpoints: await session.checkpoints?.snapshot() ?? [])
         onRunFinished?()
         if let ending = lastEnding {
             let lastAnswer = entries.last(where: { $0.kind == .assistant })?.text ?? ""
@@ -2531,7 +2524,24 @@ final class IDEAgentConversation: Identifiable {
     /// The messages this chat can go back to, newest first. Empty for ACP conversations:
     /// rewind is an AgentKit-session feature an external agent cannot honour.
     var rewindTargets: [IDEAgentRewindTarget] {
-        supportsAgentKitOnlyFeatures ? IDEAgentRewind.targets(in: entries) : []
+        IDEAgentRewind.targets(in: isACPConversation ? IDEAgentRewind.withTranscriptPositions(entries) : entries)
+    }
+
+    /// Whether the hover controls on a message can go back to it.
+    func canRewind(to entry: IDEAgentEntry) -> Bool {
+        guard !isRunning, entry.kind == .user else { return false }
+        return isACPConversation || entry.itemIndex != nil
+    }
+
+    /// An external agent's chat saved as history: its user and assistant messages, in order.
+    static func acpItems(_ entries: some Sequence<IDEAgentEntry>) -> [ConversationItem] {
+        entries.compactMap { entry in
+            switch entry.kind {
+            case .user: .user(entry.text)
+            case .assistant: .assistant(entry.text)
+            default: nil
+            }
+        }
     }
 
     /// Goes back to before the user message `entryID`: its conversation, the files the agent changed since,
@@ -2565,6 +2575,7 @@ final class IDEAgentConversation: Identifiable {
             return true
         }
 
+        if isACPConversation { return await rewindACPConversation(at: position, report: report) }
         let itemIndex = target.itemIndex
         if let session {
             do { try await session.rewind(toBeforeItem: itemIndex) } catch {
@@ -2591,6 +2602,33 @@ final class IDEAgentConversation: Identifiable {
         return true
     }
 
+    /// The conversation half of a rewind in an external agent's chat. The agent keeps its own history and ACP
+    /// cannot cut it, so its session is closed rather than left holding what was removed; the next message starts
+    /// a new one and carries the conversation up to here (`acpOwesHandoff`, `docs/harness/agent-harness-10.md`).
+    private func rewindACPConversation(at position: Int, report: RevertReport?) async -> Bool {
+        let text = entries[position].text
+        entries.removeSubrange(position...)
+        draft = text
+        status = nil
+        releaseACPProcess()
+        lastACPSessionID = nil
+        acpLaunchFingerprint = nil
+        // This notice says what the session notice would.
+        acpExplainedFreshSession = true
+        let agent = acpAgentName ?? acpDefinition?.displayName ?? "The agent"
+        let carried = IDEACPHandoff.turns(from: entries).isEmpty
+            ? "Your next message starts a new session."
+            : "Your next message starts a new session and brings the conversation up to here."
+        let prefix = "Went back to before that message. \(agent)'s session was closed, since it would still remember what was removed. \(carried)"
+        if let report {
+            announce(report, prefix: prefix)
+        } else {
+            append(.init(kind: .notice, text: prefix))
+        }
+        persist(items: Self.acpItems(entries), checkpoints: await checkpointLog?.snapshot() ?? restoredRuns)
+        return true
+    }
+
     /// The cards of the runs a revert reached show what happened to their files.
     private func markReverted(_ report: RevertReport, inEntriesAfter position: Int) {
         for index in entries.indices where index > position && entries[index].kind == .changes {
@@ -2605,6 +2643,18 @@ final class IDEAgentConversation: Identifiable {
     /// `nil`). "Files changed" cards are left out: their originals belong to this chat. `nil` while a run is going.
     func forkState(before entryID: UUID?) async -> (entries: [IDEAgentEntry], items: [ConversationItem], title: String)? {
         guard !isRunning else { return nil }
+        if isACPConversation {
+            // The agent's own history cannot be copied; the fork's first message hands its transcript to a
+            // new session instead (`acpOwesHandoff`).
+            var keptEntries = entries
+            if let entryID {
+                guard let position = entries.firstIndex(where: { $0.id == entryID }), entries[position].kind == .user
+                else { return nil }
+                keptEntries = Array(entries[..<position])
+            }
+            keptEntries.removeAll { $0.kind == .changes }
+            return (keptEntries, Self.acpItems(keptEntries), title)
+        }
         let allItems = await session?.items ?? restoredItems ?? []
         var keptEntries = entries
         var keptItems = allItems
