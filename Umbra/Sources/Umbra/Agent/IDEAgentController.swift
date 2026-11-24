@@ -541,6 +541,7 @@ final class IDEAgentController {
     func resume() { selected.resume() }
 
     func stop() { selected.stop() }
+    func retryNow() { selected.retryNow() }
 
     /// Stops the subagent started by one `task`/`explore` call and leaves the rest of the run going.
     func stopSubagentCall(callID: String) { selected.stopSubagentsForCall(callID) }

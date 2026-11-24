@@ -2769,6 +2769,13 @@ final class IDEAgentConversation: Identifiable {
     /// A failed request waiting to be sent again: drawn as a banner over the composer instead of the status line.
     private(set) var retryState: IDEAgentRetryState?
 
+    /// Sends the request that is waiting to be retried now instead of when its wait ends. Does nothing
+    /// when no retry is waiting.
+    func retryNow() {
+        guard retryState != nil, let session, session.retryNow() else { return }
+        retryState?.nextAttemptAt = Date()
+    }
+
     /// The entry the user has to act on (an approval, a question, a plan), the first one when several wait.
     var pendingDecision: IDEAgentEntry? {
         guard isAwaitingUser else { return nil }

@@ -9,6 +9,7 @@ struct IDEAgentBannerLane: View {
     let isPendingCardVisible: Bool
     let decide: (String, ApprovalDecision) -> Void
     let stop: () -> Void
+    let retryNow: () -> Void
     let showEntry: (UUID) -> Void
 
     var body: some View {
@@ -17,7 +18,7 @@ struct IDEAgentBannerLane: View {
                 IDEAgentDecisionBar(entry: entry, decide: decide, show: { showEntry(entry.id) })
                     .id(entry.id)
             } else if let retry = conversation.retryState {
-                IDEAgentRetryBanner(state: retry, stop: stop)
+                IDEAgentRetryBanner(state: retry, stop: stop, retryNow: retryNow)
             }
         }
         .ideTransition(.opacity.combined(with: .move(edge: .bottom)))
@@ -60,6 +61,7 @@ struct IDEAgentDecisionBar: View {
 struct IDEAgentRetryBanner: View {
     let state: IDEAgentRetryState
     let stop: () -> Void
+    let retryNow: () -> Void
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -69,6 +71,10 @@ struct IDEAgentRetryBanner: View {
             ) {
                 Button("Stop", action: stop)
                     .help("Stop the run instead of waiting")
+                Button("Retry Now", action: retryNow)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(state.nextAttemptAt <= context.date)
+                    .help("Send the request again now instead of waiting")
             }
         }
     }

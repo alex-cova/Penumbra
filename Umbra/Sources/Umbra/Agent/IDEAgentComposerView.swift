@@ -33,7 +33,8 @@ struct IDEAgentComposerView: View {
             }
             IDEAgentBannerLane(
                 conversation: agent.selected, isPendingCardVisible: isPendingCardVisible,
-                decide: { agent.decide(callID: $0, $1) }, stop: { agent.stop() }, showEntry: showEntry)
+                decide: { agent.decide(callID: $0, $1) }, stop: { agent.stop() }, retryNow: { agent.retryNow() },
+                showEntry: showEntry)
             // The retry banner says what the status line would, with a countdown.
             if let status = agent.status, agent.selected.retryState == nil {
                 HStack(spacing: IDEAppearance.Spacing.xs) {
