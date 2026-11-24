@@ -18,6 +18,8 @@ struct IDEAgentPanel: View {
     @State private var composerHeight: CGFloat = 22
     @State private var acceptRequest = 0
     @State private var isDiscardWorktreePresented = false
+    /// Work groups the user opened or closed, by group id; the others follow `isLive`.
+    @State private var groupToggles: [UUID: Bool] = [:]
 
     @Environment(IDEWorkspace.self) private var workspace
 
@@ -170,26 +172,31 @@ struct IDEAgentPanel: View {
         if agent.entries.isEmpty {
             IDEAgentEmptyState(agent: agent, openSettings: { isSettingsPresented = true })
         } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
-                        ForEach(agent.entries) { entry in
+            IDEAgentFollowingScrollView(
+                resetKey: agent.selectedID,
+                pinKey: agent.entries.last(where: { $0.kind == .user })?.id,
+                attention: agent.selected.isAwaitingUser ? "Waiting for you" : nil
+            ) {
+                LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.md) {
+                    ForEach(IDEAgentTranscriptRows.make(agent.entries, isRunning: agent.isRunning)) { row in
+                        switch row {
+                        case .entry(let entry):
                             IDEAgentEntryView(entry: entry).id(entry.id)
+                        case .work(let group):
+                            IDEAgentWorkGroupView(group: group, isExpanded: expansion(of: group)).id(group.id)
                         }
-                        Color.clear.frame(height: 1).id(Self.bottomID)
                     }
-                    .padding(IDEAppearance.Spacing.md)
                 }
-                .onChange(of: agent.entries.count) { scrollToBottom(proxy) }
-                .onChange(of: agent.entries.last?.text) { scrollToBottom(proxy) }
+                .padding(IDEAppearance.Spacing.md)
             }
         }
     }
 
-    private static let bottomID = "agent-bottom"
-
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        proxy.scrollTo(Self.bottomID, anchor: .bottom)
+    /// A group the user has not toggled is open while the run is adding to it, and closed after.
+    private func expansion(of group: IDEAgentWorkGroup) -> Binding<Bool> {
+        Binding(
+            get: { groupToggles[group.id] ?? group.isLive },
+            set: { groupToggles[group.id] = $0 })
     }
 
     // MARK: - Composer
