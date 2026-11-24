@@ -26,7 +26,7 @@ struct IDEAgentSlashInvocation: Equatable {
 
 /// The commands the editor itself provides.
 enum IDEAgentBuiltInCommand: String, CaseIterable {
-    case new, clear, resume, rewind, fork, compact, plan, mode, permissions, model, history, export, loop, initialize = "init", cost, usage, local, rename, help
+    case new, clear, resume, rewind, fork, compact, plan, mode, permissions, model, history, export, loop, schedule, initialize = "init", cost, usage, local, rename, help
 
     var summary: String {
         switch self {
@@ -43,6 +43,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .history: "Show this file's local history"
         case .export: "Save this chat as Markdown or JSON"
         case .loop: "Resend a prompt on a timer, up to 10 runs"
+        case .schedule: "Run a prompt on a schedule in this project, each run in its own chat"
         case .initialize: "Have the agent write an AGENTS.md for this project"
         case .cost: "Show this chat's token use and cost"
         case .usage: "Show token use and cost across chats"
@@ -60,6 +61,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .mode: "manual | accept-edits | auto | plan"
         case .export: "[json] [--hide-tools]"
         case .loop: "<interval> [count] <prompt>"
+        case .schedule: "[<interval> [--auto] <prompt>]"
         case .local: "<prompt>"
         case .rename: "<name>"
         default: nil
@@ -81,6 +83,7 @@ enum IDEAgentBuiltInCommand: String, CaseIterable {
         case .history: "clock"
         case .export: "square.and.arrow.up"
         case .loop: "repeat"
+        case .schedule: "calendar.badge.clock"
         case .initialize: "doc.badge.plus"
         case .cost: "dollarsign.circle"
         case .usage: "chart.bar"
@@ -100,9 +103,9 @@ enum IDEAgentLoopInterval {
         guard !trimmed.isEmpty else { return nil }
         var number = trimmed
         var multiplier = 60.0
-        if let last = trimmed.last, "smh".contains(last) {
+        if let last = trimmed.last, "smhd".contains(last) {
             number = String(trimmed.dropLast())
-            multiplier = last == "s" ? 1 : last == "m" ? 60 : 3_600
+            multiplier = last == "s" ? 1 : last == "m" ? 60 : last == "h" ? 3_600 : 86_400
         }
         guard let value = Double(number), value > 0, value.isFinite else { return nil }
         return value * multiplier

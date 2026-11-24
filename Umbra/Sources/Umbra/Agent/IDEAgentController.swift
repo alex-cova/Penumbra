@@ -20,12 +20,16 @@ final class IDEAgentController {
     @ObservationIgnored private(set) var commandCatalog: IDEAgentCommandCatalog!
     /// The window's MCP servers, shared by its chats.
     @ObservationIgnored let mcp: IDEMCPManager
+    /// The project's schedules (`/schedule`), run while this window has it open.
+    let scheduler: IDEAgentScheduler
     /// Bumped by `/model`, so the panel opens its settings sheet.
     var settingsRequest = 0
     /// Set to show the rewind sheet (`/rewind`, a message's Rewind button, Esc Esc).
     var rewindRequest: IDEAgentRewindRequest?
     /// `/usage`: the sheet of token use and cost across saved chats.
     var isShowingUsage = false
+    /// `/schedule` with no arguments: the project's schedules.
+    var isShowingSchedules = false
     /// What this project's chats were asked, by project folder.
     @ObservationIgnored private var promptHistories: [String: IDEAgentPromptHistory] = [:]
     /// Whether the user is looking at this window (it is the key window). Without an answer, assume yes.
@@ -107,6 +111,7 @@ final class IDEAgentController {
         self.appPermissionsFile = appPermissionsFile
         self.clientFactory = clientFactory
         self.mcp = IDEMCPManager(store: settings.mcp)
+        self.scheduler = IDEAgentScheduler(store: store)
         let first = IDEAgentConversation(
             settings: settings, store: store, appPermissionsFile: appPermissionsFile, clientFactory: clientFactory)
         conversations = [first]
@@ -166,11 +171,14 @@ final class IDEAgentController {
     func attach(host: any IDEAgentHost) {
         self.host = host
         for conversation in conversations { conversation.host = host }
+        scheduler.controller = self
+        scheduler.start()
     }
 
     /// Cancels every run and drops the sessions. A session that outlives its window would keep the
     /// workspace alive through its tools.
     func teardown() {
+        scheduler.stop()
         for conversation in conversations { conversation.teardown() }
         mcp.shutdown()
         host = nil
@@ -261,15 +269,47 @@ final class IDEAgentController {
 
     /// A new, empty chat, selected.
     @discardableResult
-    func addConversation() -> IDEAgentConversation {
+    func addConversation(selecting: Bool = true) -> IDEAgentConversation {
         let created = IDEAgentConversation(
             settings: settings, store: store, appPermissionsFile: appPermissionsFile, clientFactory: clientFactory)
         created.modelChoice = newChatChoice
         wire(created)
         conversations.append(created)
-        select(created.id)
+        if selecting { select(created.id) } else { layoutChanged() }
         didRestore = true
         return created
+    }
+
+    // MARK: - Schedules
+
+    /// A chat for one run of a schedule, beside the others and not selected, set up as the schedule says.
+    private func scheduledChat(_ schedule: IDEAgentSchedule, title: String) -> IDEAgentConversation {
+        let chat = addConversation(selecting: false)
+        if let choice = schedule.modelChoice { chat.modelChoice = choice }
+        if let binding = schedule.binding { chat.bindProvider(binding) }
+        chat.setMode(schedule.mode)
+        chat.rename(title)
+        return chat
+    }
+
+    /// Starts one run of `schedule`. Nil (and no chat left behind) when the send did not start.
+    func startScheduledRun(_ schedule: IDEAgentSchedule, at date: Date) -> IDEAgentConversation? {
+        let chat = scheduledChat(schedule, title: "\(schedule.name) · \(IDEAgentScheduler.describe(date))")
+        chat.submit(text: schedule.prompt)
+        guard chat.isRunning else {
+            close(chat.id)
+            return nil
+        }
+        return chat
+    }
+
+    /// A run that fell due while the project was not open: its prompt waits in a chat of its own, and sending it
+    /// is the run. Never sent on its own, since edits apply without asking.
+    func offerMissedScheduledRun(_ schedule: IDEAgentSchedule, due: Date) {
+        let chat = scheduledChat(schedule, title: "\(schedule.name) · missed")
+        chat.appendNotice("“\(schedule.name)” was due \(IDEAgentScheduler.describe(due)), while this project was not open. Send the message below to run it now.")
+        chat.draft = schedule.prompt
+        onNotify?(chat.id, "Scheduled prompt “\(schedule.name)” was missed", "Open the chat to run it now.", .warning)
     }
 
     /// Points the visible chat at an agent. A chat that already has a transcript is left

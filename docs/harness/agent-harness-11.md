@@ -2,7 +2,7 @@
 
 Part of the series `agent-harness-1.md` to `agent-harness-11.md` (there is no index file; `ls docs/harness`). Checked against the code on 2026-11-24, against the T3 Code tree (`docs/internals/*.md`, `docs/user/*.md`). The largest item from the same comparison, portable handoffs, has its own doc: `agent-harness-10.md`.
 
-**Status:** items 1, 4 and 5 built 2026-11-24; item 3's tooling built the same day, its recordings of real agents not made yet; item 2 is a proposal. Each item is independent.
+**Status:** items 1, 2, 4 and 5 built 2026-11-24; item 3's tooling built the same day, its recordings of real agents not made yet. Each item is independent.
 
 ## Already equal or better (checked, no work)
 
@@ -23,7 +23,7 @@ These came up in the comparison and Umbra already does them:
 
 **Built:** `/usage` opens `IDEAgentUsageSheet` from the agent panel (docked, page and AI mode's Code): This Project or All Projects (which adds AI mode's Chat), 7/30/90 days or all time; tiles for cost, input (with the cached share), output and chats; cost per day (tokens per day when nothing in the period has a cost); tables by model and, for all projects, by project. `IDEAgentUsageLoader` reads the saved files off the main actor, decodes only the usage fields, skips files last written before the period, and stops at the newest 5,000. Nothing is re-priced: a chat's recorded cost goes, whole, to the model that did most of its work (helper models are priced at 0 anyway). A chat counts on the day it was last used, since that is all a file says. Chats now save their per-model split (`IDEAgentSavedTranscript.usageByModel`); an older file puts its total on its model, else "Model not recorded". Not built: retention settings (the store is the history), ACP agents that never report usage show no tokens. Tests: `IDEAgentUsageTests` (report, loader over a real `SessionStore`, the saved split; `AI_MODE_PNG_DIR=… --filter testTheSheetRendersSeededChats` writes `usage-sheet.png`).
 
-## 2. Scheduled prompts that survive a relaunch
+## 2. Scheduled prompts that survive a relaunch (built 2026-11-24)
 
 **Today:** `/loop` repeats a prompt in the same chat while the window is open, and skips a tick while a run or approval is pending. It stops on relaunch.
 **T3:** scheduled tasks (timer or webhook) and durable workflows whose step results are saved, so a restart resumes them.
@@ -35,6 +35,12 @@ These came up in the comparison and Umbra already does them:
 
 Webhooks and multi-step workflows stay out of scope: they need a listening server.
 **Size:** medium.
+
+**Built**, with one change to point 2: a tick missed while the project was closed is **offered, not run**. It opens a chat titled "<name> · missed" with the prompt in its message field and a notice saying when it was due, and posts a notification; sending it is the run. Umbra never resumes a run on its own because edits apply without asking, and this follows the same rule. Point 4 became: creating the schedule is the consent, each run uses the mode it was made in, and Auto is kept only with `--auto` (a chat in Auto schedules Accept Edits otherwise).
+- `/schedule <interval> [--auto] <prompt>` adds one (at least 5 minutes; `5m`, `1h`, `1d`; `IDEAgentLoopInterval` now reads days), with the chat's model choice or external agent and its mode. `/schedule` alone opens `IDEAgentSchedulesSheet`: cadence, next and last run, mode, the last note, Run Now, Pause/Resume (resuming counts from then), Open Last Run, Delete.
+- `IDEAgentSchedule` (pure model; `IDEAgentScheduleTiming.decide` gives not due / run / missed) is saved per project in `<project folder>/schedules.json` beside its chats. `IDEAgentScheduler`, owned by the window's `IDEAgentController`, ticks every 30 s while that window is open (only with a store, so tests and windows without persistence run nothing), follows the window's project, and starts a due run in a new chat that does not take the selection (`addConversation(selecting: false)`). A run is skipped when the schedule's previous one is still going or waiting on the user; one that cannot start (no model set up, sending not allowed yet) leaves no chat and a note. Its finish, errors and approvals notify like any background chat.
+- Not built: a schedule that fires when no window has its project open (that would need a background agent, which the App Store rules exclude), two windows on one project both watching (each would run it; windows on the same project are rare, since opening one focuses the other).
+- Tests: `IDEAgentScheduleTimingTests`, `IDEAgentSchedulerTests` (command, a due run in its own chat without taking the selection, a missed run offered and sent nowhere, pause and resume; `AI_MODE_PNG_DIR=… --filter testTheSheetRenders` writes `schedules-sheet.png`).
 
 ## 3. Replay fixtures recorded from real ACP agents
 
@@ -84,5 +90,5 @@ Webhooks and multi-step workflows stay out of scope: they need a listening serve
 
 ## Open questions
 
-- Item 2: should a missed tick run on launch at all, or only be reported?
+- ~~Item 2: should a missed tick run on launch at all, or only be reported?~~ Decided 2026-11-24: offered in a chat with the prompt ready, never run on its own.
 - Item 1: one view per project, or one for all projects? Chats are stored in per-project hash directories, so "all projects" means walking the store.

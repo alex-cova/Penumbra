@@ -63,6 +63,9 @@ struct IDEAgentPanel: View {
                 agentStore: agent.usageStore, projectRoot: agent.host?.agentProjectRoot?.path,
                 chatStore: workspace.aiChat.usageStore)) { agent.isShowingUsage = false }
         }
+        .sheet(isPresented: Bindable(agent).isShowingSchedules) {
+            IDEAgentSchedulesSheet(agent: agent) { agent.isShowingSchedules = false }
+        }
         .onChange(of: agent.settingsRequest) { isSettingsPresented = true }
     }
 
