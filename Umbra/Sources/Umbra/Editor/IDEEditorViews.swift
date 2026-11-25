@@ -473,6 +473,15 @@ struct IDEEditorPaneView: View {
             IDEExternalChangeBanner(paneID: paneID)
             IDEGitConflictBanner(paneID: paneID)
 
+            if let document = workspace.workbench.layout.findPane(id: paneID)?.selectedDocument,
+               document.contentKind == .text,
+               workspace.databaseSupport.consoles[document.id] != nil
+                   || (document.languageIdentifier == "sql" && !workspace.databaseSupport.catalog.connections.isEmpty) {
+                IDEDatabaseConsoleHeader(document: document, support: workspace.databaseSupport) {
+                    workspace.refreshDatabaseConsoleBinding(in: paneID)
+                }
+            }
+
             IDETextViewRepresentable(paneID: paneID, workspace: workspace)
                 .overlay(alignment: .topTrailing) { IDEInspectionWidget(paneID: paneID) }
                 .overlay {

@@ -1,4 +1,3 @@
-import AsyncKit
 import Foundation
 import Logging
 import MySQLKit
@@ -15,7 +14,12 @@ public struct SQLLogin: Equatable, Sendable {
     public var username: String
     public var password: String
     public var database: String
+    /// Use TLS when the server offers it (PostgreSQL `sslmode=prefer`). This is the historical
+    /// meaning of "Use TLS" and it can fall back to plain text.
     public var useTLS: Bool
+    /// TLS is mandatory and the certificate and host name are verified; a server without TLS is
+    /// an error, never a silent downgrade.
+    public var requireTLS: Bool
     public var unixSocketPath: String?
 
     public init(
@@ -26,6 +30,7 @@ public struct SQLLogin: Equatable, Sendable {
         password: String = "",
         database: String = "",
         useTLS: Bool = false,
+        requireTLS: Bool = false,
         unixSocketPath: String? = nil
     ) {
         self.engine = engine == .mongo ? .postgres : engine
@@ -34,7 +39,8 @@ public struct SQLLogin: Equatable, Sendable {
         self.username = username
         self.password = password
         self.database = database
-        self.useTLS = useTLS
+        self.useTLS = useTLS || requireTLS
+        self.requireTLS = requireTLS
         self.unixSocketPath = unixSocketPath
     }
 }
@@ -42,13 +48,14 @@ public struct SQLLogin: Equatable, Sendable {
 extension DatabaseConnection {
     public func sqlLogin(password: String) -> SQLLogin {
         SQLLogin(
-            engine: engine == .mysql ? .mysql : .postgres,
+            engine: engine == .mysql || engine == .sqlite ? engine : .postgres,
             host: host,
             port: port,
             username: username,
             password: password,
             database: database,
-            useTLS: useTLS
+            useTLS: useTLS,
+            requireTLS: tlsRequired ?? false
         )
     }
 }
@@ -64,7 +71,7 @@ extension SQLLogin {
         switch engine {
         case .mysql: return "information_schema"
         case .postgres: return "postgres"
-        case .mongo: return database
+        case .sqlite, .mongo: return database
         }
     }
 }
@@ -108,9 +115,20 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
     public let engine: DatabaseEngine
     public let readOnly: Bool
 
-    private var mysqlPool: EventLoopGroupConnectionPool<MySQLConnectionSource>?
-    private var postgresClient: PostgresClient?
-    private var postgresRunTask: Task<Void, Never>?
+    /// MySQL likewise: one connection for statements, one for metadata (audit F-01).
+    private var mysqlConsole: MySQLSession?
+    private var mysqlMetadata: MySQLSession?
+    private var mysqlLogin: SQLLogin?
+    /// SQLite is a file on this Mac: one connection serves statements and schema reads (an
+    /// in-memory database exists only inside that one connection).
+    private var sqlite: SQLiteSession?
+    private let mysqlMetadataGate = AsyncMutex()
+    /// PostgreSQL runs on single-connection session actors (audit F-01): one for the user's
+    /// statements, one for metadata reads so the explorer never waits behind a long query.
+    private var postgresConsole: PostgresSession?
+    private var postgresMetadata: PostgresSession?
+    private var postgresLogin: SQLLogin?
+    private let metadataGate = AsyncMutex()
     private let logger: Logger
 
     private init(engine: DatabaseEngine, readOnly: Bool, logger: Logger) {
@@ -129,7 +147,9 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                 try await session.connectMySQL(login: login)
             case .postgres:
                 try await session.connectPostgres(login: login)
-            case .mongo:
+            case .sqlite:
+            try await session.connectSQLite(login: login, readOnly: readOnly)
+        case .mongo:
                 throw DatabaseError.executionFailed("MongoDB is not a SQL connection.")
             }
         } catch {
@@ -145,15 +165,126 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
     }
 
     public func disconnect() async {
-        if let mysqlPool {
-            try? await mysqlPool.shutdownAsync()
-            self.mysqlPool = nil
+        let sqliteSession = sqlite
+        sqlite = nil
+        await sqliteSession?.close()
+        let mysqlConsoleSession = mysqlConsole, mysqlMetadataSession = mysqlMetadata
+        mysqlConsole = nil
+        mysqlMetadata = nil
+        await mysqlConsoleSession?.close()
+        await mysqlMetadataSession?.close()
+        let console = postgresConsole, metadata = postgresMetadata
+        postgresConsole = nil
+        postgresMetadata = nil
+        await console?.close()
+        await metadata?.close()
+    }
+
+    /// Asks the server to stop the statement the console is running (`pg_cancel_backend` or
+    /// `KILL QUERY` on a second connection). Returns when the request is sent.
+    public func cancelRunning() async {
+        await postgresConsole?.cancelRunning()
+        await mysqlConsole?.cancelRunning()
+        sqlite?.cancelRunning()  // nonisolated: works while the statement holds the session's queue
+    }
+
+    /// The SQLite session, for maintenance and attach (nil for every other engine).
+    public var sqliteSession: SQLiteSession? { sqlite }
+
+    public func transactionState() async -> TransactionState {
+        if let postgresConsole { return await postgresConsole.transaction }
+        if let mysqlConsole { return await mysqlConsole.transaction }
+        if let sqlite { return await sqlite.transaction }
+        return .none
+    }
+
+    /// Makes a new, empty SQLite database file. It never overwrites one.
+    public static func createSQLiteDatabase(at path: String) async throws {
+        guard !FileManager.default.fileExists(atPath: path) else { throw SQLiteSession.OpenError.alreadyExists(path) }
+        let session = try await SQLiteSession.open(SQLiteOpenOptions(location: .file(path), createIfMissing: true))
+        await session.close()
+    }
+
+    /// Tables and views with their kind, in name order.
+    public func relations() async throws -> [SQLRelationInfo] {
+        switch engine {
+        case .mysql:
+            let result = try await mysqlQuery("SHOW FULL TABLES WHERE Table_type IN ('BASE TABLE', 'VIEW')")
+            return result.rows.compactMap { row in
+                guard let name = row.first ?? nil else { return nil }
+                return SQLRelationInfo(name: name, isView: row.count > 1 && row[1] == "VIEW")
+            }
+        case .postgres:
+            let result = try await postgresQuery(
+                """
+                SELECT table_name, table_type
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_type IN ('BASE TABLE', 'VIEW')
+                ORDER BY table_name
+                """
+            )
+            return result.rows.compactMap { row in
+                guard let name = row.first ?? nil else { return nil }
+                return SQLRelationInfo(name: name, isView: row.count > 1 && row[1] == "VIEW")
+            }
+        case .sqlite:
+            guard let sqlite else { throw DatabaseError.notConnected }
+            return try await sqlite.tableNames().filter { $0.kind != .shadow }.map { SQLRelationInfo(name: $0.name, isView: $0.kind == .view) }
+        case .mongo:
+            return []
         }
-        if let postgresRunTask {
-            postgresRunTask.cancel()
-            self.postgresRunTask = nil
+    }
+
+    /// The SQL language service's relations, columns, and foreign keys. A relation whose columns
+    /// could not be read makes the catalog
+    /// incomplete, which keeps "unknown table" diagnostics silent.
+    public func sqlCatalog() async throws -> SQLCatalog {
+        try await sqlCatalogMetadata().catalog
+    }
+
+    public func sqlCatalogMetadata() async throws -> (catalog: SQLCatalog, columnsByTable: [String: [SQLColumn]]) {
+        async let relationList = relations()
+        async let columnMap = allColumns()
+        async let keyList = foreignKeys()
+        let (relations, columnsByTable, keys) = try await (relationList, columnMap, keyList)
+        var complete = true
+        let schema: String? = switch engine {
+        case .postgres: "public"
+        case .sqlite: "main"
+        case .mysql: mysqlLogin?.database.isEmpty == false ? mysqlLogin?.database : nil
+        case .mongo: nil
         }
-        postgresClient = nil
+        let mapped = relations.map { relation -> SQLCatalog.Relation in
+            guard let columns = columnsByTable[relation.name] else {
+                complete = false
+                return SQLCatalog.Relation(schema: schema, name: relation.name, kind: relation.isView ? .view : .table, columns: nil)
+            }
+            return SQLCatalog.Relation(
+                schema: schema, name: relation.name, kind: relation.isView ? .view : .table,
+                columns: columns.map {
+                    SQLCatalog.Column(
+                        name: $0.name, typeName: $0.declaredType, isNotNull: $0.isNotNull, isPrimaryKey: $0.isPrimaryKey,
+                        hasDefault: !$0.defaultValue.isEmpty, isGenerated: $0.isGenerated, isIdentityAlways: $0.isIdentityAlways
+                    )
+                }
+            )
+        }
+        // One key per constraint, its columns in key order. A key with no constraint name is one pair.
+        var order: [String] = []
+        var grouped: [String: [SQLForeignKey]] = [:]
+        for (index, key) in keys.enumerated() {
+            let id = key.constraint.map { "\(key.fromTable)\u{1}\($0)" } ?? "\(key.fromTable)\u{1}#\(index)"
+            if grouped[id] == nil { order.append(id) }
+            grouped[id, default: []].append(key)
+        }
+        let foreignKeys = order.compactMap { id -> SQLCatalog.ForeignKey? in
+            guard let pairs = grouped[id]?.sorted(by: { $0.ordinal < $1.ordinal }), let first = pairs.first else { return nil }
+            return SQLCatalog.ForeignKey(
+                name: first.constraint, fromRelation: first.fromTable, fromColumns: pairs.map(\.fromColumn),
+                toRelation: first.toTable, toColumns: pairs.map(\.toColumn)
+            )
+        }
+        return (SQLCatalog(relations: mapped, foreignKeys: foreignKeys, defaultSchema: schema, isComplete: complete), columnsByTable)
     }
 
     public func tables() async throws -> [String] {
@@ -177,6 +308,9 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                 """
             )
             return result.rows.compactMap { $0.first ?? nil }
+        case .sqlite:
+            guard let sqlite else { throw DatabaseError.notConnected }
+            return try await sqlite.tableNames().filter { $0.kind != .shadow }.map(\.name)
         case .mongo:
             return []
         }
@@ -193,14 +327,15 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                     name: name,
                     declaredType: row.count > 1 ? (row[1] ?? "") : "",
                     isPrimaryKey: row.count > 3 && row[3] == "PRI",
-                    isNotNull: row.count > 2 && row[2] == "NO"
+                    isNotNull: row.count > 2 && row[2] == "NO",
+                    isGenerated: row.count > 5 && (row[5] ?? "").contains(" GENERATED")
                 )
             }
         case .postgres:
             let literal = quoteSQLLiteral(table)
             let result = try await postgresQuery(
                 """
-                SELECT column_name, data_type, is_nullable
+                SELECT column_name, data_type, is_nullable, is_generated, identity_generation
                 FROM information_schema.columns
                 WHERE table_schema = 'public' AND table_name = \(literal)
                 ORDER BY ordinal_position
@@ -213,9 +348,14 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                     name: name,
                     declaredType: row[1] ?? "",
                     isPrimaryKey: primaryKeys.contains(name),
-                    isNotNull: row[2] == "NO"
+                    isNotNull: row[2] == "NO",
+                    isGenerated: row.count > 3 && row[3] == "ALWAYS",
+                    isIdentityAlways: row.count > 4 && row[4] == "ALWAYS"
                 )
             }
+        case .sqlite:
+            guard let sqlite else { throw DatabaseError.notConnected }
+            return try await sqlite.tableInfo(table: table).columns.filter { !$0.isHidden }.map(Self.sqlColumn)
         case .mongo:
             return []
         }
@@ -228,7 +368,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
         case .mysql:
             let result = try await mysqlQuery(
                 """
-                SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY
+                SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, EXTRA
                 FROM information_schema.COLUMNS
                 WHERE TABLE_SCHEMA = DATABASE()
                 ORDER BY TABLE_NAME, ORDINAL_POSITION
@@ -239,7 +379,8 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
             let result = try await postgresQuery(
                 """
                 SELECT table_name, column_name, data_type, character_maximum_length,
-                       numeric_precision, numeric_scale, is_nullable, column_default
+                       numeric_precision, numeric_scale, is_nullable, column_default,
+                       is_generated, identity_generation
                 FROM information_schema.columns
                 WHERE table_schema = 'public'
                 ORDER BY table_name, ordinal_position
@@ -247,6 +388,9 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
             )
             let primaryKeys = try await postgresAllPrimaryKeys()
             return SQLSchemaMapping.postgresColumns(result, primaryKeyColumns: primaryKeys)
+        case .sqlite:
+            guard let sqlite else { throw DatabaseError.notConnected }
+            return try await sqlite.allColumns().mapValues { $0.filter { !$0.isHidden }.map(Self.sqlColumn) }
         case .mongo:
             return [:]
         }
@@ -258,29 +402,42 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
         case .mysql:
             let result = try await mysqlQuery(
                 """
-                SELECT TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+                SELECT TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME,
+                       CONSTRAINT_NAME, ORDINAL_POSITION
                 FROM information_schema.KEY_COLUMN_USAGE
                 WHERE TABLE_SCHEMA = DATABASE()
                   AND REFERENCED_TABLE_NAME IS NOT NULL
-                ORDER BY TABLE_NAME, ORDINAL_POSITION
+                ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION
                 """
             )
             return SQLSchemaMapping.foreignKeys(result)
         case .postgres:
             let result = try await postgresQuery(
                 """
-                SELECT tc.table_name, kcu.column_name, ccu.table_name, ccu.column_name
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu
-                  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-                JOIN information_schema.constraint_column_usage ccu
-                  ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-                  AND tc.table_schema = 'public'
-                ORDER BY tc.table_name, kcu.ordinal_position
+                SELECT cl.relname, a.attname, fcl.relname, fa.attname, con.conname, u.ord
+                FROM pg_constraint con
+                JOIN pg_class cl ON cl.oid = con.conrelid
+                JOIN pg_namespace n ON n.oid = cl.relnamespace
+                JOIN pg_class fcl ON fcl.oid = con.confrelid
+                CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS u(attnum, fattnum, ord)
+                JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = u.attnum
+                JOIN pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = u.fattnum
+                WHERE con.contype = 'f' AND n.nspname = 'public'
+                ORDER BY cl.relname, con.conname, u.ord
                 """
             )
             return SQLSchemaMapping.foreignKeys(result)
+        case .sqlite:
+            guard let sqlite else { throw DatabaseError.notConnected }
+            return try await sqlite.allForeignKeys().flatMap { entry in
+                entry.key.from.enumerated().map { offset, column in
+                    SQLForeignKey(
+                        fromTable: entry.table, fromColumn: column, toTable: entry.key.table,
+                        toColumn: (entry.key.to.indices.contains(offset) ? entry.key.to[offset] : nil) ?? "",
+                        constraint: "fk\(entry.key.id)", ordinal: offset + 1
+                    )
+                }
+            }
         case .mongo:
             return []
         }
@@ -301,9 +458,28 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
             return SQLSchemaMapping.postgresCreateTable(
                 table: table, columns: columns[table] ?? [], foreignKeys: try await foreignKeys()
             )
+        case .sqlite:
+            guard let sqlite else { throw DatabaseError.notConnected }
+            guard let sql = try await sqlite.tableInfo(table: table).sql else {
+                throw DatabaseError.executionFailed("No CREATE statement for \(table).")
+            }
+            return sql.hasSuffix(";") ? sql : sql + ";"
         case .mongo:
             throw DatabaseError.executionFailed("MongoDB is not a SQL connection.")
         }
+    }
+
+    public func declaration(of relation: SQLCatalog.Relation) async throws -> String {
+        guard engine == .postgres, relation.kind == .view else {
+            return try await createTableStatement(relation.name)
+        }
+        let name = try SQLIdentifiers.quote(relation.name, engine: .postgres)
+        let qualified = "public.\(name)"
+        let result = try await postgresQuery("SELECT pg_get_viewdef(\(quoteSQLLiteral(qualified))::regclass, true)")
+        guard let body = result.rows.first?.first ?? nil else {
+            throw DatabaseError.executionFailed("No CREATE statement for \(relation.name).")
+        }
+        return "CREATE VIEW \(qualified) AS\n\(body)"
     }
 
     /// The schema's `CREATE TABLE` statements, one per table, for copy-paste or a console.
@@ -337,24 +513,50 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                 """
             )
             return SQLSchemaMapping.postgresIndexes(result)
+        case .sqlite:
+            guard let sqlite else { throw DatabaseError.notConnected }
+            // The index SQLite makes for the primary key is the key, not a separate index to show.
+            return try await sqlite.tableInfo(table: table).indexes.filter { $0.origin != "pk" }.map {
+                SQLIndex(name: $0.name, columns: $0.columns.compactMap { $0 }, isUnique: $0.isUnique)
+            }
         case .mongo:
             return []
         }
     }
 
     public func query(_ sql: String) async throws -> QueryResult {
+        try await query(sql, parameters: [])
+    }
+
+    public func query(_ sql: String, parameters: [DatabaseValue]) async throws -> QueryResult {
+        try await Self.collect(rowLimit: Self.userRowLimit) { store in
+            try await execute(sql, parameters: parameters, into: store)
+        }
+    }
+
+    public func execute(
+        _ sql: String, parameters: [DatabaseValue], into store: ResultStore
+    ) async throws -> ExecutionSummary {
         let trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw DatabaseError.executionFailed("Query is empty")
         }
-        if readOnly, !SQLShaping.isReadOnlyStatement(trimmed) {
+        // SQLite refuses writes itself (a read-only file, `query_only`, an authorizer), and its
+        // read-only pragmas would fail a keyword check, so only the server engines get the hint.
+        if readOnly, engine != .sqlite, !SQLShaping.isReadOnlyStatement(trimmed) {
             throw DatabaseError.readOnlyViolation
         }
         switch engine {
         case .mysql:
-            return try await mysqlQuery(trimmed)
+            guard let mysqlConsole else { throw DatabaseError.notConnected }
+            return try await mysqlConsole.execute(trimmed, parameters: parameters, into: store,
+                                                  options: ExecuteOptions(collectNotices: true))
         case .postgres:
-            return try await postgresQuery(trimmed)
+            guard let postgresConsole else { throw DatabaseError.notConnected }
+            return try await postgresConsole.execute(trimmed, parameters: parameters, into: store)
+        case .sqlite:
+            guard let sqlite else { throw DatabaseError.notConnected }
+            return try await sqlite.execute(trimmed, parameters: parameters, into: store)
         case .mongo:
             throw DatabaseError.executionFailed("MongoDB is not a SQL connection.")
         }
@@ -390,145 +592,117 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
         return Set(result.rows.compactMap { $0.first ?? nil })
     }
 
-    private func connectMySQL(login: SQLLogin) async throws {
-        let configuration: MySQLConfiguration
-        if let socket = login.unixSocketPath {
-            configuration = MySQLConfiguration(
-                unixDomainSocketPath: socket,
-                username: login.username,
-                password: login.password,
-                database: login.handshakeDatabase,
-                tlsConfiguration: login.useTLS ? .makeClientConfiguration() : nil
-            )
-        } else {
-            configuration = MySQLConfiguration(
-                hostname: login.host,
-                port: login.port,
-                username: login.username,
-                password: login.password,
-                database: login.handshakeDatabase,
-                tlsConfiguration: login.useTLS ? .makeClientConfiguration() : nil
-            )
-        }
-        let pool = EventLoopGroupConnectionPool(
-            source: MySQLConnectionSource(configuration: configuration),
-            on: NIOSingletons.posixEventLoopGroup
+    private func connectSQLite(login: SQLLogin, readOnly: Bool) async throws {
+        let location: SQLiteLocation = login.database == ":memory:" ? .memory : .file(login.database)
+        sqlite = try await SQLiteSession.open(SQLiteOpenOptions(location: location, readOnly: readOnly))
+    }
+
+    private static func sqlColumn(_ column: SQLiteColumnInfo) -> SQLColumn {
+        SQLColumn(
+            name: column.name, declaredType: column.declaredType, isPrimaryKey: column.primaryKeyPosition > 0,
+            isNotNull: column.isNotNull, defaultValue: column.defaultValue ?? "", isGenerated: column.isGenerated
         )
-        mysqlPool = pool
-        _ = try await pool.database(logger: logger).simpleQuery("SELECT 1").get()
     }
 
+    private func connectMySQL(login: SQLLogin) async throws {
+        mysqlLogin = login
+        mysqlConsole = try await MySQLSession.connect(login: login, readOnly: readOnly)
+    }
+
+    /// A schema read, on the metadata connection (created on first use, read-only, one at a time).
     private func mysqlQuery(_ sql: String) async throws -> QueryResult {
-        guard let mysqlPool else { throw DatabaseError.notConnected }
-        let rows = try await mysqlPool.database(logger: logger).simpleQuery(sql).get()
-        return Self.mapMySQLRows(rows)
-    }
-
-    private static func mapMySQLRows(_ mysqlRows: [MySQLRow]) -> QueryResult {
-        guard let first = mysqlRows.first else {
-            return QueryResult(columns: [], rows: [], rowsAffected: nil, isReadQuery: false)
-        }
-        let columns = first.columnDefinitions.map(\.name)
-        let rows = mysqlRows.map { row in
-            zip(row.columnDefinitions, row.values).map { column, buffer in
-                let data = MySQLData(
-                    type: column.columnType,
-                    format: row.format,
-                    buffer: buffer,
-                    isUnsigned: column.flags.contains(.COLUMN_UNSIGNED)
-                )
-                return formatMySQLValue(data)
+        guard let login = mysqlLogin, mysqlConsole != nil else { throw DatabaseError.notConnected }
+        await mysqlMetadataGate.lock()
+        do {
+            let session: MySQLSession
+            if let existing = mysqlMetadata {
+                session = existing
+            } else {
+                session = try await MySQLSession.connect(login: login, readOnly: true)
+                mysqlMetadata = session
             }
-        }
-        return QueryResult(columns: columns, rows: rows, rowsAffected: nil, isReadQuery: true)
-    }
-
-    private static func formatMySQLValue(_ data: MySQLData) -> String? {
-        guard data.buffer != nil else { return nil }
-        switch data.type {
-        case .blob, .tinyBlob, .mediumBlob, .longBlob:
-            if let text = blobText(data) {
-                return text
+            let result = try await Self.collect(rowLimit: Self.metadataRowLimit) { store in
+                try await session.execute(sql, into: store)
             }
-            return "<BLOB \(data.buffer?.readableBytes ?? 0) bytes>"
-        default:
-            return data.string ?? ""
+            await mysqlMetadataGate.unlock()
+            return result
+        } catch {
+            await mysqlMetadataGate.unlock()
+            throw error
         }
-    }
-
-    /// Text for a blob-typed value that actually delivered a string (`SHOW COLUMNS` and
-    /// `information_schema` strings can arrive with a blob wire type), or nil when the bytes
-    /// are really binary.
-    private static func blobText(_ data: MySQLData) -> String? {
-        guard var buffer = data.buffer,
-              let bytes = buffer.readBytes(length: buffer.readableBytes)
-        else { return nil }
-        return SQLDisplayText.text(bytes: bytes)
     }
 
     private func connectPostgres(login: SQLLogin) async throws {
-        let client = PostgresClient(
-            configuration: Self.postgresConfiguration(from: login),
-            backgroundLogger: logger
-        )
-        postgresClient = client
-        postgresRunTask = Task { await client.run() }
-        _ = try await client.query("SELECT 1", logger: logger)
+        postgresLogin = login
+        postgresConsole = try await PostgresSession.connect(login: login, readOnly: readOnly)
     }
 
+    /// A schema read, on the metadata connection (created on first use, always read-only, and
+    /// used one statement at a time).
     private func postgresQuery(_ sql: String) async throws -> QueryResult {
-        guard let postgresClient else { throw DatabaseError.notConnected }
-        let sequence = try await postgresClient.query(PostgresQuery(unsafeSQL: sql), logger: logger)
-        var columns: [String] = []
-        var rows: [[String?]] = []
-        for try await row in sequence {
-            var values: [String?] = []
-            for cell in row {
-                if columns.count < row.count {
-                    columns.append(cell.columnName)
-                }
-                values.append(Self.formatPostgresCell(cell))
+        guard let login = postgresLogin, postgresConsole != nil else { throw DatabaseError.notConnected }
+        await metadataGate.lock()
+        do {
+            let session: PostgresSession
+            if let existing = postgresMetadata {
+                session = existing
+            } else {
+                session = try await PostgresSession.connect(login: login, readOnly: true)
+                postgresMetadata = session
             }
-            rows.append(values)
+            let result = try await Self.collect(rowLimit: Self.metadataRowLimit) { store in
+                try await session.execute(sql, into: store)
+            }
+            await metadataGate.unlock()
+            return result
+        } catch {
+            await metadataGate.unlock()
+            throw error
         }
-        if columns.isEmpty {
-            return QueryResult(columns: [], rows: [], rowsAffected: nil, isReadQuery: false)
-        }
-        return QueryResult(columns: columns, rows: rows, rowsAffected: nil, isReadQuery: true)
     }
 
-    private static func postgresConfiguration(from login: SQLLogin) -> PostgresClient.Configuration {
-        let tls: PostgresClient.Configuration.TLS = login.useTLS
-            ? .prefer(.makeClientConfiguration())
-            : .disable
-        let password = login.password.isEmpty ? nil : login.password
-        let database: String? = login.handshakeDatabase
-        if let socket = login.unixSocketPath {
-            return PostgresClient.Configuration(
-                unixSocketPath: socket,
-                username: login.username,
-                password: password,
-                database: database
-            )
+    /// Rows a user statement may return through this string-based facade. The paged UI asks for
+    /// a page at a time; this is a backstop against an unbounded `SELECT` run unpaged.
+    static let userRowLimit = 100_000
+    static let metadataRowLimit = 2_000_000
+
+    private static func collect(
+        rowLimit: Int, _ execute: (ResultStore) async throws -> ExecutionSummary
+    ) async throws -> QueryResult {
+        let store = ResultStore(columns: [], rowLimit: rowLimit)
+        let summary: ExecutionSummary
+        let rows: [[DatabaseValue]]
+        do {
+            summary = try await execute(store)
+            rows = try await store.rows(in: 0..<store.rowCount)
+        } catch {
+            await store.close()
+            throw error
         }
-        return PostgresClient.Configuration(
-            host: login.host,
-            port: login.port,
-            username: login.username,
-            password: password,
-            database: database,
-            tls: tls
+        await store.close()
+        return QueryResult(
+            columns: summary.columns.map(\.name),
+            rows: rows.map { $0.map(\.rawText) },
+            rowsAffected: summary.affectedRows,
+            isReadQuery: !summary.columns.isEmpty,
+            wasCancelled: summary.wasCancelled,
+            notices: summary.notices
         )
     }
 
+    /// One cell as text for the current string-based `QueryResult`. The value comes from the
+    /// typed decoder (binary results are not UTF-8: reading them as a string is what showed
+    /// integers and dates as garbage), and NULL stays distinct from an empty string.
     private static func formatPostgresCell(_ cell: PostgresCell) -> String? {
-        guard let bytes = cell.bytes, bytes.readableBytes > 0 else { return nil }
-        if let string = try? cell.decode(String.self) { return string }
-        if let integer = try? cell.decode(Int.self) { return String(integer) }
-        if let int64 = try? cell.decode(Int64.self) { return String(int64) }
-        if let double = try? cell.decode(Double.self) { return String(double) }
-        if let boolean = try? cell.decode(Bool.self) { return boolean ? "true" : "false" }
-        return "<\(String(describing: cell.dataType)) \(bytes.readableBytes) bytes>"
+        decodePostgresCell(cell).rawText
+    }
+
+    static func decodePostgresCell(_ cell: PostgresCell) -> DatabaseValue {
+        PostgresValueDecoder.decode(
+            oid: cell.dataType.rawValue,
+            isBinary: cell.format == .binary,
+            bytes: cell.bytes.map { Array($0.readableBytesView) }
+        )
     }
 }
 
@@ -543,7 +717,8 @@ public enum SQLSchemaMapping {
                 name: name,
                 declaredType: row[2] ?? "",
                 isPrimaryKey: row[4] == "PRI",
-                isNotNull: row[3] == "NO"
+                isNotNull: row[3] == "NO",
+                isGenerated: row.count > 5 && (row[5] ?? "").contains(" GENERATED")
             ))
         }
         return grouped
@@ -564,7 +739,9 @@ public enum SQLSchemaMapping {
                 declaredType: postgresDeclaredType(dataType: row[2] ?? "", maximumLength: row[3], precision: row[4], scale: row[5]),
                 isPrimaryKey: primaryKeyColumns[table]?.contains(name) ?? false,
                 isNotNull: row[6] == "NO",
-                defaultValue: row[7] ?? ""
+                defaultValue: row[7] ?? "",
+                isGenerated: row.count > 8 && row[8] == "ALWAYS",
+                isIdentityAlways: row.count > 9 && row[9] == "ALWAYS"
             ))
         }
         return grouped
@@ -593,7 +770,10 @@ public enum SQLSchemaMapping {
             guard row.count >= 4, let fromTable = row[0], let fromColumn = row[1],
                   let toTable = row[2], let toColumn = row[3]
             else { return nil }
-            return SQLForeignKey(fromTable: fromTable, fromColumn: fromColumn, toTable: toTable, toColumn: toColumn)
+            return SQLForeignKey(
+                fromTable: fromTable, fromColumn: fromColumn, toTable: toTable, toColumn: toColumn,
+                constraint: row.count > 4 ? row[4] : nil, ordinal: row.count > 5 ? Int(row[5] ?? "") ?? 0 : 0
+            )
         }
     }
 
@@ -691,19 +871,6 @@ public enum SQLSchemaMapping {
     }
 }
 
-/// Decides whether bytes a blob-typed column delivered are displayable text. A pure function
-/// so it is testable without a live database.
-enum SQLDisplayText {
-    static func text(bytes: [UInt8]) -> String? {
-        guard let text = String(bytes: bytes, encoding: .utf8), !text.isEmpty else { return nil }
-        let displayable = text.unicodeScalars.allSatisfy { scalar in
-            scalar.value == 0x09 || scalar.value == 0x0A || scalar.value == 0x0D
-                || !CharacterSet.controlCharacters.contains(scalar)
-        }
-        return displayable ? text : nil
-    }
-}
-
 private extension Array where Element == String? {
     func value(at index: Int) -> String? {
         guard indices.contains(index) else { return nil }
@@ -727,6 +894,7 @@ private extension SQLLogin {
         database = mysql.database ?? ""
         if database == "/" { database = "" }
         useTLS = mysql.tlsConfiguration != nil
+        requireTLS = false
         if url?.scheme?.lowercased() == "mysql+uds" {
             unixSocketPath = url?.path
         } else {
@@ -750,5 +918,6 @@ private extension SQLLogin {
         password = core.password ?? ""
         database = core.database ?? ""
         useTLS = core.tls.isAllowed
+        requireTLS = core.tls.isEnforced
     }
 }

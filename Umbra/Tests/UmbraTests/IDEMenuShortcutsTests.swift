@@ -52,6 +52,17 @@ final class IDEMenuShortcutsTests: XCTestCase {
         }
     }
 
+    func testDatabaseCommandsKeepEditorBindingsAvailable() throws {
+        for preset in KeymapPreset.allCases {
+            for command in [
+                IDEMenuCommand.executeDatabaseStatement, .executeAllDatabaseStatements, .cancelDatabaseStatement,
+            ] {
+                let key = try XCTUnwrap(shortcut(command, preset))
+                XCTAssertNil(preset.keymap.action(for: KeyStroke(chord(of: key))), "\(preset): \(command)")
+            }
+        }
+    }
+
     func testSublimeAndDefaultColumnsKeepTheShippedShortcuts() {
         for preset in [KeymapPreset.sublime, .default_] {
             XCTAssertEqual(shortcut(.goToFile, preset), KeyboardShortcut("p"))

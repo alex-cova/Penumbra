@@ -393,14 +393,14 @@ final class LanguageServiceRegistryTests: XCTestCase {
             "one tiered completion provider per language, in registration order"
         )
         XCTAssertEqual(
-            languages.hoverProviders.map(\.name), ["java"] + spring + ["javascript", "typescript", "swift", "python"] + rest,
-            "`.http` adds the state of a `###@scheme:` line"
+            languages.hoverProviders.map(\.name), ["java"] + spring + ["javascript", "typescript", "swift", "python"] + rest + ["sql"],
+            "HTTP and SQL add document-specific hover providers"
         )
         XCTAssertEqual(
-            languages.diagnosticProviders.map(\.name), ["java", "properties", "yaml"] + ["javascript", "typescript", "swift", "python"] + rest,
+            languages.diagnosticProviders.map(\.name), ["java", "properties", "yaml"] + ["javascript", "typescript", "swift", "python"] + rest + ["sql"],
             "Java's javac and inspection providers share one tiered provider"
         )
-        XCTAssertEqual(languages.navigationProviders.map(\.name), ["java"] + spring + ["javascript", "typescript", "swift", "python"] + rest)
+        XCTAssertEqual(languages.navigationProviders.map(\.name), ["java"] + spring + ["javascript", "typescript", "swift", "python"] + rest + ["sql"])
     }
 
     @MainActor

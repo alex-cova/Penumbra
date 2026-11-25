@@ -1,5 +1,6 @@
 import DatabaseKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Data sources, schemas, tables and collections. Double-click a table or collection to query it.
 struct IDEDatabaseSidebar: View {
@@ -16,7 +17,8 @@ struct IDEDatabaseSidebar: View {
             connected: Set(support.catalog.connections.map(\.id).filter(support.isConnected)),
             sqlSchemas: support.sqlSchemas,
             mongoSchemas: support.mongoSchemas,
-            expanded: support.expanded
+            expanded: support.expanded,
+            notes: support.sourceNotes.mapValues(\.tag)
         )
     }
 
@@ -39,6 +41,16 @@ struct IDEDatabaseSidebar: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .ideSidebarFocus(.database, on: $isListFocused)
+        // Drop SQLite files here to open them.
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in workspace.addSQLiteFiles([url]) }
+                }
+            }
+            return !providers.isEmpty
+        }
         .onChange(of: rows.map(\.id)) { _, ids in
             if let selectedID, ids.contains(selectedID) { return }
             selectedID = ids.first
@@ -65,11 +77,14 @@ struct IDEDatabaseSidebar: View {
             Text("No data sources")
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
-            Text("Add a MySQL, PostgreSQL or MongoDB connection. The password is saved in the login Keychain.")
+            Text("Add a PostgreSQL, MySQL or MongoDB connection (the password is saved in the login Keychain), or open a SQLite file. You can drop a SQLite file here.")
                 .font(IDEAppearance.Typography.monoSmall)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            Button("New Data Source") { workspace.showNewDatabaseConnection() }
-                .buttonStyle(.bordered)
+            HStack {
+                Button("New Data Source") { workspace.showNewDatabaseConnection() }
+                Button("Open SQLite File…") { workspace.openSQLiteFile() }
+            }
+            .buttonStyle(.bordered)
         }
         .padding(IDEAppearance.Spacing.md)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

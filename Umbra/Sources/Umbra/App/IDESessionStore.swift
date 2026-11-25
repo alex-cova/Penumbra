@@ -176,6 +176,7 @@ struct IDEWindowSession: Codable {
     /// were stored one by one have none; `IDESessionFiles.loadWindows` assigns one.
     var windowID: UUID?
     var restoration: EditorRestorationState?
+    var databaseConsoles: [UUID: IDEDatabaseConsoleBinding]?
     var projectRootBookmark: Data?
     var sidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var isSidebarVisible = false
@@ -209,6 +210,7 @@ struct IDEWindowSession: Codable {
     init(
         windowID: UUID? = nil,
         restoration: EditorRestorationState? = nil,
+        databaseConsoles: [UUID: IDEDatabaseConsoleBinding]? = nil,
         projectRootBookmark: Data? = nil,
         sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
         isSidebarVisible: Bool = false,
@@ -233,6 +235,7 @@ struct IDEWindowSession: Codable {
     ) {
         self.windowID = windowID
         self.restoration = restoration
+        self.databaseConsoles = databaseConsoles
         self.projectRootBookmark = projectRootBookmark
         self.sidebarWidth = sidebarWidth
         self.isSidebarVisible = isSidebarVisible
@@ -265,6 +268,7 @@ struct IDEWindowSession: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         windowID = try? container.decodeIfPresent(UUID.self, forKey: .windowID)
         restoration = try container.decodeIfPresent(EditorRestorationState.self, forKey: .restoration)
+        databaseConsoles = try? container.decodeIfPresent([UUID: IDEDatabaseConsoleBinding].self, forKey: .databaseConsoles)
         projectRootBookmark = try container.decodeIfPresent(Data.self, forKey: .projectRootBookmark)
         sidebarWidth = try container.decodeIfPresent(Double.self, forKey: .sidebarWidth)
             ?? IDEAppearance.Spacing.sidebarWidth
@@ -304,6 +308,7 @@ struct IDEWindowSession: Codable {
     func closingFolder(homeDirectory: URL) -> IDEWindowSession {
         var session = self
         session.restoration = nil
+        session.databaseConsoles = nil
         session.projectRootBookmark = nil
         session.isSidebarVisible = false
         session.isAgentPanelVisible = false

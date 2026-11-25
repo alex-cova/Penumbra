@@ -54,11 +54,24 @@ struct DatabaseURLTests {
         #expect(try postgres.selectAll(from: "items") == "SELECT * FROM \"items\"")
     }
 
-    @Test func quoteIdentifierRejectsUnsafeNames() {
+    @Test func quoteIdentifierNeverLetsANameEscapeItsQuotes() throws {
+        let mysql = DatabaseConnection(engine: .mysql)
+        let postgres = DatabaseConnection(engine: .postgres)
+        let sqlite = DatabaseConnection(engine: .sqlite)
+        // A hostile name is one quoted identifier, not a second statement.
+        #expect(try mysql.selectAll(from: "users; DROP TABLE users") == "SELECT * FROM `users; DROP TABLE users`")
+        #expect(try postgres.selectAll(from: "a\" ; DROP TABLE x; --") == "SELECT * FROM \"a\"\" ; DROP TABLE x; --\"")
+        #expect(try mysql.selectAll(from: "a` ; DROP TABLE x; --") == "SELECT * FROM `a`` ; DROP TABLE x; --`")
+        // Real tables have such names.
+        #expect(try sqlite.selectAll(from: "Order Details") == "SELECT * FROM \"Order Details\"")
+        #expect(try postgres.selectAll(from: "Café") == "SELECT * FROM \"Café\"")
+    }
+
+    @Test func quoteIdentifierRefusesWhatCannotBeQuoted() {
         let connection = DatabaseConnection(engine: .mysql)
-        #expect(throws: DatabaseError.self) {
-            try connection.selectAll(from: "users; DROP TABLE users")
-        }
+        #expect(throws: DatabaseError.self) { try connection.selectAll(from: "") }
+        #expect(throws: DatabaseError.self) { try connection.selectAll(from: "a\u{0}b") }
+        #expect(throws: DatabaseError.self) { try connection.selectAll(from: "a\nb") }
     }
 }
 
@@ -75,6 +88,13 @@ struct SQLLoginHandshakeTests {
 }
 
 struct SQLStatementTests {
+    @Test func pagingDoesNotWrapWritesThatStartLikeSelects() {
+        #expect(DatabaseQuery.canPage("WITH ready AS (SELECT id FROM jobs) SELECT * FROM ready"))
+        #expect(!DatabaseQuery.canPage("WITH ready AS (SELECT id FROM jobs) DELETE FROM jobs WHERE id IN (SELECT id FROM ready)"))
+        #expect(!DatabaseQuery.canPage("SELECT * INTO backup FROM jobs"))
+        #expect(!DatabaseQuery.canPage("SELECT nextval('job_id')"))
+    }
+
     @Test func readOnlyAllowsReadsAndBlocksWrites() {
         #expect(SQLShaping.isReadOnlyStatement("SELECT * FROM users"))
         #expect(SQLShaping.isReadOnlyStatement("-- Browse products\nSELECT * FROM product;"))
@@ -85,6 +105,32 @@ struct SQLStatementTests {
         #expect(!SQLShaping.isReadOnlyStatement("INSERT INTO users VALUES (1)"))
         #expect(!SQLShaping.isReadOnlyStatement("UPDATE users SET active = 1"))
         #expect(!SQLShaping.isReadOnlyStatement("DELETE FROM users"))
+    }
+
+    @Test func readOnlyRefusesWritesHiddenBehindAReadKeyword() {
+        // Data-modifying CTE: starts with WITH, deletes rows.
+        #expect(!SQLShaping.isReadOnlyStatement(
+            "WITH gone AS (DELETE FROM users RETURNING *) SELECT * FROM gone"
+        ))
+        #expect(!SQLShaping.isReadOnlyStatement("EXPLAIN ANALYZE DELETE FROM users"))
+        #expect(!SQLShaping.isReadOnlyStatement("SELECT * INTO backup FROM users"))
+        #expect(!SQLShaping.isReadOnlyStatement("SELECT * FROM users INTO OUTFILE '/tmp/x'"))
+        #expect(!SQLShaping.isReadOnlyStatement("SELECT nextval('seq')"))
+        #expect(!SQLShaping.isReadOnlyStatement("SELECT pg_terminate_backend(42)"))
+        #expect(!SQLShaping.isReadOnlyStatement("SELECT 1; DROP TABLE users"))
+        #expect(!SQLShaping.isReadOnlyStatement("SELECT 1; SELECT 2"))
+        #expect(!SQLShaping.isReadOnlyStatement("PRAGMA writable_schema = 1"))
+    }
+
+    @Test func readOnlyIgnoresWriteWordsInsideStringsCommentsAndQuotedNames() {
+        #expect(SQLShaping.isReadOnlyStatement("SELECT 'DELETE FROM users' AS note"))
+        #expect(SQLShaping.isReadOnlyStatement("SELECT 'it''s an INSERT' FROM t"))
+        #expect(SQLShaping.isReadOnlyStatement("SELECT \"update\" FROM t"))
+        #expect(SQLShaping.isReadOnlyStatement("SELECT `into` FROM t"))
+        #expect(SQLShaping.isReadOnlyStatement("SELECT 1 /* DROP TABLE x */ FROM t -- DELETE\n"))
+        #expect(SQLShaping.isReadOnlyStatement("SELECT $q$DELETE FROM t$q$ AS body"))
+        #expect(SQLShaping.isReadOnlyStatement("SELECT * FROM t WHERE id = $1"))
+        #expect(SQLShaping.isReadOnlyStatement("SELECT 1;"))
     }
 
     @Test func composedQueryAddsLimitAndOffset() {
@@ -178,27 +224,6 @@ private struct FakeSQL: SQLExecuting, @unchecked Sendable {
 
     func query(_ sql: String) async throws -> QueryResult {
         queryHandler(sql)
-    }
-}
-
-struct SQLDisplayTextTests {
-    @Test func blobTypedTypeStringsDisplayAsText() {
-        #expect(SQLDisplayText.text(bytes: Array("bigint".utf8)) == "bigint")
-        #expect(SQLDisplayText.text(bytes: Array("decimal(10,2)".utf8)) == "decimal(10,2)")
-        #expect(SQLDisplayText.text(bytes: Array("varchar(13)".utf8)) == "varchar(13)")
-    }
-
-    @Test func realBinaryStaysBinary() {
-        #expect(SQLDisplayText.text(bytes: [0x00, 0x01, 0x02]) == nil)
-        #expect(SQLDisplayText.text(bytes: [0xFF, 0xFE, 0xFD]) == nil)
-        #expect(SQLDisplayText.text(bytes: Array("ab\u{00}cd".utf8)) == nil)
-        #expect(SQLDisplayText.text(bytes: Array("a\u{7F}b".utf8)) == nil)
-        #expect(SQLDisplayText.text(bytes: []) == nil)
-    }
-
-    @Test func legitimateTextIsPreserved() {
-        #expect(SQLDisplayText.text(bytes: Array("line one\nline two".utf8)) == "line one\nline two")
-        #expect(SQLDisplayText.text(bytes: Array("日本語".utf8)) == "日本語")
     }
 }
 

@@ -579,6 +579,7 @@ public final class IDEWorkspace {
     let httpSupport = IDEHTTPSupport()
     /// Connections, schema and query results for this window. The connection list is shared.
     let databaseSupport: IDEDatabaseSupport
+    var databaseParameterPrompt: IDEDatabaseParameterPrompt?
     var isMarkdownPreviewVisible = false
     /// The SwiftUI canvas is docked beside the editor (`IDEWorkspace+SwiftUIPreview.swift`).
     var isSwiftUIPreviewVisible = false
@@ -855,6 +856,14 @@ public final class IDEWorkspace {
             await MainActor.run { self?.agentFileSuggestions(query: query, limit: limit) ?? [] }
         }
         databaseSupport.sqlCompletionProvider = intelligenceServices.sqlCompletion
+        databaseSupport.onSQLCatalogChange = { [weak self] connectionID in
+            guard let self else { return }
+            for pane in workbench.panes {
+                guard let document = pane.selectedDocument,
+                      databaseSupport.consoles[document.id]?.connectionID == connectionID else { continue }
+                host(for: pane.id).intelligenceController?.refreshDiagnostics()
+            }
+        }
         let httpGlobals = httpSupport.globals
         intelligenceServices.httpCompletion.setGlobals { httpGlobals.snapshot() }
         intelligenceServices.httpCompletion.setSchemaStore(httpSupport.graphQLSchemas)
@@ -2639,6 +2648,9 @@ public final class IDEWorkspace {
         case .package(let name):
             showLibraryPackage(name)
             return true
+        case .databaseRelation(let name, let column):
+            openDatabaseDeclaration(name: name, column: column, documentID: location.documentID)
+            return true
         }
         let current = host(for: workbench.activePaneID)
         current.textView.recordNavigationCheckpoint()
@@ -3571,6 +3583,7 @@ public final class IDEWorkspace {
         return IDEWindowSession(
             windowID: windowID,
             restoration: hasOpenDocuments && !hasOnlyUntouchedEmptyFile ? workbench.makeRestorationState() : nil,
+            databaseConsoles: databaseSupport.consolesByDocumentID.isEmpty ? nil : databaseSupport.consolesByDocumentID,
             projectRootBookmark: project.makeBookmarkData(),
             sidebarWidth: sidebarWidth ?? self.sidebarWidth,
             isSidebarVisible: isSidebarVisible,
@@ -3739,6 +3752,9 @@ public final class IDEWorkspace {
             // Restored files were not opened through `openDocument`, so give each its starting point too.
             for document in workbench.allDocuments() where document.contentKind == .text {
                 if let url = document.url { localHistory.recordBaseline(url) }
+                if let binding = session.databaseConsoles?[document.documentID.uuid] {
+                    databaseSupport.bindConsole(workbenchID: document.id, documentID: document.documentID, binding: binding)
+                }
             }
             Task {
                 try? await workbench.reloadFileBackedDocuments(
@@ -4053,6 +4069,14 @@ public final class IDEWorkspace {
         // Open as Hex Editor on its row (or Reopen as Hex) reaches the bytes.
         if !asHex, IDEWorkspace.isJavaArchive(url) {
             openArchive(url)
+            return
+        }
+        // A SQLite database is browsed and queried, not read as bytes. Its header decides, not its
+        // extension. Open as Hex Editor (and `asHex`) reach the bytes, and so does listing the
+        // extension under Settings ▸ Hex.
+        if !asHex, IDEWorkspace.isSQLiteDatabase(url) {
+            recordRecentFile(url)
+            addSQLiteFiles([url])
             return
         }
         // Already open and loaded: focus the live buffer (keeping unsaved edits) instead of

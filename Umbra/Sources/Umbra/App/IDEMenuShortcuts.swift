@@ -32,6 +32,8 @@ enum IDEMenuCommand: CaseIterable, Hashable {
     case debugSmartStepInto, debugDropFrame, debugForceReturn, showExecutionPoint, traceStream
     // HTTP
     case sendHTTPRequest
+    // Database
+    case executeDatabaseStatement, executeAllDatabaseStatements, cancelDatabaseStatement
     // Agent
     case runMarkdownWithAgent
     // View
@@ -179,6 +181,11 @@ enum IDEMenuShortcuts {
         .runLastConfiguration: KeyboardShortcut("r", modifiers: [.control, .option]),
         .debugLastConfiguration: KeyboardShortcut("d", modifiers: [.control, .option]),
         .sendHTTPRequest: KeyboardShortcut("r", modifiers: [.command, .shift]),
+        // ⌘↩ and ⇧⌘↩ are editor actions in several presets.
+        .executeDatabaseStatement: KeyboardShortcut(.return, modifiers: [.control, .shift]),
+        .executeAllDatabaseStatements: KeyboardShortcut(.return, modifiers: [.control, .shift, .command]),
+        // ⌘. is Show Context Actions in one preset, so the database's Cancel uses ⌃⌘. everywhere.
+        .cancelDatabaseStatement: KeyboardShortcut(".", modifiers: [.control, .command]),
         // ⌃⌘↩ is bound by no preset's `Keymap`, so one key serves all of them.
         .runMarkdownWithAgent: KeyboardShortcut(.return, modifiers: [.control, .command]),
         .splitRight: KeyboardShortcut("\\", modifiers: .command),

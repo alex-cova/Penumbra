@@ -1,5 +1,4 @@
 import Foundation
-@preconcurrency import MongoKitten
 
 /// What `MongoSession` opens. The password stays here, never on ``DatabaseConnection``.
 public struct MongoLogin: Equatable, Sendable {
@@ -194,123 +193,6 @@ enum MongoURLs {
         return trimmed.isEmpty ? "admin" : trimmed
     }
 
-    static func document(fromJSON json: String) throws -> Document {
-        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return Document() }
-        guard let data = trimmed.data(using: .utf8) else {
-            throw DatabaseError.invalidJSON("Not valid UTF-8.")
-        }
-        let object: Any
-        do {
-            object = try JSONSerialization.jsonObject(with: data)
-        } catch {
-            throw DatabaseError.invalidJSON(error.localizedDescription)
-        }
-        guard let dictionary = object as? [String: Any] else {
-            throw DatabaseError.invalidJSON("Expected a JSON object.")
-        }
-        return try document(fromJSONObject: dictionary)
-    }
-
-    static func resultTable(from documents: [Document], columnLimit: Int = 40) -> QueryResult {
-        var columns: [String] = ["_id"]
-        var seen: Set<String> = ["_id"]
-        for document in documents {
-            guard columns.count < columnLimit else { break }
-            for pair in document.pairs where pair.key != "_id" {
-                guard !seen.contains(pair.key) else { continue }
-                seen.insert(pair.key)
-                columns.append(pair.key)
-                if columns.count >= columnLimit { break }
-            }
-        }
-        let rows = documents.map { document -> [String?] in
-            columns.map { column in
-                guard let value = document[column] else { return nil }
-                return primitivePreview(value, stringLimit: 120)
-            }
-        }
-        return QueryResult(columns: columns, rows: rows, rowsAffected: nil, isReadQuery: true)
-    }
-
-    private static func document(fromJSONObject object: [String: Any]) throws -> Document {
-        var document = Document()
-        for (key, value) in object {
-            document[key] = try primitive(fromJSONValue: value)
-        }
-        return document
-    }
-
-    private static func primitive(fromJSONValue value: Any) throws -> Primitive {
-        switch value {
-        case is NSNull:
-            return Null()
-        case let string as String:
-            return string
-        case let bool as Bool:
-            return bool
-        case let number as NSNumber:
-            if CFGetTypeID(number) == CFBooleanGetTypeID() {
-                return number.boolValue
-            }
-            let doubleValue = number.doubleValue
-            if doubleValue.rounded() == doubleValue,
-               doubleValue >= Double(Int.min),
-               doubleValue <= Double(Int.max),
-               String(describing: number).contains(".") == false {
-                return number.intValue
-            }
-            return doubleValue
-        case let array as [Any]:
-            var document = Document(isArray: true)
-            for item in array {
-                document.append(try primitive(fromJSONValue: item))
-            }
-            return document
-        case let dict as [String: Any]:
-            if dict.count == 1, let oid = dict["$oid"] as? String {
-                guard let objectId = ObjectId(oid) else {
-                    throw DatabaseError.invalidJSON("Invalid ObjectId \"\(oid)\".")
-                }
-                return objectId
-            }
-            if dict.count == 1, let dateString = dict["$date"] as? String {
-                let formatter = ISO8601DateFormatter()
-                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                if let date = formatter.date(from: dateString) ?? ISO8601DateFormatter().date(from: dateString) {
-                    return date
-                }
-                throw DatabaseError.invalidJSON("Invalid date \"\(dateString)\".")
-            }
-            return try document(fromJSONObject: dict)
-        default:
-            throw DatabaseError.invalidJSON("Unsupported JSON value \(value).")
-        }
-    }
-
-    private static func primitivePreview(_ value: Primitive, stringLimit: Int = 40) -> String {
-        switch value {
-        case let objectId as ObjectId:
-            return objectId.hexString
-        case let string as String:
-            return string.count > stringLimit ? String(string.prefix(stringLimit)) + "…" : string
-        case let bool as Bool:
-            return bool ? "true" : "false"
-        case let int as Int:
-            return String(int)
-        case let int32 as Int32:
-            return String(int32)
-        case let double as Double:
-            return String(double)
-        case is Null:
-            return "null"
-        case let nested as Document:
-            return nested.isArray ? "[…]" : "{…}"
-        default:
-            return String(describing: value)
-        }
-    }
-
     static func percentEncode(_ value: String) -> String {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
@@ -405,113 +287,245 @@ enum MongoURLs {
     }
 }
 
-/// One MongoDB cluster. Connect races a short timeout because the driver's own is several minutes.
-public final class MongoSession: @unchecked Sendable {
+/// MongoDB for the app: statements on one connection, catalog reads on another, so browsing the
+/// explorer never waits behind a running query. Every value goes through `BSONValue` and Extended
+/// JSON, so nothing is converted through `Double` or `JSONSerialization` on the way in or out.
+public actor MongoSession {
     public static let testConnectTimeout: TimeInterval = 5
     public static let connectTimeout: TimeInterval = 10
 
-    private let database: MongoDatabase
-    public let readOnly: Bool
+    public nonisolated let readOnly: Bool
+    /// The document-level API, for callers that work with documents rather than table rows.
+    public let console: MongoDocumentSession
+    private let login: MongoLogin
+    private var metadata: MongoDocumentSession?
+    private let metadataGate = AsyncMutex()
 
-    private init(database: MongoDatabase, readOnly: Bool) {
-        self.database = database
+    private init(console: MongoDocumentSession, login: MongoLogin, readOnly: Bool) {
+        self.console = console
+        self.login = login
         self.readOnly = readOnly
     }
 
     public static func connect(
-        login: MongoLogin,
-        readOnly: Bool,
-        timeout: TimeInterval = connectTimeout
+        login: MongoLogin, readOnly: Bool, timeout: TimeInterval = connectTimeout
     ) async throws -> MongoSession {
-        let database = try await openDatabase(login: login, timeout: timeout)
-        return MongoSession(database: database, readOnly: readOnly)
+        let console = try await MongoDocumentSession.connect(login: login, readOnly: readOnly, timeout: timeout)
+        return MongoSession(console: console, login: login, readOnly: readOnly)
     }
 
     public static func test(login: MongoLogin) async throws {
-        let session = try await connect(login: login, readOnly: true, timeout: testConnectTimeout)
-        _ = try await session.listDatabases()
-        await session.disconnect()
+        try await MongoDocumentSession.test(login: login)
     }
 
     public func disconnect() async {
-        if let cluster = database.pool as? MongoCluster {
-            await cluster.disconnect()
+        let metadataSession = metadata
+        metadata = nil
+        await console.close()
+        await metadataSession?.close()
+    }
+
+    public func cancelRunning() async {
+        await console.cancelRunning()
+    }
+
+    private func withMetadata<T: Sendable>(_ body: (MongoDocumentSession) async throws -> T) async throws -> T {
+        await metadataGate.lock()
+        do {
+            let session: MongoDocumentSession
+            if let metadata {
+                session = metadata
+            } else {
+                session = try await MongoDocumentSession.connect(login: login, readOnly: true)
+                metadata = session
+            }
+            let value = try await body(session)
+            await metadataGate.unlock()
+            return value
+        } catch {
+            await metadataGate.unlock()
+            throw error
         }
     }
 
     public func listDatabases() async throws -> [String] {
-        let databases = try await database.pool.listDatabases()
-        return databases.map(\.name).sorted()
+        try await withMetadata { try await $0.listDatabases().map(\.name) }
     }
 
     public func listCollections(database name: String) async throws -> [String] {
-        let collections = try await database.pool[name].listCollections()
-        return collections.map(\.name).sorted()
+        try await withMetadata { try await $0.listCollections(database: name).map(\.name) }
     }
 
+    /// One page of a collection as table rows. `filterJSON` is Extended JSON; an empty box matches
+    /// everything. The sort is the server's (`sortKey`), not a re-ordering of the page on screen.
     public func find(
-        database databaseName: String,
+        database: String,
         collection: String,
         filterJSON: String,
+        sortKey: String? = nil,
+        sortAscending: Bool = true,
         skip: Int = 0,
         limit: Int = DatabasePageSize.mongo
     ) async throws -> QueryResult {
-        let filter = try MongoURLs.document(fromJSON: filterJSON)
-        let documents = try await database.pool[databaseName][collection]
-            .find(filter)
-            .skip(max(0, skip))
-            .limit(max(1, limit))
-            .drain()
-        return MongoURLs.resultTable(from: documents)
-    }
-
-    public func insert(database databaseName: String, collection: String, documentJSON: String) async throws {
-        try ensureWritable()
-        let document = try MongoURLs.document(fromJSON: documentJSON)
-        _ = try await database.pool[databaseName][collection].insert(document)
-    }
-
-    public func replace(database databaseName: String, collection: String, documentJSON: String) async throws {
-        try ensureWritable()
-        let document = try MongoURLs.document(fromJSON: documentJSON)
-        guard let id = document["_id"] else { throw DatabaseError.missingDocumentID }
-        _ = try await database.pool[databaseName][collection].updateOne(where: ["_id": id], to: document)
-    }
-
-    public func delete(database databaseName: String, collection: String, idJSON: String) async throws {
-        try ensureWritable()
-        let document = try MongoURLs.document(fromJSON: idJSON)
-        guard let id = document["_id"] else { throw DatabaseError.missingDocumentID }
-        _ = try await database.pool[databaseName][collection].deleteOne(where: ["_id": id])
-    }
-
-    private func ensureWritable() throws {
-        guard !readOnly else { throw DatabaseError.readOnlyViolation }
-    }
-
-    private static func openDatabase(login: MongoLogin, timeout: TimeInterval) async throws -> MongoDatabase {
-        let uri = MongoURLs.connectionURI(from: login)
-        return try await withThrowingTaskGroup(of: MongoDatabaseBox.self) { group in
-            group.addTask {
-                var settings = try ConnectionSettings(uri)
-                settings.connectTimeout = timeout
-                settings.socketTimeout = timeout
-                return MongoDatabaseBox(try await MongoDatabase.connect(to: settings))
-            }
-            group.addTask {
-                try await Task.sleep(for: .seconds(timeout))
-                throw DatabaseError.connectionTimedOut(timeout)
-            }
-            defer { group.cancelAll() }
-            guard let box = try await group.next() else {
-                throw DatabaseError.connectionTimedOut(timeout)
-            }
-            return box.database
+        let filter = try Self.filter(from: filterJSON)
+        var request = MongoFindRequest(
+            database: database, collection: collection, filter: filter,
+            skip: max(0, skip), limit: max(1, limit), batchSize: max(1, limit)
+        )
+        if let sortKey, !sortKey.isEmpty {
+            request.sort = BSONDocument([sortKey: .int32(sortAscending ? 1 : -1)])
         }
+        do {
+            let documents = try await console.findDocuments(request, limit: request.limit)
+            return MongoTable.result(from: documents)
+        } catch is CancellationError {
+            return QueryResult(columns: [], rows: [], rowsAffected: nil, isReadQuery: true, wasCancelled: true)
+        }
+    }
+
+    /// Streams one cursor into the flat console grid while retaining typed field values.
+    public func find(
+        database: String, collection: String, filterJSON: String,
+        sortKey: String? = nil, sortAscending: Bool = true, into store: ResultStore
+    ) async throws -> ExecutionSummary {
+        var request = MongoFindRequest(
+            database: database, collection: collection, filter: try Self.filter(from: filterJSON), batchSize: 256
+        )
+        if let sortKey, !sortKey.isEmpty {
+            request.sort = BSONDocument([sortKey: .int32(sortAscending ? 1 : -1)])
+        }
+        return try await console.findTable(request, into: store)
+    }
+
+    public func insert(database: String, collection: String, documentJSON: String) async throws {
+        let document = try Self.document(from: documentJSON)
+        _ = try await console.insertOne(database: database, collection: collection, document: document)
+    }
+
+    /// Replaces the whole document that has this `_id`. Prefer `setFields` for an edit: it changes
+    /// only the fields named and cannot overwrite a concurrent change to the others.
+    public func replace(database: String, collection: String, documentJSON: String) async throws {
+        let document = try Self.document(from: documentJSON)
+        guard let id = document["_id"] else { throw DatabaseError.missingDocumentID }
+        let result = try await console.updateOne(
+            database: database, collection: collection, filter: BSONDocument(["_id": id]), update: document
+        )
+        guard result.matched == 1 else {
+            throw DatabaseError.executionFailed("The document is no longer there; nothing was replaced.")
+        }
+    }
+
+    /// Sets (and unsets) top-level fields of one document. `expected` holds the values the caller
+    /// last saw for those fields: if any has changed since, nothing is written and the call
+    /// throws, so a concurrent edit is never silently overwritten.
+    public func setFields(
+        database: String, collection: String, idJSON: String, setJSON: String, unset: [String] = [],
+        expectedJSON: String = ""
+    ) async throws {
+        let idDocument = try Self.document(from: idJSON)
+        guard let id = idDocument["_id"] else { throw DatabaseError.missingDocumentID }
+        var filter = BSONDocument(["_id": id])
+        for field in try Self.document(from: expectedJSON.isEmpty ? "{}" : expectedJSON).fields where field.key != "_id" {
+            // A field that was absent is matched as absent, not as null.
+            filter[field.key] = field.value == .undefined
+                ? .document(BSONDocument(["$exists": .bool(false)])) : field.value
+        }
+        var update = BSONDocument()
+        let setDocument = try Self.document(from: setJSON.isEmpty ? "{}" : setJSON)
+        if !setDocument.isEmpty { update["$set"] = .document(setDocument) }
+        if !unset.isEmpty {
+            update["$unset"] = .document(BSONDocument(unset.map { BSONField($0, .string("")) }))
+        }
+        guard !update.isEmpty else { return }
+        let result = try await console.updateOne(database: database, collection: collection, filter: filter, update: update)
+        guard result.matched == 1 else {
+            throw DatabaseError.executionFailed(
+                "The document changed or was deleted since it was read; nothing was written."
+            )
+        }
+    }
+
+    public func delete(database: String, collection: String, idJSON: String) async throws {
+        let document = try Self.document(from: idJSON)
+        guard let id = document["_id"] else { throw DatabaseError.missingDocumentID }
+        _ = try await console.deleteOne(database: database, collection: collection, filter: BSONDocument(["_id": id]))
+    }
+
+    static func filter(from json: String) throws -> BSONDocument {
+        do {
+            return try ExtendedJSON.parseDocument(json)
+        } catch {
+            throw DatabaseError.invalidJSON(error.localizedDescription)
+        }
+    }
+
+    static func document(from json: String) throws -> BSONDocument {
+        try filter(from: json)
     }
 }
 
-private final class MongoDatabaseBox: @unchecked Sendable {
-    let database: MongoDatabase
-    init(_ database: MongoDatabase) { self.database = database }
+/// Documents as table rows for the string-based result the console still shows. The document
+/// views read `BSONDocument` directly; this is only the flat projection of the top level.
+public enum MongoTable {
+    public static let columnLimit = 40
+
+    /// Columns are `_id` then every other top-level key in order of first appearance. A missing
+    /// field is `nil`; an explicit `null` is the text `null`.
+    public static func result(from documents: [BSONDocument]) -> QueryResult {
+        var columns: [String] = ["_id"]
+        var seen: Set<String> = ["_id"]
+        outer: for document in documents {
+            for field in document.fields where !seen.contains(field.key) {
+                if columns.count >= columnLimit { break outer }
+                seen.insert(field.key)
+                columns.append(field.key)
+            }
+        }
+        let rows = documents.map { document in columns.map { document[$0].map(cellText) } }
+        return QueryResult(columns: columns, rows: rows, rowsAffected: nil, isReadQuery: true)
+    }
+
+    public static func cellText(_ value: BSONValue) -> String {
+        switch value {
+        case .string(let text): return text
+        case .objectId: return value.objectIdHex ?? ""
+        case .int32(let number): return String(number)
+        case .int64(let number): return String(number)
+        case .double(let number): return DatabaseValue.format(double: number)
+        case .decimal128(let decimal): return decimal.description
+        case .bool(let flag): return flag ? "true" : "false"
+        case .null: return "null"
+        case .date(let milliseconds):
+            return ExtendedJSON.isoString(milliseconds: milliseconds) ?? "date(\(milliseconds))"
+        case .binary(_, let bytes): return "‹binary, \(bytes.count) bytes›"
+        default:
+            let text = ExtendedJSON.string(value, mode: .relaxed)
+            return text.count > DatabaseValue.displayLimit ? String(text.prefix(DatabaseValue.displayLimit)) + "…" : text
+        }
+    }
+
+    static func typedCell(_ value: BSONValue, limits: ValueLimits = .standard) -> DatabaseValue {
+        func bounded(_ text: String, as makeValue: (String) -> DatabaseValue) -> DatabaseValue {
+            let count = text.utf8.count
+            guard count > limits.maxTextBytes else { return makeValue(text) }
+            var end = text.utf8.index(text.utf8.startIndex, offsetBy: limits.maxTextBytes)
+            while end > text.utf8.startIndex, text.utf8[end] & 0xC0 == 0x80 {
+                end = text.utf8.index(before: end)
+            }
+            return .truncated(preview: String(decoding: text.utf8[..<end], as: UTF8.self), fullCount: count)
+        }
+
+        switch value {
+        case .null: return .null
+        case .string(let text): return bounded(text, as: DatabaseValue.text)
+        case .int32(let number): return .int(Int64(number))
+        case .int64(let number): return .int(number)
+        case .decimal128(let decimal): return .decimal(decimal.description)
+        case .double(let number): return .double(number)
+        case .bool(let flag): return .bool(flag)
+        case .binary(_, let bytes): return .bytes(count: bytes.count, prefix: Array(bytes.prefix(limits.binaryPrefix)))
+        default:
+            return bounded(ExtendedJSON.string(value, mode: .canonical)) { .bson(typeName: value.typeName, extendedJSON: $0) }
+        }
+    }
 }

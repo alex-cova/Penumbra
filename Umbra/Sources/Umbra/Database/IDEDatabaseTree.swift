@@ -42,11 +42,15 @@ enum IDEDatabaseTree {
         connected: Set<UUID>,
         sqlSchemas: [UUID: IDEDatabaseSQLSchema],
         mongoSchemas: [UUID: IDEDatabaseMongoSchema],
-        expanded: Set<String>
+        expanded: Set<String>,
+        notes: [UUID: String] = [:]
     ) -> [Row] {
         var rows: [Row] = []
         for connection in connections {
-            append(connection, connected: connected, sqlSchemas: sqlSchemas, mongoSchemas: mongoSchemas, expanded: expanded, into: &rows)
+            append(
+                connection, connected: connected, sqlSchemas: sqlSchemas, mongoSchemas: mongoSchemas,
+                expanded: expanded, note: notes[connection.id], into: &rows
+            )
         }
         return rows
     }
@@ -57,6 +61,7 @@ enum IDEDatabaseTree {
         sqlSchemas: [UUID: IDEDatabaseSQLSchema],
         mongoSchemas: [UUID: IDEDatabaseMongoSchema],
         expanded: Set<String>,
+        note: String?,
         into rows: inout [Row]
     ) {
         let id = connection.id
@@ -66,7 +71,9 @@ enum IDEDatabaseTree {
         rows.append(Row(
             id: key,
             title: connection.name,
-            detail: "\(connection.engine.displayName) · \(connection.host)",
+            detail: (connection.engine == .sqlite
+                ? "SQLite · \(connection.isInMemorySQLite ? "in memory" : (connection.database as NSString).abbreviatingWithTildeInPath)"
+                : "\(connection.engine.displayName) · \(connection.host)") + (note.map { " · \($0)" } ?? ""),
             systemImage: isConnected ? "cylinder.split.1x2.fill" : "cylinder",
             isAccent: isConnected,
             depth: 0,

@@ -10,6 +10,7 @@ extension NavigationResult {
     func discardingTargets(in textView: TextView?, changedSince generation: UInt64) -> NavigationResult? {
         guard let textView, textView.contentGeneration != generation else { return self }
         func isInCurrentBuffer(_ location: Location) -> Bool {
+            if case .databaseRelation = location.target { return true }
             guard location.target == .source else { return false }
             guard let url = location.url else { return true }
             return url == textView.documentURL

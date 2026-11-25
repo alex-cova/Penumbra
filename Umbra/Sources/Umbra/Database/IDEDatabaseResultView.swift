@@ -1,67 +1,151 @@
 import AppKit
 import DatabaseKit
+import EditorIntelligence
 import SwiftUI
 
-/// The page of results for the last statement, with paging and export of that page.
+/// The active console's stored results, inspector, and bounded preview export.
 struct IDEDatabaseResultView: View {
-    var support: IDEDatabaseSupport
+    let support: IDEDatabaseSupport
+    var consoleID: UUID? = nil
+    @State private var showsNotices = false
+    @State private var pendingSort: PendingSort?
+    @State private var inspectedValue: IDEDatabaseInspectedValue?
+    @State private var inspectionTask: Task<Void, Never>?
+
+    private var results: IDEDatabaseResultSet { support.resultSet(for: consoleID) }
+    private var result: IDEDatabaseResult { results.result }
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider().overlay(IDEAppearance.ColorToken.border)
-            if let error = support.result.error {
+            if let error = result.error {
                 Text(error)
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.error)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(IDEAppearance.Spacing.md)
-            } else if support.result.columns.isEmpty {
-                Text(support.isRunning ? "Running…" : (support.result.message ?? "Run a query to see results."))
+            } else if result.columns.isEmpty {
+                Text(support.isRunning && result.connectionID == support.runningConnectionID
+                     ? "Running…" : (result.message ?? "Run a query to see results."))
                     .font(IDEAppearance.Typography.caption)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(IDEAppearance.Spacing.md)
-            } else {
-                IDEDatabaseResultGrid(
-                    columns: support.result.columns,
-                    rows: support.result.rows,
-                    onSort: { column in Task { await support.sort(by: column) } }
-                )
+            } else if let storage = result.storage {
+                SplitPanes(minPrimary: 200, minSecondary: 180, idealSecondary: 300, priority: .secondary,
+                           hiddenSide: inspectedValue == nil ? .secondary : nil) {
+                    IDEDatabaseResultGrid(storage: storage, columns: result.columns, rowCount: result.rowCount,
+                                          canSort: result.canSort && !support.isRunning, onSort: previewSort, onInspect: inspect)
+                } secondary: {
+                    if let inspectedValue {
+                        IDEDatabaseValueInspector(value: inspectedValue, onClose: clearInspection)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(IDEAppearance.ColorToken.panel)
+        .onChange(of: result.storage) {
+            pendingSort = nil
+            clearInspection()
+        }
+        .onDisappear(perform: clearInspection)
+    }
+
+    private func inspect(row: Int, column: Int) {
+        guard let storage = result.storage, result.columns.indices.contains(column) else { return }
+        inspectionTask?.cancel()
+        inspectionTask = Task {
+            do {
+                let values = try await storage.store.mapRows(in: row..<(row + 1)) { cells in
+                    cells.indices.contains(column) ? cells[column] : .missing
+                }
+                let snapshot = await storage.store.snapshot
+                guard let value = values.first, snapshot.columns.indices.contains(column),
+                      !Task.isCancelled, support.resultSet(for: consoleID).result.storage == storage else { return }
+                let field = snapshot.columns[column]
+                let inspected = await runDetached { IDEDatabaseInspectedValue(row: row, column: field, cell: value) }
+                guard !Task.isCancelled, support.resultSet(for: consoleID).result.storage == storage else { return }
+                inspectedValue = inspected
+            } catch {
+                if !Task.isCancelled { support.banner = error.localizedDescription }
+            }
+        }
+    }
+
+    private func clearInspection() {
+        inspectionTask?.cancel()
+        inspectionTask = nil
+        inspectedValue = nil
     }
 
     private var toolbar: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
-            IDEIconButton(
-                systemImage: "chevron.left",
-                help: "Previous page",
-                isDisabled: !support.result.canGoBack || support.isRunning
-            ) {
-                Task { await support.goToPage(support.result.page - 1) }
+            if results.scriptResults.count > 1 {
+                Menu("Statement \(results.selection + 1) of \(results.scriptResults.count)") {
+                    ForEach(results.scriptResults.indices, id: \.self) { index in
+                        let statement = results.scriptResults[index].statement
+                        Button("\(index + 1). \(statement.prefix(72))") { support.selectScriptResult(index, consoleID: consoleID) }
+                    }
+                }
+                .fixedSize()
+                .disabled(support.isRunning)
             }
-            Text("Page \(support.result.page + 1)")
-                .font(IDEAppearance.Typography.monoSmall)
-            IDEIconButton(
-                systemImage: "chevron.right",
-                help: "Next page",
-                isDisabled: !support.result.canGoForward || support.isRunning
-            ) {
-                Task { await support.goToPage(support.result.page + 1) }
-            }
-            if let message = support.result.message {
+            if let message = result.message {
                 Text(message)
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
+            } else if !result.columns.isEmpty {
+                Text("\(result.rowCount.formatted()) loaded")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            if let duration = result.duration {
+                Text(duration.formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated)))
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .foregroundStyle(IDEAppearance.ColorToken.muted)
+            }
+            if let column = result.sortColumn {
+                Label(column, systemImage: result.sortAscending ? "arrow.up" : "arrow.down")
+                    .font(IDEAppearance.Typography.monoSmall)
+                    .lineLimit(1)
+                    .help(result.sortAscending ? "Sorted ascending" : "Sorted descending")
             }
             if support.isRunning {
                 ProgressView().controlSize(.small)
+                IDEIconButton(
+                    systemImage: "stop.fill",
+                    help: support.isCancelling ? "Cancelling…" : "Cancel Statement",
+                    isDisabled: support.isCancelling
+                ) {
+                    Task { await support.cancelRunning() }
+                }
             }
             Spacer(minLength: 0)
-            IDEIconMenu(systemImage: "square.and.arrow.up", help: "Export", isDisabled: support.result.columns.isEmpty) {
+            if !result.notices.isEmpty {
+                Button("Server Messages (\(result.notices.count))", systemImage: "exclamationmark.bubble") {
+                    showsNotices.toggle()
+                }
+                .popover(isPresented: $showsNotices) {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+                            ForEach(result.notices.enumerated(), id: \.offset) { _, notice in
+                                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+                                    Text("\(notice.level) \(notice.code)").font(.caption.weight(.semibold))
+                                    Text(notice.message).textSelection(.enabled)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(IDEAppearance.Spacing.md)
+                    }
+                    .frame(width: 430, height: 240)
+                }
+            }
+            IDEIconMenu(systemImage: "square.and.arrow.up",
+                        help: "Export First \(result.rows.count.formatted()) Rows",
+                        isDisabled: result.columns.isEmpty || support.isRunning) {
                 Button("CSV") { export(.csv) }
                 Button("TSV") { export(.tsv) }
                 Button("JSON") { export(.json) }
@@ -70,6 +154,57 @@ struct IDEDatabaseResultView: View {
         .ideIconButtonSize(.compact)
         .padding(.horizontal, IDEAppearance.Spacing.sm)
         .padding(.vertical, IDEAppearance.Spacing.xs)
+        .popover(item: $pendingSort) { request in
+            VStack(alignment: .leading, spacing: IDEAppearance.Spacing.sm) {
+                Text(request.title).font(.headline)
+                ScrollView {
+                    Text(request.preview)
+                        .font(IDEAppearance.Typography.monoSmall)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) { pendingSort = nil }
+                    Button("Run Sorted Query") {
+                        pendingSort = nil
+                        Task {
+                            guard support.resultSet(for: consoleID).result.storage == request.storage else { return }
+                            await support.sort(by: request.column, consoleID: consoleID)
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(IDEAppearance.Spacing.md)
+            .frame(width: 440, height: 200)
+        }
+    }
+
+    private struct PendingSort: Identifiable {
+        let id = UUID()
+        let storage: IDEDatabaseResultStorage
+        let column: String
+        let title: String
+        let preview: String
+    }
+
+    private func previewSort(_ column: String) {
+        guard let storage = result.storage, let statement = result.preparedStatement else { return }
+        let ascending = result.sortColumn != column || !result.sortAscending
+        do {
+            let preview: String
+            if result.engine == .mongo {
+                preview = ExtendedJSON.string(BSONDocument([column: .int32(ascending ? 1 : -1)]), mode: .relaxed)
+            } else {
+                guard let sql = try DatabaseQuery.sortedStatement(statement.sql, column: column,
+                                                                  ascending: ascending, engine: result.engine) else { return }
+                preview = sql
+            }
+            pendingSort = PendingSort(storage: storage, column: column, title: "Sort by \(column)", preview: preview)
+        } catch {
+            support.banner = error.localizedDescription
+        }
     }
 
     private enum Format {
@@ -93,98 +228,35 @@ struct IDEDatabaseResultView: View {
     }
 
     private func export(_ format: Format) {
-        let text = format.text(columns: support.result.columns, rows: support.result.rows)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = format.name
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            try? text.write(to: url, atomically: true, encoding: .utf8)
-        }
-    }
-}
-
-/// A virtualized grid. `nil` cells read as NULL.
-struct IDEDatabaseResultGrid: NSViewRepresentable {
-    var columns: [String]
-    var rows: [[String?]]
-    var onSort: (String) -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onSort: onSort)
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let table = NSTableView()
-        table.style = .plain
-        table.usesAlternatingRowBackgroundColors = true
-        table.columnAutoresizingStyle = .noColumnAutoresizing
-        table.allowsColumnResizing = true
-        table.allowsColumnReordering = false
-        table.gridStyleMask = [.solidVerticalGridLineMask]
-        table.backgroundColor = .clear
-        table.delegate = context.coordinator
-        table.dataSource = context.coordinator
-        table.rowHeight = 20
-        let scroll = NSScrollView()
-        scroll.documentView = table
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = true
-        scroll.drawsBackground = false
-        context.coordinator.table = table
-        return scroll
-    }
-
-    func updateNSView(_ scroll: NSScrollView, context: Context) {
-        context.coordinator.onSort = onSort
-        context.coordinator.rows = rows
-        let table = context.coordinator.table
-        guard let table else { return }
-        if context.coordinator.columnNames != columns {
-            context.coordinator.columnNames = columns
-            while !table.tableColumns.isEmpty {
-                table.removeTableColumn(table.tableColumns[0])
+        guard let store = result.storage?.store else { return }
+        let count = min(result.rowCount, result.pageSize)
+        let columns = result.columns
+        let engine = result.engine
+        Task {
+            do {
+                let rows = try await store.mapRows(in: 0..<count) { row in
+                    columns.indices.map { index -> String? in
+                        guard row.indices.contains(index) else { return nil }
+                        let value = row[index]
+                        return engine == .mongo && value.isNull ? "null" : value.rawText
+                    }
+                }
+                let text = await runDetached { format.text(columns: columns, rows: rows) }
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = format.name
+                panel.begin { response in
+                    guard response == .OK, let url = panel.url else { return }
+                    Task {
+                        do {
+                            try await runDetached { try text.write(to: url, atomically: true, encoding: .utf8) }
+                        } catch {
+                            support.banner = error.localizedDescription
+                        }
+                    }
+                }
+            } catch {
+                support.banner = error.localizedDescription
             }
-            for (index, name) in columns.enumerated() {
-                let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("c\(index)"))
-                column.title = name
-                column.width = 140
-                column.minWidth = 60
-                column.sortDescriptorPrototype = NSSortDescriptor(key: name, ascending: true)
-                table.addTableColumn(column)
-            }
-        }
-        table.reloadData()
-    }
-
-    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
-        var onSort: (String) -> Void
-        var columnNames: [String] = []
-        var rows: [[String?]] = []
-        weak var table: NSTableView?
-
-        init(onSort: @escaping (String) -> Void) {
-            self.onSort = onSort
-        }
-
-        func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
-
-        func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-            let identifier = tableColumn?.identifier ?? NSUserInterfaceItemIdentifier("")
-            let index = Int(identifier.rawValue.dropFirst()) ?? 0
-            let cell = (tableView.makeView(withIdentifier: identifier, owner: self) as? NSTextField)
-                ?? NSTextField(labelWithString: "")
-            cell.identifier = identifier
-            cell.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            cell.lineBreakMode = .byTruncatingTail
-            let value = row < rows.count && rows[row].indices.contains(index) ? rows[row][index] : nil
-            cell.stringValue = value ?? "NULL"
-            cell.textColor = value == nil ? .secondaryLabelColor : .labelColor
-            return cell
-        }
-
-        func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
-            guard let key = tableView.sortDescriptors.first?.key else { return }
-            onSort(key)
         }
     }
 }

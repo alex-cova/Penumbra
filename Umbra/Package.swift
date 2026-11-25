@@ -126,6 +126,7 @@ let package = Package(
                 "Agent/CLAUDE.md",
                 "Bookmarks/CLAUDE.md",
                 "Coverage/CLAUDE.md",
+                "Database/CLAUDE.md",
                 "Diagrams/CLAUDE.md",
                 "Diff/CLAUDE.md",
                 "Git/CLAUDE.md",

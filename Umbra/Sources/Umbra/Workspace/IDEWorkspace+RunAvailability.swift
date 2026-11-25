@@ -104,7 +104,7 @@ extension IDEWorkspace {
         // the gutter for non-Java files.
         if let document, databaseSupport.consoles[document.id] != nil {
             httpGutterStamp = nil
-            refreshDatabaseGutter(from: textView)
+            await refreshDatabaseGutter(from: textView)
         } else if document?.languageIdentifier == "http" {
             databaseGutterStamp = nil
             if let content {

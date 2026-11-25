@@ -373,6 +373,13 @@ public struct IDERootView: View {
             .environment(workspace)
             .preferredColorScheme(IDEAppearance.preferredColorScheme)
         }
+        .sheet(item: Binding(
+            get: { workspace.databaseParameterPrompt },
+            set: { workspace.databaseParameterPrompt = $0 }
+        )) { prompt in
+            IDEDatabaseParameterSheet(prompt: prompt)
+                .preferredColorScheme(IDEAppearance.preferredColorScheme)
+        }
         .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
         .onReceive(NotificationCenter.default.publisher(for: IDEAppearance.didChangeNotification)) { _ in

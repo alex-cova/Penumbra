@@ -1,9 +1,40 @@
+import AppKit
 import DatabaseKit
+import EditorIntelligence
 import XCTest
 @testable import Umbra
 
 @MainActor
 final class IDEDatabaseTests: XCTestCase {
+    func testGridLoadsADistantVisibleRowFromItsStore() async throws {
+        let storage = IDEDatabaseResultStorage()
+        try await storage.store.append((0..<500).map { [.int(Int64($0))] })
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 180))
+        let table = NSTableView(frame: scroll.bounds)
+        let coordinator = IDEDatabaseResultGrid.Coordinator()
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        scroll.hasVerticalScroller = true
+        scroll.documentView = table
+        coordinator.install(table: table, clip: scroll.contentView)
+        defer { coordinator.detach() }
+        coordinator.update(storage: storage, columns: ["value"], rowCount: 500, canSort: false,
+                           onSort: { _ in XCTFail("Scrolling must not sort or rerun") }, onInspect: { _, _ in })
+        scroll.layoutSubtreeIfNeeded()
+        table.scrollRowToVisible(480)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let column = try XCTUnwrap(table.tableColumns.first { $0.title == "value" })
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        var cell = ""
+        repeat {
+            cell = (coordinator.tableView(table, viewFor: column, row: 480) as? NSTextField)?.stringValue ?? ""
+            if cell == "480" { break }
+            try await Task.sleep(for: .milliseconds(10))
+        } while ContinuousClock.now < deadline
+        XCTAssertEqual(cell, "480")
+        await storage.store.close()
+    }
+
     func testConnectionFileRoundTripsWithoutThePassword() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("umbra-database-\(UUID().uuidString)", isDirectory: true)
@@ -61,7 +92,10 @@ final class IDEDatabaseTests: XCTestCase {
         _ = tabs.first { $0.tab == .databaseResults }?.content(workspace)
         XCTAssertTrue(workspace.languageModuleToolWindows().contains { $0.id == "databaseResults" })
         let commands = IDEDatabaseModule().commands(for: workspace).map(\.id)
-        XCTAssertEqual(commands, ["app.database.newDataSource", "app.database.newQuery", "app.database.execute"])
+        XCTAssertEqual(commands, [
+            "app.database.newDataSource", "app.database.newQuery", "app.database.execute", "app.database.executeAll",
+            "app.database.cancel", "app.database.openSQLite", "app.database.newSQLite",
+        ])
     }
 
     func testNewConsoleFallsBackToTheFirstDataSource() throws {
@@ -125,6 +159,10 @@ final class IDEDatabaseTests: XCTestCase {
         XCTAssertEqual(workspace.databaseSupport.selectedConnectionID, first.id)
         XCTAssertEqual(workspace.databaseSupport.consoles.values.first?.connectionID, first.id)
         XCTAssertNil(workspace.databaseSupport.editor, "With a data source there is nothing to create")
+        let document = try XCTUnwrap(workspace.workbench.activePane.selectedDocument)
+        let session = workspace.makeSession()
+        let restored = try JSONDecoder().decode(IDEWindowSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(restored.databaseConsoles?[document.documentID.uuid]?.connectionID, first.id)
     }
 
     func testNewQueryConsoleWithoutDataSourcesOpensTheConnectionSheet() throws {
@@ -172,19 +210,120 @@ final class IDEDatabaseTests: XCTestCase {
         support.installSQLSessionForTesting(fake, id: connection.id)
         let binding = IDEDatabaseConsoleBinding(connectionID: connection.id, mongoDatabase: nil, mongoCollection: nil)
 
-        await support.execute(statement: "SELECT 1", binding: binding, page: 0, resetSort: true)
+        await support.execute(statement: "SELECT 1", binding: binding, resetSort: true)
         XCTAssertEqual(support.result.columns, ["n"])
         XCTAssertEqual(support.result.rows, [["1"]])
         XCTAssertNil(support.result.error)
-        XCTAssertEqual(catalog.connection(id: connection.id)?.lastStatement, "SELECT 1")
+        XCTAssertEqual(catalog.connection(id: connection.id)?.lastStatement, "")
         XCTAssertEqual(fake.statements.count, 1)
-        XCTAssertTrue(fake.statements[0].contains("LIMIT 200"))
+        XCTAssertEqual(fake.statements[0], "SELECT 1")
 
         connection.readOnly = true
         catalog.upsert(connection)
-        await support.execute(statement: "DELETE FROM users", binding: binding, page: 0, resetSort: true)
+        await support.execute(statement: "DELETE FROM users", binding: binding, resetSort: true)
         XCTAssertEqual(support.result.error, DatabaseError.readOnlyViolation.errorDescription)
         XCTAssertEqual(fake.statements.count, 1, "A refused statement is not sent")
+    }
+
+    func testAStatementIsRefusedWhileAnotherRunsAndTheFirstResultIsUndisturbed() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("umbra-database-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalog = IDEDatabaseCatalog(storeURL: directory.appendingPathComponent("database-connections.json"))
+        let support = IDEDatabaseSupport(catalog: catalog, keychain: IDEDatabaseMemoryKeyStore())
+        let connection = DatabaseConnection(name: "local", engine: .postgres)
+        catalog.upsert(connection)
+        let gate = GatedSQL()
+        support.installSQLSessionForTesting(gate, id: connection.id)
+        let binding = IDEDatabaseConsoleBinding(connectionID: connection.id, mongoDatabase: nil, mongoCollection: nil)
+
+        let first = Task { await support.execute(statement: "SELECT 1", binding: binding, resetSort: true) }
+        await gate.waitUntilStarted()
+        XCTAssertTrue(support.isRunning)
+        XCTAssertEqual(support.runningConnectionID, connection.id)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while support.result.rowCount == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(support.result.rowCount, 1, "The first row is visible before the statement completes")
+
+        await support.execute(statement: "SELECT 2", binding: binding, resetSort: true)
+        XCTAssertEqual(support.result.statement, "SELECT 1", "the refused statement must not overwrite the running one's header")
+        XCTAssertTrue(support.banner?.contains("already running") == true)
+        let sent = await gate.statements.count
+        XCTAssertEqual(sent, 1, "the refused statement is never sent")
+
+        await gate.release()
+        await first.value
+        XCTAssertFalse(support.isRunning)
+        XCTAssertNil(support.runningConnectionID)
+        XCTAssertEqual(support.result.rows, [["1"]])
+        // After it finishes, the next statement runs.
+        let second = Task { await support.execute(statement: "SELECT 3", binding: binding, resetSort: true) }
+        await gate.waitUntilStarted(count: 2)
+        await gate.release()
+        await second.value
+        XCTAssertEqual(support.result.statement, "SELECT 3")
+    }
+
+    func testACancelledResultSaysSoAndKeepsTheRowsThatArrived() {
+        XCTAssertEqual(
+            IDEDatabaseSupport.message(for: QueryResult(columns: [], rows: [], rowsAffected: nil, isReadQuery: true, wasCancelled: true)),
+            "Cancelled"
+        )
+        XCTAssertEqual(
+            IDEDatabaseSupport.message(for: QueryResult(columns: ["a"], rows: [["1"], ["2"]], rowsAffected: nil, isReadQuery: true, wasCancelled: true)),
+            "Cancelled after 2 rows"
+        )
+    }
+
+    func testConsolesKeepSeparateResultSets() async throws {
+        let catalog = try makeIsolatedCatalog()
+        let support = IDEDatabaseSupport(catalog: catalog, keychain: IDEDatabaseMemoryKeyStore())
+        let connection = DatabaseConnection(name: "local", engine: .postgres)
+        catalog.upsert(connection)
+        support.installSQLSessionForTesting(RecordingSQL(), id: connection.id)
+        let binding = IDEDatabaseConsoleBinding(connectionID: connection.id, mongoDatabase: nil, mongoCollection: nil)
+        let first = UUID()
+        let second = UUID()
+        let firstDocument = DocumentID(UUID())
+        support.bindConsole(workbenchID: first, documentID: firstDocument, binding: binding)
+        support.bindConsole(workbenchID: second, documentID: DocumentID(UUID()), binding: binding)
+
+        await support.execute(statements: ["SELECT 1", "SELECT 2"], binding: binding, consoleID: first)
+        XCTAssertTrue(support.resultSet(for: second).result.statement.isEmpty)
+        await support.execute(statements: ["SELECT 3"], binding: binding, consoleID: second)
+        support.selectScriptResult(0, consoleID: first)
+
+        XCTAssertEqual(support.resultSet(for: first).result.statement, "SELECT 1")
+        XCTAssertEqual(support.resultSet(for: second).result.statement, "SELECT 3")
+        support.closeConsole(workbenchID: first, documentID: firstDocument)
+        XCTAssertTrue(support.resultSet(for: first).scriptResults.isEmpty)
+        XCTAssertEqual(support.resultSet(for: second).result.statement, "SELECT 3")
+    }
+
+    func testTheResultsBarSaysHowManyRowsAStatementChanged() {
+        XCTAssertEqual(
+            IDEDatabaseSupport.message(for: QueryResult(columns: [], rows: [], rowsAffected: 4_812, isReadQuery: false)),
+            "4,812 rows affected"
+        )
+        XCTAssertEqual(
+            IDEDatabaseSupport.message(for: QueryResult(columns: [], rows: [], rowsAffected: 1, isReadQuery: false)),
+            "1 row affected"
+        )
+        XCTAssertEqual(
+            IDEDatabaseSupport.message(for: QueryResult(columns: [], rows: [], rowsAffected: 0, isReadQuery: false)),
+            "0 rows affected"
+        )
+        XCTAssertEqual(
+            IDEDatabaseSupport.message(for: QueryResult(columns: [], rows: [], rowsAffected: nil, isReadQuery: false)),
+            "Statement completed."
+        )
+        XCTAssertEqual(
+            IDEDatabaseSupport.message(for: QueryResult(columns: ["a"], rows: [["1"], ["2"]], rowsAffected: nil, isReadQuery: true)),
+            "2 rows"
+        )
     }
 
     func testADisconnectedSourceShowsAPlaceholderWhenExpanded() {
@@ -266,5 +405,46 @@ private final class RecordingSQL: SQLExecuting, @unchecked Sendable {
     func query(_ sql: String) async throws -> QueryResult {
         lock.withLock { stored.append(sql) }
         return QueryResult(columns: ["n"], rows: [["1"]], rowsAffected: nil, isReadQuery: true)
+    }
+}
+
+/// A SQL session whose statements wait until the test lets them finish, so a test can look at the
+/// window while a statement is running.
+private actor GatedSQL: SQLExecuting {
+    private(set) var statements: [String] = []
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var starters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    nonisolated func query(_ sql: String) async throws -> QueryResult {
+        await run(sql)
+    }
+
+    func execute(_ sql: String, parameters: [DatabaseValue], into store: ResultStore) async throws -> ExecutionSummary {
+        let columns = [ResultColumn(name: "n")]
+        await store.setColumns(columns)
+        try await store.append([[.int(Int64(statements.count + 1))]])
+        _ = await run(sql)
+        await store.finish()
+        return ExecutionSummary(columns: columns, rowCount: 1)
+    }
+
+    private func run(_ sql: String) async -> QueryResult {
+        statements.append(sql)
+        for starter in starters.filter({ $0.count <= statements.count }) { starter.continuation.resume() }
+        starters.removeAll { $0.count <= statements.count }
+        await withCheckedContinuation { waiters.append($0) }
+        // The nth statement the session was given answers with n.
+        return QueryResult(columns: ["n"], rows: [[String(statements.count)]], rowsAffected: nil, isReadQuery: true)
+    }
+
+    func waitUntilStarted(count: Int = 1) async {
+        if statements.count >= count { return }
+        await withCheckedContinuation { starters.append((count, $0)) }
+    }
+
+    func release() {
+        let pending = waiters
+        waiters = []
+        for waiter in pending { waiter.resume() }
     }
 }
