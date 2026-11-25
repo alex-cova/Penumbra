@@ -1,4 +1,5 @@
 import Foundation
+import JavaIntelligence
 import Observation
 import SwiftUI
 
@@ -44,6 +45,8 @@ struct IDEProjectTaskReport: Sendable {
     let exitCode: Int32
     let stdout: String
     let stderr: String
+    var streamedDiagnostics: GradleProblemMatcher.StreamedDiagnostics? = nil
+    var testSessionID: UUID? = nil
 
     var output: String { stdout + "\n" + stderr }
 }

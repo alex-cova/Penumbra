@@ -1,4 +1,5 @@
 import Foundation
+import JavaIntelligence
 
 /// One line of a project system's process output, as it arrived.
 struct IDEProjectOutputLine: Equatable, Sendable {
@@ -35,6 +36,7 @@ struct IDEProjectConsoleLog {
     /// than any interactive sync needs to be legible; only a pathological build would ever hit it.
     static let maxLines = 10_000
 
+    var sessionLog: GradleSessionLog?
     private(set) var lines: [Line] = []
     /// How many lines were dropped from the front because `maxLines` was exceeded, shown as a
     /// one-line notice at the top of the console instead of silently losing context.
@@ -55,6 +57,7 @@ struct IDEProjectConsoleLog {
     }
 
     mutating func reset() {
+        sessionLog = nil
         lines = []
         droppedCount = 0
         runID = UUID()
@@ -68,6 +71,12 @@ struct IDEProjectConsoleLog {
 
     mutating func appendProcessLine(_ line: IDEProjectOutputLine) {
         append(.process(line))
+    }
+
+    mutating func appendProcessLine(_ line: GradleOutputLine) {
+        appendProcessLine(IDEProjectOutputLine(
+            stream: line.stream == .stderr ? .stderr : .stdout, text: line.text
+        ))
     }
 
     mutating func markFinished() {

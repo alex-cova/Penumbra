@@ -70,6 +70,19 @@ final class IDEGradleProjectSystemTests: XCTestCase {
           echo "> Task :umbraProjectModel"
           exit 0
         fi
+        id=""
+        events=""
+        for a in "$@"; do
+          case "$a" in
+            -Dumbra.test.session=*) id="${a#-Dumbra.test.session=}" ;;
+            -Dumbra.test.directory=*) events="${a#-Dumbra.test.directory=}/events.jsonl" ;;
+          esac
+        done
+        if [ -n "$id" ] && [ -n "$events" ]; then
+          printf '{"version":1,"sessionID":"%s","sequence":1,"timestamp":1,"kind":"testStarted","build":"/build","task":":test","nodeID":"occurrence"}\\n' "$id" > "$events"
+          sleep 0.4
+          printf '{"version":1,"sessionID":"%s","sequence":2,"timestamp":2,"kind":"testFinished","build":"/build","task":":test","nodeID":"occurrence","outcome":"passed"}\\n' "$id" >> "$events"
+        fi
         echo "> Task $*"
         [ -f "$here/fail-task" ] && exit 3
         exit 0
@@ -399,9 +412,45 @@ final class IDEGradleProjectSystemTests: XCTestCase {
         harness.cancelTasks()
         XCTAssertFalse(harness.isRunningTasks)
         XCTAssertTrue(harness.runningTaskPaths.isEmpty)
+        XCTAssertTrue(harness.isBusy, "The workspace stays reserved until cancellation and pipe drain complete")
+        let cancelledButDraining = await harness.runTasks(["test"])
+        XCTAssertEqual(cancelledButDraining, second)
         let result = await first.value
         if case .cancelled = result {} else { XCTFail("expected cancelled, got \(result)") }
+        XCTAssertFalse(harness.isBusy)
         XCTAssertTrue(harness.consoleText.contains("Task run cancelled"))
+    }
+
+    func testDedicatedRunReceivesJournalBeforeCompletionAndPreservesCacheChoice() async throws {
+        try makeGradleProject()
+        harness.requestTrust = { _ in true }
+        harness.setRoot(project)
+        await eventually { harness.state == .synced(subprojects: 1, jars: 0) }
+
+        for cacheEnabled in [false, true] {
+            let id = UUID()
+            let directory = base.appendingPathComponent(id.uuidString)
+            let session = GradleTestSession(id: id, directory: directory)
+            var sawLiveTest = false
+            var finished: GradleTestSession.Update?
+            let test = IDEGradleProjectSystem.TestExecution(
+                session: session, environment: [:], javaHome: nil, workingDirectory: nil, beforeLaunch: [],
+                instrumentation: .none, canReplay: false, replay: nil, willLaunch: {},
+                update: { update in
+                    if update.counts[.running] == 1 { sawLiveTest = true }
+                },
+                settle: { _, delta in finished = delta }
+            )
+            let args = [cacheEnabled ? "--configuration-cache" : "--no-configuration-cache"]
+            let outcome = await harness.runTasks([":test"], arguments: args, test: test)
+            XCTAssertEqual(outcome, .finished(exitCode: 0))
+            XCTAssertEqual(harness.finishedTasks.last?.session, id)
+            XCTAssertNotNil(finished)
+            XCTAssertEqual(sawLiveTest, !cacheEnabled)
+            XCTAssertEqual(finished?.counts[.passed], cacheEnabled ? nil : 1)
+            XCTAssertEqual(invocations.last?.contains("--init-script"), !cacheEnabled)
+            XCTAssertTrue(invocations.last?.contains(args[0]) ?? false)
+        }
     }
 
     func testAnEmptyTaskListIsRefused() async throws {

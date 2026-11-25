@@ -9,9 +9,11 @@ struct IDEProjectConsoleView: NSViewRepresentable {
     let log: IDEProjectConsoleLog
     let fontName: String
     let fontSize: Double
+    var onReadEarlierOutput: (() -> Void)? = nil
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = ConsoleScrollView()
+        scrollView.onReadEarlierOutput = onReadEarlierOutput
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
@@ -48,6 +50,7 @@ struct IDEProjectConsoleView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        (scrollView as? ConsoleScrollView)?.onReadEarlierOutput = onReadEarlierOutput
         let fullReplace = context.coordinator.lastRunID != log.runID
             || context.coordinator.lastFontName != fontName
             || context.coordinator.lastFontSize != fontSize
@@ -56,6 +59,15 @@ struct IDEProjectConsoleView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
+    }
+
+    private final class ConsoleScrollView: NSScrollView {
+        var onReadEarlierOutput: (() -> Void)?
+
+        override func scrollWheel(with event: NSEvent) {
+            if event.scrollingDeltaY > 0 { onReadEarlierOutput?() }
+            super.scrollWheel(with: event)
+        }
     }
 
     @MainActor

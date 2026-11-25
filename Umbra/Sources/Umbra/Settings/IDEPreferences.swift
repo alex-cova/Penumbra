@@ -131,6 +131,8 @@ public final class IDEPreferences {
         static let javaStaticCountToUseStarImport = "com.umbra.editor.javaStaticCountToUseStarImport"
         static let javaImportExclusions = "com.umbra.editor.javaImportExclusions"
         static let javaStaticMemberClasses = "com.umbra.editor.javaStaticMemberClasses"
+        static let gradleTestHistoryDays = "com.umbra.editor.gradleTestHistoryDays"
+        static let gradleTestHistoryGiB = "com.umbra.editor.gradleTestHistoryGiB"
         static let javaGradleSyncTimeoutSeconds = "com.umbra.editor.javaGradleSyncTimeoutSeconds"
         static let javaMavenGoalTimeoutSeconds = "com.umbra.editor.javaMavenGoalTimeoutSeconds"
         static let javaDecompilerAgreementAccepted = "com.umbra.editor.javaDecompilerAgreementAccepted"
@@ -1045,6 +1047,14 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaGradleSyncTimeoutSeconds, forKey: Keys.javaGradleSyncTimeoutSeconds) }
     }
 
+    var gradleTestHistoryDays: Int {
+        didSet { UserDefaults.standard.set(gradleTestHistoryDays, forKey: Keys.gradleTestHistoryDays) }
+    }
+
+    var gradleTestHistoryGiB: Int {
+        didSet { UserDefaults.standard.set(gradleTestHistoryGiB, forKey: Keys.gradleTestHistoryGiB) }
+    }
+
     /// How long one Maven goal may run before it is killed. A `run` goal is not subject to this.
     var javaMavenGoalTimeoutSeconds: Int {
         didSet { UserDefaults.standard.set(javaMavenGoalTimeoutSeconds, forKey: Keys.javaMavenGoalTimeoutSeconds) }
@@ -1299,6 +1309,8 @@ public final class IDEPreferences {
         javaStaticCountToUseStarImport = defaults.object(forKey: Keys.javaStaticCountToUseStarImport) as? Int ?? 3
         javaImportExclusions = defaults.string(forKey: Keys.javaImportExclusions) ?? ""
         javaStaticMemberClasses = defaults.string(forKey: Keys.javaStaticMemberClasses) ?? ""
+        gradleTestHistoryDays = defaults.object(forKey: Keys.gradleTestHistoryDays) as? Int ?? 30
+        gradleTestHistoryGiB = defaults.object(forKey: Keys.gradleTestHistoryGiB) as? Int ?? 10
         javaGradleSyncTimeoutSeconds = defaults.object(forKey: Keys.javaGradleSyncTimeoutSeconds) as? Int ?? 300
         javaMavenGoalTimeoutSeconds = defaults.object(forKey: Keys.javaMavenGoalTimeoutSeconds) as? Int ?? 300
         javaDecompilerAgreementAccepted = defaults.bool(forKey: Keys.javaDecompilerAgreementAccepted)

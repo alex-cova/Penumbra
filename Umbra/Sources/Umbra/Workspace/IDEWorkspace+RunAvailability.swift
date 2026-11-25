@@ -133,8 +133,9 @@ extension IDEWorkspace {
         guard !Task.isCancelled else { return }
         let wantsBreakpoints = isJava || language == "swift" || language == "javascript" || language == "typescript"
         guard wantsBreakpoints, let fileURL else {
-            runEligibility.javaFileCanTest = false
-            runEligibility.activeJavaTestClass = nil
+            let kotlinTests = if language == "kotlin", let fileURL { await javaSupport.tests(for: fileURL) } else { nil as JavaTestClass? }
+            runEligibility.javaFileCanTest = !(kotlinTests?.methods.isEmpty ?? true)
+            runEligibility.activeJavaTestClass = kotlinTests
             guard let fileURL, !locations.isEmpty else {
                 textView.setGutterDecorations([])
                 textView.gutterDecorationHandler = nil

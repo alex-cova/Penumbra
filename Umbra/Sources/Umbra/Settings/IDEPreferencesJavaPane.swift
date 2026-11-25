@@ -45,6 +45,14 @@ private struct IDEJavaGradleSection: View {
                 valueWidth: 48,
                 valueSuffix: "s"
             )
+            IDEPreferencesStepper(
+                title: "Test History Age", value: $preferences.gradleTestHistoryDays,
+                range: 1...365, step: 1, valueWidth: 48, valueSuffix: "d"
+            )
+            IDEPreferencesStepper(
+                title: "Test History Disk Limit", value: $preferences.gradleTestHistoryGiB,
+                range: 1...500, step: 1, valueWidth: 60, valueSuffix: " GiB"
+            )
         }
     }
 }

@@ -159,7 +159,31 @@ extension IDEWorkspace {
                 ? { provider.run(document, location: location, instrumentation: .profile) } : nil,
             modify: modify
         )
+        let historyItems = gradleTestHistoryItems(for: location, file: file)
+        if !historyItems.isEmpty {
+            menu.addItem(.separator())
+            historyItems.forEach(menu.addItem)
+        }
         IDERunGutterMenu.popUp(menu, in: textView)
+    }
+
+    private func gradleTestHistoryItems(for location: IDERunnableLocation, file: URL) -> [NSMenuItem] {
+        guard gradle.isActive, location.kind == .test || location.kind == .testGroup,
+              let summary = testResults.gradle.summary, summary.state != .running else { return [] }
+        return [
+            IDEClosureMenuItem(title: "Rerun Last Gradle Test Run") { [weak self] in
+                self?.javaRun.retryGradleTests(.complete)
+            },
+            IDEClosureMenuItem(title: "Show Previous Result") { [weak self] in
+                guard let self else { return }
+                self.showTestResults()
+                Task {
+                    guard let declaration = await self.javaSupport.tests(for: file) else { return }
+                    let method = location.kind == .test ? declaration.methods.first { $0.line == location.line } : nil
+                    self.testResults.gradle.showPreviousResult(for: declaration, method: method)
+                }
+            }
+        ]
     }
 
     private func gutterRunDocument(file: URL, textView: TextView) -> IDERunDocument {
@@ -227,6 +251,11 @@ extension IDEWorkspace {
                     profile: provider.supportsInstrumentation(at: location)
                         ? { provider.run(document, location: location, instrumentation: .profile) } : nil
                 )
+            }
+            let historyItems = gradleTestHistoryItems(for: location, file: gutter.fileURL)
+            if !historyItems.isEmpty {
+                runItems.append(.separator())
+                runItems += historyItems
             }
             if provider.canEditRunConfiguration(location) {
                 runItems.append(.separator())
@@ -464,7 +493,12 @@ extension IDEWorkspace {
                 return
             }
         } else {
-            guard !gradle.isBusy else {
+            let selected = JavaTestRunner.executionTaskPaths(scope: scope, model: gradle.model, debug: false)
+            guard selected.count == 1, selected[0].hasPrefix(":") else {
+                reportRunProblem("Debugging Gradle tests requires one qualified test task.")
+                return
+            }
+            guard !gradle.isBusy, !javaRun.gradleTestLaunchPending else {
                 reportRunProblem("Gradle is busy. Stop the running task first, then debug ‘\(title)’ again.")
                 return
             }
@@ -510,13 +544,17 @@ extension IDEWorkspace {
             if mavenRun {
                 javaRun.startMavenTests(scope: scope, debug: true)
             } else {
-                javaRun.startGradleTests(scope: scope, debug: true)
+                javaRun.startGradleTests(scope: scope, debug: true, recording: recording)
             }
         }
     }
 
     /// Rerun (⌃⌥R in the Test Results tab): the last test run again, debugged if it was.
     func rerunTests(failedOnly: Bool, debug: Bool? = nil) {
+        if gradle.isActive, testResults.gradle.summary != nil, debug != true {
+            javaRun.retryGradleTests(failedOnly ? .failed : .complete)
+            return
+        }
         // A run another build system began (SwiftPM) repeats itself; it has no Gradle scope.
         if testResults.lastScope == nil, let handler = testResults.rerunHandler {
             handler(failedOnly)
@@ -530,6 +568,44 @@ extension IDEWorkspace {
         } else {
             javaRun.runTests(scope: scope, title: title, instrumentation: testResults.lastInstrumentation)
         }
+    }
+
+    func openGradleTestSource(_ event: GradleTestEvent) {
+        guard let root = gradle.rootURL, event.build == GradleBuildIdentity.canonicalPath(root),
+              let type = event.className, let task = event.task else { return }
+        Task { [self] in
+            let classes = await javaSupport.allTestClasses()
+            guard gradle.rootURL == root else { return }
+            let declarations = classes.filter { $0.gradleTaskPath == task }
+            if let method = declarations.lazy.flatMap(\.methods).first(where: {
+                $0.className == type && $0.methodName == (event.methodName ?? event.name)
+            }) {
+                revealDebugStop(file: method.sourceFile, line: method.line)
+            } else if let declaration = declarations.first(where: { $0.qualifiedName == type }) {
+                revealDebugStop(file: declaration.sourceFile, line: 1)
+            }
+        }
+    }
+
+    func openGradleStackFrame(_ frame: IDEStackFrameReference, event: GradleTestEvent) {
+        let root = gradle.rootURL.map { GradleBuildIdentity.canonicalPath($0) }
+        guard event.build == root else { return }
+        if let module = gradle.model?.subprojects.first(where: { $0.path == event.module }) {
+            let testSet = module.testTasks.first(where: { $0.path == event.task })?.sourceSetName
+            let ordered = module.sourceSets.filter { $0.name == testSet } + module.sourceSets.filter { $0.name != testSet }
+            let path = frame.className.split(separator: ".").dropLast().joined(separator: "/")
+            let relative = path.isEmpty ? frame.fileName : path + "/" + frame.fileName
+            for source in ordered {
+                for folder in source.sourceDirs {
+                    let candidate = folder.appendingPathComponent(relative)
+                    if FileManager.default.fileExists(atPath: candidate.path) {
+                        revealDebugStop(file: candidate, line: frame.line)
+                        return
+                    }
+                }
+            }
+        }
+        openStackFrame(frame)
     }
 
     /// Opens a test case at its method, else at the line its failure points to.

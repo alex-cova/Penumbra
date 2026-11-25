@@ -14,7 +14,7 @@ extension IDEWorkspace {
         }
 
         func closeTestResults() {
-            testResults.clear()
+            if !gradle.isActive { testResults.clear() }
             deselectBottomTab(.testResults)
         }
 

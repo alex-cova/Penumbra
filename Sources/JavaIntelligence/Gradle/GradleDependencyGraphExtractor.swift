@@ -32,7 +32,8 @@ public struct GradleDependencyGraphExtractor: Sendable {
         configuration: String = GradleDependencyGraphExtractor.defaultConfiguration,
         javaHome: URL?,
         timeout: Duration = .seconds(180),
-        output: GradleOutputHandler? = nil
+        output: GradleOutputHandler? = nil,
+        log: GradleSessionLog? = nil
     ) async throws -> GradleDependencyGraph {
         let workDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("umbra-gradle-deps-\(UUID().uuidString)", isDirectory: true)
@@ -54,7 +55,9 @@ public struct GradleDependencyGraphExtractor: Sendable {
             ],
             javaHome: javaHome,
             timeout: timeout,
-            output: output
+            output: output,
+            log: log,
+            capturesModelDiagnostics: log != nil
         )
         guard result.exitCode == 0 else { throw GradleDependencyGraphError.failed(result) }
         guard let data = try? Data(contentsOf: outputURL) else { throw GradleDependencyGraphError.missingOutput(result) }

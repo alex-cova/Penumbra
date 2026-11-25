@@ -196,7 +196,7 @@ public enum JavaTestRunner {
         return reportDirectories(forQualifiedTaskPath: taskPath, model: model)
     }
 
-    private static func reportDirectories(forQualifiedTaskPath taskPath: String, model: JavaGradleProjectModel) -> [URL] {
+    public static func reportDirectories(forQualifiedTaskPath taskPath: String, model: JavaGradleProjectModel) -> [URL] {
         let components = taskPath.split(separator: ":").map(String.init)
         guard let taskName = components.last else { return [] }
         let projectPath = components.count > 1 ? ":" + components.dropLast().joined(separator: ":") : ":"

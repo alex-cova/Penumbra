@@ -16,7 +16,9 @@ struct IDEProjectConsoleControls: View {
             } else {
                 button("arrow.clockwise", help: "Reload \(system.displayName) Project", action: system.reload)
             }
-            button("doc.on.doc", help: "Copy \(system.displayName) Output", action: copyOutput)
+            if system.console.sessionLog == nil {
+                button("doc.on.doc", help: "Copy \(system.displayName) Output", action: copyOutput)
+            }
         }
     }
 

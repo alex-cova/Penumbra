@@ -65,7 +65,12 @@ public enum GradleProblemMatcher {
         baseDirectory: URL? = nil,
         textFor: (URL) -> String? = { _ in nil }
     ) -> GradleProblemMatches {
-        match(stdout: result.stdout, stderr: result.stderr, source: source, baseDirectory: baseDirectory, textFor: textFor)
+        if let streamed = result.streamedDiagnostics {
+            return GradleProblemMatches(diagnostics: JavacDiagnosticsMapper.diagnostics(
+                from: streamed.messages, source: source, baseDirectory: baseDirectory, textFor: textFor
+            ), problems: streamed.problems)
+        }
+        return match(stdout: result.stdout, stderr: result.stderr, source: source, baseDirectory: baseDirectory, textFor: textFor)
     }
 
     public static func match(
@@ -84,6 +89,10 @@ public enum GradleProblemMatcher {
             from: messages, source: source, baseDirectory: baseDirectory, textFor: textFor
         )
 
+        return GradleProblemMatches(diagnostics: diagnostics, problems: summarize(scan))
+    }
+
+    private static func summarize(_ scan: Scan) -> [GradleProblem] {
         var problems = scan.problems
         if !scan.sawWhatWentWrong {
             for task in scan.failedTasks {
@@ -98,7 +107,104 @@ public enum GradleProblemMatcher {
         } else if scan.sawFailingTestsBlock {
             problems.append(GradleProblem(message: "There were failing tests", task: scan.failingTestsTask, kind: .testFailures))
         }
-        return GradleProblemMatches(diagnostics: diagnostics, problems: problems)
+        return problems
+    }
+
+    public struct StreamedDiagnostics: Sendable {
+        let messages: [JavacMessage]
+        let problems: [GradleProblem]
+        let coverageLines: String
+        public let reportProducingTasks: Set<String>
+    }
+
+    /// Used on the subprocess I/O queue, with finish called after both streams have drained.
+    final class StreamingMatcher: @unchecked Sendable {
+        private var stdout = StreamScan()
+        private var stderr = StreamScan()
+        private var coverage: [String] = []
+
+        func append(_ line: GradleOutputLine) {
+            if line.text.contains(JavaCoverageGradleScript.markerPrefix), coverage.count < 4096 {
+                coverage.append(line.text)
+            }
+            switch line.stream {
+            case .stdout: stdout.append(line.text)
+            case .stderr: stderr.append(line.text)
+            }
+        }
+
+        func finish() -> StreamedDiagnostics {
+            stdout.finish()
+            stderr.finish()
+            var scan = stdout.scan
+            scan.problems += stderr.scan.problems
+            scan.failedTasks += stderr.scan.failedTasks.filter { !stdout.scan.failedTasks.contains($0) }
+            scan.sawWhatWentWrong = scan.sawWhatWentWrong || stderr.scan.sawWhatWentWrong
+            scan.sawFailingTestsBlock = scan.sawFailingTestsBlock || stderr.scan.sawFailingTestsBlock
+            scan.failingTestsTask = scan.failingTestsTask ?? stderr.scan.failingTestsTask
+            scan.testSummary = scan.testSummary ?? stderr.scan.testSummary
+            return StreamedDiagnostics(
+                messages: stderr.javac.messages + stdout.javac.messages + stdout.scan.kotlinMessages + stderr.scan.kotlinMessages,
+                problems: GradleProblemMatcher.summarize(scan),
+                coverageLines: coverage.joined(separator: "\n"),
+                reportProducingTasks: stdout.tasksWithActivity.union(stderr.tasksWithActivity)
+            )
+        }
+    }
+
+    private struct StreamScan {
+        var scan = Scan()
+        var javac = JavacOutputParser.Stream()
+        var tasksWithActivity: Set<String> = []
+        private var inFailure = false
+        private var inWhere = false
+        private var block: [String] = []
+
+        mutating func append(_ line: String) {
+            if javac.messages.count < 4096 { javac.append(line) }
+            if line.hasPrefix("> Task "), tasksWithActivity.count < 16384 {
+                let parts = line.dropFirst(7).split(separator: " ")
+                if let task = parts.first, task.hasPrefix(":"),
+                   !parts.contains("UP-TO-DATE"), !parts.contains("NO-SOURCE"), !parts.contains("SKIPPED") {
+                    tasksWithActivity.insert(String(task))
+                }
+            }
+            if inFailure {
+                if !GradleProblemMatcher.blockEnd.contains(where: { line.hasPrefix($0) }),
+                   !line.hasPrefix("* Where:"), !line.hasPrefix("* What went wrong:") {
+                    if block.count < 64 { block.append(line) }
+                    return
+                }
+                finishBlock()
+            }
+            if inWhere {
+                scan.pendingWhere = scan.whereLocation(line)
+                inWhere = false
+            }
+            if line.hasPrefix("* What went wrong:") {
+                inFailure = true
+            } else if line.hasPrefix("* Where:") {
+                inWhere = true
+            } else if scan.problems.count + scan.kotlinMessages.count + scan.failedTasks.count < 4096 {
+                // Most application output cannot be a Gradle problem, so skip regex work for it.
+                if line.hasPrefix("> Task ") || line.hasPrefix("e: ") || line.hasPrefix("w: ")
+                    || line.hasPrefix("Could not resolve ") || line.contains("tests completed") || line.contains("test completed") {
+                    scan.lineMatch(line)
+                }
+            }
+        }
+
+        mutating func finish() {
+            finishBlock()
+            javac.finish()
+        }
+
+        private mutating func finishBlock() {
+            guard inFailure else { return }
+            scan.whatWentWrong(block)
+            block.removeAll(keepingCapacity: true)
+            inFailure = false
+        }
     }
 
     /// `N tests completed, M failed` anywhere in the output.
@@ -173,14 +279,14 @@ public enum GradleProblemMatcher {
             }
         }
 
-        private func whereLocation(_ line: String) -> (file: URL, line: Int)? {
+        func whereLocation(_ line: String) -> (file: URL, line: Int)? {
             guard let match = GradleProblemMatcher.buildFile.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
                   let number = Int(GradleProblemMatcher.capture(line, match, 2))
             else { return nil }
             return (URL(fileURLWithPath: GradleProblemMatcher.capture(line, match, 1)).standardizedFileURL, number)
         }
 
-        private mutating func lineMatch(_ line: String) {
+        mutating func lineMatch(_ line: String) {
             let range = NSRange(line.startIndex..., in: line)
             if let match = GradleProblemMatcher.taskHeader.firstMatch(in: line, range: range) {
                 let task = GradleProblemMatcher.capture(line, match, 1)
@@ -223,7 +329,7 @@ public enum GradleProblemMatcher {
             ))
         }
 
-        private mutating func whatWentWrong(_ raw: [String]) {
+        mutating func whatWentWrong(_ raw: [String]) {
             sawWhatWentWrong = true
             let location = pendingWhere
             pendingWhere = nil

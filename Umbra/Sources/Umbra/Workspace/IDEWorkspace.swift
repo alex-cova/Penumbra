@@ -670,7 +670,7 @@ public final class IDEWorkspace {
         return true
     }
     var showsUsagesTab: Bool { usages.hasContent }
-    var showsTestResultsTab: Bool { testResults.hasContent }
+    var showsTestResultsTab: Bool { testResults.hasContent || gradle.isActive }
     /// True when a terminal tab (rather than one of the read-only tabs) is showing.
     var isTerminalTabSelected: Bool { bottomPanel.isShellSelected }
 
@@ -5255,6 +5255,7 @@ public final class IDEWorkspace {
         syncTerminalWorkingDirectory()
         // The project systems first: a language reads what they decided (Java skips its whole-tree
         // index when Gradle starts from a cached model). Both are synchronous, so what follows sees them.
+        testResults.gradle.clear()
         projectSystems.projectDidChange(root: url)
         languages.projectDidChange(root: url)
         languageServerHost.projectDidChange(root: url, connections: intelligenceServices.languageServerConnections)

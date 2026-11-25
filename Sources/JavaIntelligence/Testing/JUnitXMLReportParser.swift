@@ -1,8 +1,8 @@
 import Foundation
 
 /// Outcome of one test case parsed from Gradle's JUnit Platform / Surefire XML reports.
-public struct JavaTestCaseResult: Sendable, Equatable, Identifiable {
-    public enum Status: String, Sendable, Equatable {
+public struct JavaTestCaseResult: Sendable, Equatable, Identifiable, Codable {
+    public enum Status: String, Sendable, Equatable, Codable {
         case passed
         case failed
         case skipped
@@ -90,6 +90,16 @@ public enum JUnitXMLReportParser {
         })
     }
 
+    /// Streams one verified Gradle report. Suite output remains at suite scope in the report.
+    static func parseVerifiedReport(_ file: URL) -> [JavaTestCaseResult] {
+        guard let input = InputStream(url: file),
+              let suite = XMLTestSuite(parser: XMLParser(stream: input), includesSuiteOutput: false) else { return [] }
+        return suite.testCases.map {
+            JavaTestCaseResult(className: $0.className, name: $0.name, status: $0.status, duration: $0.time,
+                               message: $0.message, stackTrace: $0.stackTrace, output: $0.output)
+        }
+    }
+
     /// Fallback when XML is missing: Gradle's plain summary only.
     public static func parseGradleSummary(_ output: String) -> JavaTestRunResult {
         let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -166,8 +176,12 @@ private struct XMLTestSuite {
     let output: String?
 
     init?(data: Data) {
-        let parser = XMLParser(data: data)
-        let delegate = Delegate()
+        self.init(parser: XMLParser(data: data), includesSuiteOutput: true)
+    }
+
+    init?(parser: XMLParser, includesSuiteOutput: Bool) {
+        let delegate = Delegate(includesSuiteOutput: includesSuiteOutput)
+        parser.shouldResolveExternalEntities = false
         parser.delegate = delegate
         guard parser.parse(), let suite = delegate.suite else { return nil }
         self.testCases = suite
@@ -180,11 +194,19 @@ private struct XMLTestSuite {
     }
 
     private final class Delegate: NSObject, XMLParserDelegate {
+        private let includesSuiteOutput: Bool
+
+        init(includesSuiteOutput: Bool) {
+            self.includesSuiteOutput = includesSuiteOutput
+        }
+
         var suite: [Case]?
         private var cases: [Case] = []
         private var currentClass = ""
         private var currentName = ""
         private var currentTime: TimeInterval = 0
+        private var didFail = false
+        private var didSkip = false
         private var failureMessage: String?
         private var failureBody: String?
         private var skippedMessage: String?
@@ -207,14 +229,18 @@ private struct XMLTestSuite {
                 currentClass = attributeDict["classname"] ?? attributeDict["class"] ?? ""
                 currentName = attributeDict["name"] ?? ""
                 currentTime = TimeInterval(attributeDict["time"] ?? "0") ?? 0
+                didFail = false
+                didSkip = false
                 failureMessage = nil
                 failureBody = nil
                 skippedMessage = nil
                 caseOut = nil
                 caseErr = nil
             case "failure", "error":
+                didFail = true
                 failureMessage = attributeDict["message"]
             case "skipped":
+                didSkip = true
                 skippedMessage = attributeDict["message"]
             default:
                 break
@@ -225,17 +251,29 @@ private struct XMLTestSuite {
             guard let top = elementStack.last else { return }
             switch top {
             case "failure", "error":
-                failureBody = (failureBody ?? "") + string
+                Self.append(string, to: &failureBody, limit: includesSuiteOutput ? nil : 32768)
             case "system-out", "system-err":
                 // Inside a test case it is that test's; at suite level, the class's.
                 let inCase = elementStack.dropLast().last == "testcase"
-                if top == "system-out" {
-                    if inCase { caseOut = (caseOut ?? "") + string } else { suiteOut = (suiteOut ?? "") + string }
-                } else {
-                    if inCase { caseErr = (caseErr ?? "") + string } else { suiteErr = (suiteErr ?? "") + string }
+                if inCase {
+                    if top == "system-out" { Self.append(string, to: &caseOut, limit: includesSuiteOutput ? nil : 8192) }
+                    else { Self.append(string, to: &caseErr, limit: includesSuiteOutput ? nil : 8192) }
+                } else if includesSuiteOutput {
+                    if top == "system-out" { Self.append(string, to: &suiteOut, limit: nil) }
+                    else { Self.append(string, to: &suiteErr, limit: nil) }
                 }
             default:
                 break
+            }
+        }
+
+        private static func append(_ string: String, to value: inout String?, limit: Int?) {
+            if let limit {
+                let available = limit - (value?.utf8.count ?? 0)
+                guard available > 0 else { return }
+                value = (value ?? "") + String(decoding: string.utf8.prefix(available), as: UTF8.self)
+            } else {
+                value = (value ?? "") + string
             }
         }
 
@@ -253,11 +291,11 @@ private struct XMLTestSuite {
                 let status: JavaTestCaseResult.Status
                 let message: String?
                 let stack: String?
-                if failureBody != nil || failureMessage != nil {
+                if didFail {
                     status = .failed
                     message = failureMessage
                     stack = failureBody
-                } else if skippedMessage != nil {
+                } else if didSkip {
                     status = .skipped
                     message = skippedMessage
                     stack = nil

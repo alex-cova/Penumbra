@@ -30,7 +30,7 @@ extension IDEJavaRunProvider {
             let suffix = instrumentation == .coverage ? " with coverage" : (instrumentation == .profile ? " with profiling" : "")
             host.testResults.beginRun(label: "Running \(title)\(suffix)…", scope: scope, instrumentation: instrumentation)
             host.showTestResults()
-            startGradleTests(scope: scope, instrumentation: instrumentation)
+            startGradleTests(scope: scope, instrumentation: instrumentation, recording: recording)
             return
         }
         // A run that cannot start must not leave the Test Results tab on "Running…".
@@ -61,7 +61,7 @@ extension IDEJavaRunProvider {
         guard gradle.isActive, gradle.rootURL != nil else {
             return "Running tests needs a Gradle project."
         }
-        guard !gradle.isBusy else {
+        guard !gradle.isBusy, !gradleTestLaunchPending else {
             return "Gradle is busy. Stop the running task first, then run tests again."
         }
         return nil
@@ -109,45 +109,57 @@ extension IDEJavaRunProvider {
 
     /// Starts the Gradle test task for `scope`. With `debug` the test JVM waits for a debugger on the
     /// JDWP port (`--debug-jvm`), and Gradle's run is not timed out.
-    func startGradleTests(scope: JavaTestRunScope, debug: Bool = false, instrumentation: JavaRunInstrumentation = .none) {
-        guard let url = gradle.rootURL else { return }
-        guard var request = JavaTestRunner.request(scope: scope, projectRoot: url, model: gradle.model) else { return }
-        let taskPaths = JavaTestRunner.executionTaskPaths(scope: scope, model: gradle.model, debug: debug)
-        let reports = JavaTestRunner.reportDirectories(forTaskPaths: taskPaths, model: gradle.model)
-        if !reports.isEmpty {
-            request = JavaTestRunRequest(
-                gradleTaskPath: request.gradleTaskPath,
-                testFilter: request.testFilter,
-                additionalTestFilters: request.additionalTestFilters,
-                projectRoot: request.projectRoot,
-                reportDirectories: reports
-            )
-        }
-        pendingTestRunRequest = request
-        let args = JavaTestRunner.gradleArguments(for: request, debug: debug)
-        guard instrumentation != .none, !debug else {
-            runTestTasks(taskPaths, arguments: args, debug: debug)
+    func startGradleTests(
+        scope: JavaTestRunScope, debug: Bool = false, instrumentation: JavaRunInstrumentation = .none,
+        recording: JavaRunConfiguration? = nil
+    ) {
+        guard let url = gradle.rootURL,
+              let request = JavaTestRunner.request(scope: scope, projectRoot: url, model: gradle.model),
+              !gradleTestLaunchPending else { return }
+        gradleTestLaunchPending = true
+        let epoch = launchEpoch
+        var configuration = recording ?? JavaRunConfiguration.makeTestLaunch(scope: scope)
+        configuration.instrumentation = instrumentation
+        let tasks = JavaTestRunner.executionTaskPaths(scope: scope, model: gradle.model, debug: debug)
+        var args = JavaTestRunner.gradleArguments(for: request, debug: debug)
+        let extraArguments = JavaCommandLine.split(configuration.programArguments)
+            + JavaCommandLine.split(configuration.vmArguments).filter { $0.hasPrefix("-D") }
+        let explicitCache = GradleTestSidecar.configurationCacheEnabled(arguments: extraArguments)
+        if explicitCache { args.removeAll { $0 == "--no-configuration-cache" } }
+        args += extraArguments
+        if instrumentation != .none, explicitCache {
+            gradleTestLaunchPending = false
+            let reason = "Gradle coverage and profiling require a cache-off launch."
+            host?.testResults.stopRun(message: reason)
+            host?.reportRunProblem(reason)
             return
         }
-        var configuration = JavaRunConfiguration.makeTestLaunch(scope: scope)
-        configuration.instrumentation = instrumentation
         Task { @MainActor [weak self] in
             guard let self else { return }
-            guard let plan = await self.instrumentationPlan(for: configuration, tasks: taskPaths) else {
-                self.pendingTestRunRequest = nil
-                self.host?.testResults.stopRun(message: "The tests were not started.")
+            defer { self.gradleTestLaunchPending = false }
+            var plan: InstrumentationPlan?
+            if instrumentation != .none, !debug {
+                guard let resolved = await self.instrumentationPlan(for: configuration, tasks: tasks) else {
+                    self.host?.testResults.stopRun(message: "The tests were not started.")
+                    return
+                }
+                switch self.gradleArguments(for: resolved) {
+                case .failure(let failure):
+                    self.host?.testResults.stopRun(message: failure.message)
+                    self.host?.reportRunProblem(failure.message)
+                    return
+                case .success(let extra):
+                    plan = resolved
+                    args += extra
+                }
+            }
+            guard self.launchEpoch == epoch, self.gradle.rootURL == url else {
+                if self.gradle.rootURL == url { self.host?.testResults.stopRun(message: "The test launch was cancelled.") }
                 return
             }
-            switch self.gradleArguments(for: plan) {
-            case .failure(let failure):
-                self.pendingTestRunRequest = nil
-                self.host?.testResults.stopRun(message: failure.message)
-                self.host?.reportRunProblem(failure.message)
-            case .success(let extra):
-                self.pendingInstrumentation = (plan, taskPaths)
-                self.runTestTasks(taskPaths, arguments: args + extra, debug: false)
-                if case .profile(let profile) = plan { self.beginLiveProfile(profile, processID: nil) }
-            }
+            _ = await self.runGradleTestInvocation(
+                root: url, tasks: tasks, arguments: args, debug: debug, configuration: configuration, plan: plan
+            )
         }
     }
 
@@ -248,22 +260,6 @@ extension IDEJavaRunProvider {
         }
     }
 
-    private func runTestTasks(_ taskPaths: [String], arguments args: [String], debug: Bool) {
-        gradle.runGradleTasks(taskPaths, extraArguments: args, runsApplication: debug) { [weak self] outcome in
-            guard let self, let host = self.host else { return }
-            switch outcome {
-            case .notStarted(let reason), .failed(let reason):
-                // A declined trust prompt or a missing Gradle never produces results. Leave the
-                // Test Results tab on that reason instead of "Running…" with no run behind it.
-                self.pendingInstrumentation = nil
-                host.testResults.stopRun(message: reason)
-                host.reportRunProblem(reason)
-            case .finished, .timedOut, .cancelled:
-                break
-            }
-        }
-    }
-
     // MARK: - A Gradle task ended
 
     func projectTasksDidFinish(_ report: IDEProjectTaskReport) {
@@ -276,14 +272,16 @@ extension IDEJavaRunProvider {
     /// The task run a coverage or profile plan was made for ended: read what it wrote. A build or a
     /// before-launch task that ends meanwhile is not that run.
     private func applyInstrumentationOutput(_ report: IDEProjectTaskReport) {
-        guard let pending = pendingInstrumentation, pending.tasks == report.tasks else { return }
+        guard let pending = pendingInstrumentation, pending.tasks == report.tasks,
+              instrumentationTestSessionID == report.testSessionID else { return }
         pendingInstrumentation = nil
+        instrumentationTestSessionID = nil
         finishGradleRun(plan: pending.plan, report: report)
     }
 
     /// Run and test tasks have their own panels; only builds and the like are announced.
     private func notifyTasks(_ report: IDEProjectTaskReport) {
-        guard let host else { return }
+        guard report.testSessionID == nil, let host else { return }
         func isRunTask(_ task: String) -> Bool {
             let name = task.split(separator: ":").last.map(String.init) ?? task
             return name == "run" || name == "bootRun"
@@ -322,7 +320,9 @@ extension IDEJavaRunProvider {
     private func applyBuildOutput(_ result: IDEProjectTaskReport) {
         guard let host else { return }
         let projectRoot = result.root
-        let command = GradleCommandResult(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr)
+        let command = GradleCommandResult(
+            exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, streamedDiagnostics: result.streamedDiagnostics
+        )
         if usesMaven {
             let matches = MavenProblemMatcher.match(
                 command,
@@ -348,14 +348,16 @@ extension IDEJavaRunProvider {
         }
         host.noteBuildDiagnostics(matches.diagnostics, source: IDEProblemsStore.gradleBuildSource, texts: buildTexts(for: matches.diagnostics))
         host.problems.setBuildMessages(matches.problems)
-        if matches.diagnostics.values.contains(where: { $0.contains { $0.severity == .error } })
-            || matches.problems.contains(where: { $0.severity == .error }) {
+        if result.testSessionID == nil,
+           matches.diagnostics.values.contains(where: { $0.contains { $0.severity == .error } })
+                || matches.problems.contains(where: { $0.severity == .error }) {
             host.showProblems()
         }
     }
 
     private func applyTestOutput(_ result: IDEProjectTaskReport) {
-        guard result.tasks.contains(where: JavaTestRunner.isTestTask) || pendingTestRunRequest != nil else { return }
+        guard usesMaven, result.testSessionID == nil,
+              result.tasks.contains(where: JavaTestRunner.isTestTask) || pendingTestRunRequest != nil else { return }
         let request = takePendingTestRunRequest()
         let projectRoot = result.root
         Task { @MainActor [weak self] in
