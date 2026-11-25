@@ -60,6 +60,29 @@ final class IDESessionFilesTests: XCTestCase {
         XCTAssertEqual(window.closedSidebarTabs, [.structure])
     }
 
+    // MARK: - Session directory override
+
+    func testSessionDirectoryOverrideReadsBothSpellings() {
+        XCTAssertEqual(
+            IDESessionFiles.sessionDirectoryOverride(arguments: ["Umbra", "--session-dir", "/tmp/clean"])?.path,
+            "/tmp/clean")
+        XCTAssertEqual(
+            IDESessionFiles.sessionDirectoryOverride(arguments: ["Umbra", "--open-folder", "/p", "--session-dir=/tmp/clean"])?.path,
+            "/tmp/clean")
+    }
+
+    func testSessionDirectoryOverrideExpandsTilde() {
+        let url = IDESessionFiles.sessionDirectoryOverride(arguments: ["--session-dir", "~/umbra-demo"])
+        XCTAssertEqual(url?.path, NSHomeDirectory() + "/umbra-demo")
+    }
+
+    func testSessionDirectoryOverrideIgnoresMissingOrEmptyValues() {
+        XCTAssertNil(IDESessionFiles.sessionDirectoryOverride(arguments: ["Umbra"]))
+        XCTAssertNil(IDESessionFiles.sessionDirectoryOverride(arguments: ["Umbra", "--session-dir"]))
+        XCTAssertNil(IDESessionFiles.sessionDirectoryOverride(arguments: ["Umbra", "--session-dir="]))
+        XCTAssertNil(IDESessionFiles.sessionDirectoryOverride(arguments: ["Umbra", "--session-dir", "--open-folder", "/p"]))
+    }
+
     func testMigrationLeavesTheLegacyFileUntouched() throws {
         try writeLegacy(.empty)
         let before = try Data(contentsOf: files.legacyURL)

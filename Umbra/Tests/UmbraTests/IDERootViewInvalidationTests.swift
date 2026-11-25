@@ -59,6 +59,44 @@ final class IDERootViewInvalidationTests: XCTestCase {
         try? await Task.sleep(for: .seconds(seconds))
     }
 
+    func testDockedAgentResizesWithOnlyAFolderOpen() async throws {
+        let opensAsPage = workspace.agent.settings.opensAsPage
+        defer { workspace.agent.settings.opensAsPage = opensAsPage }
+        workspace.agent.settings.opensAsPage = false
+        workspace.showsFirstRunGuide = false
+        workspace.openProjectFolder(directory)
+        window.contentView?.layoutSubtreeIfNeeded()
+        await settle()
+        workspace.toggleAgentPanel()
+        window.contentView?.layoutSubtreeIfNeeded()
+        await settle()
+
+        XCTAssertFalse(workspace.hasOpenDocuments)
+        XCTAssertTrue(workspace.agent.isPanelVisible)
+        let initialWidth = workspace.agentPanelWidth
+        let content = try XCTUnwrap(window.contentView)
+        content.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let gap = IDEAppearance.Spacing.panelGap
+        // Grab the inside edge of the card, just beyond the gap between panels.
+        let seam = content.convert(
+            NSPoint(x: content.bounds.maxX - initialWidth - gap + 2, y: content.bounds.midY),
+            to: nil
+        )
+        let distance = 120.0
+        for (type, offset) in [(NSEvent.EventType.leftMouseDown, 0.0), (.leftMouseDragged, -distance), (.leftMouseUp, -distance)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: NSPoint(x: seam.x + offset, y: seam.y), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            ))
+            window.sendEvent(event)
+        }
+        await settle()
+
+        XCTAssertEqual(workspace.agentPanelWidth, initialWidth + distance, accuracy: 1)
+    }
+
     private func write(_ name: String, lines: Int = 3_000) throws -> URL {
         let url = directory.appendingPathComponent(name)
         let text = (0..<lines).map { "    int value\($0) = \($0); // line \($0)" }.joined(separator: "\n")

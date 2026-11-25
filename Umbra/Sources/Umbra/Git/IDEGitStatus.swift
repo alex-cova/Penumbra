@@ -1096,7 +1096,7 @@ final class IDEGitStatusModel {
                 if network {
                     // No lane: a stalled remote must not hold Stage and Commit. The task is the
                     // handle `cancelNetworkActions()` cancels; cancelling it ends the git process.
-                    await self.invalidateForMutation(ifRoot: rootURL)
+                    self.invalidateForMutation(ifRoot: rootURL)
                     try Task.checkCancellation()
                     reported = try await action(operation)
                 } else {

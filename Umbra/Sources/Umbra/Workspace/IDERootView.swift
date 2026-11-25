@@ -188,11 +188,16 @@ public struct IDERootView: View {
                 }
 
                 if isAgentDocked {
-                    IDESidebarResizeHandle(width: $agentPanelWidth, edge: .trailing)
-
                     IDEAgentPanel(agent: workspace.agent)
                         .frame(width: agentPanelWidth)
                         .idePanel()
+                        .padding(.leading, IDEAppearance.Spacing.panelGap)
+                        .overlay(alignment: .leading) {
+                            // Include the card edge in the hit area without covering the editor.
+                            IDESidebarResizeHandle(
+                                width: $agentPanelWidth, edge: .trailing, showsGrip: true
+                            )
+                        }
                         .ideTransition(.opacity)
                         .opacity(workspace.chromeOpacity)
                         .allowsHitTesting(workspace.chromeOpacity > 0.05)
@@ -520,6 +525,7 @@ struct IDESidebarResizeHandle: View {
 
     @Binding var width: Double
     var edge: Edge = .leading
+    var showsGrip = false
     /// The width when the drag began; see `IDETerminalResizeHandle.startHeight`.
     @State private var startWidth: Double?
 
@@ -536,7 +542,16 @@ struct IDESidebarResizeHandle: View {
         } onEnd: {
             startWidth = nil
         }
-        .frame(width: IDEAppearance.Spacing.panelGap)
+        .frame(width: IDEAppearance.Spacing.panelGap * (showsGrip ? 2 : 1))
+        .background(alignment: .leading) {
+            if showsGrip {
+                Capsule()
+                    .fill(IDEAppearance.ColorToken.muted.opacity(0.45))
+                    .frame(width: 2, height: 28)
+                    .frame(width: IDEAppearance.Spacing.panelGap)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }
 

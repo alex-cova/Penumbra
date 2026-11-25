@@ -2,7 +2,7 @@ import SwiftUI
 
 struct IDEEditorTabsBar: View {
     /// The panes' shared space, in which pane frames and tab-drag points live.
-    static let panesSpace = "UmbraEditorPanes"
+    nonisolated static let panesSpace = "UmbraEditorPanes"
 
     let paneID: UUID
     @Environment(IDEWorkspace.self) private var workspace

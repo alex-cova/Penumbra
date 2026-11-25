@@ -340,11 +340,37 @@ struct IDESessionFiles {
             return files
         }
         #endif
+        if let directory = sessionDirectoryOverride(arguments: CommandLine.arguments) {
+            // A profile of its own: no restored windows, recents or preferences snapshot from the
+            // real files, and nothing written back to them. Nothing is migrated into it either.
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            return IDESessionFiles(directory: directory)
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let files = IDESessionFiles(directory: base.appendingPathComponent("com.umbra.editor", isDirectory: true))
         files.migrateLegacySessionIfNeeded()
         return files
     }()
+
+    /// The folder named by `--session-dir <path>` (or `--session-dir=<path>`), else nil. Pointing it
+    /// at an empty folder starts Umbra with a clean session, for recordings and screenshots that
+    /// must not show the user's own tabs. Only the session files move; preferences, trust and
+    /// caches stay where they are. A missing or empty value is ignored rather than guessed.
+    static func sessionDirectoryOverride(arguments: [String]) -> URL? {
+        for (index, argument) in arguments.enumerated() {
+            let path: String?
+            if argument == "--session-dir" {
+                path = arguments.indices.contains(index + 1) ? arguments[index + 1] : nil
+            } else if argument.hasPrefix("--session-dir=") {
+                path = String(argument.dropFirst("--session-dir=".count))
+            } else {
+                continue
+            }
+            guard let path, !path.isEmpty, !path.hasPrefix("--") else { return nil }
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        return nil
+    }
 
     var legacyURL: URL { directory.appendingPathComponent("session.json") }
     var appURL: URL { directory.appendingPathComponent("app.json") }
