@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## What this is
 
 This repo ships **Umbra**, a macOS code editor (the product), and **Penumbra**, the AppKit text engine and IDE-intelligence libraries under it. Penumbra is a high-performance plain text/code editor engine, forked from simonbs/Runestone (originally iOS/UIKit) and ported natively to macOS.
@@ -29,7 +27,7 @@ Penumbra combines two layers:
 - **`AgentKit`** (`Packages/AgentKit`) — the coding-agent harness core (LLM clients, loop, tools), pure Swift with no dependency on `Penumbra`; Umbra will wire it. Details: `Packages/AgentKit/CLAUDE.md`.
 - **`AgentKitMLX`** (`Packages/AgentKitMLX`) — on-device models for the agent (model store and MLX `LLMClient`). Only Umbra links it; `AgentKit` never does. Details: `Packages/AgentKitMLX/CLAUDE.md`.
 - **`AgentKitApple`** (`Packages/AgentKitApple`) — Apple's foundation model (Apple Intelligence, on device) and Private Cloud Compute (macOS 27) as an `LLMClient`, with a bridge that lets AgentKit's loop approve and run the tools the framework would otherwise run itself. Only Umbra and AgentEval link it. Details: `Packages/AgentKitApple/CLAUDE.md`.
-- **Platform.** The root (library) package targets **macOS 14** (tools 6.0), like the path packages under `Packages/`. The **`Umbra` package targets macOS 26** (tools 6.2) because it depends on [DiagramKit](https://github.com/alex-cova/DiagramKit) and `AgentKitApple`, which need it. `Umbra/Resources/Info.plist` (`LSMinimumSystemVersion`) and the Xcode project's deployment target follow the Umbra package.
+- **Platform.** `Umbra/Resources/Info.plist` (`LSMinimumSystemVersion`) and the Xcode project's deployment target follow the Umbra package (macOS 26, needed by DiagramKit and AgentKitApple).
 - **`Umbra`** (`Umbra/Sources/Umbra`) — the macOS editor app shipped with this repo, intended as a **Sublime Text alternative**, built on `Penumbra`, `EditorIntelligence` and `JavaIntelligence`. Rules for working in it (windows, `SplitPanes`, the one file watcher) load from `Umbra/CLAUDE.md`.
 
 ## App Store safety

@@ -1,0 +1,5 @@
+# `Sources/JavaIntelligence/Debug`
+
+Loaded when working under `Sources/JavaIntelligence/Debug`. Moved out of `Sources/JavaIntelligence/CLAUDE.md`.
+
+- **Debugger support** (`Sources/JavaIntelligence/Debug/`). `JavaCallSites.calls(onLine:in:)` lists a line's calls in the order they run (receiver and arguments first, lambda bodies left out; `<init>` for `new`) for Smart Step Into. `JavaStreamChain.chains(onLine:in:)` finds stream pipelines touching a line (a source such as `.stream()` or `IntStream.range`, known intermediate operations, a terminal one), `tracedExpression()` rewrites one to record `{time, value}` after every stage, and `links(from:to:operation:)` maps each element to its source (by time; `sorted`/`distinct` by identity). `JavaExpressionSyntax.problem(in:)` checks that a condition or watch parses. `JavaTestRunScope.tests(taskPath:filters:)` runs several `--tests` filters; `JavaTestRunner.gradleArguments(for:debug:)` adds `--debug-jvm` and `taskPaths(for:debug:)` puts `clean<Task>` first; `JUnitXMLReportParser` keeps each case's `output` (its own `system-out`/`system-err`, else its suite's). Tests: `JavaDebugSupportTests`.
