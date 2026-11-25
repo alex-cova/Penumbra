@@ -246,11 +246,9 @@ extension JavaGradleProjectModel {
     public struct TaskGroup: Sendable {
         public let name: String
         public let tasks: [GradleTask]
-    }
 
-    private static let preferredTaskGroupOrder = [
-        "build", "verification", "application", "formatting", "documentation", "help", "other"
-    ]
+        public var displayName: String { name.isEmpty ? "other" : name }
+    }
 
     /// The source set whose directory is the longest prefix of `file`, or `nil` when the file is
     /// outside every source set (unsaved buffers, scripts at the project root).
@@ -454,24 +452,22 @@ extension JavaGradleProjectModel {
         Self.groupTasks(subprojects.flatMap(\.tasks))
     }
 
-    /// Groups `tasks` by Gradle group, ordered for IDE presentation (well-known groups first, then
-    /// alphabetical), with tasks sorted by path inside each group.
+    /// Groups `tasks` by Gradle group, sorting groups and tasks alphabetically by display name.
     public static func groupTasks(_ tasks: [GradleTask]) -> [TaskGroup] {
         var grouped: [String: [GradleTask]] = [:]
         for task in tasks {
             grouped[task.group, default: []].append(task)
         }
-        return grouped.map { TaskGroup(name: $0.key, tasks: $0.value.sorted { $0.path < $1.path }) }
-            .sorted { lhs, rhs in
-                let li = Self.preferredTaskGroupOrder.firstIndex {
-                    $0.caseInsensitiveCompare(lhs.name) == .orderedSame
-                } ?? Int.max
-                let ri = Self.preferredTaskGroupOrder.firstIndex {
-                    $0.caseInsensitiveCompare(rhs.name) == .orderedSame
-                } ?? Int.max
-                if li != ri { return li < ri }
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        return grouped.map { name, tasks in
+            let sortedTasks = tasks.sorted { lhs, rhs in
+                let order = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+                return order == .orderedSame ? lhs.path < rhs.path : order == .orderedAscending
             }
+            return TaskGroup(name: name, tasks: sortedTasks)
+        }.sorted { lhs, rhs in
+            let order = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+            return order == .orderedSame ? lhs.name < rhs.name : order == .orderedAscending
+        }
     }
 
     /// Every resolved jar across every source set, deduplicated -- shared dependencies between

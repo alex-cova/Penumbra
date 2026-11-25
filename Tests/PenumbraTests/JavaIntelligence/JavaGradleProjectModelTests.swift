@@ -15,7 +15,7 @@ final class JavaGradleProjectModelTests: XCTestCase {
         XCTAssertEqual(root.path, ":")
         XCTAssertEqual(root.languageLevel, 21)
         XCTAssertEqual(root.tasks.map(\.path), [":build", ":test", ":run"])
-        XCTAssertEqual(model.taskGroups.map(\.name), ["build", "verification", "application"])
+        XCTAssertEqual(model.taskGroups.map(\.name), ["application", "build", "verification"])
         XCTAssertEqual(root.sourceDirs, [URL(string: "file:///Users/dev/single-module/src/main/java/")])
         XCTAssertEqual(root.testSourceDirs, [URL(string: "file:///Users/dev/single-module/src/test/java/")])
         XCTAssertEqual(root.compileClasspathJars.count, 1)
@@ -173,12 +173,13 @@ final class JavaGradleProjectModelTests: XCTestCase {
                 .init(path: ":app:test", name: "test", group: "verification"),
                 .init(path: ":app:run", name: "run", group: "application"),
                 .init(path: ":app:jar", name: "jar", group: "build"),
-                .init(path: ":app:assemble", name: "assemble", group: "build")
+                .init(path: ":app:assemble", name: "assemble", group: "build"),
+                .init(path: ":app:Zip", name: "Zip", group: "build")
             ]
         )
         let groups = subproject.taskGroups
-        XCTAssertEqual(groups.map(\.name), ["build", "verification", "application"])
-        XCTAssertEqual(groups.first?.tasks.map(\.name), ["assemble", "jar"])
+        XCTAssertEqual(groups.map(\.name), ["application", "build", "verification"])
+        XCTAssertEqual(groups.first { $0.name == "build" }?.tasks.map(\.name), ["assemble", "jar", "Zip"])
     }
 
     func testMaxLanguageLevelPicksHighestAcrossSubprojects() throws {
