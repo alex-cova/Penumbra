@@ -153,7 +153,7 @@ struct IDEAgentSchedulesSheet: View {
 }
 
 private extension String {
-    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+    var capitalizedFirst: String { return prefix(1).uppercased() + dropFirst() }
 }
 
 /// What a run's row says. Pure, for tests.

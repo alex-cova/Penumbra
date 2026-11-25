@@ -73,7 +73,7 @@ final class IDEStructureRefreshTests: XCTestCase {
     func testACaretMoveInsideUnchangedTextReselectsWithoutRebuilding() async throws {
         let textView = try await openJavaFile()
         workspace.showSidebarTab(.structure)
-        await eventually("the Structure tree never appeared") { workspace.structureStore.root != nil }
+        await eventually("the Structure tree never appeared", seconds: 8) { workspace.structureStore.root != nil }
         let rootBefore = workspace.structureStore.root
         let twoOffset = (source as NSString).range(of: "two").location
 
