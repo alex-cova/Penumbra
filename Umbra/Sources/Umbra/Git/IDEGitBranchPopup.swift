@@ -90,6 +90,11 @@ struct IDEGitBranchPopup: View {
             }
         }
         .frame(width: 360, height: 440)
+        // The popover is glass by default, so the editor's text showed through the rows. An opaque
+        // panel fill and an explicit foreground keep every row readable on any scheme.
+        .foregroundStyle(IDEAppearance.ColorToken.foreground)
+        .background(IDEAppearance.ColorToken.panel)
+        .presentationBackground(IDEAppearance.ColorToken.panel)
         .onAppear {
             isSearchFocused = true
             gitStatus.loadTags()
@@ -183,8 +188,8 @@ struct IDEGitBranchPopup: View {
                     Text("gone").foregroundStyle(IDEAppearance.ColorToken.gitConflict)
                 }
                 Spacer(minLength: 0)
-                if branch.ahead > 0 { badge("↑\(branch.ahead)") }
-                if branch.behind > 0 { badge("↓\(branch.behind)") }
+                if branch.ahead > 0 { badge("↑\(branch.ahead)", IDEAppearance.ColorToken.gitAdded) }
+                if branch.behind > 0 { badge("↓\(branch.behind)", IDEAppearance.ColorToken.accent) }
             }
             .font(IDEAppearance.Typography.body)
             .padding(.horizontal, IDEAppearance.Spacing.sm)
@@ -233,10 +238,10 @@ struct IDEGitBranchPopup: View {
         }
     }
 
-    private func badge(_ text: String) -> some View {
+    private func badge(_ text: String, _ color: Color) -> some View {
         Text(text)
-            .font(IDEAppearance.Typography.monoSmall)
-            .foregroundStyle(IDEAppearance.ColorToken.muted)
+            .font(IDEAppearance.Typography.monoSmall.weight(.semibold))
+            .foregroundStyle(color)
     }
 
     @ViewBuilder
