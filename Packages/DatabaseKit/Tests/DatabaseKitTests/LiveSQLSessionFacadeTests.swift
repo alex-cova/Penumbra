@@ -9,6 +9,33 @@ private let liveEnabled = ProcessInfo.processInfo.environment["UMBRA_DB_INTEGRAT
 /// prove the move to single-connection sessions did not change what the explorer and console see.
 @Suite(.enabled(if: liveEnabled, "needs UMBRA_DB_INTEGRATION=1 and Scripts/db-test-env.sh up"), .serialized)
 struct LiveSQLSessionFacadeTests {
+    @Test func explicitPostgresSchemaUsesTheSameScopeForQueriesAndMetadata() async throws {
+        let writer = try await connect(readOnly: false)
+        let name = "phase4_\(UUID().uuidString.prefix(8))'\\ scope"
+        let quoted = try SQLIdentifiers.quote(name, engine: .postgres)
+        defer {
+            Task {
+                _ = try? await writer.query("DROP SCHEMA IF EXISTS \(quoted) CASCADE")
+                await writer.disconnect()
+            }
+        }
+        _ = try await writer.query("CREATE SCHEMA \(quoted)")
+        _ = try await writer.query("CREATE TABLE \(quoted).scope_item (id int PRIMARY KEY)")
+        _ = try await writer.query("INSERT INTO \(quoted).scope_item VALUES (17)")
+        #expect(try await writer.schemaNames().contains(name))
+        let url = try #require(ProcessInfo.processInfo.environment["UMBRA_TEST_PG_URL"])
+        var login = try SQLURLs.parse(url)
+        #expect(try await writer.databaseNames().contains(login.handshakeDatabase))
+        login.postgresSchema = name
+        let scoped = try await SQLSession.connect(login: login, readOnly: true)
+        defer { Task { await scoped.disconnect() } }
+        #expect(try await scoped.query("SELECT id FROM scope_item").rows == [["17"]])
+        let catalog = try await scoped.sqlCatalog()
+        #expect(catalog.defaultSchema == name)
+        #expect(catalog.relations.map(\.name) == ["scope_item"])
+        #expect(catalog.relation(named: "scope_item")?.columns?.first?.isPrimaryKey == true)
+    }
+
     private func connect(readOnly: Bool) async throws -> SQLSession {
         guard let url = ProcessInfo.processInfo.environment["UMBRA_TEST_PG_URL"] else {
             throw DatabaseError.executionFailed("UMBRA_TEST_PG_URL is not set; run Scripts/db-test-env.sh env")
@@ -180,6 +207,25 @@ struct LiveMySQLFacadeTests {
         #expect(result.notices.first?.code == "1292")
         #expect(result.notices.first?.level == "Warning")
         #expect(try await session.query("SELECT 1").notices.isEmpty)
+    }
+
+    @Test func mysqlWarningsKeepAffectedRowCountsAndEmptyHeaders() async throws {
+        let session = try await connect(readOnly: false)
+        defer { Task { await session.disconnect() } }
+        _ = try await session.query("CREATE TEMPORARY TABLE phase4_warning (id INT PRIMARY KEY)")
+        let write = try await session.query("INSERT IGNORE INTO phase4_warning VALUES (1), (1)")
+        #expect(write.rowsAffected == 1)
+        #expect(write.notices.map(\.code) == ["1062"])
+        let bound = try await session.query("INSERT IGNORE INTO phase4_warning VALUES (?), (?)", parameters: [.int(2), .int(2)])
+        #expect(bound.rowsAffected == 1)
+        #expect(bound.notices.map(\.code) == ["1062"])
+        #expect(try await session.query("INSERT INTO phase4_warning VALUES (3)").notices.isEmpty)
+        #expect(try await session.query("SELECT ROW_COUNT()").rows == [["1"]])
+        let empty = try await session.query("SELECT id FROM phase4_warning WHERE id < 0")
+        #expect(empty.columns == ["id"])
+        #expect(empty.rows.isEmpty)
+        #expect(empty.notices.isEmpty)
+        #expect(try await session.databaseNames().contains("information_schema"))
     }
 
     @Test func theExplorerReadsMetadataWhileAConsoleQueryRuns() async throws {

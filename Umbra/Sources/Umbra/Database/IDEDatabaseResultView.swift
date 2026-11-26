@@ -17,6 +17,10 @@ struct IDEDatabaseResultView: View {
 
     private var results: IDEDatabaseResultSet { support.resultSet(for: consoleID) }
     private var result: IDEDatabaseResult { results.result }
+    private var matchesScope: Bool {
+        guard let id = result.connectionID else { return false }
+        return result.scopeRevision == support.scopeRevisions[id] && support.switchingSQLSourceID == nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,7 +43,7 @@ struct IDEDatabaseResultView: View {
                 SplitPanes(minPrimary: 200, minSecondary: 180, idealSecondary: 300, priority: .secondary,
                            hiddenSide: inspectedValue == nil ? .secondary : nil) {
                     IDEDatabaseResultGrid(storage: storage, columns: result.columns, rowCount: result.rowCount,
-                                          canSort: result.canSort && !support.isRunning, onSort: previewSort,
+                                          canSort: result.canSort && !support.isRunning && matchesScope, onSort: previewSort,
                                           onInspect: inspect, reveal: reveal)
                 } secondary: {
                     if let inspectedValue {
@@ -63,6 +67,10 @@ struct IDEDatabaseResultView: View {
             reveal = nil
             clearInspection()
         }
+        .onChange(of: matchesScope) {
+            pendingSort = nil
+            visualization = nil
+        }
         .sheet(item: $visualization) { source in
             IDEDatabaseVisualizationSheet(source: source, query: chartQuery, runQuery: runChartQuery.map { run in
                 { sql, binding in
@@ -80,7 +88,7 @@ struct IDEDatabaseResultView: View {
 
     private var chartQuery: IDEDatabaseChartQuery? {
         guard let connectionID = result.connectionID, result.engine != .mongo,
-              !support.isRunning, result.canSort else { return nil }
+              !support.isRunning, result.canSort, matchesScope else { return nil }
         return IDEDatabaseChartQuery(statement: result.statement, engine: result.engine,
                                      binding: .init(connectionID: connectionID))
     }

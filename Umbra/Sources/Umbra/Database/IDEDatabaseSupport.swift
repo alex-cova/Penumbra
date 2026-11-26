@@ -10,6 +10,11 @@ struct IDEDatabaseConsoleBinding: Codable, Equatable, Sendable {
     var mongoCollection: String?
 }
 
+struct IDEDatabaseSQLScope: Codable, Equatable, Sendable {
+    var database: String
+    var schema: String?
+}
+
 struct IDEDatabaseSQLSchema: Equatable {
     var tables: [String] = []
     var columns: [String: [SQLColumn]] = [:]
@@ -88,6 +93,7 @@ struct IDEDatabaseResult: Equatable {
     var mongoDatabase: String?
     var mongoCollection: String?
     var engine: DatabaseEngine = .postgres
+    var scopeRevision: UUID?
 
 }
 
@@ -310,6 +316,9 @@ final class IDEDatabaseSupport {
     private var sqlCatalogLoads: [UUID: Task<Void, Never>] = [:]
     private var sqlCatalogGenerations: [UUID: UUID] = [:]
     private var sqlUnindexedScopes: Set<UUID> = []
+    private(set) var sqlScopes: [UUID: IDEDatabaseSQLScope] = [:]
+    private(set) var scopeRevisions: [UUID: UUID] = [:]
+    private(set) var switchingSQLSourceID: UUID?
     private var connectionAttempts: [UUID: UUID] = [:]
     var connectingIDs: Set<UUID> { Set(connectionAttempts.keys) }
     private var sqlTesting: [UUID: any SQLExecuting] = [:]
@@ -334,6 +343,76 @@ final class IDEDatabaseSupport {
     /// Keystrokes never touch this; completion reads its pushed snapshot instead.
     func sqlSession(for connectionID: UUID) -> SQLSession? {
         sqlSessions[connectionID]
+    }
+
+    func displayedSQLScope(_ source: DatabaseConnection) -> IDEDatabaseSQLScope {
+        if let scope = sqlScopes[source.id] { return scope }
+        return .init(database: source.sqlLogin(password: "").handshakeDatabase,
+                     schema: source.engine == .postgres ? "public" : nil)
+    }
+
+    func scopeChangedInConsole(_ connectionID: UUID) -> Bool {
+        sqlUnindexedScopes.contains(connectionID)
+    }
+
+    func sqlScopeChoices(connectionID: UUID, schemas: Bool) async throws -> [String] {
+        guard let session = sqlSessions[connectionID] else { throw DatabaseError.notConnected }
+        let names = try await (schemas ? session.schemaNames() : session.databaseNames())
+        guard sqlSessions[connectionID] === session else { throw CancellationError() }
+        return names
+    }
+
+    func mongoScopeChoices(connectionID: UUID, database: String?) async throws -> [String] {
+        guard let session = mongoSessions[connectionID] else { throw DatabaseError.notConnected }
+        let names: [String]
+        if let database {
+            if let cached = mongoSchemas[connectionID]?.collections[database] { return cached }
+            names = try await session.listCollections(database: database)
+            guard mongoSessions[connectionID] === session else { throw CancellationError() }
+            mongoSchemas[connectionID]?.collections[database] = names
+        } else {
+            names = mongoSchemas[connectionID]?.databases ?? []
+        }
+        return names
+    }
+
+    func switchSQLScope(connectionID id: UUID, database: String? = nil, schema: String? = nil) async throws {
+        guard let source = catalog.connection(id: id), let oldSession = sqlSessions[id],
+              source.engine == .postgres || source.engine == .mysql else { throw DatabaseError.notConnected }
+        guard !isRunning, productionPrompt == nil, switchingSQLSourceID == nil else {
+            throw DatabaseError.executionFailed("Wait for the current database operation to finish.")
+        }
+        let current = displayedSQLScope(source)
+        let target = IDEDatabaseSQLScope(database: database ?? current.database,
+                                         schema: schema ?? (database == nil || database == current.database ? current.schema : nil))
+        guard target != current || scopeChangedInConsole(id) else { return }
+        switchingSQLSourceID = id
+        defer { if switchingSQLSourceID == id { switchingSQLSourceID = nil } }
+        guard await oldSession.transactionState() == .none else {
+            throw DatabaseError.executionFailed("Finish the transaction before switching database or schema.")
+        }
+        let password = try keychain.load(account: id.uuidString) ?? ""
+        var login = source.sqlLogin(password: password)
+        login.database = target.database
+        login.postgresSchema = target.schema
+        let replacement = try await SQLSession.connect(login: login, readOnly: source.readOnly)
+        do {
+            let tables = try await replacement.tables()
+            try Task.checkCancellation()
+            guard sqlSessions[id] === oldSession, catalog.connection(id: id) == source else { throw CancellationError() }
+            let previous = detachConnection(id)
+            sqlSessions[id] = replacement
+            sqlScopes[id] = target
+            scopeRevisions[id] = UUID()
+            sqlSchemas[id] = IDEDatabaseSQLSchema(tables: tables)
+            refreshSQLSnapshots(connectionID: id)
+            loadSQLCatalog(connectionID: id)
+            await previous.load?.value
+            await previous.sql?.disconnect()
+        } catch {
+            await replacement.disconnect()
+            throw error
+        }
     }
 
     func sqlRelation(_ name: String, connectionID: UUID) -> SQLCatalog.Relation? {
@@ -399,6 +478,8 @@ final class IDEDatabaseSupport {
     private func commitEditor(_ connection: DatabaseConnection) {
         guard let editor else { return }
         let wasConnected = isConnected(connection.id)
+        sqlScopes[connection.id] = nil
+        scopeRevisions[connection.id] = UUID()
         catalog.upsert(connection)
         do {
             try keychain.save(editor.password, account: connection.id.uuidString)
@@ -477,6 +558,8 @@ final class IDEDatabaseSupport {
     }
 
     func remove(_ id: UUID) {
+        sqlScopes[id] = nil
+        scopeRevisions[id] = nil
         Task { await disconnect(id) }
         catalog.remove(id: id)
         try? keychain.delete(account: id.uuidString)
@@ -485,6 +568,7 @@ final class IDEDatabaseSupport {
 
     func connect(_ id: UUID) async throws {
         guard let connection = catalog.connection(id: id) else { return }
+        guard switchingSQLSourceID != id else { throw DatabaseError.executionFailed("The source is switching scope.") }
         // An in-memory database exists only inside its one connection. Connecting again would
         // quietly replace it with an empty one, so an open in-memory source is left alone;
         // Disconnect is the explicit way to discard it.
@@ -502,8 +586,13 @@ final class IDEDatabaseSupport {
         let password = try keychain.load(account: id.uuidString) ?? ""
         switch connection.engine {
         case .mysql, .postgres, .sqlite:
+            var login = connection.sqlLogin(password: password)
+            if let scope = sqlScopes[id] {
+                login.database = scope.database
+                login.postgresSchema = scope.schema
+            }
             let session = try await SQLSession.connect(
-                login: connection.sqlLogin(password: password), readOnly: connection.readOnly
+                login: login, readOnly: connection.readOnly
             )
             let tables: [String]
             let note: IDEDatabaseSourceNote?
@@ -595,7 +684,7 @@ final class IDEDatabaseSupport {
         load?.cancel()
         connectionAttempts[id] = nil
         sqlCatalogGenerations[id] = nil
-        sqlUnindexedScopes.remove(id)
+        if sqlUnindexedScopes.remove(id) != nil { scopeRevisions[id] = UUID() }
         sqlCatalogs[id] = nil
         sqlSchemas[id] = nil
         sqlTransactions[id] = nil
@@ -776,7 +865,7 @@ final class IDEDatabaseSupport {
         resetSort: Bool = true,
         consoleID: UUID? = nil
     ) async {
-        guard !preparedStatements.isEmpty, productionPrompt == nil else { return }
+        guard !preparedStatements.isEmpty, productionPrompt == nil, switchingSQLSourceID == nil else { return }
         showsResultsTab = true
         // One statement at a time per window: a second run would overwrite the first one's header
         // and result while it is still going (audit F-08), and a connection runs one statement at
@@ -795,8 +884,10 @@ final class IDEDatabaseSupport {
             return
         }
         if connection.isProduction == true, connection.engine != .mongo, !connection.readOnly {
+            let revision = scopeRevisions[connection.id]
             let writes = await runDetached { preparedStatements.filter { !DatabaseQuery.canPage($0.sql) }.map(\.text) }
-            guard !Task.isCancelled, !isRunning, productionPrompt == nil,
+            guard !Task.isCancelled, !isRunning, productionPrompt == nil, switchingSQLSourceID == nil,
+                  scopeRevisions[connection.id] == revision,
                   catalog.connection(id: connection.id) == connection,
                   consoleID == nil || consoleID.flatMap({ consoles[$0] }) == binding else { return }
             if !writes.isEmpty {
@@ -806,7 +897,8 @@ final class IDEDatabaseSupport {
                 var iterator = stream.makeAsyncIterator()
                 let approved = await iterator.next() == true
                 if productionPrompt?.id == prompt.id { productionPrompt = nil }
-                guard approved, !Task.isCancelled, !isRunning, catalog.connection(id: connection.id) == connection,
+                guard approved, !Task.isCancelled, !isRunning, switchingSQLSourceID == nil,
+                      scopeRevisions[connection.id] == revision, catalog.connection(id: connection.id) == connection,
                       consoleID == nil || consoleID.flatMap({ consoles[$0] }) == binding else { return }
             }
         }
@@ -836,6 +928,7 @@ final class IDEDatabaseSupport {
                 runningConnectionID = nil
             }
         }
+        var history: [IDEDatabaseQueryHistory.Attempt] = []
         for statement in preparedStatements {
             guard executionID == execution, !isCancelling, !Task.isCancelled else { break }
             if let consoleID, consoles[consoleID] != binding { break }
@@ -843,6 +936,10 @@ final class IDEDatabaseSupport {
                 statement, binding: binding, connection: connection, resetSort: resetSort, execution: execution
             )
             guard executionID == execution else { return }
+            if history.count == IDEDatabaseQueryHistory.limit { history.removeFirst() }
+            history.append(.init(statement: statement.text,
+                                 status: result.error != nil ? .failed : (finished ? .completed : .cancelled),
+                                 duration: result.duration ?? .zero))
             if resetSort, preparedStatements.count > 1 {
                 selectedScriptResult = scriptResults.count
                 scriptResults.append(result)
@@ -851,6 +948,10 @@ final class IDEDatabaseSupport {
             }
             if !finished { break }
         }
+        if catalog.connection(id: connection.id) != nil {
+            await catalog.history.record(history, source: connection.id, engine: connection.engine)
+        }
+        guard executionID == execution else { return }
         if let session = sqlSessions[connection.id] {
             let transaction = await session.transactionState()
             if executionID == execution, sqlSessions[connection.id] === session {
@@ -926,7 +1027,8 @@ final class IDEDatabaseSupport {
             canSort: connection.engine == .mongo || DatabaseQuery.canPage(statement.sql), storage: storage,
             sortColumn: sortColumn, sortAscending: sortAscending, statement: statement.text,
             preparedStatement: statement, connectionID: connection.id,
-            mongoDatabase: binding.mongoDatabase, mongoCollection: binding.mongoCollection, engine: connection.engine
+            mongoDatabase: binding.mongoDatabase, mongoCollection: binding.mongoCollection, engine: connection.engine,
+            scopeRevision: scopeRevisions[connection.id]
         )
         let started = ContinuousClock.now
         let updates = Task { [weak self] in
@@ -989,6 +1091,7 @@ final class IDEDatabaseSupport {
                 if impact == .scope, !summary.wasCancelled,
                    let liveSession, sqlSessions[connection.id] === liveSession {
                     sqlUnindexedScopes.insert(connection.id)
+                    scopeRevisions[connection.id] = UUID()
                 }
             }
             await store.finish()
@@ -1096,9 +1199,10 @@ final class IDEDatabaseSupport {
     }
 
     func sort(by column: String, consoleID: UUID? = nil) async {
-        guard !isRunning else { return }
+        guard !isRunning, switchingSQLSourceID == nil else { return }
         if let consoleID { switchResultOwner(to: consoleID) }
-        guard result.canSort, let id = result.connectionID, let statement = result.preparedStatement else { return }
+        guard result.canSort, let id = result.connectionID, result.scopeRevision == scopeRevisions[id],
+              let statement = result.preparedStatement else { return }
         if result.sortColumn == column {
             result.sortAscending.toggle()
         } else {

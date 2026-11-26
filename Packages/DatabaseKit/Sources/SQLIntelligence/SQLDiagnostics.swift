@@ -175,11 +175,7 @@ public enum SQLDiagnosticsEngine {
             for source in segment.sources {
                 guard case .table(let parts) = source.kind, let table = parts.last else { continue }
                 if parts.count == 1, model.findCTE(named: table, from: blockID) != nil { continue }
-                if parts.count > 1 {
-                    let schema = parts[parts.count - 2]
-                    guard parts.count == 2,
-                          catalog.defaultSchema?.caseInsensitiveCompare(schema) == .orderedSame else { continue }
-                }
+                guard catalog.coversName(qualifiedBy: parts) else { continue }
                 if catalog.relation(qualifiedBy: parts) == nil {
                     let nameToken = model.tokens[source.start + (parts.count - 1) * 2]
                     result.append(SQLDiagnostic(nameToken.range, .error, "unknown-table", "There is no table or view named \"\(table)\"."))

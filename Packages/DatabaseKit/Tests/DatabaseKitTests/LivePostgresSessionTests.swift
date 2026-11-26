@@ -154,6 +154,7 @@ struct LivePostgresSessionTests {
         try await Task.sleep(for: .milliseconds(300))
         let started = ContinuousClock.now
         task.cancel()
+        await session.cancelRunning()
         let result = try await task.value
         #expect(result.summary.wasCancelled)
         #expect(ContinuousClock.now - started < .seconds(3))

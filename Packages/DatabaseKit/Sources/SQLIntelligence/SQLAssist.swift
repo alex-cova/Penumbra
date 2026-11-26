@@ -80,7 +80,9 @@ public enum SQLAssist {
                     if parts.count == 1, let (cte, owner) = model.findCTE(named: name, from: blockID) {
                         return Target(kind: .cte(cte.name, range: cteRange(model, cte, owner)), range: range)
                     }
-                    return Target(kind: .relation(catalog.relation(qualifiedBy: parts), name: name), range: range)
+                    let relation = catalog.relation(qualifiedBy: parts)
+                    guard relation != nil || catalog.coversName(qualifiedBy: parts) else { return nil }
+                    return Target(kind: .relation(relation, name: name), range: range)
                 }
             }
             if let alias = source.alias, model.name(index)?.caseInsensitiveCompare(alias) == .orderedSame, index > source.start {

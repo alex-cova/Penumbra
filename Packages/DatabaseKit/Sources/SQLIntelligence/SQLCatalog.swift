@@ -87,6 +87,12 @@ public struct SQLCatalog: Equatable, Sendable {
         relations.first { $0.name == name } ?? relations.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
+    func coversName(qualifiedBy parts: [String]) -> Bool {
+        guard isComplete else { return false }
+        if parts.count == 1 { return true }
+        return parts.count == 2 && defaultSchema?.caseInsensitiveCompare(parts[0]) == .orderedSame
+    }
+
     func relation(qualifiedBy parts: [String]) -> Relation? {
         guard let name = parts.last else { return nil }
         if parts.count == 1 { return relation(named: name) }

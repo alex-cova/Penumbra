@@ -35,7 +35,9 @@ public actor PostgresSession {
     private let connection: PostgresConnection
     private let logger: Logger
     private var cancelConnection: PostgresConnection?
-    private var isRunning = false
+    private var runningStatement: UUID?
+    private var isRunning: Bool { runningStatement != nil }
+    private var isSendingCancel = false
     private var cancelRequested = false
     private var isClosed = false
 
@@ -62,6 +64,18 @@ public actor PostgresSession {
         logger.logLevel = .warning
         let connection = try await openConnection(login: login, logger: logger)
         do {
+            if let schema = login.postgresSchema {
+                let quoted = try SQLIdentifiers.quote(schema, engine: .postgres)
+                let access = try await connection.query(
+                    "SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = \(schema) AND has_schema_privilege(oid, 'USAGE')",
+                    logger: logger
+                )
+                var found = false
+                for try await _ in access { found = true }
+                guard found else { throw DatabaseError.executionFailed("Cannot use PostgreSQL schema \(schema).") }
+                let changed = try await connection.query("SELECT pg_catalog.set_config('search_path', \(quoted), false)", logger: logger)
+                for try await _ in changed {}
+            }
             // Server facts, read once. These are the only queries that run on connect.
             let rows = try await connection.query(
                 """
@@ -180,9 +194,10 @@ public actor PostgresSession {
             }
         }
         let query = PostgresQuery(unsafeSQL: trimmed, binds: bindings)
-        isRunning = true
+        let statementID = UUID()
+        runningStatement = statementID
         cancelRequested = false
-        defer { isRunning = false }
+        defer { runningStatement = nil }
 
         let start = ContinuousClock.now
         let wrapped = readOnly || options.forceReadOnly
@@ -217,7 +232,7 @@ public actor PostgresSession {
                 throw Self.map(error)
             }
         } onCancel: {
-            Task { await self.cancelRunning() }
+            Task { await self.cancelRunning(markRequested: true, statementID: statementID) }
         }
     }
 
@@ -414,11 +429,15 @@ public actor PostgresSession {
         await cancelRunning(markRequested: true)
     }
 
-    private func cancelRunning(markRequested: Bool) async {
-        guard isRunning else { return }
+    private func cancelRunning(markRequested: Bool, statementID: UUID? = nil) async {
+        guard let running = runningStatement, !isClosed, statementID == nil || statementID == running else { return }
         if markRequested { cancelRequested = true }
+        guard !isSendingCancel else { return }
+        isSendingCancel = true
+        defer { isSendingCancel = false }
         do {
             let helper = try await cancelHelper()
+            guard !isClosed, runningStatement == running else { return }
             _ = try await helper.query(
                 PostgresQuery(unsafeSQL: "SELECT pg_cancel_backend(\(backendPID))"), logger: logger
             )
@@ -433,6 +452,10 @@ public actor PostgresSession {
     private func cancelHelper() async throws -> PostgresConnection {
         if let cancelConnection, !cancelConnection.isClosed { return cancelConnection }
         let helper = try await Self.openConnection(login: login, logger: logger)
+        if isClosed {
+            try? await helper.close()
+            throw DatabaseError.notConnected
+        }
         cancelConnection = helper
         return helper
     }

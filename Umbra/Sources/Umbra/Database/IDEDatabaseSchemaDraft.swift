@@ -33,6 +33,7 @@ struct IDEDatabaseSchemaDraft: Identifiable {
     let id = UUID()
     let connection: DatabaseConnection
     let operation: Operation
+    let sqlScope: IDEDatabaseSQLScope?
     var table: String
     var name = ""
     var columns = [Column()]
@@ -46,10 +47,11 @@ struct IDEDatabaseSchemaDraft: Identifiable {
         connection.engine == .sqlite && (operation == .addForeignKey || operation == .addUnique)
     }
 
-    init(connection: DatabaseConnection, operation: Operation, table: String = "") {
+    init(connection: DatabaseConnection, operation: Operation, table: String = "", sqlScope: IDEDatabaseSQLScope? = nil) {
         self.connection = connection
         self.operation = operation
         self.table = table
+        self.sqlScope = sqlScope
     }
 
     func statement() throws -> String {
@@ -66,9 +68,9 @@ struct IDEDatabaseSchemaDraft: Identifiable {
         }
         let relation = operation == .createTable ? try quote(table) : try SQLIdentifiers.quote(table, engine: engine)
         let scope = switch engine {
-        case .postgres: "public"
+        case .postgres: sqlScope?.schema ?? "public"
         case .sqlite: "main"
-        case .mysql: connection.database.isEmpty ? "information_schema" : connection.database
+        case .mysql: sqlScope?.database ?? connection.sqlLogin(password: "").handshakeDatabase
         case .mongo: throw DatabaseError.executionFailed("The schema editor requires a SQL source.")
         }
         let schema = try quote(scope)

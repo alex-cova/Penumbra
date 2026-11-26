@@ -23,6 +23,7 @@ struct IDEDatabaseSidebar: View {
             mongoSchemas: support.mongoSchemas,
             expanded: support.expanded,
             notes: support.sourceNotes.mapValues(\.tag),
+            sqlScopes: support.sqlScopes,
             connecting: support.connectingIDs,
             query: query, filter: filter, favorites: support.favoriteObjects, recents: support.recentObjects
         )
@@ -409,7 +410,10 @@ struct IDEDatabaseSidebar: View {
         }
         if connection.engine != .mongo {
             if support.isConnected(connection.id), !connection.readOnly {
-                Button("Create Table…") { workspace.databaseSchemaDraft = .init(connection: connection, operation: .createTable) }
+                Button("Create Table…") {
+                    workspace.databaseSchemaDraft = .init(connection: connection, operation: .createTable,
+                                                          sqlScope: support.displayedSQLScope(connection))
+                }
             }
             Button("Show Schema Diagram") { workspace.showSchemaDiagram(connection) }
             Button("Copy Database SQL") { workspace.copyDatabaseSQL(connection) }
@@ -425,7 +429,8 @@ struct IDEDatabaseSidebar: View {
             Menu("Generate Schema Change") {
                 ForEach(IDEDatabaseSchemaDraft.Operation.tableActions(for: connection.engine)) { operation in
                     Button(operation.rawValue) {
-                        workspace.databaseSchemaDraft = .init(connection: connection, operation: operation, table: table)
+                        workspace.databaseSchemaDraft = .init(connection: connection, operation: operation, table: table,
+                                                              sqlScope: support.displayedSQLScope(connection))
                     }
                 }
             }

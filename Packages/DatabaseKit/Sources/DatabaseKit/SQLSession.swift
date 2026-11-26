@@ -22,6 +22,7 @@ public struct SQLLogin: Equatable, Sendable {
     public var requireTLS: Bool
     public var unixSocketPath: String?
     public var sqliteBusyTimeoutMilliseconds = 5_000
+    public var postgresSchema: String?
 
     public init(
         engine: DatabaseEngine,
@@ -33,7 +34,8 @@ public struct SQLLogin: Equatable, Sendable {
         useTLS: Bool = false,
         requireTLS: Bool = false,
         unixSocketPath: String? = nil,
-        sqliteBusyTimeoutMilliseconds: Int = 5_000
+        sqliteBusyTimeoutMilliseconds: Int = 5_000,
+        postgresSchema: String? = nil
     ) {
         self.engine = engine == .mongo ? .postgres : engine
         self.host = host
@@ -45,6 +47,7 @@ public struct SQLLogin: Equatable, Sendable {
         self.requireTLS = requireTLS
         self.unixSocketPath = unixSocketPath
         self.sqliteBusyTimeoutMilliseconds = min(Int(Int32.max), max(0, sqliteBusyTimeoutMilliseconds))
+        self.postgresSchema = postgresSchema
     }
 }
 
@@ -118,6 +121,8 @@ enum SQLURLs {
 public final class SQLSession: SQLExecuting, @unchecked Sendable {
     public let engine: DatabaseEngine
     public let readOnly: Bool
+    private var postgresSchema: String { postgresLogin?.postgresSchema ?? "public" }
+    private var postgresSchemaLiteral: String { quoteSQLLiteral(postgresSchema) }
 
     /// MySQL likewise: one connection for statements, one for metadata (audit F-01).
     private var mysqlConsole: MySQLSession?
@@ -170,16 +175,22 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
 
     public func disconnect() async {
         let sqliteSession = sqlite
+        let mysqlConsoleSession = mysqlConsole
+        let console = postgresConsole
         sqlite = nil
-        await sqliteSession?.close()
-        let mysqlConsoleSession = mysqlConsole, mysqlMetadataSession = mysqlMetadata
         mysqlConsole = nil
+        postgresConsole = nil
+        await mysqlMetadataGate.lock()
+        let mysqlMetadataSession = mysqlMetadata
         mysqlMetadata = nil
+        await mysqlMetadataGate.unlock()
+        await metadataGate.lock()
+        let metadata = postgresMetadata
+        postgresMetadata = nil
+        await metadataGate.unlock()
+        await sqliteSession?.close()
         await mysqlConsoleSession?.close()
         await mysqlMetadataSession?.close()
-        let console = postgresConsole, metadata = postgresMetadata
-        postgresConsole = nil
-        postgresMetadata = nil
         await console?.close()
         await metadata?.close()
     }
@@ -194,6 +205,30 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
 
     /// The SQLite session, for maintenance and attach (nil for every other engine).
     public var sqliteSession: SQLiteSession? { sqlite }
+
+    public func databaseNames() async throws -> [String] {
+        switch engine {
+        case .postgres:
+            try await postgresQuery("""
+                SELECT datname FROM pg_catalog.pg_database
+                WHERE datallowconn AND NOT datistemplate AND has_database_privilege(datname, 'CONNECT')
+                ORDER BY datname
+                """).rows.compactMap { $0.first ?? nil }
+        case .mysql:
+            try await mysqlQuery("SHOW DATABASES").rows.compactMap { $0.first ?? nil }
+        case .sqlite, .mongo: []
+        }
+    }
+
+    public func schemaNames() async throws -> [String] {
+        guard engine == .postgres else { return [] }
+        return try await postgresQuery("""
+            SELECT nspname FROM pg_catalog.pg_namespace
+            WHERE left(nspname, 3) <> 'pg_' AND nspname <> 'information_schema'
+              AND has_schema_privilege(oid, 'USAGE')
+            ORDER BY nspname
+            """).rows.compactMap { $0.first ?? nil }
+    }
 
     public func transactionState() async -> TransactionState {
         if let postgresConsole { return await postgresConsole.transaction }
@@ -223,7 +258,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                 """
                 SELECT table_name, table_type
                 FROM information_schema.tables
-                WHERE table_schema = 'public' AND table_type IN ('BASE TABLE', 'VIEW')
+                WHERE table_schema = \(postgresSchemaLiteral) AND table_type IN ('BASE TABLE', 'VIEW')
                 ORDER BY table_name
                 """
             )
@@ -253,7 +288,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
         let (relations, columnsByTable, keys) = try await (relationList, columnMap, keyList)
         var complete = true
         let schema: String? = switch engine {
-        case .postgres: "public"
+        case .postgres: postgresSchema
         case .sqlite: "main"
         case .mysql: mysqlLogin?.database.isEmpty == false ? mysqlLogin?.database : nil
         case .mongo: nil
@@ -306,7 +341,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                 """
                 SELECT table_name
                 FROM information_schema.tables
-                WHERE table_schema = 'public'
+                WHERE table_schema = \(postgresSchemaLiteral)
                   AND table_type IN ('BASE TABLE', 'VIEW')
                 ORDER BY table_name
                 """
@@ -341,7 +376,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                 """
                 SELECT column_name, data_type, is_nullable, is_generated, identity_generation
                 FROM information_schema.columns
-                WHERE table_schema = 'public' AND table_name = \(literal)
+                WHERE table_schema = \(postgresSchemaLiteral) AND table_name = \(literal)
                 ORDER BY ordinal_position
                 """
             )
@@ -386,7 +421,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                        numeric_precision, numeric_scale, is_nullable, column_default,
                        is_generated, identity_generation
                 FROM information_schema.columns
-                WHERE table_schema = 'public'
+                WHERE table_schema = \(postgresSchemaLiteral)
                 ORDER BY table_name, ordinal_position
                 """
             )
@@ -426,7 +461,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                 CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS u(attnum, fattnum, ord)
                 JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = u.attnum
                 JOIN pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = u.fattnum
-                WHERE con.contype = 'f' AND n.nspname = 'public'
+                WHERE con.contype = 'f' AND n.nspname = \(postgresSchemaLiteral) AND fcl.relnamespace = cl.relnamespace
                 ORDER BY cl.relname, con.conname, u.ord
                 """
             )
@@ -478,7 +513,8 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
             return try await createTableStatement(relation.name)
         }
         let name = try SQLIdentifiers.quote(relation.name, engine: .postgres)
-        let qualified = "public.\(name)"
+        let schema = try SQLIdentifiers.quote(postgresSchema, engine: .postgres)
+        let qualified = "\(schema).\(name)"
         let result = try await postgresQuery("SELECT pg_get_viewdef(\(quoteSQLLiteral(qualified))::regclass, true)")
         guard let body = result.rows.first?.first ?? nil else {
             throw DatabaseError.executionFailed("No CREATE statement for \(relation.name).")
@@ -512,7 +548,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
                 JOIN pg_class ic ON ic.oid = i.indexrelid
                 JOIN pg_class tc ON tc.oid = i.indrelid
                 JOIN pg_attribute a ON a.attrelid = tc.oid AND a.attnum = ANY(i.indkey)
-                WHERE tc.relname = \(literal) AND tc.relnamespace = 'public'::regnamespace
+                WHERE tc.relname = \(literal) AND tc.relnamespace = \(postgresSchemaLiteral)::regnamespace
                 ORDER BY index_name, column_position
                 """
             )
@@ -574,7 +610,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
             JOIN information_schema.key_column_usage kcu
               ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
             WHERE tc.constraint_type = 'PRIMARY KEY'
-              AND tc.table_schema = 'public'
+              AND tc.table_schema = \(postgresSchemaLiteral)
             """
         )
         return SQLSchemaMapping.postgresPrimaryKeys(result)
@@ -589,7 +625,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
             JOIN information_schema.key_column_usage kcu
               ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
             WHERE tc.constraint_type = 'PRIMARY KEY'
-              AND tc.table_schema = 'public'
+              AND tc.table_schema = \(postgresSchemaLiteral)
               AND tc.table_name = \(literal)
             """
         )
@@ -617,9 +653,10 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
 
     /// A schema read, on the metadata connection (created on first use, read-only, one at a time).
     private func mysqlQuery(_ sql: String) async throws -> QueryResult {
-        guard let login = mysqlLogin, mysqlConsole != nil else { throw DatabaseError.notConnected }
         await mysqlMetadataGate.lock()
         do {
+            try Task.checkCancellation()
+            guard let login = mysqlLogin, mysqlConsole != nil else { throw DatabaseError.notConnected }
             let session: MySQLSession
             if let existing = mysqlMetadata {
                 session = existing
@@ -646,9 +683,10 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
     /// A schema read, on the metadata connection (created on first use, always read-only, and
     /// used one statement at a time).
     private func postgresQuery(_ sql: String) async throws -> QueryResult {
-        guard let login = postgresLogin, postgresConsole != nil else { throw DatabaseError.notConnected }
         await metadataGate.lock()
         do {
+            try Task.checkCancellation()
+            guard let login = postgresLogin, postgresConsole != nil else { throw DatabaseError.notConnected }
             let session: PostgresSession
             if let existing = postgresMetadata {
                 session = existing
@@ -885,7 +923,8 @@ private extension Array where Element == String? {
 }
 
 private func quoteSQLLiteral(_ value: String) -> String {
-    "'\(value.replacingOccurrences(of: "'", with: "''"))'"
+    let escaped = value.replacing("\\", with: "\\\\").replacing("'", with: "''")
+    return "E'\(escaped)'"
 }
 
 private extension SQLLogin {

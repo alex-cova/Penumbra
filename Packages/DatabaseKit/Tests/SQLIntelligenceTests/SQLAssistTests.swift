@@ -40,6 +40,10 @@ struct SQLHoverTests {
         incomplete.isComplete = false
         let (text2, caret2) = at("SELECT * FROM nowhe|re")
         #expect(SQLAssist.hover(text: text2, caret: caret2, dialect: .postgres, catalog: incomplete) == nil, "not loaded is not unknown")
+        var scoped = catalog
+        scoped.defaultSchema = "public"
+        let (other, otherCaret) = at("SELECT * FROM unindexed.nowhe|re")
+        #expect(SQLAssist.hover(text: other, caret: otherCaret, dialect: .postgres, catalog: scoped) == nil)
     }
 
     @Test func aliasesCtesAndAmbiguity() {

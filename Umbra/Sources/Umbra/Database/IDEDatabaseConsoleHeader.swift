@@ -6,6 +6,7 @@ struct IDEDatabaseConsoleHeader: View {
     let document: WorkbenchDocument
     let support: IDEDatabaseSupport
     let onBindingChange: () -> Void
+    @State private var showsHistory = false
 
     private var binding: IDEDatabaseConsoleBinding? { support.consoles[document.id] }
     private var connection: DatabaseConnection? {
@@ -36,15 +37,15 @@ struct IDEDatabaseConsoleHeader: View {
                     Label("Production", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(IDEAppearance.ColorToken.error)
                 }
-                if let scope = scope(for: connection) {
-                    Text(scope)
-                        .lineLimit(1)
-                        .help(scope)
-                }
+                scopeControls(connection)
                 Text(status(for: connection))
                 if connection.readOnly {
                     Label("Read Only", systemImage: "lock")
                 }
+                IDEIconButton(systemImage: "clock", help: "Query History") { showsHistory.toggle() }
+                    .popover(isPresented: $showsHistory) {
+                        IDEDatabaseQueryHistoryView(history: support.catalog.history, source: connection.id)
+                    }
             }
             Spacer(minLength: 0)
         }
@@ -68,13 +69,61 @@ struct IDEDatabaseConsoleHeader: View {
         onBindingChange()
     }
 
-    private func scope(for connection: DatabaseConnection) -> String? {
+    @ViewBuilder
+    private func scopeControls(_ connection: DatabaseConnection) -> some View {
         switch connection.engine {
-        case .sqlite: connection.isInMemorySQLite ? "In Memory · main" : "\(URL(fileURLWithPath: connection.database).lastPathComponent) · main"
-        case .postgres: connection.database.isEmpty ? nil : connection.database
-        case .mysql: connection.database.isEmpty ? nil : connection.database
-        case .mongo: [binding?.mongoDatabase, binding?.mongoCollection].compactMap { $0 }.joined(separator: ".")
+        case .sqlite:
+            Text(connection.isInMemorySQLite ? "In Memory · main" : "\(URL(fileURLWithPath: connection.database).lastPathComponent) · main")
+                .lineLimit(1)
+        case .postgres, .mysql:
+            let scope = support.displayedSQLScope(connection)
+            let changed = support.scopeChangedInConsole(connection.id)
+            HStack(spacing: IDEAppearance.Spacing.xs) {
+                IDEDatabaseScopePicker(label: "Database", current: changed ? "" : scope.database) {
+                    try await support.sqlScopeChoices(connectionID: connection.id, schemas: false)
+                } select: { value in
+                    try await support.switchSQLScope(connectionID: connection.id, database: value)
+                }
+                if connection.engine == .postgres {
+                    IDEDatabaseScopePicker(label: "Schema", current: changed ? "" : (scope.schema ?? "public")) {
+                        try await support.sqlScopeChoices(connectionID: connection.id, schemas: true)
+                    } select: { value in
+                        try await support.switchSQLScope(connectionID: connection.id, schema: value)
+                    }
+                }
+                if changed {
+                    Label("Scope changed in SQL", systemImage: "exclamationmark.circle")
+                        .help("Choose an indexed scope to reset the connection's search settings.")
+                }
+            }
+            .disabled(!support.isConnected(connection.id) || support.isRunning || support.switchingSQLSourceID != nil)
+            .help("Scope applies to every console bound to this source in this window.")
+        case .mongo:
+            if let binding {
+                HStack(spacing: IDEAppearance.Spacing.xs) {
+                    IDEDatabaseScopePicker(label: "Database", current: binding.mongoDatabase ?? "") {
+                        try await support.mongoScopeChoices(connectionID: connection.id, database: nil)
+                    } select: { value in
+                        updateMongoBinding(binding, database: value, collection: nil)
+                    }
+                    if let database = binding.mongoDatabase {
+                        IDEDatabaseScopePicker(label: "Collection", current: binding.mongoCollection ?? "") {
+                            try await support.mongoScopeChoices(connectionID: connection.id, database: database)
+                        } select: { value in
+                            updateMongoBinding(binding, database: database, collection: value)
+                        }
+                    }
+                }
+                .disabled(!support.isConnected(connection.id) || support.isRunning)
+            }
         }
+    }
+
+    private func updateMongoBinding(_ current: IDEDatabaseConsoleBinding, database: String, collection: String?) {
+        guard !support.isRunning, binding == current else { return }
+        support.bindConsole(workbenchID: document.id, documentID: document.documentID,
+                            binding: .init(connectionID: current.connectionID, mongoDatabase: database, mongoCollection: collection))
+        onBindingChange()
     }
 
     private func status(for connection: DatabaseConnection) -> String {

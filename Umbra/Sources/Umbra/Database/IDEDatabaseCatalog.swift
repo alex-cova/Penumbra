@@ -8,9 +8,11 @@ import Observation
 final class IDEDatabaseCatalog {
     private(set) var connections: [DatabaseConnection] = []
     let storeURL: URL
+    let history: IDEDatabaseQueryHistory
 
     init(storeURL: URL) {
         self.storeURL = storeURL
+        history = IDEDatabaseQueryHistory(url: storeURL.deletingLastPathComponent().appendingPathComponent("database-query-history.json"))
         connections = Self.read(from: storeURL)
     }
 
@@ -49,6 +51,7 @@ final class IDEDatabaseCatalog {
     func remove(id: UUID) {
         connections.removeAll { $0.id == id }
         persist()
+        Task { await history.remove(source: id) }
     }
 
     private func persist() {

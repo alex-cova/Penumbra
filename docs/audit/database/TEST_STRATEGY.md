@@ -68,6 +68,8 @@ Baseline runs were taken after the first interim change (hardened read-only keyw
 
 The execution diagnostics follow-up verified a real PostgreSQL error through pagination and parameter rewriting and a real MySQL query with a warning. The SQLite console test verified the editor range in a selected, bound query containing Unicode and confirmed that a later edit clears it. All 60 focused Umbra tests passed. The SQL splitter suite also covers a position inside a rewritten placeholder, end of input, and invalid offsets.
 
+The history and scope follow-up passed 106 focused Umbra tests, all 267 DatabaseKit tests with the disposable servers, and the macOS Debug Xcode build. The live cases verify PostgreSQL schema quoting and matching execution and metadata scopes, refusal to switch an open transaction, preservation of old stored rows after switching, and cancellation from both the task and the session. MySQL cases verify warnings and affected-row counts for text and parameterized writes, zero-warning row-count behavior, and headers on empty text results. History tests verify redaction on disk, bounded retention, and recording completed and failed statements.
+
 ## Phase 5 verification
 
 - All 265 DatabaseKit tests passed with the disposable servers. Coverage includes PostgreSQL's million-row store test, 10,000 MySQL rows through socket read watermarks and spill, MongoDB grid columns discovered across cursor batches, and byte-limited chunks read back after spilling.

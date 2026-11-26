@@ -58,7 +58,7 @@ extension IDEWorkspace {
     func openDatabaseTable(_ connection: DatabaseConnection, table: String) {
         let sql: String
         do {
-            sql = try connection.selectAll(from: table)
+            sql = try "SELECT * FROM " + qualifiedDatabaseName(connection, parts: [table])
         } catch {
             databaseSupport.banner = error.localizedDescription
             return
@@ -90,7 +90,8 @@ extension IDEWorkspace {
 
     func openDatabaseSchemaDraft(_ sql: String, draft: IDEDatabaseSchemaDraft) {
         guard let source = databaseSupport.catalog.connection(id: draft.connection.id),
-              source.engine == draft.connection.engine else { return }
+              source.engine == draft.connection.engine,
+              draft.sqlScope == nil || draft.sqlScope == databaseSupport.displayedSQLScope(source) else { return }
         openConsole(title: draft.operation.rawValue, text: sql, language: "sql",
                     binding: .init(connectionID: source.id), run: false)
     }
@@ -117,10 +118,11 @@ extension IDEWorkspace {
 
     private func qualifiedDatabaseName(_ connection: DatabaseConnection, parts: [String]) throws -> String {
         if connection.engine == .mongo { return parts.joined(separator: ".") }
+        let scope = databaseSupport.displayedSQLScope(connection)
         let schema: String = switch connection.engine {
-        case .postgres: "public"
+        case .postgres: scope.schema ?? "public"
         case .sqlite: "main"
-        case .mysql: connection.database.isEmpty ? "information_schema" : connection.database
+        case .mysql: scope.database
         case .mongo: ""
         }
         return try ([schema] + parts).map { try SQLIdentifiers.quote($0, engine: connection.engine) }.joined(separator: ".")

@@ -74,6 +74,7 @@ enum IDEDatabaseTree {
         mongoSchemas: [UUID: IDEDatabaseMongoSchema],
         expanded: Set<String>,
         notes: [UUID: String] = [:],
+        sqlScopes: [UUID: IDEDatabaseSQLScope] = [:],
         connecting: Set<UUID> = [],
         query: String = "",
         filter: Filter = .all,
@@ -109,7 +110,8 @@ enum IDEDatabaseTree {
             for connection in groups[name] ?? [] {
                 let sourceStart = rows.count
                 append(connection, connected: connected, sqlSchemas: sqlSchemas, mongoSchemas: mongoSchemas,
-                       expanded: expanded, note: notes[connection.id], connecting: connecting, into: &rows)
+                       expanded: expanded, note: notes[connection.id], connecting: connecting,
+                       scope: sqlScopes[connection.id], into: &rows)
                 if searching {
                     for index in (sourceStart + 1)..<rows.count {
                         switch rows[index].kind {
@@ -151,6 +153,7 @@ enum IDEDatabaseTree {
         expanded: Set<String>,
         note: String?,
         connecting: Set<UUID>,
+        scope: IDEDatabaseSQLScope?,
         into rows: inout [Row]
     ) {
         let id = connection.id
@@ -190,7 +193,7 @@ enum IDEDatabaseTree {
         if connection.engine == .mongo {
             appendMongo(id, schema: mongoSchemas[id], expanded: expanded, into: &rows)
         } else {
-            appendSQL(id, connection: connection, schema: sqlSchemas[id], expanded: expanded, into: &rows)
+            appendSQL(id, connection: connection, schema: sqlSchemas[id], expanded: expanded, scope: scope, into: &rows)
         }
     }
 
@@ -199,14 +202,16 @@ enum IDEDatabaseTree {
         connection: DatabaseConnection,
         schema: IDEDatabaseSQLSchema?,
         expanded: Set<String>,
+        scope: IDEDatabaseSQLScope?,
         into rows: inout [Row]
     ) {
         let key = schemaKey(id)
         let isOpen = expanded.contains(key)
+        let database = scope?.database ?? connection.database
         rows.append(Row(
             id: key,
-            title: connection.engine == .sqlite ? "main" : (connection.database.isEmpty ? "Database" : connection.database),
-            detail: connection.engine == .postgres ? "public" : "",
+            title: connection.engine == .sqlite ? "main" : (database.isEmpty ? "Database" : database),
+            detail: connection.engine == .postgres ? (scope?.schema ?? "public") : "",
             systemImage: "square.stack.3d.up",
             isAccent: false,
             depth: 1,

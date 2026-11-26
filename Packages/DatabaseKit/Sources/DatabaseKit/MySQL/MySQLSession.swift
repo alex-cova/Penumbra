@@ -19,9 +19,8 @@ import NIOPosix
 /// - MySQL sends rows without cursor demand. The client pauses NIO socket reads at a high
 ///   watermark while the `ResultStore` consumes and spills them. A
 ///   row limit stops the server with `KILL QUERY`. It is not a lazily pulled cursor.
-/// - The driver reports column definitions only with a row, so **an empty result has no column
-///   headers**. Callers that know the table (browsing `SELECT * FROM t`) read them from
-///   `information_schema` instead.
+/// - Text responses supply column definitions even when empty. The driver's prepared
+///   query callback supplies columns only when a row arrives.
 /// - DDL and several other statements commit implicitly. The session says so in the summary
 ///   (`implicitlyCommitted`) instead of pretending a transaction survived.
 public actor MySQLSession {
@@ -202,11 +201,11 @@ public actor MySQLSession {
                 if wrapped, !wasInsideTransaction {
                     _ = try await Self.collect(connection, "START TRANSACTION READ ONLY")
                 }
-                var summary = try await run(trimmed, bindings: bindings, into: store)
-                if options.collectNotices, !cancelRequested, !summary.limitReached,
-                   !summary.columns.isEmpty, Self.canCollectNotices(after: trimmed) {
+                let result = try await run(trimmed, bindings: bindings, into: store)
+                var summary = result.summary
+                if options.collectNotices, result.warningCount != 0, !cancelRequested, !summary.limitReached,
+                   Self.canCollectNotices(after: trimmed) {
                     // SHOW WARNINGS must run on this connection before the read-only rollback.
-                    // Restrict it to row results: the diagnostic query itself sets ROW_COUNT() to -1.
                     if let warnings = try? await Self.collect(connection, "SHOW WARNINGS LIMIT 100") {
                         summary.notices = warnings.compactMap { row in
                             guard row.count == 3, let level = row[0].rawText, let code = row[1].rawText,
@@ -249,7 +248,9 @@ public actor MySQLSession {
         return !SQLShaping.words(in: sql).words.prefix(4).contains { $0 == "WARNINGS" || $0 == "ERRORS" }
     }
 
-    private func run(_ sql: String, bindings: [MySQLData], into store: ResultStore) async throws -> ExecutionSummary {
+    private func run(
+        _ sql: String, bindings: [MySQLData], into store: ResultStore
+    ) async throws -> (summary: ExecutionSummary, warningCount: UInt16?) {
         let producesRows = Self.returnsRows(sql)
         let channel = connection.channel
         let producer = NIOAsyncSequenceProducer.makeSequence(
@@ -263,6 +264,7 @@ public actor MySQLSession {
         let source = producer.source
         let columnsBox = NIOLockedValueBox<[ResultColumn]?>(nil)
         let affectedRows = NIOLockedValueBox<Int?>(nil)
+        let warningCount = NIOLockedValueBox<UInt16?>(nil)
         let onRow: @Sendable (MySQLRow) -> Void = { row in
             columnsBox.withLockedValue { columns in
                 if columns == nil { columns = row.columnDefinitions.map(Self.column) }
@@ -277,7 +279,13 @@ public actor MySQLSession {
         }
         let future: EventLoopFuture<Void>
         if bindings.isEmpty {
-            future = connection.simpleQuery(sql, onRow: onRow)
+            let command = MySQLTextResultCommand(sql: sql, onColumns: { definitions in
+                columnsBox.withLockedValue { $0 = definitions.map(Self.column) }
+            }, onRow: onRow, onCompletion: { rows, warnings in
+                affectedRows.withLockedValue { $0 = rows.flatMap { Int(exactly: $0) } }
+                warningCount.withLockedValue { $0 = warnings }
+            })
+            future = connection.send(command, logger: connection.logger)
         } else {
             future = connection.query(sql, bindings, onRow: onRow) { metadata in
                 affectedRows.withLockedValue { $0 = Int(exactly: metadata.affectedRows) }
@@ -334,20 +342,12 @@ public actor MySQLSession {
             }
         }
         summary.rowCount = await store.rowCount
-        if !producesRows, !bindings.isEmpty {
+        if !producesRows {
             summary.affectedRows = affectedRows.withLockedValue { $0 }
-        } else if !producesRows {
-            // The text protocol returns no metadata, so the affected-row count is asked for.
-            // `ROW_COUNT()` reports the previous statement and is only meaningful right after it.
-            if let count = try? await Self.collect(connection, "SELECT ROW_COUNT()").first?.first,
-               case .int(let rows) = count, rows >= 0
-            {
-                summary.affectedRows = Int(rows)
-            }
         }
         summary.commandTag = producesRows ? "SELECT \(summary.rowCount)" : SQLShaping.firstKeyword(in: sql)
         await store.finish()
-        return summary
+        return (summary, warningCount.withLockedValue { $0 })
     }
 
     /// Statements whose result is a set of rows. MySQL has no data-modifying CTE in `SELECT`
