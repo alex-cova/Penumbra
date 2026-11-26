@@ -419,9 +419,14 @@ struct IDEEditorLayoutNode: View {
     }
 }
 
-/// Puts a pane in its allocated frame, growing from `edge` as `presence` runs
-/// 0 → 1 on open and shrinking back to it on close (Silica's `PanePlacement`,
-/// re-expressed without layout frames: the pane measures its own allocation).
+/// Reveals a pane from `edge` as `presence` runs 0 → 1 on open and hides it back toward the edge
+/// on close (Silica's `PanePlacement`).
+///
+/// A clip, not a frame: the pane keeps the size its split gives it, so its text view does not
+/// reflow on every frame of the animation. The modifier must never take part in layout. An earlier
+/// version measured the allocation with a `GeometryReader` and re-framed the pane; inside a
+/// transition modifier that reader was proposed the whole editor area instead of the pane's share,
+/// so every split drew its panes a quarter of the window too far right.
 private struct PanePresence: ViewModifier, Animatable {
     let edge: Edge?
     var presence: CGFloat
@@ -431,30 +436,42 @@ private struct PanePresence: ViewModifier, Animatable {
         set { presence = newValue }
     }
 
+    @ViewBuilder
     func body(content: Content) -> some View {
         if let edge {
-            GeometryReader { proxy in
-                let sideways = edge == .leading || edge == .trailing
-                content
-                    .frame(
-                        width: sideways ? proxy.size.width * presence : proxy.size.width,
-                        height: sideways ? proxy.size.height : proxy.size.height * presence
-                    )
-                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: alignment(of: edge))
-                    .clipped()
-            }
+            content.clipShape(PaneReveal(edge: edge, presence: presence))
         } else {
             content
         }
     }
+}
 
-    private func alignment(of edge: Edge) -> Alignment {
+/// The part of a rectangle that is showing: `presence` of it, anchored at `edge`.
+private struct PaneReveal: Shape {
+    let edge: Edge
+    var presence: CGFloat
+
+    nonisolated var animatableData: CGFloat {
+        get { presence }
+        set { presence = newValue }
+    }
+
+    nonisolated func path(in rect: CGRect) -> Path {
+        let share = min(max(presence, 0), 1)
+        var visible = rect
         switch edge {
-        case .leading: return .leading
-        case .trailing: return .trailing
-        case .top: return .top
-        case .bottom: return .bottom
+        case .leading:
+            visible.size.width = rect.width * share
+        case .trailing:
+            visible.origin.x = rect.maxX - rect.width * share
+            visible.size.width = rect.width * share
+        case .top:
+            visible.size.height = rect.height * share
+        case .bottom:
+            visible.origin.y = rect.maxY - rect.height * share
+            visible.size.height = rect.height * share
         }
+        return Path(visible)
     }
 }
 
@@ -495,7 +512,6 @@ struct IDEEditorPaneView: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(IDEEditorTabsBar.panesSpace)) } action: {
             workspace.editorPaneFrames[paneID] = $0
         }
-        .onDisappear { workspace.editorPaneFrames[paneID] = nil }
         // Where a tab dragged from another pane would land.
         .overlay {
             if workspace.tabDropPaneID == paneID {

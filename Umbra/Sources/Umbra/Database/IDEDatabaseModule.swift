@@ -64,7 +64,8 @@ struct IDEDatabaseModule: IDELanguageModule {
                 AnyView(IDEDatabaseResultView(
                     support: workspace.databaseSupport,
                     consoleID: workspace.isDatabaseConsoleActive ? workspace.workbench.activePane.selectedDocument?.id : nil,
-                    runChartQuery: { [weak workspace] sql, binding in workspace?.runDatabaseChartQuery(sql, binding: binding) }
+                    runChartQuery: { [weak workspace] sql, binding in workspace?.runDatabaseChartQuery(sql, binding: binding) },
+                    runResultQuery: { [weak workspace] query in workspace?.openDatabaseResultQuery(query) }
                 ))
             }
         )]

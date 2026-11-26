@@ -226,6 +226,19 @@ public struct ResultColumn: Equatable, Sendable, Codable {
     /// possible for columns that have an origin.
     public var origin: Origin?
     public var isNullable: Bool?
+    /// PostgreSQL's RowDescription identity for the column: the table's OID and the column's
+    /// attribute number, nil for a computed column. Resolved to names when a result is made editable.
+    public var postgresSource: PostgresSource?
+
+    public struct PostgresSource: Equatable, Sendable, Codable {
+        public var tableOID: UInt32
+        public var attribute: Int16
+
+        public init(tableOID: UInt32, attribute: Int16) {
+            self.tableOID = tableOID
+            self.attribute = attribute
+        }
+    }
 
     public struct Origin: Equatable, Sendable, Codable {
         public var schema: String?
@@ -239,10 +252,14 @@ public struct ResultColumn: Equatable, Sendable, Codable {
         }
     }
 
-    public init(name: String, typeName: String = "", origin: Origin? = nil, isNullable: Bool? = nil) {
+    public init(
+        name: String, typeName: String = "", origin: Origin? = nil, isNullable: Bool? = nil,
+        postgresSource: PostgresSource? = nil
+    ) {
         self.name = name
         self.typeName = typeName
         self.origin = origin
         self.isNullable = isNullable
+        self.postgresSource = postgresSource
     }
 }

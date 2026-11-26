@@ -454,7 +454,7 @@ public actor SQLiteSession {
 
     /// SQLite is dynamically typed: the storage class of *this* value decides what it is, whatever
     /// the column declares. A column declared `INTEGER` can hold text; it is shown as the text.
-    private func value(_ statement: OpaquePointer, _ index: Int32, limits: ValueLimits = .standard) -> DatabaseValue {
+    private func value(_ statement: OpaquePointer, _ index: Int32, limits: ValueLimits = .current) -> DatabaseValue {
         switch sqlite3_column_type(statement, index) {
         case SQLITE_INTEGER:
             return .int(sqlite3_column_int64(statement, index))
@@ -548,6 +548,92 @@ public actor SQLiteSession {
 
     // MARK: - State
 
+    /// Applies a preview as one atomic batch. Outside a transaction it is its own `BEGIN IMMEDIATE`
+    /// and commits. Inside one the caller opened, it runs under a savepoint and leaves the
+    /// transaction open for the caller to commit or roll back. Any conflict, schema change or
+    /// rejected statement undoes the whole batch, and the caller can keep the edits staged.
+    @discardableResult
+    public func applyMutations(
+        _ mutations: [SQLiteRowMutation], table: String, schemaVersion: Int
+    ) async throws -> SQLMutationResult {
+        guard !readOnly else { throw DatabaseError.readOnlyViolation }
+        guard !isClosed else { throw DatabaseError.notConnected }
+        guard !isRunning else {
+            throw DatabaseError.executionFailed("Finish the running statement before submitting edits.")
+        }
+        guard !mutations.isEmpty, mutations.count <= 500 else {
+            throw DatabaseError.executionFailed("Submit between 1 and 500 changed rows.")
+        }
+        let statements = try mutations.map { try $0.statement(table: table) }
+        let nested = transaction.isOpen
+        let savepoint = "umbra_submit"
+        isRunning = true
+        defer { isRunning = false; updateTransactionState() }
+        try Task.checkCancellation()
+        _ = try await run(nested ? "SAVEPOINT \(savepoint)" : "BEGIN IMMEDIATE", parameters: [])
+        var result = SQLMutationResult(rowsAffected: 0, leftTransactionOpen: nested, insertedRowIDs: [:])
+        do {
+            guard try await pragma("schema_version") == String(schemaVersion) else {
+                throw DatabaseError.executionFailed("The table schema changed. Reopen the table before editing.")
+            }
+            for (index, statement) in statements.enumerated() {
+                try Task.checkCancellation()
+                let store = ResultStore(columns: [])
+                let summary: ExecutionSummary
+                do {
+                    summary = try await stepInternal(statement.sql, parameters: statement.parameters, into: store, requireReadOnly: false)
+                } catch let error as DatabaseServerError where error.code != "SQLITE_INTERRUPT" {
+                    await store.close()
+                    throw SQLiteMutationFailure(index: index, message: error.localizedDescription, code: error.code)
+                }
+                await store.close()
+                guard summary.affectedRows == 1 else {
+                    throw try await conflict(for: mutations[index], at: index, table: table)
+                }
+                result.rowsAffected += 1
+                if case .insert = mutations[index],
+                   case .int(let rowID)? = try await run("SELECT last_insert_rowid()", parameters: []).first?.first {
+                    result.insertedRowIDs[index] = rowID
+                }
+            }
+            try Task.checkCancellation()
+            _ = try await run(nested ? "RELEASE \(savepoint)" : "COMMIT", parameters: [])
+        } catch {
+            if nested {
+                _ = try? await run("ROLLBACK TO \(savepoint)", parameters: [])
+                _ = try? await run("RELEASE \(savepoint)", parameters: [])
+            } else {
+                _ = try? await run("ROLLBACK", parameters: [])
+            }
+            throw error
+        }
+        return result
+    }
+
+    /// Kept for callers that only update; a changed row throws `SQLiteOptimisticConflict`.
+    public func applyOptimisticUpdates(
+        _ updates: [SQLiteOptimisticUpdate], table: String, schemaVersion: Int
+    ) async throws {
+        try await applyMutations(updates.map(SQLiteRowMutation.update), table: table, schemaVersion: schemaVersion)
+    }
+
+    private func conflict(for mutation: SQLiteRowMutation, at index: Int, table: String) async throws -> SQLiteOptimisticConflict {
+        switch mutation {
+        case .update(let update):
+            let query = try update.readCurrent(table: table)
+            let current = try await run(query.sql, parameters: query.parameters, limit: 2)
+            return SQLiteOptimisticConflict(updateIndex: index, current: current.count == 1 ? current.first : nil)
+        case .delete(let delete):
+            guard let query = try delete.readCurrent(table: table) else {
+                return SQLiteOptimisticConflict(updateIndex: index, current: nil, isDeletion: true)
+            }
+            let current = try await run(query.sql, parameters: query.parameters, limit: 2)
+            return SQLiteOptimisticConflict(updateIndex: index, current: current.count == 1 ? current.first : nil, isDeletion: true)
+        case .insert:
+            return SQLiteOptimisticConflict(updateIndex: index, current: nil)
+        }
+    }
+
     private func updateTransactionState() {
         guard let db = handle.raw else { return }
         transaction = sqlite3_get_autocommit(db) == 0 ? .active(readOnly: false) : .none
@@ -557,17 +643,19 @@ public actor SQLiteSession {
         guard !readOnly else {
             throw DatabaseError.executionFailed("This database is open read-only; it has no transactions to keep.")
         }
-        guard !transaction.isOpen else { throw DatabaseError.executionFailed("A transaction is already open.") }
+        guard !isRunning, !transaction.isOpen else { throw DatabaseError.executionFailed("A statement or transaction is already open.") }
         _ = try await run(immediate ? "BEGIN IMMEDIATE" : "BEGIN", parameters: [])
         updateTransactionState()
     }
 
     public func commit() async throws {
+        guard !isRunning else { throw DatabaseError.executionFailed("A statement is already running.") }
         _ = try await run("COMMIT", parameters: [])
         updateTransactionState()
     }
 
     public func rollback() async throws {
+        guard !isRunning else { throw DatabaseError.executionFailed("A statement is already running.") }
         _ = try await run("ROLLBACK", parameters: [])
         updateTransactionState()
     }

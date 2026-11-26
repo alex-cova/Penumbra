@@ -8,6 +8,7 @@ struct IDEDatabaseConsoleBinding: Codable, Equatable, Sendable {
     var connectionID: UUID
     var mongoDatabase: String?
     var mongoCollection: String?
+    var sqliteBrowseTable: String?
 }
 
 struct IDEDatabaseSQLScope: Codable, Equatable, Sendable {
@@ -94,7 +95,54 @@ struct IDEDatabaseResult: Equatable {
     var mongoCollection: String?
     var engine: DatabaseEngine = .postgres
     var scopeRevision: UUID?
+    var pendingEdits: IDEDatabasePendingEdits?
+    var sqliteBrowseTable: String?
+    /// Why the result cannot be edited, when the app checked. Nil while it is editable or unchecked.
+    var readOnlyReason: String?
+    /// The table and key the server verified for this result's rows, whether or not they may be
+    /// written. Reading a large value and following a foreign key need only this.
+    var rowSource: IDEDatabaseEditTarget?
+}
 
+/// One step of following relationships in a console: the query that produced the result.
+struct IDEDatabaseNavigationEntry: Equatable {
+    let title: String
+    let statement: IDEDatabaseStatement
+    let binding: IDEDatabaseConsoleBinding
+    let scopeRevision: UUID?
+}
+
+/// Back and forward through the results a console showed by following foreign keys. Going back
+/// re-runs the earlier query: the history keeps statements, not rows.
+struct IDEDatabaseNavigationHistory: Equatable {
+    private(set) var entries: [IDEDatabaseNavigationEntry] = []
+    private(set) var index = 0
+
+    static let limit = 50
+
+    var canGoBack: Bool { index > 0 }
+    var canGoForward: Bool { index + 1 < entries.count }
+    var current: IDEDatabaseNavigationEntry? { entries.indices.contains(index) ? entries[index] : nil }
+    var backTitle: String? { canGoBack ? entries[index - 1].title : nil }
+    var forwardTitle: String? { canGoForward ? entries[index + 1].title : nil }
+
+    /// Starts the history at the query the console was showing.
+    init(origin: IDEDatabaseNavigationEntry) { entries = [origin] }
+
+    /// A new hop discards whatever was ahead, like a browser.
+    mutating func visit(_ entry: IDEDatabaseNavigationEntry) {
+        entries.removeSubrange((index + 1)...)
+        entries.append(entry)
+        if entries.count > Self.limit { entries.removeFirst(entries.count - Self.limit) }
+        index = entries.count - 1
+    }
+
+    mutating func move(by offset: Int) -> IDEDatabaseNavigationEntry? {
+        let target = index + offset
+        guard entries.indices.contains(target) else { return nil }
+        index = target
+        return entries[target]
+    }
 }
 
 struct IDEDatabaseResultSet {
@@ -307,7 +355,15 @@ final class IDEDatabaseSupport {
     private(set) var scriptResults: [IDEDatabaseResult] = []
     private(set) var selectedScriptResult = 0
     @ObservationIgnored private var executionID: UUID?
+    /// Batches applied inside a console's open transaction, per connection. A later statement
+    /// replaces the result that showed them, so the outcome is tracked here, not on the result.
+    @ObservationIgnored private var submittedBatches: [UUID: [IDEDatabasePendingEdits]] = [:]
+    @ObservationIgnored private var sqliteMutationTask: Task<SQLMutationResult, Error>?
     private var resultOwner: UUID?
+    /// Relationship hops per console, for Back and Forward. A statement the user runs ends it.
+    private(set) var navigationHistories: [UUID: IDEDatabaseNavigationHistory] = [:]
+    @ObservationIgnored private var isNavigating = false
+    private static let anonymousConsole = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     private var consoleResults: [UUID: IDEDatabaseResultSet] = [:]
     var banner: String?
 
@@ -326,6 +382,7 @@ final class IDEDatabaseSupport {
     var sqlSchemas: [UUID: IDEDatabaseSQLSchema] = [:]
     var mongoSchemas: [UUID: IDEDatabaseMongoSchema] = [:]
     private(set) var sqlTransactions: [UUID: TransactionState] = [:]
+    private(set) var databaseSavepoints: [UUID: [String]] = [:]
 
     init(
         catalog: IDEDatabaseCatalog = IDESharedServices.shared.databases,
@@ -457,6 +514,11 @@ final class IDEDatabaseSupport {
     func saveEditor() {
         guard let editor else { return }
         let connection = editor.connection()
+        guard !refuseDisconnecting(source: connection.id) else {
+            editor.status = banner
+            editor.testSucceeded = false
+            return
+        }
         if connection.engine == .sqlite, editor.createsNewFile, !connection.isInMemorySQLite,
            !FileManager.default.fileExists(atPath: connection.database)
         {
@@ -558,6 +620,7 @@ final class IDEDatabaseSupport {
     }
 
     func remove(_ id: UUID) {
+        guard !refuseDisconnecting(source: id) else { return }
         sqlScopes[id] = nil
         scopeRevisions[id] = nil
         Task { await disconnect(id) }
@@ -573,6 +636,9 @@ final class IDEDatabaseSupport {
         // quietly replace it with an empty one, so an open in-memory source is left alone;
         // Disconnect is the explicit way to discard it.
         if connection.isInMemorySQLite, isConnected(id) { return }
+        if isConnected(id), refuseDisconnecting(source: id) {
+            throw DatabaseError.executionFailed(banner ?? Self.pendingEditMessage)
+        }
         let previous = detachConnection(id)
         let attempt = UUID()
         connectionAttempts[id] = attempt
@@ -670,6 +736,7 @@ final class IDEDatabaseSupport {
     }
 
     func disconnect(_ id: UUID) async {
+        guard !refuseDisconnecting(source: id) else { return }
         let previous = detachConnection(id)
         await previous.load?.value
         await previous.sql?.disconnect()
@@ -687,7 +754,9 @@ final class IDEDatabaseSupport {
         if sqlUnindexedScopes.remove(id) != nil { scopeRevisions[id] = UUID() }
         sqlCatalogs[id] = nil
         sqlSchemas[id] = nil
+        if sqlTransactions[id]?.isOpen == true { noteTransactionBoundary(connectionID: id, .ended) }
         sqlTransactions[id] = nil
+        databaseSavepoints[id] = nil
         mongoSchemas[id] = nil
         sourceNotes[id] = nil
         refreshSQLSnapshots(connectionID: id)
@@ -695,6 +764,7 @@ final class IDEDatabaseSupport {
     }
 
     func closeAll() {
+        sqliteMutationTask?.cancel()
         productionPrompt?.resolve(false)
         productionPrompt = nil
         executionID = nil
@@ -720,6 +790,7 @@ final class IDEDatabaseSupport {
         mongoSessions.removeAll()
         sqlSchemas.removeAll()
         sqlTransactions.removeAll()
+        databaseSavepoints.removeAll()
         mongoSchemas.removeAll()
         if let provider = sqlCompletionProvider {
             for key in consolesByDocumentID.keys {
@@ -736,13 +807,17 @@ final class IDEDatabaseSupport {
     /// Stores the binding under both the workbench id and the EIP document id, and pushes the
     /// console's first snapshot (tables, no columns yet when freshly connected).
     func bindConsole(workbenchID: UUID, documentID: DocumentID, binding: IDEDatabaseConsoleBinding) {
-        if consoles[workbenchID] != binding { discardResults(for: workbenchID) }
+        if consoles[workbenchID] != binding {
+            guard !refuseDiscardingEdits(consoleID: workbenchID) else { return }
+            discardResults(for: workbenchID)
+        }
         consoles[workbenchID] = binding
         consolesByDocumentID[documentID.uuid] = binding
         pushSnapshot(for: documentID, binding: binding)
     }
 
     func closeConsole(workbenchID: UUID, documentID: DocumentID) {
+        guard !refuseDiscardingEdits(consoleID: workbenchID) else { return }
         discardResults(for: workbenchID)
         consoles.removeValue(forKey: workbenchID)
         consolesByDocumentID.removeValue(forKey: documentID.uuid)
@@ -875,6 +950,8 @@ final class IDEDatabaseSupport {
             return
         }
         if let consoleID, consoles[consoleID] != binding { return }
+        guard !refuseDiscardingEdits(consoleID: consoleID) else { return }
+        if resetSort, !isNavigating { navigationHistories[historyKey(consoleID)] = nil }
         guard let connection = catalog.connection(id: binding.connectionID) else {
             if let consoleID { switchResultOwner(to: consoleID) }
             Self.releaseResults([result] + scriptResults)
@@ -955,7 +1032,10 @@ final class IDEDatabaseSupport {
         if let session = sqlSessions[connection.id] {
             let transaction = await session.transactionState()
             if executionID == execution, sqlSessions[connection.id] === session {
+                let wasOpen = sqlTransactions[connection.id]?.isOpen == true
                 sqlTransactions[connection.id] = transaction
+                if !transaction.isOpen { databaseSavepoints[connection.id] = nil }
+                if wasOpen, !transaction.isOpen { noteTransactionBoundary(connectionID: connection.id, .ended) }
                 if sqlCatalogs[connection.id] == nil, sqlCatalogLoads[connection.id] == nil,
                    !transaction.isOpen || connection.engine == .sqlite {
                     loadSQLCatalog(connectionID: connection.id)
@@ -969,6 +1049,361 @@ final class IDEDatabaseSupport {
         return IDEDatabaseResultSet(result: result, scriptResults: scriptResults, selection: selectedScriptResult)
     }
 
+    private static let pendingEditMessage = "Submit or revert the staged database edits first."
+
+    func refuseDiscardingEdits(consoleID: UUID?) -> Bool {
+        let current = resultSet(for: consoleID)
+        let pending = ([current.result] + current.scriptResults).contains { $0.pendingEdits?.hasChanges == true }
+        if pending { banner = Self.pendingEditMessage }
+        return pending
+    }
+
+    var closeBlocker: String? {
+        if storedResults.contains(where: { $0.pendingEdits?.hasChanges == true }) { return Self.pendingEditMessage }
+        if sqlTransactions.values.contains(where: \.isOpen) { return "Commit or roll back the open database transaction first." }
+        if isRunning { return "Wait for the running database operation or cancel it first." }
+        return nil
+    }
+
+    private var storedResults: [IDEDatabaseResult] {
+        [result] + scriptResults + consoleResults.values.flatMap { [$0.result] + $0.scriptResults }
+    }
+
+    private func refuseDisconnecting(source: UUID) -> Bool {
+        if storedResults.contains(where: { $0.connectionID == source && $0.pendingEdits?.hasChanges == true }) {
+            banner = Self.pendingEditMessage
+        } else if runningConnectionID == source {
+            banner = "Wait for the running database operation or cancel it first."
+        } else if sqlTransactions[source]?.isOpen == true {
+            banner = "Commit or roll back the transaction before changing the connection."
+        } else {
+            return false
+        }
+        return true
+    }
+
+    func performTransaction(_ action: IDEDatabaseTransactionAction, connectionID: UUID) async {
+        guard !isRunning, switchingSQLSourceID == nil, productionPrompt == nil,
+              let session = sqlSessions[connectionID],
+              let source = catalog.connection(id: connectionID), !source.readOnly,
+              sourceNotes[connectionID] == nil else { return }
+        isRunning = true
+        runningConnectionID = connectionID
+        isCancelling = false
+        defer {
+            isRunning = false
+            runningConnectionID = nil
+            isCancelling = false
+        }
+        do {
+            let state = await session.transactionState()
+            switch action {
+            case .begin(let options):
+                guard !state.isOpen else { return }
+                try await session.beginTransaction(options)
+            case .commit, .rollback:
+                guard state.isOpen else { return }
+                let commit: Bool = if case .commit = action { true } else { false }
+                guard !commit || state != .aborted else { return }
+                try await session.endTransaction(commit: commit)
+                noteTransactionBoundary(connectionID: connectionID, commit ? .committed : .rolledBack)
+                databaseSavepoints[connectionID] = nil
+                invalidateSQLCatalog(connectionID: connectionID)
+                loadSQLCatalog(connectionID: connectionID)
+            case .savepoint, .rollbackTo, .release:
+                guard state.isOpen else { return }
+                var names = databaseSavepoints[connectionID] ?? []
+                var rolledBackTo: String?
+                let sql: String
+                switch action {
+                case .savepoint:
+                    guard state != .aborted, names.count < 32 else { return }
+                    let name = "umbra_" + UUID().uuidString.prefix(8).lowercased()
+                    sql = "SAVEPOINT \(name)"
+                    names.append(name)
+                case .rollbackTo(let name):
+                    guard let index = names.firstIndex(of: name) else { return }
+                    sql = "ROLLBACK TO SAVEPOINT \(name)"
+                    names = Array(names[...index])
+                    rolledBackTo = name
+                case .release(let name):
+                    guard state != .aborted, let index = names.firstIndex(of: name) else { return }
+                    sql = "RELEASE SAVEPOINT \(name)"
+                    if source.engine == .mysql { names.remove(at: index) }
+                    else { names = Array(names[..<index]) }
+                default: return
+                }
+                let store = ResultStore(columns: [])
+                let summary = try await session.execute(sql, parameters: [], into: store)
+                await store.close()
+                guard !summary.wasCancelled else { return }
+                databaseSavepoints[connectionID] = names
+                if let rolledBackTo { noteTransactionBoundary(connectionID: connectionID, .rolledBackTo(rolledBackTo.lowercased())) }
+            }
+        } catch { banner = error.localizedDescription }
+        if sqlSessions[connectionID] === session { sqlTransactions[connectionID] = await session.transactionState() }
+    }
+
+    /// Applies the staged batch. Without an open transaction it commits on its own. With one it
+    /// runs under a savepoint and stays *submitted*: the user's Commit or Rollback decides it.
+    /// Returns false when the batch stayed staged (a conflict or a rejected row); the pending
+    /// object says which row.
+    func submitEdits(
+        _ pending: IDEDatabasePendingEdits, storage: IDEDatabaseResultStorage, consoleID: UUID?
+    ) async throws -> Bool {
+        let current = resultSet(for: consoleID).result
+        guard !isRunning, switchingSQLSourceID == nil, productionPrompt == nil,
+              current.storage == storage, current.pendingEdits === pending, pending.isLocal,
+              let connectionID = current.connectionID,
+              let source = catalog.connection(id: connectionID), !source.readOnly else {
+            throw DatabaseError.executionFailed("The editable result or its writable connection is no longer available.")
+        }
+        let target = pending.target
+        let work: @Sendable ([SQLiteRowMutation]) async throws -> SQLMutationResult
+        let cancel: @Sendable () -> Void
+        switch target.engine {
+        case .sqlite:
+            guard let session = sqlSessions[connectionID]?.sqliteSession,
+                  session.options.location == source.sqliteOpenOptions().location else {
+                throw DatabaseError.executionFailed("The editable result or its writable SQLite session is no longer available.")
+            }
+            work = { try await session.applyMutations($0, table: target.table, schemaVersion: target.schemaVersion) }
+            cancel = { session.cancelRunning() }
+        case .postgres, .mysql:
+            guard let session = sqlSessions[connectionID], let sql = target.sql else {
+                throw DatabaseError.executionFailed("The editable result or its writable connection is no longer available.")
+            }
+            work = { mutations in
+                try await session.applyUpdates(mutations.compactMap { if case .update(let update) = $0 { update } else { nil } }, target: sql)
+            }
+            cancel = { Task { await session.cancelRunning() } }
+        case .mongo:
+            guard let session = mongoSessions[connectionID], let database = target.mongoDatabase else {
+                throw DatabaseError.executionFailed("The editable result or its writable connection is no longer available.")
+            }
+            work = { mutations in
+                let updates = mutations.compactMap { mutation -> MongoFieldUpdate? in
+                    if case .update(let update) = mutation { target.mongoUpdate(update) } else { nil }
+                }
+                guard updates.count == mutations.count else {
+                    throw DatabaseError.executionFailed("MongoDB edits are field updates only.")
+                }
+                return try await session.applyFieldUpdates(database: database, collection: target.table, updates: updates)
+            }
+            cancel = { Task { await session.cancelRunning() } }
+        }
+        let preview = pending.preview()
+        guard !preview.isEmpty else { return false }
+        isRunning = true
+        isCancelling = false
+        runningConnectionID = connectionID
+        let mutations = preview.map(\.mutation)
+        let task = Task { try await work(mutations) }
+        sqliteMutationTask = task
+        defer {
+            sqliteMutationTask = nil
+            isRunning = false
+            isCancelling = false
+            runningConnectionID = nil
+        }
+        do {
+            let outcome = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+                cancel()
+            }
+            if outcome.leftTransactionOpen {
+                pending.markSubmitted(savepoints: databaseSavepoints[connectionID] ?? [])
+                submittedBatches[connectionID, default: []].append(pending)
+            } else {
+                pending.markCommitted()
+            }
+            if target.engine != .mongo, sqlSessions[connectionID] != nil {
+                sqlTransactions[connectionID] = await sqlSessions[connectionID]?.transactionState() ?? .none
+            }
+            return true
+        } catch let conflict as SQLiteOptimisticConflict {
+            pending.markConflict(conflict, in: preview)
+            return false
+        } catch let failure as SQLiteMutationFailure {
+            pending.markRejected(failure, in: preview)
+            return false
+        }
+    }
+
+    /// Asks the server whether this result is editable and attaches the answer to whichever stored
+    /// result still holds the storage. The console never waits for it, and a later query simply
+    /// replaces the result it was for.
+    private func resolveEditTarget(
+        for session: SQLSession, columns: [ResultColumn], storage: IDEDatabaseResultStorage, connectionID: UUID,
+        writable: Bool
+    ) {
+        Task { @MainActor [weak self] in
+            let resolution = await session.resolveRowSource(columns: columns)
+            guard let self, self.sqlSessions[connectionID] === session else { return }
+            @MainActor func attach(_ result: inout IDEDatabaseResult) {
+                guard result.storage == storage, result.pendingEdits == nil, result.rowSource == nil else { return }
+                switch resolution {
+                case .editable(let target):
+                    if let editTarget = IDEDatabaseEditTarget(sql: target, columns: columns) {
+                        result.rowSource = editTarget
+                        if writable {
+                            result.pendingEdits = IDEDatabasePendingEdits(target: editTarget)
+                            result.readOnlyReason = nil
+                        } else {
+                            result.readOnlyReason = "This connection is read-only."
+                        }
+                    } else {
+                        result.readOnlyReason = "The key could not be matched to the result."
+                    }
+                case .readOnly(let reason): result.readOnlyReason = reason
+                }
+            }
+            attach(&self.result)
+            for index in self.scriptResults.indices { attach(&self.scriptResults[index]) }
+            for key in self.consoleResults.keys {
+                guard var saved = self.consoleResults[key] else { continue }
+                attach(&saved.result)
+                for index in saved.scriptResults.indices { attach(&saved.scriptResults[index]) }
+                self.consoleResults[key] = saved
+            }
+        }
+    }
+
+    /// The whole value of one cell, read from the database by the row's verified key. This is a
+    /// live read, so it can differ from what the grid stored when the query ran.
+    func fetchFullValue(in result: IDEDatabaseResult, row: Int, column: Int) async throws -> DatabaseValue {
+        guard !isRunning, let id = result.connectionID, let target = result.rowSource, let storage = result.storage,
+              scopeRevisions[id] == result.scopeRevision, let name = target.sourceNames[column] else {
+            throw DatabaseError.executionFailed("This result's rows are not tied to a verified table and key, so the value cannot be re-read.")
+        }
+        guard let values = try await storage.store.mapRows(in: row..<(row + 1), { $0 }).first,
+              let keys = target.keyValues(values: values) else {
+            throw DatabaseError.executionFailed("This row has no complete key value to read it by.")
+        }
+        switch target.engine {
+        case .sqlite:
+            guard let session = sqlSessions[id] else { throw DatabaseError.notConnected }
+            return try await session.fetchFullSQLiteValue(table: target.table, column: name, keys: keys)
+        case .postgres, .mysql:
+            guard let session = sqlSessions[id], let sql = target.sql else { throw DatabaseError.notConnected }
+            return try await session.fetchFullValue(column: name, keys: keys, target: sql)
+        case .mongo:
+            guard let session = mongoSessions[id], let database = target.mongoDatabase, let key = keys.first?.value else {
+                throw DatabaseError.notConnected
+            }
+            return try await session.fetchFullValue(database: database, collection: target.table, id: key, field: name)
+        }
+    }
+
+    /// Tells every result of this connection that a transaction ended, so a batch that was
+    /// submitted into it shows committed, rolled back, or unknown.
+    private func noteTransactionBoundary(connectionID: UUID, _ boundary: IDEDatabasePendingEdits.Boundary) {
+        guard let batches = submittedBatches[connectionID] else { return }
+        for batch in batches { batch.noteBoundary(boundary) }
+        let waiting = batches.filter { $0.phase == .submitted }
+        submittedBatches[connectionID] = waiting.isEmpty ? nil : waiting
+    }
+
+    /// COMMIT / END, ROLLBACK and ROLLBACK TO, read from the statement's own words.
+    nonisolated static func transactionBoundary(of statement: String, engine: DatabaseEngine) -> IDEDatabasePendingEdits.Boundary? {
+        guard let dialect = SQLDialect(engine: engine) else { return nil }
+        let source = statement as NSString
+        let words = Array(SQLLexer(statement, dialect: dialect).tokenize().lazy.filter { $0.kind != .comment }
+            .prefix(4).map { source.substring(with: $0.range).uppercased() })
+        switch words.first {
+        case "COMMIT", "END": return .committed
+        case "ROLLBACK":
+            guard words.count > 1, words[1] == "TO" else { return .rolledBack }
+            let name = words.dropFirst(2).first { $0 != "SAVEPOINT" }
+            return name.map { .rolledBackTo($0.trimmingCharacters(in: CharacterSet(charactersIn: "\"`[]")).lowercased()) } ?? .rolledBack
+        default: return nil
+        }
+    }
+
+    private func historyKey(_ consoleID: UUID?) -> UUID { consoleID ?? resultOwner ?? Self.anonymousConsole }
+
+    func navigationHistory(for consoleID: UUID?) -> IDEDatabaseNavigationHistory? {
+        navigationHistories[historyKey(consoleID)]
+    }
+
+    /// Runs a related-rows query in the console that holds the result, remembering where it came
+    /// from so Back returns to it.
+    func followRelation(_ query: IDEDatabaseResultQuery, consoleID: UUID?) async {
+        let key = historyKey(consoleID)
+        let current = resultSet(for: consoleID).result
+        guard !isRunning, !refuseDiscardingEdits(consoleID: consoleID),
+              let id = current.connectionID, id == query.binding.connectionID,
+              scopeRevisions[id] == query.scopeRevision, current.scopeRevision == query.scopeRevision,
+              let origin = current.preparedStatement else { return }
+        let binding = consoleID.flatMap { consoles[$0] } ?? query.binding
+        let entry = IDEDatabaseNavigationEntry(
+            title: query.title, statement: IDEDatabaseStatement(query.sql, parameters: query.parameters),
+            binding: binding, scopeRevision: query.scopeRevision)
+        var history = navigationHistories[key] ?? IDEDatabaseNavigationHistory(origin: .init(
+            title: "Original query", statement: origin, binding: binding, scopeRevision: current.scopeRevision))
+        history.visit(entry)
+        navigationHistories[key] = history
+        await runNavigation(entry, consoleID: consoleID)
+    }
+
+    /// Back (-1) or forward (+1): the earlier query runs again, so what shows is current data.
+    func navigateHistory(by offset: Int, consoleID: UUID?) async {
+        let key = historyKey(consoleID)
+        guard !isRunning, !refuseDiscardingEdits(consoleID: consoleID),
+              var history = navigationHistories[key], let entry = history.move(by: offset) else { return }
+        guard scopeRevisions[entry.binding.connectionID] == entry.scopeRevision else {
+            banner = "The database scope changed since that result, so it cannot be re-run from the history."
+            navigationHistories[key] = nil
+            return
+        }
+        navigationHistories[key] = history
+        await runNavigation(entry, consoleID: consoleID)
+    }
+
+    private func runNavigation(_ entry: IDEDatabaseNavigationEntry, consoleID: UUID?) async {
+        isNavigating = true
+        defer { isNavigating = false }
+        await execute(preparedStatements: [entry.statement], binding: entry.binding, resetSort: true, consoleID: consoleID)
+    }
+
+    /// Foreign-key hops from one cell: the row it points at and the rows that point at its row.
+    /// Only declared keys count, and only for a result whose table and key the server verified.
+    func relatedRows(in result: IDEDatabaseResult, row: Int, columnIndex: Int) async throws -> [IDEDatabaseResultQuery] {
+        guard let id = result.connectionID, let target = result.rowSource, let column = target.sourceNames[columnIndex],
+              let storage = result.storage, scopeRevisions[id] == result.scopeRevision else { return [] }
+        let table = target.table
+        let keys = try await databaseDependencies(table, connectionID: id)
+        guard !keys.isEmpty else { return [] }
+        let sourceNames = target.sourceNames
+        let values = try await storage.store.mapRows(in: row..<(row + 1)) { cells in
+            var values: [String: DatabaseValue] = [:]
+            for (index, name) in sourceNames where cells.indices.contains(index) { values[name] = cells[index] }
+            return values
+        }
+        guard let values = values.first else { return [] }
+        let binding = IDEDatabaseConsoleBinding(connectionID: id)
+        switch target.engine {
+        case .sqlite:
+            return try IDEDatabaseResultQuery.make(table: table, column: column, values: values, keys: keys,
+                                                   binding: binding, scopeRevision: result.scopeRevision)
+        case .postgres, .mysql:
+            guard let session = sqlSessions[id], let schema = target.schema else { throw DatabaseError.notConnected }
+            var types: [String: [String: String]] = [:]
+            for relation in Set(keys.flatMap { [$0.fromRelation, $0.toRelation] }) where relation != table || types[relation] == nil {
+                types[relation] = Dictionary(try await session.columns(of: relation).map { ($0.name, $0.declaredType) },
+                                             uniquingKeysWith: { first, _ in first })
+            }
+            guard scopeRevisions[id] == result.scopeRevision, sqlSessions[id] === session else { throw CancellationError() }
+            return try IDEDatabaseResultQuery.make(
+                engine: target.engine, schema: schema, table: table, column: column, values: values, keys: keys,
+                typeOf: { types[$0]?[$1] }, binding: binding, scopeRevision: result.scopeRevision)
+        case .mongo:
+            return []
+        }
+    }
+
     private func switchResultOwner(to consoleID: UUID) {
         guard resultOwner != consoleID else { return }
         if let previous = resultOwner, consoles[previous] != nil { consoleResults[previous] = resultSet(for: previous) }
@@ -980,6 +1415,7 @@ final class IDEDatabaseSupport {
     }
 
     private func discardResults(for consoleID: UUID) {
+        navigationHistories[consoleID] = nil
         if let saved = consoleResults.removeValue(forKey: consoleID) {
             Self.releaseResults([saved.result] + saved.scriptResults)
         }
@@ -1064,6 +1500,18 @@ final class IDEDatabaseSupport {
                     sortAscending: result.sortAscending,
                     into: store
                 )
+                if !summary.wasCancelled {
+                    if let target = IDEDatabaseEditTarget(mongoDatabase: database, collection: collection, columns: summary.columns) {
+                        result.rowSource = target
+                        if connection.readOnly {
+                            result.readOnlyReason = "This connection is read-only."
+                        } else {
+                            result.pendingEdits = IDEDatabasePendingEdits(target: target)
+                        }
+                    } else {
+                        result.readOnlyReason = "The result has no _id column, so documents cannot be identified."
+                    }
+                }
             } else {
                 let liveSession = sqlSessions[connection.id]
                 let session: any SQLExecuting
@@ -1078,8 +1526,17 @@ final class IDEDatabaseSupport {
                 if impact != .none, liveSession != nil {
                     invalidateSQLCatalog(connectionID: connection.id)
                 }
+                let browse = Self.sqliteBrowseTable(binding: binding, statement: statement, connection: connection)
+                let sqlite = browse == nil ? nil : liveSession?.sqliteSession
+                let version = try? await sqlite?.pragma("schema_version")
+                // A table with no key is edited through its rowid, which has to be in the result.
+                let info = browse == nil ? nil : try? await sqlite?.tableInfo(table: browse ?? "")
+                let rowIDAlias = connection.readOnly ? nil : info.flatMap(IDEDatabaseSQLiteEditTarget.rowIDAlias(for:))
+                let sql = rowIDAlias.flatMap { alias in
+                    browse.flatMap { Self.rowIDSelect(table: $0, alias: alias, statement: statement.sql) }
+                } ?? statement.sql
                 summary = try await DatabaseQuery.execute(
-                    statement: statement.sql,
+                    statement: sql,
                     readOnly: connection.readOnly,
                     sortColumn: result.sortColumn,
                     sortAscending: result.sortAscending,
@@ -1088,10 +1545,46 @@ final class IDEDatabaseSupport {
                     parameters: statement.parameters,
                     into: store
                 )
+                if executionID == execution, !summary.wasCancelled { result.sqliteBrowseTable = browse }
+                if let sqlite, let info, let version, let number = Int(version), !summary.wasCancelled,
+                   (try? await sqlite.pragma("schema_version")) == version, executionID == execution,
+                   sqlSessions[connection.id] === liveSession {
+                    let rowIDColumn = rowIDAlias == nil ? nil : 0
+                    if let target = IDEDatabaseSQLiteEditTarget(table: info, columns: summary.columns, schemaVersion: number,
+                                                                rowIDColumn: rowIDColumn) {
+                        result.rowSource = target
+                        if connection.readOnly {
+                            result.readOnlyReason = "This connection is read-only."
+                        } else {
+                            result.pendingEdits = IDEDatabasePendingEdits(target: target)
+                        }
+                    } else {
+                        result.readOnlyReason = IDEDatabaseSQLiteEditTarget.readOnlyReason(
+                            table: info, columns: summary.columns, rowIDColumn: rowIDColumn)
+                    }
+                }
+                if !summary.wasCancelled, liveSession != nil,
+                   let boundary = Self.transactionBoundary(of: statement.sql, engine: connection.engine) {
+                    // PostgreSQL answers COMMIT on an aborted transaction with the tag ROLLBACK.
+                    noteTransactionBoundary(connectionID: connection.id,
+                                            summary.commandTag?.uppercased() == "ROLLBACK" ? .rolledBack : boundary)
+                }
+                if connection.engine != .sqlite, !summary.wasCancelled, !summary.columns.isEmpty {
+                    if let liveSession {
+                        resolveEditTarget(for: liveSession, columns: summary.columns, storage: storage,
+                                          connectionID: connection.id, writable: !connection.readOnly)
+                    }
+                } else if connection.engine == .sqlite, browse == nil, !summary.columns.isEmpty {
+                    result.readOnlyReason = "Open the table from the explorer to edit it."
+                }
                 if impact == .scope, !summary.wasCancelled,
                    let liveSession, sqlSessions[connection.id] === liveSession {
                     sqlUnindexedScopes.insert(connection.id)
                     scopeRevisions[connection.id] = UUID()
+                }
+                if !summary.wasCancelled,
+                   ["SAVEPOINT", "RELEASE", "ROLLBACK"].contains(summary.commandTag?.uppercased() ?? "") {
+                    databaseSavepoints[connection.id] = nil
                 }
             }
             await store.finish()
@@ -1128,6 +1621,37 @@ final class IDEDatabaseSupport {
         if snapshot.rowCount != result.rowCount { result.rowCount = snapshot.rowCount }
         let columns = snapshot.columns.map(\.name)
         if columns != result.columns { result.columns = columns }
+    }
+
+    private static func rowIDSelect(table: String, alias: String) -> String? {
+        guard let name = try? SQLIdentifiers.quote(table, engine: .sqlite),
+              let column = try? SQLIdentifiers.quote(alias, engine: .sqlite) else { return nil }
+        return "SELECT \(column) AS \(column), * FROM \"main\".\(name)"
+    }
+
+    /// The table an SQLite result's rows come from when the statement is the explorer's own
+    /// `SELECT *` or a foreign-key hop Umbra generated. The origin check in the edit target still
+    /// verifies every column, so this only says which table to look up.
+    private static func sqliteBrowseTable(
+        binding: IDEDatabaseConsoleBinding, statement: IDEDatabaseStatement, connection: DatabaseConnection
+    ) -> String? {
+        guard connection.engine == .sqlite else { return nil }
+        if statement.parameters.isEmpty, let table = binding.sqliteBrowseTable,
+           let name = try? SQLIdentifiers.quote(table, engine: .sqlite),
+           statement.sql == "SELECT * FROM \"main\".\(name)" {
+            return table
+        }
+        return IDEDatabaseResultQuery.navigatedTable(in: statement.sql)
+    }
+
+    private static func rowIDSelect(table: String, alias: String, statement: String) -> String? {
+        guard let name = try? SQLIdentifiers.quote(table, engine: .sqlite),
+              let column = try? SQLIdentifiers.quote(alias, engine: .sqlite) else { return nil }
+        if statement == "SELECT * FROM \"main\".\(name)" { return "SELECT \(column) AS \(column), * FROM \"main\".\(name)" }
+        for qualifier in ["parent", "child"] where statement.hasPrefix("SELECT \(qualifier).* FROM ") {
+            return "SELECT \(qualifier).\(column) AS \(column), " + statement.dropFirst("SELECT ".count)
+        }
+        return nil
     }
 
     nonisolated private static func readPreview(
@@ -1194,12 +1718,14 @@ final class IDEDatabaseSupport {
     func cancelRunning() async {
         guard isRunning, !isCancelling, let id = runningConnectionID else { return }
         isCancelling = true
+        sqliteMutationTask?.cancel()
         if let session = sqlSessions[id] { await session.cancelRunning() }
         if let session = mongoSessions[id] { await session.cancelRunning() }
     }
 
     func sort(by column: String, consoleID: UUID? = nil) async {
         guard !isRunning, switchingSQLSourceID == nil else { return }
+        guard !refuseDiscardingEdits(consoleID: consoleID) else { return }
         if let consoleID { switchResultOwner(to: consoleID) }
         guard result.canSort, let id = result.connectionID, result.scopeRevision == scopeRevisions[id],
               let statement = result.preparedStatement else { return }
@@ -1211,7 +1737,7 @@ final class IDEDatabaseSupport {
         }
         // Both engines sort on the server and reload from the first page: a sort of only the
         // rows on screen would show a different order than the data has.
-        let binding = IDEDatabaseConsoleBinding(
+        let binding = resultOwner.flatMap { consoles[$0] } ?? IDEDatabaseConsoleBinding(
             connectionID: id, mongoDatabase: result.mongoDatabase, mongoCollection: result.mongoCollection
         )
         await execute(preparedStatements: [statement], binding: binding, resetSort: false, consoleID: resultOwner)

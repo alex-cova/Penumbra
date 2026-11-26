@@ -281,7 +281,9 @@ public actor PostgresSession {
             ResultColumn(
                 name: column.name,
                 typeName: PostgresValueDecoder.typeName(oid: column.dataType.rawValue),
-                origin: nil  // table OIDs are resolved to names when a result is made editable
+                origin: nil,  // table OIDs are resolved to names when a result is made editable
+                postgresSource: column.tableOID > 0 && column.columnAttributeNumber > 0
+                    ? .init(tableOID: UInt32(column.tableOID), attribute: column.columnAttributeNumber) : nil
             )
         }
         await store.setColumns(columns)

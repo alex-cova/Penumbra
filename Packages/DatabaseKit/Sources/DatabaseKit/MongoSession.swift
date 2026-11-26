@@ -504,7 +504,7 @@ public enum MongoTable {
         }
     }
 
-    static func typedCell(_ value: BSONValue, limits: ValueLimits = .standard) -> DatabaseValue {
+    static func typedCell(_ value: BSONValue, limits: ValueLimits = .current) -> DatabaseValue {
         func bounded(_ text: String, as makeValue: (String) -> DatabaseValue) -> DatabaseValue {
             let count = text.utf8.count
             guard count > limits.maxTextBytes else { return makeValue(text) }
@@ -527,5 +527,153 @@ public enum MongoTable {
         default:
             return bounded(ExtendedJSON.string(value, mode: .canonical)) { .bson(typeName: value.typeName, extendedJSON: $0) }
         }
+    }
+}
+
+/// Field changes for one document, identified by the `_id` cell the grid shows.
+public struct MongoFieldUpdate: Equatable, Sendable {
+    public struct Change: Equatable, Sendable {
+        public let field: String
+        public let original: DatabaseValue
+        public let replacement: DatabaseValue
+
+        public init(field: String, original: DatabaseValue, replacement: DatabaseValue) {
+            self.field = field
+            self.original = original
+            self.replacement = replacement
+        }
+    }
+
+    public let id: DatabaseValue
+    public let changes: [Change]
+
+    public init(id: DatabaseValue, changes: [Change]) {
+        self.id = id
+        self.changes = changes
+    }
+
+    /// The shell form shown before anything is written.
+    public func preview(collection: String) -> String {
+        let id = (try? MongoSession.idValue(self.id)).map { ExtendedJSON.string($0, mode: .canonical) } ?? "<_id>"
+        let set = changes.map { "\($0.field): \(MongoSession.previewText($0.replacement))" }.joined(separator: ", ")
+        let expected = changes.map { "\($0.field): \(MongoSession.previewText($0.original))" }.joined(separator: ", ")
+        return "db.\(collection).updateOne(\n  { _id: \(id), \(expected) },\n  { $set: { \(set) } }\n)"
+    }
+}
+
+extension MongoSession {
+    static func previewText(_ value: DatabaseValue) -> String {
+        switch value {
+        case .missing: "<missing>"
+        case .null: "null"
+        case .text(let text): ExtendedJSON.string(.string(text), mode: .relaxed)
+        default: value.rawText ?? "?"
+        }
+    }
+
+    /// The `_id` as BSON. A binary or otherwise lossy cell cannot name its document exactly, so it
+    /// is refused rather than guessed.
+    static func idValue(_ cell: DatabaseValue) throws -> BSONValue {
+        switch cell {
+        case .text(let text): return .string(text)
+        case .int(let number): return .int64(number)
+        case .bson(let type, let json) where type == "objectId": return try ExtendedJSON.parse(json)
+        default: throw DatabaseError.executionFailed("This _id cannot identify its document exactly.")
+        }
+    }
+
+    /// A new value of the type the field already has: an int32 field stays int32 while the value
+    /// fits, so an edit never changes a number's width by accident.
+    static func bsonValue(_ value: DatabaseValue, replacing current: BSONValue?) throws -> BSONValue {
+        switch value {
+        case .null: return .null
+        case .bool(let flag): return .bool(flag)
+        case .text(let text): return .string(text)
+        case .double(let number): return .double(number)
+        case .int(let number):
+            switch current {
+            case .double?: return .double(Double(number))
+            case .int64?: return .int64(number)
+            default: return Int32(exactly: number).map(BSONValue.int32) ?? .int64(number)
+            }
+        default: throw DatabaseError.executionFailed("That value type cannot be written to a MongoDB field here.")
+        }
+    }
+
+    /// One top-level field of the document `id` names, with the display bound lifted. A document
+    /// that changed identity or vanished throws, so the answer is never another document's value.
+    public func fetchFullValue(database: String, collection: String, id: DatabaseValue, field: String) async throws -> DatabaseValue {
+        let request = MongoFindRequest(database: database, collection: collection,
+                                       filter: BSONDocument(["_id": try Self.idValue(id)]), limit: 2)
+        let limit = ValueLimits.fullValueLimit
+        return try await ValueLimits.$override.withValue(ValueLimits(maxTextBytes: limit, binaryPrefix: limit)) {
+            let documents = try await console.findDocuments(request, limit: 2)
+            guard documents.count == 1, let document = documents.first else {
+                throw DatabaseError.executionFailed("The document is no longer there.")
+            }
+            return document[field].map { MongoTable.typedCell($0) } ?? .missing
+        }
+    }
+
+    /// Sets top-level fields one document at a time. Every document is read first and its fields
+    /// compared with what the grid showed; nothing is written if any differs. Each write then
+    /// filters on the exact `_id` and the exact current field values, so a change that lands
+    /// between the read and the write matches nothing. MongoDB has no rollback across documents
+    /// here: a server error after the first write reports how many documents were already changed.
+    @discardableResult
+    public func applyFieldUpdates(
+        database: String, collection: String, updates: [MongoFieldUpdate]
+    ) async throws -> SQLMutationResult {
+        guard !readOnly else { throw DatabaseError.readOnlyViolation }
+        guard !updates.isEmpty, updates.count <= 500 else {
+            throw DatabaseError.executionFailed("Submit between 1 and 500 changed documents.")
+        }
+        struct Prepared { let filter: BSONDocument; let set: BSONDocument }
+        var prepared: [Prepared] = []
+        for (index, update) in updates.enumerated() {
+            try Task.checkCancellation()
+            guard !update.changes.isEmpty, update.changes.allSatisfy({ $0.field != "_id" && !$0.field.contains("$") }),
+                  Set(update.changes.map(\.field)).count == update.changes.count else {
+                throw DatabaseError.executionFailed("A document needs distinct, editable fields.")
+            }
+            let request = MongoFindRequest(database: database, collection: collection,
+                                           filter: BSONDocument(["_id": try Self.idValue(update.id)]), limit: 2)
+            let documents = try await console.findDocuments(request, limit: 2)
+            guard documents.count == 1, let document = documents.first, let exactID = document["_id"] else {
+                throw SQLiteOptimisticConflict(updateIndex: index, current: nil)
+            }
+            var filter = BSONDocument(["_id": exactID])
+            var set = BSONDocument()
+            var currentCells: [DatabaseValue] = []
+            var changed = false
+            for change in update.changes {
+                let current = document[change.field]
+                let cell = current.map { MongoTable.typedCell($0) } ?? .missing
+                currentCells.append(cell)
+                if cell != change.original { changed = true }
+                filter[change.field] = current ?? .document(BSONDocument(["$exists": .bool(false)]))
+                set[change.field] = try Self.bsonValue(change.replacement, replacing: current)
+            }
+            guard !changed else { throw SQLiteOptimisticConflict(updateIndex: index, current: currentCells) }
+            prepared.append(Prepared(filter: filter, set: set))
+        }
+        var result = SQLMutationResult(rowsAffected: 0, leftTransactionOpen: false, insertedRowIDs: [:])
+        for (index, item) in prepared.enumerated() {
+            try Task.checkCancellation()
+            do {
+                let written = try await console.updateOne(database: database, collection: collection, filter: item.filter,
+                                                          update: BSONDocument(["$set": .document(item.set)]))
+                guard written.matched == 1 else { throw SQLiteOptimisticConflict(updateIndex: index, current: nil) }
+            } catch let conflict as SQLiteOptimisticConflict {
+                throw conflict
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                let note = index == 0 ? "Nothing was written." : "\(index) earlier document\(index == 1 ? " was" : "s were") already written."
+                throw SQLiteMutationFailure(index: index, message: "\(error.localizedDescription) \(note)", code: nil)
+            }
+            result.rowsAffected += 1
+        }
+        return result
     }
 }

@@ -1,21 +1,6 @@
 import DatabaseCore
 import Foundation
 
-/// How much of a large value is kept in a result. The rest is fetched on demand by the inspector.
-public struct ValueLimits: Sendable, Equatable {
-    /// Text, JSON and similar longer than this many bytes are stored as a `.truncated` preview.
-    public var maxTextBytes: Int
-    /// Binary values keep only this many leading bytes (plus their full length).
-    public var binaryPrefix: Int
-
-    public init(maxTextBytes: Int = 65_536, binaryPrefix: Int = 64) {
-        self.maxTextBytes = maxTextBytes
-        self.binaryPrefix = binaryPrefix
-    }
-
-    public static let standard = ValueLimits()
-}
-
 /// Turns one PostgreSQL result cell (type OID, wire format, raw bytes) into a `DatabaseValue`.
 ///
 /// PostgresNIO asks the server for binary results, so a cell is the type's wire encoding, not
@@ -29,7 +14,7 @@ public struct ValueLimits: Sendable, Equatable {
 /// UTF-8 (which is how enums arrive) and to a bounded binary value otherwise.
 public enum PostgresValueDecoder {
     public static func decode(
-        oid: UInt32, isBinary: Bool, bytes: [UInt8]?, limits: ValueLimits = .standard
+        oid: UInt32, isBinary: Bool, bytes: [UInt8]?, limits: ValueLimits = .current
     ) -> DatabaseValue {
         // NULL has no bytes at all. A zero-length value is a real, empty value (audit F-22).
         guard let bytes else { return .null }

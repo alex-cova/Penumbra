@@ -44,6 +44,181 @@ final class IDESQLiteSourceTests: XCTestCase {
         IDEDatabaseConsoleBinding(connectionID: connection.id, mongoDatabase: nil, mongoCollection: nil)
     }
 
+    func testBrowseEditsRemainStagedOnConflictAndCommitAsOneBatch() async throws {
+        let path = try await makeDatabase(named: "edits.sqlite")
+        let support = makeSupport()
+        let connection = try await support.addSQLiteSource(path: path)
+        let tableBinding = IDEDatabaseConsoleBinding(connectionID: connection.id, sqliteBrowseTable: "items")
+        let select = #"SELECT * FROM "main"."items""#
+        await support.execute(statement: select, binding: tableBinding, resetSort: true)
+        let pending = try XCTUnwrap(support.result.pendingEdits)
+        let storage = try XCTUnwrap(support.result.storage)
+        let rows = try await storage.store.rows(in: 0..<2)
+        let name = try XCTUnwrap(pending.target.draft(row: 0, column: 1, values: rows[0]))
+        let note = try XCTUnwrap(pending.target.draft(row: 1, column: 2, values: rows[1]))
+        XCTAssertNil(pending.target.draft(row: 0, column: 0, values: rows[0]))
+        try pending.stage(name, replacement: .text("pear tree"))
+        try pending.stage(note, replacement: .null)
+        pending.undo()
+        XCTAssertEqual(pending.edits.count, 1)
+        pending.redo()
+        XCTAssertEqual(pending.edits.count, 2)
+        XCTAssertNotNil(support.closeBlocker)
+
+        await support.execute(statement: "SELECT 100", binding: tableBinding, resetSort: true)
+        XCTAssertEqual(support.result.storage, storage, "Replacing a result must preserve its staged edits")
+        await support.disconnect(connection.id)
+        XCTAssertTrue(support.isConnected(connection.id))
+
+        let writer = try await SQLSession.connect(login: connection.sqlLogin(password: ""), readOnly: false)
+        _ = try await writer.query("UPDATE items SET note = 'outside edit' WHERE id = 2")
+        let first = try await support.submitEdits(pending, storage: storage, consoleID: nil)
+        XCTAssertFalse(first)
+        XCTAssertEqual(pending.conflict?.current, [.text("outside edit")])
+        let rolledBack = try await writer.query("SELECT name FROM items WHERE id = 1")
+        XCTAssertEqual(rolledBack.rows, [["apple"]])
+        XCTAssertEqual(pending.edits.count, 2)
+
+        pending.rebaseConflict()
+        let committed = try await support.submitEdits(pending, storage: storage, consoleID: nil)
+        XCTAssertTrue(committed)
+        XCTAssertTrue(pending.committed)
+        let actual = try await writer.query("SELECT name, note FROM items ORDER BY id")
+        XCTAssertEqual(actual.rows, [["pear tree", nil], ["pear", nil]])
+        XCTAssertNil(support.closeBlocker)
+
+        await support.execute(statement: select, binding: tableBinding, resetSort: true)
+        let stale = try XCTUnwrap(support.result.pendingEdits)
+        let staleStorage = try XCTUnwrap(support.result.storage)
+        let currentRows = try await staleStorage.store.rows(in: 0..<1)
+        let staleDraft = try XCTUnwrap(stale.target.draft(row: 0, column: 1, values: currentRows[0]))
+        try stale.stage(staleDraft, replacement: .text("should not write"))
+        _ = try await writer.query("ALTER TABLE items ADD COLUMN extra TEXT")
+        do {
+            _ = try await support.submitEdits(stale, storage: staleStorage, consoleID: nil)
+            XCTFail("A changed schema must reject the staged mutation")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("table schema changed"))
+        }
+        XCTAssertEqual(stale.edits.count, 1)
+        let unchanged = try await writer.query("SELECT name FROM items WHERE id = 1")
+        XCTAssertEqual(unchanged.rows, [["pear tree"]])
+        stale.revertAll()
+        await writer.disconnect()
+        await support.disconnect(connection.id)
+    }
+
+    func testFilteredClipboardPasteStagesAnAtomicUndoGroupAndSkipsHiddenRows() async throws {
+        let support = makeSupport()
+        let connection = try await support.addSQLiteSource(path: try await makeDatabase(named: "paste.sqlite"))
+        let console = IDEDatabaseConsoleBinding(connectionID: connection.id, sqliteBrowseTable: "items")
+        await support.execute(statement: "INSERT INTO items(name, note) VALUES ('apple orchard', NULL)", binding: console, resetSort: true)
+        await support.execute(statement: #"SELECT * FROM "main"."items""#, binding: console, resetSort: true)
+        let storage = try XCTUnwrap(support.result.storage)
+        let pending = try XCTUnwrap(support.result.pendingEdits)
+        let matched = try await IDEDatabaseLoadedFilter(text: "apple", column: 1).apply(to: storage.store)
+        XCTAssertEqual(matched.indices, [0, 2])
+
+        let paste = IDEDatabaseGridPaste(text: "alpha\tfirst\nbeta\tsecond", delimiter: "\t",
+                                        sourceRows: matched.indices, columns: [1, 2])
+        let proposals = try await paste.edits(from: storage.store, target: pending.target)
+        XCTAssertEqual(try pending.stage(proposals), 4)
+        XCTAssertEqual(pending.preview().map(\.row), [0, 2])
+        pending.undo()
+        XCTAssertTrue(pending.edits.isEmpty)
+        pending.redo()
+        XCTAssertEqual(pending.edits.count, 4)
+
+        let rejected = IDEDatabaseGridPaste(text: "new value\t5", delimiter: "\t", sourceRows: [0], columns: [1, 0])
+        do {
+            _ = try await rejected.edits(from: storage.store, target: pending.target)
+            XCTFail("The clipboard rectangle crosses an identity column")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("identity"))
+        }
+        XCTAssertEqual(pending.edits.count, 4)
+        let committed = try await support.submitEdits(pending, storage: storage, consoleID: nil)
+        XCTAssertTrue(committed)
+        await support.execute(statement: "SELECT name, note FROM items ORDER BY id", binding: console, resetSort: true)
+        XCTAssertEqual(support.result.rows, [["alpha", "first"], ["pear", ""], ["beta", "second"]])
+        await support.disconnect(connection.id)
+    }
+
+    func testServerFilterPreservesOriginalParametersAndBindsSearchValue() async throws {
+        let support = makeSupport()
+        let connection = try await support.addSQLiteSource(path: try await makeDatabase(named: "server-filter.sqlite"))
+        let session = try XCTUnwrap(support.sqlSession(for: connection.id))
+        let quoted = "a'b; --"
+        _ = try await session.query("INSERT INTO items(name) VALUES (?)", parameters: [.text(quoted)])
+        let statement = IDEDatabaseStatement("SELECT id, name, note FROM items WHERE id >= ?; -- trailing comment", parameters: [.int(2)])
+        let filter = IDEDatabaseServerFilter(statement: statement, columns: ["id", "name", "note"], engine: .sqlite,
+                                            connectionID: connection.id, scopeRevision: nil)
+        let query = try filter.query(column: 1, comparison: .equals, value: .text(quoted))
+        XCTAssertFalse(query.sql.contains(quoted))
+        XCTAssertEqual(query.parameters, [.int(2), .text(quoted)])
+        let matching = try await session.query(query.sql, parameters: query.parameters)
+        XCTAssertEqual(matching.rows, [["3", quoted, nil]])
+        let nulls = try filter.query(column: 2, comparison: .equals, value: .null)
+        XCTAssertTrue(nulls.sql.contains("IS NULL"))
+        XCTAssertEqual(nulls.parameters, [.int(2)])
+        let matchingNull = try await session.query(nulls.sql, parameters: nulls.parameters)
+        XCTAssertEqual(matchingNull.rows, [["3", quoted, nil]])
+        await support.disconnect(connection.id)
+    }
+
+    func testUnverifiedResultHasNoEditTargetAndTransactionsPreserveQueryResults() async throws {
+        let support = makeSupport()
+        let connection = try await support.addSQLiteSource(path: try await makeDatabase(named: "tx-actions.sqlite"))
+        let browse = IDEDatabaseConsoleBinding(connectionID: connection.id, sqliteBrowseTable: "items")
+        await support.execute(statement: "SELECT name AS id, id AS name FROM items", binding: browse, resetSort: true)
+        XCTAssertNil(support.result.pendingEdits)
+        let stored = try XCTUnwrap(support.result.storage)
+        await support.performTransaction(.begin(.init()), connectionID: connection.id)
+        XCTAssertEqual(support.result.storage, stored)
+        XCTAssertEqual(support.sqlTransactions[connection.id], .active(readOnly: false))
+        await support.performTransaction(.savepoint, connectionID: connection.id)
+        let savepoint = try XCTUnwrap(support.databaseSavepoints[connection.id]?.first)
+        await support.execute(statement: "UPDATE items SET name = 'temporary' WHERE id = 1", binding: browse, resetSort: true)
+        await support.performTransaction(.rollbackTo(savepoint), connectionID: connection.id)
+        await support.performTransaction(.release(savepoint), connectionID: connection.id)
+        XCTAssertEqual(support.databaseSavepoints[connection.id], [])
+        await support.performTransaction(.commit, connectionID: connection.id)
+        XCTAssertEqual(support.sqlTransactions[connection.id], TransactionState.none)
+        await support.execute(statement: "SELECT name FROM items WHERE id = 1", binding: browse, resetSort: true)
+        XCTAssertEqual(support.result.rows, [["apple"]])
+        await support.disconnect(connection.id)
+    }
+
+    func testRelatedRowsUseAllComponentsOfTheDeclaredKey() async throws {
+        let support = makeSupport()
+        let connection = try await support.addSQLiteSource(path: ":memory:")
+        let binding = binding(connection)
+        await support.execute(statements: [
+            "CREATE TABLE parent (id INTEGER, code TEXT COLLATE NOCASE, PRIMARY KEY(id, code))",
+            "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER, parent_code TEXT, "
+                + "FOREIGN KEY(parent_id, parent_code) REFERENCES parent(id, code))",
+            "INSERT INTO parent VALUES (1, 'Key'), (1, 'Other')",
+            "INSERT INTO child VALUES (1, 1, 'key'), (2, 1, 'Other')",
+        ], binding: binding)
+        let session = try XCTUnwrap(support.sqlSession(for: connection.id))
+        for (table, index, expected) in [
+            ("child", 1, [["1", "Key"]]),
+            ("parent", 0, [["1", "1", "key"]]),
+        ] {
+            let browse = IDEDatabaseConsoleBinding(connectionID: connection.id, sqliteBrowseTable: table)
+            await support.execute(statement: "SELECT * FROM \"main\".\"\(table)\"", binding: browse, resetSort: true)
+            let storage = try XCTUnwrap(support.result.storage)
+            let columns = await storage.store.snapshot.columns
+            _ = columns
+            let queries = try await support.relatedRows(in: support.result, row: 0, columnIndex: index)
+            let query = try XCTUnwrap(queries.first)
+            XCTAssertEqual(query.parameters.count, 2)
+            let related = try await session.query(query.sql, parameters: query.parameters)
+            XCTAssertEqual(related.rows, expected)
+        }
+        await support.disconnect(connection.id)
+    }
+
     func testAddingAFileConnectsListsItsTablesAndRunsStatements() async throws {
         let path = try await makeDatabase(named: "shop.sqlite")
         let support = makeSupport()

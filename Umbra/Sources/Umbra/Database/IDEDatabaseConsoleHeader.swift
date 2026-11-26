@@ -38,7 +38,12 @@ struct IDEDatabaseConsoleHeader: View {
                         .foregroundStyle(IDEAppearance.ColorToken.error)
                 }
                 scopeControls(connection)
-                Text(status(for: connection))
+                if connection.engine != .mongo, !connection.readOnly, support.isConnected(connection.id),
+                   support.sourceNotes[connection.id] == nil {
+                    IDEDatabaseTransactionControls(connection: connection, support: support)
+                } else {
+                    Text(status(for: connection))
+                }
                 if connection.readOnly {
                     Label("Read Only", systemImage: "lock")
                 }

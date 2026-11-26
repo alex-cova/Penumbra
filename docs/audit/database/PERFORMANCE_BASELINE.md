@@ -57,6 +57,23 @@ One run each; debug build; local container. They show what changed, not final pe
 | Completion latency (current keyword scan) with 10,000 tables | Reference for the new engine | Unit benchmark on `SQLCompletion.site` |
 | Editor keystroke cost in a console | Must not regress | `swift run -c release PerfHarness enter-session synthetic --lines 20000` before and after |
 
+## Current native result viewport
+
+`IDEDatabaseGridFrameTimingTests` scrolls a real window through a fixed path (90 vertical steps of 40 px, 80 horizontal steps of 60 px, five jumps) with one 60 Hz interval between steps. A *frame cost* is the time `displayIfNeeded()` takes after each step. A *placeholder frame* is one drawn while a visible cell still says "Loading…". The grid it replaced (a `[[String?]]` page in a plain `NSTableView`, kept in the test as a fixture) is run on 200 rows because that was all it could show. **Debug build, one run, `caffeinate -u -d -i -s`, local Mac; Debug is an upper bound and no release run was made.**
+
+| Grid | Rows × 40 columns | Frame cost p50 / p95 / max | Frames over 16.7 ms | Placeholder frames |
+|---|---|---|---|---|
+| Original page grid | 200 | 0.52 / 0.84 / 19.7 ms | 2 of 175 | 0 |
+| Stored-result viewport | 200 | 0.54 / 0.75 / 26.9 ms | 2 of 175 | 5 (all jumps) |
+| Stored-result viewport | 100,000 | 0.62 / 0.71 / 20.3 ms | 2 of 385 | 5 (all jumps) |
+
+Findings and what changed:
+
+- Frame cost does not depend on the number of rows and is within the original grid's range, so the measurement gives no reason to replace the native table. The two frames over 16.7 ms are the same in all three runs (the first display after the window opens and the first scroll), so they are not caused by the new grid.
+- The first measurement found a real defect: **65 of 175 frames showed placeholders**, 60 of them during plain horizontal scrolling. Cause: `NSTableView` builds a row's cells for every column when the row appears, so cells just off screen were created as placeholders before a read landed, and the read refreshed only the visible columns. Fixes: refresh every cached column after a read, read ±6 columns around the viewport, and start a refill while the viewport is still 3 columns or 24 rows inside the cached window; a refill that starts with every visible cell cached no longer waits the 12 ms coalescing delay (a read for cells that are visible and unloaded waits 4 ms).
+- After the fix smooth scrolling in either direction shows no placeholders (asserted by the test). A jump to a region that was never loaded still draws placeholders until its read lands; **cell-ready after a jump fell from 16.8 ms median (max 17.2) to 8.6 ms (max 8.6)** over the same eight jumps in a 4,096 × 40 result.
+- Not measured: release-build frame times, Instruments hitches, scrolling a result that has spilled to disk, and the original grid beyond one page.
+
 ## Budgets (targets, from the specification)
 
 | Operation | Target | Measured |
@@ -64,7 +81,7 @@ One run each; debug build; local container. They show what changed, not final pe
 | Cached SQL completion | P95 < 50 ms | not measured |
 | Initial local completion candidates | < 20 ms where practical | not measured |
 | Main-thread synchronous work during interaction | generally < 8 ms | not measured |
-| Result grid scrolling | stable 60 FPS | not measured |
+| Result grid scrolling | stable 60 FPS | Debug: p95 frame cost 0.7 ms, no placeholder frames in smooth scrolling (see above); release not measured |
 | Query cancellation feedback | < 100 ms | not measured (no cancellation exists) |
 | Explorer interaction | no synchronous network I/O | not measured |
 | Initial result rendering | incremental, without waiting for all rows | not met at baseline (M-1) |

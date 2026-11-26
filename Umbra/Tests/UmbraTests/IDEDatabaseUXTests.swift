@@ -73,7 +73,8 @@ final class IDEDatabaseUXTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(120))
             try send("\r", keyCode: 36)
             try await waitFor({ workspace.workbench.activePane.selectedDocument?.displayName == "items" }, "Return opens the table console")
-            try await waitFor({ support.result.rows == [["7"]] }, "Return opens the selected table and loads its rows")
+            // `items` has no key, so a writable source selects its rowid first (the row's identity for editing).
+            try await waitFor({ support.result.rows == [["1", "7"]] }, "Return opens the selected table and loads its rows")
         }
     }
 

@@ -3766,6 +3766,9 @@ public final class IDEWorkspace {
                 )
                 rebuildLayoutHosts()
                 refreshPresentation()
+                // Tabs whose files vanished while Umbra was closed reload to empty buffers with
+                // no watcher event; mark them so the tab shows the deleted-on-disk banner.
+                markRestoredMissingFiles()
                 showsWelcome = !hasOpenDocuments
             }
         }
@@ -4675,6 +4678,10 @@ public final class IDEWorkspace {
     }
 
     func closeDocument(_ documentID: UUID, in pane: EditorPane) {
+        guard !databaseSupport.refuseDiscardingEdits(consoleID: documentID) else {
+            notifyDatabaseCloseBlocker(databaseSupport.banner ?? "Review the staged database edits first.")
+            return
+        }
         closeDiffSession(documentID, in: pane)
         closeDiagramSession(documentID, in: pane)
         closeProfileSession(documentID, in: pane)
@@ -4795,6 +4802,10 @@ public final class IDEWorkspace {
             hostCache.remove(id)
         }
         hostedPaneIDs = live
+        // A pane's view reports its frame as it lays out, but its replacement (the tree is rebuilt
+        // with a new identity on every layout change) reports before the old view disappears, so
+        // clearing on disappear dropped the frame of a pane that survived a split.
+        editorPaneFrames = editorPaneFrames.filter { live.contains($0.key) }
         for pane in panes {
             let host = host(for: pane.id)
             if pane.selectedDocument != nil {

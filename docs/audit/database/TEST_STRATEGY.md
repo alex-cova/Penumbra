@@ -76,6 +76,10 @@ The history and scope follow-up passed 106 focused Umbra tests, all 267 Database
 - All 62 focused Umbra tests passed. They check first-row publication during execution, a native grid scroll to a distant stored row, SQLite results that stay stable after the table changes, and store closure when the console closes.
 - The Umbra Xcode Debug build passed with code signing disabled. Scroll frame timing and the Phase 5 grid comparison remain unmeasured.
 
+The Phase 5 follow-up passed 148 focused Umbra tests, 267 DatabaseKit tests with the disposable servers, and the macOS Debug Xcode build. The added coverage verifies stored rectangular clipboard output, two-dimensional viewport reads, staged-edit undo and redo, batch rollback on conflict, rebasing and submission, rejection after a schema change, SQL savepoint rollback, and both directions of a composite SQLite foreign key. The viewport probe measured cell readiness after eight jumps. See `PERFORMANCE_BASELINE.md` for the timings.
+
+The filtering and paste follow-up passed 166 focused Umbra tests, 268 DatabaseKit tests with the disposable servers, and the macOS Debug Xcode build. Coverage includes source row identity in the filtered grid, grouped undo for a pasted rectangle across noncontiguous SQLite rows, rejected clipboard input, sparse reads across spill chunks, and server filter parameter order on SQLite, PostgreSQL, and MySQL.
+
 ## Phase 6 verification
 
 - The 104 focused Umbra tests cover database results, SQLite, shortcuts and module integration. The new cases cover all ten chart types through `ImageRenderer`, bounded sampling, LTTB endpoints, histogram and scatter counts, date grouping and median, WGS84 rejection, WKB and antimeridian bounds. The native grid test verifies selecting and scrolling to a stored row. The SQLite workspace test confirms the generated aggregation opens a separate console, prompts for the bound value, and retains the source result.
@@ -91,3 +95,20 @@ The history and scope follow-up passed 106 focused Umbra tests, all 267 Database
 ## Skipped tests
 
 None skipped by design yet. The live suites report as "not run" when `UMBRA_DB_INTEGRATION` is not `1`, and the final report states how many ran.
+
+### Phase 5 mutations, engines, inspection and navigation
+
+All three suites ran against the disposable PostgreSQL 16, MySQL 8.4 and MongoDB 7 containers: **288 DatabaseKit tests passed** (77 + 166 + 45; 268 before), **191 focused Umbra tests passed** (166 before), `git diff --check` and `sync-umbra-xcodeproj.py --check` were clean, and the macOS Debug Xcode build passed.
+
+New coverage, by what it proves:
+
+- `SQLiteRowMutationTests` (real files): insert leaves default columns out and reports the rowid; expressions in UPDATE and INSERT; delete compares the loaded values and reports what changed or that the row is gone; a UNIQUE violation rolls back the whole batch and names its row; a stale schema version rejects the batch; a batch inside the caller's transaction is visible to that connection only, a failing batch undoes only itself, rollback and commit behave; `rowid` identifies a keyless table; free text in a default expression is refused.
+- `IDEDatabaseRowMutationTests` (through `IDEDatabaseSupport`): insert, duplicate, delete and edit commit as one batch with one undo history; a conflict on a delete leaves everything staged and unwritten; a rejection names the row and keeps the batch; a batch submitted into an open transaction is *Submitted*, then *Rolled back* (and can be staged again) or *Committed*, including through a typed `COMMIT`, `ROLLBACK` and `ROLLBACK TO`; the rowid fallback and the read-only reasons.
+- `LiveSQLEditTargetTests`: PostgreSQL resolves its table from RowDescription OIDs; keys, generated columns and unsupported types are locked with reasons; typed casts (numeric, boolean, timestamptz); a changed row is a conflict and writes nothing; NULL originals; a NOT NULL violation names its row; submission under the console's own transaction recovers from a failed batch; joins, missing keys, computed columns, views and read-only connections are refused with reasons. MySQL: origin metadata, case-only changes still conflict (byte comparison), exact DECIMAL and DATETIME comparison.
+- `LiveMongoFieldUpdateTests`: int32, int64 and double fields keep their type; an ObjectId and a string `_id`; a changed field or missing document writes nothing, including documents that did match; `_id` and binary ids are refused.
+- `LiveFullValueTests`: a 200 KB text and a 100 KB binary are previews in the grid and whole on a fetch by key on PostgreSQL and MySQL; the raised limit does not leak into the next statement; a vanished row is an error.
+- `IDEDatabaseEngineEditTests`: the same PostgreSQL, MySQL and MongoDB paths end to end through `IDEDatabaseSupport`, plus the exact statements the app builds.
+- `IDEDatabaseNavigationAndValueTests`: viewers and their bounds, the XML external-entity case, live-versus-stored labelling, the history stack, bound and cast foreign-key queries including a composite uuid key on PostgreSQL, and Follow Here, Back and Forward on SQLite including a hop from a keyless table.
+- `IDEDatabaseGridFrameTimingTests` (`UMBRA_UI_TESTS=1`): frame cost against the original grid and the placeholder assertions.
+
+Not covered: release-build frame times, MongoDB failure *between* writes (needs fault injection), and running the app by hand.

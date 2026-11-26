@@ -847,6 +847,10 @@ final class IDEWindowCloseGuard: NSObject, NSWindowDelegate {
     private var hasConfirmedClose = false
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if let workspace, let message = workspace.databaseSupport.closeBlocker {
+            workspace.notifyDatabaseCloseBlocker(message)
+            return false
+        }
         if !hasConfirmedClose, let workspace, workspace.hasUnsavedDocuments {
             // Saving is asynchronous: refuse now, and close again when the editors are on disk.
             Task { @MainActor [weak self, weak sender] in

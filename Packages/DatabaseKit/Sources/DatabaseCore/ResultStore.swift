@@ -143,6 +143,27 @@ public actor ResultStore {
         try mapRows(in: range) { $0 }
     }
 
+    /// Projects sparse selections in their requested order. Consecutive references into
+    /// the same spilled chunk share its decoded rows.
+    public func mapRows<T: Sendable>(
+        at indices: [Int], _ transform: @Sendable ([DatabaseValue]) -> T
+    ) throws -> [T] {
+        guard !isClosed else { throw ResultStoreError.closed }
+        var previousChunk: Int?
+        var currentRows: [[DatabaseValue]] = []
+        var firstRow = 0
+        return try indices.map { index in
+            guard (0..<rowCount).contains(index) else { throw ResultStoreError.outOfRange(index) }
+            let chunkIndex = chunk(containing: index)
+            if chunkIndex != previousChunk {
+                currentRows = chunkIndex < chunks.count ? try load(chunkIndex) : tail
+                firstRow = chunkIndex < chunks.count ? chunks[chunkIndex].firstRow : rowCount - tail.count
+                previousChunk = chunkIndex
+            }
+            return transform(currentRows[index - firstRow])
+        }
+    }
+
     /// Projects a range one chunk at a time, so callers can retain lightweight display cells.
     public func mapRows<T: Sendable>(
         in range: Range<Int>, _ transform: @Sendable ([DatabaseValue]) -> T

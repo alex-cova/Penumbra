@@ -237,6 +237,30 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
         return .none
     }
 
+    public func beginTransaction(_ options: TransactionOptions = .init()) async throws {
+        if let postgresConsole { return try await postgresConsole.begin(options) }
+        if let mysqlConsole { return try await mysqlConsole.begin(options) }
+        if let sqlite {
+            guard options.isolation == nil, !options.readOnly else {
+                throw DatabaseError.executionFailed("SQLite uses its configured transaction mode.")
+            }
+            return try await sqlite.begin()
+        }
+        throw DatabaseError.notConnected
+    }
+
+    public func endTransaction(commit: Bool) async throws {
+        if let postgresConsole {
+            if commit { try await postgresConsole.commit() } else { try await postgresConsole.rollback() }
+        } else if let mysqlConsole {
+            if commit { try await mysqlConsole.commit() } else { try await mysqlConsole.rollback() }
+        } else if let sqlite {
+            if commit { try await sqlite.commit() } else { try await sqlite.rollback() }
+        } else {
+            throw DatabaseError.notConnected
+        }
+    }
+
     /// Makes a new, empty SQLite database file. It never overwrites one.
     public static func createSQLiteDatabase(at path: String) async throws {
         guard !FileManager.default.fileExists(atPath: path) else { throw SQLiteSession.OpenError.alreadyExists(path) }
@@ -652,7 +676,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
     }
 
     /// A schema read, on the metadata connection (created on first use, read-only, one at a time).
-    private func mysqlQuery(_ sql: String) async throws -> QueryResult {
+    func mysqlQuery(_ sql: String) async throws -> QueryResult {
         await mysqlMetadataGate.lock()
         do {
             try Task.checkCancellation()
@@ -682,7 +706,7 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
 
     /// A schema read, on the metadata connection (created on first use, always read-only, and
     /// used one statement at a time).
-    private func postgresQuery(_ sql: String) async throws -> QueryResult {
+    func postgresQuery(_ sql: String) async throws -> QueryResult {
         await metadataGate.lock()
         do {
             try Task.checkCancellation()

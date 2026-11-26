@@ -80,6 +80,12 @@ public final class IDEAppDelegate: NSObject, NSApplicationDelegate {
     /// Saving is asynchronous, so a quit with unsaved editors waits (`terminateLater`) for it.
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let registry = IDEWindowRegistry.shared
+        for workspace in registry.workspaces {
+            if let message = workspace.databaseSupport.closeBlocker {
+                workspace.notifyDatabaseCloseBlocker(message)
+                return .terminateCancel
+            }
+        }
         guard registry.hasUnsavedDocuments else {
             registry.noteTermination()
             return .terminateNow

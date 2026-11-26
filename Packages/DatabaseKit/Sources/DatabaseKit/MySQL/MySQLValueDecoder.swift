@@ -15,7 +15,7 @@ public enum MySQLValueDecoder {
 
     public static func decode(
         typeCode: UInt8, isUnsigned: Bool, charset: UInt16, bytes: [UInt8]?,
-        limits: ValueLimits = .standard, binaryProtocol: Bool = false
+        limits: ValueLimits = .current, binaryProtocol: Bool = false
     ) -> DatabaseValue {
         guard let bytes else { return .null }
         if binaryProtocol, let value = decodeFixedWidth(typeCode, isUnsigned: isUnsigned, bytes: bytes) {

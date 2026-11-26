@@ -416,7 +416,7 @@ public actor MongoDocumentSession {
     }
 
     /// A document as one cell: canonical Extended JSON, bounded like any large value.
-    static func cell(_ document: BSONDocument, limits: ValueLimits = .standard) -> DatabaseValue {
+    static func cell(_ document: BSONDocument, limits: ValueLimits = .current) -> DatabaseValue {
         let text = ExtendedJSON.string(document, mode: .canonical)
         guard text.utf8.count > limits.maxTextBytes else {
             return .bson(typeName: "object", extendedJSON: text)

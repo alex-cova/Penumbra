@@ -16,6 +16,19 @@ extension IDEWorkspace {
         showBottomTab(.databaseResults)
     }
 
+    func notifyDatabaseCloseBlocker(_ message: String) {
+        notifications.post(message, category: .general)
+        showDatabaseResults()
+    }
+
+    func openDatabaseResultQuery(_ query: IDEDatabaseResultQuery) {
+        let id = query.binding.connectionID
+        guard !databaseSupport.isRunning, databaseSupport.scopeRevisions[id] == query.scopeRevision,
+              databaseSupport.catalog.connection(id: id)?.engine == query.engine else { return }
+        openConsole(title: query.title, text: query.sql, language: "sql", binding: query.binding,
+                    run: true, parameters: query.parameters)
+    }
+
     /// An untitled SQL or JSON tab bound to the selected data source.
     func openDatabaseQueryConsole() {
         // Without a project or a document the sidebar stays hidden, so asking the user
@@ -68,7 +81,8 @@ extension IDEWorkspace {
             title: table,
             text: sql,
             language: "sql",
-            binding: IDEDatabaseConsoleBinding(connectionID: connection.id, mongoDatabase: nil, mongoCollection: nil),
+            binding: IDEDatabaseConsoleBinding(connectionID: connection.id, mongoDatabase: nil, mongoCollection: nil,
+                                               sqliteBrowseTable: connection.engine == .sqlite ? table : nil),
             run: true
         )
     }
@@ -481,7 +495,8 @@ extension IDEWorkspace {
         text: String,
         language: String,
         binding: IDEDatabaseConsoleBinding,
-        run: Bool
+        run: Bool,
+        parameters: [DatabaseValue] = []
     ) {
         openUntitled(displayName: title.isEmpty ? "Query" : title, text: text, languageIdentifier: language)
         guard let selected = workbench.activePane.selectedDocument else { return }
@@ -490,6 +505,9 @@ extension IDEWorkspace {
         guard run else { return }
         databaseSupport.showsResultsTab = true
         showBottomTab(.databaseResults)
-        Task { await databaseSupport.execute(statement: text, binding: binding, resetSort: true, consoleID: selected.id) }
+        Task {
+            await databaseSupport.execute(preparedStatements: [.init(text, parameters: parameters)],
+                                          binding: binding, consoleID: selected.id)
+        }
     }
 }

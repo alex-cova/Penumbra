@@ -265,11 +265,13 @@ public actor MySQLSession {
         let columnsBox = NIOLockedValueBox<[ResultColumn]?>(nil)
         let affectedRows = NIOLockedValueBox<Int?>(nil)
         let warningCount = NIOLockedValueBox<UInt16?>(nil)
+        // Rows are decoded on the connection's event loop, outside this task: read the limits here.
+        let limits = ValueLimits.current
         let onRow: @Sendable (MySQLRow) -> Void = { row in
             columnsBox.withLockedValue { columns in
                 if columns == nil { columns = row.columnDefinitions.map(Self.column) }
             }
-            if source.yield(Self.decode(row)) == .stopProducing {
+            if source.yield(Self.decode(row, limits: limits)) == .stopProducing {
                 // The callback is already on the connection's event loop. Pause subsequent
                 // socket reads while allowing the current inbound buffer to finish decoding.
                 channel.setOption(ChannelOptions.autoRead, value: false).whenFailure { _ in
@@ -366,7 +368,7 @@ public actor MySQLSession {
         }
     }
 
-    private static func decode(_ row: MySQLRow) -> [DatabaseValue] {
+    private static func decode(_ row: MySQLRow, limits: ValueLimits = .current) -> [DatabaseValue] {
         row.columnDefinitions.indices.map { index in
             let definition = row.columnDefinitions[index]
             return MySQLValueDecoder.decode(
@@ -374,6 +376,7 @@ public actor MySQLSession {
                 isUnsigned: definition.flags.contains(.COLUMN_UNSIGNED),
                 charset: UInt16(truncatingIfNeeded: definition.characterSet.rawValue),
                 bytes: row.values[index].map { Array($0.readableBytesView) },
+                limits: limits,
                 binaryProtocol: row.format == .binary
             )
         }

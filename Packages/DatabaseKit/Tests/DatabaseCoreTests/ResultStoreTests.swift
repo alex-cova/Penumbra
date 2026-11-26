@@ -26,6 +26,17 @@ struct ResultStoreTests {
         await store.close()
     }
 
+    @Test func sparseProjectionPreservesOrderAcrossSpilledChunks() async throws {
+        let store = ResultStore(columns: [], memoryLimitBytes: 0)
+        try await store.append((0..<2_100).map { [.int(Int64($0))] })
+        await store.finish()
+        let stats = await store.stats
+        #expect(stats.spillFileExists)
+        let selected = try await store.mapRows(at: [2_099, 0, 1_024, 0, 2_000]) { $0.first }
+        #expect(selected == [.int(2_099), .int(0), .int(1_024), .int(0), .int(2_000)])
+        await store.close()
+    }
+
     @Test func memoryStaysUnderTheCeilingAndOldChunksSpillAndComeBack() async throws {
         // A ceiling of one chunk's worth forces spilling almost immediately.
         let store = ResultStore(columns: columns, memoryLimitBytes: 200_000)

@@ -6,6 +6,76 @@ import XCTest
 
 @MainActor
 final class IDEDatabaseTests: XCTestCase {
+    func testFilteredGridRevealsAndInspectsByOriginalRowNumber() async throws {
+        let storage = IDEDatabaseResultStorage()
+        try await storage.store.append((0..<10).map { [.int(Int64($0))] })
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        let table = NSTableView(frame: scroll.bounds)
+        let coordinator = IDEDatabaseResultGrid.Coordinator()
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        scroll.documentView = table
+        coordinator.install(table: table, clip: scroll.contentView)
+        defer { coordinator.detach() }
+        let projection = IDEDatabaseLoadedFilter.Matches(indices: [3, 7], loadedRows: 10, reachedMatchLimit: false)
+        var inspected: Int?
+        coordinator.update(storage: storage, columns: ["number"], rowCount: 10, canSort: false,
+                           onSort: { _ in }, onInspect: { row, _ in inspected = row }, rowProjection: projection)
+        XCTAssertEqual(coordinator.numberOfRows(in: table), 2)
+        coordinator.reveal(.init(row: 7))
+        XCTAssertEqual(table.selectedRow, 1)
+        XCTAssertTrue(coordinator.inspectSelectedValue())
+        XCTAssertEqual(inspected, 7)
+        XCTAssertTrue(coordinator.selectCell(row: 0, column: 1, extend: false))
+        XCTAssertTrue(coordinator.inspectSelectedValue())
+        XCTAssertEqual(inspected, 3)
+        await storage.store.close()
+    }
+    func testGridViewportLoadsBothScrolledDimensions() async throws {
+        let storage = IDEDatabaseResultStorage()
+        let columnNames = (0..<40).map { "column_\($0)" }
+        for start in stride(from: 0, to: 4_096, by: 256) {
+            try await storage.store.append((start..<(start + 256)).map { row in
+                columnNames.indices.map { .text("\(row):\($0)") }
+            })
+        }
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 220))
+        let table = NSTableView(frame: scroll.bounds)
+        let coordinator = IDEDatabaseResultGrid.Coordinator()
+        table.dataSource = coordinator
+        table.delegate = coordinator
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        coordinator.install(table: table, clip: scroll.contentView)
+        defer { coordinator.detach() }
+        coordinator.update(storage: storage, columns: columnNames, rowCount: 4_096, canSort: false,
+                           onSort: { _ in XCTFail("Scrolling should use the store") }, onInspect: { _, _ in })
+        scroll.layoutSubtreeIfNeeded()
+
+        var times: [Double] = []
+        for (row, column) in [(1024, 12), (2048, 28), (3072, 36), (32, 1), (4064, 20), (128, 5), (2400, 16), (600, 32)] {
+            let start = ContinuousClock.now
+            table.scrollRowToVisible(row)
+            table.scrollColumnToVisible(column + 1)
+            scroll.reflectScrolledClipView(scroll.contentView)
+            let field = table.tableColumns[column + 1]
+            let expected = "\(row):\(column)"
+            var actual: String?
+            repeat {
+                actual = (coordinator.tableView(table, viewFor: field, row: row) as? NSTextField)?.stringValue
+                if actual == expected { break }
+                try await Task.sleep(for: .milliseconds(3))
+            } while start.duration(to: .now) < .seconds(3)
+            XCTAssertEqual(actual, expected)
+            let duration = start.duration(to: .now).components
+            times.append(Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15)
+        }
+        let sorted = times.sorted()
+        print("DATABASE_GRID_VIEWPORT cell-ready ms median=\(sorted[sorted.count / 2]) max=\(sorted.last ?? 0), jumps=\(times.count)")
+        await storage.store.close()
+    }
+
     func testGridLoadsADistantVisibleRowFromItsStore() async throws {
         let storage = IDEDatabaseResultStorage()
         try await storage.store.append((0..<500).map { [.int(Int64($0))] })

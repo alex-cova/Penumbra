@@ -10,11 +10,11 @@ struct IDEDatabaseParameterPrompt: Identifiable {
 struct IDEDatabaseParameterSheet: View {
     @Environment(\.dismiss) private var dismiss
     let prompt: IDEDatabaseParameterPrompt
-    @State private var inputs: [Input]
+    @State private var inputs: [IDEDatabaseParameterInput]
 
     init(prompt: IDEDatabaseParameterPrompt) {
         self.prompt = prompt
-        _inputs = State(initialValue: prompt.labels.map { _ in Input() })
+        _inputs = State(initialValue: prompt.labels.map { _ in IDEDatabaseParameterInput() })
     }
 
     var body: some View {
@@ -26,7 +26,7 @@ struct IDEDatabaseParameterSheet: View {
                         GridRow {
                             Text(prompt.labels[index]).font(IDEAppearance.Typography.monoSmall)
                             Picker("Type for \(prompt.labels[index])", selection: $inputs[index].kind) {
-                                ForEach(Input.Kind.allCases) { kind in Text(kind.rawValue).tag(kind) }
+                                ForEach(IDEDatabaseParameterInput.Kind.allCases) { kind in Text(kind.rawValue).tag(kind) }
                             }
                             .labelsHidden()
                             .frame(width: 100)
@@ -56,38 +56,5 @@ struct IDEDatabaseParameterSheet: View {
         guard values.count == inputs.count else { return }
         dismiss()
         prompt.onSubmit(values)
-    }
-
-    private struct Input {
-        enum Kind: String, CaseIterable, Identifiable {
-            case text = "Text"
-            case integer = "Integer"
-            case floatingPoint = "Float"
-            case boolean = "Boolean"
-            case null = "NULL"
-
-            var id: Self { self }
-        }
-
-        var kind = Kind.text
-        var text = ""
-
-        var value: DatabaseValue? {
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            switch kind {
-            case .text: return .text(text)
-            case .integer: return Int64(trimmed).map(DatabaseValue.int)
-            case .floatingPoint:
-                guard let value = Double(trimmed), value.isFinite else { return nil }
-                return .double(value)
-            case .boolean:
-                switch trimmed.lowercased() {
-                case "true", "1": return .bool(true)
-                case "false", "0": return .bool(false)
-                default: return nil
-                }
-            case .null: return .null
-            }
-        }
     }
 }
