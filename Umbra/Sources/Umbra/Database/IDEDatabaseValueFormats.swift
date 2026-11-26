@@ -137,7 +137,7 @@ enum IDEDatabaseValueFormats {
         guard !bytes.isEmpty, bytes.count <= renderLimit * 4 else { return nil }
         var candidate = bytes
         // A partial value may end inside a character; ignore at most three trailing bytes then.
-        if !complete { for _ in 0..<3 where String(validatingUTF8: candidate.map { CChar(bitPattern: $0) } + [0]) == nil { candidate.removeLast() } }
+        if !complete { for _ in 0..<3 where String(validatingCString: candidate.map { CChar(bitPattern: $0) } + [0]) == nil { candidate.removeLast() } }
         guard let text = String(bytes: candidate, encoding: .utf8), !text.unicodeScalars.contains(where: { $0.value == 0 }) else {
             return nil
         }

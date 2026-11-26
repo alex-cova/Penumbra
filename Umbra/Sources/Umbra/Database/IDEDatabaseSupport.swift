@@ -1219,8 +1219,8 @@ final class IDEDatabaseSupport {
             } else {
                 pending.markCommitted()
             }
-            if target.engine != .mongo, sqlSessions[connectionID] != nil {
-                sqlTransactions[connectionID] = await sqlSessions[connectionID]?.transactionState() ?? .none
+            if target.engine != .mongo, let session = sqlSessions[connectionID] {
+                sqlTransactions[connectionID] = await session.transactionState()
             }
             return true
         } catch let conflict as SQLiteOptimisticConflict {
