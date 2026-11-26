@@ -53,6 +53,7 @@ final class IDEMarkdownPreviewSettingsTests: XCTestCase {
         XCTAssertEqual(settings.lineSpacing, .normal, "an unknown value falls back")
         XCTAssertEqual(settings.typeface, .editor)
         XCTAssertTrue(settings.opensDiagramsOnClick)
+        XCTAssertFalse(settings.sideBySide, "a value saved before the alongside option keeps covering")
     }
 
     func testStoredAndLoadedThroughUserDefaults() throws {

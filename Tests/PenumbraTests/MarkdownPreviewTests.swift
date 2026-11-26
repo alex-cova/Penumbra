@@ -141,15 +141,63 @@ final class MarkdownPreviewTests: XCTestCase {
     }
 
     @MainActor
-    func testToggleIgnoredForNilAndMermaidLanguageIdentifiers() {
+    func testToggleIgnoredForNilLanguageIdentifier() {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
         let controller = MarkdownPreviewController(textView: textView)
 
         textView.languageIdentifier = nil
         XCTAssertFalse(controller.toggle())
+    }
 
+    @MainActor
+    func testToggleRendersMermaidFileAsOneDiagram() async {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        textView.setState(TextViewState(text: "flowchart TD\n    A --> B", theme: DefaultTheme()))
         textView.languageIdentifier = "mermaid"
-        XCTAssertFalse(controller.toggle())
+        let controller = MarkdownPreviewController(textView: textView)
+        controller.parseDebounceNanoseconds = 10_000_000
+        XCTAssertTrue(controller.toggle())
+        XCTAssertTrue(controller.isVisible)
+        await controller.waitForPendingWork()
+        let blocks = controller.previewView.document?.blocks ?? []
+        XCTAssertEqual(blocks.count, 1)
+        guard case .mermaid(let source) = blocks.first?.kind else {
+            return XCTFail("Expected one mermaid block, got \(blocks)")
+        }
+        XCTAssertEqual(source, "flowchart TD\n    A --> B")
+        XCTAssertTrue(controller.previewView.rasterImages[0] != nil)
+    }
+
+    @MainActor
+    func testSideBySideKeepsEditorEditable() {
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        let controller = MarkdownPreviewController(textView: textView)
+        controller.embed(editorView: textView)
+        window.contentView = controller.containerView
+        textView.setState(TextViewState(text: "# Title\n\nBody", theme: DefaultTheme()))
+        textView.languageIdentifier = "markdown"
+
+        XCTAssertTrue(controller.toggleSideBySide())
+        XCTAssertTrue(controller.isVisible)
+        XCTAssertTrue(controller.isSideBySide)
+        XCTAssertTrue(textView.isSelectable)
+        window.makeKeyAndOrderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(textView.frame.width, 299.5, accuracy: 1, "the editor keeps its half")
+        XCTAssertEqual(controller.previewView.frame.width, 299.5, accuracy: 1, "the preview takes the other half")
+        XCTAssertLessThanOrEqual(textView.frame.maxX, controller.previewView.frame.minX + 1)
+
+        controller.setSideBySide(false)
+        XCTAssertFalse(controller.isSideBySide)
+        XCTAssertTrue(controller.isVisible)
+        XCTAssertFalse(textView.isSelectable)
+
+        XCTAssertTrue(controller.toggle())
+        XCTAssertFalse(controller.isVisible)
     }
 
     @MainActor

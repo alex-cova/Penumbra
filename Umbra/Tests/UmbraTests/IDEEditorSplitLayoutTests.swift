@@ -1,4 +1,5 @@
 import AppKit
+import Penumbra
 import SwiftUI
 import XCTest
 @testable import Umbra
@@ -188,5 +189,218 @@ final class IDEEditorSplitLayoutTests: XCTestCase {
         XCTAssertGreaterThan(end, start + 100, "the survivor took the area back")
         let between = samples.filter { $0 > start + 40 && $0 < end - 40 }
         XCTAssertGreaterThanOrEqual(between.count, 3, "the pane jumped from \(start) to \(end): \(samples)")
+    }
+
+    // MARK: Changes that move a pane (no animation, still laid out right)
+
+    func testClosingTheMiddlePaneSharesTheAreaBetweenTheOthers() async throws {
+        workspace.splitRight()
+        await settle()
+        workspace.splitRight()
+        await settle()
+        let ids = workspace.workbench.layout.flattenedPanes().map(\.id)
+        XCTAssertEqual(ids.count, 3)
+        workspace.host(for: ids[1]).onActivated?()
+        await settle()
+        workspace.closeActivePane()
+        await settle()
+
+        XCTAssertEqual(workspace.workbench.layout.flattenedPanes().map(\.id), [ids[0], ids[2]])
+        let frames = paneFrames()
+        XCTAssertEqual(frames.count, 2)
+        guard frames.count == 2 else { return }
+        assertInsideEditorArea(frames, "after closing the middle pane")
+        XCTAssertEqual(frames[0].minX, 0, accuracy: 1.5)
+        XCTAssertEqual(frames[1].maxX, workspace.editorAreaSize.width, accuracy: 1.5)
+        XCTAssertEqual(frames[0].width, frames[1].width, accuracy: 1.5)
+    }
+
+    func testSplittingDownBesideAnotherPaneNestsInTheOtherDirection() async throws {
+        workspace.splitRight()
+        await settle()
+        workspace.splitDown()
+        await settle()
+
+        let frames = paneFrames()
+        XCTAssertEqual(frames.count, 3)
+        guard frames.count == 3 else { return }
+        assertInsideEditorArea(frames, "nested split")
+        let area = workspace.editorAreaSize
+        XCTAssertEqual(frames[0].minX, 0, accuracy: 1.5)
+        XCTAssertEqual(frames[0].height, area.height, accuracy: 1.5)
+        XCTAssertEqual(frames[1].minX, frames[2].minX, accuracy: 1.5)
+        XCTAssertEqual(frames[1].width, frames[2].width, accuracy: 1.5)
+        XCTAssertEqual(frames[1].minY, 0, accuracy: 1.5)
+        XCTAssertEqual(frames[2].maxY, area.height, accuracy: 1.5)
+        XCTAssertLessThanOrEqual(frames[1].maxY, frames[2].minY + 1)
+        XCTAssertEqual(frames[2].maxX, area.width, accuracy: 1.5)
+    }
+
+    func testUnsplitLeavesOnePaneWithTheWholeArea() async throws {
+        workspace.splitRight()
+        await settle()
+        workspace.splitRight()
+        await settle()
+        let first = try XCTUnwrap(workspace.workbench.layout.flattenedPanes().first)
+        workspace.unsplit(from: first.id)
+        await settle(1.2)
+
+        let frames = paneFrames()
+        XCTAssertEqual(frames.count, 1)
+        guard let frame = frames.first else { return }
+        XCTAssertEqual(frame.minX, 0, accuracy: 1.5)
+        XCTAssertEqual(frame.width, workspace.editorAreaSize.width, accuracy: 1.5)
+        XCTAssertEqual(hostedEditorFrames().count, 1, "the closed panes' views are gone")
+    }
+
+    func testAPaneKeepsItsEditorViewWhenAnotherOpensBesideIt() async throws {
+        let before = try XCTUnwrap(workspace.workbench.layout.flattenedPanes().first)
+        let host = workspace.host(for: before.id)
+        let container = host.textView.superview
+        workspace.splitRight()
+        await settle()
+        XCTAssertTrue(workspace.host(for: before.id) === host)
+        XCTAssertTrue(host.textView.superview === container, "the pane was rebuilt instead of kept")
+    }
+
+    // MARK: Dropping a tab on a pane's edge
+
+    private func openTwoTabs() async throws -> (first: WorkbenchDocument, second: WorkbenchDocument) {
+        workspace.openUntitled(displayName: "Second", text: "second tab\n")
+        await settle()
+        let documents = workspace.workbench.activePane.documents
+        XCTAssertEqual(documents.count, 2)
+        return (documents[0], documents[1])
+    }
+
+    func testDroppingATabOnItsOwnPanesEdgeSplitsItOff() async throws {
+        let (first, second) = try await openTwoTabs()
+        let paneID = workspace.workbench.activePaneID
+        workspace.moveTab(second.id, from: paneID, toNewPaneAt: .trailing, of: paneID)
+        await settle(1.0)
+
+        let panes = workspace.workbench.layout.flattenedPanes()
+        XCTAssertEqual(panes.count, 2)
+        guard panes.count == 2 else { return }
+        XCTAssertEqual(panes[0].documents.map(\.id), [first.id])
+        XCTAssertEqual(panes[1].documents.map(\.id), [second.id])
+        XCTAssertEqual(workspace.workbench.activePaneID, panes[1].id, "the new pane takes focus")
+        XCTAssertEqual(workspace.host(for: panes[1].id).textView.text, "second tab\n", "the new pane shows the tab")
+        XCTAssertEqual(workspace.host(for: panes[0].id).textView.text.isEmpty, false)
+        let frames = paneFrames()
+        XCTAssertEqual(frames.count, 2)
+        guard frames.count == 2 else { return }
+        assertInsideEditorArea(frames, "tab dropped on the edge")
+        XCTAssertEqual(frames[0].width, frames[1].width, accuracy: 1.5)
+        XCTAssertLessThan(frames[0].minX, frames[1].minX)
+    }
+
+    func testDroppingOnTheLeadingEdgePutsTheNewPaneFirst() async throws {
+        let (first, second) = try await openTwoTabs()
+        let paneID = workspace.workbench.activePaneID
+        workspace.moveTab(second.id, from: paneID, toNewPaneAt: .leading, of: paneID)
+        await settle(1.0)
+
+        let panes = workspace.workbench.layout.flattenedPanes()
+        XCTAssertEqual(panes.map { $0.documents.map(\.id) }, [[second.id], [first.id]])
+        let frames = paneFrames()
+        guard frames.count == 2 else { return XCTFail("two panes expected") }
+        assertInsideEditorArea(frames, "leading drop")
+        XCTAssertEqual(frames[0].minX, 0, accuracy: 1.5)
+    }
+
+    func testDroppingOnTheBottomEdgeStacksThePanes() async throws {
+        let (_, second) = try await openTwoTabs()
+        let paneID = workspace.workbench.activePaneID
+        workspace.moveTab(second.id, from: paneID, toNewPaneAt: .bottom, of: paneID)
+        await settle(1.0)
+
+        let frames = paneFrames()
+        guard frames.count == 2 else { return XCTFail("two panes expected") }
+        assertInsideEditorArea(frames, "bottom drop")
+        XCTAssertEqual(frames[0].minX, frames[1].minX, accuracy: 1.5)
+        XCTAssertLessThan(frames[0].minY, frames[1].minY)
+    }
+
+    func testTheOnlyTabOfAPaneCannotSplitItsOwnPane() async throws {
+        let paneID = workspace.workbench.activePaneID
+        let only = try XCTUnwrap(workspace.workbench.activePane.documents.first)
+        workspace.moveTab(only.id, from: paneID, toNewPaneAt: .trailing, of: paneID)
+        await settle()
+        XCTAssertEqual(workspace.workbench.layout.flattenedPanes().count, 1)
+        XCTAssertEqual(workspace.workbench.activePane.documents.map(\.id), [only.id])
+    }
+
+    func testDroppingAPanesLastTabOnAnotherPanesEdgeClosesTheSource() async throws {
+        let (first, second) = try await openTwoTabs()
+        workspace.splitRight()
+        await settle()
+        let panes = workspace.workbench.layout.flattenedPanes()
+        XCTAssertEqual(panes.count, 2)
+        // The right-hand pane holds both tabs again; keep only `second` there and `first` on the left.
+        let left = panes[0], right = panes[1]
+        workspace.closeDocument(second.id, in: left)
+        workspace.closeDocument(first.id, in: right)
+        await settle()
+        XCTAssertEqual(left.documents.map(\.id), [first.id])
+        XCTAssertEqual(right.documents.map(\.id), [second.id])
+
+        workspace.moveTab(first.id, from: left.id, toNewPaneAt: .trailing, of: right.id)
+        await settle(1.2)
+
+        let after = workspace.workbench.layout.flattenedPanes()
+        XCTAssertEqual(after.count, 2, "the emptied pane is gone and the dropped tab has its own")
+        XCTAssertEqual(after.map { $0.documents.map(\.id) }, [[second.id], [first.id]])
+        let frames = paneFrames()
+        guard frames.count == 2 else { return XCTFail("two panes expected") }
+        assertInsideEditorArea(frames, "after moving a pane's last tab")
+        XCTAssertEqual(frames[0].minX, 0, accuracy: 1.5)
+        XCTAssertEqual(frames[1].maxX, workspace.editorAreaSize.width, accuracy: 1.5)
+    }
+
+    func testAFileBackedTabKeepsItsTextInTheNewPane() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("drop-\(UUID().uuidString).txt")
+        try "from disk\nline two\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        await workspace.openDocument(from: url)
+        await settle(1.0)
+        let paneID = workspace.workbench.activePaneID
+        let document = try XCTUnwrap(workspace.workbench.activePane.selectedDocument)
+        XCTAssertEqual(document.url?.lastPathComponent, url.lastPathComponent)
+        workspace.moveTab(document.id, from: paneID, toNewPaneAt: .trailing, of: paneID)
+        await settle(1.5)
+
+        let panes = workspace.workbench.layout.flattenedPanes()
+        XCTAssertEqual(panes.count, 2)
+        guard panes.count == 2 else { return }
+        XCTAssertEqual(workspace.host(for: panes[1].id).textView.text, "from disk\nline two\n")
+    }
+
+    func testTheDropTargetFollowsThePanesAsLaidOut() async throws {
+        workspace.splitRight()
+        await settle()
+        let panes = workspace.workbench.layout.flattenedPanes()
+        let frames = paneFrames()
+        guard panes.count == 2, frames.count == 2 else { return XCTFail("two panes expected") }
+        let left = frames[0], right = frames[1]
+        let bar = IDEAppearance.Spacing.tabHeight
+
+        // Over the right pane, dragged from the left one.
+        XCTAssertEqual(
+            workspace.tabDropTarget(at: CGPoint(x: right.maxX - 10, y: right.midY), from: panes[0].id),
+            IDETabDropTarget(paneID: panes[1].id, edge: .trailing)
+        )
+        XCTAssertEqual(
+            workspace.tabDropTarget(at: CGPoint(x: right.midX, y: right.midY), from: panes[0].id),
+            IDETabDropTarget(paneID: panes[1].id, edge: nil)
+        )
+        XCTAssertEqual(
+            workspace.tabDropTarget(at: CGPoint(x: right.midX, y: right.minY + bar / 2), from: panes[0].id),
+            IDETabDropTarget(paneID: panes[1].id, edge: nil),
+            "the tab bar is not the top edge"
+        )
+        // Over its own pane: its bar is a reorder, and a pane with one tab cannot split itself.
+        XCTAssertNil(workspace.tabDropTarget(at: CGPoint(x: left.midX, y: left.minY + bar / 2), from: panes[0].id))
+        XCTAssertNil(workspace.tabDropTarget(at: CGPoint(x: left.maxX - 10, y: left.midY), from: panes[0].id))
     }
 }

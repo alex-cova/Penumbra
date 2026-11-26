@@ -5,7 +5,8 @@ import XCTest
 @MainActor
 final class IDEDatabaseConsoleScopeTests: XCTestCase {
     func testPostgresScopeSwitchProtectsTransactionsAndOldResultReruns() async throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_DB_INTEGRATION"] == "1")
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["UMBRA_DB_INTEGRATION"] == "1"
+                          && ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true", "needs the database containers; never on CI")
         let url = try XCTUnwrap(ProcessInfo.processInfo.environment["UMBRA_TEST_PG_URL"])
         let draft = try DatabaseURL.parse(url)
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -101,6 +101,17 @@ struct IDEPreferencesMarkdownPane: View {
             IDESettingsToggle("Justify paragraphs", isOn: $preferences.markdownPreview.justifiesParagraphs)
         }
 
+        IDESettingsSection(
+            "Preview Layout",
+            footer: "Alongside keeps the editor editable, so the rendered page follows the buffer as it is typed."
+        ) {
+            IDESettingsToggle(
+                "Show preview alongside the editor",
+                isOn: $preferences.markdownPreview.sideBySide,
+                detail: "Markdown and Mermaid files open split with the rendered page, updating live."
+            )
+        }
+
         IDESettingsSection("Tables and Diagrams") {
             IDESettingsPicker("Table columns", selection: $preferences.markdownPreview.tableDensity) {
                 ForEach(IDEMarkdownPreviewSettings.TableDensity.allCases) { density in

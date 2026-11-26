@@ -395,26 +395,42 @@ struct IDETextViewRepresentable: NSViewRepresentable {
 // MARK: - Layout
 
 struct IDEEditorLayoutNode: View {
-    @Environment(IDEWorkspace.self) private var workspace
     let layout: EditorLayout
+    /// `IDEWorkspace.layoutEpoch`. The layout is a tree of classes edited in place, so a node
+    /// handed the same objects looks unchanged to SwiftUI; the epoch is what says it changed.
+    /// Passing it down, rather than giving the whole tree a new identity per change, is what lets
+    /// panes that stay keep their views and the ones that come and go be animated.
+    var epoch: UInt64 = 0
     /// The edge a pane in this node grows from when it opens and shrinks to when it
     /// closes: away from the other side of its split. `nil` for the only pane.
     var growthEdge: Edge? = nil
+    /// The top of the editor area. A lone pane there is drawn as a chain of one, so it keeps its
+    /// view when a second one opens beside it, which is what turns it into a chain of two.
+    var isRoot = false
 
     var body: some View {
         let _ = IDEBodyDiagnostics.note("IDEEditorLayoutNode")
-        switch layout {
-        case .pane(let pane):
+        // `.horizontal` means children sit left/right (see `EditorSplitData.split`), i.e. an
+        // HStack. Switch on `data.axis` rather than the enum case so a case/axis mismatch
+        // (the two are always constructed together, but round-trip independently through
+        // `EditorRestorationState`) can't silently invert the split again.
+        //
+        // One call site for every container, so the view is the same whichever way the layout
+        // is shaped: a pane split sideways and then downward keeps being a chain of panes.
+        if let (axis, children) = chain {
+            IDEEditorSplitChain(axis: axis, children: children, epoch: epoch)
+        } else if case .pane(let pane) = layout {
             IDEEditorPaneView(paneID: pane.id, growthEdge: growthEdge)
                 .id(pane.id)
-        case .horizontal(let data):
-            // `.horizontal` means children sit left/right (see `EditorSplitData.split`), i.e. an
-            // HStack. Switch on `data.axis` rather than the enum case so a case/axis mismatch
-            // (the two are always constructed together, but round-trip independently through
-            // `EditorRestorationState`) can't silently invert the split again.
-            IDEEditorSplitChain(axis: data.axis == .horizontal ? .horizontal : .vertical, children: data.children)
-        case .vertical(let data):
-            IDEEditorSplitChain(axis: data.axis == .horizontal ? .horizontal : .vertical, children: data.children)
+        }
+    }
+
+    private var chain: (SplitLayout, [EditorLayout])? {
+        switch layout {
+        case .pane:
+            return isRoot ? (.horizontal, [layout]) : nil
+        case .horizontal(let data), .vertical(let data):
+            return (data.axis == .horizontal ? .horizontal : .vertical, data.children)
         }
     }
 }
@@ -512,18 +528,38 @@ struct IDEEditorPaneView: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(IDEEditorTabsBar.panesSpace)) } action: {
             workspace.editorPaneFrames[paneID] = $0
         }
-        // Where a tab dragged from another pane would land.
+        // Where a tab being dragged would land: this pane's tabs, or the new pane beside it.
         .overlay {
-            if workspace.tabDropPaneID == paneID {
-                Rectangle()
-                    .fill(IDEAppearance.ColorToken.accent.opacity(0.14))
-                    .allowsHitTesting(false)
+            if let target = workspace.tabDropTarget, target.paneID == paneID {
+                IDETabDropHighlight(edge: target.edge)
             }
         }
         .transition(.modifier(
             active: PanePresence(edge: growthEdge, presence: 0),
             identity: PanePresence(edge: growthEdge, presence: 1)
         ))
+    }
+}
+
+/// The area a dragged tab would take: the half of the pane on an edge, or all of it for its tabs.
+private struct IDETabDropHighlight: View {
+    let edge: EditorSplitEdge?
+
+    var body: some View {
+        GeometryReader { proxy in
+            let area = IDEEditorTabDrop.highlight(
+                for: edge,
+                in: CGRect(origin: .zero, size: proxy.size),
+                tabBarHeight: IDEAppearance.Spacing.tabHeight
+            )
+            Rectangle()
+                .fill(IDEAppearance.ColorToken.accent.opacity(0.14))
+                .overlay { Rectangle().strokeBorder(IDEAppearance.ColorToken.accent.opacity(0.5), lineWidth: 1) }
+                .frame(width: area.width, height: area.height)
+                .offset(x: area.minX, y: area.minY)
+                .ideAnimation(IDEAppearance.Motion.quick, value: edge)
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -536,10 +572,17 @@ struct IDEEditorPaneView: View {
 /// Each link opens at `1 / remaining`, so every pane starts with an equal share, and re-spreads
 /// evenly when a pane is added or closed (`SplitPanes` follows a changing `defaultFraction`).
 /// Dragging a divider moves one pane against all the panes after it, not just its neighbour.
+///
+/// The last pane is a link too, with nothing on its second side (`hiddenSide`). A pane is therefore
+/// always the first side of the link at its place in the chain, and opening a sibling after it only
+/// shows that link's second side: the pane keeps its view and its share is animated, where
+/// switching a bare pane for a split would build it again beside the new one. A pane inserted or
+/// closed before another takes that one's place (see `IDEEditorLayoutPaths`).
 struct IDEEditorSplitChain: View {
     let axis: SplitLayout
     let children: [EditorLayout]
     var start = 0
+    var epoch: UInt64 = 0
     /// Growth edge of the first child; later children are the second side of
     /// their link and grow from the opposite edge. Computed from `axis` when nil.
     var firstGrowthEdge: Edge? = nil
@@ -554,22 +597,23 @@ struct IDEEditorSplitChain: View {
         Group {
             if remaining <= 0 {
                 Color.clear
-            } else if remaining == 1 {
-                IDEEditorLayoutNode(layout: children[start], growthEdge: firstEdge)
             } else {
                 SplitPanes(
                     axis: axis,
                     minPrimary: IDEAppearance.Spacing.editorPaneMinLength,
                     minSecondary: IDEAppearance.Spacing.editorPaneMinLength * CGFloat(remaining - 1),
-                    defaultFraction: 1 / CGFloat(remaining),
+                    // The share a second pane gets when it opens: a lone link is hidden at the
+                    // moment, and its fraction is what it opens at.
+                    defaultFraction: remaining > 1 ? 1 / CGFloat(remaining) : 0.5,
                     // Panes scale together with the window rather than one keeping its size.
                     priority: nil,
+                    hiddenSide: remaining == 1 ? .secondary : nil,
                     animatesFraction: true,
                     dividerResetsOnDoubleClick: true
                 ) {
-                    IDEEditorLayoutNode(layout: children[start], growthEdge: firstEdge)
+                    IDEEditorLayoutNode(layout: children[start], epoch: epoch, growthEdge: firstEdge)
                 } secondary: {
-                    IDEEditorSplitChain(axis: axis, children: children, start: start + 1, firstGrowthEdge: restEdge)
+                    IDEEditorSplitChain(axis: axis, children: children, start: start + 1, epoch: epoch, firstGrowthEdge: restEdge)
                 }
             }
         }

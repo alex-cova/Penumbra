@@ -6,6 +6,7 @@ import Testing
 /// Live probes against the disposable servers from `Scripts/db-test-env.sh`. Skipped (with the
 /// reason in the test name) unless `UMBRA_DB_INTEGRATION=1`, so CI without Docker stays green.
 private let liveEnabled = ProcessInfo.processInfo.environment["UMBRA_DB_INTEGRATION"] == "1"
+    && ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true"  // never on the CI pipeline
 
 private func login(_ variable: String) throws -> SQLLogin {
     guard let url = ProcessInfo.processInfo.environment[variable] else {

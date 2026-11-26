@@ -42,7 +42,7 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
     )
     static let markdown = IDEPreferencesDomain(
         id: "markdown", title: "Markdown", symbol: "doc.richtext",
-        searchTerms: ["markdown", "preview", "reading", "font", "font size", "typeface", "serif", "new york", "line spacing", "line length", "characters per line", "measure", "headings", "heading alignment", "centered", "number headings", "numbered", "outline", "indent paragraphs", "justify", "tables", "table columns", "padded", "compact", "light mode", "dark mode", "appearance", "diagrams", "mermaid", "export", "animation", "animate", "fade", "scale"]
+        searchTerms: ["markdown", "preview", "reading", "font", "font size", "typeface", "serif", "new york", "line spacing", "line length", "characters per line", "measure", "headings", "heading alignment", "centered", "number headings", "numbered", "outline", "indent paragraphs", "justify", "tables", "table columns", "padded", "compact", "light mode", "dark mode", "appearance", "diagrams", "mermaid", "export", "animation", "animate", "fade", "scale", "side by side", "alongside", "split", "live", "layout"]
     )
     static let terminal = IDEPreferencesDomain(
         id: "terminal", title: "Terminal", symbol: "apple.terminal",

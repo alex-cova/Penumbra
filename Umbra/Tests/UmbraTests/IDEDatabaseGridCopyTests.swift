@@ -33,7 +33,7 @@ final class IDEDatabaseGridCopyTests: XCTestCase {
 
     func testServerFilterKeepsLivePostgresAndMySQLBindingsInOrder() async throws {
         let environment = ProcessInfo.processInfo.environment
-        try XCTSkipUnless(environment["UMBRA_DB_INTEGRATION"] == "1")
+        try XCTSkipUnless(environment["UMBRA_DB_INTEGRATION"] == "1" && environment["GITHUB_ACTIONS"] != "true", "needs the database containers; never on CI")
         for (key, sql) in [
             ("UMBRA_TEST_PG_URL", "SELECT $1::bigint AS number, 'label'::text AS name"),
             ("UMBRA_TEST_MYSQL_URL", "SELECT CAST(? AS SIGNED) AS number, 'label' AS name"),

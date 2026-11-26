@@ -4,6 +4,7 @@ import Testing
 @testable import DatabaseKit
 
 private let liveEnabled = ProcessInfo.processInfo.environment["UMBRA_DB_INTEGRATION"] == "1"
+    && ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true"  // never on the CI pipeline
 
 /// Field edits on a real replica set: exact `_id`, type-preserving `$set`, a pre-flight check
 /// against what the grid showed, and a filter that makes a racing change match nothing.

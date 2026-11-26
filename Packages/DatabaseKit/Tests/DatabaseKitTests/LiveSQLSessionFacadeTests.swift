@@ -4,6 +4,7 @@ import Testing
 @testable import DatabaseKit
 
 private let liveEnabled = ProcessInfo.processInfo.environment["UMBRA_DB_INTEGRATION"] == "1"
+    && ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true"  // never on the CI pipeline
 
 /// `SQLSession` is the facade the app still calls. These tests drive it the way the app does, to
 /// prove the move to single-connection sessions did not change what the explorer and console see.

@@ -143,7 +143,7 @@ final class IDEDatabaseEngineEditTests: XCTestCase {
     private func makeSupport(urlKey: String, setUp: (inout DatabaseConnection) -> Void = { _ in }) async throws
         -> (IDEDatabaseSupport, DatabaseConnection, SQLSession?, URL) {
         let environment = ProcessInfo.processInfo.environment
-        try XCTSkipUnless(environment["UMBRA_DB_INTEGRATION"] == "1")
+        try XCTSkipUnless(environment["UMBRA_DB_INTEGRATION"] == "1" && environment["GITHUB_ACTIONS"] != "true", "needs the database containers; never on CI")
         let url = try XCTUnwrap(environment[urlKey])
         let draft = try DatabaseURL.parse(url)
         var source = draft.connection
@@ -241,7 +241,7 @@ final class IDEDatabaseEngineEditTests: XCTestCase {
 
     func testMongoCollectionEditsSetOnlyTheChosenFieldsAndKeepTheirTypes() async throws {
         let environment = ProcessInfo.processInfo.environment
-        try XCTSkipUnless(environment["UMBRA_DB_INTEGRATION"] == "1")
+        try XCTSkipUnless(environment["UMBRA_DB_INTEGRATION"] == "1" && environment["GITHUB_ACTIONS"] != "true", "needs the database containers; never on CI")
         let url = try XCTUnwrap(environment["UMBRA_TEST_MONGO_URL"])
         let draft = try DatabaseURL.parse(url)
         let source = draft.connection

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Fails if a variable that switches on a test which spends money (OpenAI, Anthropic, an Ollama server)
-# has a value. Run by CI; also safe to run locally before a push: it only reads the environment.
+# or one that needs disposable database containers (Docker; Scripts/db-test-env.sh) has a value. Run by CI; also safe to run locally before a push: it only reads the environment.
 set -euo pipefail
 
 status=0
 for name in \
   AGENTKIT_EVAL AGENTKIT_OPENAI_KEY AGENTKIT_ANTHROPIC_KEY AGENTKIT_META_KEY AGENTKIT_OLLAMA_MODEL AGENTKIT_OLLAMA_URL \
   UMBRA_LIVE_ACP UMBRA_LIVE_ACP_UI UMBRA_LIVE_ACP_PERMISSIONS UMBRA_ACP_UI_LIVE \
-  OPENAI_API_KEY ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CODEX_API_KEY; do
+  OPENAI_API_KEY ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CODEX_API_KEY \
+  UMBRA_DB_INTEGRATION UMBRA_TEST_PG_URL UMBRA_TEST_MYSQL_URL UMBRA_TEST_MONGO_URL; do
   if [ -n "${!name:-}" ]; then
-    echo "error: $name is set. Tests that call a paid API must not run in CI; remove it from the workflow or its secrets." >&2
+    echo "error: $name is set. Tests that call a paid API or need database containers must not run in CI; remove it from the workflow or its secrets." >&2
     status=1
   fi
 done

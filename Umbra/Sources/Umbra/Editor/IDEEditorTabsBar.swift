@@ -84,7 +84,7 @@ struct IDEEditorTabsBar: View {
                                     )
                                 }
                             )
-                            .opacity(isDragged && workspace.tabDropPaneID != nil ? 0.4 : 1)
+                            .opacity(isDragged && workspace.tabDropTarget != nil ? 0.4 : 1)
                             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabWidths[tab.id] = $0 }
                             // Room the row scrolls into view with the tab, clear of
                             // the faded ends; spacing and padding take it back out.
@@ -134,7 +134,7 @@ struct IDEEditorTabsBar: View {
                     if let drag, !ids.contains(drag.tab) { endDrag() }
                 }
                 .onDisappear {
-                    if drag != nil { workspace.tabDropPaneID = nil }
+                    if drag != nil { workspace.tabDropTarget = nil }
                 }
                 // A cancelled drag (Esc) resets the gesture state without a drop:
                 // the tabs settle back and no order changes.
@@ -198,15 +198,15 @@ struct IDEEditorTabsBar: View {
 
     private func endDrag() {
         drag = nil
-        if workspace.tabDropPaneID != nil { workspace.tabDropPaneID = nil }
+        if workspace.tabDropTarget != nil { workspace.tabDropTarget = nil }
     }
 
     private func handleDrag(_ event: IDETabDragEvent, at point: CGPoint, of id: UUID, proxy: ScrollViewProxy) {
         switch event {
         case .moved(let translation, let location):
             let barLocation = location - barOrigin
-            let target = workspace.editorPane(at: point).flatMap { $0 == paneID ? nil : $0 }
-            if workspace.tabDropPaneID != target { workspace.tabDropPaneID = target }
+            let target = workspace.tabDropTarget(at: point, from: paneID)
+            if workspace.tabDropTarget != target { workspace.tabDropTarget = target }
             if let drag, drag.tab == id {
                 self.drag = IDETabDrag(tab: id, translation: translation, location: barLocation, startScrollOffset: drag.startScrollOffset)
             } else {
@@ -215,9 +215,13 @@ struct IDEEditorTabsBar: View {
             }
         case .dropped(let translation):
             guard var dropped = drag, dropped.tab == id else { return }
-            if let target = workspace.tabDropPaneID {
+            if let target = workspace.tabDropTarget {
                 endDrag()
-                workspace.moveTab(id, from: paneID, toPane: target)
+                if let edge = target.edge {
+                    workspace.moveTab(id, from: paneID, toNewPaneAt: edge, of: target.paneID)
+                } else {
+                    workspace.moveTab(id, from: paneID, toPane: target.paneID)
+                }
                 return
             }
             dropped.translation = translation

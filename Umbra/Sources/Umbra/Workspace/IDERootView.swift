@@ -114,8 +114,7 @@ public struct IDERootView: View {
                             // A folder alone is not a document. The workbench always has an empty
                             // pane, so showing it here paints a text editor with no tab and no text.
                             if workspace.hasOpenDocuments {
-                                IDEEditorLayoutNode(layout: workspace.editorLayout)
-                                    .id(workspace.layoutEpoch)
+                                IDEEditorLayoutNode(layout: workspace.editorLayout, epoch: workspace.layoutEpoch, isRoot: true)
                                     .coordinateSpace(name: IDEEditorTabsBar.panesSpace)
                             } else {
                                 // The welcome page, or in a project the quieter empty editor.

@@ -582,6 +582,8 @@ public final class IDEWorkspace {
     var databaseParameterPrompt: IDEDatabaseParameterPrompt?
     var databaseSchemaDraft: IDEDatabaseSchemaDraft?
     var isMarkdownPreviewVisible = false
+    /// The visible preview is showing alongside the editor rather than covering it.
+    var isMarkdownPreviewSideBySide = false
     /// The SwiftUI canvas is docked beside the editor (`IDEWorkspace+SwiftUIPreview.swift`).
     var isSwiftUIPreviewVisible = false
     var swiftUIPreview: IDESwiftUIPreviewSession?
@@ -595,17 +597,26 @@ public final class IDEWorkspace {
         set { if position.selectionLength != newValue { position.selectionLength = newValue } }
     }
     var tabsByPane: [UUID: [IDETabRow]] = [:]
-    /// The pane a tab being dragged would move to if dropped now.
-    var tabDropPaneID: UUID?
+    /// Where a tab being dragged would land if dropped now: another pane's tabs, or a new pane beside one.
+    var tabDropTarget: IDETabDropTarget?
     /// Pane frames in the editor panes' coordinate space, for tab drags.
     @ObservationIgnored var editorPaneFrames: [UUID: CGRect] = [:]
 
-    /// The pane at a point in the editor panes' space, for a dragged tab.
+    /// What dropping a tab dragged out of `paneID` at a point in the editor panes' space would do.
     /// Frames of panes that have since closed are ignored.
-    func editorPane(at point: CGPoint) -> UUID? {
-        editorPaneFrames.first {
-            workbench.layout.findPane(id: $0.key) != nil && $0.value.contains(point)
-        }?.key
+    func tabDropTarget(at point: CGPoint, from paneID: UUID) -> IDETabDropTarget? {
+        guard let source = workbench.layout.findPane(id: paneID) else { return nil }
+        let frames = editorPaneFrames.compactMap { entry in
+            workbench.layout.findPane(id: entry.key) != nil ? (id: entry.key, frame: entry.value) : nil
+        }
+        return IDEEditorTabDrop.target(
+            at: point,
+            panes: frames,
+            from: paneID,
+            sourceTabCount: source.documents.count,
+            tabBarHeight: IDEAppearance.Spacing.tabHeight,
+            canSplit: { canSplitActivePane(along: $0) }
+        )
     }
     /// Editor area size reported by the root view, for the split guard.
     @ObservationIgnored var editorAreaSize: CGSize = .zero
@@ -1330,6 +1341,7 @@ public final class IDEWorkspace {
         if pane.id == workbench.activePaneID {
             statusLanguage = identifier
             isMarkdownPreviewVisible = host.markdownPreviewController.isVisible
+            isMarkdownPreviewSideBySide = host.markdownPreviewController.isVisible && host.markdownPreviewController.isSideBySide
             isJSONDiagramVisible = host.isJSONDiagramVisible
             isCSVTableVisible = host.isCSVTableVisible
         }
@@ -2858,10 +2870,6 @@ public final class IDEWorkspace {
         splitDown()
     }
 
-    /// Splits the active pane, opening its currently selected document into the new pane too —
-    /// two views on the same file, like Sublime Text/VS Code. The two panes reconcile on focus
-    /// switch (`activatePane`'s outgoing sync + `showDocument`'s same-document refresh) rather
-    /// than mirroring edits live.
     /// Whether the active pane can be divided along `edge`'s axis with every
     /// pane keeping its minimum length (Silica's `canSplit`). Before the root
     /// view has reported a size there is nothing to go by, so splitting is allowed.
@@ -2879,6 +2887,11 @@ public final class IDEWorkspace {
         return paneCount * minimum + terminal <= Double(editorAreaSize.height)
     }
 
+    /// Splits the active pane, opening its currently selected document into the new pane too —
+    /// two views on the same file, like Sublime Text/VS Code. Edits made in either pane are replayed
+    /// in the other as they happen (`mirrorEdits`); the focus switch (`activatePane`'s outgoing sync
+    /// + `showDocument`'s same-document refresh) is the fallback for an edit that has no single
+    /// range, and for the document's saved state.
     private func split(edge: EditorSplitEdge) {
         guard canSplitActivePane(along: edge) else {
             NSSound.beep()
@@ -2892,13 +2905,14 @@ public final class IDEWorkspace {
             // starts at the same spot, not wherever it was last explicitly synced.
             syncTextViewToDocument(sourceHost.textView, document: document, from: sourceHost)
         }
-        let newPane = IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) {
-            workbench.splitActivePane(edge: edge)
-        }
+        let placesBefore = IDEEditorLayoutPaths.paths(of: workbench.layout)
+        let newPane = workbench.splitActivePane(edge: edge)
         if let document {
             workbench.openDocument(document, in: newPane)
         }
-        rebuildLayoutHosts()
+        rebuildLayoutHosts(
+            animated: IDEEditorLayoutPaths.keepsPlaces(from: placesBefore, to: IDEEditorLayoutPaths.paths(of: workbench.layout))
+        )
         activatePane(workbench.activePaneID)
         Task { await workspaceBridge.syncWorkbench(workbench) }
     }
@@ -2941,10 +2955,61 @@ public final class IDEWorkspace {
         if wasTemporary { target.temporaryDocumentID = documentID }
         target.selectDocument(documentID)
         if source.documents.isEmpty {
-            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { closePane(sourceID) }
+            // Rebuilds the layout itself, animated when the other panes stay in place.
+            closePane(sourceID)
+        } else {
+            rebuildLayoutHosts()
         }
-        rebuildLayoutHosts()
         activatePane(targetID)
+        focusActiveEditor()
+        refreshPresentation()
+        Task { await workspaceBridge.syncWorkbench(workbench) }
+    }
+
+    /// Moves a tab into a new pane split off `edge` of the pane `targetID` (dropping it on that edge).
+    /// The target may be the pane the tab comes from, when that leaves a tab in it. A source pane left
+    /// without tabs closes, as when its last tab is closed. No close prompt: nothing is closed.
+    func moveTab(_ documentID: UUID, from sourceID: UUID, toNewPaneAt edge: EditorSplitEdge, of targetID: UUID) {
+        guard let source = workbench.layout.findPane(id: sourceID),
+              workbench.layout.findPane(id: targetID) != nil,
+              let index = source.documents.firstIndex(where: { $0.id == documentID }) else { return }
+        if sourceID == targetID, source.documents.count < 2 { return }
+        guard canSplitActivePane(along: edge) else {
+            NSSound.beep()
+            return
+        }
+        let document = source.documents[index]
+        let sourceHost = host(for: source.id)
+        if document.contentKind == .text, sourceHost.loadedDocumentID == document.id {
+            // The new pane's editor starts from the live buffer, caret and scroll, not from what
+            // the model last saw (a file-backed document keeps no text of its own).
+            syncTextViewToDocument(sourceHost.textView, document: document, from: sourceHost)
+            document.pendingState = sourceHost.textView.makeCapturedState()
+        }
+        let placesBefore = IDEEditorLayoutPaths.paths(of: workbench.layout)
+        let newPane = EditorPane()
+        workbench.layout.splitPane(targetID, edge: edge, newPane: newPane)
+
+        let wasTemporary = source.temporaryDocumentID == documentID
+        source.documents.remove(at: index)
+        if source.temporaryDocumentID == documentID { source.temporaryDocumentID = nil }
+        if source.selectedDocumentID == documentID {
+            source.selectedDocumentID = source.documents.last?.id
+        }
+        source.tabHistory.remove(documentID: documentID)
+        newPane.documents.append(document)
+        if wasTemporary { newPane.temporaryDocumentID = documentID }
+        newPane.selectDocument(documentID)
+        if source.documents.isEmpty {
+            workbench.closePane(sourceID)
+            hostCache.remove(sourceID)
+            hostedPaneIDs.remove(sourceID)
+        }
+        workbench.activatePane(newPane.id)
+        rebuildLayoutHosts(
+            animated: IDEEditorLayoutPaths.keepsPlaces(from: placesBefore, to: IDEEditorLayoutPaths.paths(of: workbench.layout))
+        )
+        activatePane(newPane.id)
         focusActiveEditor()
         refreshPresentation()
         Task { await workspaceBridge.syncWorkbench(workbench) }
@@ -3157,7 +3222,28 @@ public final class IDEWorkspace {
             toggleSwiftUIPreview()
             return
         }
+        // A hidden preview opens in the Settings ▸ Markdown layout, so the play button
+        // follows the "show alongside" choice without a second step.
+        if let host = hostCache.peek(workbench.activePaneID), !host.markdownPreviewController.isVisible {
+            host.markdownPreviewController.setSideBySide(preferences.markdownPreview.sideBySide)
+        }
         adapter.textView?.perform(.toggleMarkdownPreview)
+    }
+
+    /// Shows the preview alongside the editor (switching a cover preview over without hiding),
+    /// or switches an alongside preview back to covering. The play button hides either way.
+    public func toggleMarkdownPreviewSideBySide() {
+        guard MarkdownPreviewController.isPreviewableLanguage(statusLanguage.isEmpty ? nil : statusLanguage) else { return }
+        guard let host = hostCache.peek(workbench.activePaneID) else { return }
+        let controller = host.markdownPreviewController
+        if controller.isVisible {
+            // Staying visible keeps the caret and focus where they are; only the layout flips.
+            preferences.markdownPreview.sideBySide = !controller.isSideBySide
+        } else {
+            preferences.markdownPreview.sideBySide = true
+            controller.setSideBySide(true)
+            adapter.textView?.perform(.toggleMarkdownPreview)
+        }
     }
 
     /// The play button changed on `host`. Updates the titlebar and moves the keyboard to the
@@ -3165,6 +3251,7 @@ public final class IDEWorkspace {
     private func notePreviewVisibility(of host: IDEEditorPaneHost) {
         guard hostCache.peek(workbench.activePaneID) === host else { return }
         isMarkdownPreviewVisible = host.markdownPreviewController.isVisible
+        isMarkdownPreviewSideBySide = host.markdownPreviewController.isVisible && host.markdownPreviewController.isSideBySide
         isJSONDiagramVisible = host.isJSONDiagramVisible
         isCSVTableVisible = host.isCSVTableVisible
         if host.isJSONDiagramVisible {
@@ -3354,6 +3441,7 @@ public final class IDEWorkspace {
                 preferences.apply(to: controller)
             }
             host.markdownPreviewController.options = preferences.markdownPreview.options
+            host.markdownPreviewController.setSideBySide(preferences.markdownPreview.sideBySide)
         }
         applyCodeInsightPreferences()
         if let textView = adapter?.textView {
@@ -3488,13 +3576,16 @@ public final class IDEWorkspace {
     func unsplit(from paneID: UUID) {
         let otherPaneIDs = workbench.panes.map(\.id).filter { $0 != paneID }
         guard !otherPaneIDs.isEmpty else { return }
+        let placesBefore = IDEEditorLayoutPaths.paths(of: workbench.layout)
         for otherPaneID in otherPaneIDs {
-            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { workbench.closePane(otherPaneID) }
+            workbench.closePane(otherPaneID)
             hostCache.remove(otherPaneID)
             hostedPaneIDs.remove(otherPaneID)
         }
         workbench.activatePane(paneID)
-        rebuildLayoutHosts()
+        rebuildLayoutHosts(
+            animated: IDEEditorLayoutPaths.keepsPlaces(from: placesBefore, to: IDEEditorLayoutPaths.paths(of: workbench.layout))
+        )
         activatePane(workbench.activePaneID)
         showsWelcome = !hasOpenDocuments
         Task { await workspaceBridge.syncWorkbench(workbench) }
@@ -3851,6 +3942,11 @@ public final class IDEWorkspace {
         host.markdownPreviewController.showsAppearanceToggle = true
         host.markdownPreviewController.appearanceOverride = IDEMarkdownPreviewAppearance.stored
         host.markdownPreviewController.options = preferences.markdownPreview.options
+        host.markdownPreviewController.setSideBySide(preferences.markdownPreview.sideBySide)
+        host.markdownPreviewController.onSideBySideChange = { [weak self, weak host] _ in
+            guard let self, let host else { return }
+            self.notePreviewVisibility(of: host)
+        }
         host.markdownPreviewController.onAppearanceOverrideChange = { [weak self] appearance in
             IDEMarkdownPreviewAppearance.stored = appearance
             // Settings ▸ Markdown ▸ Appearance shows the same choice.
@@ -4729,10 +4825,13 @@ public final class IDEWorkspace {
     }
 
     private func closePane(_ paneID: UUID) {
-        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { workbench.closePane(paneID) }
+        let placesBefore = IDEEditorLayoutPaths.paths(of: workbench.layout)
+        workbench.closePane(paneID)
         hostCache.remove(paneID)
         hostedPaneIDs.remove(paneID)
-        rebuildLayoutHosts()
+        rebuildLayoutHosts(
+            animated: IDEEditorLayoutPaths.keepsPlaces(from: placesBefore, to: IDEEditorLayoutPaths.paths(of: workbench.layout))
+        )
         activatePane(workbench.activePaneID)
         showsWelcome = !hasOpenDocuments
         Task { await workspaceBridge.syncWorkbench(workbench) }
@@ -4795,7 +4894,10 @@ public final class IDEWorkspace {
         Task { await javaSupport.buildDiagnostics.clearAll() }
     }
 
-    private func rebuildLayoutHosts() {
+    /// Brings the hosts and the views in line with `workbench.layout`. `animated` runs the change of
+    /// layout through the pane animation: panes opening, closing and re-spreading. Pass it only when
+    /// `IDEEditorLayoutPaths.keepsPlaces` holds, or a pane that moves would play its own removal.
+    private func rebuildLayoutHosts(animated: Bool = false) {
         let panes = workbench.layout.flattenedPanes()
         let live = Set(panes.map(\.id))
         for id in hostedPaneIDs.subtracting(live) {
@@ -4812,7 +4914,11 @@ public final class IDEWorkspace {
                 showDocument(in: pane, host: host)
             }
         }
-        layoutEpoch += 1
+        if animated {
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { layoutEpoch += 1 }
+        } else {
+            layoutEpoch += 1
+        }
         refreshPresentation()
     }
 
@@ -5366,6 +5472,7 @@ public final class IDEWorkspace {
         autoRevealActiveDocumentIfNeeded()
         let activeHost = hostCache.peek(workbench.activePaneID)
         isMarkdownPreviewVisible = activeHost?.markdownPreviewController.isVisible ?? false
+        isMarkdownPreviewSideBySide = (activeHost?.markdownPreviewController.isVisible ?? false) && (activeHost?.markdownPreviewController.isSideBySide ?? false)
         isJSONDiagramVisible = activeHost?.isJSONDiagramVisible ?? false
         isCSVTableVisible = activeHost?.isCSVTableVisible ?? false
         if let document = workbench.activePane.selectedDocument, document.contentKind == .text {

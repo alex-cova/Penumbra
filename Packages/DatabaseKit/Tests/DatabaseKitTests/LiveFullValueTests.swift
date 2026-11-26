@@ -4,6 +4,7 @@ import Testing
 @testable import DatabaseKit
 
 private let liveEnabled = ProcessInfo.processInfo.environment["UMBRA_DB_INTEGRATION"] == "1"
+    && ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true"  // never on the CI pipeline
 
 /// A grid keeps a bounded preview of a large value. The inspector fetches the rest by the row's
 /// verified key, on the same server, with the bound lifted for that one statement only.

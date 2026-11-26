@@ -4,6 +4,7 @@ import Testing
 @testable import DatabaseKit
 
 private let liveEnabled = ProcessInfo.processInfo.environment["UMBRA_DB_INTEGRATION"] == "1"
+    && ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true"  // never on the CI pipeline
 
 /// The server is the oracle: for each expression, what our decoder shows for the value must equal
 /// what PostgreSQL itself prints for `(expression)::text`. Runs end to end through

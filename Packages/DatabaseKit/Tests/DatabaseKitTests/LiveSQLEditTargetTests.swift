@@ -4,6 +4,7 @@ import Testing
 @testable import DatabaseKit
 
 private let liveEnabled = ProcessInfo.processInfo.environment["UMBRA_DB_INTEGRATION"] == "1"
+    && ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true"  // never on the CI pipeline
 
 /// A result is editable only when the server itself says which table and key it came from.
 /// These run the real path on disposable PostgreSQL and MySQL servers: RowDescription OIDs,
