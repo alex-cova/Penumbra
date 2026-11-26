@@ -2499,7 +2499,22 @@ extension TextInputView {
                                                                    byteRange: byteRange,
                                                                    hasOnlyDefaultAttributes: true))
         }
+        normalizeFontSizes(of: attributed)
         return attributed
+    }
+
+    /// Gives every run the editor font's size, keeping its traits (bold, italic). A pinned row has
+    /// the height of one editor line, so a theme's scaled Markdown headings (`markup.heading.1`
+    /// at 1.6x) would spill out of it.
+    private func normalizeFontSizes(of attributed: NSMutableAttributedString) {
+        let size = theme.font.pointSize
+        let full = NSRange(location: 0, length: attributed.length)
+        attributed.enumerateAttribute(.font, in: full) { value, range, _ in
+            guard let font = value as? NSFont, font.pointSize != size else {
+                return
+            }
+            attributed.addAttribute(.font, value: NSFont(descriptor: font.fontDescriptor, size: size) ?? font, range: range)
+        }
     }
 
     /// Highlighted lines for the scrollbar preview. Reads each row through ``lineInfo(atRow:)`` and
@@ -2541,6 +2556,7 @@ extension TextInputView {
                     hasOnlyDefaultAttributes: true
                 ))
             }
+            normalizeFontSizes(of: attributed)
             if capped < info.length {
                 attributed.append(NSAttributedString(string: "…", attributes: [
                     .font: theme.font,

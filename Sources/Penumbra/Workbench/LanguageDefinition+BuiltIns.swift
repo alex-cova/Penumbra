@@ -11,7 +11,7 @@ public extension LanguageDefinition {
         LanguageDefinition(id: "plain", displayName: "Plain Text",
                            fileExtensions: ["txt", ""], fenceAliases: ["text", "plaintext", "txt"]),
         LanguageDefinition(id: "markdown", displayName: "Markdown", fileExtensions: ["md", "markdown", "mdown"],
-                           fenceAliases: ["md"], isSelectable: true),
+                           fenceAliases: ["md"], configuration: .markdown, isSelectable: true),
         LanguageDefinition(id: "json", displayName: "JSON", fileExtensions: ["json", "jsonc"],
                            fenceAliases: ["jsonc"], isSelectable: true),
         LanguageDefinition(id: "csv", displayName: "CSV", fileExtensions: ["csv"]),

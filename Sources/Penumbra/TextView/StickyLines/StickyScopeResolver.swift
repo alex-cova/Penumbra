@@ -62,22 +62,47 @@ enum StickyScopeResolver {
         row: Int,
         configuration: LanguageConfiguration
     ) -> StickyScope? {
-        let rule = configuration.rule(forNodeType: type)
-        let isDeclaration = rule.map { $0.kind == .type || $0.kind == .function } ?? false
-        guard isDeclaration || configuration.stickyNodeTypes.contains(type) else {
-            return nil
-        }
         let startRow = Int(node.startPoint.row)
         var endRow = Int(node.endPoint.row)
         // A node that ends at column 0 of a row does not include that row.
         if node.endPoint.column == 0, endRow > startRow {
             endRow -= 1
         }
+        if let section = configuration.stickySection, type == section.sectionNodeType {
+            return sectionScope(for: node, rule: section, endRow: endRow, row: row)
+        }
+        let rule = configuration.rule(forNodeType: type)
+        let isDeclaration = rule.map { $0.kind == .type || $0.kind == .function } ?? false
+        guard isDeclaration || configuration.stickyNodeTypes.contains(type) else {
+            return nil
+        }
         var headerRow = startRow
         if isDeclaration, let rule, !rule.nameNodeTypes.isEmpty,
            let name = DeclarationScanner.firstChild(of: node, ofAnyType: rule.nameNodeTypes) {
             headerRow = Int(name.startPoint.row)
         }
+        guard endRow > headerRow, headerRow < row, row <= endRow else {
+            return nil
+        }
+        return StickyScope(headerRow: headerRow, endRow: endRow)
+    }
+
+    /// A heading section (Markdown): pinned when its first child is a heading whose marker is one
+    /// of the rule's levels. The header is the heading's row; the section runs to the next heading
+    /// of the same or a higher level, so a `###` inside a `##` inside a `#` yields three scopes.
+    private static func sectionScope(
+        for node: TreeSitterNode,
+        rule: StickySectionRule,
+        endRow: Int,
+        row: Int
+    ) -> StickyScope? {
+        guard let heading = node.child(at: 0),
+              let headingType = heading.type,
+              rule.headingNodeTypes.contains(headingType),
+              DeclarationScanner.firstChild(of: heading, ofAnyType: Array(rule.markerNodeTypes)) != nil else {
+            return nil
+        }
+        let headerRow = Int(heading.startPoint.row)
         guard endRow > headerRow, headerRow < row, row <= endRow else {
             return nil
         }
