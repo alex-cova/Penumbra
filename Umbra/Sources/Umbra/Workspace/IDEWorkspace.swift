@@ -855,6 +855,7 @@ public final class IDEWorkspace {
         // The blame column and the profiler's line hints share the annotation column; a file with
         // hints is theirs until the user turns them off.
         blame.yieldsAnnotations = { [weak self] url in self?.profileHintsOwnAnnotations(of: url) ?? false }
+        configureBlame()
         inspections.onChange = { [weak self] in self?.javaInspectionPreferencesChanged() }
         gitStatus.codeAnalysisProvider = { [weak self] files in await self?.analyzeForCommit(files) }
         applyLaunchConfiguration()
@@ -2313,8 +2314,14 @@ public final class IDEWorkspace {
         blame.isEnabled(for: workbench.activePane.selectedDocument?.url)
     }
 
-    /// Shows or hides the blame column for the active file (Git ▸ Show Git Blame).
+    /// Shows or hides the blame column for the active file (Git ▸ Annotate with Git Blame).
     func toggleGitBlame() {
+        // A revision snapshot lives in the cache, outside the repository folder, but blames fine.
+        if let snapshot = workbench.activePane.selectedDocument?.url, IDEGitRevisionFiles.isSnapshot(snapshot) {
+            blame.toggle(for: snapshot)
+            refreshBlame(in: workbench.activePane, force: true)
+            return
+        }
         guard let url = activeFileInRepository() else {
             showGitNotice("No Git Blame", "The active file is not in a git repository.")
             return
@@ -3213,7 +3220,27 @@ public final class IDEWorkspace {
             return
         }
         showExplorer()
-        project.revealAndSelect(url: url, centered: false)
+        revealForExplorer(url: url, centered: false)
+    }
+
+    /// `revealAndSelect` with the Explorer's current flattening (the same source roots the
+    /// sidebar flattens with), so an opened file expands the rows the tree actually shows:
+    /// with Flatten Packages, sibling packages stay closed.
+    private func revealForExplorer(url: URL, centered: Bool) {
+        project.revealAndSelect(
+            url: url, centered: centered,
+            flattenPackages: preferences.flattenJavaPackages,
+            sourceRootPaths: gradle.sourceRootPaths
+        )
+    }
+
+    /// `reveal` with the Explorer's current flattening (see `revealForExplorer`).
+    private func expandForExplorer(url: URL) {
+        project.reveal(
+            url: url,
+            flattenPackages: preferences.flattenJavaPackages,
+            sourceRootPaths: gradle.sourceRootPaths
+        )
     }
 
     public func toggleMarkdownPreview() {
@@ -3494,6 +3521,8 @@ public final class IDEWorkspace {
             host.textView.backgroundColor = IDEAppearance.NSToken.editor
             host.layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
         }
+        // Blame tints are fixed colours chosen for the scheme.
+        blame.representAll()
     }
 
     func openDroppedURLs(_ urls: [URL]) {
@@ -4794,6 +4823,7 @@ public final class IDEWorkspace {
         pane.closeDocument(documentID)
         let stillOpen = workbench.panes.contains { $0.documents.contains { $0.id == documentID } }
         if !stillOpen {
+            project.forgetAutoRevealed(documentID: documentID)
             if let closingDocument {
                 databaseSupport.closeConsole(workbenchID: documentID, documentID: closingDocument.documentID)
             }
@@ -5271,8 +5301,12 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.showEvaluateExpression() }),
             EditorCommand(id: "app.debug.quickEvaluate", title: "Run: Quick Evaluate Expression", group: "Run",
                           action: { [weak self] in self?.quickEvaluate() }),
-            EditorCommand(id: "app.git.blame", title: "Git: Toggle Blame (Annotate)", group: "Git",
+            EditorCommand(id: "app.git.blame", title: "Git: Annotate with Git Blame (Toggle)", group: "Git",
                           action: { [weak self] in self?.toggleGitBlame() }),
+            EditorCommand(id: "app.git.historyMethod", title: "Git: Show History for Method", group: "Git",
+                          action: { [weak self] in self?.showDeclarationHistory(.method) }),
+            EditorCommand(id: "app.git.historyClass", title: "Git: Show History for Class", group: "Git",
+                          action: { [weak self] in self?.showDeclarationHistory(.type) }),
             EditorCommand(id: "app.git.revert", title: "Git: Discard Changes in File…", group: "Git",
                           action: { [weak self] in self?.revertActiveFile() }),
             EditorCommand(id: "app.git.stage", title: "Git: Stage", group: "Git",
@@ -5579,6 +5613,16 @@ public final class IDEWorkspace {
         }
     }
 
+    /// The outline provider of the active language and the editor's document for it: what the
+    /// Structure tab asks, for features that need the same declarations (Show History for Method).
+    func structureOutlineSource() -> (provider: any StructureProviding, document: EditorIntelligence.Document?) {
+        let provider: any StructureProviding = languages.structure(for: statusLanguage)
+            ?? SymbolStructureProvider(
+                index: intelligenceServices.symbolIndex, parser: intelligenceServices.workbenchParser
+            )
+        return (provider, adapter.currentDocument)
+    }
+
     /// The type a breadcrumb symbol names (or the type enclosing it) with all its members, the symbol
     /// checked. A language without a structure provider has no member outline here and returns `nil`.
     private func structureBreadcrumbMenu(for range: EditorIntelligence.TextRange) async -> NSMenu? {
@@ -5739,12 +5783,12 @@ public final class IDEWorkspace {
             let url = isDirectory
                 ? try operations.createDirectory(in: directory, name: name)
                 : try operations.createFile(in: directory, name: name)
-            project.reveal(url: directory)
+            expandForExplorer(url: directory)
             Task {
                 await project.refresh(directories: [directory.path])
                 project.pendingCreationPath = url.path
                 project.renamingPath = url.path
-                project.revealAndSelect(url: url, centered: false)
+                revealForExplorer(url: url, centered: false)
                 gitStatus.refresh()
             }
         } catch {
@@ -5785,7 +5829,7 @@ public final class IDEWorkspace {
         let parent = url.deletingLastPathComponent().path
         Task {
             await project.refresh(directories: [parent])
-            project.revealAndSelect(url: result, centered: false)
+            revealForExplorer(url: result, centered: false)
             gitStatus.refresh()
             refreshPresentation()
             if isPlaceholder {
@@ -5817,7 +5861,7 @@ public final class IDEWorkspace {
             let copy = try operations.duplicate(url)
             Task {
                 await project.refresh(directories: [url.deletingLastPathComponent().path])
-                project.revealAndSelect(url: copy, centered: false)
+                revealForExplorer(url: copy, centered: false)
                 gitStatus.refresh()
             }
         } catch {
@@ -5906,7 +5950,7 @@ public final class IDEWorkspace {
             return
         }
         showExplorer()
-        project.revealAndSelect(url: url, centered: true)
+        revealForExplorer(url: url, centered: true)
         requestSidebarFocus()
     }
 
@@ -5915,20 +5959,24 @@ public final class IDEWorkspace {
         guard document?.id != lastAutoRevealedDocumentID else { return }
         lastAutoRevealedDocumentID = document?.id
         guard IDEPreferences.shared.explorerAutoReveal, project.renamingPath == nil,
-              let url = document?.url, project.rootURL != nil else { return }
-        project.revealAndSelect(url: url, centered: false)
+              let document, let url = document.url, project.rootURL != nil else { return }
+        // Reselecting an already-open tab must not reopen its collapsed package unless asked.
+        guard project.shouldAutoReveal(
+            documentID: document.id, revealReselected: preferences.explorerRevealReselectedFiles
+        ) else { return }
+        revealForExplorer(url: url, centered: false)
     }
 
     /// Go to Package lands here: the Explorer selects the directory, including a flattened package row.
     private func revealPackage(_ url: URL) {
         showExplorer()
-        project.revealAndSelect(url: url, centered: true)
+        revealForExplorer(url: url, centered: true)
     }
 
     private func revealInSidebar(_ url: URL) {
         if project.rootURL != nil {
             showExplorer()
-            project.reveal(url: url)
+            expandForExplorer(url: url)
         } else {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }

@@ -2743,7 +2743,8 @@ public final class EditorIntelligenceController {
             document: document,
             cursor: document.cursor,
             selection: document.selection,
-            trigger: .manual
+            trigger: .manual,
+            isPointerHover: true
         )
         guard let result = await hoverEngine.hover(context: context),
               !Task.isCancelled, mouseHoverTarget == expectedRange else { return }

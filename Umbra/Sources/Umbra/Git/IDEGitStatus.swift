@@ -98,6 +98,8 @@ final class IDEGitStatusModel {
     var historySince: Date?
     /// Only commits touching this folder or file (relative to the root); empty for all.
     var historyPathFilter = ""
+    /// A commit to select as soon as the next history load lands (set by ``revealCommit(_:inHistoryOf:)``).
+    @ObservationIgnored var pendingRevealHash: String?
     /// How many commits the log asks for; "Load more" raises it.
     private(set) var historyLimit = 300
     /// True after a history load for the current list has applied. False until then, and again
@@ -582,9 +584,39 @@ final class IDEGitStatusModel {
     /// `git blame` of the file at `path` (absolute) against `contents`, the editor's live text, so
     /// unsaved edits come back as uncommitted lines. Nil when the file is outside the repository or
     /// git has no blame for it (untracked, or a repository without commits).
-    func blame(path: String, contents: Data) async -> [GitBlameLine]? {
+    func blame(path: String, contents: Data, options: GitBlameOptions = .default) async -> [GitBlameLine]? {
         guard let rootURL, let relative = relativePath(for: path) else { return nil }
-        return await Self.loadBlame(root: rootURL, existing: repository, relativePath: relative, contents: contents)
+        return await Self.loadBlame(root: rootURL, existing: repository, relativePath: relative, contents: contents, options: options)
+    }
+
+    /// Blame of `relativePath` as it was in `revision` (Annotate Revision): nothing of the working
+    /// tree is read. Nil when the repository is not this window's, or git has no blame for it.
+    func blame(revision: String, relativePath: String, repositoryRoot: String, options: GitBlameOptions = .default) async -> [GitBlameLine]? {
+        guard let rootURL, repositoryRootPath == repositoryRoot else { return nil }
+        return await Self.loadBlame(root: rootURL, existing: repository, relativePath: relativePath, revision: revision, options: options)
+    }
+
+    /// The commit's full message body (empty when it has none), for the blame popover.
+    func commitMessageBody(hash: String) async -> String? {
+        guard let rootURL, let repo = try? await IDEGitSupport.repository(for: rootURL, existing: repository),
+              let message = try? await repo.commit(hash: hash)?.body else { return nil }
+        // `body` is the whole message; the popover shows the subject itself.
+        guard let newline = message.firstIndex(of: "\n") else { return "" }
+        return String(message[newline...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// `relativePath` as `revision` stored it; nil when that version has no such file.
+    func fileContents(at revision: GitRevision, relativePath: String) async -> Data? {
+        guard let rootURL, let repo = try? await IDEGitSupport.repository(for: rootURL, existing: repository) else { return nil }
+        return try? await repo.fileContents(at: revision, path: relativePath)
+    }
+
+    /// Shows `hash` in the History tab of `path`: the log narrowed to that file's history with the
+    /// commit selected once it has loaded (an old commit may sit beyond the loaded rows, so the
+    /// selection waits for the list rather than guessing).
+    func revealCommit(_ hash: String, inHistoryOf path: String) {
+        pendingRevealHash = hash
+        showFileHistory(path: path)
     }
 
     /// The blob of `relativePath` in `HEAD`. `found` is false when git could not be asked;
@@ -639,6 +671,10 @@ final class IDEGitStatusModel {
             self.historyDidLoad = true
             if let selected = self.selectedCommitHash, !commits.contains(where: { $0.hash == selected }) {
                 self.selectCommit(nil)
+            }
+            if let reveal = self.pendingRevealHash {
+                self.pendingRevealHash = nil
+                if commits.contains(where: { $0.hash == reveal }) { self.selectCommit(reveal) }
             }
         }
     }
@@ -1381,9 +1417,18 @@ final class IDEGitStatusModel {
 
     /// The commit, or with `filePath` just that file's change in it. A file's diff can be empty
     /// for a commit that changed it under an older name; the whole commit is shown then.
-    nonisolated private static func loadBlame(root: URL, existing: GitRepository?, relativePath: String, contents: Data) async -> [GitBlameLine]? {
+    nonisolated private static func loadBlame(
+        root: URL, existing: GitRepository?, relativePath: String, contents: Data, options: GitBlameOptions
+    ) async -> [GitBlameLine]? {
         guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing) else { return nil }
-        return try? await repo.blame(relativePath: relativePath, contents: contents)
+        return try? await repo.blame(relativePath: relativePath, contents: contents, options: options)
+    }
+
+    nonisolated private static func loadBlame(
+        root: URL, existing: GitRepository?, relativePath: String, revision: String, options: GitBlameOptions
+    ) async -> [GitBlameLine]? {
+        guard let repo = try? await IDEGitSupport.repository(for: root, existing: existing) else { return nil }
+        return try? await repo.blame(relativePath: relativePath, revision: revision, options: options)
     }
 
     nonisolated private static func loadHead(root: URL, existing: GitRepository?, relativePath: String) async -> (found: Bool, data: Data?) {

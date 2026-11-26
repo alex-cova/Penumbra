@@ -26,7 +26,7 @@ extension IDEWorkspace {
                 return
             }
             guard let name = item.qualifiedName else { return }
-            Task { await openJavaType(qualifiedName: name) }
+            Task { await openJavaType(qualifiedName: name, selectsDeclaration: false) }
         case .resource:
             guard let archive = item.archive, let entry = item.entry else { return }
             let cacheRoot = javaSupport.indexCacheRoot

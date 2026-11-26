@@ -877,6 +877,35 @@ public struct DocumentTextExport: Sendable {
         textInputView.setGutterAnnotations(annotations, edited: edited)
     }
 
+    /// Called for a click on an annotated row of the annotation column (a right click or
+    /// Control-click has `isSecondary`). Return `true` when handled; otherwise the click goes on as
+    /// if the column were not interactive. Setting a handler gives the column a pointing-hand cursor.
+    public var gutterAnnotationClickHandler: ((GutterAnnotationClick) -> Bool)? {
+        get { textInputView.gutterAnnotationClickHandler }
+        set { textInputView.gutterAnnotationClickHandler = newValue }
+    }
+
+    /// Called once when the pointer moves onto an annotation (not on every move), and with `nil`
+    /// when it leaves the column, the rows scroll from under it or the annotations are replaced.
+    /// While a handler is set the column shows no tooltip of its own, so the host can present its
+    /// own (``GutterAnnotationClick/rect`` anchors a popover).
+    public var gutterAnnotationHoverHandler: ((GutterAnnotationClick?) -> Void)? {
+        get { textInputView.gutterAnnotationHoverHandler }
+        set { textInputView.gutterAnnotationHoverHandler = newValue }
+    }
+
+    /// Draws the rows of the annotation with this ``GutterAnnotation/id`` highlighted (a host marks
+    /// the lines of the commit it is describing); `nil` clears it. Repaints only: no layout.
+    public var highlightedGutterAnnotationID: Int? {
+        get { textInputView.highlightedGutterAnnotationID }
+        set { textInputView.highlightedGutterAnnotationID = newValue }
+    }
+
+    /// Test hook: the width of the line-number column.
+    var lineNumberColumnWidthForTesting: CGFloat {
+        textInputView.lineNumberColumnWidthForTesting
+    }
+
     /// Test hook: the annotation shown for a 0-based row.
     func gutterAnnotationForTesting(atRow row: Int) -> GutterAnnotation? {
         textInputView.gutterAnnotation(atRow: row)

@@ -103,14 +103,26 @@ public enum GitNameStatusParser {
 }
 
 /// `git blame --porcelain`. Commit details appear only the first time a commit is seen, so they
-/// are cached by hash. The result is indexed by final line (0-based).
+/// are cached by hash; `filename` and the original line belong to each line group and are read
+/// per group. The result is indexed by final line (0-based).
 public enum GitBlameParser {
     public static func parse(_ output: String) -> [GitBlameLine] {
-        struct Info { var author = ""; var time: TimeInterval = 0; var summary = "" }
+        struct Info {
+            var author = ""
+            var email = ""
+            var time: TimeInterval = 0
+            var committer = ""
+            var committerTime: TimeInterval?
+            var summary = ""
+            var previous: GitBlamePrevious?
+            var boundary = false
+        }
         var cache: [String: Info] = [:]
         var lines: [GitBlameLine] = []
         var currentHash: String?
         var currentFinalLine = 0
+        var currentOriginalLine = 0
+        var currentPath = ""
         var pending = Info()
 
         for raw in output.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -118,12 +130,22 @@ public enum GitBlameParser {
                 guard let hash = currentHash else { continue }
                 if cache[hash] == nil { cache[hash] = pending }
                 let info = cache[hash] ?? pending
+                let date = Date(timeIntervalSince1970: info.time)
+                let isUncommitted = hash.allSatisfy { $0 == "0" }
                 let entry = GitBlameLine(
                     hash: hash,
                     author: info.author,
-                    date: Date(timeIntervalSince1970: info.time),
+                    date: date,
                     summary: info.summary,
-                    isUncommitted: hash.allSatisfy { $0 == "0" }
+                    isUncommitted: isUncommitted,
+                    authorEmail: info.email,
+                    committer: info.committer,
+                    committerDate: info.committerTime.map { Date(timeIntervalSince1970: $0) } ?? date,
+                    originalLine: currentOriginalLine,
+                    originalPath: currentPath,
+                    // git points an uncommitted line's `previous` at HEAD; there is no commit to step back from.
+                    previous: isUncommitted ? nil : info.previous,
+                    isBoundary: info.boundary
                 )
                 while lines.count < currentFinalLine - 1 { lines.append(entry) }
                 if lines.count == currentFinalLine - 1 { lines.append(entry) }
@@ -132,19 +154,38 @@ public enum GitBlameParser {
             }
             if currentHash == nil {
                 let parts = raw.split(separator: " ")
-                if parts.count >= 3, parts[0].count >= 40, parts[0].allSatisfy(\.isHexDigit), let final = Int(parts[2]) {
+                if parts.count >= 3, parts[0].count >= 40, parts[0].allSatisfy(\.isHexDigit),
+                   let original = Int(parts[1]), let final = Int(parts[2]) {
                     currentHash = String(parts[0])
                     currentFinalLine = final
+                    currentOriginalLine = original
                     pending = cache[String(parts[0])] ?? Info()
                 }
                 continue
             }
             if raw.hasPrefix("author ") {
                 pending.author = String(raw.dropFirst(7))
+            } else if raw.hasPrefix("author-mail ") {
+                pending.email = String(raw.dropFirst(12)).trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
             } else if raw.hasPrefix("author-time ") {
                 pending.time = TimeInterval(raw.dropFirst(12)) ?? 0
+            } else if raw.hasPrefix("committer ") {
+                pending.committer = String(raw.dropFirst(10))
+            } else if raw.hasPrefix("committer-time ") {
+                pending.committerTime = TimeInterval(raw.dropFirst(15))
             } else if raw.hasPrefix("summary ") {
                 pending.summary = String(raw.dropFirst(8))
+            } else if raw.hasPrefix("previous ") {
+                // `previous <hash> <path>`; the path may hold spaces.
+                let rest = raw.dropFirst(9)
+                if let space = rest.firstIndex(of: " ") {
+                    pending.previous = GitBlamePrevious(
+                        hash: String(rest[..<space]), path: String(rest[rest.index(after: space)...]))
+                }
+            } else if raw == "boundary" {
+                pending.boundary = true
+            } else if raw.hasPrefix("filename ") {
+                currentPath = String(raw.dropFirst(9))
             }
         }
         return lines

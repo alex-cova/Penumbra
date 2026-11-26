@@ -102,6 +102,25 @@ final class GutterAnnotationTests: XCTestCase {
         XCTAssertFalse(textView.hasGutterAnnotations)
     }
 
+    func testAWideAnnotationColumnLeavesTheLineNumbersTheirRoom() {
+        // `[26/09/01 Author] [line numbers] [gutters]`: the annotation text sits beside the digits.
+        // Counted in the 70 pt gutter cap, a 150 pt column left them no width at all.
+        let textView = makeTextView((1...120).map { "line \($0)" }.joined(separator: "\n"))
+        let plain = textView.gutterWidth
+        let wide = GutterAnnotation(id: 1, text: "26/09/01 Alexander Hamilton-Smith")
+        textView.setGutterAnnotations(Array(repeating: wide, count: 120))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        textView.layoutIfNeeded()
+        XCTAssertGreaterThan(textView.gutterWidth - plain, 150, "the column is added to the gutter")
+        XCTAssertGreaterThan(textView.lineNumberColumnWidthForTesting, 16, "three digits still fit beside the annotation")
+        // Without the annotation column the digits keep the same width.
+        let withAnnotation = textView.lineNumberColumnWidthForTesting
+        textView.clearGutterAnnotations()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.lineNumberColumnWidthForTesting, withAnnotation, accuracy: 0.01)
+    }
+
     func testAnnotationsFollowLinesThroughEdits() {
         let textView = makeTextView("one\ntwo\nthree")
         textView.setGutterAnnotations([annotation(1), annotation(2), annotation(3)], edited: edited)

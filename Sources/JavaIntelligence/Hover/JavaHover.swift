@@ -32,10 +32,16 @@ enum JavaHover {
         index: JavaIndex,
         jdkHome: URL?,
         cacheRoot: URL,
-        openBuffer: (@Sendable (URL) async -> String?)?
+        openBuffer: (@Sendable (URL) async -> String?)?,
+        isAmbient: Bool = false
     ) async -> JavaHoverContent? {
         guard let tree = JavaParseMemo.shared.tree(for: source) else { return nil }
         let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: utf16Offset, in: source)
+        // The name of the class being read sits right under its own Javadoc: an ambient popup there
+        // only repeats it (and covers the code), so only an explicit request shows it.
+        if isAmbient, JavaReferenceClassifier.isTypeDeclarationName(in: tree, atByteOffset: byteOffset) {
+            return nil
+        }
         guard let reference = JavaReferenceClassifier.classify(in: tree, atByteOffset: byteOffset) else { return nil }
         let session = JavaNavigationSession(
             source: source, fileURL: fileURL, tree: tree, byteOffset: byteOffset,
@@ -44,6 +50,9 @@ enum JavaHover {
         )
         let symbols = Array(await session.resolveSymbols(reference).prefix(maxSymbols))
         guard !symbols.isEmpty else { return nil }
+        // Likewise a mention of the class being read (its name, `this`, `new Own(…)`): the reader
+        // already knows what it is, so a popup is noise unless they ask for it.
+        if isAmbient, refersToOwnType(reference, symbols: symbols, session: session) { return nil }
         var blocks: [String] = []
         var hasDocumentation = false
         for symbol in symbols {
@@ -56,6 +65,29 @@ enum JavaHover {
             byteRange: tree.node(atByteOffset: byteOffset).byteRange,
             hasDocumentation: hasDocumentation
         )
+    }
+
+    /// Whether every symbol is a type the file declares at its top level, or one the position is
+    /// inside, reached by naming it or constructing it.
+    private static func refersToOwnType(
+        _ reference: JavaReference, symbols: [JavaResolvedSymbol], session: JavaNavigationSession
+    ) -> Bool {
+        var own = Set(session.context.enclosingTypeQualifiedNames)
+        for stub in session.currentClasses where stub.outerQualifiedName == nil { own.insert(stub.qualifiedName) }
+        // A class with no declared constructor falls back to the type itself, so both shapes count.
+        let isOwn: (JavaResolvedSymbol) -> Bool = {
+            switch $0 {
+            case .type(let stub): return own.contains(stub.qualifiedName)
+            case .method(_, let owner): return own.contains(owner)
+            default: return false
+            }
+        }
+        switch reference {
+        case .type, .keywordThis, .constructor, .explicitConstructor:
+            return symbols.allSatisfy(isOwn)
+        default:
+            return false
+        }
     }
 
     private static func markdown(for symbol: JavaResolvedSymbol, documentation: String?, session: JavaNavigationSession) async -> String {

@@ -46,6 +46,7 @@ public final class IDEPreferences {
         static let inlineCompletionOtherLanguages = "com.umbra.editor.inlineCompletionOtherLanguages"
         static let inlineCompletionAcceptKey = "com.umbra.editor.inlineCompletionAcceptKey"
         static let explorerAutoReveal = "com.umbra.editor.explorerAutoReveal"
+        static let explorerRevealReselectedFiles = "com.umbra.editor.explorerRevealReselectedFiles"
         static let explorerSortOrder = "com.umbra.editor.explorerSortOrder"
         static let explorerFoldersOnTop = "com.umbra.editor.explorerFoldersOnTop"
         static let explorerCompactMiddlePackages = "com.umbra.editor.explorerCompactMiddlePackages"
@@ -336,6 +337,13 @@ public final class IDEPreferences {
     /// Explorer selects and scrolls to the active editor tab's file whenever the tab changes.
     var explorerAutoReveal: Bool {
         didSet { UserDefaults.standard.set(explorerAutoReveal, forKey: Keys.explorerAutoReveal) }
+    }
+
+    /// With `explorerAutoReveal`, selecting a file that is already open reveals it again —
+    /// reopening the package that was just collapsed. Off (the default) reveals a file only
+    /// the first time it opens, so collapsed packages stay collapsed on reselection.
+    var explorerRevealReselectedFiles: Bool {
+        didSet { UserDefaults.standard.set(explorerRevealReselectedFiles, forKey: Keys.explorerRevealReselectedFiles) }
     }
 
     /// Explorer row order within a folder: by name, or by file extension then name.
@@ -1197,6 +1205,7 @@ public final class IDEPreferences {
         inlineCompletionOtherLanguages = defaults.object(forKey: Keys.inlineCompletionOtherLanguages) as? Bool ?? false
         inlineCompletionAcceptKey = defaults.string(forKey: Keys.inlineCompletionAcceptKey).flatMap(InlineAcceptKey.init(rawValue:)) ?? .tab
         explorerAutoReveal = defaults.object(forKey: Keys.explorerAutoReveal) as? Bool ?? true
+        explorerRevealReselectedFiles = defaults.object(forKey: Keys.explorerRevealReselectedFiles) as? Bool ?? false
         explorerSortOrder = defaults.string(forKey: Keys.explorerSortOrder).flatMap(IDEExplorerSortOrder.init(rawValue:)) ?? .name
         explorerFoldersOnTop = defaults.object(forKey: Keys.explorerFoldersOnTop) as? Bool ?? true
         explorerCompactMiddlePackages = defaults.object(forKey: Keys.explorerCompactMiddlePackages) as? Bool ?? true

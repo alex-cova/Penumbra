@@ -17,14 +17,19 @@ extension IDEWorkspace {
             let items = stubs.map { (title: $0.simpleName, subtitle: Optional(Self.kindLabel($0.kind))) }
             paletteController.presentList(title: "Classes in \(name)", items: items) { [weak self] choice in
                 guard let self, stubs.indices.contains(choice) else { return }
-                Task { @MainActor in await self.openJavaType(qualifiedName: stubs[choice].qualifiedName) }
+                Task { @MainActor in await self.openJavaType(qualifiedName: stubs[choice].qualifiedName, selectsDeclaration: false) }
             }
         }
     }
 
     /// Opens the declaration of `qualifiedName` by asking Go to Definition about an `import` of it,
     /// so attached sources, decompiling and its one-time agreement behave exactly as for a click.
-    func openJavaType(qualifiedName: String) async {
+    ///
+    /// `selectsDeclaration` is Go to Definition's own behaviour: the caret lands on the type's name.
+    /// Browsing to a class (External Libraries, a package's class list) passes `false`, so the file
+    /// opens like any other, at its top with nothing selected, and no documentation popup follows a
+    /// caret that was never put there.
+    func openJavaType(qualifiedName: String, selectsDeclaration: Bool = true) async {
         let source = "import \(qualifiedName);"
         let offset = (source as NSString).length - 2
         let position = TextPosition(line: 0, column: offset, utf16Offset: offset)
@@ -42,7 +47,11 @@ extension IDEWorkspace {
         ))
         switch result {
         case .single(let location):
-            _ = openNavigationLocation(location)
+            if !selectsDeclaration, location.target == .source, let url = location.url {
+                await openDocument(from: url)
+            } else {
+                _ = openNavigationLocation(location)
+            }
         case .multiple(let locations):
             presentNavigationChoices(locations)
         case nil:

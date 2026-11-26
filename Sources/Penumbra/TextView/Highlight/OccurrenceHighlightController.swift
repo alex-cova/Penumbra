@@ -82,6 +82,24 @@ final class OccurrenceHighlightController {
         searchTask?.cancel()
         emphasisManager?.removeEmphases(for: EmphasisGroup.occurrences)
     }
+
+    /// The document was replaced (tab switch, reload, full-text reset): the ranges on screen,
+    /// any pending work and the remembered request all belong to the old text.
+    ///
+    /// Drops all three and recomputes for the current selection. The recompute is unconditional
+    /// because the selection-equality guards in `TextInputView` mean no selection change fires
+    /// when the new document restores the same caret — without this, the old file's highlights
+    /// would stay painted over the new file indefinitely.
+    func documentDidChange(selectedRange: NSRange?, isMultiCaret: Bool) {
+        generation &+= 1
+        debounceWorkItem?.cancel()
+        debounceWorkItem = nil
+        searchTask?.cancel()
+        searchTask = nil
+        lastRequest = nil
+        emphasisManager?.removeEmphases(for: EmphasisGroup.occurrences)
+        selectionDidChange(selectedRange: selectedRange, isMultiCaret: isMultiCaret)
+    }
 }
 
 private extension OccurrenceHighlightController {

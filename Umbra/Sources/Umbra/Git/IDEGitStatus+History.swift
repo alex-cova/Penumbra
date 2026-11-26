@@ -295,9 +295,9 @@ extension IDEGitStatusModel {
 
     // MARK: - Line history
 
-    func showLineHistory(path: String, startLine: Int, endLine: Int) {
+    func showLineHistory(path: String, startLine: Int, endLine: Int, title: String? = nil) {
         guard let relative = repositoryRelativePath(for: path), let rootURL else { return }
-        lineHistory = IDEGitLineHistory(path: path, startLine: startLine, endLine: endLine, entries: [], selectedHash: nil)
+        lineHistory = IDEGitLineHistory(path: path, startLine: startLine, endLine: endLine, entries: [], selectedHash: nil, title: title)
         let existing = repository
         Task { [weak self] in
             do {

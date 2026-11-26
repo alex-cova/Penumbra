@@ -406,9 +406,35 @@ public struct GitRepository: Sendable {
     }
 
     /// Blame of `relativePath`, using `contents` (the live buffer) so unsaved edits read as uncommitted.
-    public func blame(relativePath: String, contents: Data) async throws -> [GitBlameLine] {
-        let out = try await readOnly(["--literal-pathspecs", "blame", "--no-textconv", "--porcelain", "--contents", "-", "--", relativePath], stdin: contents)
+    public func blame(
+        relativePath: String,
+        contents: Data,
+        options: GitBlameOptions = .default
+    ) async throws -> [GitBlameLine] {
+        let flags = try Self.blameFlags(options)
+        let out = try await readOnly(
+            ["--literal-pathspecs", "blame", "--no-textconv", "--porcelain"] + flags + ["--contents", "-", "--", relativePath],
+            stdin: contents)
         return GitBlameParser.parse(out.text)
+    }
+
+    /// Blame of `relativePath` as it was in `revision` (a hash, or any name `rev-parse` accepts):
+    /// IntelliJ's Annotate Revision. Nothing from the working tree is involved.
+    public func blame(
+        relativePath: String,
+        revision: String,
+        options: GitBlameOptions = .default
+    ) async throws -> [GitBlameLine] {
+        guard !revision.isEmpty, !revision.hasPrefix("-") else { throw GitError.invalidRequest("Enter a valid revision.") }
+        let flags = try Self.blameFlags(options)
+        let out = try await readOnly(
+            ["--literal-pathspecs", "blame", "--no-textconv", "--porcelain"] + flags + [revision, "--", relativePath])
+        return GitBlameParser.parse(out.text)
+    }
+
+    private static func blameFlags(_ options: GitBlameOptions) throws -> [String] {
+        guard let flags = options.arguments() else { throw GitError.invalidRequest("Enter a valid revision to ignore.") }
+        return flags
     }
 
     public func lastCommitMessage() async -> String? {

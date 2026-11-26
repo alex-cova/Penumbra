@@ -94,6 +94,15 @@ extension IDEWorkspace {
             items.append(IDEClosureMenuItem(title: "Show History for Selection") { [weak self] in
                 self?.showSelectionHistory()
             })
+            items.append(IDEClosureMenuItem(title: "Show History for Method") { [weak self] in
+                self?.showDeclarationHistory(.method)
+            })
+            items.append(IDEClosureMenuItem(title: "Show History for Class") { [weak self] in
+                self?.showDeclarationHistory(.type)
+            })
+            items.append(IDEClosureMenuItem(title: blame.isEnabled(for: url) ? "Close Annotations" : "Annotate with Git Blame") { [weak self] in
+                self?.toggleGitBlame()
+            })
             items.append(IDEClosureMenuItem(title: "Rollback Change at Caret") { [weak self] in
                 self?.rollbackChangeAtCaret()
             })

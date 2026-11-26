@@ -1,20 +1,82 @@
+@preconcurrency import AppKit
 import Foundation
+
+/// A background colour for the rows of an annotation, chosen by the host (version-control blame
+/// tints a commit's lines by its age or author). Fixed RGBA: the host sends fresh annotations
+/// when the appearance changes.
+public struct GutterAnnotationTint: Hashable, Sendable {
+    public let red: Double
+    public let green: Double
+    public let blue: Double
+    public let alpha: Double
+
+    public init(red: Double, green: Double, blue: Double, alpha: Double = 1) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.alpha = alpha
+    }
+}
 
 /// A line of text in the annotation column, which sits between the gutter decorations and the
 /// line numbers (a host uses it for version-control blame, for example).
 ///
-/// The column is display-only. Consecutive lines that carry the same ``id`` form one block, and
-/// only the block's first line shows the text.
+/// Consecutive lines that carry the same ``id`` form one block, and only the block's first line
+/// shows the text. The host can react to the pointer through
+/// ``TextView/gutterAnnotationClickHandler`` and ``TextView/gutterAnnotationHoverHandler``.
 public struct GutterAnnotation: Hashable, Sendable {
     /// Identifies what the text stands for (a commit, say). Lines with equal ids share one block.
     public let id: Int
     public let text: String
     public let tooltip: String
+    /// Paints the annotation's rows behind the text (the whole column width).
+    public let tint: GutterAnnotationTint?
+    /// Draws the text in bold with a trailing `*`, like IntelliJ's mark for the newest revision.
+    public let isEmphasized: Bool
 
-    public init(id: Int, text: String, tooltip: String = "") {
+    public init(
+        id: Int,
+        text: String,
+        tooltip: String = "",
+        tint: GutterAnnotationTint? = nil,
+        isEmphasized: Bool = false
+    ) {
         self.id = id
         self.text = text
         self.tooltip = tooltip
+        self.tint = tint
+        self.isEmphasized = isEmphasized
+    }
+
+    /// What the column draws: the text, with the emphasis mark.
+    var displayText: String {
+        isEmphasized && !text.isEmpty ? text + "*" : text
+    }
+}
+
+/// A pointer event on the annotation column, reported through
+/// ``TextView/gutterAnnotationClickHandler`` and ``TextView/gutterAnnotationHoverHandler``.
+public struct GutterAnnotationClick {
+    /// 1-based document line under the pointer.
+    public let line: Int
+    /// The annotation of that line.
+    public let annotation: GutterAnnotation
+    /// A right click or a Control-click, which should open a menu rather than act.
+    public let isSecondary: Bool
+    /// The mouse event for a click (to position a menu); nil for a hover.
+    public let event: NSEvent?
+    /// The line's rect in ``anchorView``'s coordinates, for anchoring a popover to the pointed row.
+    public let rect: CGRect
+    /// The view ``rect`` belongs to.
+    public let anchorView: NSView
+
+    public init(line: Int, annotation: GutterAnnotation, isSecondary: Bool, event: NSEvent?, rect: CGRect, anchorView: NSView) {
+        self.line = line
+        self.annotation = annotation
+        self.isSecondary = isSecondary
+        self.event = event
+        self.rect = rect
+        self.anchorView = anchorView
     }
 }
 

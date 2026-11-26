@@ -191,6 +191,7 @@ struct IDEExplorerOptionsMenu: View {
         }
         Section("Behavior") {
             Toggle("Always Select Opened File", isOn: $preferences.explorerAutoReveal)
+            Toggle("Reveal Reselected Files", isOn: $preferences.explorerRevealReselectedFiles)
         }
     }
 }

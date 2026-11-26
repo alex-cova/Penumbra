@@ -505,6 +505,7 @@ struct IDEEditorPaneView: View {
 
             IDEExternalChangeBanner(paneID: paneID)
             IDEGitConflictBanner(paneID: paneID)
+            IDEMissingLanguageServerBanner(paneID: paneID)
 
             if let document = workspace.workbench.layout.findPane(id: paneID)?.selectedDocument,
                document.contentKind == .text,

@@ -22,6 +22,15 @@ enum JavaReferenceClassifier {
         "record_declaration", "annotation_type_declaration"
     ]
 
+    /// Whether `byteOffset` is on the name of a class, interface, enum, record or annotation
+    /// declaration: the one place where a type's own Javadoc is already on screen above it.
+    static func isTypeDeclarationName(in tree: JavaSyntaxTree, atByteOffset byteOffset: Int) -> Bool {
+        let leaf = tree.node(atByteOffset: byteOffset)
+        guard let token = nameToken(leaf, byteOffset: byteOffset), token.type == "identifier",
+              let parent = token.parent, typeDeclarations.contains(parent.type) else { return false }
+        return parent.child(byFieldName: "name")?.byteRange == token.byteRange
+    }
+
     static func classify(in tree: JavaSyntaxTree, atByteOffset byteOffset: Int) -> JavaReference? {
         let leaf = tree.node(atByteOffset: byteOffset)
         guard let token = nameToken(leaf, byteOffset: byteOffset) else { return nil }

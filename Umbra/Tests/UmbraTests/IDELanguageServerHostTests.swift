@@ -77,6 +77,30 @@ final class IDELanguageServerHostTests: XCTestCase {
         func increment() { lock.withLock { value += 1 } }
     }
 
+    func testAMissingServerStaysOutOfTheStatusBar() {
+        typealias Status = IDELanguageServerHost.ServerStatus
+        let missing = [Status(id: "bash-language-server", name: "Bash", phase: .missing)]
+        XCTAssertNil(IDELanguageServerHost.summary(statuses: missing, work: [:]), "a missing server shows a banner, not a label")
+        let mixed = missing + [Status(id: "sourcekit-lsp", name: "SourceKit-LSP", phase: .ready)]
+        XCTAssertEqual(IDELanguageServerHost.summary(statuses: mixed, work: [:]), "SourceKit-LSP")
+    }
+
+    func testTheMissingBannerShowsOnlyForAMatchingFile() {
+        typealias Status = IDELanguageServerHost.ServerStatus
+        let missing = [Status(id: "bash-language-server", name: "Bash", phase: .missing)]
+        let notice = IDEMissingLanguageServerNotice.forDocument(languageIdentifier: "shell", statuses: missing)
+        XCTAssertEqual(notice?.serverID, "bash-language-server")
+        XCTAssertTrue(notice?.message.contains("Bash") == true)
+        XCTAssertEqual(notice?.installHint, "npm install -g bash-language-server")
+        XCTAssertNil(IDEMissingLanguageServerNotice.forDocument(languageIdentifier: "markdown", statuses: missing))
+        XCTAssertNil(IDEMissingLanguageServerNotice.forDocument(languageIdentifier: "shell", statuses: []))
+        XCTAssertNil(
+            IDEMissingLanguageServerNotice.forDocument(
+                languageIdentifier: "shell", statuses: missing, dismissed: ["bash-language-server"]
+            )
+        )
+    }
+
     func testWorkOnlyShowsWhileTheServerIsReady() {
         typealias Status = IDELanguageServerHost.ServerStatus
         let work = ["sourcekit-lsp": [LSPWorkProgress(token: "i", title: "Indexing")]]

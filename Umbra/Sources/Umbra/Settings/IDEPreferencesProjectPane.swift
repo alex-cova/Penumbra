@@ -50,6 +50,11 @@ struct IDEPreferencesProjectPane: View {
                 isOn: $preferences.explorerAutoReveal,
                 detail: "Selects and scrolls to the active tab's file whenever the tab changes."
             )
+            IDESettingsToggle(
+                "Reveal Reselected Files",
+                isOn: $preferences.explorerRevealReselectedFiles,
+                detail: "Also reveals files that are already open when their tab is selected. Off reveals a file only when it opens, so collapsed packages stay collapsed."
+            )
         }
         IDEGitSettingsSection()
     }

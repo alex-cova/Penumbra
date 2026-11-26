@@ -268,6 +268,12 @@ extension IDEWorkspace {
             menu.addItem(.separator())
             runItems.forEach(menu.addItem)
         }
+        if gitStatus.isRepository {
+            menu.addItem(.separator())
+            menu.addItem(IDEClosureMenuItem(title: blame.isEnabled(for: gutter.fileURL) ? "Close Annotations" : "Annotate with Git Blame") { [weak self] in
+                self?.toggleGitBlame()
+            })
+        }
         NSMenu.popUpContextMenu(menu, with: click.event, for: textView)
     }
 
