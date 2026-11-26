@@ -3940,11 +3940,18 @@ public final class IDEWorkspace {
             self.notePreviewVisibility(of: host)
         }
         host.markdownPreviewController.showsAppearanceToggle = true
+        host.markdownPreviewController.showsSideBySideToggle = true
         host.markdownPreviewController.appearanceOverride = IDEMarkdownPreviewAppearance.stored
         host.markdownPreviewController.options = preferences.markdownPreview.options
         host.markdownPreviewController.setSideBySide(preferences.markdownPreview.sideBySide)
-        host.markdownPreviewController.onSideBySideChange = { [weak self, weak host] _ in
+        host.markdownPreviewController.onSideBySideChange = { [weak self, weak host] sideBySide in
             guard let self, let host else { return }
+            // The preview's own alongside button flips the mode; remember it so the play
+            // button, the View menu and new panes follow. Writing back the same value is
+            // a no-op downstream: the controllers already show it.
+            if self.preferences.markdownPreview.sideBySide != sideBySide {
+                self.preferences.markdownPreview.sideBySide = sideBySide
+            }
             self.notePreviewVisibility(of: host)
         }
         host.markdownPreviewController.onAppearanceOverrideChange = { [weak self] appearance in

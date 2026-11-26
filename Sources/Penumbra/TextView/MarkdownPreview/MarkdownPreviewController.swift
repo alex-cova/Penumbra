@@ -74,7 +74,7 @@ public final class MarkdownPreviewController: NSObject {
     /// dark look (``appearanceOverride``). Off by default: a host that embeds the preview inline
     /// has no use for it.
     public var showsAppearanceToggle = false {
-        didSet { updateAppearanceToggle() }
+        didSet { updateOverlayButtons() }
     }
 
     /// Called when the user flips the look with the toggle (not when ``appearanceOverride`` is set
@@ -84,6 +84,17 @@ public final class MarkdownPreviewController: NSObject {
     private let appearanceToggle = NSButton()
     /// Test-only hook (`@testable import` visibility).
     var debugAppearanceToggle: NSButton { appearanceToggle }
+
+    /// Shows an alongside/cover button left of the appearance toggle that flips the preview
+    /// between covering the editor and sitting next to it. Off by default, like the
+    /// appearance toggle.
+    public var showsSideBySideToggle = false {
+        didSet { updateOverlayButtons() }
+    }
+
+    private let sideBySideToggle = NSButton()
+    /// Test-only hook (`@testable import` visibility).
+    var debugSideBySideToggle: NSButton { sideBySideToggle }
 
     /// Debounce interval before re-parsing after a buffer edit. Tests may shorten this.
     var parseDebounceNanoseconds: UInt64 = 200_000_000
@@ -119,6 +130,7 @@ public final class MarkdownPreviewController: NSObject {
 
         previewDelegate = PreviewTextViewDelegate(controller: self)
         configureAppearanceToggle()
+        configureSideBySideToggle()
     }
 
     private func configureAppearanceToggle() {
@@ -133,6 +145,20 @@ public final class MarkdownPreviewController: NSObject {
         appearanceToggle.wantsLayer = true
         appearanceToggle.layer?.cornerRadius = 6
         appearanceToggle.isHidden = true
+    }
+
+    private func configureSideBySideToggle() {
+        sideBySideToggle.translatesAutoresizingMaskIntoConstraints = false
+        sideBySideToggle.isBordered = false
+        sideBySideToggle.bezelStyle = .regularSquare
+        sideBySideToggle.imagePosition = .imageOnly
+        sideBySideToggle.imageScaling = .scaleProportionallyDown
+        sideBySideToggle.focusRingType = .none
+        sideBySideToggle.target = self
+        sideBySideToggle.action = #selector(toggleSideBySideFromButton)
+        sideBySideToggle.wantsLayer = true
+        sideBySideToggle.layer?.cornerRadius = 6
+        sideBySideToggle.isHidden = true
     }
 
     /// The style the preview shows: the editor's, or the fixed look the host asked for.
@@ -176,7 +202,12 @@ public final class MarkdownPreviewController: NSObject {
         previewView.style.isDark(under: previewView.effectiveAppearance)
     }
 
-    /// Shows the button only while the preview is up, with the icon of the look a click switches to.
+    /// Shows the buttons only while the preview is up, with the icon of the look a click switches to.
+    private func updateOverlayButtons() {
+        updateAppearanceToggle()
+        updateSideBySideToggle()
+    }
+
     private func updateAppearanceToggle() {
         appearanceToggle.isHidden = !(showsAppearanceToggle && isPreviewVisible)
         let dark = isDisplayingDark
@@ -192,6 +223,29 @@ public final class MarkdownPreviewController: NSObject {
         appearanceToggle.layer?.backgroundColor = (dark
             ? NSColor.white.withAlphaComponent(0.1)
             : NSColor.black.withAlphaComponent(0.06)).cgColor
+    }
+
+    private func updateSideBySideToggle() {
+        sideBySideToggle.isHidden = !(showsSideBySideToggle && isPreviewVisible)
+        let label = isSideBySide ? "Show Preview Covering the Editor" : "Show Preview Alongside the Editor"
+        sideBySideToggle.image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: label)?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
+        sideBySideToggle.toolTip = label
+        sideBySideToggle.setAccessibilityLabel(label)
+        let dark = isDisplayingDark
+        sideBySideToggle.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        sideBySideToggle.contentTintColor = dark ? NSColor(white: 0.85, alpha: 1) : NSColor(white: 0.25, alpha: 1)
+        if isSideBySide {
+            sideBySideToggle.layer?.backgroundColor = NSColor.selectedContentBackgroundColor.cgColor
+        } else {
+            sideBySideToggle.layer?.backgroundColor = (dark
+                ? NSColor.white.withAlphaComponent(0.1)
+                : NSColor.black.withAlphaComponent(0.06)).cgColor
+        }
+    }
+
+    @objc private func toggleSideBySideFromButton() {
+        setSideBySide(!isSideBySide)
     }
 
     /// Chains preview text/Metal observation ahead of an existing delegate (e.g. EIP forwarding).
@@ -229,6 +283,7 @@ public final class MarkdownPreviewController: NSObject {
         containerStack.addSubview(previewView)
         containerStack.addSubview(dividerView)
         containerStack.addSubview(appearanceToggle)
+        containerStack.addSubview(sideBySideToggle)
         coverConstraints = [
             editorView.topAnchor.constraint(equalTo: containerStack.topAnchor),
             editorView.leadingAnchor.constraint(equalTo: containerStack.leadingAnchor),
@@ -259,6 +314,11 @@ public final class MarkdownPreviewController: NSObject {
             appearanceToggle.trailingAnchor.constraint(equalTo: containerStack.trailingAnchor, constant: -18),
             appearanceToggle.widthAnchor.constraint(equalToConstant: 28),
             appearanceToggle.heightAnchor.constraint(equalToConstant: 28),
+            // The alongside toggle sits left of the appearance toggle.
+            sideBySideToggle.centerYAnchor.constraint(equalTo: appearanceToggle.centerYAnchor),
+            sideBySideToggle.trailingAnchor.constraint(equalTo: appearanceToggle.leadingAnchor, constant: -8),
+            sideBySideToggle.widthAnchor.constraint(equalToConstant: 28),
+            sideBySideToggle.heightAnchor.constraint(equalToConstant: 28),
         ])
         applyLayoutMode()
         previewView.isHidden = true
@@ -303,6 +363,7 @@ public final class MarkdownPreviewController: NSObject {
         guard sideBySide != isSideBySide else { return }
         isSideBySide = sideBySide
         applyLayoutMode()
+        updateOverlayButtons()
         if isPreviewVisible, let textView {
             textView.isSelectable = sideBySide ? editorWasSelectableBeforePreview : false
             scheduleParse(immediate: true)
@@ -312,7 +373,9 @@ public final class MarkdownPreviewController: NSObject {
 
     private func applyLayoutMode() {
         guard editorContainer != nil else { return }
-        if isSideBySide {
+        // A hidden preview always yields the full frame back to the editor; the mode flag
+        // is kept so showing again restores the split.
+        if isSideBySide && isPreviewVisible {
             NSLayoutConstraint.deactivate(coverConstraints)
             NSLayoutConstraint.activate(sideBySideConstraints)
         } else {
@@ -365,7 +428,7 @@ public final class MarkdownPreviewController: NSObject {
         guard let textView else { return }
         previewView.style = makeStyle(for: textView)
         previewView.usesMetalRendering = textView.isMetalRenderingActive
-        updateAppearanceToggle()
+        updateOverlayButtons()
         scheduleParse(immediate: true)
     }
 
@@ -414,8 +477,10 @@ public final class MarkdownPreviewController: NSObject {
         revealPending = false
         previewView.cancelReveal()
         previewView.isHidden = true
-        dividerView.isHidden = true
-        updateAppearanceToggle()
+        // Gives the editor its full frame back: an alongside preview leaves the split
+        // constraints active otherwise. The mode flag is kept for the next show.
+        applyLayoutMode()
+        updateOverlayButtons()
         parseTask?.cancel()
         cancelMermaidWork()
         // Called for every document load too; only a preview that was up changed the editor.

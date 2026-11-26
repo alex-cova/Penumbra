@@ -43,14 +43,6 @@ struct IDEMarkdownModule: IDELanguageModule {
             id: "markdown.preview", isVisible: workspace.isMarkdownPreviewVisible,
             help: isMermaid ? "Toggle Mermaid Preview" : "Toggle Markdown Preview", workspace: workspace
         ))
-        items.append(.button(
-            id: "markdown.previewSideBySide", order: IDEToolbarItem.Order.preview + 1,
-            systemImage: "rectangle.split.2x1",
-            help: workspace.isMarkdownPreviewSideBySide
-                ? "Show Preview Covering the Editor" : "Show Preview Alongside the Editor",
-            isActive: workspace.isMarkdownPreviewSideBySide,
-            action: { [weak workspace] in workspace?.toggleMarkdownPreviewSideBySide() }
-        ))
         return items
     }
 

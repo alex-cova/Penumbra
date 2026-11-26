@@ -196,8 +196,50 @@ final class MarkdownPreviewTests: XCTestCase {
         XCTAssertTrue(controller.isVisible)
         XCTAssertFalse(textView.isSelectable)
 
+        XCTAssertTrue(controller.toggleSideBySide())
+        XCTAssertTrue(controller.isSideBySide)
         XCTAssertTrue(controller.toggle())
         XCTAssertFalse(controller.isVisible)
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(textView.frame.width, 600, accuracy: 1, "hiding gives the editor its full frame back")
+
+        XCTAssertTrue(controller.toggle())
+        XCTAssertTrue(controller.isSideBySide, "the alongside mode survives hiding")
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(textView.frame.width, 299.5, accuracy: 1, "showing again restores the split")
+        XCTAssertTrue(controller.toggle())
+        XCTAssertFalse(controller.isVisible)
+    }
+
+    @MainActor
+    func testInPreviewAlongsideButtonFlipsTheLayout() {
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        let controller = MarkdownPreviewController(textView: textView)
+        controller.embed(editorView: textView)
+        window.contentView = controller.containerView
+        textView.setState(TextViewState(text: "# Title\n\nBody", theme: DefaultTheme()))
+        textView.languageIdentifier = "markdown"
+        controller.showsSideBySideToggle = true
+        let button = controller.debugSideBySideToggle
+        XCTAssertTrue(button.isHidden, "no alongside button while the preview is closed")
+
+        XCTAssertTrue(controller.toggle())
+        XCTAssertFalse(button.isHidden, "the alongside button sits next to the appearance toggle")
+        XCTAssertEqual(button.toolTip, "Show Preview Alongside the Editor")
+
+        button.performClick(nil)
+        XCTAssertTrue(controller.isSideBySide)
+        XCTAssertTrue(textView.isSelectable, "alongside keeps the editor editable")
+        XCTAssertEqual(button.toolTip, "Show Preview Covering the Editor")
+
+        button.performClick(nil)
+        XCTAssertFalse(controller.isSideBySide)
+        XCTAssertFalse(textView.isSelectable, "back to covering locks the editor again")
+        XCTAssertEqual(button.toolTip, "Show Preview Alongside the Editor")
     }
 
     @MainActor
