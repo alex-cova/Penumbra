@@ -10,11 +10,20 @@ struct IDEDatabaseResultGrid: NSViewRepresentable {
     let canSort: Bool
     let onSort: (String) -> Void
     let onInspect: (Int, Int) -> Void
+    var reveal: Reveal?
+
+    struct Reveal {
+        let id = UUID()
+        let row: Int
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let table = NSTableView()
+        let table = GridTable()
+        table.inspectSelection = { [weak coordinator = context.coordinator] in
+            coordinator?.inspectSelectedValue() ?? false
+        }
         table.style = .plain
         table.usesAlternatingRowBackgroundColors = true
         table.columnAutoresizingStyle = .noColumnAutoresizing
@@ -48,6 +57,7 @@ struct IDEDatabaseResultGrid: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.update(storage: storage, columns: columns, rowCount: rowCount,
                                    canSort: canSort, onSort: onSort, onInspect: onInspect)
+        context.coordinator.reveal(reveal)
     }
 
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
@@ -70,6 +80,17 @@ struct IDEDatabaseResultGrid: NSViewRepresentable {
         }
     }
 
+    private final class GridTable: NSTableView {
+        var inspectSelection: (() -> Bool)?
+
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
+            if window?.firstResponder === self, modifiers == .command, event.charactersIgnoringModifiers == "i",
+               inspectSelection?() == true { return true }
+            return super.performKeyEquivalent(with: event)
+        }
+    }
+
     @MainActor
     final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         private static let rowNumber = NSUserInterfaceItemIdentifier("rowNumber")
@@ -86,6 +107,15 @@ struct IDEDatabaseResultGrid: NSViewRepresentable {
         private var firstRow = 0
         private var requestedRange: Range<Int>?
         private var readTask: Task<Void, Never>?
+        private var lastReveal: UUID?
+
+        func reveal(_ request: Reveal?) {
+            guard let request, request.id != lastReveal, (0..<rowCount).contains(request.row),
+                  let table else { return }
+            lastReveal = request.id
+            table.selectRowIndexes(IndexSet(integer: request.row), byExtendingSelection: false)
+            table.scrollRowToVisible(request.row)
+        }
 
         func install(table: NSTableView, clip: NSClipView) {
             self.table = table
@@ -233,7 +263,8 @@ struct IDEDatabaseResultGrid: NSViewRepresentable {
                 Cell(.unloaded)
             }
             cell.stringValue = value.label
-            cell.setAccessibilityLabel(value.label)
+            cell.setAccessibilityLabel(column?.title ?? "Column")
+            cell.setAccessibilityValue(value.label)
             cell.textColor = value.muted ? .secondaryLabelColor : .labelColor
             return cell
         }
@@ -249,6 +280,16 @@ struct IDEDatabaseResultGrid: NSViewRepresentable {
                   let column = Int(table.tableColumns[table.clickedColumn].identifier.rawValue),
                   columns.indices.contains(column) else { return }
             onInspect?(table.clickedRow, column)
+        }
+
+        func inspectSelectedValue() -> Bool {
+            guard let table, (0..<rowCount).contains(table.selectedRow) else { return false }
+            let preferred = table.tableColumns.indices.contains(table.clickedColumn)
+                ? Int(table.tableColumns[table.clickedColumn].identifier.rawValue) : nil
+            let first = table.tableColumns.lazy.compactMap { Int($0.identifier.rawValue) }.first
+            guard let column = preferred ?? first, columns.indices.contains(column), let onInspect else { return false }
+            onInspect(table.selectedRow, column)
+            return true
         }
     }
 }

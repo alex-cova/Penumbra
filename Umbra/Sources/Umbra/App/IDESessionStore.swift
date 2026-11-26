@@ -177,6 +177,7 @@ struct IDEWindowSession: Codable {
     var windowID: UUID?
     var restoration: EditorRestorationState?
     var databaseConsoles: [UUID: IDEDatabaseConsoleBinding]?
+    var databaseExplorer: IDEDatabaseExplorerState?
     var projectRootBookmark: Data?
     var sidebarWidth = IDEAppearance.Spacing.sidebarWidth
     var isSidebarVisible = false
@@ -211,6 +212,7 @@ struct IDEWindowSession: Codable {
         windowID: UUID? = nil,
         restoration: EditorRestorationState? = nil,
         databaseConsoles: [UUID: IDEDatabaseConsoleBinding]? = nil,
+        databaseExplorer: IDEDatabaseExplorerState? = nil,
         projectRootBookmark: Data? = nil,
         sidebarWidth: Double = IDEAppearance.Spacing.sidebarWidth,
         isSidebarVisible: Bool = false,
@@ -236,6 +238,7 @@ struct IDEWindowSession: Codable {
         self.windowID = windowID
         self.restoration = restoration
         self.databaseConsoles = databaseConsoles
+        self.databaseExplorer = databaseExplorer
         self.projectRootBookmark = projectRootBookmark
         self.sidebarWidth = sidebarWidth
         self.isSidebarVisible = isSidebarVisible
@@ -269,6 +272,7 @@ struct IDEWindowSession: Codable {
         windowID = try? container.decodeIfPresent(UUID.self, forKey: .windowID)
         restoration = try container.decodeIfPresent(EditorRestorationState.self, forKey: .restoration)
         databaseConsoles = try? container.decodeIfPresent([UUID: IDEDatabaseConsoleBinding].self, forKey: .databaseConsoles)
+        databaseExplorer = try? container.decodeIfPresent(IDEDatabaseExplorerState.self, forKey: .databaseExplorer)
         projectRootBookmark = try container.decodeIfPresent(Data.self, forKey: .projectRootBookmark)
         sidebarWidth = try container.decodeIfPresent(Double.self, forKey: .sidebarWidth)
             ?? IDEAppearance.Spacing.sidebarWidth

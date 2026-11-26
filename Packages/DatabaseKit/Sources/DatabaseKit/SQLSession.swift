@@ -21,6 +21,7 @@ public struct SQLLogin: Equatable, Sendable {
     /// an error, never a silent downgrade.
     public var requireTLS: Bool
     public var unixSocketPath: String?
+    public var sqliteBusyTimeoutMilliseconds = 5_000
 
     public init(
         engine: DatabaseEngine,
@@ -31,7 +32,8 @@ public struct SQLLogin: Equatable, Sendable {
         database: String = "",
         useTLS: Bool = false,
         requireTLS: Bool = false,
-        unixSocketPath: String? = nil
+        unixSocketPath: String? = nil,
+        sqliteBusyTimeoutMilliseconds: Int = 5_000
     ) {
         self.engine = engine == .mongo ? .postgres : engine
         self.host = host
@@ -42,6 +44,7 @@ public struct SQLLogin: Equatable, Sendable {
         self.useTLS = useTLS || requireTLS
         self.requireTLS = requireTLS
         self.unixSocketPath = unixSocketPath
+        self.sqliteBusyTimeoutMilliseconds = min(Int(Int32.max), max(0, sqliteBusyTimeoutMilliseconds))
     }
 }
 
@@ -55,7 +58,8 @@ extension DatabaseConnection {
             password: password,
             database: database,
             useTLS: useTLS,
-            requireTLS: tlsRequired ?? false
+            requireTLS: tlsRequired ?? false,
+            sqliteBusyTimeoutMilliseconds: sqliteBusyTimeoutMilliseconds ?? 5_000
         )
     }
 }
@@ -594,7 +598,9 @@ public final class SQLSession: SQLExecuting, @unchecked Sendable {
 
     private func connectSQLite(login: SQLLogin, readOnly: Bool) async throws {
         let location: SQLiteLocation = login.database == ":memory:" ? .memory : .file(login.database)
-        sqlite = try await SQLiteSession.open(SQLiteOpenOptions(location: location, readOnly: readOnly))
+        sqlite = try await SQLiteSession.open(SQLiteOpenOptions(
+            location: location, readOnly: readOnly, busyTimeoutMilliseconds: login.sqliteBusyTimeoutMilliseconds
+        ))
     }
 
     private static func sqlColumn(_ column: SQLiteColumnInfo) -> SQLColumn {

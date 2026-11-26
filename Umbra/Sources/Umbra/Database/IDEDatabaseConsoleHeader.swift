@@ -32,6 +32,10 @@ struct IDEDatabaseConsoleHeader: View {
                 .disabled(support.isRunning)
             }
             if let connection {
+                if connection.isProduction == true {
+                    Label("Production", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(IDEAppearance.ColorToken.error)
+                }
                 if let scope = scope(for: connection) {
                     Text(scope)
                         .lineLimit(1)

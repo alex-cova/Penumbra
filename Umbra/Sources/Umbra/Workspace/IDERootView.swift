@@ -361,25 +361,7 @@ public struct IDERootView: View {
                 .environment(workspace)
                 .preferredColorScheme(IDEAppearance.preferredColorScheme)
         }
-        .sheet(item: Binding(
-            get: { workspace.databaseSupport.editor },
-            set: { workspace.databaseSupport.editor = $0 }
-        )) { editor in
-            IDEDatabaseConnectionSheet(
-                editor: editor,
-                support: workspace.databaseSupport,
-                onCancel: { workspace.databaseSupport.editor = nil }
-            )
-            .environment(workspace)
-            .preferredColorScheme(IDEAppearance.preferredColorScheme)
-        }
-        .sheet(item: Binding(
-            get: { workspace.databaseParameterPrompt },
-            set: { workspace.databaseParameterPrompt = $0 }
-        )) { prompt in
-            IDEDatabaseParameterSheet(prompt: prompt)
-                .preferredColorScheme(IDEAppearance.preferredColorScheme)
-        }
+        .modifier(IDEDatabaseWindowSheets(workspace: workspace))
         .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
         .onReceive(NotificationCenter.default.publisher(for: IDEAppearance.didChangeNotification)) { _ in

@@ -7,7 +7,11 @@ struct IDEDatabaseSidebar: View {
     @Environment(IDEWorkspace.self) private var workspace
     @State private var selectedID: String?
     @State private var typeahead = IDETypeaheadBuffer()
+    @State private var query = ""
+    @State private var filter: IDEDatabaseTree.Filter = .all
+    @State private var failedConnection: UUID?
     @FocusState private var isListFocused: Bool
+    @FocusState private var isSearchFocused: Bool
 
     private var support: IDEDatabaseSupport { workspace.databaseSupport }
 
@@ -18,23 +22,41 @@ struct IDEDatabaseSidebar: View {
             sqlSchemas: support.sqlSchemas,
             mongoSchemas: support.mongoSchemas,
             expanded: support.expanded,
-            notes: support.sourceNotes.mapValues(\.tag)
+            notes: support.sourceNotes.mapValues(\.tag),
+            connecting: support.connectingIDs,
+            query: query, filter: filter, favorites: support.favoriteObjects, recents: support.recentObjects
         )
     }
 
     var body: some View {
+        let rows = self.rows
         VStack(spacing: 0) {
-            header
+            header(rows.first { $0.id == selectedID })
             Divider().overlay(IDEAppearance.ColorToken.border)
             if support.catalog.connections.isEmpty {
                 empty
             } else {
-                tree
+                search
+                if rows.isEmpty {
+                    ContentUnavailableView("No Matching Objects", systemImage: "magnifyingglass",
+                                           description: Text("Try another search, or connect and expand a data source to load more objects."))
+                } else {
+                    tree(rows)
+                }
             }
             if let banner = support.banner {
-                Text(banner)
-                    .font(IDEAppearance.Typography.monoSmall)
-                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                VStack(alignment: .leading, spacing: IDEAppearance.Spacing.xs) {
+                    Text(banner)
+                        .font(.caption)
+                        .foregroundStyle(IDEAppearance.ColorToken.error)
+                        .textSelection(.enabled)
+                    if let failedConnection, support.catalog.connection(id: failedConnection) != nil {
+                        HStack {
+                            Button("Retry") { connect(failedConnection) }
+                            Button("Edit Connection…") { support.beginEdit(failedConnection) }
+                        }
+                    }
+                }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(IDEAppearance.Spacing.sm)
             }
@@ -51,18 +73,47 @@ struct IDEDatabaseSidebar: View {
             }
             return !providers.isEmpty
         }
-        .onChange(of: rows.map(\.id)) { _, ids in
+        .onChange(of: rows.map(\.id), initial: true) { _, ids in
             if let selectedID, ids.contains(selectedID) { return }
             selectedID = ids.first
         }
     }
 
-    private var header: some View {
+    private var search: some View {
+        HStack(spacing: IDEAppearance.Spacing.xs) {
+            TextField("Search loaded objects", text: $query)
+                .focused($isSearchFocused)
+                .onSubmit { isListFocused = true }
+                .onKeyPress(.downArrow) {
+                    isListFocused = true
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    if query.isEmpty { isListFocused = true } else { query = "" }
+                    return .handled
+                }
+            Picker("Object Filter", selection: $filter) {
+                ForEach(IDEDatabaseTree.Filter.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .labelsHidden()
+            .accessibilityLabel("Object Filter")
+            .fixedSize()
+        }
+        .padding(IDEAppearance.Spacing.xs)
+    }
+
+    private func header(_ selected: IDEDatabaseTree.Row?) -> some View {
         HStack(spacing: 4) {
             Text("Data Sources")
                 .font(IDEAppearance.Typography.sidebarHeader)
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
             Spacer(minLength: 0)
+            if !support.catalog.connections.isEmpty {
+                IDEIconButton(systemImage: "magnifyingglass", help: "Search Database Objects") { isSearchFocused = true }
+            }
+            if let selected {
+                IDEIconMenu(systemImage: "ellipsis", help: "Actions for \(selected.title)") { menu(for: selected) }
+            }
             IDEIconButton(systemImage: "plus", help: "New Data Source") {
                 workspace.showNewDatabaseConnection()
             }
@@ -97,16 +148,17 @@ struct IDEDatabaseSidebar: View {
         }
     }
 
-    private var tree: some View {
-        let rows = self.rows
-        return ScrollViewReader { scroller in
+    private func tree(_ rows: [IDEDatabaseTree.Row]) -> some View {
+        ScrollViewReader { scroller in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(rows) { row in
                         IDEDatabaseTreeRow(
                             row: row,
                             isSelected: selectedID == row.id,
-                            onSelect: { select(row, toggling: row.canDisclose) },
+                            isFavorite: support.favoriteObjects.contains(row.id),
+                            onSelect: { select(row, toggling: false) },
+                            onToggle: { select(row, toggling: true) },
                             onActivate: { activate(row) },
                             menu: { menu(for: row) }
                         )
@@ -199,6 +251,8 @@ struct IDEDatabaseSidebar: View {
 
     private func applySelection(_ kind: IDEDatabaseTree.Kind) {
         switch kind {
+        case .group:
+            break
         case .connection(let id), .placeholder(let id), .schema(let id), .table(let id, _), .column(let id, _, _):
             support.selectedConnectionID = id
             support.selectedMongoDatabase = nil
@@ -222,6 +276,18 @@ struct IDEDatabaseSidebar: View {
             support.expanded.insert(row.id)
             loadIfNeeded(row)
         }
+        if case .connection(let id) = row.kind, row.isExpanded == false, support.isConnected(id) {
+            restoreBranches(id)
+        }
+        workspace.saveSession()
+    }
+
+    private func restoreBranches(_ id: UUID) {
+        Task {
+            for name in support.mongoSchemas[id]?.databases ?? [] where support.expanded.contains(IDEDatabaseTree.mongoDatabaseKey(id, name)) {
+                await support.ensureCollections(connectionID: id, database: name)
+            }
+        }
     }
 
     private func loadIfNeeded(_ row: IDEDatabaseTree.Row) {
@@ -238,12 +304,19 @@ struct IDEDatabaseSidebar: View {
 
     private func activate(_ row: IDEDatabaseTree.Row) {
         select(row, toggling: false)
+        if row.isObject {
+            support.recentObjects.removeAll { $0 == row.id }
+            support.recentObjects.insert(row.id, at: 0)
+            if support.recentObjects.count > 24 { support.recentObjects.removeLast() }
+            workspace.saveSession()
+        }
         switch row.kind {
+        case .group:
+            toggle(row)
         case .connection(let id), .placeholder(let id):
             connect(id)
         case .table(let id, let table):
             guard let connection = support.catalog.connection(id: id) else { return }
-            support.expanded.insert(row.id)
             workspace.openDatabaseTable(connection, table: table)
         case .mongoCollection(let id, let database, let collection):
             guard let connection = support.catalog.connection(id: id) else { return }
@@ -256,37 +329,68 @@ struct IDEDatabaseSidebar: View {
     }
 
     private func connect(_ id: UUID) {
+        failedConnection = nil
         support.selectedConnectionID = id
         Task {
-            do { try await support.connect(id) }
-            catch { support.banner = error.localizedDescription }
+            do {
+                try await support.connect(id)
+                restoreBranches(id)
+                workspace.saveSession()
+            }
+            catch is CancellationError {}
+            catch {
+                failedConnection = id
+                if let source = support.catalog.connection(id: id) {
+                    support.banner = IDEDatabaseConnectionDiagnostics.message(error.localizedDescription, engine: source.engine)
+                }
+            }
         }
     }
 
     @ViewBuilder
     private func menu(for row: IDEDatabaseTree.Row) -> some View {
         switch row.kind {
+        case .group:
+            Button(row.isExpanded ? "Collapse Group" : "Expand Group") { toggle(row) }
         case .connection(let id), .placeholder(let id), .schema(let id):
             if let connection = support.catalog.connection(id: id) {
                 connectionMenu(connection)
             }
         case .table(let id, let table):
             if let connection = support.catalog.connection(id: id) {
-                Button("Query") { workspace.openDatabaseTable(connection, table: table) }
-                Button("Copy CREATE TABLE") { workspace.copyCreateTable(connection, table: table) }
+                Button("Open Data") { activate(row) }
+                Button("Open Definition") { workspace.openDatabaseDefinition(connection, table: table) }
+                Button("Copy Qualified Name") { workspace.copyDatabaseObjectName(connection, parts: [table]) }
+                Button("Generate SELECT") { workspace.generateDatabaseSelect(connection, table: table) }
+                Button("Show Dependencies") { workspace.showDatabaseDependencies(connection, table: table) }
+                if !row.isView { schemaActions(connection, table: table) }
+                Button("Refresh Columns") { Task { await support.ensureColumns(connectionID: id, table: table, refresh: true) } }
             }
         case .mongoCollection(let id, let database, let collection):
             if let connection = support.catalog.connection(id: id) {
-                Button("Query") {
-                    workspace.openDatabaseCollection(connection, database: database, collection: collection)
-                }
+                Button("Open Documents") { activate(row) }
+                Button("Copy Qualified Name") { workspace.copyDatabaseObjectName(connection, parts: [database, collection]) }
             }
-        case .mongoDatabase(let id, _):
+        case .mongoDatabase(let id, let database):
             if let connection = support.catalog.connection(id: id) {
-                connectionMenu(connection)
+                Button("New Query Console") {
+                    applySelection(row.kind)
+                    workspace.openDatabaseQueryConsole()
+                }
+                Button("Copy Database Name") { workspace.copyDatabaseObjectName(connection, parts: [database]) }
+                Button("Refresh Collections") { Task { await support.ensureCollections(connectionID: id, database: database, refresh: true) } }
             }
-        case .column:
-            EmptyView()
+        case .column(let id, let table, let column):
+            if let connection = support.catalog.connection(id: id) {
+                Button("Copy Qualified Name") { workspace.copyDatabaseObjectName(connection, parts: [table, column]) }
+            }
+        }
+        if row.isObject {
+            Divider()
+            Button(support.favoriteObjects.contains(row.id) ? "Remove Favorite" : "Add to Favorites") {
+                if !support.favoriteObjects.insert(row.id).inserted { support.favoriteObjects.remove(row.id) }
+                workspace.saveSession()
+            }
         }
     }
 
@@ -296,6 +400,7 @@ struct IDEDatabaseSidebar: View {
             connect(connection.id)
         }
         if support.isConnected(connection.id) {
+            Button("Refresh Objects") { Task { await support.refreshSource(connection.id) } }
             Button("Disconnect") { Task { await support.disconnect(connection.id) } }
         }
         Button("New Query Console") {
@@ -303,6 +408,9 @@ struct IDEDatabaseSidebar: View {
             workspace.openDatabaseQueryConsole()
         }
         if connection.engine != .mongo {
+            if support.isConnected(connection.id), !connection.readOnly {
+                Button("Create Table…") { workspace.databaseSchemaDraft = .init(connection: connection, operation: .createTable) }
+            }
             Button("Show Schema Diagram") { workspace.showSchemaDiagram(connection) }
             Button("Copy Database SQL") { workspace.copyDatabaseSQL(connection) }
         }
@@ -310,12 +418,27 @@ struct IDEDatabaseSidebar: View {
         Divider()
         Button("Delete", role: .destructive) { support.remove(connection.id) }
     }
+
+    @ViewBuilder
+    private func schemaActions(_ connection: DatabaseConnection, table: String) -> some View {
+        if !connection.readOnly {
+            Menu("Generate Schema Change") {
+                ForEach(IDEDatabaseSchemaDraft.Operation.tableActions(for: connection.engine)) { operation in
+                    Button(operation.rawValue) {
+                        workspace.databaseSchemaDraft = .init(connection: connection, operation: operation, table: table)
+                    }
+                }
+            }
+        }
+    }
 }
 
 private struct IDEDatabaseTreeRow<Menu: View>: View {
     let row: IDEDatabaseTree.Row
     let isSelected: Bool
+    let isFavorite: Bool
     let onSelect: () -> Void
+    let onToggle: () -> Void
     let onActivate: () -> Void
     @ViewBuilder let menu: () -> Menu
 
@@ -324,9 +447,13 @@ private struct IDEDatabaseTreeRow<Menu: View>: View {
     var body: some View {
         HStack(spacing: IDEAppearance.Spacing.xs) {
             if row.canDisclose {
-                IDEDisclosureChevron(isExpanded: row.isExpanded, size: 10, width: 12)
-                    .foregroundStyle(IDEAppearance.ColorToken.muted)
-                    .frame(width: 12, height: 16)
+                Button(action: onToggle) {
+                    IDEDisclosureChevron(isExpanded: row.isExpanded, size: 10, width: 12)
+                        .foregroundStyle(IDEAppearance.ColorToken.muted)
+                        .frame(width: 12, height: 16)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(row.isExpanded ? "Collapse \(row.title)" : "Expand \(row.title)")
             } else {
                 Spacer().frame(width: 12)
             }
@@ -338,13 +465,28 @@ private struct IDEDatabaseTreeRow<Menu: View>: View {
                 .font(IDEAppearance.Typography.caption)
                 .foregroundStyle(IDEAppearance.ColorToken.foreground)
                 .lineLimit(1)
-            if !row.detail.isEmpty {
-                Text(row.detail)
+            let detail = [row.detail.isEmpty ? nil : row.detail, row.context].compactMap { $0 }.joined(separator: " · ")
+            if !detail.isEmpty {
+                Text(detail)
                     .font(IDEAppearance.Typography.monoSmall)
                     .foregroundStyle(IDEAppearance.ColorToken.muted)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            if isFavorite { Image(systemName: "star.fill").foregroundStyle(.secondary).accessibilityHidden(true) }
+            if row.isProduction {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(IDEAppearance.ColorToken.error)
+                    .help("Production")
+                    .accessibilityHidden(true)
+            }
+            if let status = row.status {
+                Image(systemName: status == "Connected" ? "circle.fill" : (status == "Connecting" ? "circle.dotted" : "circle"))
+                    .font(.system(size: 8))
+                    .foregroundStyle(status == "Connected" ? IDEAppearance.ColorToken.gitAdded : IDEAppearance.ColorToken.muted)
+                    .help(status)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.leading, CGFloat(row.depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
         .padding(.trailing, IDEAppearance.Spacing.sm)
@@ -356,8 +498,12 @@ private struct IDEDatabaseTreeRow<Menu: View>: View {
         .simultaneousGesture(TapGesture().onEnded(onSelect))
         .contextMenu { menu() }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(row.detail.isEmpty ? row.title : "\(row.title), \(row.detail)")
-        .accessibilityValue(row.canDisclose ? (row.isExpanded ? "Expanded" : "Collapsed") : "")
+        .accessibilityLabel([row.title, row.detail.isEmpty ? nil : row.detail, row.context].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityValue([row.status, row.isProduction ? "Production" : nil, isFavorite ? "Favorite" : nil,
+                             row.canDisclose ? (row.isExpanded ? "Expanded" : "Collapsed") : nil]
+            .compactMap { $0 }.joined(separator: ", "))
+        .accessibilityAction(named: Text("Open")) { onActivate() }
+        .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

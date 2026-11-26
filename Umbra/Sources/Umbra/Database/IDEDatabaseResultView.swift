@@ -7,10 +7,13 @@ import SwiftUI
 struct IDEDatabaseResultView: View {
     let support: IDEDatabaseSupport
     var consoleID: UUID? = nil
+    var runChartQuery: ((String, IDEDatabaseConsoleBinding) -> Void)?
     @State private var showsNotices = false
     @State private var pendingSort: PendingSort?
     @State private var inspectedValue: IDEDatabaseInspectedValue?
     @State private var inspectionTask: Task<Void, Never>?
+    @State private var visualization: IDEDatabaseVisualizationSource?
+    @State private var reveal: IDEDatabaseResultGrid.Reveal?
 
     private var results: IDEDatabaseResultSet { support.resultSet(for: consoleID) }
     private var result: IDEDatabaseResult { results.result }
@@ -36,10 +39,18 @@ struct IDEDatabaseResultView: View {
                 SplitPanes(minPrimary: 200, minSecondary: 180, idealSecondary: 300, priority: .secondary,
                            hiddenSide: inspectedValue == nil ? .secondary : nil) {
                     IDEDatabaseResultGrid(storage: storage, columns: result.columns, rowCount: result.rowCount,
-                                          canSort: result.canSort && !support.isRunning, onSort: previewSort, onInspect: inspect)
+                                          canSort: result.canSort && !support.isRunning, onSort: previewSort,
+                                          onInspect: inspect, reveal: reveal)
                 } secondary: {
                     if let inspectedValue {
                         IDEDatabaseValueInspector(value: inspectedValue, onClose: clearInspection)
+                    }
+                }
+                .overlay {
+                    if result.rowCount == 0, result.hasCompleteRows {
+                        ContentUnavailableView("No Rows", systemImage: "tablecells",
+                                               description: Text("The statement finished without returning any rows."))
+                            .allowsHitTesting(false)
                     }
                 }
             }
@@ -48,9 +59,30 @@ struct IDEDatabaseResultView: View {
         .background(IDEAppearance.ColorToken.panel)
         .onChange(of: result.storage) {
             pendingSort = nil
+            visualization = nil
+            reveal = nil
             clearInspection()
         }
+        .sheet(item: $visualization) { source in
+            IDEDatabaseVisualizationSheet(source: source, query: chartQuery, runQuery: runChartQuery.map { run in
+                { sql, binding in
+                    visualization = nil
+                    run(sql, binding)
+                }
+            }) { row in
+                guard support.resultSet(for: consoleID).result.storage == source.storage else { return }
+                reveal = .init(row: row)
+                visualization = nil
+            }
+        }
         .onDisappear(perform: clearInspection)
+    }
+
+    private var chartQuery: IDEDatabaseChartQuery? {
+        guard let connectionID = result.connectionID, result.engine != .mongo,
+              !support.isRunning, result.canSort else { return nil }
+        return IDEDatabaseChartQuery(statement: result.statement, engine: result.engine,
+                                     binding: .init(connectionID: connectionID))
     }
 
     private func inspect(row: Int, column: Int) {
@@ -123,6 +155,14 @@ struct IDEDatabaseResultView: View {
                 }
             }
             Spacer(minLength: 0)
+            IDEIconButton(systemImage: "chart.xyaxis.line", help: "Visualize Results",
+                          isDisabled: result.storage == nil || result.rowCount == 0) {
+                if let storage = result.storage {
+                    visualization = IDEDatabaseVisualizationSource(
+                        storage: storage, columns: result.columns, rowCount: result.rowCount, complete: result.hasCompleteRows
+                    )
+                }
+            }
             if !result.notices.isEmpty {
                 Button("Server Messages (\(result.notices.count))", systemImage: "exclamationmark.bubble") {
                     showsNotices.toggle()

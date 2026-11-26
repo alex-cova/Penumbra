@@ -40,6 +40,9 @@ public struct DatabaseConnection: Codable, Equatable, Sendable, Identifiable {
     /// The last statement run against this data source, so it can be reopened.
     public var lastStatement: String
     public var sortIndex: Int
+    public var isProduction: Bool?
+    public var group: String?
+    public var sqliteBusyTimeoutMilliseconds: Int?
 
     public init(
         id: UUID = UUID(),
@@ -57,7 +60,10 @@ public struct DatabaseConnection: Codable, Equatable, Sendable, Identifiable {
         replicaSet: String = "",
         directConnection: Bool = true,
         lastStatement: String = "",
-        sortIndex: Int = 0
+        sortIndex: Int = 0,
+        isProduction: Bool? = nil,
+        group: String? = nil,
+        sqliteBusyTimeoutMilliseconds: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -75,6 +81,9 @@ public struct DatabaseConnection: Codable, Equatable, Sendable, Identifiable {
         self.directConnection = directConnection
         self.lastStatement = lastStatement
         self.sortIndex = sortIndex
+        self.isProduction = isProduction
+        self.group = group
+        self.sqliteBusyTimeoutMilliseconds = sqliteBusyTimeoutMilliseconds
     }
 
     public func mongoLogin(password: String) -> MongoLogin {

@@ -580,6 +580,7 @@ public final class IDEWorkspace {
     /// Connections, schema and query results for this window. The connection list is shared.
     let databaseSupport: IDEDatabaseSupport
     var databaseParameterPrompt: IDEDatabaseParameterPrompt?
+    var databaseSchemaDraft: IDEDatabaseSchemaDraft?
     var isMarkdownPreviewVisible = false
     /// The SwiftUI canvas is docked beside the editor (`IDEWorkspace+SwiftUIPreview.swift`).
     var isSwiftUIPreviewVisible = false
@@ -3584,6 +3585,7 @@ public final class IDEWorkspace {
             windowID: windowID,
             restoration: hasOpenDocuments && !hasOnlyUntouchedEmptyFile ? workbench.makeRestorationState() : nil,
             databaseConsoles: databaseSupport.consolesByDocumentID.isEmpty ? nil : databaseSupport.consolesByDocumentID,
+            databaseExplorer: databaseSupport.explorerState,
             projectRootBookmark: project.makeBookmarkData(),
             sidebarWidth: sidebarWidth ?? self.sidebarWidth,
             isSidebarVisible: isSidebarVisible,
@@ -3700,6 +3702,7 @@ public final class IDEWorkspace {
     }
 
     private func loadSession(_ session: IDEWindowSession) {
+        databaseSupport.explorerState = session.databaseExplorer ?? .init()
         isSidebarVisible = false
         selectedSidebarTab = session.sidebarTab ?? .explorer
         closedSidebarTabs = Set(session.closedSidebarTabs ?? []).subtracting([.explorer])

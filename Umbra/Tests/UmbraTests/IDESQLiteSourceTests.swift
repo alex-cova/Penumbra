@@ -174,6 +174,44 @@ final class IDESQLiteSourceTests: XCTestCase {
         await support.disconnect(connection.id)
     }
 
+    func testChartAggregationRunsInNewConsoleAndKeepsTheSourceResult() async throws {
+        IDEWorkspace.isSessionPersistenceEnabled = false
+        let support = makeSupport()
+        let connection = try await support.addSQLiteSource(path: try await makeDatabase(named: "chart.sqlite"))
+        let workspace = IDEWorkspace(databaseSupport: support)
+        defer { workspace.teardown() }
+        workspace.bootstrap()
+
+        let sourceSQL = "SELECT 'a' AS category, :amount AS amount UNION ALL SELECT 'a', 2"
+        let consoleBinding = binding(connection)
+        workspace.openUntitled(displayName: "Source", text: sourceSQL, languageIdentifier: "sql")
+        let source = try XCTUnwrap(workspace.workbench.activePane.selectedDocument)
+        support.bindConsole(workbenchID: source.id, documentID: source.documentID, binding: consoleBinding)
+        await support.execute(statement: "SELECT 'source' AS value", binding: consoleBinding, resetSort: true, consoleID: source.id)
+        let original = try XCTUnwrap(support.resultSet(for: source.id).result.storage)
+        let query = IDEDatabaseChartQuery(statement: sourceSQL, engine: .sqlite, binding: consoleBinding)
+        let sql = try XCTUnwrap(query.sql(columns: ["category", "amount"], settings: .init(x: 0, y: 1, aggregate: .sum)))
+        workspace.runDatabaseChartQuery(sql, binding: consoleBinding)
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(4))
+        while workspace.databaseParameterPrompt == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let console = try XCTUnwrap(workspace.workbench.activePane.selectedDocument)
+        XCTAssertNotEqual(console.id, source.id)
+        let prompt = try XCTUnwrap(workspace.databaseParameterPrompt)
+        XCTAssertEqual(prompt.labels, [":amount"])
+        XCTAssertFalse(support.isRunning)
+        workspace.databaseParameterPrompt = nil
+        prompt.onSubmit([.int(5)])
+        while support.resultSet(for: console.id).result.rows.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(support.resultSet(for: console.id).result.rows, [["a", "7"]])
+        XCTAssertEqual(support.resultSet(for: source.id).result.storage, original)
+        await support.disconnect(connection.id)
+    }
+
     func testConsoleRunsSelectionAndPromptsBeforeRunningBoundScript() async throws {
         IDEWorkspace.isSessionPersistenceEnabled = false
         let support = makeSupport()

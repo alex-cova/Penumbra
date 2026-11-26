@@ -4,7 +4,7 @@ import Foundation
 import Observation
 
 /// Which data source an untitled console tab runs against.
-struct IDEDatabaseConsoleBinding: Codable, Equatable {
+struct IDEDatabaseConsoleBinding: Codable, Equatable, Sendable {
     var connectionID: UUID
     var mongoDatabase: String?
     var mongoCollection: String?
@@ -13,6 +13,13 @@ struct IDEDatabaseConsoleBinding: Codable, Equatable {
 struct IDEDatabaseSQLSchema: Equatable {
     var tables: [String] = []
     var columns: [String: [SQLColumn]] = [:]
+    var views: Set<String> = []
+}
+
+struct IDEDatabaseExplorerState: Codable {
+    var expanded: Set<String> = []
+    var favorites: Set<String> = []
+    var recents: [String] = []
 }
 
 struct IDEDatabaseMongoSchema: Equatable {
@@ -67,6 +74,7 @@ struct IDEDatabaseResult: Equatable {
     var canSort = false
     var storage: IDEDatabaseResultStorage?
     var rowCount = 0
+    var hasCompleteRows = false
     var sortColumn: String?
     var sortAscending = true
     var error: String?
@@ -119,6 +127,10 @@ final class IDEDatabaseConnectionEditor: Identifiable {
     var portFollowsDefault: Bool
     /// SQLite: the file does not exist yet and saving should make it.
     var createsNewFile = false
+    var isProduction = false
+    var group = ""
+    var sqliteBusyTimeoutMilliseconds = 5_000
+    var testSucceeded = false
 
     private init(existing: DatabaseConnection?, password: String) {
         if let existing {
@@ -139,6 +151,9 @@ final class IDEDatabaseConnectionEditor: Identifiable {
             replicaSet = existing.replicaSet
             directConnection = existing.directConnection
             portFollowsDefault = existing.port == existing.engine.defaultPort
+            isProduction = existing.isProduction == true
+            group = existing.group ?? ""
+            sqliteBusyTimeoutMilliseconds = existing.sqliteBusyTimeoutMilliseconds ?? 5_000
         } else {
             let fresh = DatabaseConnection()
             existingID = nil
@@ -197,7 +212,10 @@ final class IDEDatabaseConnectionEditor: Identifiable {
             authSource: authSource.trimmingCharacters(in: .whitespacesAndNewlines),
             useSRV: useSRV,
             replicaSet: replicaSet.trimmingCharacters(in: .whitespacesAndNewlines),
-            directConnection: directConnection
+            directConnection: directConnection,
+            isProduction: isProduction ? true : nil,
+            group: group.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : group.trimmingCharacters(in: .whitespacesAndNewlines),
+            sqliteBusyTimeoutMilliseconds: engine == .sqlite ? sqliteBusyTimeoutMilliseconds : nil
         )
         if connection.name.isEmpty {
             if connection.engine == .sqlite {
@@ -231,9 +249,12 @@ final class IDEDatabaseConnectionEditor: Identifiable {
             directConnection = parsed.directConnection
             if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { name = parsed.name }
             portFollowsDefault = port == engine.defaultPort
+            urlText = ""
+            testSucceeded = false
             status = nil
         } catch {
-            status = error.localizedDescription
+            status = "Check the URL scheme, host, and percent-encoding."
+            testSucceeded = false
         }
     }
 }
@@ -256,6 +277,17 @@ final class IDEDatabaseSupport {
     var selectedMongoDatabase: String?
     var selectedMongoCollection: String?
     var expanded: Set<String> = []
+    var favoriteObjects: Set<String> = []
+    var recentObjects: [String] = []
+    var productionPrompt: IDEDatabaseProductionPrompt?
+    var explorerState: IDEDatabaseExplorerState {
+        get { .init(expanded: expanded, favorites: favoriteObjects, recents: recentObjects) }
+        set {
+            expanded = newValue.expanded
+            favoriteObjects = newValue.favorites
+            recentObjects = newValue.recents
+        }
+    }
     var editor: IDEDatabaseConnectionEditor?
     var showsResultsTab = false
     var isRunning = false
@@ -279,6 +311,7 @@ final class IDEDatabaseSupport {
     private var sqlCatalogGenerations: [UUID: UUID] = [:]
     private var sqlUnindexedScopes: Set<UUID> = []
     private var connectionAttempts: [UUID: UUID] = [:]
+    var connectingIDs: Set<UUID> { Set(connectionAttempts.keys) }
     private var sqlTesting: [UUID: any SQLExecuting] = [:]
     private var mongoSessions: [UUID: MongoSession] = [:]
     var sqlSchemas: [UUID: IDEDatabaseSQLSchema] = [:]
@@ -305,6 +338,18 @@ final class IDEDatabaseSupport {
 
     func sqlRelation(_ name: String, connectionID: UUID) -> SQLCatalog.Relation? {
         sqlCatalogs[connectionID]?.relation(named: name)
+    }
+
+    func databaseDependencies(_ table: String, connectionID: UUID) async throws -> [SQLCatalog.ForeignKey] {
+        guard let session = sqlSessions[connectionID] else { throw DatabaseError.notConnected }
+        let catalog: SQLCatalog
+        if let cached = sqlCatalogs[connectionID] {
+            catalog = cached
+        } else {
+            catalog = try await session.sqlCatalogMetadata().catalog
+        }
+        guard sqlSessions[connectionID] === session else { throw CancellationError() }
+        return catalog.foreignKeys.filter { $0.fromRelation == table || $0.toRelation == table }
     }
 
     func beginNewConnection() {
@@ -395,9 +440,10 @@ final class IDEDatabaseSupport {
     }
 
     func testEditor() async {
-        guard let editor else { return }
+        guard let editor, !editor.isTesting else { return }
         editor.isTesting = true
         editor.status = nil
+        editor.testSucceeded = false
         defer { editor.isTesting = false }
         let connection = editor.connection()
         do {
@@ -408,7 +454,8 @@ final class IDEDatabaseSupport {
                 // Opening is the whole test: header check, schema read, and (for a new file) the
                 // answer "it does not exist yet" is fine when Save is going to create it.
                 if editor.createsNewFile, !FileManager.default.fileExists(atPath: connection.database) {
-                    editor.status = "Connected. The file will be created when you save."
+                    editor.status = "The file will be created when you save."
+                    editor.testSucceeded = true
                     return
                 }
                 let session = try await SQLiteSession.open(connection.sqliteOpenOptions())
@@ -417,13 +464,15 @@ final class IDEDatabaseSupport {
                 editor.status = immutable
                     ? "Connected, read-only and immutable: changes made by other programs will not be seen."
                     : "Connected."
+                editor.testSucceeded = true
                 return
             case .mongo:
                 try await MongoSession.test(login: connection.mongoLogin(password: editor.password))
             }
             editor.status = "Connected."
+            editor.testSucceeded = true
         } catch {
-            editor.status = error.localizedDescription
+            editor.status = IDEDatabaseConnectionDiagnostics.message(error.localizedDescription, engine: connection.engine)
         }
     }
 
@@ -497,23 +546,29 @@ final class IDEDatabaseSupport {
         banner = sourceNotes[id]?.message
     }
 
-    private func loadSQLCatalog(connectionID: UUID) {
+    private func loadSQLCatalog(connectionID: UUID, reportErrors: Bool = false) {
         guard let session = sqlSessions[connectionID] else { return }
         sqlCatalogLoads[connectionID]?.cancel()
         let generation = UUID()
         sqlCatalogGenerations[connectionID] = generation
         sqlCatalogLoads[connectionID] = Task { [weak self] in
-            let metadata = try? await session.sqlCatalogMetadata()
-            guard let self, !Task.isCancelled, sqlCatalogGenerations[connectionID] == generation else { return }
-            defer { sqlCatalogLoads[connectionID] = nil }
-            guard let metadata else { return }
-            var catalog = metadata.catalog
-            if sqlUnindexedScopes.contains(connectionID) { catalog.isComplete = false }
-            sqlCatalogs[connectionID] = catalog
-            sqlSchemas[connectionID] = IDEDatabaseSQLSchema(
-                tables: metadata.catalog.relations.map(\.name), columns: metadata.columnsByTable
-            )
-            refreshSQLSnapshots(connectionID: connectionID)
+            do {
+                let metadata = try await session.sqlCatalogMetadata()
+                guard let self, !Task.isCancelled, sqlCatalogGenerations[connectionID] == generation else { return }
+                var catalog = metadata.catalog
+                if sqlUnindexedScopes.contains(connectionID) { catalog.isComplete = false }
+                sqlCatalogs[connectionID] = catalog
+                sqlSchemas[connectionID] = IDEDatabaseSQLSchema(
+                    tables: metadata.catalog.relations.map(\.name), columns: metadata.columnsByTable,
+                    views: Set(metadata.catalog.relations.filter { $0.kind == .view }.map(\.name))
+                )
+                refreshSQLSnapshots(connectionID: connectionID)
+            } catch {
+                if let self, reportErrors, !Task.isCancelled, sqlCatalogGenerations[connectionID] == generation {
+                    banner = error.localizedDescription
+                }
+            }
+            if let self, sqlCatalogGenerations[connectionID] == generation { sqlCatalogLoads[connectionID] = nil }
         }
     }
 
@@ -551,6 +606,8 @@ final class IDEDatabaseSupport {
     }
 
     func closeAll() {
+        productionPrompt?.resolve(false)
+        productionPrompt = nil
         executionID = nil
         isRunning = false
         isCancelling = false
@@ -644,8 +701,23 @@ final class IDEDatabaseSupport {
         )
     }
 
-    func ensureColumns(connectionID: UUID, table: String) async {
-        guard sqlSchemas[connectionID]?.columns[table] == nil else { return }
+    func refreshSource(_ id: UUID) async {
+        if let session = mongoSessions[id] {
+            do {
+                let names = try await session.listDatabases()
+                guard mongoSessions[id] === session else { return }
+                mongoSchemas[id] = IDEDatabaseMongoSchema(databases: names)
+                for name in names where expanded.contains(Self.mongoDatabaseKey(id, name)) {
+                    await ensureCollections(connectionID: id, database: name)
+                }
+            } catch { banner = error.localizedDescription }
+        } else {
+            loadSQLCatalog(connectionID: id, reportErrors: true)
+        }
+    }
+
+    func ensureColumns(connectionID: UUID, table: String, refresh: Bool = false) async {
+        guard refresh || sqlSchemas[connectionID]?.columns[table] == nil else { return }
         guard let session = sqlSessions[connectionID] else { return }
         let generation = sqlCatalogGenerations[connectionID]
         do {
@@ -658,11 +730,12 @@ final class IDEDatabaseSupport {
         }
     }
 
-    func ensureCollections(connectionID: UUID, database: String) async {
-        guard mongoSchemas[connectionID]?.collections[database] == nil else { return }
+    func ensureCollections(connectionID: UUID, database: String, refresh: Bool = false) async {
+        guard refresh || mongoSchemas[connectionID]?.collections[database] == nil else { return }
         guard let session = mongoSessions[connectionID] else { return }
         do {
             let names = try await session.listCollections(database: database)
+            guard mongoSessions[connectionID] === session else { return }
             mongoSchemas[connectionID]?.collections[database] = names
         } catch {
             banner = error.localizedDescription
@@ -703,7 +776,7 @@ final class IDEDatabaseSupport {
         resetSort: Bool = true,
         consoleID: UUID? = nil
     ) async {
-        guard !preparedStatements.isEmpty else { return }
+        guard !preparedStatements.isEmpty, productionPrompt == nil else { return }
         showsResultsTab = true
         // One statement at a time per window: a second run would overwrite the first one's header
         // and result while it is still going (audit F-08), and a connection runs one statement at
@@ -713,14 +786,31 @@ final class IDEDatabaseSupport {
             return
         }
         if let consoleID, consoles[consoleID] != binding { return }
-        if let consoleID { switchResultOwner(to: consoleID) }
         guard let connection = catalog.connection(id: binding.connectionID) else {
+            if let consoleID { switchResultOwner(to: consoleID) }
             Self.releaseResults([result] + scriptResults)
             result = IDEDatabaseResult()
             scriptResults.removeAll()
             result.error = "That data source was removed."
             return
         }
+        if connection.isProduction == true, connection.engine != .mongo, !connection.readOnly {
+            let writes = await runDetached { preparedStatements.filter { !DatabaseQuery.canPage($0.sql) }.map(\.text) }
+            guard !Task.isCancelled, !isRunning, productionPrompt == nil,
+                  catalog.connection(id: connection.id) == connection,
+                  consoleID == nil || consoleID.flatMap({ consoles[$0] }) == binding else { return }
+            if !writes.isEmpty {
+                let (stream, decision) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
+                let prompt = IDEDatabaseProductionPrompt(source: connection.name, statements: writes, decision: decision)
+                productionPrompt = prompt
+                var iterator = stream.makeAsyncIterator()
+                let approved = await iterator.next() == true
+                if productionPrompt?.id == prompt.id { productionPrompt = nil }
+                guard approved, !Task.isCancelled, !isRunning, catalog.connection(id: connection.id) == connection,
+                      consoleID == nil || consoleID.flatMap({ consoles[$0] }) == binding else { return }
+            }
+        }
+        if let consoleID { switchResultOwner(to: consoleID) }
         let execution = UUID()
         executionID = execution
         isRunning = true
@@ -906,6 +996,7 @@ final class IDEDatabaseSupport {
             guard executionID == execution else { return false }
             publishResultSnapshot(snapshot)
             result.notices = summary.notices
+            result.hasCompleteRows = !summary.wasCancelled && !summary.limitReached
             result.message = Self.message(for: summary, engine: connection.engine)
             let size = result.pageSize
             let preview = try await Self.readPreview(from: store, range: 0..<size, engine: connection.engine)

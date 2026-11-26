@@ -100,7 +100,8 @@ extension DatabaseConnection {
     public func sqliteOpenOptions(createIfMissing: Bool = false) -> SQLiteOpenOptions {
         SQLiteOpenOptions(
             location: isInMemorySQLite ? .memory : .file(database), readOnly: readOnly,
-            createIfMissing: createIfMissing
+            createIfMissing: createIfMissing,
+            busyTimeoutMilliseconds: min(Int(Int32.max), max(0, sqliteBusyTimeoutMilliseconds ?? 5_000))
         )
     }
 

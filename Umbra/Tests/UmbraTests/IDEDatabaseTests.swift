@@ -21,7 +21,8 @@ final class IDEDatabaseTests: XCTestCase {
         coordinator.update(storage: storage, columns: ["value"], rowCount: 500, canSort: false,
                            onSort: { _ in XCTFail("Scrolling must not sort or rerun") }, onInspect: { _, _ in })
         scroll.layoutSubtreeIfNeeded()
-        table.scrollRowToVisible(480)
+        coordinator.reveal(.init(row: 480))
+        XCTAssertEqual(table.selectedRow, 480)
         scroll.reflectScrolledClipView(scroll.contentView)
         let column = try XCTUnwrap(table.tableColumns.first { $0.title == "value" })
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))

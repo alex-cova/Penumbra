@@ -74,6 +74,18 @@ The execution diagnostics follow-up verified a real PostgreSQL error through pag
 - All 62 focused Umbra tests passed. They check first-row publication during execution, a native grid scroll to a distant stored row, SQLite results that stay stable after the table changes, and store closure when the console closes.
 - The Umbra Xcode Debug build passed with code signing disabled. Scroll frame timing and the Phase 5 grid comparison remain unmeasured.
 
+## Phase 6 verification
+
+- The 104 focused Umbra tests cover database results, SQLite, shortcuts and module integration. The new cases cover all ten chart types through `ImageRenderer`, bounded sampling, LTTB endpoints, histogram and scatter counts, date grouping and median, WGS84 rejection, WKB and antimeridian bounds. The native grid test verifies selecting and scrolling to a stored row. The SQLite workspace test confirms the generated aggregation opens a separate console, prompts for the bound value, and retains the source result.
+- The Umbra macOS Debug Xcode build passed with code signing disabled.
+- The disposable PostGIS and MySQL servers returned matching longitude-first coordinates from `ST_AsGeoJSON` and WKB with SRID 4326. Both servers accepted the generated grouping pattern. Desktop gesture, clipboard, save-panel and online basemap smoke checks remain open.
+
+## Phase 9 verification
+
+- All 139 focused Umbra tests passed with `UMBRA_UI_TESTS=1`. The native-window test used arrow keys and Return to connect, expand the schema, and open SQLite table data in both light and dark mode. The test checks behavior. Manual VoiceOver and visual checks remain open.
+- The other Phase 9 tests cover explorer search and session restoration, the SQLite busy timeout, production approval before executing any statement in a batch, preservation of rows and dependent definitions during a supported SQLite rebuild, and rejection of stale rebuild previews.
+- All 265 DatabaseKit tests passed with the disposable PostgreSQL, MySQL, and MongoDB servers. The Umbra macOS Debug Xcode build passed with code signing disabled. The Xcode project synchronization and whitespace checks passed.
+
 ## Skipped tests
 
 None skipped by design yet. The live suites report as "not run" when `UMBRA_DB_INTEGRATION` is not `1`, and the final report states how many ran.

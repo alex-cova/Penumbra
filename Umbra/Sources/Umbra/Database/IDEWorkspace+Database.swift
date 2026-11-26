@@ -88,6 +88,71 @@ extension IDEWorkspace {
         )
     }
 
+    func openDatabaseSchemaDraft(_ sql: String, draft: IDEDatabaseSchemaDraft) {
+        guard let source = databaseSupport.catalog.connection(id: draft.connection.id),
+              source.engine == draft.connection.engine else { return }
+        openConsole(title: draft.operation.rawValue, text: sql, language: "sql",
+                    binding: .init(connectionID: source.id), run: false)
+    }
+
+    func loadDatabaseSQLiteRebuild(_ draft: IDEDatabaseSchemaDraft) async throws -> IDEDatabaseSQLiteRebuild {
+        guard let session = databaseSupport.sqlSession(for: draft.connection.id)?.sqliteSession else {
+            throw DatabaseError.notConnected
+        }
+        return try await IDEDatabaseSQLiteRebuild.load(draft.table, from: session)
+    }
+
+    func generateDatabaseSelect(_ connection: DatabaseConnection, table: String) {
+        do {
+            let name = try qualifiedDatabaseName(connection, parts: [table])
+            openConsole(title: table, text: "SELECT * FROM \(name);", language: "sql",
+                        binding: .init(connectionID: connection.id), run: false)
+        } catch { databaseSupport.banner = error.localizedDescription }
+    }
+
+    func copyDatabaseObjectName(_ connection: DatabaseConnection, parts: [String]) {
+        do { copyDatabaseSQLToClipboard(try qualifiedDatabaseName(connection, parts: parts)) }
+        catch { databaseSupport.banner = error.localizedDescription }
+    }
+
+    private func qualifiedDatabaseName(_ connection: DatabaseConnection, parts: [String]) throws -> String {
+        if connection.engine == .mongo { return parts.joined(separator: ".") }
+        let schema: String = switch connection.engine {
+        case .postgres: "public"
+        case .sqlite: "main"
+        case .mysql: connection.database.isEmpty ? "information_schema" : connection.database
+        case .mongo: ""
+        }
+        return try ([schema] + parts).map { try SQLIdentifiers.quote($0, engine: connection.engine) }.joined(separator: ".")
+    }
+
+    func openDatabaseDefinition(_ connection: DatabaseConnection, table: String) {
+        guard let session = databaseSupport.sqlSession(for: connection.id) else { return }
+        Task {
+            do {
+                let relation = databaseSupport.sqlRelation(table, connectionID: connection.id) ?? .init(name: table)
+                let sql = try await session.declaration(of: relation)
+                guard databaseSupport.sqlSession(for: connection.id) === session else { return }
+                openUntitled(displayName: "\(table) DDL", text: sql, languageIdentifier: "sql")
+            } catch { databaseSupport.banner = error.localizedDescription }
+        }
+    }
+
+    func showDatabaseDependencies(_ connection: DatabaseConnection, table: String) {
+        Task {
+            do {
+                let keys = try await databaseSupport.databaseDependencies(table, connectionID: connection.id)
+                let lines = keys.map { key in
+                    let name = key.name.map { "\($0)\n" } ?? ""
+                    return "\(name)\(key.fromRelation) (\(key.fromColumns.joined(separator: ", "))) → \(key.toRelation) (\(key.toColumns.joined(separator: ", ")))"
+                }
+                openUntitled(displayName: "\(table) Dependencies",
+                             text: lines.isEmpty ? "No foreign keys in the loaded schema reference \(table)." : lines.joined(separator: "\n\n"))
+            } catch is CancellationError {}
+            catch { databaseSupport.banner = error.localizedDescription }
+        }
+    }
+
     /// The schema picture of a data source. Reads live so it is fresh; connect first.
     func showSchemaDiagram(_ connection: DatabaseConnection) {
         guard connection.engine != .mongo else {
@@ -400,6 +465,13 @@ extension IDEWorkspace {
             Task { await refreshDatabaseGutter(from: host.textView) }
         }
         saveSession()
+    }
+
+    func runDatabaseChartQuery(_ sql: String, binding: IDEDatabaseConsoleBinding) {
+        guard !databaseSupport.isRunning, databaseParameterPrompt == nil,
+              databaseSupport.catalog.connection(id: binding.connectionID) != nil else { return }
+        openConsole(title: "Chart Aggregation", text: sql, language: "sql", binding: binding, run: false)
+        executeDatabaseConsole(all: true)
     }
 
     private func openConsole(
