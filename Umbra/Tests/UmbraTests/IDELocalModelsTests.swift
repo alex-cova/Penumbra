@@ -41,10 +41,16 @@ final class IDELocalModelsStoreTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
-    private func makeStore() -> IDELocalModelsStore {
+    private func makeStore(
+        containsToken: @escaping () throws -> Bool = { false },
+        loadToken: @escaping () throws -> String? = { nil }
+    ) -> IDELocalModelsStore {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubHubProtocol.self]
-        return IDELocalModelsStore(rootURL: root, session: URLSession(configuration: configuration), runtime: LocalModelRuntime())
+        return IDELocalModelsStore(
+            rootURL: root, session: URLSession(configuration: configuration), runtime: LocalModelRuntime(),
+            containsToken: containsToken, loadToken: loadToken
+        )
     }
 
     @discardableResult
@@ -113,12 +119,33 @@ final class IDELocalModelsStoreTests: XCTestCase {
             "/api/models/acme/plain-4bit": (200, Data(#"{"id":"acme/plain-4bit","siblings":[{"rfilename":"model.safetensors","size":10}]}"#.utf8)),
             "/acme/plain-4bit/resolve/main/tokenizer_config.json": (200, Data(plainTemplate.utf8)),
         ])
-        let store = makeStore()
+        let store = makeStore(containsToken: { true }, loadToken: {
+            XCTFail("Viewing local models and public details should not read the saved token")
+            return nil
+        })
+        store.prepareIfNeeded()
+        XCTAssertTrue(store.hasToken)
         await store.loadDetails(for: "acme/qwen-4bit")
         await store.loadDetails(for: "acme/plain-4bit")
         XCTAssertEqual(store.details["acme/qwen-4bit"]?.sizeBytes, Int64(weights + 100), "only what MLX loads counts, not the README")
         XCTAssertEqual(store.details["acme/qwen-4bit"]?.supportsTools, true)
         XCTAssertEqual(store.details["acme/plain-4bit"]?.supportsTools, false)
+    }
+
+    func testGatedDetailsReadTheTokenOnlyWhenAuthenticationIsNeeded() async {
+        StubHubProtocol.serve([
+            "/api/models/acme/gated": (200, Data(#"{"id":"acme/gated","gated":true,"siblings":[{"rfilename":"model.safetensors","size":100}]}"#.utf8)),
+            "/acme/gated/resolve/main/tokenizer_config.json": (200, Data(toolTemplate.utf8)),
+        ])
+        var reads = 0
+        let store = makeStore(containsToken: { true }, loadToken: {
+            reads += 1
+            return "test-token"
+        })
+        await store.loadDetails(for: "acme/gated")
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(store.details["acme/gated"]?.isGated, true)
+        XCTAssertEqual(store.details["acme/gated"]?.supportsTools, true)
     }
 
     func testCancellingWithNothingRunningIsHarmless() throws {

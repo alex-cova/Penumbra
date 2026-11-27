@@ -5,7 +5,7 @@ import Observation
 @MainActor
 @Observable
 final class IDEGradleTestPresentation {
-    struct Row: Identifiable, Sendable {
+    struct Row: Equatable, Identifiable, Sendable {
         let id: String
         let title: String
         let depth: Int
@@ -31,7 +31,10 @@ final class IDEGradleTestPresentation {
     private(set) var rows: [Row] = []
     private(set) var failureRows: [String] = []
     private(set) var isRestoring = false
-    var selected: Set<String> = []
+    private(set) var selectedNode: GradleTestSession.Node?
+    var selected: Set<String> = [] {
+        didSet { selectedNode = primarySelection.flatMap { nodes[$0] } }
+    }
     var query = "" { didSet { scheduleProjection() } }
     var hidePassed = false { didSet { scheduleProjection() } }
     var failedOnly = false { didSet { scheduleProjection() } }
@@ -44,8 +47,17 @@ final class IDEGradleTestPresentation {
     @ObservationIgnored private var restoreVersion = 0
 
     var isRunning: Bool { summary?.state == .running }
+    var tabTitle: String {
+        let total = counts.values.reduce(0, +) + reportCounts.values.reduce(0, +)
+        if total == 0 { return isRunning ? "Tests · …" : "Tests" }
+        return "Tests · \(count(for: .passed))/\(total)"
+    }
     var primarySelection: String? { selected.count == 1 ? selected.first : nil }
     var sessionDirectory: URL? { summary.map { GradleTestHistory.shared.directory(for: $0.id) } }
+
+    func count(for outcome: GradleTestEvent.Outcome) -> Int {
+        counts[outcome, default: 0] + reportCounts[outcome, default: 0]
+    }
 
     func begin(_ session: GradleTestHistory.Summary) {
         restoreVersion += 1
@@ -58,10 +70,20 @@ final class IDEGradleTestPresentation {
 
     func ingest(_ update: GradleTestSession.Update, for id: UUID) {
         guard summary?.id == id else { return }
-        for node in update.nodes { nodes[node.id] = node }
-        counts = update.counts
-        issues = update.issues
-        if !update.nodes.isEmpty { scheduleProjection() }
+        let selection = primarySelection
+        var rowsChanged = false
+        for node in update.nodes {
+            let previous = nodes.updateValue(node, forKey: node.id)
+            // Output updates keep the same event and outcome. Refresh the selected details
+            // without rebuilding the outline for every line written by a worker.
+            if previous?.event.sequence != node.event.sequence || previous?.outcome != node.outcome {
+                rowsChanged = true
+            }
+            if node.id == selection { selectedNode = node }
+        }
+        if counts != update.counts { counts = update.counts }
+        if issues != update.issues { issues = update.issues }
+        if rowsChanged { scheduleProjection() }
     }
 
     func finish(_ session: GradleTestHistory.Summary, reports: SavedReports) {
@@ -222,8 +244,11 @@ final class IDEGradleTestPresentation {
                               includesWorkers: self.includesWorkers, collapsed: self.collapsed)
             let projected = await Self.project(input)
             guard !Task.isCancelled else { return }
-            self.rows = projected
-            self.failureRows = projected.filter { !$0.hasChildren && $0.outcome == .failed }.map(\.id)
+            if self.rows != projected {
+                self.rows = projected
+                let failures = projected.filter { !$0.hasChildren && $0.outcome == .failed }.map(\.id)
+                if self.failureRows != failures { self.failureRows = failures }
+            }
             self.projection = nil
             if input.query != self.query || input.hidePassed != self.hidePassed || input.failedOnly != self.failedOnly
                 || input.includesWorkers != self.includesWorkers || input.collapsed != self.collapsed

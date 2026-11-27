@@ -10,6 +10,7 @@ extension IDEJavaRunProvider {
     ) async -> IDEGradleRunOutcome {
         guard let host, gradle.rootURL == root, !gradle.isBusy else { return .notStarted("Gradle is busy.") }
         let presentation = host.testResults.gradle
+        host.showTestResults()
         let history = GradleTestHistory.shared
         let epoch = launchEpoch
         let summary: GradleTestHistory.Summary
@@ -17,6 +18,7 @@ extension IDEJavaRunProvider {
             summary = try await history.begin(root: root, tasks: tasks, original: original)
         } catch {
             let reason = "Could not create the Gradle test session. \(error.localizedDescription)"
+            presentation.showActionMessage(reason)
             host.testResults.stopRun(message: reason)
             host.reportRunProblem(reason)
             return .notStarted(reason)
@@ -32,7 +34,6 @@ extension IDEJavaRunProvider {
             return .notStarted(reason)
         }
         presentation.begin(summary)
-        host.showTestResults()
         if let plan {
             pendingInstrumentation = (plan, tasks)
             instrumentationTestSessionID = summary.id
@@ -43,13 +44,19 @@ extension IDEJavaRunProvider {
         let canonicalRoot = GradleBuildIdentity.canonicalPath(root)
         var reportSnapshot: GradleTestReports?
         var observedTasks: Set<String> = []
+        var reusedTestOutputs = false
         var discoveredHTML: [String: URL] = [:]
         func observe(_ update: GradleTestSession.Update) {
             for node in update.nodes where node.event.build == canonicalRoot {
                 guard let task = node.event.task else { continue }
                 if node.isTest { observedTasks.insert(task) }
-                if node.event.kind == .taskFinished, let path = node.event.report {
-                    discoveredHTML[task] = URL(fileURLWithPath: path)
+                if node.event.kind == .taskFinished {
+                    if let path = node.event.report { discoveredHTML[task] = URL(fileURLWithPath: path) }
+                    if let disposition = node.event.disposition,
+                       disposition == "UP-TO-DATE" || disposition == "FROM-CACHE",
+                       JavaTestRunner.isSelectedTestTask(task, model: gradle.model) {
+                        reusedTestOutputs = true
+                    }
                 }
             }
             presentation.ingest(update, for: summary.id)
@@ -67,7 +74,8 @@ extension IDEJavaRunProvider {
             workingDirectory: workingDirectory,
             beforeLaunch: configuration?.beforeLaunch ?? [],
             instrumentation: configuration?.instrumentation ?? .none,
-            canReplay: !debug && plan == nil && (configuration?.beforeLaunch.isEmpty ?? true),
+            canReplay: !debug && plan == nil && (configuration?.beforeLaunch.isEmpty ?? true)
+                && tasks.allSatisfy { !$0.hasPrefix("-") || $0 == "--rerun" },
             replay: replay,
             willLaunch: {
                 reportSnapshot = await Task.detached {
@@ -103,7 +111,9 @@ extension IDEJavaRunProvider {
                 finished.finishedAt = Date()
                 var message = result.message
                 if result.state == .finished, update.counts.values.reduce(0, +) == 0, saved.rows.isEmpty {
-                    message += " · No current test results"
+                    message += reusedTestOutputs
+                        ? " · Gradle reused test outputs. No tests executed."
+                        : " · No current test results"
                 } else if !saved.rows.isEmpty {
                     message += " · Includes Gradle XML reports"
                 }
@@ -147,8 +157,7 @@ extension IDEJavaRunProvider {
         var reports: [String: [URL]] = [:]
         let model = gradle.model
         for task in tasks where !task.hasPrefix("-") {
-            if !task.hasPrefix(":") {
-                guard let model else { continue }
+            if !task.contains(":"), let model {
                 for module in model.subprojects {
                     let prefix = module.path == ":" ? "" : module.path
                     let qualified = prefix + ":" + task
@@ -157,11 +166,12 @@ extension IDEJavaRunProvider {
                 }
                 continue
             }
+            let qualified = task.hasPrefix(":") ? task : ":" + task
             if let model {
-                let directories = JavaTestRunner.reportDirectories(forQualifiedTaskPath: task, model: model)
-                if !directories.isEmpty { reports[task] = directories }
-            } else if task == ":test" {
-                reports[task] = [root.appendingPathComponent("build/test-results/test")]
+                let directories = JavaTestRunner.reportDirectories(forQualifiedTaskPath: qualified, model: model)
+                if !directories.isEmpty { reports[qualified] = directories }
+            } else if qualified == ":test" {
+                reports[qualified] = [root.appendingPathComponent("build/test-results/test")]
             }
         }
         return reports

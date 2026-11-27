@@ -159,8 +159,11 @@ struct IDEJavaModule: IDELanguageModule {
                 item: { workspace in
                     let results = workspace.testResults
                     let total = results.passedCount + results.failedCount + results.skippedCount
+                    let title = workspace.gradle.isActive
+                        ? results.gradle.tabTitle
+                        : (results.isRunning ? "Tests · …" : "Tests · \(results.passedCount)/\(total)")
                     return AnyView(IDETestResultsTabItem(
-                        title: results.isRunning ? "Tests · …" : "Tests · \(results.passedCount)/\(total)",
+                        title: title,
                         isSelected: workspace.isBottomTabSelected(.testResults),
                         onSelect: { [weak workspace] in workspace?.showBottomTab(.testResults) }
                     ))

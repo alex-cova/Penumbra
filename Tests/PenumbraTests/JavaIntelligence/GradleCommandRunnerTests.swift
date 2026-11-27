@@ -149,6 +149,47 @@ final class GradleCommandRunnerTests: XCTestCase {
         XCTAssertEqual(received.lines.map(\.text), emitted.map(\.text))
     }
 
+    func testGradleReplaySettingsStayInMemoryAndAreEvictedWithHistory() async throws {
+        let directory = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gradle = directory.appendingPathComponent("gradle")
+        let javaHome = directory.appendingPathComponent("jdk")
+        let executable = gradle.appendingPathComponent("bin/gradle")
+        for file in [
+            executable, gradle.appendingPathComponent("lib/gradle-launcher-9.4.1.jar"),
+            javaHome.appendingPathComponent("release"), javaHome.appendingPathComponent("bin/java")
+        ] {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try makeExecutableFile(at: file)
+        }
+        let trust = ProjectTrustStore(storeURL: directory.appendingPathComponent("trust.json"))
+        trust.setTrusted(true, for: directory)
+        let history = GradleTestHistory(directory: directory.appendingPathComponent("history"))
+        let summary = try await history.begin(root: directory, tasks: [":test"])
+        let runDirectory = history.directory(for: summary.id)
+        defer { GradleLaunchSnapshot.discard(for: runDirectory) }
+        let launcher = RecordingLauncher(result: .init(exitCode: 0, stdout: "", stderr: ""))
+        let runner = GradleCommandRunner(
+            trustStore: trust, launcher: launcher,
+            resolver: GradleExecutableResolver(processRunner: FakeProcessRunner(output: executable.path))
+        )
+        let result = try await runner.run(
+            projectDirectory: directory, tasks: summary.tasks, javaHome: javaHome,
+            environmentOverrides: ["TEST_CREDENTIAL": "in-memory fixture"], snapshotDirectory: runDirectory
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        let replay = try GradleLaunchSnapshot.load(from: runDirectory)
+        XCTAssertEqual(replay.environment["TEST_CREDENTIAL"], "in-memory fixture")
+        try replay.validate(root: directory)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: runDirectory.path), ["summary.json"])
+
+        try await history.finish(summary, state: .finished, exitCode: 0, message: "Finished", days: 0, bytes: 0)
+        try await history.evict(days: 0, bytes: 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runDirectory.path))
+        XCTAssertThrowsError(try GradleLaunchSnapshot.load(from: runDirectory))
+    }
+
     // MARK: - SystemGradleProcessLauncher: real process behavior (no Gradle needed)
 
     func testSystemLauncherCapturesStdoutStderrAndExitCode() async throws {

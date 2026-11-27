@@ -45,6 +45,18 @@ public enum LocalModelTokenStore {
         guard status == errSecSuccess else { throw LocalModelTokenError.saveFailed(status) }
     }
 
+    /// Checks the item metadata without requesting the credential.
+    public static func contains() throws -> Bool {
+        var query = baseQuery
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return false }
+        guard status == errSecSuccess else { throw LocalModelTokenError.loadFailed(status) }
+        return true
+    }
+
     /// `nil` when no token has been saved.
     public static func load() throws -> String? {
         var query = baseQuery

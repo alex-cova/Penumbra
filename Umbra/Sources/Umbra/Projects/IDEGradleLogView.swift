@@ -9,6 +9,7 @@ struct IDEGradleLogView: View {
     let notes: [String]
     let fontName: String
     let fontSize: Double
+    let isVisible: Bool
 
     @State private var end: UInt64 = 0
     @State private var anchoredEnd: UInt64?
@@ -54,34 +55,49 @@ struct IDEGradleLogView: View {
                 if follow { follow = false }
             }
         }
-        .task(id: ObjectIdentifier(log)) { await followLog() }
-        .task(id: Page(start: start, end: pageEnd, notes: notes)) {
-            let page = Page(start: start, end: pageEnd, notes: notes)
+        .task(id: isVisible ? ObjectIdentifier(log) : nil) {
+            guard isVisible else { return }
+            await followLog()
+        }
+        .task(id: visiblePage) {
+            guard let page = visiblePage else { return }
             let old = loaded
             let lines = await Self.readPage(log, page)
             guard !Task.isCancelled else { return }
             var next = old
             next.reset()
-            if page.start == 0 { next.appendNotes(notes.prefix(3)) }
+            if page.start == 0 { next.appendNotes(page.notes.prefix(3)) }
             for line in lines { next.appendProcessLine(line) }
-            if page.end == end { next.appendNotes(notes.dropFirst(min(3, notes.count))) }
+            if page.end == end { next.appendNotes(page.notes.dropFirst(3)) }
             loaded = next
+        }
+        .onChange(of: ObjectIdentifier(log)) { _, _ in
+            start = 0
+            end = 0
+            follow = true
+            anchoredEnd = nil
+            match = nil
+            searchStatus = nil
+            searchTask?.cancel()
+            loaded.reset()
         }
         .onChange(of: follow) { _, following in anchoredEnd = following ? nil : end }
         .onDisappear { searchTask?.cancel() }
     }
 
     private var pageEnd: UInt64 { min(start + Self.window, max(anchoredEnd ?? end, start)) }
+    private var visiblePage: Page? {
+        isVisible ? Page(logID: ObjectIdentifier(log), start: start, end: pageEnd, notes: notes) : nil
+    }
 
     private func followLog() async {
-        start = 0
-        end = 0
-        follow = true
-        anchoredEnd = nil
-        match = nil
         while !Task.isCancelled {
-            end = log.snapshot.bytes
-            if follow { start = end > Self.window ? end - Self.window : 0 }
+            let bytes = log.snapshot.bytes
+            if bytes != end { end = bytes }
+            if follow {
+                let tailStart = bytes > Self.window ? bytes - Self.window : 0
+                if start != tailStart { start = tailStart }
+            }
             try? await Task.sleep(for: .milliseconds(60))
         }
     }
@@ -141,6 +157,7 @@ struct IDEGradleLogView: View {
     }
 
     private struct Page: Equatable {
+        let logID: ObjectIdentifier
         let start: UInt64
         let end: UInt64
         let notes: [String]

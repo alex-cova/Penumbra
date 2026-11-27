@@ -2588,9 +2588,10 @@ public final class IDEWorkspace {
         }
     }
 
-    func runGradleTask(_ taskPath: String) {
+    func runGradleTaskSelection(_ tasks: [String]) {
+        if javaRun.runSelectedGradleTests(tasks) { return }
         showGradleOutput()
-        projectSystems.active?.runTasks([taskPath])
+        projectSystems.active?.runTasks(tasks)
     }
 
     func restartTerminal() {
@@ -4545,7 +4546,6 @@ public final class IDEWorkspace {
 
     func showTestResults() {
         showBottomTab(.testResults)
-        isTerminalVisible = true
     }
 
     func openTestResult(_ result: IDETestCaseResult) {

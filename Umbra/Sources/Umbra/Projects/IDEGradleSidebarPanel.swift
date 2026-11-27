@@ -225,7 +225,7 @@ struct IDEGradleSidebarPanel: View {
 
     private var treeActions: IDEGradleTreeActions {
         IDEGradleTreeActions(
-            runTask: { workspace.runGradleTask($0) },
+            runTask: { workspace.runGradleTaskSelection([$0]) },
             reveal: { workspace.revealInExplorer($0) },
             revealInFinder: { NSWorkspace.shared.activateFileViewerSelecting([$0]) },
             copy: { string in
@@ -297,10 +297,9 @@ struct IDEGradleSidebarPanel: View {
     }
 
     private func runTypedTasks() {
-        let tasks = runText.split(whereSeparator: \.isWhitespace).map(String.init)
+        let tasks = JavaCommandLine.split(runText)
         guard !tasks.isEmpty, !gradle.isBusy else { return }
-        workspace.showGradleOutput()
-        gradle.runGradleTasks(tasks)
+        workspace.runGradleTaskSelection(tasks)
         dismissRunField()
     }
 }
@@ -554,8 +553,6 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
     let onActivate: () -> Void
     @ViewBuilder let menu: () -> Menu
 
-    @State private var isHovering = false
-
     private var node: IDEGradleTreeNode { row.node }
 
     private var isTask: Bool {
@@ -594,19 +591,6 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
             }
 
             Spacer(minLength: 0)
-
-            if isTask, isHovering, !isRunning, !isRunDisabled {
-                Button(action: onActivate) {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(IDEAppearance.ColorToken.run)
-                        .frame(width: 16, height: 16)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Run \(node.title)")
-                .accessibilityLabel("Run \(node.title)")
-            }
         }
         .padding(.leading, CGFloat(row.depth) * 14 + CGFloat(IDEAppearance.Spacing.sm))
         .padding(.trailing, IDEAppearance.Spacing.sm)
@@ -614,7 +598,6 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
         .background(background)
         .contentShape(Rectangle())
         .opacity(isTask && isRunDisabled && !isRunning ? 0.45 : 1)
-        .onHover { isHovering = $0 }
         .onTapGesture(count: 2, perform: onActivate)
         .simultaneousGesture(TapGesture().onEnded(onSelect))
         .help(node.help ?? node.title)
@@ -627,7 +610,7 @@ private struct IDEGradleTreeRowView<Menu: View>: View {
 
     private var background: Color {
         if isSelected { return IDEAppearance.ColorToken.selection }
-        return isHovering ? IDEAppearance.ColorToken.controlHover : Color.clear
+        return Color.clear
     }
 
     private var titleColor: Color {

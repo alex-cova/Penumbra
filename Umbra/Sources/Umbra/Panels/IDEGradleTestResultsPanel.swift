@@ -7,6 +7,7 @@ struct IDEGradleTestResultsPanel: View {
     @Bindable var store: IDEGradleTestPresentation
     @State private var log: GradleSessionLog?
     @State private var showsLog = false
+    @State private var tailScroll: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,7 +15,8 @@ struct IDEGradleTestResultsPanel: View {
             Divider()
             if showsLog, let log {
                 IDEGradleLogView(log: log, notes: [], fontName: workspace.preferences.fontName,
-                                 fontSize: workspace.preferences.fontSize)
+                                 fontSize: workspace.preferences.fontSize,
+                                 isVisible: workspace.isBottomToolWindowOpen(.testResults))
                     .id(ObjectIdentifier(log))
             } else if store.rows.isEmpty {
                 VStack(spacing: IDEAppearance.Spacing.xs) {
@@ -127,18 +129,20 @@ struct IDEGradleTestResultsPanel: View {
     }
 
     private var counterText: String {
-        let counts = store.counts
-        let reportCounts = store.reportCounts
-        let running = counts[.running, default: 0]
-        let passed = counts[.passed, default: 0] + reportCounts[.passed, default: 0]
-        let failed = counts[.failed, default: 0] + reportCounts[.failed, default: 0]
-        let skipped = counts[.skipped, default: 0] + reportCounts[.skipped, default: 0]
+        let running = store.count(for: .running)
+        let passed = store.count(for: .passed)
+        let failed = store.count(for: .failed)
+        let skipped = store.count(for: .skipped)
         let totals = "\(passed) passed · \(failed) failed · \(skipped) skipped"
         return store.isRunning ? "\(running) running · " + totals : totals
     }
 
     private var outline: some View {
-        ScrollViewReader { proxy in
+        let scrollTarget = store.primarySelection.flatMap { id in
+            store.rows.contains { $0.id == id } ? id : nil
+        }
+        let tail = Tail(rowCount: store.rows.count, lastID: store.rows.last?.id)
+        return ScrollViewReader { proxy in
             List(selection: $store.selected) {
                 ForEach(store.rows) { row in
                     HStack(spacing: 5) {
@@ -183,11 +187,18 @@ struct IDEGradleTestResultsPanel: View {
                 }
             }
             .listStyle(.plain)
-            .onChange(of: store.primarySelection) { _, selection in
+            .onChange(of: scrollTarget) { _, selection in
                 if let selection { proxy.scrollTo(selection) }
             }
-            .onChange(of: store.rows.count) { _, _ in
-                if let selection = store.primarySelection { proxy.scrollTo(selection) }
+            .onChange(of: tail, initial: true) {
+                if store.isRunning { scheduleTailScroll(proxy) }
+            }
+            .onChange(of: store.isRunning) { wasRunning, isRunning in
+                if wasRunning, !isRunning { scheduleTailScroll(proxy) }
+            }
+            .onDisappear {
+                tailScroll?.cancel()
+                tailScroll = nil
             }
             .onKeyPress(.return) {
                 guard let selection = store.primarySelection else { return .ignored }
@@ -197,9 +208,26 @@ struct IDEGradleTestResultsPanel: View {
         }
     }
 
+    private struct Tail: Equatable {
+        let rowCount: Int
+        let lastID: String?
+    }
+
+    private func scheduleTailScroll(_ proxy: ScrollViewProxy) {
+        guard tailScroll == nil, store.selected.isEmpty, let run = store.summary?.id else { return }
+        tailScroll = Task {
+            // Scroll once for a batch of live updates and resolve the newest row at that point.
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            tailScroll = nil
+            guard store.summary?.id == run, store.selected.isEmpty, let last = store.rows.last else { return }
+            proxy.scrollTo(last.id, anchor: .bottom)
+        }
+    }
+
     private var details: some View {
         IDEGradleTestDetails(
-            node: store.primarySelection.flatMap { store.detail(for: $0) },
+            node: store.selectedNode,
             report: store.primarySelection.flatMap { store.reportRow(for: $0) },
             directory: store.sessionDirectory,
             status: store.status,

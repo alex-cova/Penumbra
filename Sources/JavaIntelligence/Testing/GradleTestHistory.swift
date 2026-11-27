@@ -1,9 +1,8 @@
 import CryptoKit
 import Foundation
-import Security
+import os
 
-/// Metadata is deliberately separate from launch credentials. A missing key or changed executable
-/// only affects replay. Journals and the console remain readable.
+/// Stores test results and console logs. Exact replay settings live in the current process.
 public actor GradleTestHistory {
     public enum State: String, Codable, Sendable {
         case running, finished, cancelled, failed, interrupted
@@ -78,7 +77,9 @@ public actor GradleTestHistory {
         for (summary, size) in entries {
             guard !writers.contains(summary.id), readers[summary.id] == nil,
                   summary.started < oldest || total > max(0, bytes) else { continue }
-            try FileManager.default.removeItem(at: directory(for: summary.id))
+            let folder = directory(for: summary.id)
+            try FileManager.default.removeItem(at: folder)
+            GradleLaunchSnapshot.discard(for: folder)
             total -= size
         }
     }
@@ -114,11 +115,10 @@ public actor GradleTestHistory {
 /// A resolved Gradle client launch. Files are fingerprinted at launch and revalidated at replay.
 public struct GradleLaunchSnapshot: Codable, Sendable {
     public enum ReplayError: LocalizedError {
-        case keychain(OSStatus), changedFile(String), missingIdentity, modifiedLaunch, unavailable(String)
+        case changedFile(String), missingIdentity, modifiedLaunch, unavailable(String)
 
         public var errorDescription: String? {
             switch self {
-            case .keychain(let status): "The Gradle launch key is unavailable (Keychain status \(status))."
             case .changedFile(let path): "The original Gradle executable, wrapper, distribution or JDK changed: \(path)."
             case .missingIdentity: "The original wrapper distribution or JDK could not be identified."
             case .unavailable(let reason): reason
@@ -207,21 +207,29 @@ public struct GradleLaunchSnapshot: Codable, Sendable {
         }
     }
 
-    func save(to directory: URL) throws {
-        let sealed = try AES.GCM.seal(JSONEncoder().encode(self), using: Self.key())
-        guard let data = sealed.combined else { throw ReplayError.missingIdentity }
-        try data.write(to: directory.appendingPathComponent("launch.sealed"), options: .atomic)
+    // A launch can inherit credentials through environment variables or arguments.
+    private static let replaySettings = OSAllocatedUnfairLock(initialState: [URL: Result<Self, Error>]())
+
+    static func remember(_ result: Result<Self, Error>, for directory: URL) {
+        replaySettings.withLock { $0[directory.standardizedFileURL] = result }
+    }
+
+    static func hasReplaySettings(for directory: URL) -> Bool {
+        replaySettings.withLock { settings in
+            if case .success? = settings[directory.standardizedFileURL] { return true }
+            return false
+        }
+    }
+
+    static func discard(for directory: URL) {
+        _ = replaySettings.withLock { $0.removeValue(forKey: directory.standardizedFileURL) }
     }
 
     public static func load(from directory: URL) throws -> Self {
-        let url = directory.appendingPathComponent("launch.sealed")
-        if !FileManager.default.fileExists(atPath: url.path),
-           let reason = try? String(contentsOf: directory.appendingPathComponent("replay-unavailable.txt"), encoding: .utf8) {
-            throw ReplayError.unavailable(reason)
+        guard let result = replaySettings.withLock({ $0[directory.standardizedFileURL] }) else {
+            throw ReplayError.unavailable("Exact replay requires a run started in this Umbra session.")
         }
-        let data = try Data(contentsOf: url)
-        let decrypted = try AES.GCM.open(AES.GCM.SealedBox(combined: data), using: key(create: false))
-        return try JSONDecoder().decode(Self.self, from: decrypted)
+        return try result.get()
     }
 
     private static func fingerprint(_ file: URL) throws -> Data {
@@ -230,27 +238,5 @@ public struct GradleLaunchSnapshot: Codable, Sendable {
         var hash = SHA256()
         while let data = try handle.read(upToCount: 128 * 1024), !data.isEmpty { hash.update(data: data) }
         return Data(hash.finalize())
-    }
-
-    private static func key(create: Bool = true) throws -> SymmetricKey {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "Umbra Gradle Test History",
-            kSecAttrAccount as String: "launch-v1"
-        ]
-        var result: CFTypeRef?
-        var lookup = query
-        lookup[kSecReturnData as String] = true
-        let status = SecItemCopyMatching(lookup as CFDictionary, &result)
-        if status == errSecSuccess, let data = result as? Data { return SymmetricKey(data: data) }
-        guard status == errSecItemNotFound, create else { throw ReplayError.keychain(status) }
-
-        let key = SymmetricKey(size: .bits256)
-        var item = query
-        item[kSecValueData as String] = key.withUnsafeBytes { Data($0) }
-        let added = SecItemAdd(item as CFDictionary, nil)
-        if added == errSecDuplicateItem { return try Self.key(create: false) }
-        guard added == errSecSuccess else { throw ReplayError.keychain(added) }
-        return key
     }
 }

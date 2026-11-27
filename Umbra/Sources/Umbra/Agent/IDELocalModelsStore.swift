@@ -50,6 +50,8 @@ final class IDELocalModelsStore {
     @ObservationIgnored private let paths: LocalModelPaths?
     @ObservationIgnored private let session: URLSession
     @ObservationIgnored private let runtime: LocalModelRuntime
+    @ObservationIgnored private let containsToken: () throws -> Bool
+    @ObservationIgnored private let loadToken: () throws -> String?
     @ObservationIgnored private var downloadTask: Task<Void, Never>?
     @ObservationIgnored private var downloadControl: LocalModelDownloadControl?
     @ObservationIgnored private var pausedStaging: URL?
@@ -57,10 +59,16 @@ final class IDELocalModelsStore {
     @ObservationIgnored private var isPrepared = false
 
     /// `rootURL` pins the models folder (tests); otherwise it is `Application Support/com.umbra.editor/Models`.
-    init(rootURL: URL? = nil, session: URLSession = .shared, runtime: LocalModelRuntime = .shared) {
+    init(
+        rootURL: URL? = nil, session: URLSession = .shared, runtime: LocalModelRuntime = .shared,
+        containsToken: @escaping () throws -> Bool = LocalModelTokenStore.contains,
+        loadToken: @escaping () throws -> String? = LocalModelTokenStore.load
+    ) {
         paths = rootURL.map(LocalModelPaths.init(root:)) ?? (try? LocalModelPaths.defaultRoot(folderName: "com.umbra.editor")).map(LocalModelPaths.init(root:))
         self.session = session
         self.runtime = runtime
+        self.containsToken = containsToken
+        self.loadToken = loadToken
         if paths == nil { storageError = "The models folder could not be created." }
     }
 
@@ -78,7 +86,7 @@ final class IDELocalModelsStore {
             pausedStaging = paused.staging
             download = Download(id: paused.checkpoint.repositoryID, progress: paused.checkpoint.progress, isPaused: true)
         }
-        hasToken = ((try? LocalModelTokenStore.load()) ?? nil) != nil
+        hasToken = (try? containsToken()) == true
         refreshInstalled()
     }
 
@@ -92,7 +100,7 @@ final class IDELocalModelsStore {
     func saveToken(_ token: String) {
         do {
             try LocalModelTokenStore.save(token)
-            hasToken = ((try? LocalModelTokenStore.load()) ?? nil) != nil
+            hasToken = !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         } catch {
             searchError = error.localizedDescription
         }
@@ -121,10 +129,22 @@ final class IDELocalModelsStore {
     /// Size and tool support, fetched when a result is selected, so a search itself stays one request.
     func loadDetails(for id: String) async {
         if let known = details[id], known.error == nil, known.sizeBytes != nil { return }
-        let token = (try? LocalModelTokenStore.load()) ?? nil
+        var token: String?
         var detail = Detail()
         do {
-            let info = try await HuggingFaceSearchEngine.repositoryInfo(id: id, token: token, session: session)
+            let info: HFRepositoryInfo
+            do {
+                info = try await HuggingFaceSearchEngine.repositoryInfo(id: id, session: session)
+            } catch let error as LocalModelError {
+                switch error {
+                case .gatedModel, .modelNotFound:
+                    guard let savedToken = try? loadToken() else { throw error }
+                    token = savedToken
+                    info = try await HuggingFaceSearchEngine.repositoryInfo(id: id, token: savedToken, session: session)
+                default:
+                    throw error
+                }
+            }
             detail.sizeBytes = LocalModelDownloader.select(info.siblings).reduce(Int64(0)) { $0 + ($1.size ?? 0) }
             detail.isGated = info.isGated
         } catch {
@@ -171,7 +191,7 @@ final class IDELocalModelsStore {
         let control = LocalModelDownloadControl()
         downloadControl = control
         download = Download(id: id, progress: LocalModelDownloadProgress(bytesDownloaded: checkpoint?.completedBytes ?? 0, totalBytes: checkpoint?.totalBytes ?? 0), isPaused: false)
-        let token = (try? LocalModelTokenStore.load()) ?? nil
+        let token = try? loadToken()
         let downloader = LocalModelDownloader(session: LocalModelDownloader.makeSession())
         let report: @Sendable (LocalModelDownloadProgress) -> Void = { [weak self] progress in
             Task { @MainActor in self?.apply(progress, to: id) }

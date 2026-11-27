@@ -170,6 +170,37 @@ final class IDEProjectAndRunProviderTests: XCTestCase {
 
     // MARK: - Run providers
 
+    func testGradleTestsTabCountsJournalAndReportCases() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let history = GradleTestHistory(directory: folder)
+        var summary = try await history.begin(root: folder, tasks: [":test"])
+        let presentation = IDEGradleTestPresentation()
+        XCTAssertEqual(presentation.tabTitle, "Tests")
+        presentation.begin(summary)
+        XCTAssertEqual(presentation.tabTitle, "Tests · …")
+
+        let session = GradleTestSession(id: summary.id, directory: history.directory(for: summary.id))
+        let event = try JSONDecoder().decode(GradleTestEvent.self, from: Data("""
+        {"version":1,"sessionID":"\(summary.id)","sequence":0,"timestamp":0,"kind":"testFinished",
+         "build":"/project","task":":test","nodeID":"first","outcome":"passed"}
+        """.utf8))
+        await session.ingest(event)
+        let update = await session.poll()
+        presentation.ingest(update, for: summary.id)
+        XCTAssertEqual(presentation.tabTitle, "Tests · 1/1")
+
+        let snapshot = GradleTestReports(directoriesByTask: [":app:test": [folder]])
+        let xml = """
+        <testsuite><testcase classname="Example" name="check" time="0"><skipped/></testcase></testsuite>
+        """
+        try xml.write(to: folder.appendingPathComponent("TEST-Example.xml"), atomically: true, encoding: .utf8)
+        let rows = snapshot.reconcile(excluding: [":test"], didRun: [":app:test"])
+        summary.state = .finished
+        presentation.finish(summary, reports: .init(rows: rows, html: []))
+        XCTAssertEqual(presentation.tabTitle, "Tests · 1/2")
+    }
+
     @MainActor
     private final class FakeRunProvider: IDERunProvider {
         let id: String

@@ -22,6 +22,20 @@ final class JavaTestRunnerTests: XCTestCase {
         XCTAssertFalse(JavaTestRunner.isTestTask(":app:build"))
     }
 
+    func testSidebarRecognizesQualifiedAndUnqualifiedTestSelections() {
+        let model = JavaGradleProjectModel(formatVersion: 8, gradleVersion: "9.4.1", subprojects: [
+            .init(path: ":app", directory: URL(fileURLWithPath: "/proj/app"),
+                  testTasks: [.init(path: ":app:verify", name: "verify")])
+        ])
+        for selector in ["test", ":test", ":app:integrationTest", "verify", "app:verify", ":app:verify"] {
+            XCTAssertTrue(JavaTestRunner.isSelectedTestTask(selector, model: model), selector)
+        }
+        for selector in ["cleanTest", ":app:cleanTest", ":other:verify", "--rerun", "build"] {
+            XCTAssertFalse(JavaTestRunner.isSelectedTestTask(selector, model: model), selector)
+        }
+        XCTAssertTrue(GradleTestRetryPlan.supportsTaskRerun(model.gradleVersion))
+    }
+
     func testAnUnqualifiedRunUsesEveryTestTaskTheModelLists() {
         let app = URL(fileURLWithPath: "/proj/app")
         let lib = URL(fileURLWithPath: "/proj/lib")

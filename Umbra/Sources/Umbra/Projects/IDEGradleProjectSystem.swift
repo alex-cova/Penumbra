@@ -1026,7 +1026,10 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                 let fontName = workspace.preferences.fontName
                 let fontSize = workspace.preferences.fontSize
                 if let log = console.sessionLog {
-                    return AnyView(IDEGradleLogView(log: log, notes: console.lines.map(\.text), fontName: fontName, fontSize: fontSize))
+                    return AnyView(IDEGradleLogView(
+                        log: log, notes: console.lines.map(\.text), fontName: fontName, fontSize: fontSize,
+                        isVisible: workspace.isBottomToolWindowOpen(.gradle)
+                    ))
                 }
                 return AnyView(IDEProjectConsoleView(log: console, fontName: fontName, fontSize: fontSize))
             },

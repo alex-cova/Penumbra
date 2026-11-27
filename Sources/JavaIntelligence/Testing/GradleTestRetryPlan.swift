@@ -18,7 +18,7 @@ public enum GradleTestRetryPlan {
     }
 
     public static func supportsTaskRerun(_ version: String?) -> Bool {
-        version.map { ["7.6.4", "8.14.5", "9.9.2"].contains($0) } ?? false
+        version.map { ["7.6.4", "8.14.5", "9.4.1", "9.9.2"].contains($0) } ?? false
     }
 
     public static func complete(tasks: [String], arguments: [String]) -> Invocation? {

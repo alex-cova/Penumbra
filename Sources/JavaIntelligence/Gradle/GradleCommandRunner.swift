@@ -178,25 +178,23 @@ public actor GradleCommandRunner {
         }
 
         let directory = replay?.workingDirectory ?? workingDirectory ?? projectDirectory
-        func saveLaunch(in folder: URL) {
-            do {
-                try GradleLaunchSnapshot(
+        func rememberLaunch(in folder: URL) {
+            GradleLaunchSnapshot.remember(Result {
+                guard canReplay else { throw GradleLaunchSnapshot.ReplayError.modifiedLaunch }
+                return try GradleLaunchSnapshot(
                     executable: executable, leadingArguments: leadingArguments, root: projectDirectory, tasks: tasks,
                     arguments: arguments, environment: environment, javaHome: javaHome, canReplay: canReplay,
                     workingDirectory: directory, beforeLaunch: beforeLaunch, instrumentation: instrumentation
-                ).save(to: folder)
-            } catch {
-                try? Data(error.localizedDescription.utf8).write(
-                    to: folder.appendingPathComponent("replay-unavailable.txt"), options: .atomic)
-            }
+                )
+            }, for: folder)
         }
-        if let snapshotDirectory { saveLaunch(in: snapshotDirectory) }
+        if let snapshotDirectory { rememberLaunch(in: snapshotDirectory) }
         defer {
-            if let snapshotDirectory,
-               !FileManager.default.fileExists(atPath: snapshotDirectory.appendingPathComponent("launch.sealed").path),
+            if canReplay, let snapshotDirectory,
+               !GradleLaunchSnapshot.hasReplaySettings(for: snapshotDirectory),
                !Task.isCancelled {
                 // The first invocation can provision the distribution before the client exits.
-                saveLaunch(in: snapshotDirectory)
+                rememberLaunch(in: snapshotDirectory)
             }
         }
 

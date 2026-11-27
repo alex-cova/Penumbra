@@ -374,6 +374,11 @@ final class IDEJavaRunProvider: IDERunProvider {
     /// and the toolbar knows it is running. Its output goes to the Gradle console.
     private func launchGradleRun(_ configuration: JavaRunConfiguration, projectPath: String, taskName: String) {
         guard let host else { return }
+        let task = JavaLaunchCommand.gradleRunTask(for: projectPath, taskName: taskName)
+        if gradle.isActive, !usesMaven, JavaTestRunner.isSelectedTestTask(task, model: gradle.model) {
+            runTests(scope: .tests(taskPath: task, filters: []), title: configuration.displayName, recording: configuration)
+            return
+        }
         guard host.projectRootURL != nil else {
             host.reportRunProblem("“\(configuration.displayName)” needs an open project folder.")
             return
@@ -385,7 +390,6 @@ final class IDEJavaRunProvider: IDERunProvider {
         host.runConfigurationStore.setLast(configuration, forProject: host.projectRootURL)
         host.refreshLastRunConfiguration()
         host.showGradleConsole()
-        let task = JavaLaunchCommand.gradleRunTask(for: projectPath, taskName: taskName)
         let base = JavaLaunchCommand.gradleRunArguments(configuration: configuration)
         guard configuration.instrumentation != .none else {
             gradle.runGradleTasks([task], extraArguments: base, runsApplication: true)

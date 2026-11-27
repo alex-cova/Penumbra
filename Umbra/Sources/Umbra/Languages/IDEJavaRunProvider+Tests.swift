@@ -82,6 +82,37 @@ extension IDEJavaRunProvider {
         runTests(scope: .testMethod(method, taskPath: taskPath), title: "\(method.methodName)()")
     }
 
+    /// Runs the sidebar's task selections using the same journal as editor test actions.
+    /// Keep task options in their original positions so they apply to the requested task.
+    func runSelectedGradleTests(_ command: [String]) -> Bool {
+        let selectors = command.prefix { !$0.hasPrefix("-") }
+        guard gradle.isActive, let root = gradle.rootURL,
+              selectors.contains(where: { JavaTestRunner.isSelectedTestTask($0, model: gradle.model) }) else { return false }
+        if let reason = gradleTestBlockReason() {
+            host?.reportRunProblem(reason)
+            return true
+        }
+        let arguments = GradleTestSidecar.configurationCacheEnabled(arguments: command) ? ["--configuration-cache"] : ["--no-configuration-cache"]
+        let tasks = selectors.count == command.count
+            && selectors.allSatisfy { JavaTestRunner.isSelectedTestTask($0, model: gradle.model) }
+            ? freshTestTasks(command, root: root) : command
+        gradleTestLaunchPending = true
+        let epoch = launchEpoch
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.gradleTestLaunchPending = false }
+            guard self.launchEpoch == epoch else { return }
+            _ = await self.runGradleTestInvocation(root: root, tasks: tasks, arguments: arguments)
+        }
+        return true
+    }
+
+    private func freshTestTasks(_ tasks: [String], root: URL) -> [String] {
+        let version = GradleJDKCompatibility.wrapperVersion(in: root) ?? gradle.model?.gradleVersion
+        guard GradleTestRetryPlan.supportsTaskRerun(version) else { return tasks }
+        return GradleTestRetryPlan.complete(tasks: tasks, arguments: [])?.tasks ?? tasks
+    }
+
     /// Remembers a test run as a configuration, so Run Last and the picker can repeat it. The
     /// configuration a run came from keeps its settings; any other run is a temporary one.
     func recordTestRun(
@@ -120,7 +151,8 @@ extension IDEJavaRunProvider {
         let epoch = launchEpoch
         var configuration = recording ?? JavaRunConfiguration.makeTestLaunch(scope: scope)
         configuration.instrumentation = instrumentation
-        let tasks = JavaTestRunner.executionTaskPaths(scope: scope, model: gradle.model, debug: debug)
+        let selected = JavaTestRunner.executionTaskPaths(scope: scope, model: gradle.model, debug: debug)
+        let tasks = debug ? selected : freshTestTasks(selected, root: url)
         var args = JavaTestRunner.gradleArguments(for: request, debug: debug)
         let extraArguments = JavaCommandLine.split(configuration.programArguments)
             + JavaCommandLine.split(configuration.vmArguments).filter { $0.hasPrefix("-D") }

@@ -151,6 +151,21 @@ public enum JavaTestRunner {
         return last == "test" || last.hasSuffix("Test")
     }
 
+    /// Recognizes test selections in the Gradle sidebar, including custom names from the model.
+    public static func isSelectedTestTask(_ selector: String, model: JavaGradleProjectModel?) -> Bool {
+        guard !selector.hasPrefix("-"), let name = selector.split(separator: ":").last else { return false }
+        if let model {
+            let qualified = selector.hasPrefix(":") ? selector : ":" + selector
+            let isQualified = selector.contains(":")
+            if model.subprojects.contains(where: { project in
+                project.testTasks.contains { task in
+                    isQualified ? task.path == qualified : task.name == name
+                }
+            }) { return true }
+        }
+        return isRunnableTestTask(String(name))
+    }
+
     /// Report directories for every task in `taskPaths`. A `clean*` task is skipped, and an
     /// unqualified name (`test`) collects that source set from every subproject.
     public static func reportDirectories(forTaskPaths taskPaths: [String], model: JavaGradleProjectModel?) -> [URL] {
