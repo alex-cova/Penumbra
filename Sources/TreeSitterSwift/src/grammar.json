@@ -196,6 +196,10 @@
         },
         {
           "type": "STRING",
+          "value": "override"
+        },
+        {
+          "type": "STRING",
           "value": "unsafe"
         },
         {
@@ -12042,6 +12046,10 @@
     [
       "_contextual_simple_identifier",
       "property_behavior_modifier"
+    ],
+    [
+      "_contextual_simple_identifier",
+      "member_modifier"
     ],
     [
       "_contextual_simple_identifier",

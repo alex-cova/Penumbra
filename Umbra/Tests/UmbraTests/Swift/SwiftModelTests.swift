@@ -88,6 +88,22 @@ final class SwiftModelTests: XCTestCase {
         XCTAssertTrue(dog.members.contains { $0.kind == .deinitializer })
     }
 
+    func testOverrideIsAContextualIdentifier() throws {
+        // `override` is a member modifier on declarations but a plain identifier in
+        // expressions: `ValueLimits.current` reads a task-local named `override`.
+        let m = model("""
+        public struct ValueLimits: Sendable {
+            @TaskLocal static var override: ValueLimits?
+            static var current: ValueLimits { override ?? .standard }
+            static let standard = ValueLimits()
+        }
+        """)
+        XCTAssertTrue(m.errors.isEmpty, "\(m.errors.map(\.bytes))")
+        let limits = try XCTUnwrap(declaration("ValueLimits", in: m.declarations))
+        XCTAssertNotNil(declaration("override", in: limits.members))
+        XCTAssertEqual(declaration("current", in: limits.members)?.typeName, "ValueLimits")
+    }
+
     func testExtensionsAreNamedForTheTypeTheyExtend() throws {
         let m = model("""
         extension Point: Equatable {

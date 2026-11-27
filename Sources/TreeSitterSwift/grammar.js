@@ -187,6 +187,8 @@ module.exports = grammar({
     // These are keywords sometimes, but simple identifiers other times, and it just depends on the rest of their usage.
     [$._contextual_simple_identifier, $._modifierless_class_declaration],
     [$._contextual_simple_identifier, $.property_behavior_modifier],
+    // `override` is a member modifier on declarations but an identifier in expressions.
+    [$._contextual_simple_identifier, $.member_modifier],
     [$._contextual_simple_identifier, $.parameter_modifier],
     [$._contextual_simple_identifier, $.type_parameter_pack],
     [$._contextual_simple_identifier, $.type_pack_expansion],
@@ -330,6 +332,9 @@ module.exports = grammar({
         "package",
         // `open` is contextual: `open class` is a modifier, `open.append` is a variable.
         "open",
+        // `override` is contextual: `override func` is a modifier, `override ?? .standard`
+        // reads a task-local named `override`.
+        "override",
         "unsafe",
         $._parameter_ownership_modifier
       ),
