@@ -35,6 +35,12 @@ public final class IDEWorkspace {
     let diagramSessionStore = IDEDiagramSessionStore()
     let profileSessionStore = IDEProfilerSessionStore()
     let heapDumpSessionStore = IDEHeapDumpSessionStore()
+    /// Each image tab's photo-editor session, by document id. Created on entering edit mode,
+    /// released when the document closes everywhere.
+    let photoSessionStore = IDEPhotoSessionStore()
+    /// Documents currently showing the photo editor instead of the viewer. Keyed by document so
+    /// a split showing the same image edits in both panes.
+    var photoEditingDocuments: Set<UUID> = []
     /// Line costs of the profile being looked at, shown in the Java editors beside the code.
     let profileHints = IDEProfileLineHints()
     /// The profile tab that feeds ``profileHints``.
@@ -806,6 +812,10 @@ public final class IDEWorkspace {
         }
         if workbench.activePane.selectedDocument?.contentKind == .heapDump {
             host.heapDumpViewer.focus()
+            return
+        }
+        if workbench.activePane.selectedDocument?.contentKind == .image {
+            host.imageViewerController.focusForInteraction()
             return
         }
         if host.isCSVTableVisible {
@@ -4816,6 +4826,7 @@ public final class IDEWorkspace {
                 databaseSupport.closeConsole(workbenchID: documentID, documentID: closingDocument.documentID)
             }
             closeHexSession(documentID)
+            closePhotoSession(documentID)
             // Temporary injections die with the tab; comment injections need no cleanup.
             if let closingDocument {
                 manualInjectionStore.clear(forKey: IDEManualInjectionStore.key(

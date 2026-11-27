@@ -66,6 +66,8 @@ final class IDEEditorPaneHost: NSView {
         textView.keymap = preferences.keymap
         markdownPreviewController = MarkdownPreviewController(textView: textView)
         imageViewerController = ImageViewerController()
+        imageViewerController.coveredEditor = textView
+        imageViewerController.viewerBackgroundColor = IDEAppearance.NSToken.editor
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
@@ -388,7 +390,11 @@ struct IDETextViewRepresentable: NSViewRepresentable {
     func updateNSView(_ container: EditorHostContainer, context: Context) {
         let host = workspace.host(for: paneID)
         container.mount(host)
-        host.textView.participatesInKeyViewLoop = !workspace.isEditorCoveredByOverlay
+        // An image tab's editor stays out of the key-view loop while its viewer covers it (the
+        // viewer controller restores the flag when the image hides). Without this guard every
+        // representable update would re-enable Tab-into-the-hidden-editor behind the image.
+        let isImage = workspace.workbench.layout.findPane(id: paneID)?.selectedDocument?.contentKind == .image
+        host.textView.participatesInKeyViewLoop = !workspace.isEditorCoveredByOverlay && !isImage
     }
 }
 
@@ -507,6 +513,12 @@ struct IDEEditorPaneView: View {
             IDEGitConflictBanner(paneID: paneID)
             IDEMissingLanguageServerBanner(paneID: paneID)
 
+            if let document = workspace.selectedTabDocument(in: paneID),
+               document.contentKind == .image,
+               !workspace.isPhotoEditing(document.id) {
+                IDEImageViewerToolbar(paneID: paneID)
+            }
+
             if let document = workspace.workbench.layout.findPane(id: paneID)?.selectedDocument,
                document.contentKind == .text,
                workspace.databaseSupport.consoles[document.id] != nil
@@ -518,6 +530,13 @@ struct IDEEditorPaneView: View {
 
             IDETextViewRepresentable(paneID: paneID, workspace: workspace)
                 .overlay(alignment: .topTrailing) { IDEInspectionWidget(paneID: paneID) }
+                .overlay {
+                    if let document = workspace.selectedTabDocument(in: paneID),
+                       document.contentKind == .image,
+                       workspace.isPhotoEditing(document.id) {
+                        IDEPhotoEditorView(document: document)
+                    }
+                }
                 .overlay {
                     if workspace.activePaneID != paneID {
                         Rectangle()

@@ -1,6 +1,21 @@
 @preconcurrency import AppKit
 
 /// Renders a local image file with pinch, scroll-wheel, and keyboard zoom.
+///
+/// The viewer is an overlay: it sits on top of the pane's editor and must fully occlude it while
+/// visible. Two rules keep the covered editor from leaking through:
+///
+/// 1. The scroll view is opaque (`drawsBackground` + `viewerBackgroundColor`). A transparent
+///    scroll view shows the editor behind the image whenever the zoomed image is smaller than
+///    the viewport, which is exactly the reported "editor behind the image" bug.
+/// 2. The covered editor is made unselectable (and leaves the key-view loop) while the image
+///    shows, mirroring the markdown cover preview, JSON diagram, and CSV table overlays. This
+///    stops keyboard focus — and with it caret/selection/typing — from landing in the invisible
+///    buffer behind the image. Saved values are restored on `hide()`.
+///
+/// The host assigns `coveredEditor` (the pane's `TextView`) and `viewerBackgroundColor` (the
+/// editor color). View transforms (rotate/flip/crop/adjust) live in the Umbra photo editor, not
+/// here: this controller is a viewer only.
 @MainActor
 public final class ImageViewerController: NSObject {
     private let containerStack = NSView()
@@ -11,7 +26,33 @@ public final class ImageViewerController: NSObject {
     private var isVisible = false
     private(set) var currentURL: URL?
 
+    /// The editor this viewer covers. Made unselectable while the image shows, restored on hide.
+    public weak var coveredEditor: TextView?
+    private var editorWasSelectable = true
+    private var editorWasInKeyLoop = true
+
+    /// Opaque backdrop painted behind (and around) the image. The host sets this to the editor
+    /// color so letterboxing blends with the surrounding UI instead of leaking the covered editor.
+    public var viewerBackgroundColor: NSColor = .textBackgroundColor {
+        didSet { applyBackgroundColor() }
+    }
+
+    /// Fired after every zoom, show, and hide so a toolbar can refresh its readout.
+    public var onStateChange: (() -> Void)?
+
     public var isShowing: Bool { isVisible }
+
+    /// Current zoom as a whole-number percentage (`100` == actual size).
+    public var zoomPercent: Int { Int((scrollView.magnification * 100).rounded()) }
+
+    /// The displayed image's point size, for toolbar readouts.
+    public var imagePixelSize: CGSize { imageView.image?.size ?? .zero }
+
+    /// The image currently on screen, if any.
+    public var currentImage: NSImage? { imageView.image }
+
+    /// One step of the zoom ladder (matches the photo editor's `PhotoViewport.zoomStep`).
+    private static let zoomStep: CGFloat = 1.25
 
     public override init() {
         super.init()
@@ -47,6 +88,7 @@ public final class ImageViewerController: NSObject {
         currentURL = url
         isVisible = true
         scrollView.isHidden = false
+        setCoveredEditorEnabled(false)
 
         if let image = NSImage(contentsOf: url) {
             errorLabel.isHidden = true
@@ -54,7 +96,7 @@ public final class ImageViewerController: NSObject {
             imageView.image = image
             imageView.frame = NSRect(origin: .zero, size: image.size)
             scrollView.documentView = imageView
-            fitToVisibleArea()
+            zoomToFit()
         } else {
             imageView.image = nil
             imageView.isHidden = true
@@ -62,6 +104,7 @@ public final class ImageViewerController: NSObject {
             errorLabel.isHidden = false
             scrollView.documentView = errorLabel
             scrollView.magnification = 1
+            onStateChange?()
         }
     }
 
@@ -72,6 +115,8 @@ public final class ImageViewerController: NSObject {
         scrollView.isHidden = true
         imageView.image = nil
         scrollView.documentView = nil
+        setCoveredEditorEnabled(true)
+        onStateChange?()
     }
 
     public func focusForInteraction() {
@@ -82,20 +127,76 @@ public final class ImageViewerController: NSObject {
         isVisible && currentURL == url
     }
 
+    // MARK: - Zoom (toolbar + keyboard)
+
+    public func zoomIn() {
+        adjustZoom(by: Self.zoomStep)
+    }
+
+    public func zoomOut() {
+        adjustZoom(by: 1 / Self.zoomStep)
+    }
+
+    /// Fits the whole image into the viewport, centered.
+    public func zoomToFit() {
+        guard let image = imageView.image else { return }
+        let imageSize = image.size
+        let visibleSize = scrollView.contentView.bounds.size
+        guard imageSize.width > 0, imageSize.height > 0, visibleSize.width > 0, visibleSize.height > 0 else {
+            scrollView.magnification = 1
+            onStateChange?()
+            return
+        }
+        let scale = min(visibleSize.width / imageSize.width, visibleSize.height / imageSize.height)
+        scrollView.magnification = min(max(scale, scrollView.minMagnification), scrollView.maxMagnification)
+        centerImage()
+        onStateChange?()
+    }
+
+    /// Actual pixels (100%), centered.
+    public func zoomToActualSize() {
+        scrollView.magnification = 1
+        centerImage()
+        onStateChange?()
+    }
+
+    /// Fills the viewport (the shorter edge touches), centered.
+    public func zoomToFill() {
+        guard let image = imageView.image else { return }
+        let imageSize = image.size
+        let visibleSize = scrollView.contentView.bounds.size
+        guard imageSize.width > 0, imageSize.height > 0, visibleSize.width > 0, visibleSize.height > 0 else {
+            return
+        }
+        let scale = max(visibleSize.width / imageSize.width, visibleSize.height / imageSize.height)
+        scrollView.magnification = min(max(scale, scrollView.minMagnification), scrollView.maxMagnification)
+        centerImage()
+        onStateChange?()
+    }
+
+    /// Recenters the image at the current zoom.
+    public func recenter() {
+        centerImage()
+        onStateChange?()
+    }
+
+    // MARK: - Private
+
     private func configureViews() {
         containerStack.translatesAutoresizingMaskIntoConstraints = false
+        containerStack.wantsLayer = true
 
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.allowsMagnification = true
         scrollView.minMagnification = 0.05
-        scrollView.maxMagnification = 8
-        scrollView.backgroundColor = .clear
-        scrollView.drawsBackground = false
+        scrollView.maxMagnification = 16
+        applyBackgroundColor()
         scrollView.onZoomIn = { [weak self] in self?.zoomIn() }
         scrollView.onZoomOut = { [weak self] in self?.zoomOut() }
-        scrollView.onResetZoom = { [weak self] in self?.resetZoom() }
+        scrollView.onResetZoom = { [weak self] in self?.zoomToActualSize() }
+        scrollView.onMagnificationChanged = { [weak self] in self?.onStateChange?() }
 
         imageView.imageScaling = .scaleNone
         imageView.imageAlignment = .alignCenter
@@ -106,35 +207,45 @@ public final class ImageViewerController: NSObject {
         errorLabel.isHidden = true
     }
 
-    private func fitToVisibleArea() {
-        guard let image = imageView.image else { return }
-        let imageSize = image.size
-        let visibleSize = scrollView.contentView.bounds.size
-        guard imageSize.width > 0, imageSize.height > 0, visibleSize.width > 0, visibleSize.height > 0 else {
-            scrollView.magnification = 1
-            return
+    private func applyBackgroundColor() {
+        containerStack.layer?.backgroundColor = viewerBackgroundColor.cgColor
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = viewerBackgroundColor
+    }
+
+    /// Locks (`enabled == false`) or restores the editor underneath, so keyboard focus, caret,
+    /// selection, and typing can never land in the invisible buffer behind the image.
+    private func setCoveredEditorEnabled(_ enabled: Bool) {
+        guard let editor = coveredEditor else { return }
+        if enabled {
+            editor.isSelectable = editorWasSelectable
+            editor.participatesInKeyViewLoop = editorWasInKeyLoop
+        } else {
+            editorWasSelectable = editor.isSelectable
+            editorWasInKeyLoop = editor.participatesInKeyViewLoop
+            editor.isSelectable = false
+            editor.participatesInKeyViewLoop = false
         }
-        let scale = min(visibleSize.width / imageSize.width, visibleSize.height / imageSize.height, 1)
-        scrollView.magnification = max(scale, scrollView.minMagnification)
-        scrollView.contentView.scroll(to: .zero)
     }
 
-    private func zoomIn() {
-        adjustZoom(by: 1.15)
-    }
-
-    private func zoomOut() {
-        adjustZoom(by: 1 / 1.15)
-    }
-
-    private func resetZoom() {
-        scrollView.magnification = 1
-        scrollView.contentView.scroll(to: .zero)
+    /// Centers the (possibly zoomed) document in the viewport.
+    private func centerImage() {
+        let documentSize = scrollView.documentView?.frame.size ?? .zero
+        let visibleSize = scrollView.contentView.bounds.size
+        let scaled = CGSize(width: documentSize.width * scrollView.magnification,
+                            height: documentSize.height * scrollView.magnification)
+        let origin = NSPoint(
+            x: max(0, (scaled.width - visibleSize.width) / 2),
+            y: max(0, (scaled.height - visibleSize.height) / 2)
+        )
+        scrollView.contentView.scroll(to: origin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     private func adjustZoom(by factor: CGFloat) {
         let next = scrollView.magnification * factor
         scrollView.magnification = min(max(next, scrollView.minMagnification), scrollView.maxMagnification)
+        onStateChange?()
     }
 }
 
@@ -142,6 +253,7 @@ private final class ImageScrollView: NSScrollView {
     var onZoomIn: (() -> Void)?
     var onZoomOut: (() -> Void)?
     var onResetZoom: (() -> Void)?
+    var onMagnificationChanged: (() -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -183,5 +295,6 @@ private final class ImageScrollView: NSScrollView {
         }
         let next = magnification * (1 + event.magnification)
         magnification = min(max(next, minMagnification), maxMagnification)
+        onMagnificationChanged?()
     }
 }
