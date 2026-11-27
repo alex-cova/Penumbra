@@ -1,3 +1,4 @@
+import EditorIntelligence
 import Foundation
 @preconcurrency import AppKit
 
@@ -17,7 +18,7 @@ final class EditMenuController: NSObject {
     /// Items the host appends after the standard ones.
     var additionalItemsProvider: ((EditorContextMenuContext) -> [NSMenuItem])?
 
-    func contextMenu(for textInputView: TextInputView, location: Int? = nil) -> NSMenu {
+    func contextMenu(for textInputView: TextInputView, location: Int? = nil, hint: InlayHint? = nil) -> NSMenu {
         let menu = NSMenu()
         let isEditable = delegate?.editMenuControllerIsEditable(self) ?? true
         let hasSelection = (delegate?.selectedRange(for: self)?.length ?? 0) > 0
@@ -50,7 +51,12 @@ final class EditMenuController: NSObject {
         }
 
         let selectedRange = delegate?.selectedRange(for: self)
-        let context = EditorContextMenuContext(location: location ?? selectedRange?.location, selectedRange: selectedRange)
+        let keyboardHint = location == nil && selectedRange?.length == 0
+            ? selectedRange.flatMap { textInputView.inlayHint(atAnchor: $0.location) } : nil
+        let context = EditorContextMenuContext(
+            location: location ?? selectedRange?.location, selectedRange: selectedRange,
+            inlayHint: hint ?? keyboardHint
+        )
         if let items = additionalItemsProvider?(context), !items.isEmpty {
             menu.addItem(.separator())
             items.forEach(menu.addItem)
@@ -61,7 +67,10 @@ final class EditMenuController: NSObject {
 
     func presentContextMenu(for textInputView: TextInputView, with event: NSEvent) {
         let point = textInputView.convert(event.locationInWindow, from: nil)
-        let menu = contextMenu(for: textInputView, location: textInputView.characterIndex(at: point))
+        let menu = contextMenu(
+            for: textInputView, location: textInputView.characterIndex(at: point),
+            hint: textInputView.inlayHint(at: point)
+        )
         NSMenu.popUpContextMenu(menu, with: event, for: textInputView)
     }
 

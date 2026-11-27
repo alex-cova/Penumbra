@@ -37,6 +37,18 @@ enum EnterSessionProfile {
             }
         }
         let lineCount = textView.lineHandleStatistics.lineCount
+        let hintCount = Int(ProcessInfo.processInfo.environment["PENUMBRA_INLAY_HINTS"] ?? "") ?? 0
+        func updateHints(around row: Int) {
+            guard hintCount > 0 else { return }
+            let half = min(hintCount, 512) / 2
+            let lower = max(0, row - half)
+            let upper = min(lineCount, row + half)
+            guard lower < upper else { return }
+            textView.inlayHints = (lower..<upper).compactMap { line in
+                guard let offset = textView.location(at: TextLocation(lineNumber: line, column: 8)) else { return nil }
+                return InlayHint(utf16Offset: offset, label: "count:")
+            }
+        }
         warn("=== enter-session \(file): \(lineCount) lines, metal=\(textView.isMetalRenderingActive) ===")
 
         func reportHandles(_ step: String) {
@@ -50,6 +62,7 @@ enum EnterSessionProfile {
 
         func measureEnter(_ label: String, row: Int) {
             _ = textView.goToLine(row, select: .end)
+            updateHints(around: row)
             pump(textView)
             // Warm up once so the first sample doesn't carry one-off costs (atlas, caches).
             textView.insertText("\n")
@@ -88,7 +101,7 @@ enum EnterSessionProfile {
             warn(String(format: "  Enter %-28@ median=%7.3f ms  p90=%7.3f ms  shiftVisits/Enter=%d  live=%d  extracts/Enter=%d  decorations/Enter=%d",
                         label as NSString, median * 1000, p90 * 1000, visits, live, extracts, decorations))
             ResultLog.row("enter_\(label)", file: file, sizeBytes: sizeBytes, seconds: median,
-                          extra: "p90=\(String(format: "%.6f", p90)) shiftVisits=\(visits) live=\(live) extracts=\(extracts) decorations=\(decorations)")
+                          extra: "samples=\(times.count) p95=\(String(format: "%.6f", Measurement.percentile(times, 0.95))) p90=\(String(format: "%.6f", p90)) shiftVisits=\(visits) live=\(live) extracts=\(extracts) decorations=\(decorations)")
         }
 
         // What copying the whole buffer costs after an edit. ⌘-hover used to pay it on the main
@@ -143,11 +156,20 @@ enum EnterSessionProfile {
         warn(String(format: "  Scroll page (%d pages)              median=%7.3f ms  p90=%7.3f ms",
                     pageTimes.count, pageMedian * 1000, pageP90 * 1000))
         ResultLog.row("scroll_page", file: file, sizeBytes: sizeBytes, seconds: pageMedian,
-                      extra: "p90=\(String(format: "%.6f", pageP90)) pages=\(pageTimes.count)")
+                      extra: "p95=\(String(format: "%.6f", Measurement.percentile(pageTimes, 0.95))) p90=\(String(format: "%.6f", pageP90)) pages=\(pageTimes.count)")
         // Small steps from the middle of the file: a real scroll moves a few lines per frame, which is
         // when per-frame overlays (sticky lines) run most often.
         var stepTimes: [Double] = []
         let stepStart = textView.contentSize.height / 2
+        textView.contentOffset = CGPoint(x: 0, y: stepStart)
+        textView.inlayHints = []
+        pump(textView)
+        let beforeHints = Measurement.mallocBytesInUse()
+        updateHints(around: lineCount / 2)
+        pump(textView)
+        let afterHints = Measurement.mallocBytesInUse()
+        ResultLog.row("inlay_memory", file: file, sizeBytes: sizeBytes, seconds: 0,
+                      extra: "hints=\(textView.inlayHints.count) before=\(beforeHints) after=\(afterHints)")
         for step in 0 ..< 400 {
             autoreleasepool {
                 let start = CFAbsoluteTimeGetCurrent()
@@ -163,7 +185,7 @@ enum EnterSessionProfile {
         warn(String(format: "  Scroll step (%d steps of 24 pt)     median=%7.3f ms  p90=%7.3f ms",
                     stepTimes.count, stepMedian * 1000, stepP90 * 1000))
         ResultLog.row("scroll_step", file: file, sizeBytes: sizeBytes, seconds: stepMedian,
-                      extra: "p90=\(String(format: "%.6f", stepP90)) steps=\(stepTimes.count)")
+                      extra: "p95=\(String(format: "%.6f", Measurement.percentile(stepTimes, 0.95))) p90=\(String(format: "%.6f", stepP90)) steps=\(stepTimes.count)")
         warn("  Sticky lines pinned after the last step: \(textView.stickyLineCountForBenchmarks)")
         reportHandles("scrolled_whole_file")
         for fraction in [0.1, 0.5, 0.9] {

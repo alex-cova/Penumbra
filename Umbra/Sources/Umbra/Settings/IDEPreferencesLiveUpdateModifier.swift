@@ -6,7 +6,7 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
 
     // Split into groups: one 22-modifier chain exceeds the type checker's time limit.
     func body(content: Content) -> some View {
-        markdownChanges(smartKeyChanges(codeInsightChanges(modeChanges(displayChanges(editingChanges(appearanceChanges(content)))))))
+        markdownChanges(smartKeyChanges(inlayChanges(codeInsightChanges(modeChanges(displayChanges(editingChanges(appearanceChanges(content))))))))
     }
 
     private func markdownChanges(_ view: some View) -> some View {
@@ -73,6 +73,18 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.isDistractionFreeModeEnabled) { applyLivePreferences() }
             .onChange(of: preferences.isFocusModeEnabled) { applyLivePreferences() }
             .onChange(of: preferences.isFocusModeToolbarFadeEnabled) { applyLivePreferences() }
+    }
+
+    private func inlayChanges(_ view: some View) -> some View {
+        view
+            .onChange(of: preferences.inlayHintsEnabled) { applyLivePreferences() }
+            .onChange(of: preferences.lspInlayHintsEnabled) { applyLivePreferences() }
+            .onChange(of: preferences.jdkConfigurationHintsEnabled) { applyLivePreferences() }
+            .onChange(of: preferences.javaInlayHints) { applyLivePreferences() }
+            .onChange(of: preferences.javaInlayVariableTypes) { applyLivePreferences() }
+            .onChange(of: preferences.javaInlayLambdaTypes) { applyLivePreferences() }
+            .onChange(of: preferences.javaInlayChainTypes) { applyLivePreferences() }
+            .onChange(of: preferences.javaInlayExclusions) { applyLivePreferences() }
     }
 
     private func codeInsightChanges(_ view: some View) -> some View {

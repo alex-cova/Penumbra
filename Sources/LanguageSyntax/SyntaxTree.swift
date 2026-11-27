@@ -244,6 +244,19 @@ public struct SyntaxNode {
         } while ts_tree_cursor_goto_next_sibling(&cursor)
     }
 
+    /// Walks named children intersecting a byte window without allocating a child array.
+    package func walkNamedChildren(overlapping bytes: Range<Int>, _ body: (SyntaxNode) -> Bool) {
+        var cursor = ts_tree_cursor_new(raw)
+        defer { ts_tree_cursor_delete(&cursor) }
+        let start = UInt32(clamping: bytes.lowerBound)
+        guard ts_tree_cursor_goto_first_child_for_byte(&cursor, start) >= 0 else { return }
+        repeat {
+            let child = SyntaxNode(raw: ts_tree_cursor_current_node(&cursor), tree: tree)
+            guard child.startByte <= bytes.upperBound else { return }
+            if child.isNamed, !body(child) { return }
+        } while ts_tree_cursor_goto_next_sibling(&cursor)
+    }
+
     /// Every direct child, anonymous tokens included, in order, with the grammar field it fills
     /// (`nil` when it fills none). One cursor walk: linear in the child count, where calling
     /// ``child(at:)`` per index is not. Needed for grammars that reuse one field name for several

@@ -11,6 +11,14 @@ struct LineInlayHint: Equatable {
     /// Everything the hint adds to the line: its padding, its text and the gap before the next
     /// character.
     let width: CGFloat
+    /// Width of the items drawn after this one at the same document anchor.
+    var followingWidth: CGFloat = 0
+    var leadingPadding: CGFloat = 0
+
+    func leadingX(in line: CTLine) -> CGFloat {
+        guard localOffset > 0 else { return 0 }
+        return InlayChipGeometry.chipEnd(forLocalOffset: localOffset, in: line) - width - followingWidth
+    }
     /// How the hint is painted. Part of the hint, so a theme or font change repaints (and re-typesets)
     /// the lines that have hints and nothing else.
     let appearance: InlayHintAppearance
@@ -68,6 +76,12 @@ struct InlayHintAppearance: Equatable {
 
     func inlineTextWidth(of label: String) -> CGFloat {
         ceil((label as NSString).size(withAttributes: [.font: editorFont]).width)
+    }
+
+    func width(of hint: InlayHint) -> CGFloat {
+        width(of: hint.label, kind: hint.kind)
+            + (hint.paddingLeft ? Self.trailingGap : 0)
+            + (hint.paddingRight ? Self.trailingGap : 0)
     }
 
     /// The horizontal room a hint needs.
@@ -137,7 +151,8 @@ enum InlayHintIndex {
         in hints: [InlayHint],
         lineLocation location: Int,
         lineLength length: Int,
-        appearance: InlayHintAppearance
+        appearance: InlayHintAppearance,
+        measure: ((InlayHint) -> CGFloat)? = nil
     ) -> [LineInlayHint] {
         guard !hints.isEmpty else { return [] }
         // First hint strictly after the line's first character.
@@ -154,7 +169,7 @@ enum InlayHintIndex {
             let hint = hints[low - 1]
             result.append(LineInlayHint(
                 localOffset: 0, label: hint.label, kind: hint.kind,
-                width: appearance.width(of: hint.label, kind: hint.kind), appearance: appearance
+                width: measure?(hint) ?? appearance.width(of: hint), appearance: appearance
             ))
         }
         var index = low
@@ -164,10 +179,21 @@ enum InlayHintIndex {
                 localOffset: hint.utf16Offset - location,
                 label: hint.label,
                 kind: hint.kind,
-                width: appearance.width(of: hint.label, kind: hint.kind),
+                width: measure?(hint) ?? appearance.width(of: hint),
+                leadingPadding: hint.paddingLeft ? InlayHintAppearance.trailingGap : 0,
                 appearance: appearance
             ))
             index += 1
+        }
+        var followingWidth: CGFloat = 0
+        var offset: Int?
+        for index in result.indices.reversed() {
+            if result[index].localOffset != offset {
+                offset = result[index].localOffset
+                followingWidth = 0
+            }
+            result[index].followingWidth = followingWidth
+            followingWidth += result[index].width
         }
         return result
     }
@@ -178,9 +204,13 @@ enum InlayHintIndex {
         guard !hints.isEmpty else { return hints }
         let delta = replacementLength - range.length
         return hints.compactMap { hint in
-            if hint.utf16Offset <= range.location { return hint }
+            if hint.utf16Offset < range.location { return hint }
+            if hint.utf16Offset == range.location {
+                guard hint.affinity == .afterInsertion else { return hint }
+                guard range.length == 0 else { return nil }
+            }
             if hint.utf16Offset < range.upperBound { return nil }
-            return InlayHint(utf16Offset: hint.utf16Offset + delta, label: hint.label, kind: hint.kind)
+            return hint.anchored(at: hint.utf16Offset + delta)
         }
     }
 }

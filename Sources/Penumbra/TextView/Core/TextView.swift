@@ -2339,6 +2339,22 @@ public struct DocumentTextExport: Sendable {
         textInputView.characterIndex(at: textInputView.convert(point, from: self))
     }
 
+    /// Uses row geometry without typesetting the overscan lines for a semantic request.
+    func inlayRequestRange(overscan: CGFloat) -> ClosedRange<Int>? {
+        let manager = textInputView.lineManager
+        guard manager.lineCount > 0 else { return nil }
+        let first = textInputView.row(atYPosition: contentOffset.y - overscan)
+        let last = textInputView.row(atYPosition: contentOffset.y + bounds.height + overscan)
+        let endLine = manager.lineInfo(atRow: max(first, last))
+        return manager.location(ofRow: first)...(endLine.location + endLine.length)
+    }
+
+    func isCharacterBoundary(at offset: Int) -> Bool {
+        guard offset >= 0 && offset <= documentLength else { return false }
+        if offset == documentLength { return true }
+        return textInputView.stringView.rangeOfComposedCharacterSequence(at: offset).location == offset
+    }
+
     /// Returns the character location at the specified row and column.
     /// - Parameter textLocation: The row and column in the text.
     /// - Returns: The location if the input row and column could be found in the text, otherwise nil.
@@ -2618,6 +2634,8 @@ public struct DocumentTextExport: Sendable {
     /// Identifier the host assigns to the current document, copied onto every
     /// ``NavigationEntry`` so a multi-document host can route a cross-file back/forward jump.
     public var documentIdentifier: UUID?
+    /// The workbench's intelligence identity can differ from its navigation identity.
+    var intelligenceDocumentID: DocumentID?
     /// URL of the current document, if any — also copied onto ``NavigationEntry`` values.
     public var documentURL: URL?
     /// Invoked when back/forward lands on an entry belonging to a *different* document. Return

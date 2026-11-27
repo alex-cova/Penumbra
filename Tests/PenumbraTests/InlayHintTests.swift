@@ -35,6 +35,28 @@ final class InlayHintTests: XCTestCase {
         XCTAssertEqual(inserted.map(\.utf16Offset), [2, 6, 15], "a hint exactly at the edit stays in front of it")
     }
 
+    func testRightAffinityMovesOnInsertionAndDropsWhenTheAnchorIsReplaced() {
+        let original = InlayHint(
+            utf16Offset: 6, label: "count:", providerID: "java", symbol: "example.Target.call",
+            tooltip: "Parameter count", affinity: .afterInsertion
+        )
+        let inserted = InlayHintIndex.applyingEdit(to: [original], range: NSRange(location: 6, length: 0), replacementLength: 3)
+        XCTAssertEqual(inserted, [original.anchored(at: 9)])
+        let replaced = InlayHintIndex.applyingEdit(to: [original], range: NSRange(location: 6, length: 1), replacementLength: 3)
+        XCTAssertTrue(replaced.isEmpty)
+    }
+
+    func testProviderValidationRejectsUnusableOutOfRangeAndDuplicateHints() {
+        let start = TextPosition(line: 0, column: 2, utf16Offset: 2)
+        let end = TextPosition(line: 0, column: 9, utf16Offset: 9)
+        let range = EditorIntelligence.TextRange(start: start, end: end)
+        let result = InlayHintController.validated([
+            hint(1), hint(2), hint(2), hint(3, "one\ntwo"), hint(4, String(repeating: "x", count: 513)),
+            hint(9), hint(10), InlayHint(utf16Offset: 5, label: "ghost", kind: .inlineCompletion)
+        ], in: range)
+        XCTAssertEqual(result, [hint(2), hint(9)])
+    }
+
     func testWidthGrowsWithTheLabel() {
         let appearance = InlayHintAppearance.standard
         XCTAssertGreaterThan(appearance.width(of: "capacity:"), appearance.width(of: "n:"))
@@ -62,6 +84,18 @@ final class InlayHintTests: XCTestCase {
         XCTAssertEqual(after.minX - before.minX, textView.inlayHintAppearanceForTesting.width(of: "count:"), accuracy: 0.5)
         XCTAssertEqual(textView.text, text)
         XCTAssertEqual(textView.caretRectInViewport(at: 3).minX, start.minX, accuracy: 0.01, "text before the hint does not move")
+    }
+
+    func testGhostTextAndSemanticHintReserveSeparateSpaceAtOneAnchor() {
+        let textView = makeTextView("call(1, 2);")
+        let before = textView.caretRectInViewport(at: 8)
+        textView.inlayHints = [hint(5, "count:")]
+        textView.inlineCompletion = InlineCompletionPresentation(utf16Offset: 5, text: "extra")
+        textView.layoutIfNeeded()
+        let appearance = textView.inlayHintAppearanceForTesting
+        let width = appearance.width(of: "count:") + appearance.inlineTextWidth(of: "extra")
+        XCTAssertEqual(textView.caretRectInViewport(at: 8).minX - before.minX, width, accuracy: 0.5)
+        XCTAssertEqual(textView.text, "call(1, 2);")
     }
 
     func testClearingHintsRestoresTheOriginalLayout() {
@@ -94,6 +128,52 @@ final class InlayHintTests: XCTestCase {
         textView.inlayHints = [hint(5, "count:")]
         XCTAssertFalse((textView.text as String).contains("count"))
         XCTAssertEqual(textView.inlayHints.count, 1)
+    }
+
+    func testObsoleteProviderResultDoesNotReplaceNewerHints() async throws {
+        let textView = makeTextView("call(1)")
+        let provider = DelayedInlayProvider()
+        let controller = InlayHintController(textView: textView, provider: provider)
+        controller.makeDocument = { [weak textView] in
+            guard let textView else { return nil }
+            let start = TextPosition(line: 0, column: 0, utf16Offset: 0)
+            return Document(
+                displayName: "test.java", contentSnapshot: TextSnapshot(version: 1, text: textView.text),
+                selection: Selection(range: EditorIntelligence.TextRange(start: start, end: start)),
+                cursor: Cursor(position: start), viewport: Viewport(x: 0, y: 0, width: 600, height: 300),
+                languageIdentifier: "java"
+            )
+        }
+
+        controller.refresh(delay: 0)
+        try await waitForRequests(1, from: provider)
+        textView.replace(NSRange(location: 5, length: 1), withText: "2")
+        controller.refresh(delay: 0)
+        try await waitForRequests(2, from: provider)
+        let start = TextPosition(line: 0, column: 5, utf16Offset: 5)
+        let end = TextPosition(line: 0, column: 6, utf16Offset: 6)
+        let edit = TextEdit(range: EditorIntelligence.TextRange(start: start, end: end), replacement: "3")
+        let newHint = InlayHint(utf16Offset: 5, label: "new:", edits: [edit])
+        await provider.finish(request: 1, with: [newHint])
+        let deadline = ContinuousClock.now + .seconds(2)
+        while textView.inlayHints.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        await provider.finish(request: 0, with: [hint(5, "obsolete:")])
+        try await Task.sleep(for: .milliseconds(10))
+        XCTAssertEqual(textView.inlayHints, [newHint])
+        XCTAssertTrue(controller.accept(newHint))
+        XCTAssertEqual(textView.text, "call(3)")
+        XCTAssertFalse(controller.accept(newHint), "applying edits consumes that revision")
+    }
+
+    private func waitForRequests(_ count: Int, from provider: DelayedInlayProvider) async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while await provider.requestCount < count, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let actual = await provider.requestCount
+        XCTAssertEqual(actual, count)
     }
 
     // MARK: - Appearance
@@ -157,5 +237,21 @@ final class InlayHintTests: XCTestCase {
         // After the last character: the end of the line includes the kern.
         let end = line(kerning: 10, text: "call(1, 2);")
         XCTAssertEqual(InlayChipGeometry.chipEnd(forLocalOffset: 11, in: end), 11 * advance + kern, accuracy: 0.01)
+    }
+}
+
+
+private actor DelayedInlayProvider: InlayHintProviding {
+    private(set) var requestCount = 0
+    private var requests: [Int: CheckedContinuation<[InlayHint], Never>] = [:]
+
+    func inlayHints(for document: Document, in range: EditorIntelligence.TextRange) async -> [InlayHint] {
+        let request = requestCount
+        requestCount += 1
+        return await withCheckedContinuation { requests[request] = $0 }
+    }
+
+    func finish(request: Int, with hints: [InlayHint]) {
+        requests.removeValue(forKey: request)?.resume(returning: hints)
     }
 }

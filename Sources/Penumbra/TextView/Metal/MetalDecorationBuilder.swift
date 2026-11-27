@@ -330,12 +330,11 @@ private extension MetalDecorationBuilder {
             let appearance = hint.appearance
             if hint.kind == .inlineCompletion {
                 // Ghost text: no pill, editor font, starting where the caret is.
-                let end = InlayChipGeometry.chipEnd(forLocalOffset: hint.localOffset, in: context.line)
                 geometry.overlayGlyphs.append(contentsOf: textGlyphs(
                     hint.label,
                     font: appearance.editorFont,
                     color: appearance.inlineTextColor,
-                    atX: context.originX + (hint.localOffset == 0 ? 0 : end - hint.width),
+                    atX: context.originX + hint.leadingX(in: context.line),
                     context: context,
                     atlas: atlas,
                     budget: &budget
@@ -346,7 +345,7 @@ private extension MetalDecorationBuilder {
             let attributes: [NSAttributedString.Key: Any] = [.font: font]
             let size = (hint.label as NSString).size(withAttributes: attributes)
             let textWidth = appearance.textWidth(of: hint.label)
-            let pillX = context.originX + InlayChipGeometry.chipEnd(forLocalOffset: hint.localOffset, in: context.line) - hint.width
+            let pillX = context.originX + hint.leadingX(in: context.line) + hint.leadingPadding
             let pillWidth = textWidth + InlayHintAppearance.horizontalPadding * 2
             let pillHeight = size.height + 2
             geometry.overlaySolids.append(SolidInstance(

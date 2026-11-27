@@ -33,7 +33,7 @@ final class CodeVisionRefreshController {
     private weak var textView: TextView?
     /// Snapshot for the caret's document, read when a debounced refresh fires — not when it is
     /// scheduled. Wired by the owning controller after init (mirroring `InlineCompletionController.engine`).
-    var makeDocument: @MainActor () -> Document? = { nil }
+    var makeDocument: @MainActor () async -> Document? = { nil }
     /// Navigation for the built-in lens kinds, wired by the owning controller after init.
     var navigate: @MainActor (NavigationKind, Int) -> Bool = { _, _ in false }
     private var task: Task<Void, Never>?
@@ -62,16 +62,15 @@ final class CodeVisionRefreshController {
         task = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            let request: (Document, UInt64)? = await MainActor.run {
-                guard let self, let textView = self.textView, let document = self.makeDocument() else { return nil }
-                return (document, textView.contentGeneration)
-            }
-            guard let (document, generation) = request else { return }
+            guard let bufferIdentity = self?.textView?.stringViewObjectIdentifier,
+                  let generation = self?.textView?.contentGeneration,
+                  let document = await self?.makeDocument(), !Task.isCancelled else { return }
             let anchors = await provider.codeVisionAnchors(for: document).sorted()
             guard !Task.isCancelled else { return }
             // Step 1: room for every declaration, keeping the labels already shown on the same lines.
             let visible: [Int]? = await MainActor.run {
-                guard let self, let textView = self.textView, textView.contentGeneration == generation else { return nil }
+                guard let self, let textView = self.textView, textView.contentGeneration == generation,
+                      textView.stringViewObjectIdentifier == bufferIdentity else { return nil }
                 let shownByLine = Dictionary(
                     textView.codeVisionLenses.compactMap { lens in
                         textView.textLocation(at: lens.utf16Offset).map { ($0.lineNumber, lens.entries) }
@@ -83,18 +82,18 @@ final class CodeVisionRefreshController {
                     return CodeVisionLens(utf16Offset: anchor, entries: line.flatMap { shownByLine[$0] } ?? [])
                 }
                 let height = textView.bounds.height
-                let top = textView.characterIndex(at: CGPoint(x: 0, y: -height)) ?? 0
-                let bottom = textView.characterIndex(at: CGPoint(x: textView.bounds.width, y: height * 2)) ?? textView.documentLength
+                guard let range = textView.inlayRequestRange(overscan: height) else { return [] }
                 let offsetY = textView.contentOffset.y
                 self.requestedYRange = (offsetY - height)...(offsetY + height * 2)
-                return anchors.filter { $0 >= top && $0 <= bottom }
+                return anchors.filter { range.contains($0) }
             }
             guard let visible, !visible.isEmpty else { return }
             // Step 2: the numbers for what is on screen.
             let lenses = await provider.codeVision(for: document, anchors: visible)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self, let textView = self.textView, textView.contentGeneration == generation else { return }
+                guard let self, let textView = self.textView, textView.contentGeneration == generation,
+                      textView.stringViewObjectIdentifier == bufferIdentity else { return }
                 let entriesByAnchor = Dictionary(lenses.map { ($0.utf16Offset, $0.entries) }, uniquingKeysWith: { first, _ in first })
                 let shown = Dictionary(textView.codeVisionLenses.map { ($0.utf16Offset, $0) }, uniquingKeysWith: { first, _ in first })
                 textView.codeVisionLenses = anchors.map { anchor in

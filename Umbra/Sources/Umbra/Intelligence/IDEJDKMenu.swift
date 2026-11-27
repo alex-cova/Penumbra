@@ -11,25 +11,32 @@ extension IDEWorkspace {
     /// Asks for a JDK folder (a home, a `.jdk` bundle or a home's `bin`), adds it to the list and
     /// hands it to `completion`. A folder that isn't a JDK is reported instead.
     func addJDKFromPanel(completion: ((JDKInstallation) -> Void)? = nil) {
+        chooseJDKFolder(prompt: "Add JDK") { [weak self] url in
+            guard let self else { return }
+            switch javaSupport.jdk.addJDK(at: url) {
+            case .success(let installation):
+                completion?(installation)
+            case .failure(let error):
+                notifications.post(
+                    "Couldn't add JDK", detail: "\(url.path): \(error.localizedDescription)", severity: .error
+                )
+            }
+        }
+    }
+
+    func chooseJDKFolder(prompt: String, completion: @escaping (URL) -> Void) {
         let panel = NSOpenPanel()
         panel.title = "Choose a JDK"
         panel.message = "Choose a JDK home folder or a .jdk bundle."
-        panel.prompt = "Add JDK"
+        panel.prompt = prompt
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.treatsFilePackagesAsDirectories = true
         panel.directoryURL = URL(fileURLWithPath: "/Library/Java/JavaVirtualMachines")
-        panel.begin { [weak self] result in
-            guard result == .OK, let url = panel.url, let self else { return }
-            switch self.javaSupport.jdk.addJDK(at: url) {
-            case .success(let installation):
-                completion?(installation)
-            case .failure(let error):
-                self.notifications.post(
-                    "Couldn't add JDK", detail: "\(url.path): \(error.localizedDescription)", severity: .error
-                )
-            }
+        panel.begin { result in
+            guard result == .OK, let url = panel.url else { return }
+            completion(url)
         }
     }
 }

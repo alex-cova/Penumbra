@@ -109,12 +109,14 @@ public struct LSPOutlineSymbol: Sendable, Equatable {
     }
 }
 
-/// One inlay hint with its label already flattened to text.
+/// One inlay hint with a display label and the original protocol item.
 public struct LSPRenderedInlayHint: Sendable, Equatable {
     public var line: Int
     public var character: Int
     public var label: String
     public var kind: String?
+    public private(set) var protocolHint: LanguageServerProtocol.InlayHint?
+    public private(set) var tooltip: String?
 
     public init(line: Int, character: Int, label: String, kind: String? = nil) {
         self.line = line
@@ -138,6 +140,49 @@ public struct LSPRenderedInlayHint: Sendable, Equatable {
         case nil: kind = nil
         }
         self.init(line: hint.position.line, character: hint.position.character, label: label, kind: kind)
+        protocolHint = hint
+        let labelTooltips: [String]
+        switch hint.label {
+        case .optionA: labelTooltips = []
+        case .optionB(let parts): labelTooltips = parts.compactMap { Self.text($0.tooltip) }
+        }
+        tooltip = Self.text(hint.tooltip) ?? (labelTooltips.isEmpty ? nil : labelTooltips.joined(separator: "\n"))
+    }
+
+    /// Equality describes the flattened display value exposed before wire metadata was retained.
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.line == rhs.line && lhs.character == rhs.character && lhs.label == rhs.label && lhs.kind == rhs.kind
+    }
+
+    func acceptanceEdits(in map: SourceTextMap) -> [EditorIntelligence.TextEdit] {
+        guard let edits = protocolHint?.textEdits, !edits.isEmpty, edits.count <= 8 else { return [] }
+        var result: [EditorIntelligence.TextEdit] = []
+        for edit in edits {
+            let start = edit.range.start
+            let end = edit.range.end
+            guard let lower = map.utf16Offset(line: start.line, column: start.character),
+                  let upper = map.utf16Offset(line: end.line, column: end.character),
+                  lower <= upper, edit.newText.utf16.count <= 4096 else { return [] }
+            let range = EditorIntelligence.TextRange(
+                start: TextPosition(line: start.line, column: start.character, utf16Offset: lower),
+                end: TextPosition(line: end.line, column: end.character, utf16Offset: upper)
+            )
+            result.append(EditorIntelligence.TextEdit(range: range, replacement: edit.newText))
+        }
+        result.sort { $0.range.start.utf16Offset < $1.range.start.utf16Offset }
+        for (lhs, rhs) in zip(result, result.dropFirst()) {
+            guard lhs.range.start.utf16Offset < rhs.range.start.utf16Offset,
+                  lhs.range.end.utf16Offset <= rhs.range.start.utf16Offset else { return [] }
+        }
+        return result
+    }
+
+    private static func text(_ value: TwoTypeOption<String, MarkupContent>?) -> String? {
+        switch value {
+        case .optionA(let text): text
+        case .optionB(let markup): markup.value
+        case nil: nil
+        }
     }
 }
 

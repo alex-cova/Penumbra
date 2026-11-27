@@ -194,9 +194,10 @@ final class TextInputView: EditorView {
     }
     /// Display-only labels drawn inline (see ``InlayHint``). They are kept where they are through
     /// edits, and dropped when the document is replaced.
+    private var rebasingInlayOffsets = false
     var inlayHints: [InlayHint] = [] {
         didSet {
-            if inlayHints != oldValue {
+            if !rebasingInlayOffsets, inlayHints != oldValue {
                 inlayHintsDidChange()
             }
         }
@@ -205,7 +206,7 @@ final class TextInputView: EditorView {
     /// ``inlayHints`` so neither replaces the other.
     var supplementaryInlayHints: [InlayHint] = [] {
         didSet {
-            if supplementaryInlayHints != oldValue {
+            if !rebasingInlayOffsets, supplementaryInlayHints != oldValue {
                 inlayHintsDidChange()
             }
         }
@@ -252,6 +253,15 @@ final class TextInputView: EditorView {
     }
 
     /// The room of the inlay hint in front of the character at `location`, or 0.
+    func inlayHint(atAnchor offset: Int) -> InlayHint? {
+        inlayHints.first { $0.utf16Offset == offset }
+    }
+
+    func inlayHint(at point: CGPoint) -> InlayHint? {
+        guard !inlayHints.isEmpty, let anchor = layoutManager.inlayHintAnchor(at: point) else { return nil }
+        return inlayHint(atAnchor: anchor)
+    }
+
     func inlayHintWidth(atLocation location: Int) -> CGFloat {
         layoutManager.inlayHintWidth(atLocation: location)
     }
@@ -276,14 +286,14 @@ final class TextInputView: EditorView {
         layoutManager.inlayHintAppearance = InlayHintAppearance.make(theme: theme, useEditorFont: inlayHintsUseEditorFont)
     }
 
-    private func inlayHintsDidChange() {
+    private func inlayHintsDidChange(editedLines: Set<DocumentLineNode>? = nil) {
         var merged = InlayHintIndex.normalized(supplementaryInlayHints.isEmpty ? inlayHints : inlayHints + supplementaryInlayHints)
         if let inlineCompletion, !inlineCompletion.firstLine.isEmpty {
             let hint = InlayHint(utf16Offset: inlineCompletion.utf16Offset, label: inlineCompletion.firstLine, kind: .inlineCompletion)
             let index = merged.firstIndex { $0.utf16Offset > hint.utf16Offset } ?? merged.endIndex
             merged.insert(hint, at: index)
         }
-        layoutManager.inlayHints = merged
+        layoutManager.setInlayHints(merged, editedLines: editedLines)
         // Reserve room under the caret's row for the ghost's extra lines (multi-line
         // suggestions); only that row ever gets it, and clearing restores the layout.
         if let inlineCompletion, !inlineCompletion.extraLines.isEmpty,
@@ -3563,11 +3573,12 @@ extension TextInputView {
         let textEditResult = EditorPerformanceTrace.shared.measure(.textMutation) {
             textEditHelper.replaceText(in: range, with: newString)
         }
-        if !inlayHints.isEmpty {
+        if !inlayHints.isEmpty || !supplementaryInlayHints.isEmpty {
+            rebasingInlayOffsets = true
             inlayHints = InlayHintIndex.applyingEdit(to: inlayHints, range: range, replacementLength: nsNewString.length)
-        }
-        if !supplementaryInlayHints.isEmpty {
             supplementaryInlayHints = InlayHintIndex.applyingEdit(to: supplementaryInlayHints, range: range, replacementLength: nsNewString.length)
+            rebasingInlayOffsets = false
+            inlayHintsDidChange(editedLines: textEditResult.lineChangeSet.editedLines)
         }
         let textChange = textEditResult.textChange
         let lineChangeSet = textEditResult.lineChangeSet
@@ -5186,11 +5197,8 @@ extension TextInputView: @preconcurrency LineControllerStorageDelegate {
             lineController.topInset = layoutManager.codeVisionStore.inset(forRow: lineController.line.index)
         }
         if !layoutManager.inlayHints.isEmpty {
-            lineController.inlayHints = InlayHintIndex.localHints(
-                in: layoutManager.inlayHints,
-                lineLocation: lineController.line.location,
-                lineLength: lineController.line.data.length,
-                appearance: layoutManager.inlayHintAppearance
+            lineController.inlayHints = layoutManager.inlayHints(
+                forLineAt: lineController.line.location, length: lineController.line.data.length
             )
         }
     }

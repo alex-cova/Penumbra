@@ -73,6 +73,13 @@ final class JavaInlayHintProviderTests: XCTestCase {
         ))
     }
 
+    func testSymbolExclusionsMatchQualifiedOwnersAndWildcards() {
+        XCTAssertTrue(JavaInlayHints.matchesExclusion("java.lang.Math.*", symbol: "java.lang.Math.min"))
+        XCTAssertTrue(JavaInlayHints.matchesExclusion("java.lang.String.substring", symbol: "java.lang.String.substring"))
+        XCTAssertFalse(JavaInlayHints.matchesExclusion("java.lang.Math.*", symbol: "example.java.lang.Math.min"))
+        XCTAssertFalse(JavaInlayHints.matchesExclusion("example.Api.get", symbol: "example.Api.getAll"))
+    }
+
     func testLabelsLiteralArgumentsOfAMethodCall() async throws {
         let source = "class T { void m() { Lib.area(3, 4); } }"
         let result = try await hints(source)

@@ -1,3 +1,4 @@
+import struct EditorIntelligence.SourceTextMap
 import EditorIntelligenceLSP
 import LanguageServerProtocol
 import XCTest
@@ -18,6 +19,18 @@ final class LSPPublishedDiagnosticsTests: XCTestCase {
         store.apply(PublishDiagnosticsParams(uri: "file:///A.swift", diagnostics: []))
         XCTAssertTrue(store.diagnostics(for: "file:///A.swift").isEmpty)
         XCTAssertNil(store.version(for: "file:///A.swift"))
+    }
+
+    func testStrictInlayPositionsRejectLineOverflowAndSplitSurrogates() {
+        let map = SourceTextMap("a😀z\r\nnext\rthird\n")
+        XCTAssertEqual(map.utf16Offset(line: 0, column: 4), 4)
+        XCTAssertEqual(map.utf16Offset(line: 1, column: 0), 6)
+        XCTAssertEqual(map.utf16Offset(line: 2, column: 0), 11)
+        XCTAssertEqual(map.utf16Offset(line: 3, column: 0), 17)
+        XCTAssertNil(map.utf16Offset(line: 0, column: 2))
+        XCTAssertNil(map.utf16Offset(line: 0, column: 5))
+        XCTAssertNil(map.utf16Offset(line: -1, column: 0))
+        XCTAssertNil(map.utf16Offset(line: 1, column: Int.max))
     }
 
     func testDocumentSymbolsKeepTheirChildrenAndInlayLabelsFlatten() {

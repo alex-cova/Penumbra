@@ -311,8 +311,11 @@ public final class EditorIntelligenceController {
         inlineController.onPresentationChanged = { [weak self] in
             self?.updateInlineLinesView()
         }
-        inlayHints.makeDocument = { [weak self] in self?.liveDocument() }
-        codeVision.makeDocument = { [weak self] in self?.liveDocument() }
+        inlayHints.makeDocument = { [weak self] in
+            guard let self, let parts = self.liveDocumentParts() else { return nil }
+            return await self.liveDocument(parts)
+        }
+        codeVision.makeDocument = inlayHints.makeDocument
         codeVision.navigate = { [weak self] kind, offset in
             self?.navigate(kind: kind, atUTF16Offset: offset) ?? false
         }
@@ -1587,12 +1590,18 @@ public final class EditorIntelligenceController {
         let cursor: Cursor
         /// The buffer's `contentGeneration` the parts were read at.
         let generation: UInt64
+        let bufferIdentity: ObjectIdentifier
     }
 
     private func liveDocumentParts(caretAt overrideOffset: Int? = nil) -> LiveDocumentParts? {
-        guard let textView, let base = adapter.currentDocument else {
-            return nil
+        guard let textView else { return nil }
+        let baseDocument: Document?
+        if let documentID = textView.intelligenceDocumentID {
+            baseDocument = adapter.document(withID: documentID)
+        } else {
+            baseDocument = adapter.currentDocument
         }
+        guard let base = baseDocument else { return nil }
         let length = textView.documentLength
         // Line and column come from the line index, as in `buildLiveDocument`. Counting line breaks
         // in a copy of the text before the caret made every call O(document) per position.
@@ -1612,7 +1621,8 @@ public final class EditorIntelligenceController {
                 additionalRanges: selected.dropFirst().map(range)
             ),
             cursor: Cursor(position: caret),
-            generation: textView.contentGeneration
+            generation: textView.contentGeneration,
+            bufferIdentity: textView.stringViewObjectIdentifier
         )
     }
 
@@ -1644,7 +1654,8 @@ public final class EditorIntelligenceController {
     /// or the caller was cancelled.
     private func liveDocument(_ parts: LiveDocumentParts) async -> Document? {
         guard let textView, let snapshot = await textView.materializedText(priority: .userInitiated),
-              snapshot.generation == parts.generation, textView.contentGeneration == parts.generation else { return nil }
+              snapshot.generation == parts.generation, textView.contentGeneration == parts.generation,
+              textView.stringViewObjectIdentifier == parts.bufferIdentity else { return nil }
         return composeLiveDocument(parts, text: snapshot.text)
     }
 
@@ -1674,7 +1685,16 @@ public final class EditorIntelligenceController {
 
     /// Asks the inlay hint provider for the hints around what is on screen; the work lives in
     /// ``InlayHintController``.
-    public func refreshInlayHints(delay: TimeInterval = 0.25) {
+    @discardableResult
+    public func acceptInlayHint(_ hint: InlayHint) -> Bool {
+        inlayHints.accept(hint)
+    }
+
+    public func inlayTooltip(for hint: InlayHint) async -> String? {
+        await inlayHints.tooltip(for: hint)
+    }
+
+    public func refreshInlayHints(delay: TimeInterval = 0.08) {
         inlayHints.refresh(delay: delay)
     }
 

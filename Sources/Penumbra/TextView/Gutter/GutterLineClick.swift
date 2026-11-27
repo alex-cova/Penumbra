@@ -1,4 +1,5 @@
 @preconcurrency import AppKit
+import EditorIntelligence
 import Foundation
 
 /// A click in the gutter's line-number or decoration column that no decoration handled, reported
@@ -29,8 +30,12 @@ public struct EditorContextMenuContext {
     /// The selection when the menu opened (after a right click moved the caret, if it did).
     public let selectedRange: NSRange?
 
-    public init(location: Int?, selectedRange: NSRange?) {
+    /// A virtual annotation under the pointer, or at the caret for a keyboard menu.
+    public let inlayHint: InlayHint?
+
+    public init(location: Int?, selectedRange: NSRange?, inlayHint: InlayHint? = nil) {
         self.location = location
         self.selectedRange = selectedRange
+        self.inlayHint = inlayHint
     }
 }

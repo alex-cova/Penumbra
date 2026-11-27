@@ -550,9 +550,12 @@ private extension LineController {
             attributedString.addAttribute(.kern, value: kern, range: range)
         }
         hintKernedRanges = []
+        var previousOffset: Int?
         for hint in inlayHints where hint.localOffset >= 1 && hint.localOffset <= attributedString.length {
+            guard hint.localOffset != previousOffset else { continue }
+            previousOffset = hint.localOffset
             let range = NSRange(location: hint.localOffset - 1, length: 1)
-            attributedString.addAttribute(.kern, value: kern + hint.width, range: range)
+            attributedString.addAttribute(.kern, value: kern + hint.width + hint.followingWidth, range: range)
             hintKernedRanges.append(range)
         }
     }
@@ -910,25 +913,44 @@ extension LineController {
               offset > fragment.range.location, offset <= fragment.range.upperBound else {
             return CTLineGetOffsetForStringIndex(fragment.line, offset, nil)
         }
-        let end = InlayChipGeometry.chipEnd(forLocalOffset: offset, in: fragment.line)
-        // The caret always sits in front of ghost text.
-        if hint.kind == .inlineCompletion { return end - hint.width }
-        return beforeInlayHint ? end - hint.width : end
+        let start = hint.leadingX(in: fragment.line)
+        // The caret always sits in front of ghost text, after any semantic chip.
+        if hint.kind == .inlineCompletion { return start }
+        return beforeInlayHint ? start : start + hint.width
+    }
+
+    func inlayHintAnchor(at point: CGPoint) -> Int? {
+        guard let fragment = lineFragment(closestTo: point),
+              point.y >= fragment.yPosition, point.y < fragment.yPosition + fragment.scaledSize.height else { return nil }
+        for hint in inlayHints where hint.kind != .inlineCompletion
+            && hint.localOffset > fragment.range.location && hint.localOffset <= fragment.range.upperBound {
+            let start = hint.leadingX(in: fragment.line)
+            if point.x >= start, point.x < start + hint.width {
+                return line.location + hint.localOffset
+            }
+        }
+        return nil
     }
 
     /// Core Text sees "character plus chip" as one wide glyph and splits it in the middle of the
     /// whole. A click on the chip puts the caret at the hint; one on the character before it splits
     /// at the middle of the character alone.
     private func inlayAdjustedIndex(forX x: CGFloat, in fragment: LineFragment) -> Int? {
+        var previousOffset: Int?
         for hint in inlayHints where hint.localOffset > fragment.range.location && hint.localOffset <= fragment.range.upperBound {
-            let end = InlayChipGeometry.chipEnd(forLocalOffset: hint.localOffset, in: fragment.line)
-            let chipStart = end - hint.width
+            guard hint.localOffset != previousOffset else { continue }
+            previousOffset = hint.localOffset
+            let chipStart = hint.leadingX(in: fragment.line)
+            let end = chipStart + hint.width + hint.followingWidth
             if x >= chipStart, x < end {
                 return hint.localOffset
             }
-            let previousStart = CTLineGetOffsetForStringIndex(fragment.line, hint.localOffset - 1, nil)
-            if x >= previousStart, x < chipStart {
-                return x < (previousStart + chipStart) / 2 ? hint.localOffset - 1 : hint.localOffset
+            guard x < chipStart else { continue }
+            let previous = stringView.rangeOfComposedCharacterSequence(at: line.location + hint.localOffset - 1)
+            let previousOffset = previous.location - line.location
+            let previousStart = CTLineGetOffsetForStringIndex(fragment.line, previousOffset, nil)
+            if x >= previousStart {
+                return x < (previousStart + chipStart) / 2 ? previousOffset : hint.localOffset
             }
         }
         return nil

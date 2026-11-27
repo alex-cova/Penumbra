@@ -336,46 +336,7 @@ private struct IDEJavaAnalysisSection: View {
                 workspace.semanticHighlightingPreferenceChanged()
             }
 
-            IDESettingsToggle("Parameter Name Hints", isOn: $preferences.javaInlayHints)
-                .onChange(of: preferences.javaInlayHints) {
-                    workspace.javaInlayHintsPreferenceChanged()
-                }
-
-            IDESettingsToggle(
-                "Variable Type Hints",
-                isOn: $preferences.javaInlayVariableTypes,
-                detail: "Shows the type after a `var` local or loop variable, unless the initializer already says it (`new Foo()`, a cast, a literal)."
-            )
-            .onChange(of: preferences.javaInlayVariableTypes) {
-                workspace.javaInlayHintsPreferenceChanged()
-            }
-
-            IDESettingsToggle(
-                "Lambda Parameter Type Hints",
-                isOn: $preferences.javaInlayLambdaTypes,
-                detail: "Shows the types of implicitly typed lambda parameters, read off the method they are passed to."
-            )
-            .onChange(of: preferences.javaInlayLambdaTypes) {
-                workspace.javaInlayHintsPreferenceChanged()
-            }
-
-            IDESettingsToggle(
-                "Code Vision: Usages",
-                isOn: $preferences.javaCodeVisionUsages,
-                detail: "Shows how many places use a class, method or constructor above its declaration. Counts come from the project index, so they follow saved files."
-            )
-
-            IDESettingsToggle(
-                "Code Vision: Implementations",
-                isOn: $preferences.javaCodeVisionImplementations,
-                detail: "Shows how many project types implement an interface, abstract class or abstract method."
-            )
-
-            IDESettingsToggle(
-                "Use Editor Font for Hints",
-                isOn: $preferences.inlayHintsUseEditorFont,
-                detail: "Draws inlay hints in the editor font, one point smaller, instead of the system font."
-            )
+            Button("Inlay Hints…", action: workspace.showInlayHintSettings)
         }
     }
 }

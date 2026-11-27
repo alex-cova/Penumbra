@@ -473,6 +473,21 @@ final class IDEJavaSupport {
         )
     }
 
+    func configureCodeVisionReadiness() {
+        Task { [weak self, codeVisionProvider] in
+            await codeVisionProvider.setIndexReadiness { [weak self] url in
+                await self?.isCodeVisionIndexReady(for: url) == true
+            }
+        }
+    }
+
+    private func isCodeVisionIndexReady(for url: URL?) async -> Bool {
+        guard !activity.isActive(.javaSources), !activity.isActive(.javaDependencies),
+              !gradle.syncState.isSyncing, !maven.syncState.isSyncing,
+              !isJavaBuildActive || projectModel != nil, let url else { return false }
+        return await resolutionStatus(for: url) == .complete
+    }
+
     /// Whether `url`'s missing-class checks ran, are waiting for indexing, or cannot run (the
     /// Problems panel's note). Shard paths are named by the jar or folder they index.
     func resolutionStatus(for url: URL) async -> IDEResolutionStatus {

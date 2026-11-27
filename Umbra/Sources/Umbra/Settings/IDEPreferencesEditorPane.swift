@@ -5,6 +5,7 @@ import Penumbra
 import SwiftUI
 
 struct IDEPreferencesEditorPane: View {
+    @Environment(IDEWorkspace.self) private var workspace
     @Bindable var preferences: IDEPreferences
     @State private var modelsStore = IDELocalModelsStore.shared
     @State private var inlineModelStatus = "Not loaded"
@@ -49,6 +50,10 @@ struct IDEPreferencesEditorPane: View {
                     Text(palette.name).tag(palette.id)
                 }
             }
+        }
+
+        IDESettingsSection("Code Annotations") {
+            Button("Inlay Hints…", action: workspace.showInlayHintSettings)
         }
 
         IDESettingsSection("Typography") {

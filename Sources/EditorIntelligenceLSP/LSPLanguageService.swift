@@ -140,7 +140,7 @@ public final class LSPLanguageService: LanguageService, @unchecked Sendable {
             semanticTokens = LSPReadySemanticTokens(languages: languages, connections: connections)
         }
         if features.contains(.inlayHints) {
-            inlayHints = LSPReadyInlayHints(languages: languages, connections: connections)
+            inlayHints = LSPReadyInlayHints(languages: languages, connections: connections, languageID: configuration.lspLanguageID)
         }
         if features.contains(.typeHierarchy) {
             typeHierarchy = LSPReadyTypeHierarchy(languages: languages, connections: connections)

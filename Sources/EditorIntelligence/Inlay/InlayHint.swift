@@ -1,9 +1,6 @@
 import Foundation
 
-/// A label shown inline in the text without being part of it: `count:` before an argument.
-///
-/// Hints are display-only. They are not selected, copied or undone, and the editor keeps them
-/// where they are in the text as it is edited until the provider sends fresh ones.
+/// A virtual annotation anchored to a UTF-16 boundary in the document.
 public struct InlayHint: Sendable, Hashable {
     public enum Kind: Sendable, Hashable {
         /// The name of the parameter an argument is passed to.
@@ -15,16 +12,54 @@ public struct InlayHint: Sendable, Hashable {
         case other
     }
 
-    /// The UTF-16 offset in the document the hint sits in front of.
+    public enum Affinity: Sendable, Hashable {
+        /// An insertion at the anchor leaves the hint before the inserted text.
+        case beforeInsertion
+        /// An insertion at the anchor moves the hint after the inserted text.
+        case afterInsertion
+    }
+
+    /// The UTF-16 boundary in the document.
     public let utf16Offset: Int
     /// The text shown, with any punctuation (`count:`).
     public let label: String
     public let kind: Kind
 
-    public init(utf16Offset: Int, label: String, kind: Kind = .parameter) {
+    public let providerID: String?
+    public let symbol: String?
+    public let tooltip: String?
+    /// A bounded provider token for resolving optional presentation metadata.
+    public let resolutionData: Data?
+    /// An explicit acceptance action for the document revision that produced this hint.
+    public let edits: [TextEdit]
+    public let paddingLeft: Bool
+    public let paddingRight: Bool
+    public let affinity: Affinity
+
+    public init(
+        utf16Offset: Int, label: String, kind: Kind = .parameter,
+        providerID: String? = nil, symbol: String? = nil, tooltip: String? = nil, resolutionData: Data? = nil,
+        edits: [TextEdit] = [], affinity: Affinity = .beforeInsertion, paddingLeft: Bool = false, paddingRight: Bool = false
+    ) {
         self.utf16Offset = utf16Offset
         self.label = label
         self.kind = kind
+        self.providerID = providerID
+        self.symbol = symbol
+        self.tooltip = tooltip
+        self.resolutionData = resolutionData
+        self.edits = edits
+        self.affinity = affinity
+        self.paddingLeft = paddingLeft
+        self.paddingRight = paddingRight
+    }
+
+    public func anchored(at offset: Int) -> Self {
+        Self(
+            utf16Offset: offset, label: label, kind: kind, providerID: providerID,
+            symbol: symbol, tooltip: tooltip, resolutionData: resolutionData,
+            edits: edits, affinity: affinity, paddingLeft: paddingLeft, paddingRight: paddingRight
+        )
     }
 }
 
@@ -33,4 +68,11 @@ public protocol InlayHintProviding: Sendable {
     /// The hints whose offsets fall in `range` (a hint at either end is included). A provider
     /// should bound its work, since this runs whenever the visible text changes.
     func inlayHints(for document: Document, in range: TextRange) async -> [InlayHint]
+    func resolveInlayTooltip(for hint: InlayHint, in document: Document) async -> String?
+}
+
+public extension InlayHintProviding {
+    func resolveInlayTooltip(for hint: InlayHint, in document: Document) async -> String? {
+        hint.tooltip
+    }
 }

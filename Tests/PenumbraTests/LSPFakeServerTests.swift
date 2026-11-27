@@ -1003,6 +1003,72 @@ final class LSPFakeServerTests: XCTestCase {
         XCTAssertTrue(LSPServerCapabilities.resolvesCompletionItems(capabilities))
     }
 
+    func testInlayHintsRoundTripAndRefreshWithoutParameters() async throws {
+        let updates = ProgressLog()
+        let fixture = await makeIncrementalFixture(syncKind: 2, inlayMode: .enabled) {
+            updates.append(["refresh"])
+        }
+        defer { fixture.stop() }
+        let document = incrementalDocument(DocumentID(), "let value = 1")
+        let start = document.cursor.position
+        let end = TextPosition(line: 0, column: 13, utf16Offset: 13)
+        let hints = try await fixture.client.requestInlayHints(for: document, in: TextRange(start: start, end: end))
+        XCTAssertEqual(hints.map(\.label), [": Int"])
+        XCTAssertEqual(hints.first?.protocolHint?.paddingLeft, true)
+        XCTAssertNotNil(hints.first?.protocolHint?.data)
+        let box = LSPConnectionBox(client: fixture.client)
+        box.setSupportedFeatures(await fixture.client.advertisedFeatures())
+        let service = LSPLanguageService(
+            configuration: LSPLanguageConfiguration(
+                name: "fake", languageIdentifiers: ["swift"], enabledFeatures: [.inlayHints],
+                diagnosticSource: .sourceKitLSP
+            ),
+            connections: box
+        )
+        let provider = try XCTUnwrap(service.providers.inlayHints)
+        let converted = await provider.inlayHints(for: document, in: TextRange(start: start, end: end))
+        let hint = try XCTUnwrap(converted.first)
+        XCTAssertNil(hint.tooltip)
+        XCTAssertNotNil(hint.resolutionData)
+        XCTAssertFalse(fixture.peer.methods.contains("inlayHint/resolve"))
+        let tooltip = await provider.resolveInlayTooltip(for: hint, in: document)
+        XCTAssertEqual(tooltip, "Inferred integer type")
+
+        let capabilities = fixture.peer.clientCapabilities
+        let workspace = capabilities["workspace"] as? [String: Any]
+        let refresh = workspace?["inlayHint"] as? [String: Bool]
+        XCTAssertEqual(refresh?["refreshSupport"], true)
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !fixture.peer.methods.contains("response:9002"), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(updates.snapshot, [["refresh"]])
+        XCTAssertTrue(fixture.peer.methods.contains("response:9002"))
+    }
+
+    func testCancellingInlayRequestSendsProtocolCancellationAndUnblocksCaller() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2, inlayMode: .withholdResponse)
+        defer { fixture.stop() }
+        let document = incrementalDocument(DocumentID(), "let value = 1")
+        let range = document.selection.range
+        let client = fixture.client
+        let request = Task { try await client.requestInlayHints(for: document, in: range) }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !fixture.peer.methods.contains("textDocument/inlayHint"), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(fixture.peer.methods.contains("textDocument/inlayHint"))
+        request.cancel()
+        do {
+            _ = try await request.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {}
+        while !fixture.peer.methods.contains("$/cancelRequest"), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(fixture.peer.methods.contains("$/cancelRequest"))
+    }
+
     private static func document() -> Document {
         let position = TextPosition(line: 1, column: 4, utf16Offset: 8)
         return Document(
@@ -1025,11 +1091,15 @@ final class LSPFakeServerTests: XCTestCase {
         let stop: () -> Void
     }
 
-    private func makeIncrementalFixture(syncKind: Int) async -> IncrementalFixture {
+    private func makeIncrementalFixture(
+        syncKind: Int, inlayMode: ScriptedLSPPeer.InlayMode = .disabled,
+        onInlayHintsChanged: (@Sendable () -> Void)? = nil
+    ) async -> IncrementalFixture {
         let toServer = Pipe()
         let fromServer = Pipe()
         let peer = ScriptedLSPPeer()
         peer.syncKind = syncKind
+        peer.inlayMode = inlayMode
         let server = Task.detached {
             peer.serve(reading: toServer.fileHandleForReading, writing: fromServer.fileHandleForWriting)
         }
@@ -1050,7 +1120,8 @@ final class LSPFakeServerTests: XCTestCase {
             write: { try clientWrite.write($0) },
             read: stream,
             documentURI: { $0.url?.absoluteString ?? "untitled:\($0.id)" },
-            workspaceRoot: URL(fileURLWithPath: "/tmp")
+            workspaceRoot: URL(fileURLWithPath: "/tmp"),
+            onInlayHintsChanged: onInlayHintsChanged
         )
         let workspace = Workspace()
         let sync = LSPWorkspaceDocumentSync(client: client, languages: ["swift"])
@@ -1211,6 +1282,13 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
         return seen
     }
 
+    enum InlayMode {
+        case disabled
+        case enabled
+        case withholdResponse
+    }
+    var inlayMode: InlayMode = .disabled
+
     /// After `initialized`, ask the client to create a progress token and report on it.
     var scriptsProgress = false
     /// After `initialized`, push one diagnostic (source `SourceKit`, 0:4-0:7) for `file:///tmp/A.swift`.
@@ -1323,6 +1401,11 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
         lock.unlock()
         if method == "initialized", scriptsProgress { Self.sendProgress(on: output) }
         if method == "initialized", publishesDiagnostic { Self.sendDiagnostic(on: output) }
+        if method == "initialized", inlayMode == .enabled {
+            let body = #"{"jsonrpc":"2.0","id":9002,"method":"workspace/inlayHint/refresh"}"#
+            try? output.write(contentsOf: Data("Content-Length: \(body.utf8.count)\r\n\r\n\(body)".utf8))
+        }
+        if method == "textDocument/inlayHint", inlayMode == .withholdResponse { return }
         guard let id = object["id"], !(id is NSNull) else { return }
         if method == "workspace/executeCommand", appliesEditOnCommand {
             lock.lock()
@@ -1332,7 +1415,7 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
             return
         }
         let body = Self.response(
-            id: id, method: method, incompleteCompletion: incompleteCompletion, syncKind: syncKind
+            id: id, method: method, incompleteCompletion: incompleteCompletion, syncKind: syncKind, supportsInlay: inlayMode != .disabled
         )
         var framed = Data("Content-Length: \(body.count)\r\n\r\n".utf8)
         framed.append(body)
@@ -1396,7 +1479,7 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
     }
 
     private static func response(
-        id: Any, method: String, incompleteCompletion: Bool = false, syncKind: Int? = nil
+        id: Any, method: String, incompleteCompletion: Bool = false, syncKind: Int? = nil, supportsInlay: Bool = false
     ) -> Data {
         let result: Any
         switch method {
@@ -1412,7 +1495,16 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
             if let syncKind {
                 capabilities["textDocumentSync"] = syncKind
             }
+            if supportsInlay { capabilities["inlayHintProvider"] = ["resolveProvider": true] }
             result = ["capabilities": capabilities] as [String: Any]
+        case "textDocument/inlayHint":
+            result = [
+                ["position": ["line": 0, "character": 9], "label": [["value": ": "], ["value": "Int"]],
+                 "kind": 1, "paddingLeft": true, "data": ["token": "opaque"]],
+                ["position": ["line": 0], "label": ""]
+            ]
+        case "inlayHint/resolve":
+            result = ["position": ["line": 0, "character": 9], "label": ": Int", "tooltip": "Inferred integer type"]
         case "textDocument/completion":
             let items = [["label": "Box", "insertText": "Box"]]
             result = incompleteCompletion ? ["isIncomplete": true, "items": items] as [String: Any] : items as Any

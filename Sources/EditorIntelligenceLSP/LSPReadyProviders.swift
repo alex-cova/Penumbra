@@ -28,7 +28,7 @@ struct LSPReadyCodeActions: CodeActionProviding {
     let languages: Set<String>
     let connections: any LSPConnectionProviding
 
-    func codeActions(for document: Document, at position: TextPosition, diagnostics: [Diagnostic]) async -> [CodeAction] {
+    func codeActions(for document: Document, at position: TextPosition, diagnostics: [EditorIntelligence.Diagnostic]) async -> [CodeAction] {
         guard let client = lspClient(connections, feature: .codeActions, languages: languages, documentLanguage: document.languageIdentifier) else {
             return []
         }
@@ -89,19 +89,45 @@ struct LSPReadySemanticTokens: SemanticTokenProviding {
 struct LSPReadyInlayHints: InlayHintProviding {
     let languages: Set<String>
     let connections: any LSPConnectionProviding
+    let languageID: @Sendable (URL?, String) -> String
 
-    func inlayHints(for document: Document, in range: EditorIntelligence.TextRange) async -> [InlayHint] {
+    func inlayHints(for document: Document, in range: EditorIntelligence.TextRange) async -> [EditorIntelligence.InlayHint] {
         guard let client = lspClient(connections, feature: .inlayHints, languages: languages, documentLanguage: document.languageIdentifier) as? LanguageServerClient else {
             return []
         }
-        let hints = (try? await client.requestInlayHints(for: document, in: range)) ?? []
-        let source = documentText(document)
-        return hints.compactMap { hint in
-            guard let offset = utf16Offset(line: hint.line, character: hint.character, in: source),
+        let hints = (try? await client.requestInlayHints(
+            for: document, in: range, languageID: languageID(document.url, document.languageIdentifier ?? "")
+        )) ?? []
+        guard !hints.isEmpty, !Task.isCancelled else { return [] }
+        let map = SourceTextMap(documentText(document))
+        let canResolve = await client.supportsInlayResolution()
+        return hints.prefix(512).compactMap { hint in
+            guard let offset = map.utf16Offset(line: hint.line, column: hint.character),
                   offset >= range.start.utf16Offset, offset <= range.end.utf16Offset else { return nil }
-            let kind: InlayHint.Kind = hint.kind == "type" ? .type : (hint.kind == "parameter" ? .parameter : .other)
-            return InlayHint(utf16Offset: offset, label: hint.label, kind: kind)
+            let kind: EditorIntelligence.InlayHint.Kind = hint.kind == "type" ? .type : (hint.kind == "parameter" ? .parameter : .other)
+            let token: Data?
+            if canResolve, hint.tooltip == nil, let wire = hint.protocolHint,
+               let encoded = try? JSONEncoder().encode(wire), encoded.count <= 4096 {
+                token = encoded
+            } else {
+                token = nil
+            }
+            return EditorIntelligence.InlayHint(
+                utf16Offset: offset, label: hint.label, kind: kind, providerID: "lsp",
+                tooltip: hint.tooltip.map { String($0.prefix(4096)) }, resolutionData: token,
+                edits: hint.acceptanceEdits(in: map),
+                paddingLeft: hint.protocolHint?.paddingLeft == true,
+                paddingRight: hint.protocolHint?.paddingRight == true
+            )
         }
+    }
+
+    func resolveInlayTooltip(for hint: EditorIntelligence.InlayHint, in document: Document) async -> String? {
+        if let tooltip = hint.tooltip { return tooltip }
+        guard hint.providerID == "lsp", let token = hint.resolutionData,
+              let client = lspClient(connections, feature: .inlayHints, languages: languages, documentLanguage: document.languageIdentifier) as? LanguageServerClient,
+              let resolved = try? await client.resolveInlayHint(token) else { return nil }
+        return resolved.tooltip.map { String($0.prefix(4096)) }
     }
 }
 
@@ -229,7 +255,7 @@ private func documentText(_ document: Document) -> String {
     return snapshot.substring(utf16Offset: 0, length: snapshot.utf16Length)
 }
 
-func lspDocument(source: String, url: URL?, language: String?, utf16Offset: Int) -> Document {
+func lspDocument(source: String, url: URL?, language: String?, utf16Offset: Int) -> EditorIntelligence.Document {
     let position = textPosition(utf16Offset: utf16Offset, in: source)
     return Document(
         url: url, displayName: url?.lastPathComponent ?? "untitled",

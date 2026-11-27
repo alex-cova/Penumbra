@@ -57,6 +57,7 @@ public final class PenumbraWorkbenchEditorAdapter: EditorAdapter, @unchecked Sen
     public func bindNavigationHistory(to textView: TextView, document: WorkbenchDocument) {
         textView.navigationHistory = workbench.navigationHistory
         textView.documentIdentifier = document.id
+        textView.intelligenceDocumentID = document.documentID
         textView.documentURL = document.url
         textView.onNavigateToHistoryEntry = { [weak self] entry in
             self?.onOpenHistoryEntry?(entry) ?? false

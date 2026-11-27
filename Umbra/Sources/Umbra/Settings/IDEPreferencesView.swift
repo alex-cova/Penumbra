@@ -23,12 +23,20 @@ public struct IDEPreferencesView: View {
     }
 
     private var visibleDomains: [IDEPreferencesDomain] {
-        IDEPreferencesDomain.ordered(with: IDELanguageModules.preferencePanes.map(\.domain)).filter { $0.matches(query) }
+        let domains = IDEPreferencesDomain.ordered(with: IDELanguageModules.preferencePanes.map(\.domain))
+        let matches = domains.filter { $0.matches(query) }
+        if !query.trimmingCharacters(in: .whitespaces).isEmpty, IDEPreferencesDomain.inlayHints.matches(query) {
+            return matches + [.inlayHints]
+        }
+        return matches
     }
 
     /// The selected domain, or the first match when a search has filtered it out of the sidebar.
     private var shownDomain: IDEPreferencesDomain {
-        visibleDomains.contains(selectedDomain) ? selectedDomain : (visibleDomains.first ?? selectedDomain)
+        if selectedDomain == .inlayHints, query.trimmingCharacters(in: .whitespaces).isEmpty {
+            return .inlayHints
+        }
+        return visibleDomains.contains(selectedDomain) ? selectedDomain : (visibleDomains.first ?? selectedDomain)
     }
 
     public var body: some View {
@@ -38,7 +46,9 @@ public struct IDEPreferencesView: View {
                 searchFocused: $searchFocused, sidebarFocused: $sidebarFocused)
             HStack(spacing: 0) {
                 IDEPreferencesSidebar(
-                    visibleDomains: visibleDomains, shownDomain: shownDomain, selectedDomain: $selectedDomain,
+                    visibleDomains: visibleDomains,
+                    shownDomain: shownDomain == .inlayHints && !visibleDomains.contains(.inlayHints) ? .editor : shownDomain,
+                    selectedDomain: $selectedDomain,
                     searchFocused: $searchFocused, sidebarFocused: $sidebarFocused)
                     .frame(width: 190)
                 Rectangle()

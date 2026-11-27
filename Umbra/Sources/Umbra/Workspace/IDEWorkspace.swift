@@ -449,6 +449,11 @@ public final class IDEWorkspace {
         showSettings()
     }
 
+    func showInlayHintSettings() {
+        requestedSettingsDomain = .inlayHints
+        showSettings()
+    }
+
     func showSettings() {
         IDESettingsPresentation.shared.open(from: self)
     }
@@ -982,6 +987,9 @@ public final class IDEWorkspace {
             }
         }
         languageServerHost.documentWorkspace = workspaceBridge.workspace
+        languageServerHost.onInlayHintsChanged = { [weak self] _ in
+            self?.javaInlayHintsPreferenceChanged()
+        }
         languageServerHost.requestTrust = { [weak self] definition, url in
             guard let self, self.window != nil else { return false }
             let name = url.lastPathComponent
@@ -1055,9 +1063,15 @@ public final class IDEWorkspace {
         intelligenceServices.javaSupport.onCompilerConfigured = { [weak self] in
             self?.compilerDidReconfigure()
         }
+        intelligenceServices.javaSupport.configureCodeVisionReadiness()
         intelligenceServices.javaSupport.onIndexSourcesPublished = { [weak self] in
             guard let self else { return }
             javaGutterIconsPreferenceChanged()
+            for paneID in hostedPaneIDs {
+                let controller = host(for: paneID).intelligenceController
+                controller?.refreshInlayHints()
+                controller?.refreshCodeVision()
+            }
             // Inspection results are only current for the sources they were judged against.
             javaSupport.reanalyzeInspectionsAfterIndexChange(openJavaDocuments())
         }
@@ -3330,6 +3344,16 @@ public final class IDEWorkspace {
         }
     }
 
+    func toggleInlayHints() {
+        if let root = project.rootURL, let visibility = preferences.inlayHintsOverride(for: root) {
+            preferences.setInlayHintsOverride(!visibility, for: root)
+        } else {
+            preferences.inlayHintsEnabled.toggle()
+        }
+        applyPreferencesToAllHosts()
+        focusActiveEditor()
+    }
+
     func toggleMinimap() {
         preferences.showMinimap.toggle()
         applyPreferencesToAllHosts()
@@ -3465,6 +3489,8 @@ public final class IDEWorkspace {
             preferences.apply(to: host.textView, repaint: true)
             if let controller = host.intelligenceController {
                 preferences.apply(to: controller)
+                configureAnnotations(on: controller, for: pane.selectedDocument)
+                controller.refreshInlayHints()
             }
             host.markdownPreviewController.options = preferences.markdownPreview.options
             host.markdownPreviewController.setSideBySide(preferences.markdownPreview.sideBySide)
@@ -3916,7 +3942,11 @@ public final class IDEWorkspace {
             adapter: adapter,
             workspace: workspaceBridge.workspace
         )
-        host.intelligenceController?.inlayHintsEnabled = preferences.areInlayHintsEnabled
+        host.intelligenceController?.inlayHintsEnabled = false
+        host.intelligenceController?.onCodeVisionClick = { [weak self, weak host] entry, offset in
+            guard let self, let host else { return }
+            self.intelligenceServices.jdkConfigurationHints.handle(entry, at: offset, in: host.textView, workspace: self)
+        }
         // A bound key that no layer handled is swallowed (it must not become text); say so rather
         // than let it vanish (F28). It cannot tell "no handler" from "nothing to do here", so the
         // wording fits both.
@@ -3953,7 +3983,8 @@ public final class IDEWorkspace {
         host.textView.contextMenuItemsProvider = { [weak self, weak host] context in
             guard let self, let host else { return [] }
             let url = self.workbench.layout.findPane(id: paneID)?.selectedDocument?.url
-            return self.editorContextMenuItems(context: context, paneID: paneID, url: url)
+            return self.inlayHintContextMenuItems(context.inlayHint, controller: host.intelligenceController)
+                + self.editorContextMenuItems(context: context, paneID: paneID, url: url)
                 + self.copyReferenceContextMenuItems(context: context, paneID: paneID, url: url)
                 + self.diffContextMenuItems(url: url)
                 + self.diagramContextMenuItems(url: url)
@@ -4632,12 +4663,87 @@ public final class IDEWorkspace {
         noteSwiftUIPreviewDocumentSaved(url)
     }
 
+    private func configureAnnotations(on controller: EditorIntelligenceController, for document: WorkbenchDocument?) {
+        let language = document?.intelligenceLanguageIdentifier
+        let supported = languages.services(for: language).contains {
+            $0.providers.inlayHints != nil && !$0.unavailableFeatures.contains(.inlayHints)
+        }
+        let visible = preferences.inlayHintsOverride(for: project.rootURL) ?? preferences.inlayHintsEnabled
+        controller.inlayHintsEnabled = visible && supported
+            && (language == "java" ? preferences.areInlayHintsEnabled : preferences.lspInlayHintsEnabled)
+        let configuration = IDEJDKConfigurationCodeVision.supports(document?.url, in: javaSupport.jdk.projectRoot)
+        controller.codeVisionEnabled = visible && (
+            configuration ? preferences.jdkConfigurationHintsEnabled : language == "java" && preferences.areCodeVisionLensesEnabled
+        )
+    }
+
     func javaInlayHintsPreferenceChanged() {
         for paneID in hostedPaneIDs {
-            let controller = host(for: paneID).intelligenceController
-            controller?.inlayHintsEnabled = preferences.areInlayHintsEnabled
-            // The kinds shown changed, which `inlayHintsEnabled` alone does not notice.
-            controller?.refreshInlayHints()
+            guard let controller = host(for: paneID).intelligenceController else { continue }
+            configureAnnotations(on: controller, for: workbench.layout.findPane(id: paneID)?.selectedDocument)
+            controller.refreshInlayHints()
+            controller.refreshCodeVision()
+        }
+    }
+
+    private func inlayHintContextMenuItems(_ hint: InlayHint?, controller: EditorIntelligenceController?) -> [NSMenuItem] {
+        guard let hint else { return [] }
+        var items: [NSMenuItem] = []
+        if !hint.edits.isEmpty {
+            items.append(IDEClosureMenuItem(title: "Apply Inlay Hint") { [weak controller] in
+                controller?.acceptInlayHint(hint)
+            })
+        }
+        if hint.tooltip != nil || hint.resolutionData != nil {
+            items.append(IDEClosureMenuItem(title: "Show Inlay Hint Details") { [weak self, weak controller] in
+                Task {
+                    guard let tooltip = await controller?.inlayTooltip(for: hint) else { return }
+                    self?.notifications.post(hint.label, detail: tooltip)
+                }
+            })
+        }
+        if hint.providerID == "java", let symbol = hint.symbol {
+            items.append(IDEClosureMenuItem(title: "Exclude \(symbol)") { [weak self] in
+                guard let self else { return }
+                if !preferences.javaInlayExclusions.isEmpty {
+                    preferences.javaInlayExclusions += "\n"
+                }
+                preferences.javaInlayExclusions += symbol
+                applyPreferencesToAllHosts()
+            })
+        }
+        if hint.providerID == "lsp" || hint.kind == .parameter {
+            items.append(IDEClosureMenuItem(title: hint.providerID == "lsp" ? "Hide Language Server Hints" : "Hide Java Parameter Hints") { [weak self] in
+                guard let self else { return }
+                if hint.providerID == "lsp" {
+                    preferences.lspInlayHintsEnabled = false
+                } else {
+                    preferences.javaInlayHints = false
+                }
+                applyPreferencesToAllHosts()
+            })
+        }
+        items.append(IDEClosureMenuItem(title: "Configure Inlay Hints…") { [weak self] in
+            self?.showInlayHintSettings()
+        })
+        items.append(IDEClosureMenuItem(title: "Disable Inlay Hints") { [weak self] in
+            guard let self else { return }
+            if let root = project.rootURL {
+                preferences.setInlayHintsOverride(false, for: root)
+            } else {
+                preferences.inlayHintsEnabled = false
+            }
+            applyPreferencesToAllHosts()
+        })
+        return items
+    }
+
+    func refreshJDKConfigurationHints() {
+        for paneID in hostedPaneIDs {
+            guard let pane = workbench.layout.findPane(id: paneID),
+                  IDEJDKConfigurationCodeVision.supports(pane.selectedDocument?.url, in: javaSupport.jdk.projectRoot)
+            else { continue }
+            host(for: paneID).intelligenceController?.refreshCodeVision(delay: 0)
         }
     }
 
@@ -5226,6 +5332,10 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.runAgentCommand(.history) }),
             EditorCommand(id: "app.revealActiveFile", title: "Reveal Active File in Explorer", group: "View",
                           action: { [weak self] in self?.revealActiveFileInExplorer() }),
+            EditorCommand(id: "app.toggleInlayHints", title: "Toggle Inlay Hints", group: "View",
+                          action: { [weak self] in self?.toggleInlayHints() }),
+            EditorCommand(id: "app.configureInlayHints", title: "Configure Inlay Hints…", group: "View",
+                          action: { [weak self] in self?.showInlayHintSettings() }),
             EditorCommand(id: "app.toggleMinimap", title: "Toggle Minimap", group: "View",
                           action: { [weak self] in self?.toggleMinimap() }),
             EditorCommand(id: "app.toggleLineNumbers", title: "Toggle Line Numbers", group: "View",
@@ -6461,6 +6571,11 @@ public final class IDEWorkspace {
         host.loadedDocumentID = document.id
         host.loadedGeneration = document.contentGeneration
         host.loadedBufferGeneration = host.textView.contentGeneration
+        if let controller = host.intelligenceController {
+            configureAnnotations(on: controller, for: document)
+            controller.refreshInlayHints()
+            controller.refreshCodeVision()
+        }
         host.textView.layoutSubtreeIfNeeded()
         if let pending = host.pendingReveal, pending.documentID == document.id {
             host.pendingReveal = nil

@@ -110,6 +110,21 @@ public struct SourceTextMap: Sendable {
         return (text, lineIndex, clamped - start)
     }
 
+    /// Strict UTF-16 position conversion for server results. Excludes line delimiters and
+    /// rejects offsets inside surrogate pairs.
+    public func utf16Offset(line: Int, column: Int) -> Int? {
+        guard lineStarts.indices.contains(line), column >= 0 else { return nil }
+        let ns = source as NSString
+        let start = lineStarts[line].utf16
+        var end = line + 1 < lineStarts.count ? lineStarts[line + 1].utf16 : utf16Length
+        if end > start, ns.character(at: end - 1) == 0x0A { end -= 1 }
+        if end > start, ns.character(at: end - 1) == 0x0D { end -= 1 }
+        guard column <= end - start else { return nil }
+        let offset = start + column
+        if offset < end, (0xDC00...0xDFFF).contains(ns.character(at: offset)) { return nil }
+        return offset
+    }
+
     private func lineIndex(byte: Int) -> Int {
         var low = 0
         var high = lineStarts.count - 1

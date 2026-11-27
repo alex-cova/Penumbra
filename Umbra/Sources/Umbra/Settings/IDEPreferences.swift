@@ -92,6 +92,12 @@ public final class IDEPreferences {
         static let javaMavenSettingsFile = "com.umbra.editor.javaMavenSettingsFile"
         static let javaCompilerDiagnostics = "com.umbra.editor.javaCompilerDiagnostics"
         static let semanticHighlighting = "com.umbra.editor.semanticHighlighting"
+        static let inlayHintsWorkspaceOverrides = "com.umbra.editor.inlayHintsWorkspaceOverrides"
+        static let inlayHintsEnabled = "com.umbra.editor.inlayHintsEnabled"
+        static let lspInlayHintsEnabled = "com.umbra.editor.lspInlayHintsEnabled"
+        static let jdkConfigurationHintsEnabled = "com.umbra.editor.jdkConfigurationHintsEnabled"
+        static let javaInlayChainTypes = "com.umbra.editor.javaInlayChainTypes"
+        static let javaInlayExclusions = "com.umbra.editor.javaInlayExclusions"
         static let javaInlayHints = "com.umbra.editor.javaInlayHints"
         static let javaInlayVariableTypes = "com.umbra.editor.javaInlayVariableTypes"
         static let javaInlayLambdaTypes = "com.umbra.editor.javaInlayLambdaTypes"
@@ -826,9 +832,56 @@ public final class IDEPreferences {
         )
     }
 
+    var inlayHintsEnabled: Bool {
+        didSet { UserDefaults.standard.set(inlayHintsEnabled, forKey: Keys.inlayHintsEnabled) }
+    }
+
+    private var inlayHintsWorkspaceOverrides: [String: Bool] {
+        didSet { UserDefaults.standard.set(inlayHintsWorkspaceOverrides, forKey: Keys.inlayHintsWorkspaceOverrides) }
+    }
+
+    func inlayHintsOverride(for root: URL?) -> Bool? {
+        guard let root else { return nil }
+        return inlayHintsWorkspaceOverrides[root.standardizedFileURL.path]
+    }
+
+    func setInlayHintsOverride(_ value: Bool?, for root: URL) {
+        inlayHintsWorkspaceOverrides[root.standardizedFileURL.path] = value
+    }
+
+    var lspInlayHintsEnabled: Bool {
+        didSet { UserDefaults.standard.set(lspInlayHintsEnabled, forKey: Keys.lspInlayHintsEnabled) }
+    }
+
+    var jdkConfigurationHintsEnabled: Bool {
+        didSet { UserDefaults.standard.set(jdkConfigurationHintsEnabled, forKey: Keys.jdkConfigurationHintsEnabled) }
+    }
+
+    var javaInlayChainTypes: Bool {
+        didSet { UserDefaults.standard.set(javaInlayChainTypes, forKey: Keys.javaInlayChainTypes) }
+    }
+
+    var javaInlayExclusions: String {
+        didSet { UserDefaults.standard.set(javaInlayExclusions, forKey: Keys.javaInlayExclusions) }
+    }
+
+    func restoreInlayHintDefaults() {
+        inlayHintsEnabled = true
+        lspInlayHintsEnabled = true
+        jdkConfigurationHintsEnabled = true
+        javaInlayHints = true
+        javaInlayVariableTypes = true
+        javaInlayLambdaTypes = true
+        javaInlayChainTypes = false
+        javaInlayExclusions = ""
+        javaCodeVisionUsages = false
+        javaCodeVisionImplementations = false
+        inlayHintsUseEditorFont = false
+    }
+
     /// Whether any kind of inlay hint is on, which is when the editor asks for hints at all.
     var areInlayHintsEnabled: Bool {
-        javaInlayHints || javaInlayVariableTypes || javaInlayLambdaTypes
+        javaInlayHints || javaInlayVariableTypes || javaInlayLambdaTypes || javaInlayChainTypes
     }
 
     /// One level of indentation as the editor is set up (`tabWidth` spaces, or a tab), for the language
@@ -856,9 +909,13 @@ public final class IDEPreferences {
     nonisolated static func currentJavaInlayHintOptions() -> JavaInlayHintOptions {
         let defaults = UserDefaults.standard
         return JavaInlayHintOptions(
-            parameterNames: defaults.bool(forKey: Keys.javaInlayHints),
-            variableTypes: defaults.bool(forKey: Keys.javaInlayVariableTypes),
-            lambdaParameterTypes: defaults.bool(forKey: Keys.javaInlayLambdaTypes)
+            parameterNames: defaults.object(forKey: Keys.javaInlayHints) as? Bool ?? true,
+            variableTypes: defaults.object(forKey: Keys.javaInlayVariableTypes) as? Bool ?? true,
+            lambdaParameterTypes: defaults.object(forKey: Keys.javaInlayLambdaTypes) as? Bool ?? true,
+            methodChainTypes: defaults.bool(forKey: Keys.javaInlayChainTypes),
+            excludedSymbols: (defaults.string(forKey: Keys.javaInlayExclusions) ?? "")
+                .prefix(16_384).split(whereSeparator: \.isNewline).prefix(128)
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         )
     }
 
@@ -1284,9 +1341,15 @@ public final class IDEPreferences {
         javaMavenSettingsFile = defaults.string(forKey: Keys.javaMavenSettingsFile) ?? ""
         javaCompilerDiagnostics = defaults.object(forKey: Keys.javaCompilerDiagnostics) as? Bool ?? true
         semanticHighlighting = defaults.object(forKey: Keys.semanticHighlighting) as? Bool ?? true
-        javaInlayHints = defaults.bool(forKey: Keys.javaInlayHints)
-        javaInlayVariableTypes = defaults.bool(forKey: Keys.javaInlayVariableTypes)
-        javaInlayLambdaTypes = defaults.bool(forKey: Keys.javaInlayLambdaTypes)
+        inlayHintsWorkspaceOverrides = defaults.dictionary(forKey: Keys.inlayHintsWorkspaceOverrides) as? [String: Bool] ?? [:]
+        inlayHintsEnabled = defaults.object(forKey: Keys.inlayHintsEnabled) as? Bool ?? true
+        lspInlayHintsEnabled = defaults.object(forKey: Keys.lspInlayHintsEnabled) as? Bool ?? true
+        jdkConfigurationHintsEnabled = defaults.object(forKey: Keys.jdkConfigurationHintsEnabled) as? Bool ?? true
+        javaInlayChainTypes = defaults.bool(forKey: Keys.javaInlayChainTypes)
+        javaInlayExclusions = defaults.string(forKey: Keys.javaInlayExclusions) ?? ""
+        javaInlayHints = defaults.object(forKey: Keys.javaInlayHints) as? Bool ?? true
+        javaInlayVariableTypes = defaults.object(forKey: Keys.javaInlayVariableTypes) as? Bool ?? true
+        javaInlayLambdaTypes = defaults.object(forKey: Keys.javaInlayLambdaTypes) as? Bool ?? true
         javaCodeVisionUsages = defaults.bool(forKey: Keys.javaCodeVisionUsages)
         javaCoverageShowsInEditor = defaults.object(forKey: Keys.javaCoverageShowsInEditor) as? Bool ?? true
         javaCoverageIncludesTests = defaults.object(forKey: Keys.javaCoverageIncludesTests) as? Bool ?? false
@@ -1467,7 +1530,6 @@ public final class IDEPreferences {
         controller.showsDocumentationOnMouseHover = showsDocumentationOnHover
         controller.tooltipDelay = TimeInterval(tooltipDelayMilliseconds) / 1000
         controller.codeVisionConfiguration = "\(javaCodeVisionUsages)|\(javaCodeVisionImplementations)"
-        controller.codeVisionEnabled = areCodeVisionLensesEnabled
         controller.appliesRefactoringsInPlace = inPlaceRefactoring
         controller.confirmsInlineVariable = confirmsInlineVariable
         controller.postfixExpansionSettings = javaPostfix.expansionSettings

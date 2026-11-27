@@ -38,6 +38,7 @@ func printUsageAndExit() -> Never {
       typeset-long synthetic [--samples N]
       index-parse <path|synthetic> [--lang java] [--lines N] [--samples N]
       metal-waits <path|synthetic> [--lines N] [--frames N] [--no-deferred] [--discrete-atlas]
+      java-inlay synthetic [--lines N] [--samples N]
       java-completion synthetic [--jars N] [--large-methods N] [--large-per-class N] [--unicode]
       java-anonymous synthetic [--samples N] [--edits N]
       java-name-index <java-source-directory|synthetic> [--files N]
@@ -122,7 +123,7 @@ let options = Commands.Options(
 )
 
 let allowsSyntheticPath = command == "scroll-frames" || command == "metal-waits" || command == "typeset-long" || command == "index-parse" || command == "snapshot-metal" || command == "java-completion" || command == "java-inspections" || command == "java-reinspection" || command == "java-analysis-server" || command == "java-scope-tree" || command == "java-goto-definition" || command == "swift-syntax-parse"
-    || command == "java-profile-import" || command == "java-coverage-bands" || command == "java-platform-release"
+    || command == "java-inlay" || command == "java-profile-import" || command == "java-coverage-bands" || command == "java-platform-release"
     || command == "enter-session" || command == "markdown-preview" || command == "java-name-index" || command == "java-inheritors" || command == "java-stub-reuse" || command == "java-parse-edit" || command == "java-allocations" || command == "java-anonymous"
     || command == "spring" || command == "spring-endpoints" || command == "swift-index" || command == "swift-completion" || command == "ts-index" || command == "ts-completion"
 let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
@@ -249,6 +250,11 @@ do {
             pathOrSynthetic: path,
             lines: Int(flagValue("--lines", in: rest) ?? "") ?? 2_000,
             samples: Int(flagValue("--samples", in: rest) ?? "") ?? 9
+        )
+    case "java-inlay":
+        JavaInlayProfile.run(
+            lines: Int(flagValue("--lines", in: rest) ?? "") ?? 5_000,
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 50
         )
     case "java-profile-import":
         JavaInstrumentationProfile.runProfileImport(

@@ -32,6 +32,10 @@ struct IDEPreferencesDomain: Hashable, Identifiable {
         searchTerms: ["theme", "color", "font", "font size", "line height", "typography", "markdown headings", "tab width", "indent", "spaces", "line numbers", "folding", "word wrap", "minimap", "scrollbars", "right margin", "page guide", "method separators", "occurrences", "invisible characters", "metal", "renderer", "keymap", "keyboard", "sublime", "intellij", "shortcuts", "command completion", "full line", "inline", "postfix", "hugging face", "model", "download", "focus", "typewriter", "distraction free", "focus mode", "writing"],
         showsTypePreview: true
     )
+    static let inlayHints = IDEPreferencesDomain(
+        id: "inlay-hints", title: "Inlay Hints", symbol: "text.bubble",
+        searchTerms: ["editor", "parameter names", "inferred types", "lambda", "chains", "code vision", "JDK", "LSP", "exclusions"]
+    )
     static let saving = IDEPreferencesDomain(
         id: "saving", title: "Saving", symbol: "square.and.arrow.down",
         searchTerms: ["save", "autosave", "idle", "focus", "terminal", "seconds", "actions on save", "reformat", "format", "optimize imports", "imports", "code cleanup", "trailing spaces", "whitespace", "newline", "end of file", "build", "mark modified", "unsaved", "tabs", "modified"]

@@ -60,6 +60,7 @@ final class IDEIntelligenceServices {
     /// formatting. The order is the order each engine asks its providers, and the order services that
     /// share a language are combined in (Java's code actions come before the Run ones).
     let languages: LanguageServiceRegistry
+    lazy var jdkConfigurationHints = IDEJDKConfigurationCodeVision(native: languages.codeVision, jdk: javaSupport.jdk)
     /// Semantic-tier connections. The host fills them when a trusted folder's server is running.
     let sourceKitConnection = LSPConnectionBox()
     let typeScriptServerConnection = LSPConnectionBox()
@@ -199,13 +200,14 @@ final class IDEIntelligenceServices {
         adapter: PenumbraWorkbenchEditorAdapter,
         workspace: Workspace
     ) -> EditorIntelligenceController {
-        let services = EditorIntelligenceServices(
+        var services = EditorIntelligenceServices(
             languages: languages, symbolIndex: symbolIndex, workspace: workspace,
             inlineCompletionEngine: InlineCompletionEngine(
                 model: IDEInlineCompletionService.shared,
                 validators: ["java": javaSupport.completionProvider]
             )
         )
+        services.codeVisionProvider = jdkConfigurationHints
         let controller = EditorIntelligenceController(
             textView: textView,
             adapter: adapter,

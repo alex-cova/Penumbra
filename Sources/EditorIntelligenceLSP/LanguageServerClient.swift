@@ -7,11 +7,14 @@ import LanguageServerProtocol
 /// Concrete LSP client backed by ChimeHQ's `LanguageClient`.
 public actor LanguageServerClient: LSPClient {
     private let server: InitializingServer
+    private let inlayTransport: LSPInlayTransport?
     private let documentURI: @Sendable (Document) -> String
     private var uris: [DocumentID: String] = [:]
     /// Diagnostics the server pushed with `textDocument/publishDiagnostics`. An empty push clears the file.
     private var publishedDiagnostics = LSPPublishedDiagnostics()
     private var cachedCapabilities: ServerCapabilities?
+    private var inlayRegistrations: [String: InlayHintRegistrationOptions] = [:]
+    private let onInlayHintsChanged: (@Sendable () -> Void)?
     /// The one `initialize` in flight. Callers that arrive while it runs (the host's feature query and an editor
     /// request) wait for it; a second `initializeIfNeeded` beside it answered nothing, which left a ready server
     /// advertising no features.
@@ -40,12 +43,33 @@ public actor LanguageServerClient: LSPClient {
     public init(
         server: InitializingServer,
         documentURI: @escaping @Sendable (Document) -> String,
-        onProgress: (@Sendable ([LSPWorkProgress]) -> Void)? = nil
+        onProgress: (@Sendable ([LSPWorkProgress]) -> Void)? = nil,
+        onInlayHintsChanged: (@Sendable () -> Void)? = nil
+    ) {
+        self.init(
+            server: server, documentURI: documentURI, onProgress: onProgress,
+            onInlayHintsChanged: onInlayHintsChanged, inlayTransport: nil
+        )
+    }
+
+    private init(
+        server: InitializingServer,
+        documentURI: @escaping @Sendable (Document) -> String,
+        onProgress: (@Sendable ([LSPWorkProgress]) -> Void)?,
+        onInlayHintsChanged: (@Sendable () -> Void)?,
+        inlayTransport: LSPInlayTransport?
     ) {
         self.server = server
         self.documentURI = documentURI
         self.onProgress = onProgress
-        Task { await self.consumeServerEvents() }
+        self.onInlayHintsChanged = onInlayHintsChanged
+        self.inlayTransport = inlayTransport
+        Task { [weak self] in
+            for await event in server.eventSequence {
+                guard let self else { return }
+                await self.consumeServerEvent(event)
+            }
+        }
     }
 
     /// A client speaking JSON-RPC over `write` and `read`. The host owns the process; this only
@@ -57,14 +81,39 @@ public actor LanguageServerClient: LSPClient {
         documentURI: @escaping @Sendable (Document) -> String,
         workspaceRoot: URL? = nil,
         initializationOptions: Data? = nil,
-        onProgress: (@Sendable ([LSPWorkProgress]) -> Void)? = nil
+        onProgress: (@Sendable ([LSPWorkProgress]) -> Void)? = nil,
+        onInlayHintsChanged: (@Sendable () -> Void)? = nil
     ) -> LanguageServerClient {
-        let channel = DataChannel(writeHandler: write, dataSequence: read)
-        let connection = JSONRPCServerConnection(dataChannel: channel)
+        let framed = DataChannel(writeHandler: write, dataSequence: read).withMessageFraming()
+        let inlayTransport = LSPInlayTransport(write: framed.writeHandler, onRefresh: onInlayHintsChanged)
+        let (messages, continuation) = AsyncStream<Data>.makeStream()
+        let relay = Task {
+            for await message in framed.dataSequence {
+                if !(await inlayTransport.consume(message)) { continuation.yield(message) }
+            }
+            await inlayTransport.close()
+            continuation.finish()
+        }
+        continuation.onTermination = { _ in relay.cancel() }
+        let channel = DataChannel(writeHandler: { try await inlayTransport.forward($0) }, dataSequence: messages)
+        let connection = JSONRPCServerConnection(dataChannel: channel, addMessageFraming: false)
         let server = InitializingServer(server: connection) {
             let folders = workspaceRoot.map {
                 [WorkspaceFolder(uri: $0.absoluteString, name: $0.lastPathComponent)]
             }
+            var textDocumentCapabilities = TextDocumentClientCapabilities(
+                codeAction: CodeActionClientCapabilities(
+                    dynamicRegistration: false,
+                    codeActionLiteralSupport: .init(codeActionKind: ValueSet(valueSet: [
+                        CodeActionKind.Quickfix, CodeActionKind.Refactor, CodeActionKind.RefactorExtract,
+                        CodeActionKind.RefactorInline, CodeActionKind.RefactorRewrite,
+                    ])),
+                    isPreferredSupport: true
+                )
+            )
+            var inlayHintCapabilities = InlayHintClientCapabilities(dynamicRegistration: true)
+            inlayHintCapabilities.resolveSupport = .init(properties: ["tooltip", "label.tooltip"])
+            textDocumentCapabilities.inlayHint = inlayHintCapabilities
             return InitializeParams(
                 processId: Int(ProcessInfo.processInfo.processIdentifier),
                 clientInfo: InitializeParams.ClientInfo(name: "Umbra"),
@@ -79,19 +128,7 @@ public actor LanguageServerClient: LSPClient {
                         applyEdit: true, workspaceEdit: nil, didChangeConfiguration: nil, didChangeWatchedFiles: nil,
                         symbol: nil, executeCommand: nil, workspaceFolders: nil, configuration: nil, semanticTokens: nil
                     ),
-                    // Without literal support SourceKit-LSP answers every `textDocument/codeAction` with an
-                    // empty list (it advertises `codeActionProvider: true` all the same), so no fix-it or
-                    // refactoring ever reached the editor. Only the kinds the mapping below can apply.
-                    textDocument: TextDocumentClientCapabilities(
-                        codeAction: CodeActionClientCapabilities(
-                            dynamicRegistration: false,
-                            codeActionLiteralSupport: .init(codeActionKind: ValueSet(valueSet: [
-                                CodeActionKind.Quickfix, CodeActionKind.Refactor, CodeActionKind.RefactorExtract,
-                                CodeActionKind.RefactorInline, CodeActionKind.RefactorRewrite,
-                            ])),
-                            isPreferredSupport: true
-                        )
-                    ),
+                    textDocument: textDocumentCapabilities,
                     // Advertised because `consumeServerEvents` answers `window/workDoneProgress/create`;
                     // a server that asked and got no answer would wait for it.
                     window: WindowClientCapabilities(workDoneProgress: true, showMessage: nil, showDocument: nil),
@@ -101,13 +138,18 @@ public actor LanguageServerClient: LSPClient {
                 workspaceFolders: folders
             )
         }
-        return LanguageServerClient(server: server, documentURI: documentURI, onProgress: onProgress)
+        return LanguageServerClient(
+            server: server, documentURI: documentURI, onProgress: onProgress,
+            onInlayHintsChanged: onInlayHintsChanged, inlayTransport: inlayTransport
+        )
     }
 
     /// Features the server advertised. Runs `initialize` if it has not happened yet.
     public func advertisedFeatures() async -> Set<LanguageFeature> {
         guard let capabilities = await capabilities() else { return [] }
-        return LSPServerCapabilities.features(in: capabilities)
+        var features = LSPServerCapabilities.features(in: capabilities)
+        if !inlayRegistrations.isEmpty { features.insert(.inlayHints) }
+        return features
     }
 
     public func requestDiagnostics(for document: Document) async throws -> [EditorIntelligence.LSPDiagnostic] {
@@ -653,14 +695,57 @@ public actor LanguageServerClient: LSPClient {
         }
     }
 
-    public func requestInlayHints(for document: Document, in range: EditorIntelligence.TextRange) async throws -> [LSPRenderedInlayHint] {
-        guard await allows(.inlayHints) else { return [] }
+    public func requestInlayHints(
+        for document: Document, in range: EditorIntelligence.TextRange, languageID: String? = nil
+    ) async throws -> [LSPRenderedInlayHint] {
+        guard await allows(.inlayHints) || hasInlayRegistration(for: document, languageID: languageID),
+              !Task.isCancelled else { return [] }
         await ensureSynced(document)
-        let hints = try await server.inlayHint(InlayHintParams(
-            textDocument: textDocument(for: document),
-            range: lspRange(from: range)
-        )) ?? []
-        return hints.map(LSPRenderedInlayHint.init)
+        try Task.checkCancellation()
+        let params = InlayHintParams(textDocument: textDocument(for: document), range: lspRange(from: range))
+        let hints: [LanguageServerProtocol.InlayHint]
+        if let inlayTransport {
+            let response = try await inlayTransport.request("textDocument/inlayHint", params: params)
+            let items = try JSONDecoder().decode([LSPAny]?.self, from: response) ?? []
+            hints = items.prefix(2048).compactMap { item in
+                guard let data = try? JSONEncoder().encode(item) else { return nil }
+                return try? JSONDecoder().decode(LanguageServerProtocol.InlayHint.self, from: data)
+            }
+        } else {
+            hints = try await server.inlayHint(params) ?? []
+        }
+        try Task.checkCancellation()
+        return hints.prefix(2048).map(LSPRenderedInlayHint.init)
+    }
+
+    func supportsInlayResolution() async -> Bool {
+        await inlayTransport?.resolvesHints == true
+    }
+
+    func resolveInlayHint(_ token: Data) async throws -> LSPRenderedInlayHint? {
+        guard let inlayTransport, await inlayTransport.resolvesHints else { return nil }
+        let hint = try JSONDecoder().decode(LanguageServerProtocol.InlayHint.self, from: token)
+        let response = try await inlayTransport.request("inlayHint/resolve", params: hint)
+        let resolved = try JSONDecoder().decode(LanguageServerProtocol.InlayHint.self, from: response)
+        guard resolved.position == hint.position else { return nil }
+        return LSPRenderedInlayHint(resolved)
+    }
+
+    private func hasInlayRegistration(for document: Document, languageID: String?) -> Bool {
+        let uri = URL(string: documentURI(document))
+        return inlayRegistrations.values.contains { registration in
+            guard let filters = registration.documentSelector else { return true }
+            return filters.contains { filter in
+                if let language = filter.language, language.rawValue != (languageID ?? document.languageIdentifier) {
+                    return false
+                }
+                if let scheme = filter.scheme, scheme != uri?.scheme { return false }
+                if let pattern = filter.pattern {
+                    guard let path = uri?.path, fnmatch(pattern, path, 0) == 0 else { return false }
+                }
+                return true
+            }
+        }
     }
 
     public func notifyClosed(documentID: DocumentID) async {
@@ -692,23 +777,43 @@ public actor LanguageServerClient: LSPClient {
         TextDocumentIdentifier(uri: DocumentUri(stringLiteral: documentURI(document)))
     }
 
-    private func consumeServerEvents() async {
-        for await event in server.eventSequence {
-            switch event {
-            case .notification(.textDocumentPublishDiagnostics(let params)):
-                publishedDiagnostics.apply(params)
-            case .notification(.protocolProgress(let params)):
-                if workProgress.apply(params) { onProgress?(workProgress.active) }
-            case .request(_, .windowWorkDoneProgressCreate(_, let respond)):
-                await respond(nil)
-            case .request(_, .workspaceApplyEdit(let params, let respond)):
-                // Kept for `refactoring(from:)`; applied by the editor, so the server is told it was taken.
-                let wanted = applyEditSink != nil
-                if wanted { applyEditSink?.append(params.edit) }
-                await respond(.success(ApplyWorkspaceEditResult(applied: wanted)))
-            default:
-                break
+    private func consumeServerEvent(_ event: ServerEvent) async {
+        switch event {
+        case .notification(.textDocumentPublishDiagnostics(let params)):
+            publishedDiagnostics.apply(params)
+        case .notification(.protocolProgress(let params)):
+            if workProgress.apply(params) { onProgress?(workProgress.active) }
+        case .request(_, .windowWorkDoneProgressCreate(_, let respond)):
+            await respond(nil)
+        case .request(_, .clientRegisterCapability(let params, _)):
+            var changed = false
+            for registration in params.registrations where registration.method == "textDocument/inlayHint" {
+                let options: InlayHintRegistrationOptions
+                if let value = registration.registerOptions, value != .null {
+                    guard let data = try? JSONEncoder().encode(value),
+                          let decoded = try? JSONDecoder().decode(InlayHintRegistrationOptions.self, from: data)
+                    else { continue }
+                    options = decoded
+                } else {
+                    options = InlayHintRegistrationOptions()
+                }
+                inlayRegistrations[registration.id] = options
+                changed = true
             }
+            if changed { onInlayHintsChanged?() }
+        case .request(_, .clientUnregisterCapability(let params, _)):
+            var changed = false
+            for registration in params.unregistrations where registration.method == "textDocument/inlayHint" {
+                if inlayRegistrations.removeValue(forKey: registration.id) != nil { changed = true }
+            }
+            if changed { onInlayHintsChanged?() }
+        case .request(_, .workspaceApplyEdit(let params, let respond)):
+            // Kept for `refactoring(from:)`; applied by the editor, so the server is told it was taken.
+            let wanted = applyEditSink != nil
+            if wanted { applyEditSink?.append(params.edit) }
+            await respond(.success(ApplyWorkspaceEditResult(applied: wanted)))
+        default:
+            break
         }
     }
 }

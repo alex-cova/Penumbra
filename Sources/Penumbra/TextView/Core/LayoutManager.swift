@@ -205,23 +205,33 @@ final class LayoutManager {
     /// Inlay hints of the whole document, sorted by offset (see ``InlayHintIndex/normalized(_:)``).
     /// Lines pick theirs up as they are laid out; setting this re-typesets the lines that had
     /// different ones.
-    var inlayHints: [InlayHint] = [] {
-        didSet {
-            guard inlayHints != oldValue else { return }
-            refreshInlayHintsOnLoadedLines()
+    private(set) var inlayHints: [InlayHint] = []
+    private var measuredInlayWidths: [String: CGFloat] = [:]
+
+    func setInlayHints(_ hints: [InlayHint], editedLines: Set<DocumentLineNode>? = nil) {
+        guard inlayHints != hints else { return }
+        inlayHints = hints
+        if let editedLines {
+            // An edit rebases absolute offsets. Whole lines that moved retain their local
+            // geometry, so only the edited line controllers need to be refreshed here.
+            refreshInlayHints(on: editedLines.lazy.compactMap { self.lineControllerStorage[$0.id] })
+        } else {
+            refreshInlayHints(on: lineControllerStorage)
         }
     }
+
     /// Font and colors of the hints. A change re-typesets the lines that have hints, since their
     /// width depends on the font.
     var inlayHintAppearance: InlayHintAppearance = .standard {
         didSet {
             guard inlayHintAppearance != oldValue else { return }
+            measuredInlayWidths.removeAll(keepingCapacity: true)
             codeVisionStore.rowHeight = Self.codeVisionRowHeight(for: inlayHintAppearance)
             if !codeVisionStore.isEmpty {
                 refreshCodeVisionInsetsOnLoadedLines()
             }
             guard !inlayHints.isEmpty else { return }
-            refreshInlayHintsOnLoadedLines()
+            refreshInlayHints(on: lineControllerStorage)
         }
     }
 
@@ -332,16 +342,35 @@ final class LayoutManager {
         }
         // Ghost text takes no caret room: any caret move dismisses it, so ←/→ never step over it.
         if inlayHints[low].kind == .inlineCompletion { return 0 }
-        return inlayHintAppearance.width(of: inlayHints[low].label)
+        return measuredWidth(for: inlayHints[low])
     }
 
-    private func refreshInlayHintsOnLoadedLines() {
+    private func measuredWidth(for hint: InlayHint) -> CGFloat {
+        if hint.kind == .inlineCompletion { return inlayHintAppearance.inlineTextWidth(of: hint.label) }
+        let width: CGFloat
+        if let cached = measuredInlayWidths[hint.label] {
+            width = cached
+        } else {
+            width = inlayHintAppearance.width(of: hint.label)
+            if measuredInlayWidths.count >= 512 { measuredInlayWidths.removeAll(keepingCapacity: true) }
+            measuredInlayWidths[hint.label] = width
+        }
+        let extraPadding = (hint.paddingLeft ? 1 : 0) + (hint.paddingRight ? 1 : 0)
+        return width + CGFloat(extraPadding) * InlayHintAppearance.trailingGap
+    }
+
+    func inlayHints(forLineAt location: Int, length: Int) -> [LineInlayHint] {
+        InlayHintIndex.localHints(
+            in: inlayHints, lineLocation: location, lineLength: length,
+            appearance: inlayHintAppearance, measure: measuredWidth(for:)
+        )
+    }
+
+    private func refreshInlayHints(on controllers: some Sequence<LineController>) {
         var changedLineIDs: Set<DocumentLineNodeID> = []
-        for lineController in lineControllerStorage {
+        for lineController in controllers {
             let line = lineController.line
-            let local = InlayHintIndex.localHints(
-                in: inlayHints, lineLocation: line.location, lineLength: line.data.length, appearance: inlayHintAppearance
-            )
+            let local = inlayHints(forLineAt: line.location, length: line.data.length)
             if local != lineController.inlayHints {
                 lineController.inlayHints = local
                 changedLineIDs.insert(line.id)
@@ -1112,6 +1141,13 @@ extension LayoutManager {
         }
     }
 
+    func inlayHintAnchor(at point: CGPoint) -> Int? {
+        let y = point.y - textContainerInset.top
+        guard let line = lineManager.line(containingYOffset: y) else { return nil }
+        let local = CGPoint(x: point.x - leadingLineSpacing, y: y - line.yPosition)
+        return typesetLineController(for: line).inlayHintAnchor(at: local)
+    }
+
     func foldPlaceholderHitTest(at point: CGPoint) -> (CGRect, FoldRegion)? {
         guard let foldingModel, foldingModel.isEnabled else {
             return nil
@@ -1524,9 +1560,7 @@ extension LayoutManager {
             let lineYPosition = line.yPosition
             let lineLocation = line.location
             let lineController = lineControllerStorage.getOrCreateLineController(for: line)
-            let nextInlayHints = InlayHintIndex.localHints(
-                in: inlayHints, lineLocation: lineLocation, lineLength: line.data.length, appearance: inlayHintAppearance
-            )
+            let nextInlayHints = inlayHints(forLineAt: lineLocation, length: line.data.length)
             let nextTopInset = codeVisionStore.isEmpty ? 0 : codeVisionStore.inset(forRow: line.index)
             let widthUnchanged = abs(lineController.constrainingWidth - constrainingLineWidth) < 0.5
             let fragmentIDs = lineController.lineFragmentIDs

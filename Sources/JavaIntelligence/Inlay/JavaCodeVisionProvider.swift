@@ -43,6 +43,7 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
     private var openBuffer: (@Sendable (URL) async -> String?)?
     private var jdkHome: URL?
     private var options = JavaCodeVisionOptions()
+    private var isIndexReady: (@Sendable (URL?) async -> Bool)?
     private var optionsSource: (@Sendable () -> JavaCodeVisionOptions)?
     private var cache: [String: [CodeVisionEntry]] = [:]
 
@@ -76,12 +77,17 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
         optionsSource = source
     }
 
+    public func setIndexReadiness(_ readiness: @escaping @Sendable (URL?) async -> Bool) {
+        isIndexReady = readiness
+        cache.removeAll()
+    }
+
     // MARK: - CodeVisionProviding
 
     public func codeVisionAnchors(for document: Document) async -> [Int] {
         guard document.languageIdentifier == "java", (optionsSource?() ?? options).isAnyEnabled else { return [] }
         let source = JavaNavigationText.fullText(of: document)
-        guard !source.isEmpty, let tree = JavaSyntaxParser().parse(source) else { return [] }
+        guard !source.isEmpty, !Task.isCancelled, let tree = JavaParseMemo.shared.tree(for: source) else { return [] }
         return JavaCodeVision.declarations(in: tree, source: source).prefix(Self.maxAnchors).map(\.utf16Offset)
     }
 
@@ -90,7 +96,10 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
         let options = optionsSource?() ?? self.options
         guard options.isAnyEnabled else { return [] }
         let source = JavaNavigationText.fullText(of: document)
-        guard !source.isEmpty, let tree = JavaSyntaxParser().parse(source) else { return [] }
+        guard !source.isEmpty, !Task.isCancelled, let tree = JavaParseMemo.shared.tree(for: source) else { return [] }
+        if let isIndexReady, !(await isIndexReady(document.url)) {
+            return anchors.map { CodeVisionLens(utf16Offset: $0, entries: []) }
+        }
         let wanted = Set(anchors)
         let declarations = JavaCodeVision.declarations(in: tree, source: source).filter { wanted.contains($0.utf16Offset) }
         let generation = await index.generation
@@ -129,12 +138,14 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
                 for await result in group { collected.append(result) }
                 return collected
             }
+            guard !Task.isCancelled, await self.index.generation == generation else { return [] }
             for (offset, key, entries) in results {
                 if cache.count >= Self.maxCachedEntries { cache.removeAll() }
                 cache[key] = entries
                 lenses.append(CodeVisionLens(utf16Offset: offset, entries: entries))
             }
         }
+        guard !Task.isCancelled, await self.index.generation == generation else { return [] }
         return lenses
     }
 
@@ -145,9 +156,9 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
         scope: Set<String>?, lookup: (@Sendable (URL) async -> String?)?
     ) async -> [CodeVisionEntry] {
         var entries: [CodeVisionEntry] = []
-        if options.usages {
-            let usages = await findUsages.findUsages(source: source, url: url, utf16Offset: offset)
-            entries.append(CodeVisionEntry(id: "usages", text: JavaCodeVision.label(count: usages.count, singular: "usage", plural: "usages")))
+        if options.usages,
+           let result = await findUsages.declarationUsages(source: source, url: url, utf16Offset: offset) {
+            entries.append(CodeVisionEntry(id: "usages", text: JavaCodeVision.label(count: result.usages.count, singular: "usage", plural: "usages")))
         }
         if options.implementations, declaration.isAbstract {
             let count = await implementationCount(source: source, url: url, offset: offset, scope: scope, lookup: lookup)

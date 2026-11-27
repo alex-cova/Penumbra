@@ -55,6 +55,7 @@ final class IDELanguageServerHost {
     /// The workspace whose documents the servers are told about (`LSPWorkspaceDocumentSync`). Set by the
     /// window; nil starts servers that are never sent a file, which answer nothing about an edited buffer.
     var documentWorkspace: Workspace?
+    @ObservationIgnored var onInlayHintsChanged: (@MainActor (Set<String>) -> Void)?
 
     private let trustDirectory: URL
     private var sessions: [String: Session] = [:]
@@ -188,6 +189,16 @@ final class IDELanguageServerHost {
                 Task { @MainActor in
                     self?.noteWork(work, definition: definition, token: token, serial: serial)
                 }
+            },
+            onInlayHintsChanged: { [weak self] in
+                Task { @MainActor in
+                    guard let self, self.generation == token, self.sessions[definition.id]?.serial == serial,
+                          let client = connection.current as? LanguageServerClient else { return }
+                    let features = await client.advertisedFeatures()
+                    guard self.generation == token, self.sessions[definition.id]?.serial == serial else { return }
+                    connection.setSupportedFeatures(features)
+                    self.onInlayHintsChanged?(definition.configuration.languageIdentifiers)
+                }
             }
         )
         var request = SubprocessRequest(executable: executable.url.path, arguments: definition.arguments(root))
@@ -235,6 +246,9 @@ final class IDELanguageServerHost {
                 connection.setSupportedFeatures(features)
                 self.setStatus(definition, .ready)
                 self.sessions[definition.id]?.beginSync()
+                if features.contains(.inlayHints) {
+                    self.onInlayHintsChanged?(definition.configuration.languageIdentifiers)
+                }
             }
         }
         session.featuresTask = featuresTask
