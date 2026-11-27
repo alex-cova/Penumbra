@@ -3,14 +3,14 @@
     <channel>
         <title>Umbra</title>
         <item>
-            <title>1.6.33</title>
-            <pubDate>Wed, 25 Nov 2026 16:47:38 +0000</pubDate>
+            <title>1.6.34</title>
+            <pubDate>Fri, 27 Nov 2026 16:46:13 +0000</pubDate>
             <link>https://alex-cova.github.io/Penumbra/appcast.xml</link>
-            <sparkle:version>1.6.33</sparkle:version>
-            <sparkle:shortVersionString>1.6.33</sparkle:shortVersionString>
+            <sparkle:version>1.6.34</sparkle:version>
+            <sparkle:shortVersionString>1.6.34</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/alex-cova/Penumbra/releases/download/1.6.33/Umbra-1.6.33-macOS.zip" length="66359028" type="application/octet-stream" sparkle:edSignature="WkUkS3aqop1HOjE35nDuK1ygSw4xUrbGOSbrf/bpD0Ji/XWOWvEViqs8SpbFhztqatya8JhFpHD6vt2dCBnNDA=="/>
+            <enclosure url="https://github.com/alex-cova/Penumbra/releases/download/1.6.34/Umbra-1.6.34-macOS.zip" length="69663474" type="application/octet-stream" sparkle:edSignature="vsDmqmQs4353AlF+G6CNp8pk+Lo2XSXNJ0rMHTUfBmBMBAVhdxKehGrHDR27Ab8A5DjJxLCGORV0Alka7MfWAw=="/>
         </item>
     </channel>
 </rss>
