@@ -281,6 +281,7 @@ final class TextInputView: EditorView {
     }
 
     var inlayHintAppearanceForTesting: InlayHintAppearance { layoutManager.inlayHintAppearance }
+    var layoutManagerForTesting: LayoutManager { layoutManager }
 
     private func updateInlayHintAppearance() {
         layoutManager.inlayHintAppearance = InlayHintAppearance.make(theme: theme, useEditorFont: inlayHintsUseEditorFont)

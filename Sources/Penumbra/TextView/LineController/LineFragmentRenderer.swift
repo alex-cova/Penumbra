@@ -42,6 +42,13 @@ final class LineFragmentRenderer: @unchecked Sendable {
     }
 
     func draw(to context: CGContext, inCanvasOfSize canvasSize: CGSize) {
+        // The view starts at the left edge of a line-start chip; the text begins after it.
+        let inset = lineFragment.leadingInset
+        if inset > 0 {
+            context.saveGState()
+            context.translateBy(x: inset, y: 0)
+        }
+        defer { if inset > 0 { context.restoreGState() } }
         drawHighlightedRanges(to: context, inCanvasOfSize: canvasSize)
         drawMarkedRange(to: context)
         drawGlyphs(to: context)

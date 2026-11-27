@@ -327,7 +327,8 @@ final class LayoutManager {
     }
 
     /// The room of the inlay hint in front of the character at `location`, or 0. A hint at the first
-    /// character of a line is not shown, so it has no width.
+    /// character of a line sits in the line's leading inset, not in the text, so the caret has no
+    /// extra stop there and it has no width here.
     func inlayHintWidth(atLocation location: Int) -> CGFloat {
         var low = 0
         var high = inlayHints.count
@@ -1627,6 +1628,7 @@ extension LayoutManager {
                     : nil
                 lineFragmentController.inlayHints = lineController.inlayHints.filter { hint in
                     hint.localOffset > lineFragment.range.location && hint.localOffset <= lineFragment.range.upperBound
+                        || hint.localOffset == 0 && lineFragment.index == 0 && hint.kind != .inlineCompletion
                 }
                 layoutLineFragmentView(
                     for: lineFragmentController,
@@ -1856,8 +1858,10 @@ extension LayoutManager {
         lineFragmentFrame: inout CGRect
     ) {
         let lineFragment = lineFragmentController.lineFragment
-        let lineFragmentOrigin = CGPoint(x: leadingLineSpacing, y: textContainerInset.top + lineYPosition + lineFragment.yPosition)
-        let lineFragmentWidth = contentSizeService.contentWidth - leadingLineSpacing - textContainerInset.right
+        // The text starts after the room of a line-start chip; the paint backends draw the chip left of it.
+        let inset = lineFragment.leadingInset
+        let lineFragmentOrigin = CGPoint(x: leadingLineSpacing + inset, y: textContainerInset.top + lineYPosition + lineFragment.yPosition)
+        let lineFragmentWidth = contentSizeService.contentWidth - leadingLineSpacing - inset - textContainerInset.right
         let lineFragmentSize = CGSize(width: lineFragmentWidth, height: lineFragment.scaledSize.height)
         lineFragmentFrame = CGRect(origin: lineFragmentOrigin, size: lineFragmentSize)
         var invisibles = InvisibleCharacterLayout.empty
@@ -1876,6 +1880,7 @@ extension LayoutManager {
             id: lineFragment.id,
             lineID: lineID,
             frame: lineFragmentFrame,
+            leadingInset: inset,
             line: lineFragment.line,
             descent: lineFragment.descent,
             baseSize: lineFragment.baseSize,

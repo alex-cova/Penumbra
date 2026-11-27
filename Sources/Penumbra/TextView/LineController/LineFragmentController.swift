@@ -148,7 +148,7 @@ final class LineFragmentController {
             .font: NSFont.systemFont(ofSize: 11, weight: .medium)
         ]
         let size = foldPlaceholderText.size(withAttributes: attrs)
-        let endOfLineX = CGFloat(CTLineGetTypographicBounds(lineFragment.line, nil, nil, nil))
+        let endOfLineX = CGFloat(CTLineGetTypographicBounds(lineFragment.line, nil, nil, nil)) + lineFragment.leadingInset
         let padding: CGFloat = 4
         return CGRect(
             x: endOfLineX + padding,

@@ -63,6 +63,9 @@ final class LineFragment {
     ///
     /// This is relative to the beginning of the line.
     let yPosition: CGFloat
+    /// Room before the text for a line-start inlay chip. Only the line's first fragment has any. It
+    /// is part of the fragment's width, and the text is drawn this far from the fragment's left edge.
+    let leadingInset: CGFloat
     /// Entire range of the line fragment.
     ///
     /// The range also contains the ``hiddenLength`` of the line fragment. That is, the visible content of the line fragment is placed in the range `range.location` to `range.length - hiddenLength`.
@@ -78,7 +81,8 @@ final class LineFragment {
         descent: CGFloat,
         baseSize: CGSize,
         scaledSize: CGSize,
-        yPosition: CGFloat
+        yPosition: CGFloat,
+        leadingInset: CGFloat = 0
     ) {
         self.init(
             id: id,
@@ -90,7 +94,8 @@ final class LineFragment {
             descent: descent,
             baseSize: baseSize,
             scaledSize: scaledSize,
-            yPosition: yPosition
+            yPosition: yPosition,
+            leadingInset: leadingInset
         )
     }
 
@@ -104,8 +109,10 @@ final class LineFragment {
         descent: CGFloat,
         baseSize: CGSize,
         scaledSize: CGSize,
-        yPosition: CGFloat
+        yPosition: CGFloat,
+        leadingInset: CGFloat
     ) {
+        self.leadingInset = leadingInset
         self.id = id
         self.index = index
         self.visibleRange = visibleRange
@@ -129,7 +136,8 @@ final class LineFragment {
             descent: descent,
             baseSize: baseSize,
             scaledSize: scaledSize,
-            yPosition: yPosition
+            yPosition: yPosition,
+            leadingInset: leadingInset
         )
     }
 

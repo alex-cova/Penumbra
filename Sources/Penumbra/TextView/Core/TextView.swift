@@ -1861,6 +1861,7 @@ public struct DocumentTextExport: Sendable {
     var stickyLinesInput: TextInputView { textInputView }
 
     var inlayHintAppearanceForTesting: InlayHintAppearance { textInputView.inlayHintAppearanceForTesting }
+    var layoutManagerForTesting: LayoutManager { textInputView.layoutManagerForTesting }
 
     /// Where the pinned lines go: under the find bar, left of the minimap.
     var stickyLinesAvailableFrame: CGRect {

@@ -185,6 +185,33 @@ final class MetalDecorationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(Double(chip.origin.x), Double(endOfLineX))
     }
 
+    /// A chip at the line's first character sits left of the text frame in both renderers: Metal puts
+    /// its pill at the frame's left edge minus the chip's width, and the Core Graphics view starts at
+    /// that same x so the chip is inside the view that draws it.
+    func testLineStartChipSitsLeftOfTheTextFrameInBothRenderers() throws {
+        let atlas = try makeAtlas()
+        let line = makeLine("call(1, 2);")
+        let appearance = InlayHintAppearance.standard
+        let width = appearance.width(of: "n:")
+        var decorations = decorations()
+        decorations.inlayHints = [LineInlayHint(localOffset: 0, label: "n:", kind: .parameter, width: width, appearance: appearance)]
+        let frame = CGRect(x: 100, y: 0, width: 300, height: 20)
+        var spec = makeSpec(line: line, frame: frame, decorations: decorations)
+        spec.leadingInset = width
+        var budget = GlyphRasterBudget()
+        let geometry = MetalDecorationBuilder.build(spec: spec, atlas: atlas, scale: 2, budget: &budget)
+        let pill = try XCTUnwrap(geometry.overlaySolids.first)
+        XCTAssertEqual(CGFloat(pill.origin.x), frame.minX - width, accuracy: 0.01)
+
+        let container = EditorView(frame: CGRect(x: 0, y: 0, width: 600, height: 100))
+        let backend = CGLinePaintBackend(linesContainerView: container)
+        backend.upsertFragment(spec)
+        let view = try XCTUnwrap(backend.lineFragmentView(for: spec.id))
+        XCTAssertEqual(view.frame.minX, frame.minX - width, accuracy: 0.01)
+        XCTAssertEqual(view.frame.maxX, frame.maxX, accuracy: 0.01, "the view grows left only")
+        XCTAssertEqual(CGFloat(pill.origin.x), view.frame.minX, accuracy: 0.01, "the pill starts where the view does")
+    }
+
     func testFoldPlaceholderChipUsesSystem11MediumNotThemeFont() throws {
         let atlas = try makeAtlas()
         let line = makeLine("collapsed")

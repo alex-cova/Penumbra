@@ -17,13 +17,16 @@ final class InlayHintTests: XCTestCase {
         XCTAssertEqual(result[0].label, "x: y:")
     }
 
-    func testLocalHintsAreLineRelativeAndSkipTheLineStart() {
+    func testLocalHintsAreLineRelativeAndTheLineStartHintGetsOffsetZero() {
         let hints = InlayHintIndex.normalized([hint(10), hint(14), hint(20), hint(31)])
-        // A line at 10...30: the hint at its first character has nothing before it to widen.
+        // A line at 10...30: the hint at its first character has nothing before it to widen, so it
+        // is offset 0 and the first fragment reserves its room.
         let appearance = InlayHintAppearance.standard
         let local = InlayHintIndex.localHints(in: hints, lineLocation: 10, lineLength: 20, appearance: appearance)
-        XCTAssertEqual(local.map(\.localOffset), [4, 10])
+        XCTAssertEqual(local.map(\.localOffset), [0, 4, 10])
         XCTAssertTrue(local.allSatisfy { $0.width == appearance.width(of: "a:") })
+        XCTAssertEqual(LineInlayHint.leadingInset(of: local), appearance.width(of: "a:"))
+        XCTAssertEqual(LineInlayHint.leadingInset(of: Array(local.dropFirst())), 0)
         XCTAssertTrue(InlayHintIndex.localHints(in: [], lineLocation: 0, lineLength: 5, appearance: appearance).isEmpty)
     }
 
@@ -84,6 +87,56 @@ final class InlayHintTests: XCTestCase {
         XCTAssertEqual(after.minX - before.minX, textView.inlayHintAppearanceForTesting.width(of: "count:"), accuracy: 0.5)
         XCTAssertEqual(textView.text, text)
         XCTAssertEqual(textView.caretRectInViewport(at: 3).minX, start.minX, accuracy: 0.01, "text before the hint does not move")
+    }
+
+    func testALineStartHintMovesTheTextRightAndLeavesTheTextAlone() {
+        let text = "call(1, 2);\nnext();"
+        let textView = makeTextView(text)
+        let appearance = textView.inlayHintAppearanceForTesting
+        let startBefore = textView.caretRectInViewport(at: 0)
+        let midBefore = textView.caretRectInViewport(at: 5)
+        let nextBefore = textView.caretRectInViewport(at: 12)
+        textView.inlayHints = [hint(0, "name:")]
+        textView.layoutIfNeeded()
+        let width = appearance.width(of: "name:")
+        XCTAssertEqual(textView.caretRectInViewport(at: 0).minX - startBefore.minX, width, accuracy: 0.5,
+                       "the caret at the line start sits behind the chip")
+        XCTAssertEqual(textView.caretRectInViewport(at: 5).minX - midBefore.minX, width, accuracy: 0.5)
+        XCTAssertEqual(textView.caretRectInViewport(at: 12).minX, nextBefore.minX, accuracy: 0.01, "other lines do not move")
+        XCTAssertEqual(textView.text, text)
+        textView.inlayHints = []
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.caretRectInViewport(at: 5).minX, midBefore.minX, accuracy: 0.5, "clearing the hint takes the room back")
+    }
+
+    func testAClickOnALineStartChipPutsTheCaretAtTheLineStart() throws {
+        let textView = makeTextView("call(1, 2);")
+        let appearance = textView.inlayHintAppearanceForTesting
+        textView.inlayHints = [hint(0, "name:")]
+        textView.layoutIfNeeded()
+        let layoutManager = textView.layoutManagerForTesting
+        let textStart = textView.caretRectInViewport(at: 0)
+        let width = appearance.width(of: "name:")
+        let y = textStart.midY
+        XCTAssertEqual(layoutManager.closestIndex(to: CGPoint(x: textStart.minX - width / 2, y: y)), 0, "on the chip")
+        XCTAssertEqual(layoutManager.inlayHintAnchor(at: CGPoint(x: textStart.minX - width / 2, y: y)), 0)
+        let fourth = textView.caretRectInViewport(at: 4)
+        XCTAssertEqual(layoutManager.closestIndex(to: CGPoint(x: fourth.minX + 0.5, y: y)), 4, "text clicks are not shifted")
+        XCTAssertNil(layoutManager.inlayHintAnchor(at: CGPoint(x: fourth.minX + 0.5, y: y)))
+    }
+
+    func testAWrappedLineStartHintWidensOnlyTheFirstFragment() {
+        let text = String(repeating: "word ", count: 60)
+        let textView = makeTextView(text)
+        let before = textView.caretRectInViewport(at: 0)
+        let laterBefore = textView.caretRectInViewport(at: 290)
+        textView.inlayHints = [hint(0, "name:")]
+        textView.layoutIfNeeded()
+        let after = textView.caretRectInViewport(at: 0)
+        XCTAssertGreaterThan(after.minX, before.minX)
+        XCTAssertGreaterThan(after.maxY, 0)
+        let laterAfter = textView.caretRectInViewport(at: 290)
+        XCTAssertGreaterThanOrEqual(laterAfter.minY, laterBefore.minY, "the hint cannot pull text up")
     }
 
     func testGhostTextAndSemanticHintReserveSeparateSpaceAtOneAnchor() {

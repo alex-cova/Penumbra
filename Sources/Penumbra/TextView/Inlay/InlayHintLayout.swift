@@ -3,8 +3,10 @@ import EditorIntelligence
 
 /// An inlay hint in the coordinates of one line: where it sits and how much room it takes.
 struct LineInlayHint: Equatable {
-    /// Line-local UTF-16 offset of the character the hint is in front of. Always at least 1: the
-    /// room for the hint is added after the character before it.
+    /// Line-local UTF-16 offset of the character the hint is in front of. The room for a hint is
+    /// added after the character before it, so it is at least 1 except for a hint at the first
+    /// character of the line (0): that one has no character before it, and the line's first
+    /// fragment reserves ``leadingInset(of:)`` in front of the text instead.
     let localOffset: Int
     let label: String
     let kind: InlayHint.Kind
@@ -15,13 +17,21 @@ struct LineInlayHint: Equatable {
     var followingWidth: CGFloat = 0
     var leadingPadding: CGFloat = 0
 
+    /// X of the hint's room in the coordinates of the text (the first character's leading edge is 0).
+    /// A line-start chip sits wholly left of the text, in the fragment's leading inset.
     func leadingX(in line: CTLine) -> CGFloat {
-        guard localOffset > 0 else { return 0 }
+        guard localOffset > 0 else { return kind == .inlineCompletion ? 0 : -width }
         return InlayChipGeometry.chipEnd(forLocalOffset: localOffset, in: line) - width - followingWidth
     }
     /// How the hint is painted. Part of the hint, so a theme or font change repaints (and re-typesets)
     /// the lines that have hints and nothing else.
     let appearance: InlayHintAppearance
+
+    /// Room the first fragment of a line reserves in front of its text for a chip at the line's first
+    /// character, or 0. Ghost text at the line start takes no room (it never moves the caret).
+    static func leadingInset(of hints: [LineInlayHint]) -> CGFloat {
+        hints.first { $0.localOffset == 0 && $0.kind != .inlineCompletion }?.width ?? 0
+    }
 }
 
 /// Look and metrics of inlay hints, shared by both paint paths. One value per text view, made
@@ -145,8 +155,9 @@ enum InlayHintIndex {
     }
 
     /// The hints of a line covering `[location, location + length]`, line-local. `hints` must be
-    /// normalized. A hint at the very start of the line has no character before it to widen and
-    /// is not shown.
+    /// normalized. A hint at the very start of the line has no character before it to widen, so it
+    /// is local offset 0 and the line's first fragment reserves room for it (see
+    /// ``LineInlayHint/leadingInset(of:)``).
     static func localHints(
         in hints: [InlayHint],
         lineLocation location: Int,
@@ -163,13 +174,16 @@ enum InlayHintIndex {
             if hints[mid].utf16Offset <= location { low = mid + 1 } else { high = mid }
         }
         var result: [LineInlayHint] = []
-        // An inline completion at the very start of an (empty) line has no character before
-        // it to widen; it is drawn at the line start with no kern.
-        if low > 0, hints[low - 1].utf16Offset == location, hints[low - 1].kind == .inlineCompletion {
-            let hint = hints[low - 1]
+        // Hints at the very start of the line have no character before them to widen. A chip gets
+        // the first fragment's leading inset; ghost text is drawn at the line start with no kern.
+        var firstAtStart = low
+        while firstAtStart > 0, hints[firstAtStart - 1].utf16Offset == location { firstAtStart -= 1 }
+        for hint in hints[firstAtStart..<low] {
             result.append(LineInlayHint(
                 localOffset: 0, label: hint.label, kind: hint.kind,
-                width: measure?(hint) ?? appearance.width(of: hint), appearance: appearance
+                width: measure?(hint) ?? appearance.width(of: hint),
+                leadingPadding: hint.kind != .inlineCompletion && hint.paddingLeft ? InlayHintAppearance.trailingGap : 0,
+                appearance: appearance
             ))
         }
         var index = low

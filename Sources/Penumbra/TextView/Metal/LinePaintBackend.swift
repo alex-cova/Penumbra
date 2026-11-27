@@ -44,7 +44,10 @@ struct CanvasPaintSpec {
 struct LineFragmentPaintSpec {
     var id: LineFragmentID
     var lineID: DocumentLineNodeID
+    /// The frame of the fragment's text. A line-start chip sits in the `leadingInset` to its left.
     var frame: CGRect
+    /// Room left of `frame` for a line-start inlay chip (`LineFragment.leadingInset`).
+    var leadingInset: CGFloat = 0
     var line: CTLine
     var descent: CGFloat
     var baseSize: CGSize
@@ -153,7 +156,11 @@ final class CGLinePaintBackend: LinePaintBackend {
         if view.superview == nil {
             linesContainerView?.addSubview(view)
         }
-        view.frame = spec.frame
+        // The view also covers the room of a line-start chip, which the renderer draws in.
+        view.frame = spec.leadingInset > 0
+            ? CGRect(x: spec.frame.minX - spec.leadingInset, y: spec.frame.minY,
+                     width: spec.frame.width + spec.leadingInset, height: spec.frame.height)
+            : spec.frame
     }
 
     func removeFragments(ids: Set<LineFragmentID>) {

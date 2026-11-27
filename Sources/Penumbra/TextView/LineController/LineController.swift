@@ -546,6 +546,9 @@ private extension LineController {
     /// Adds each hint's width to the kern of the character before it, after taking back the widening
     /// of hints that are gone. Setting (not adding) keeps a re-typeset from widening twice.
     private func applyInlayHintKern(to attributedString: NSMutableAttributedString) {
+        // A chip at the first character has no character before it to widen; the first fragment
+        // keeps room for it in front of the text.
+        typesetter.firstLineLeadingInset = LineInlayHint.leadingInset(of: inlayHints)
         for range in hintKernedRanges where range.upperBound <= attributedString.length {
             attributedString.addAttribute(.kern, value: kern, range: range)
         }
@@ -893,8 +896,12 @@ extension LineController {
         guard let closestLineFragment = lineFragment(closestTo: point) else {
             return line.location
         }
-        var localLocation = min(CTLineGetStringIndexForPosition(closestLineFragment.line, point), line.data.length)
-        if !inlayHints.isEmpty, let adjusted = inlayAdjustedIndex(forX: point.x, in: closestLineFragment) {
+        // The line's first fragment keeps room for a line-start chip; Core Text knows only the text.
+        let inset = closestLineFragment.leadingInset
+        if inset > 0, point.x < inset { return line.location }
+        let textPoint = CGPoint(x: point.x - inset, y: point.y)
+        var localLocation = min(CTLineGetStringIndexForPosition(closestLineFragment.line, textPoint), line.data.length)
+        if !inlayHints.isEmpty, let adjusted = inlayAdjustedIndex(forX: textPoint.x, in: closestLineFragment) {
             localLocation = adjusted
         }
         return line.location + localLocation
@@ -908,12 +915,15 @@ extension LineController {
     /// X of the caret at `offset` in `fragment`. At a hint's offset the caret is behind the chip, or
     /// in front of it with `beforeInlayHint`; elsewhere it is where Core Text puts it.
     func caretX(in fragment: LineFragment, atLocalOffset offset: Int, beforeInlayHint: Bool) -> CGFloat {
+        let inset = fragment.leadingInset
+        // A line-start chip fills the inset: the caret is in front of it, or behind it at the text.
+        if inset > 0, offset == 0 { return beforeInlayHint ? 0 : inset }
         guard !inlayHints.isEmpty,
               let hint = inlayHints.first(where: { $0.localOffset == offset }),
               offset > fragment.range.location, offset <= fragment.range.upperBound else {
-            return CTLineGetOffsetForStringIndex(fragment.line, offset, nil)
+            return CTLineGetOffsetForStringIndex(fragment.line, offset, nil) + inset
         }
-        let start = hint.leadingX(in: fragment.line)
+        let start = hint.leadingX(in: fragment.line) + inset
         // The caret always sits in front of ghost text, after any semantic chip.
         if hint.kind == .inlineCompletion { return start }
         return beforeInlayHint ? start : start + hint.width
@@ -922,9 +932,10 @@ extension LineController {
     func inlayHintAnchor(at point: CGPoint) -> Int? {
         guard let fragment = lineFragment(closestTo: point),
               point.y >= fragment.yPosition, point.y < fragment.yPosition + fragment.scaledSize.height else { return nil }
+        if fragment.leadingInset > 0, point.x >= 0, point.x < fragment.leadingInset { return line.location }
         for hint in inlayHints where hint.kind != .inlineCompletion
             && hint.localOffset > fragment.range.location && hint.localOffset <= fragment.range.upperBound {
-            let start = hint.leadingX(in: fragment.line)
+            let start = hint.leadingX(in: fragment.line) + fragment.leadingInset
             if point.x >= start, point.x < start + hint.width {
                 return line.location + hint.localOffset
             }

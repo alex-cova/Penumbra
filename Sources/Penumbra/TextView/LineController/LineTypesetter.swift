@@ -31,6 +31,9 @@ final class LineTypesetter {
 
     var lineBreakMode: LineBreakMode = .byWordWrapping
     var constrainingWidth: CGFloat = 0
+    /// Room the first fragment keeps in front of its text for a line-start inlay chip. It counts
+    /// toward that fragment's width, so wrapping and the content width account for it.
+    var firstLineLeadingInset: CGFloat = 0
     var lineFragmentHeightMultiplier: CGFloat = 1
     /// Room above the first fragment (a code vision lens). Applied by ``reset()``.
     var topInset: CGFloat = 0
@@ -285,8 +288,9 @@ private extension LineTypesetter {
         var leading: CGFloat = 0
         let width = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
         let height = ascent + descent + leading
-        let baseSize = CGSize(width: width, height: height)
-        let scaledSize = CGSize(width: width, height: height * lineFragmentHeightMultiplier)
+        let leadingInset = lineFragmentIndex == 0 ? firstLineLeadingInset : 0
+        let baseSize = CGSize(width: width + leadingInset, height: height)
+        let scaledSize = CGSize(width: width + leadingInset, height: height * lineFragmentHeightMultiplier)
         let id = LineFragmentID(lineId: lineID, lineFragmentIndex: lineFragmentIndex)
         let visibleRange = NSRange(location: visibleRange.location, length: visibleRange.length)
         return LineFragment(
@@ -297,7 +301,8 @@ private extension LineTypesetter {
             descent: descent,
             baseSize: baseSize,
             scaledSize: scaledSize,
-            yPosition: yPosition
+            yPosition: yPosition,
+            leadingInset: leadingInset
         )
     }
 }
