@@ -31,7 +31,8 @@ public struct JavaInlayHintOptions: Sendable, Equatable {
 
 /// Inlay hints for Java: parameter names at call sites (`foo(count: 3, name: "x")`, shown before the
 /// arguments where the name adds information) and, when asked for, the types of `var` locals,
-/// `for (var …)` variables and implicit lambda parameters.
+/// `for (var …)` variables, `try (var …)` resources, `var` components of record patterns and implicit
+/// lambda parameters.
 ///
 /// A parameter hint is only produced when the call binds to exactly one declaration with named
 /// parameters (class-file stubs without debug info have none), so an overload guess never mislabels
@@ -159,6 +160,12 @@ enum JavaInlayHints {
                     hints.append(hint)
                 }
             }
+        }
+        if options.variableTypes {
+            hints.append(contentsOf: await recordPatternHints(
+                source: source, tree: tree, fileStubs: fileStubs, url: fileURL, bytes: bytes,
+                index: index, cacheRoot: cacheRoot, openBuffer: openBuffer
+            ))
         }
         if options.variableTypes || options.lambdaParameterTypes {
             hints.append(contentsOf: await typeHints(
@@ -344,6 +351,82 @@ enum JavaInlayHints {
         return hints
     }
 
+    // MARK: - Record patterns
+
+    /// A `var` component of a record pattern and the record pattern that declares it.
+    private struct RecordPatternVariable {
+        let pattern: SyntaxNode
+        let typeName: SyntaxNode
+        let componentIndex: Int
+        let name: SyntaxNode
+    }
+
+    /// `if (o instanceof Box(var items, var count))`: each `var` takes the type of the record's
+    /// component at its position. Only a record the index knows and that has no type parameters:
+    /// substituting a generic record's parameters needs the scrutinee's type arguments.
+    private static func recordPatternHints(
+        source: String, tree: JavaSyntaxTree, fileStubs: JavaSourceFileStubs, url: URL?, bytes: Range<Int>,
+        index: JavaIndex, cacheRoot: URL, openBuffer: (@Sendable (URL) async -> String?)?
+    ) async -> [InlayHint] {
+        var variables: [RecordPatternVariable] = []
+        collectRecordPatternVariables(tree.rootNode, within: bytes, into: &variables)
+        var hints: [InlayHint] = []
+        var componentsByPattern: [Int: [JavaFieldStub]?] = [:]
+        for variable in variables.prefix(JavaInlayHintProvider.maxTypedDeclarations) {
+            if Task.isCancelled { return [] }
+            let components: [JavaFieldStub]?
+            if let cached = componentsByPattern[variable.pattern.startByte] {
+                components = cached
+            } else {
+                let session = JavaNavigationSession(
+                    source: source, fileURL: url, tree: tree, byteOffset: variable.pattern.startByte, fileStubs: fileStubs,
+                    index: index, jdkHome: nil, cacheRoot: cacheRoot, openBuffer: openBuffer,
+                    decompile: JavaDecompileGate(policy: .denied)
+                )
+                let symbols = await session.resolveSymbols(.type(variable.typeName))
+                if symbols.count == 1, case .type(let stub) = symbols[0], stub.kind == .recordKind, stub.typeParameters.isEmpty {
+                    // A record's instance fields are its components, in declaration order.
+                    components = stub.fields.filter { !$0.modifiers.contains(.staticFlag) }
+                } else {
+                    components = nil
+                }
+                componentsByPattern[variable.pattern.startByte] = components
+            }
+            guard let components, components.indices.contains(variable.componentIndex) else { continue }
+            let type = components[variable.componentIndex].type
+            guard isInformative(type) else { continue }
+            hints.append(typeHint(type, offset: JavaNavigationText.utf16Offset(forByte: variable.name.endByte, in: source)))
+        }
+        return hints
+    }
+
+    private static func collectRecordPatternVariables(
+        _ node: SyntaxNode, within bytes: Range<Int>, into variables: inout [RecordPatternVariable]
+    ) {
+        guard variables.count < JavaInlayHintProvider.maxTypedDeclarations, !Task.isCancelled,
+              node.endByte >= bytes.lowerBound, node.startByte <= bytes.upperBound else { return }
+        if node.type == "record_pattern", let typeNode = node.namedChild(at: 0),
+           let body = node.namedChildren.first(where: { $0.type == "record_pattern_body" }) {
+            // `Box`, `pkg.Box` (its last identifier) or `Box<String>` (the generic's own name).
+            var typeName = typeNode
+            if typeName.type == "generic_type", let inner = typeName.namedChild(at: 0) { typeName = inner }
+            if typeName.type == "scoped_type_identifier" || typeName.type == "scoped_identifier",
+               let last = typeName.namedChildren.last { typeName = last }
+            if typeName.type == "identifier" || typeName.type == "type_identifier" {
+                for (position, component) in body.namedChildren.enumerated() where component.type == "record_pattern_component" {
+                    guard component.namedChildren.first?.text == "var",
+                          let name = component.namedChildren.first(where: { $0.type == "identifier" }),
+                          name.text != "_" else { continue }
+                    variables.append(RecordPatternVariable(pattern: node, typeName: typeName, componentIndex: position, name: name))
+                }
+            }
+        }
+        node.walkNamedChildren(overlapping: bytes) { child in
+            collectRecordPatternVariables(child, within: bytes, into: &variables)
+            return variables.count < JavaInlayHintProvider.maxTypedDeclarations && !Task.isCancelled
+        }
+    }
+
     /// `Object` is what a failed inference falls back to; a hint saying so would mislead.
     private static func isInformative(_ type: JavaTypeRef) -> Bool {
         if case .unresolved(let name, _) = type { return name != "Object" && name != "var" && !name.isEmpty }
@@ -368,6 +451,15 @@ enum JavaInlayHints {
         case "enhanced_for_statement" where options.variableTypes:
             if node.child(byFieldName: "type")?.text == "var",
                let name = node.child(byFieldName: "name"), let body = node.child(byFieldName: "body") {
+                candidates.append(TypeCandidate(name: name, scopeOffset: body.startByte))
+            }
+        case "resource" where options.variableTypes:
+            // `try (var lines = Files.lines(path))`: visible in the statement's body.
+            if node.child(byFieldName: "type")?.text == "var",
+               let name = node.child(byFieldName: "name"),
+               let value = node.child(byFieldName: "value"), !typeIsObvious(from: value),
+               let statement = node.parent?.parent, statement.type == "try_with_resources_statement",
+               let body = statement.child(byFieldName: "body") {
                 candidates.append(TypeCandidate(name: name, scopeOffset: body.startByte))
             }
         case "lambda_expression" where options.lambdaParameterTypes:

@@ -45,13 +45,14 @@ final class JavaInlayHintProviderTests: XCTestCase {
 
     private func hints(
         _ source: String, range: Range<Int>? = nil, options: JavaInlayHintOptions? = nil,
-        documentParseCache: JavaDocumentParseCache? = nil
+        documentParseCache: JavaDocumentParseCache? = nil, extraLibrary: String = ""
     ) async throws -> [InlayHint] {
         let libURL = scratch.appendingPathComponent("Lib.java")
-        try lib.write(to: libURL, atomically: true, encoding: .utf8)
+        let library = lib + "\n" + extraLibrary
+        try library.write(to: libURL, atomically: true, encoding: .utf8)
         let shard = scratch.appendingPathComponent("\(UUID().uuidString).idx")
         try JavaIndexShardWriter().write(
-            JavaSourceStubBuilder.build(source: lib, url: libURL).classes,
+            JavaSourceStubBuilder.build(source: library, url: libURL).classes,
             stamp: JavaStamp(size: 0, modificationDate: 0), to: shard
         )
         let index = JavaIndex()
@@ -82,6 +83,56 @@ final class JavaInlayHintProviderTests: XCTestCase {
         XCTAssertTrue(JavaInlayHints.matchesExclusion("java.lang.String.substring", symbol: "java.lang.String.substring"))
         XCTAssertFalse(JavaInlayHints.matchesExclusion("java.lang.Math.*", symbol: "example.java.lang.Math.min"))
         XCTAssertFalse(JavaInlayHints.matchesExclusion("example.Api.get", symbol: "example.Api.getAll"))
+    }
+
+    private let records = """
+    record Item(String name, int quantity) {}
+    record Order(Item first, java.util.List<String> notes) {}
+    record Pair<A, B>(A left, B right) {}
+    """
+
+    func testVarComponentsOfARecordPatternTakeTheComponentTypes() async throws {
+        let source = "class T { boolean m(Object o) { return o instanceof Order(var first, var notes); } }"
+        let result = try await hints(
+            source, options: JavaInlayHintOptions(parameterNames: false, variableTypes: true), extraLibrary: records
+        )
+        XCTAssertEqual(result.map(\.label), [": Item", ": List<String>"])
+        XCTAssertEqual(
+            rendered(source, result),
+            "class T { boolean m(Object o) { return o instanceof Order(var first: Item , var notes: List<String> ); } }"
+        )
+    }
+
+    func testNestedRecordPatternsResolveEachRecordOnItsOwn() async throws {
+        let source = "class T { boolean m(Object o) { return o instanceof Order(Item(var name, var quantity), var notes); } }"
+        let result = try await hints(
+            source, options: JavaInlayHintOptions(parameterNames: false, variableTypes: true), extraLibrary: records
+        )
+        // The controller sorts hints by position; the provider returns them in discovery order.
+        XCTAssertEqual(result.sorted { $0.utf16Offset < $1.utf16Offset }.map(\.label), [": String", ": int", ": List<String>"])
+    }
+
+    func testRecordPatternHintsAreSkippedForGenericAndUnknownRecordsAndTypedComponents() async throws {
+        let options = JavaInlayHintOptions(parameterNames: false, variableTypes: true)
+        let generic = try await hints(
+            "class T { boolean m(Object o) { return o instanceof Pair(var left, var right); } }",
+            options: options, extraLibrary: records
+        )
+        XCTAssertEqual(generic, [], "a generic record needs the scrutinee's type arguments")
+        let unknown = try await hints(
+            "class T { boolean m(Object o) { return o instanceof Missing(var x); } }", options: options, extraLibrary: records
+        )
+        XCTAssertEqual(unknown, [])
+        let typed = try await hints(
+            "class T { boolean m(Object o) { return o instanceof Item(String name, int quantity); } }",
+            options: options, extraLibrary: records
+        )
+        XCTAssertEqual(typed, [], "a written type needs no hint")
+        let off = try await hints(
+            "class T { boolean m(Object o) { return o instanceof Item(var name, var quantity); } }",
+            options: JavaInlayHintOptions(parameterNames: false, variableTypes: false), extraLibrary: records
+        )
+        XCTAssertEqual(off, [])
     }
 
     func testLabelsLiteralArgumentsOfAMethodCall() async throws {

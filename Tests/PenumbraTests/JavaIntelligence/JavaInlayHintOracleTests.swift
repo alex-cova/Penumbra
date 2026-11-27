@@ -65,6 +65,85 @@ final class JavaInlayHintOracleTests: XCTestCase {
             }
         } }
         """),
+        Sample(name: "LambdaForEach", source: """
+        import java.util.List;
+        class LambdaForEach { void m(List<String> names) {
+            names.forEach(name -> {
+                name€.
+            });
+        } }
+        """),
+        Sample(name: "LambdaMap", source: """
+        import java.util.List;
+        class LambdaMap { void m(List<String> names) {
+            var lengths = names.stream().map(item -> {
+                item€.
+                return 1;
+            }).toList();
+        } }
+        """),
+        Sample(name: "LambdaTwoParams", source: """
+        import java.util.Map;
+        class LambdaTwoParams { void m(Map<String, Integer> map) {
+            map.forEach((key, count) -> {
+                count€.
+            });
+        } }
+        """),
+        Sample(name: "LambdaComparator", source: """
+        import java.util.List;
+        class LambdaComparator { void m(List<String> names) {
+            names.sort((left, right) -> {
+                right€.
+                return 0;
+            });
+        } }
+        """),
+        Sample(name: "TryResource", source: """
+        import java.nio.file.*;
+        import java.util.stream.Stream;
+        class TryResource { void m(Path path) throws Exception {
+            try (var lines = Files.lines(path)) {
+                lines€.
+            }
+        } }
+        """),
+        Sample(name: "RecordPatternInstanceof", source: """
+        import java.util.List;
+        class RecordPatternInstanceof {
+            record Box(List<String> items, int count) {}
+            void m(Object value) {
+                if (value instanceof Box(var entries, var total)) {
+                    entries€.
+                }
+            }
+        }
+        """),
+        Sample(name: "RecordPatternPrimitive", source: """
+        class RecordPatternPrimitive {
+            record Box(String label, int count) {}
+            void m(Object value) {
+                if (value instanceof Box(var caption, var amount)) {
+                    amount€.
+                }
+            }
+        }
+        """),
+        Sample(name: "RecordPatternSwitch", source: """
+        import java.util.List;
+        class RecordPatternSwitch {
+            record Pair(String first, List<Integer> second) {}
+            int m(Object value) {
+                switch (value) {
+                    case Pair(var head, var tail) -> {
+                        tail€.
+                        return 1;
+                    }
+                    default -> { return 0; }
+                }
+            }
+        }
+        """),
         Sample(name: "StreamToList", source: """
         import java.util.List;
         class StreamToList { void m(List<String> names) {
@@ -92,7 +171,7 @@ final class JavaInlayHintOracleTests: XCTestCase {
         let provider = JavaInlayHintProvider(
             index: index, indexPaths: JavaIndexPaths(root: scratch.appendingPathComponent("cache"))
         )
-        await provider.setOptions(JavaInlayHintOptions(parameterNames: false, variableTypes: true))
+        await provider.setOptions(JavaInlayHintOptions(parameterNames: false, variableTypes: true, lambdaParameterTypes: true))
 
         var failures: [String] = []
         for sample in Self.samples {
@@ -101,21 +180,43 @@ final class JavaInlayHintOracleTests: XCTestCase {
                 continue
             }
             let source = sample.source.replacingOccurrences(of: "€.", with: ".hashCode();")
+            // The probed variable's declaration is the first whole-word occurrence of its name.
+            guard let variable = Self.probedVariable(in: sample.source),
+                  let declaration = try Self.firstWord(variable, in: source) else {
+                failures.append("\(sample.name): no probed variable")
+                continue
+            }
+            // The open file's own types are in the index overlay, as they are in the app.
+            let own = JavaSourceStubBuilder.build(source: source, url: scratch.appendingPathComponent("T.java")).classes
+            await index.setOverlay(Dictionary(uniqueKeysWithValues: own.map { ($0.qualifiedName, $0) }))
             let hints = await Self.hints(for: source, provider: provider, in: scratch)
-                .filter { $0.kind == .type }
+                .filter { $0.kind == .type && $0.utf16Offset == declaration }
             let expected = JavaReceiverTypeAudit.simplified(javacType)
             if expected == "Object" {
                 if !hints.isEmpty { failures.append("\(sample.name): javac Object, hint \(hints.map(\.label))") }
                 continue
             }
             guard let hint = hints.first, hints.count == 1 else {
-                failures.append("\(sample.name): javac \(expected), hints \(hints.map(\.label))")
+                failures.append("\(sample.name): javac \(expected), hints at \(variable) \(hints.map(\.label))")
                 continue
             }
             let actual = JavaReceiverTypeAudit.simplified(String(hint.label.dropFirst(2)))
             if actual != expected { failures.append("\(sample.name): javac \(expected), hint \(actual)") }
         }
         XCTAssertEqual(failures, [], failures.joined(separator: "\n"))
+    }
+
+    private static func probedVariable(in source: String) -> String? {
+        guard let marker = source.range(of: "€") else { return nil }
+        let word = source[..<marker.lowerBound].reversed().prefix { $0.isLetter || $0.isNumber || $0 == "_" }
+        return word.isEmpty ? nil : String(word.reversed())
+    }
+
+    /// The UTF-16 offset just after the first whole-word `word` in `source`.
+    private static func firstWord(_ word: String, in source: String) throws -> Int? {
+        let regex = try NSRegularExpression(pattern: "\\b\(NSRegularExpression.escapedPattern(for: word))\\b")
+        guard let match = regex.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)) else { return nil }
+        return match.range.upperBound
     }
 
     private static func hints(for source: String, provider: JavaInlayHintProvider, in scratch: URL) async -> [InlayHint] {
