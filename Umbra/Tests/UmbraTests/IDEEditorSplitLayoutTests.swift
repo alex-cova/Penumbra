@@ -394,13 +394,13 @@ final class IDEEditorSplitLayoutTests: XCTestCase {
             workspace.tabDropTarget(at: CGPoint(x: right.midX, y: right.midY), from: panes[0].id),
             IDETabDropTarget(paneID: panes[1].id, edge: nil)
         )
-        XCTAssertEqual(
-            workspace.tabDropTarget(at: CGPoint(x: right.midX, y: right.minY + bar / 2), from: panes[0].id),
-            IDETabDropTarget(paneID: panes[1].id, edge: nil),
-            "the tab bar is not the top edge"
-        )
-        // Over its own pane: its bar is a reorder, and a pane with one tab cannot split itself.
-        XCTAssertNil(workspace.tabDropTarget(at: CGPoint(x: left.midX, y: left.minY + bar / 2), from: panes[0].id))
+        let overBar = workspace.tabDropTarget(at: CGPoint(x: right.midX, y: right.minY + bar / 2), from: panes[0].id)
+        XCTAssertEqual(overBar?.paneID, panes[1].id, "the tab bar is not the top edge")
+        XCTAssertNil(overBar?.edge)
+        // Over its own pane: its bar is a reorder (a place among its tabs), and a pane with one tab cannot split itself.
+        let ownBar = workspace.tabDropTarget(at: CGPoint(x: left.midX, y: left.minY + bar / 2), from: panes[0].id)
+        XCTAssertEqual(ownBar?.paneID, panes[0].id)
+        XCTAssertNil(ownBar?.edge)
         XCTAssertNil(workspace.tabDropTarget(at: CGPoint(x: left.maxX - 10, y: left.midY), from: panes[0].id))
     }
 }

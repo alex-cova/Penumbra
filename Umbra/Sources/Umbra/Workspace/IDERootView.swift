@@ -116,6 +116,8 @@ public struct IDERootView: View {
                             if workspace.hasOpenDocuments {
                                 IDEEditorLayoutNode(layout: workspace.editorLayout, epoch: workspace.layoutEpoch, isRoot: true)
                                     .coordinateSpace(name: IDEEditorTabsBar.panesSpace)
+                                    // The tab being dragged, over the panes it can be dropped on.
+                                    .overlay(alignment: .topLeading) { IDETabDragGhostLayer() }
                             } else {
                                 // The welcome page, or in a project the quieter empty editor.
                                 IDENoDocumentView()

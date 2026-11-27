@@ -91,6 +91,133 @@ struct IDEMiddleClickClosesTab: NSViewRepresentable {
     }
 }
 
+/// Follows the pointer through a tab drag. SwiftUI's `DragGesture` on a tab inside a scroll view
+/// stopped reporting moves once the drag began, so the tabs never made room; the events are read
+/// here instead, as a local monitor, and handed on unchanged (a plain click still reaches the tab).
+///
+/// A press on a tab that moves 4 pt starts the drag, mouse-up drops it, Esc cancels it. Points
+/// given to the closures are in the editor panes' space (`barOrigin` is where this view starts in it).
+struct IDETabDragTracker: NSViewRepresentable {
+    /// What a press at a horizontal position in the bar can pick up: the tab and where it starts.
+    let tab: (CGFloat) -> (id: UUID, minX: CGFloat)?
+    /// The bar's tabs and where it starts. Handed to `publish` whenever it changes, from here and
+    /// not from an `onChange` in the bar: that one dropped the update that followed a tab being
+    /// added to a new pane, leaving the bar published without its widths.
+    let geometry: IDETabBarGeometry
+    let publish: (IDETabBarGeometry) -> Void
+    /// The tab, where the pointer took hold of it (from its top-left), and the pointer.
+    let begin: (UUID, CGPoint, CGPoint) -> Void
+    let move: (CGPoint) -> Void
+    let drop: () -> Void
+    let cancel: () -> Void
+
+    func makeNSView(context: Context) -> AnchorView { AnchorView() }
+
+    func updateNSView(_ nsView: AnchorView, context: Context) {
+        nsView.tab = tab
+        nsView.barOrigin = geometry.origin
+        if nsView.published != geometry {
+            nsView.published = geometry
+            publish(geometry)
+        }
+        nsView.begin = begin
+        nsView.move = move
+        nsView.drop = drop
+        nsView.cancel = cancel
+    }
+
+    static func dismantleNSView(_ nsView: AnchorView, coordinator: ()) {
+        nsView.stopWatching(cancelling: true)
+    }
+
+    final class AnchorView: NSView {
+        var tab: (CGFloat) -> (id: UUID, minX: CGFloat)? = { _ in nil }
+        var barOrigin: CGPoint = .zero
+        fileprivate var published: IDETabBarGeometry?
+        var begin: (UUID, CGPoint, CGPoint) -> Void = { _, _, _ in }
+        var move: (CGPoint) -> Void = { _ in }
+        var drop: () -> Void = {}
+        var cancel: () -> Void = {}
+
+        private struct Press {
+            var tab: UUID
+            var start: CGPoint
+            var grab: CGPoint
+        }
+
+        private static let threshold: CGFloat = 4
+        private static let escape: UInt16 = 53
+
+        private var monitor: Any?
+        private var press: Press?
+        private var isDragging = false
+
+        /// Points in the bar grow downwards, like the panes' space they are added to.
+        override var isFlipped: Bool { true }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopWatching(cancelling: true)
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown]) { [weak self] event in
+                // nil swallows the event (Esc during a drag), so it must not fall back to `event`.
+                guard let self else { return event }
+                return handle(event)
+            }
+        }
+
+        func stopWatching(cancelling: Bool = false) {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            press = nil
+            if isDragging {
+                isDragging = false
+                if cancelling { cancel() }
+            }
+        }
+
+        private func panesPoint(_ local: CGPoint) -> CGPoint {
+            CGPoint(x: local.x + barOrigin.x, y: local.y + barOrigin.y)
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            switch event.type {
+            case .leftMouseDown:
+                press = nil
+                isDragging = false
+                let isBlocked = window?.attachedSheet != nil || NSApp.modalWindow != nil
+                guard event.window === window, !isBlocked else { return event }
+                let point = convert(event.locationInWindow, from: nil)
+                guard bounds.contains(point), let hit = tab(point.x) else { return event }
+                press = Press(tab: hit.id, start: point, grab: CGPoint(x: point.x - hit.minX, y: point.y))
+            case .leftMouseDragged:
+                guard let press, event.window === window else { return event }
+                let point = convert(event.locationInWindow, from: nil)
+                if isDragging {
+                    move(panesPoint(point))
+                } else if hypot(point.x - press.start.x, point.y - press.start.y) >= Self.threshold {
+                    isDragging = true
+                    begin(press.tab, press.grab, panesPoint(point))
+                }
+            case .leftMouseUp:
+                let wasDragging = isDragging
+                press = nil
+                isDragging = false
+                if wasDragging { drop() }
+            case .keyDown:
+                guard isDragging, event.keyCode == Self.escape else { return event }
+                press = nil
+                isDragging = false
+                cancel()
+                return nil
+            default:
+                break
+            }
+            return event
+        }
+    }
+}
+
 private extension NSEvent {
     /// A copy with vertical wheel travel made horizontal, as holding Shift does.
     func turnedSideways() -> NSEvent? {

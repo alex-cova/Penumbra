@@ -18,18 +18,20 @@ struct IDEEditorTabsBar: View {
 
     /// Fixed regardless of dirty/hover state, so the tab itself never resizes as the pointer
     /// crosses it — only what's drawn inside this slot changes.
-    private let trailingSlotSide: CGFloat = 14
+    nonisolated static let trailingSlotSide: CGFloat = 14
+    private var trailingSlotSide: CGFloat { Self.trailingSlotSide }
+
+    private var session: IDETabDragSession { workspace.tabDrag }
 
     @State private var barWidth: CGFloat = 0
     @State private var tabsWidth: CGFloat = 0
     /// Where the bar starts in the panes' space, which a drag is measured in.
-    @State private var barOrigin: CGFloat = 0
-    /// The tab being dragged, and how far the pointer has carried it.
-    @State private var drag: IDETabDrag?
-    /// True while a tab drag gesture is live; a cancelled gesture resets it
-    /// without calling `onEnded`, which is how a cancel is seen.
-    @GestureState private var isDraggingTab = false
+    @State private var barOrigin: CGPoint = .zero
     @State private var tabWidths: [UUID: CGFloat] = [:]
+    /// What the tabs measure (they are all alike), for the floating copy to be the same size and
+    /// sit the same way: the height, and how far down in the panes' space the tabs start.
+    @State private var tabHeight: CGFloat = IDEAppearance.Spacing.tabHeight
+    @State private var tabTop: CGFloat = 0
     @State private var scrollOffset: CGFloat = 0
     @State private var scrollPosition = ScrollPosition(idType: Never.self)
     @State private var edgeFades = IDEEdgeFades()
@@ -57,15 +59,38 @@ struct IDEEditorTabsBar: View {
         )
     }
 
+    /// The pointer is over this bar's tabs with a tab to put among them: it opens a gap there.
+    private var dropIndex: Int? {
+        guard let target = session.target, target.paneID == paneID, target.edge == nil else { return nil }
+        return target.index
+    }
+
+    /// How far each tab sits from its place while a tab is dragged: the tab being dragged leaves
+    /// its slot, and the slot it would drop into opens. The tab keeps its own slot while the pointer
+    /// is nowhere it could land (it goes back there on release).
+    private var gapOffsets: [UUID: CGFloat] {
+        guard let dragged = session.tab, let ghost = session.ghost else { return [:] }
+        let isSource = session.sourcePaneID == paneID
+        var index = dropIndex
+        if isSource, session.target == nil { index = tabs.firstIndex { $0.id == dragged } }
+        guard isSource || index != nil else { return [:] }
+        return layout.gapOffsets(excluding: isSource ? dragged : nil, insertingAt: index, gapWidth: ghost.width)
+    }
+
+    /// The row scrolls under a dragged tab held near this bar's ends.
+    private var autoscrollKey: UUID? {
+        dropIndex == nil ? nil : session.tab
+    }
+
     var body: some View {
-        let offsets = drag?.reorder(in: layout)?.offsets ?? [:]
+        let offsets = gapOffsets
         HStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Self.spacing - 2 * Self.fadeWidth) {
                         ForEach(tabs) { tab in
                             let offset = offsets[tab.id] ?? 0
-                            let isDragged = drag?.tab == tab.id
+                            let isDragged = session.tab == tab.id
                             IDEChromeTabItem(
                                 title: tab.title,
                                 isSelected: tab.isSelected,
@@ -84,15 +109,18 @@ struct IDEEditorTabsBar: View {
                                     )
                                 }
                             )
-                            .opacity(isDragged && workspace.tabDropTarget != nil ? 0.4 : 1)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabWidths[tab.id] = $0 }
+                            // The floating copy stands in for it while it is dragged.
+                            .opacity(isDragged ? 0 : 1)
+                            .onGeometryChange(for: CGSize.self) { $0.size } action: {
+                                tabWidths[tab.id] = $0.width
+                                if tabHeight != $0.height { tabHeight = $0.height }
+                            }
+                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.panesSpace)).minY } action: { tabTop = $0 }
                             // Room the row scrolls into view with the tab, clear of
                             // the faded ends; spacing and padding take it back out.
                             .padding(.horizontal, Self.fadeWidth)
                             .offset(x: offset)
-                            .zIndex(isDragged ? 1 : 0)
-                            .animation(isDragged || reduceMotion ? nil : Self.reorderAnimation, value: offset)
-                            .gesture(tabDragGesture(for: tab.id, proxy: proxy))
+                            .animation(reduceMotion ? nil : Self.reorderAnimation, value: offset)
                             .id(tab.id)
                             .contextMenu { tabMenu(for: tab) }
                         }
@@ -111,7 +139,7 @@ struct IDEEditorTabsBar: View {
                 } action: { _, fades in
                     edgeFades = fades
                 }
-                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.panesSpace)).minX } action: { barOrigin = $0 }
+                .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named(Self.panesSpace)).origin } action: { barOrigin = $0 }
                 // A tab scrolled part of the way out fades rather than ending in a cut.
                 .mask { fadeMask }
                 .background(IDEWheelScrollsSideways())
@@ -119,6 +147,17 @@ struct IDEEditorTabsBar: View {
                     IDEMiddleClickClosesTab(tab: tab(at:)) { id in
                         workspace.requestCloseTab(id, in: paneID)
                     }
+                )
+                .background(
+                    IDETabDragTracker(
+                        tab: dragCandidate(at:),
+                        geometry: IDETabBarGeometry(layout: layout, origin: barOrigin),
+                        publish: publishGeometry,
+                        begin: { id, grab, point in beginDrag(id, grab: grab, at: point) },
+                        move: { workspace.updateTabDrag(to: $0) },
+                        drop: { workspace.dropDraggedTab() },
+                        cancel: { workspace.cancelTabDrag() }
+                    )
                 )
                 // A tab chosen from the menu, a keyboard shortcut or a file opened elsewhere must
                 // not stay out of sight.
@@ -131,22 +170,14 @@ struct IDEEditorTabsBar: View {
                 }
                 .onChange(of: tabs.map(\.id)) { _, ids in
                     tabWidths = tabWidths.filter { ids.contains($0.key) }
-                    if let drag, !ids.contains(drag.tab) { endDrag() }
                 }
                 .onDisappear {
-                    if drag != nil { workspace.tabDropTarget = nil }
-                }
-                // A cancelled drag (Esc) resets the gesture state without a drop:
-                // the tabs settle back and no order changes.
-                .onChange(of: isDraggingTab) { _, isDragging in
-                    if !isDragging, let drag {
-                        handleDrag(.cancelled, at: .zero, of: drag.tab, proxy: proxy)
-                    }
+                    if session.sourcePaneID == paneID { workspace.cancelTabDrag() }
                 }
                 // A pointer resting near an end sends no events, so a timer keeps
                 // the row scrolling under it for as long as the drag lasts.
-                .task(id: drag?.tab) {
-                    guard drag != nil else { return }
+                .task(id: autoscrollKey) {
+                    guard autoscrollKey != nil else { return }
                     var last = Date.now
                     while !Task.isCancelled {
                         try? await Task.sleep(for: .milliseconds(16))
@@ -185,70 +216,50 @@ struct IDEEditorTabsBar: View {
         }
     }
 
-    private func tabDragGesture(for id: UUID, proxy: ScrollViewProxy) -> some Gesture {
-        DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.panesSpace))
-            .updating($isDraggingTab) { _, state, _ in state = true }
-            .onChanged { value in
-                handleDrag(.moved(translation: value.translation.width, location: value.location.x), at: value.location, of: id, proxy: proxy)
-            }
-            .onEnded { value in
-                handleDrag(.dropped(translation: value.translation.width), at: value.location, of: id, proxy: proxy)
-            }
+    /// The tab a press at a horizontal position in the bar picks up, and where it starts. Not the
+    /// ×: a press there that wanders a few points is still a click on it.
+    private func dragCandidate(at x: CGFloat) -> (id: UUID, minX: CGFloat)? {
+        guard let id = layout.tab(at: x), let minX = layout.minX(of: id), let width = tabWidths[id],
+              x < minX + width - trailingSlotSide - IDEAppearance.Spacing.cozy else { return nil }
+        return (id, minX)
     }
 
-    private func endDrag() {
-        drag = nil
-        if workspace.tabDropTarget != nil { workspace.tabDropTarget = nil }
-    }
-
-    private func handleDrag(_ event: IDETabDragEvent, at point: CGPoint, of id: UUID, proxy: ScrollViewProxy) {
-        switch event {
-        case .moved(let translation, let location):
-            let barLocation = location - barOrigin
-            let target = workspace.tabDropTarget(at: point, from: paneID)
-            if workspace.tabDropTarget != target { workspace.tabDropTarget = target }
-            if let drag, drag.tab == id {
-                self.drag = IDETabDrag(tab: id, translation: translation, location: barLocation, startScrollOffset: drag.startScrollOffset)
-            } else {
-                workspace.selectTab(id, in: paneID)
-                drag = IDETabDrag(tab: id, translation: translation, location: barLocation, startScrollOffset: scrollOffset)
-            }
-        case .dropped(let translation):
-            guard var dropped = drag, dropped.tab == id else { return }
-            if let target = workspace.tabDropTarget {
-                endDrag()
-                if let edge = target.edge {
-                    workspace.moveTab(id, from: paneID, toNewPaneAt: edge, of: target.paneID)
-                } else {
-                    workspace.moveTab(id, from: paneID, toPane: target.paneID)
-                }
-                return
-            }
-            dropped.translation = translation
-            let destination = dropped.reorder(in: layout)?.destination
-            withAnimation(reduceMotion ? nil : Self.reorderAnimation) {
-                if let destination { workspace.reorderTab(id, in: paneID, to: destination) }
-                drag = nil
-            }
-            DispatchQueue.main.async {
-                withAnimation(reduceMotion ? nil : Self.reorderAnimation) { proxy.scrollTo(id) }
-            }
-        case .cancelled:
-            if drag?.tab == id {
-                withAnimation(reduceMotion ? nil : Self.reorderAnimation) { endDrag() }
-            }
+    /// Where the tabs are is what a drag finds its slot in, so the workspace keeps it.
+    private func publishGeometry(_ geometry: IDETabBarGeometry) {
+        workspace.tabBarGeometry[paneID] = geometry
+        // A row that scrolled or changed width under a still pointer has a new slot under it.
+        if workspace.tabDrag.isActive {
+            DispatchQueue.main.async { workspace.retargetTabDrag() }
         }
     }
 
+    private func beginDrag(_ id: UUID, grab: CGPoint, at point: CGPoint) {
+        guard let tab = tabs.first(where: { $0.id == id }) else { return }
+        // The row is centred in the bar, so a tab's top is measured from the pane's, which is where
+        // the bar starts; the pointer's hold on it from the row, which is where the press was read.
+        let paneTop = workspace.editorPaneFrames[paneID]?.minY ?? barOrigin.y
+        let ghost = IDETabDragSession.Ghost(
+            title: tab.title,
+            symbolName: tab.symbolName ?? IDEFileIcon.systemName(forFilename: tab.title),
+            isDirty: tab.isDirty && workspace.preferences.markModifiedTabs,
+            width: tabWidths[id] ?? 0,
+            height: tabHeight,
+            top: tabTop - paneTop
+        )
+        let grabOffset = CGPoint(x: grab.x, y: grab.y - (tabTop - barOrigin.y))
+        workspace.beginTabDrag(id, in: paneID, ghost: ghost, grabOffset: grabOffset, at: point)
+    }
+
     private func autoscroll(elapsed: TimeInterval) {
-        guard let target = drag?.autoscrollOffset(in: layout, elapsed: elapsed) else { return }
+        let pointerX = session.location.x - barOrigin.x
+        guard let target = layout.autoscrollOffset(pointerX: pointerX, elapsed: elapsed) else { return }
         scrollPosition.scrollTo(x: target)
         scrollOffset = target
     }
 
     /// The tab at a horizontal position in the bar, if there's one.
     private func tab(at x: CGFloat) -> UUID? {
-        drag == nil ? layout.tab(at: x) : nil
+        session.isActive ? nil : layout.tab(at: x)
     }
 
     /// Every tab of the pane in one list, for the ones scrolled out of view.

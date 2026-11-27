@@ -68,9 +68,24 @@ final class IDEEditorTabDropTests: XCTestCase {
     }
 
     func testTheSourcePaneOnlyTakesAnEdgeSplit() {
-        XCTAssertNil(target(CGPoint(x: 200, y: 10)), "its own bar is a reorder")
+        XCTAssertNil(target(CGPoint(x: 200, y: 10)), "its own bar has no layout to take a place in")
         XCTAssertNil(target(CGPoint(x: 200, y: 232)), "its own middle is nothing")
         XCTAssertEqual(target(CGPoint(x: 390, y: 232)), IDETabDropTarget(paneID: source, edge: .trailing))
+    }
+
+    func testOverAnyBarTheTabGoesWhereTheBarSays() {
+        func indexed(_ point: CGPoint) -> IDETabDropTarget? {
+            IDEEditorTabDrop.target(
+                at: point,
+                panes: [(source, CGRect(x: 0, y: 0, width: 400, height: 432)), (other, CGRect(x: 400, y: 0, width: 400, height: 432))],
+                from: source, sourceTabCount: 3, tabBarHeight: bar, canSplit: { _ in true },
+                insertionIndex: { $0 == source ? 1 : 2 }
+            )
+        }
+        XCTAssertEqual(indexed(CGPoint(x: 200, y: 10)), IDETabDropTarget(paneID: source, edge: nil, index: 1), "its own bar reorders")
+        XCTAssertEqual(indexed(CGPoint(x: 600, y: 10)), IDETabDropTarget(paneID: other, edge: nil, index: 2))
+        XCTAssertEqual(indexed(CGPoint(x: 600, y: 232)), IDETabDropTarget(paneID: other, edge: nil, index: nil), "the middle goes to the end")
+        XCTAssertNil(indexed(CGPoint(x: 200, y: 232)), "its own middle is nothing")
     }
 
     func testALonelyTabCannotSplitItsOwnPane() {

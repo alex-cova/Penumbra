@@ -529,9 +529,10 @@ struct IDEEditorPaneView: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(IDEEditorTabsBar.panesSpace)) } action: {
             workspace.editorPaneFrames[paneID] = $0
         }
-        // Where a tab being dragged would land: this pane's tabs, or the new pane beside it.
+        // Where a tab being dragged would land: the new pane beside it, or the pane as a whole. Into
+        // its bar the tabs show it themselves, by opening a gap.
         .overlay {
-            if let target = workspace.tabDropTarget, target.paneID == paneID {
+            if let target = workspace.tabDrag.target, target.paneID == paneID, target.edge != nil || target.index == nil {
                 IDETabDropHighlight(edge: target.edge)
             }
         }

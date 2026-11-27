@@ -24,41 +24,98 @@ final class IDETabDragTests: XCTestCase {
         XCTAssertNil(layout.tab(at: 1000))
     }
 
-    func testDragPastANeighboursMiddleStepsItAside() {
-        // Tab 0 dragged right by more than half of tab 1 (50 + spacing).
-        let drag = IDETabDrag(tab: ids[0], translation: 60, location: 68, startScrollOffset: 0)
-        let result = drag.reorder(in: bar())
-        XCTAssertEqual(result?.destination, 1)
-        XCTAssertEqual(result?.offsets[ids[0]], 60)
-        XCTAssertEqual(result?.offsets[ids[1]], -104, "the passed tab steps aside by the dragged tab's stride")
-        XCTAssertNil(result?.offsets[ids[2]])
+    func testMinXOfATabIsWhereItStartsInTheScrolledRow() {
+        XCTAssertEqual(bar().minX(of: ids[2]), 8 + 2 * 104)
+        XCTAssertEqual(bar(scrollOffset: 30).minX(of: ids[0]), -22)
+        XCTAssertNil(bar().minX(of: UUID()))
     }
 
-    func testShortDragStaysPut() {
-        let drag = IDETabDrag(tab: ids[1], translation: 10, location: 122, startScrollOffset: 0)
-        let result = drag.reorder(in: bar())
-        XCTAssertEqual(result?.destination, 1)
-        XCTAssertEqual(result?.offsets[ids[1]], 10)
-        XCTAssertNil(result?.offsets[ids[0]])
+    // MARK: Where a dragged tab would go
+
+    func testInsertionIndexPassesANeighbourAtItsMiddle() {
+        let layout = bar()
+        // Tab 0 is being dragged; the others sit at 8, 112, 216 as a row of three (middles 58, 162, 266).
+        XCTAssertEqual(layout.insertionIndex(forCenterX: 0, excluding: ids[0]), 0)
+        XCTAssertEqual(layout.insertionIndex(forCenterX: 58, excluding: ids[0]), 0, "on the middle is not past it")
+        XCTAssertEqual(layout.insertionIndex(forCenterX: 59, excluding: ids[0]), 1)
+        XCTAssertEqual(layout.insertionIndex(forCenterX: 200, excluding: ids[0]), 2)
+        XCTAssertEqual(layout.insertionIndex(forCenterX: 1000, excluding: ids[0]), 3)
     }
 
-    func testDragIsClampedToTheEndsOfTheRow() {
-        let drag = IDETabDrag(tab: ids[0], translation: -500, location: 0, startScrollOffset: 0)
-        XCTAssertEqual(drag.reorder(in: bar())?.offsets[ids[0]], 0)
-        // The last tab starts past the bar's trailing edge (row 424 > bar 400),
-        // so keeping it in view lets it slide back by that overhang only.
-        let last = IDETabDrag(tab: ids[3], translation: 500, location: 400, startScrollOffset: 0)
-        XCTAssertEqual(last.reorder(in: bar())?.offsets[ids[3]], -20)
+    func testInsertionIndexInAnotherBarCountsEveryTab() {
+        XCTAssertEqual(bar().insertionIndex(forCenterX: 300, excluding: nil), 3)
+        XCTAssertEqual(bar().insertionIndex(forCenterX: 0, excluding: nil), 0)
     }
 
-    func testAutoscrollOnlyTowardsTheDraggedSide() {
+    func testInsertionIndexFollowsTheScroll() {
+        // Scrolled by a tab's stride, what is at 59 is the middle of what was at 163.
+        XCTAssertEqual(bar(scrollOffset: 104).insertionIndex(forCenterX: 59, excluding: nil), 2)
+    }
+
+    // MARK: The gap
+
+    func testNoDragNoOffsets() {
+        XCTAssertTrue(bar().gapOffsets(excluding: nil, insertingAt: nil, gapWidth: 100).isEmpty)
+    }
+
+    func testTheGapStaysInTheDraggedTabsSlotUntilItMoves() {
+        XCTAssertTrue(bar().gapOffsets(excluding: ids[1], insertingAt: 1, gapWidth: 100).isEmpty)
+    }
+
+    func testTheGapMovesWithinTheBarItCameFrom() {
+        // Tab 0 over the slot after tab 2 (index 2 among the others): 1 and 2 step back over its slot.
+        let offsets = bar().gapOffsets(excluding: ids[0], insertingAt: 2, gapWidth: 100)
+        XCTAssertEqual(offsets[ids[1]], -104)
+        XCTAssertEqual(offsets[ids[2]], -104)
+        XCTAssertNil(offsets[ids[3]], "past the gap it is where it was")
+        XCTAssertNil(offsets[ids[0]], "the dragged tab is the ghost's")
+        // The other way: tab 3 moves to the front, the ones it passes make room.
+        let front = bar().gapOffsets(excluding: ids[3], insertingAt: 0, gapWidth: 100)
+        XCTAssertEqual(front[ids[0]], 104)
+        XCTAssertEqual(front[ids[1]], 104)
+        XCTAssertEqual(front[ids[2]], 104)
+    }
+
+    func testTheRowClosesOverATabThatLeavesItsBar() {
+        let offsets = bar().gapOffsets(excluding: ids[1], insertingAt: nil, gapWidth: 100)
+        XCTAssertNil(offsets[ids[0]])
+        XCTAssertEqual(offsets[ids[2]], -104)
+        XCTAssertEqual(offsets[ids[3]], -104)
+    }
+
+    func testAGapOpensInABarTheTabIsOver() {
+        let offsets = bar().gapOffsets(excluding: nil, insertingAt: 2, gapWidth: 80)
+        XCTAssertNil(offsets[ids[0]])
+        XCTAssertNil(offsets[ids[1]])
+        XCTAssertEqual(offsets[ids[2]], 84, "the gap and the spacing after it")
+        XCTAssertEqual(offsets[ids[3]], 84)
+        XCTAssertTrue(bar().gapOffsets(excluding: nil, insertingAt: 4, gapWidth: 80).isEmpty, "a gap at the end moves nothing")
+    }
+
+    func testGapOffsetsUseTheScrolledRowButNotItsOffset() {
+        XCTAssertEqual(
+            bar(scrollOffset: 50).gapOffsets(excluding: ids[0], insertingAt: nil, gapWidth: 100),
+            bar().gapOffsets(excluding: ids[0], insertingAt: nil, gapWidth: 100),
+            "offsets are distances, so scrolling the row does not change them"
+        )
+    }
+
+    // MARK: Autoscroll
+
+    func testAutoscrollTowardsTheEndTheTabIsHeldAt() {
         let layout = bar(barWidth: 200)
-        let right = IDETabDrag(tab: ids[0], translation: 50, location: 195, startScrollOffset: 0)
-        let target = right.autoscrollOffset(in: layout, elapsed: 0.1)
-        XCTAssertNotNil(target)
-        XCTAssertGreaterThan(target ?? 0, 0)
-        let still = IDETabDrag(tab: ids[0], translation: 0, location: 195, startScrollOffset: 0)
-        XCTAssertNil(still.autoscrollOffset(in: layout, elapsed: 0.1), "picking a tab up at the end does not scroll")
+        let right = layout.autoscrollOffset(pointerX: 195, elapsed: 0.1)
+        XCTAssertGreaterThan(right ?? 0, 0)
+        XCTAssertNil(layout.autoscrollOffset(pointerX: 100, elapsed: 0.1), "the middle of the bar does not scroll")
+        XCTAssertNil(layout.autoscrollOffset(pointerX: 5, elapsed: 0.1), "already at the start")
+        let scrolled = bar(scrollOffset: 100, barWidth: 200)
+        XCTAssertLessThan(scrolled.autoscrollOffset(pointerX: 5, elapsed: 0.1) ?? 100, 100)
+    }
+
+    func testAutoscrollStopsAtTheEndOfTheRow() {
+        // The row is 428 wide (an inset each side, four tabs and their spacing): it can scroll by 228 in a 200 bar.
+        let layout = bar(scrollOffset: 228, barWidth: 200)
+        XCTAssertNil(layout.autoscrollOffset(pointerX: 199, elapsed: 1))
     }
 
     func testEdgeFadesRampOverTheFadeDistance() {
@@ -98,6 +155,26 @@ final class IDEWorkspaceTabMoveTests: XCTestCase {
         workspace.reorderTab(docs[0].id, in: firstPane, to: 2)
         let pane = workspace.workbench.layout.findPane(id: firstPane)
         XCTAssertEqual(pane?.documents.map(\.id), [docs[1].id, docs[2].id, docs[0].id])
+    }
+
+    func testMoveTabToAnotherPaneInsertsAtTheIndex() {
+        let (workspace, firstPane, secondPane, docs) = workspaceWithTwoPanes()
+        defer { workspace.teardown() }
+        let target = workspace.workbench.layout.findPane(id: secondPane)
+        let before = target?.documents.map(\.id) ?? []
+        // The second pane starts as a copy of the first's active document; move another over, first.
+        workspace.moveTab(docs[0].id, from: firstPane, toPane: secondPane, at: 0)
+        XCTAssertEqual(target?.documents.first?.id, docs[0].id)
+        XCTAssertEqual(target?.documents.count, before.count + (before.contains(docs[0].id) ? 0 : 1))
+        workspace.moveTab(docs[1].id, from: firstPane, toPane: secondPane, at: 99)
+        XCTAssertEqual(target?.documents.last?.id, docs[1].id, "an index past the end appends")
+    }
+
+    func testDroppingAtTheEndOfAnotherPaneAppendsWithoutAnIndex() {
+        let (workspace, firstPane, secondPane, docs) = workspaceWithTwoPanes()
+        defer { workspace.teardown() }
+        workspace.moveTab(docs[2].id, from: firstPane, toPane: secondPane)
+        XCTAssertEqual(workspace.workbench.layout.findPane(id: secondPane)?.documents.last?.id, docs[2].id)
     }
 
     func testMoveTabToAnotherPaneSelectsItThereWithoutClosingAnything() {

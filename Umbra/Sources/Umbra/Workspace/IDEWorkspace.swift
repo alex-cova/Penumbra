@@ -597,27 +597,15 @@ public final class IDEWorkspace {
         set { if position.selectionLength != newValue { position.selectionLength = newValue } }
     }
     var tabsByPane: [UUID: [IDETabRow]] = [:]
-    /// Where a tab being dragged would land if dropped now: another pane's tabs, or a new pane beside one.
-    var tabDropTarget: IDETabDropTarget?
+    /// The editor tab being dragged, where it would land if dropped now, and the floating copy that
+    /// follows the pointer. Its own object, so the pointer moving does not invalidate the workspace;
+    /// the logic is in `IDEWorkspace+TabDrag.swift`.
+    let tabDrag = IDETabDragSession()
     /// Pane frames in the editor panes' coordinate space, for tab drags.
     @ObservationIgnored var editorPaneFrames: [UUID: CGRect] = [:]
+    /// Each pane's tab bar as laid out, for tab drags to find the slot under the pointer.
+    @ObservationIgnored var tabBarGeometry: [UUID: IDETabBarGeometry] = [:]
 
-    /// What dropping a tab dragged out of `paneID` at a point in the editor panes' space would do.
-    /// Frames of panes that have since closed are ignored.
-    func tabDropTarget(at point: CGPoint, from paneID: UUID) -> IDETabDropTarget? {
-        guard let source = workbench.layout.findPane(id: paneID) else { return nil }
-        let frames = editorPaneFrames.compactMap { entry in
-            workbench.layout.findPane(id: entry.key) != nil ? (id: entry.key, frame: entry.value) : nil
-        }
-        return IDEEditorTabDrop.target(
-            at: point,
-            panes: frames,
-            from: paneID,
-            sourceTabCount: source.documents.count,
-            tabBarHeight: IDEAppearance.Spacing.tabHeight,
-            canSplit: { canSplitActivePane(along: $0) }
-        )
-    }
     /// Editor area size reported by the root view, for the split guard.
     @ObservationIgnored var editorAreaSize: CGSize = .zero
     /// Derived from `tabsByPane` so the toolbar's close group does not re-evaluate on every tab
@@ -2935,21 +2923,21 @@ public final class IDEWorkspace {
         refreshPresentation()
     }
 
-    /// Moves a tab from one pane to the end of another's bar (dragging it onto
-    /// that pane) and shows it there. No close prompt: nothing is closed. A
+    /// Moves a tab from one pane to another's bar (dragging it onto that pane), at `index` among the
+    /// tabs there or at the end, and shows it there. No close prompt: nothing is closed. A
     /// source pane left without tabs closes, as when its last tab is closed.
-    func moveTab(_ documentID: UUID, from sourceID: UUID, toPane targetID: UUID) {
+    func moveTab(_ documentID: UUID, from sourceID: UUID, toPane targetID: UUID, at index: Int? = nil) {
         guard sourceID != targetID,
               let source = workbench.layout.findPane(id: sourceID),
               let target = workbench.layout.findPane(id: targetID),
-              let index = source.documents.firstIndex(where: { $0.id == documentID }) else { return }
+              let sourceIndex = source.documents.firstIndex(where: { $0.id == documentID }) else { return }
         // Flush the source pane's live state into the document first.
         if let document = source.selectedDocument {
             syncTextViewToDocument(host(for: source.id).textView, document: document, from: host(for: source.id))
         }
-        let document = source.documents[index]
+        let document = source.documents[sourceIndex]
         let wasTemporary = source.temporaryDocumentID == documentID
-        source.documents.remove(at: index)
+        source.documents.remove(at: sourceIndex)
         if source.temporaryDocumentID == documentID { source.temporaryDocumentID = nil }
         if source.selectedDocumentID == documentID {
             source.selectedDocumentID = source.documents.last?.id
@@ -2958,7 +2946,7 @@ public final class IDEWorkspace {
         if let existing = target.documents.firstIndex(where: { $0.id == documentID }) {
             target.documents.remove(at: existing)
         }
-        target.documents.append(document)
+        target.documents.insert(document, at: min(max(index ?? target.documents.count, 0), target.documents.count))
         if wasTemporary { target.temporaryDocumentID = documentID }
         target.selectDocument(documentID)
         if source.documents.isEmpty {
@@ -4945,6 +4933,7 @@ public final class IDEWorkspace {
         // with a new identity on every layout change) reports before the old view disappears, so
         // clearing on disappear dropped the frame of a pane that survived a split.
         editorPaneFrames = editorPaneFrames.filter { live.contains($0.key) }
+        tabBarGeometry = tabBarGeometry.filter { live.contains($0.key) }
         for pane in panes {
             let host = host(for: pane.id)
             if pane.selectedDocument != nil {

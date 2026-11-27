@@ -7,6 +7,15 @@ import Penumbra
 struct IDETabDropTarget: Equatable {
     var paneID: UUID
     var edge: EditorSplitEdge?
+    /// With no `edge`, the place among the pane's other tabs when the pointer is over its tab bar
+    /// (the bar opens a gap there); nil when the tab goes to the end, from over the pane's middle.
+    var index: Int?
+
+    init(paneID: UUID, edge: EditorSplitEdge? = nil, index: Int? = nil) {
+        self.paneID = paneID
+        self.edge = edge
+        self.index = index
+    }
 }
 
 /// The part of an editor pane a dragged tab is over. The same rule as the terminal panes
@@ -56,21 +65,27 @@ enum IDEEditorTabDrop {
     }
 
     /// What dropping at `point` would do for a tab dragged out of `sourcePaneID`, which holds
-    /// `sourceTabCount` tabs. Nothing to do on the pane the tab came from, except an edge split of it
-    /// that leaves a tab behind; a split the window has no room for is the middle of that pane instead.
+    /// `sourceTabCount` tabs. Over a pane's tab bar (the source's too) the tab goes into the bar at
+    /// `insertionIndex(paneID)`, or to the end of another pane's when the bar has no layout yet.
+    /// Nothing to do over the middle of the pane the tab came from, and an edge split of it only
+    /// when that leaves a tab behind; a split the window has no room for is the middle of that pane instead.
     static func target(
         at point: CGPoint,
         panes: [(id: UUID, frame: CGRect)],
         from sourcePaneID: UUID,
         sourceTabCount: Int,
         tabBarHeight: CGFloat,
-        canSplit: (EditorSplitEdge) -> Bool
+        canSplit: (EditorSplitEdge) -> Bool,
+        insertionIndex: (UUID) -> Int? = { _ in nil }
     ) -> IDETabDropTarget? {
         guard let hit = panes.first(where: { $0.frame.contains(point) }) else { return nil }
         let isSource = hit.id == sourcePaneID
         let fallback: IDETabDropTarget? = isSource ? nil : IDETabDropTarget(paneID: hit.id, edge: nil)
         switch zone(at: point, in: hit.frame, tabBarHeight: tabBarHeight) {
-        case .tabBar, .center:
+        case .tabBar:
+            guard let index = insertionIndex(hit.id) else { return fallback }
+            return IDETabDropTarget(paneID: hit.id, edge: nil, index: index)
+        case .center:
             return fallback
         case .edge(let edge):
             if isSource && sourceTabCount < 2 { return nil }
