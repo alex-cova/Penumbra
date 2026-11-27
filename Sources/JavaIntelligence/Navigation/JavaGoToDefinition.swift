@@ -365,7 +365,7 @@ struct JavaNavigationSession {
         }
         guard let dot = dotOffset(before: fieldNode),
               let receiver = await JavaExpressionTyper.receiverInfo(
-                source: source, realTree: tree, dotOffset: dot, context: context, index: index
+                source: source, bytes: tree.sourceBytes, realTree: tree, dotOffset: dot, context: context, index: index
               ) else { return nil }
         let mode: JavaMemberLookupMode = receiver.isTypeReference ? .staticOnly : .instance
         return await fieldTarget(named: fieldNode.text, on: receiver.type, mode: mode, qualifier: receiver.memberQualifier)
@@ -453,7 +453,7 @@ struct JavaNavigationSession {
         }
         guard let dot = dotOffset(before: nameNode) else { return nil }
         return await JavaExpressionTyper.receiverInfo(
-            source: source, realTree: tree, dotOffset: dot, context: context, index: index
+            source: source, bytes: tree.sourceBytes, realTree: tree, dotOffset: dot, context: context, index: index
         )
     }
 
@@ -704,7 +704,8 @@ struct JavaNavigationSession {
     }
 
     func dotOffset(before node: SyntaxNode) -> Int? {
-        let bytes = Array(source.utf8)
+        // The tree's own bytes: copying the whole document per call made a viewport of calls cost O(file).
+        let bytes = tree.sourceBytes
         var index = node.startByte - 1
         while index >= 0 {
             let byte = bytes[index]

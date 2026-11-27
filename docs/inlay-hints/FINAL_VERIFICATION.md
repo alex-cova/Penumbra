@@ -105,9 +105,11 @@ The 0.5 ms added-p95 budget is met at every size on the rebuilt binary. Only `en
 - **LSP position encoding: decided not to negotiate.** The client sends `general: nil`, so servers must use UTF-16, and about 69 sites in `Sources/EditorIntelligenceLSP` assume UTF-16 columns. Offering UTF-8 or UTF-32 would touch all of them for a server-side speed gain only. UTF-16 stays the contract. Reopen if a server is found that refuses it.
 - **Placement is not started.** A hint's room is added to the previous glyph's kerning (`LineController.swift:554`, `InlayHintLayout.swift` `localOffset >= 1`), so a hint at a line's first column and below-line hints need new typesetting room and parity work in both renderers. They remain open.
 
+- **Native warm p95 closed.** A sample of the 120k-line run showed `_platform_memmove` as 1,353 of about 1,600 busy samples. `JavaNavigationSession.dotOffset(before:)` and `JavaExpressionTyper.receiverInfo` each copied the whole 9.25 MB source (`Array(source.utf8)`) once per call, so a viewport of calls cost O(file). Both now use the tree's own `sourceBytes` (`JavaGoToDefinition.swift`). Result: warm p95 **29.2 ms to 8.7 ms** against the 20 ms budget, 162 hints unchanged, document cache 1 parse and 30 hits. Retained heap is still about 398 MB (the cached tree and stubs), RSS delta about 395 MB. Command: `.build/release/PerfHarness java-inlay synthetic --lines 120000 --samples 30`. The change is shared with go-to-definition, so `swift test --filter Java` ran: 2,082 cases, 7 skipped, 0 failures.
+
 ### Gates still open
 
-Native warm p95 (29 ms against 20 ms), the three unexplained intermittent failures, and every item the phase table lists as open: line-start and below-line placement with renderer parity, LSP Code Lens, non-UTF-16 LSP encodings and part-level actions, trusted JDK download and install, remaining Java hint categories and the hint-specific javac differential matrix, and end-to-end accessibility and performance checks.
+The three unexplained intermittent failures, and every item the phase table lists as open: line-start and below-line placement with renderer parity, LSP Code Lens, non-UTF-16 LSP encodings and part-level actions, trusted JDK download and install, remaining Java hint categories and the hint-specific javac differential matrix, and end-to-end accessibility and performance checks.
 
 ## Files changed
 
