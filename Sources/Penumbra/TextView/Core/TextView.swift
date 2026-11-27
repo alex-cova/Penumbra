@@ -412,6 +412,16 @@ public struct DocumentTextExport: Sendable {
             textInputView.caretShape = newValue
         }
     }
+    /// Whether the painted caret spans the full line height, including line spacing. On by
+    /// default. Does not change ``caretRect(at:)`` or selection geometry.
+    public var usesFullLineHeightCaret: Bool {
+        get {
+            textInputView.usesFullLineHeightCaret
+        }
+        set {
+            textInputView.usesFullLineHeightCaret = newValue
+        }
+    }
     /// Seconds the pointer rests on a collapsed fold's chip before its preview opens. Defaults to 0.5.
     /// Hosts that show their own hover popups use the same value (`EditorIntelligenceController.tooltipDelay`).
     public var tooltipDelay: TimeInterval {

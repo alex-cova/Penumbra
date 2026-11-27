@@ -2,8 +2,9 @@ import AppKit
 import XCTest
 @testable import Penumbra
 
-/// The caret's painted frame follows ``TextView/caretShape``. ``caretRect(at:)`` stays the thin
-/// bar so selection and popups do not move.
+/// The caret's painted frame follows ``TextView/caretShape`` and spans the full line height
+/// while ``TextView/usesFullLineHeightCaret`` is on. ``caretRect(at:)`` stays the thin
+/// text-height bar so selection and popups do not move.
 @MainActor
 final class CaretShapeTests: XCTestCase {
     func testBarBlockAndUnderlineFrames() throws {
@@ -11,18 +12,23 @@ final class CaretShapeTests: XCTestCase {
         let characterWidth = textView.caretRect(at: 1).minX - textView.caretRect(at: 0).minX
         let bar = textView.caretRect(at: 0)
         XCTAssertGreaterThan(characterWidth, Caret.width)
+        // Full line height is on by default: the painted caret spans the line spacing too,
+        // centered on the text-height bar.
+        let fullHeight = bar.height * textView.lineHeightMultiplier
+        XCTAssertGreaterThan(fullHeight, bar.height)
 
         textView.caretShape = .bar
         let barCaret = try XCTUnwrap(caret(in: textView))
         XCTAssertEqual(barCaret.frame.width, Caret.width, accuracy: 0.5)
-        XCTAssertEqual(barCaret.frame.height, bar.height, accuracy: 0.5)
+        XCTAssertEqual(barCaret.frame.height, fullHeight, accuracy: 0.5)
+        XCTAssertEqual(barCaret.frame.midY, bar.midY, accuracy: 0.5)
         XCTAssertEqual(barCaret.coveredText, "")
 
         textView.caretShape = .block
         let block = try XCTUnwrap(caret(in: textView))
         block.displayIfNeeded()
         XCTAssertEqual(block.frame.width, characterWidth, accuracy: 0.5)
-        XCTAssertEqual(block.frame.height, bar.height, accuracy: 0.5)
+        XCTAssertEqual(block.frame.height, fullHeight, accuracy: 0.5)
         XCTAssertEqual(block.frame.minX, bar.minX, accuracy: 0.5)
         XCTAssertEqual(block.coveredText, "W")
         XCTAssertEqual(textView.caretRect(at: 0).width, Caret.width, accuracy: 0.5)
@@ -39,6 +45,28 @@ final class CaretShapeTests: XCTestCase {
         XCTAssertEqual(underline.frame.height, Caret.width, accuracy: 0.5)
         XCTAssertGreaterThan(underline.frame.minY, bar.midY)
         XCTAssertLessThanOrEqual(underline.frame.maxY, bar.maxY + 0.5)
+    }
+
+    func testFullLineHeightCaretIsOnByDefault() {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 200, height: 80))
+        XCTAssertTrue(textView.usesFullLineHeightCaret)
+    }
+
+    func testFullLineHeightCaretCanBeDisabled() throws {
+        let textView = makeFocusedTextView(text: "W")
+        let fullBar = try XCTUnwrap(caret(in: textView))
+        let bar = textView.caretRect(at: 0)
+        XCTAssertGreaterThan(fullBar.frame.height, bar.height)
+
+        textView.usesFullLineHeightCaret = false
+        let shortBar = try XCTUnwrap(caret(in: textView))
+        XCTAssertEqual(shortBar.frame.height, bar.height, accuracy: 0.5)
+        // Selection and popup geometry never follows the setting.
+        XCTAssertEqual(textView.caretRect(at: 0).height, bar.height, accuracy: 0.5)
+
+        textView.usesFullLineHeightCaret = true
+        let tallAgain = try XCTUnwrap(caret(in: textView))
+        XCTAssertEqual(tallAgain.frame.height, fullBar.frame.height, accuracy: 0.5)
     }
 
     func testBlockCaretCoversOneGrapheme() throws {

@@ -135,6 +135,12 @@ struct IDEPreferencesEditorPane: View {
                 isOn: $preferences.smoothCaretMovement,
                 detail: "Glides the caret to its new position instead of jumping. Ignored when the system asks to reduce motion."
             )
+
+            IDESettingsToggle(
+                "Use Full Line Height Caret",
+                isOn: $preferences.usesFullLineHeightCaret,
+                detail: "The caret spans the full line height, including line spacing, instead of just the text."
+            )
         }
 
         IDESettingsSection("Indentation") {

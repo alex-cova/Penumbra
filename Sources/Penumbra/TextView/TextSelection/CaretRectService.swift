@@ -6,6 +6,11 @@ final class CaretRectService {
     var lineManager: LineManager
     var textContainerInset: NSEdgeInsets = .zero
     var showLineNumbers = false
+    /// The painted caret spans the full line height (text plus line spacing) when true.
+    /// ``caretRect(at:allowMovingCaretToNextLineFragment:beforeInlayHint:)`` is unaffected,
+    /// so selection, handles, popups and scrolling keep their text-height geometry.
+    var usesFullLineHeightCaret = true
+    var lineHeightMultiplier: CGFloat = TextView.defaultLineHeightMultiplier
     weak var foldingModel: FoldingModel?
 
     private let lineControllerStorage: LineControllerStorage
@@ -61,11 +66,11 @@ final class CaretRectService {
         beforeInlayHint: Bool = false
     ) -> CaretPresentation {
         if shape == .bar {
-            return CaretPresentation(frame: caretRect(
+            return CaretPresentation(frame: fullLineHeightFrameIfEnabled(caretRect(
                 at: location,
                 allowMovingCaretToNextLineFragment: allowMovingCaretToNextLineFragment,
                 beforeInlayHint: beforeInlayHint
-            ))
+            )))
         }
         let adjustedLocation = foldingModel?.visibleCaretLocation(for: location) ?? location
         let safeLocation = min(max(adjustedLocation, 0), stringView.length)
@@ -84,11 +89,16 @@ final class CaretRectService {
         let globalBar = metrics.barRect.offsetBy(dx: leadingLineSpacing, dy: line.yPosition + textContainerInset.top)
         let width = max(metrics.advance, 1)
         let frame: CGRect
+        let descent: CGFloat
         switch shape {
         case .bar:
-            frame = globalBar
+            frame = fullLineHeightFrameIfEnabled(globalBar)
+            descent = metrics.descent
         case .block:
-            frame = CGRect(x: globalBar.minX, y: globalBar.minY, width: width, height: globalBar.height)
+            let bar = fullLineHeightFrameIfEnabled(globalBar)
+            frame = CGRect(x: bar.minX, y: bar.minY, width: width, height: bar.height)
+            // The knocked-out glyph stays on the text baseline inside the taller frame.
+            descent = metrics.descent + (bar.height - globalBar.height) / 2
         case .underline:
             let thickness = min(Caret.width, globalBar.height)
             var y = globalBar.maxY - metrics.descent
@@ -99,12 +109,13 @@ final class CaretRectService {
                 y = globalBar.minY
             }
             frame = CGRect(x: globalBar.minX, y: y, width: width, height: thickness)
+            descent = metrics.descent
         }
         return CaretPresentation(
             frame: frame,
             coveredText: shape == .block ? metrics.coveredText : "",
             coveredFont: metrics.coveredFont,
-            descent: metrics.descent
+            descent: descent
         )
     }
 }
@@ -117,6 +128,19 @@ struct CaretPresentation {
 }
 
 private extension CaretRectService {
+    /// Expands a text-height bar to the full line height, keeping its vertical center, when
+    /// ``usesFullLineHeightCaret`` is on. A zero-height rect (no laid-out line) passes through.
+    private func fullLineHeightFrameIfEnabled(_ bar: CGRect) -> CGRect {
+        guard usesFullLineHeightCaret else {
+            return bar
+        }
+        let fullHeight = bar.height * lineHeightMultiplier
+        guard fullHeight > bar.height else {
+            return bar
+        }
+        return CGRect(x: bar.minX, y: bar.minY - (fullHeight - bar.height) / 2, width: bar.width, height: fullHeight)
+    }
+
     private func shouldMoveCaretToNextLineFragment(forLocation location: Int, in line: DocumentLineNode) -> Bool {
         let lineController = lineControllerStorage.getOrCreateLineController(for: line)
         guard lineController.numberOfLineFragments > 0 else {

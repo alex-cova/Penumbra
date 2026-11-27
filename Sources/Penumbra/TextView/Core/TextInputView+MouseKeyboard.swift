@@ -36,9 +36,6 @@ extension TextInputView {
                 return
             }
         }
-        if isPointOnSelectionHandle(point) {
-            return
-        }
         let isEditable = delegate?.textInputViewIsEditable(self) ?? true
         if event.modifierFlags.contains(.option), event.modifierFlags.contains(.shift), isEditable {
             // Option+Shift extends the active block selection (or starts one from the current
@@ -806,21 +803,6 @@ extension TextInputView {
             return true
         }
         return characters.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) }
-    }
-
-    private func isPointOnSelectionHandle(_ point: CGPoint) -> Bool {
-        guard let selection = selection, selection.length > 0 else {
-            return false
-        }
-        for subview in subviews.reversed() {
-            guard let handle = subview as? SelectionHandleView, !handle.isHidden else {
-                continue
-            }
-            if handle.frame.insetBy(dx: -4, dy: -4).contains(point) {
-                return true
-            }
-        }
-        return false
     }
 }
 

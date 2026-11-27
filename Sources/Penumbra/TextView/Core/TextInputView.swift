@@ -136,6 +136,16 @@ final class TextInputView: EditorView {
         }
     }
     var smoothCaretMovement = false
+    /// The painted caret spans the full line height, including line spacing. On by default.
+    /// `caretRect(at:)` and selection geometry stay on the text-height bar either way.
+    var usesFullLineHeightCaret = true {
+        didSet {
+            if usesFullLineHeightCaret != oldValue {
+                caretRectService.usesFullLineHeightCaret = usesFullLineHeightCaret
+                selectionOverlayController.updateLayout()
+            }
+        }
+    }
     @objc var selectionBarColor: NSColor = .label {
         didSet {
             if selectionBarColor != oldValue {
@@ -570,6 +580,7 @@ final class TextInputView: EditorView {
         didSet {
             if lineHeightMultiplier != oldValue {
                 selectionRectService.lineHeightMultiplier = lineHeightMultiplier
+                caretRectService.lineHeightMultiplier = lineHeightMultiplier
                 layoutManager.lineHeightMultiplier = lineHeightMultiplier
                 invalidateLines()
                 applyEstimatedLineHeight()
@@ -1339,6 +1350,8 @@ final class TextInputView: EditorView {
         }
         lineMovementController.foldingModel = foldingModel
         caretRectService.foldingModel = foldingModel
+        caretRectService.lineHeightMultiplier = lineHeightMultiplier
+        caretRectService.usesFullLineHeightCaret = usesFullLineHeightCaret
         customTokenizer.foldingModel = foldingModel
         foldPreviewController.textInputView = self
         selectionOverlayController = SelectionOverlayController(textInputView: self,

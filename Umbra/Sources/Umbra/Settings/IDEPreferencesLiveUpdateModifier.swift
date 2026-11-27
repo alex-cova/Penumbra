@@ -38,6 +38,7 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.caretBlinkIntervalMilliseconds) { applyLivePreferences() }
             .onChange(of: preferences.smoothCaretBlinking) { applyLivePreferences() }
             .onChange(of: preferences.smoothCaretMovement) { applyLivePreferences() }
+            .onChange(of: preferences.usesFullLineHeightCaret) { applyLivePreferences() }
             .onChange(of: preferences.scaleMarkdownHeadings) { applyLivePreferences() }
             .onChange(of: preferences.keymapPreset) { applyLivePreferences() }
             .onChange(of: preferences.goToFileShortcut) { applyLivePreferences() }

@@ -10,9 +10,6 @@ final class SelectionOverlayController {
     private var secondaryCaretViews: [CaretView] = []
     private let overlayHostView = SelectionChromeHostView()
     private let selectionOverlayView = SelectionOverlayView()
-    private let startHandle = SelectionHandleView(kind: .start)
-    private let endHandle = SelectionHandleView(kind: .end)
-    private var isAdjustingSelection = false
     /// Set when the selection moved or text was edited, so the next ``updateCarets()`` shows the
     /// carets solid again for a blink interval instead of leaving them in whatever phase they were.
     private var needsBlinkRestart = true
@@ -49,15 +46,12 @@ final class SelectionOverlayController {
         self.textInputView = textInputView
         self.caretRectService = caretRectService
         self.selectionRectService = selectionRectService
-        configureHandles()
     }
 
     func install() {
         textInputView.addSubview(overlayHostView)
         overlayHostView.addSubview(selectionOverlayView)
         overlayHostView.addSubview(caretView)
-        overlayHostView.addSubview(startHandle)
-        overlayHostView.addSubview(endHandle)
         updateColors()
     }
 
@@ -119,7 +113,6 @@ final class SelectionOverlayController {
         selectionOverlayView.frame = textInputView.bounds
         updateColors()
         updateSelectionOverlay()
-        updateSelectionHandles()
         updateCarets()
         updateCaretBlinkState()
     }
@@ -132,8 +125,6 @@ final class SelectionOverlayController {
         caretView.caretColor = color
         secondaryCaretViews.forEach { $0.caretColor = secondary }
         selectionOverlayView.highlightColor = textInputView.selectionHighlightColor
-        startHandle.handleColor = color
-        endHandle.handleColor = color
     }
 
     func selectionDidChange() {
@@ -159,8 +150,6 @@ final class SelectionOverlayController {
             secondaryCaretViews.forEach { $0.isHidden = true }
             selectionOverlayView.selectionRects = []
             selectionOverlayView.setNeedsDisplay()
-            startHandle.isHidden = true
-            endHandle.isHidden = true
         }
     }
 
@@ -208,40 +197,16 @@ private extension SelectionOverlayController {
             && textInputView.isEditing
             && !caretRanges.isEmpty
             && textInputView.markedTextRange == nil
-            && !isAdjustingSelection
     }
 
     private var shouldShowSelection: Bool {
         isEnabled && !highlightedRanges.isEmpty
     }
 
-    private var shouldShowSelectionHandles: Bool {
-        shouldShowSelection
-            && highlightedRanges.count == 1
-            && (textInputView.delegate?.textInputViewIsSelectable(textInputView) ?? true)
-    }
-
-    private func configureHandles() {
-        startHandle.onDrag = { [weak self] event in
-            self?.handleStartDrag(with: event)
-        }
-        startHandle.onDragEnded = { [weak self] event in
-            self?.handleDragEnded(with: event)
-        }
-        endHandle.onDrag = { [weak self] event in
-            self?.handleEndDrag(with: event)
-        }
-        endHandle.onDragEnded = { [weak self] event in
-            self?.handleDragEnded(with: event)
-        }
-    }
-
     private func updateVisibility() {
         caretView.isHidden = !isEnabled
         secondaryCaretViews.forEach { $0.isHidden = !isEnabled }
         selectionOverlayView.isHidden = !isEnabled
-        startHandle.isHidden = !isEnabled
-        endHandle.isHidden = !isEnabled
     }
 
     private func updateSelectionOverlay() {
@@ -253,23 +218,6 @@ private extension SelectionOverlayController {
         selectionOverlayView.selectionRects = rangesNearViewport(highlightedRanges).flatMap { range in
             selectionRectService.selectionRects(in: range)
         }
-    }
-
-    private func updateSelectionHandles() {
-        guard shouldShowSelectionHandles, let selectedRange = highlightedRanges.first else {
-            startHandle.isHidden = true
-            endHandle.isHidden = true
-            return
-        }
-        let startCaretRect = caretRectService.caretRect(at: selectedRange.location, allowMovingCaretToNextLineFragment: true)
-        let endIndex = max(selectedRange.upperBound - 1, selectedRange.location)
-        let endCaretRect = caretRectService.caretRect(at: endIndex, allowMovingCaretToNextLineFragment: false)
-        startHandle.frame = startHandle.frame(anchoredTo: startCaretRect)
-        endHandle.frame = endHandle.frame(anchoredTo: endCaretRect)
-        startHandle.isHidden = false
-        endHandle.isHidden = false
-        overlayHostView.bringSubviewToFront(startHandle)
-        overlayHostView.bringSubviewToFront(endHandle)
     }
 
     private func updateCarets() {
@@ -394,36 +342,6 @@ private extension SelectionOverlayController {
     }
 
     private static var reduceMotion: Bool { MotionPreference.reduceMotion }
-
-    private func handleStartDrag(with event: NSEvent) {
-        guard let selection = textInputView.selection else {
-            return
-        }
-        isAdjustingSelection = true
-        stopCaretBlink()
-        let point = textInputView.convert(event.locationInWindow, from: nil)
-        if let index = textInputView.characterIndex(at: point) {
-            textInputView.updateSelection(from: index, to: selection.upperBound)
-        }
-    }
-
-    private func handleEndDrag(with event: NSEvent) {
-        guard let selection = textInputView.selection else {
-            return
-        }
-        isAdjustingSelection = true
-        stopCaretBlink()
-        let point = textInputView.convert(event.locationInWindow, from: nil)
-        if let index = textInputView.characterIndex(at: point) {
-            textInputView.updateSelection(from: selection.location, to: index)
-        }
-    }
-
-    private func handleDragEnded(with event: NSEvent) {
-        isAdjustingSelection = false
-        textInputView.selectionAnchor = textInputView.selection?.location
-        updateLayout()
-    }
 }
 
 /// Layer-backed host so caret/selection chrome composite above `CAMetalLayer`. Empty space must

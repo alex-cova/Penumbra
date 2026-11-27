@@ -60,6 +60,19 @@ final class IDECaretPreferenceTests: XCTestCase {
         XCTAssertFalse(textView.smoothCaretMovement)
     }
 
+    func testFullLineHeightCaretDefaultsOnAndReachesTheEditor() {
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 200, height: 80))
+        XCTAssertTrue(IDEPreferences.shared.usesFullLineHeightCaret)
+
+        IDEPreferences.shared.usesFullLineHeightCaret = false
+        IDEPreferences.shared.apply(to: textView)
+        XCTAssertFalse(textView.usesFullLineHeightCaret)
+
+        IDEPreferences.shared.usesFullLineHeightCaret = true
+        IDEPreferences.shared.apply(to: textView)
+        XCTAssertTrue(textView.usesFullLineHeightCaret)
+    }
+
     func testCaretAnimationDefaults() throws {
         let snapshot = try XCTUnwrap(original)
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any]
@@ -72,6 +85,15 @@ final class IDECaretPreferenceTests: XCTestCase {
         XCTAssertEqual(decoded.caretBlinkIntervalMilliseconds, 500)
         XCTAssertTrue(decoded.smoothCaretBlinking)
         XCTAssertTrue(decoded.smoothCaretMovement)
+    }
+
+    func testOlderSnapshotsDefaultToFullLineHeightCaret() throws {
+        let snapshot = try XCTUnwrap(original)
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any]
+        object?.removeValue(forKey: "usesFullLineHeightCaret")
+        let stripped = try JSONSerialization.data(withJSONObject: try XCTUnwrap(object))
+        let decoded = try JSONDecoder().decode(IDEPreferencesSnapshot.self, from: stripped)
+        XCTAssertTrue(decoded.usesFullLineHeightCaret)
     }
 
     private func sRGBHex(_ color: NSColor) -> UInt32? {
