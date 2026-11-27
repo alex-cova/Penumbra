@@ -95,20 +95,19 @@ struct LSPReadyInlayHints: InlayHintProviding {
         guard let client = lspClient(connections, feature: .inlayHints, languages: languages, documentLanguage: document.languageIdentifier) as? LanguageServerClient else {
             return []
         }
-        let hints = (try? await client.requestInlayHints(
-            for: document, in: range, languageID: languageID(document.url, document.languageIdentifier ?? "")
-        )) ?? []
+        let language = languageID(document.url, document.languageIdentifier ?? "")
+        let hints = (try? await client.requestInlayHints(for: document, in: range, languageID: language)) ?? []
         guard !hints.isEmpty, !Task.isCancelled else { return [] }
         let map = SourceTextMap(documentText(document))
-        let canResolve = await client.supportsInlayResolution()
+        let canResolve = await client.supportsInlayResolution(for: document, languageID: language)
         return hints.prefix(512).compactMap { hint in
             guard let offset = map.utf16Offset(line: hint.line, column: hint.character),
                   offset >= range.start.utf16Offset, offset <= range.end.utf16Offset else { return nil }
             let kind: EditorIntelligence.InlayHint.Kind = hint.kind == "type" ? .type : (hint.kind == "parameter" ? .parameter : .other)
             let token: Data?
-            if canResolve, hint.tooltip == nil, let wire = hint.protocolHint,
-               let encoded = try? JSONEncoder().encode(wire), encoded.count <= 4096 {
-                token = encoded
+            let mayResolveEdits = hint.protocolHint?.textEdits == nil
+            if canResolve, let wire = hint.protocolHint, hint.tooltip == nil || mayResolveEdits {
+                token = client.inlayResolutionToken(for: wire)
             } else {
                 token = nil
             }
@@ -116,6 +115,7 @@ struct LSPReadyInlayHints: InlayHintProviding {
                 utf16Offset: offset, label: hint.label, kind: kind, providerID: "lsp",
                 tooltip: hint.tooltip.map { String($0.prefix(4096)) }, resolutionData: token,
                 edits: hint.acceptanceEdits(in: map),
+                mayResolveEdits: token != nil && mayResolveEdits,
                 paddingLeft: hint.protocolHint?.paddingLeft == true,
                 paddingRight: hint.protocolHint?.paddingRight == true
             )
@@ -124,10 +124,22 @@ struct LSPReadyInlayHints: InlayHintProviding {
 
     func resolveInlayTooltip(for hint: EditorIntelligence.InlayHint, in document: Document) async -> String? {
         if let tooltip = hint.tooltip { return tooltip }
+        return await resolve(hint, in: document)?.tooltip.map { String($0.prefix(4096)) }
+    }
+
+    func resolveInlayEdits(for hint: EditorIntelligence.InlayHint, in document: Document) async -> [TextEdit] {
+        if !hint.edits.isEmpty { return hint.edits }
+        guard hint.mayResolveEdits, let resolved = await resolve(hint, in: document), !Task.isCancelled else { return [] }
+        return resolved.acceptanceEdits(in: SourceTextMap(documentText(document)))
+    }
+
+    private func resolve(_ hint: EditorIntelligence.InlayHint, in document: Document) async -> LSPRenderedInlayHint? {
         guard hint.providerID == "lsp", let token = hint.resolutionData,
               let client = lspClient(connections, feature: .inlayHints, languages: languages, documentLanguage: document.languageIdentifier) as? LanguageServerClient,
-              let resolved = try? await client.resolveInlayHint(token) else { return nil }
-        return resolved.tooltip.map { String($0.prefix(4096)) }
+              let resolved = try? await client.resolveInlayHint(
+                  token, for: document, languageID: languageID(document.url, document.languageIdentifier ?? "")
+              ), connections.current as? LanguageServerClient === client else { return nil }
+        return resolved
     }
 }
 

@@ -1690,6 +1690,11 @@ public final class EditorIntelligenceController {
         inlayHints.accept(hint)
     }
 
+    @discardableResult
+    public func resolveAndAcceptInlayHint(_ hint: InlayHint) async -> Bool {
+        await inlayHints.resolveAndAccept(hint)
+    }
+
     public func inlayTooltip(for hint: InlayHint) async -> String? {
         await inlayHints.tooltip(for: hint)
     }

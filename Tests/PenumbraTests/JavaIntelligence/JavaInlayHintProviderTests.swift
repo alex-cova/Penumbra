@@ -44,7 +44,8 @@ final class JavaInlayHintProviderTests: XCTestCase {
     }
 
     private func hints(
-        _ source: String, range: Range<Int>? = nil, options: JavaInlayHintOptions? = nil
+        _ source: String, range: Range<Int>? = nil, options: JavaInlayHintOptions? = nil,
+        documentParseCache: JavaDocumentParseCache? = nil
     ) async throws -> [InlayHint] {
         let libURL = scratch.appendingPathComponent("Lib.java")
         try lib.write(to: libURL, atomically: true, encoding: .utf8)
@@ -55,7 +56,10 @@ final class JavaInlayHintProviderTests: XCTestCase {
         )
         let index = JavaIndex()
         await index.setSources([.init(precedence: 1, reader: try JavaIndexShardReader(url: shard))])
-        let provider = JavaInlayHintProvider(index: index, indexPaths: JavaIndexPaths(root: scratch.appendingPathComponent("cache")))
+        let provider = JavaInlayHintProvider(
+            index: index, indexPaths: JavaIndexPaths(root: scratch.appendingPathComponent("cache")),
+            documentParseCache: documentParseCache
+        )
         if let options { await provider.setOptions(options) }
         let length = (source as NSString).length
         let bounds = range ?? 0..<length
@@ -84,6 +88,25 @@ final class JavaInlayHintProviderTests: XCTestCase {
         let source = "class T { void m() { Lib.area(3, 4); } }"
         let result = try await hints(source)
         XCTAssertEqual(rendered(source, result), "class T { void m() { Lib.area(width: 3, height: 4); } }")
+    }
+
+    func testAnOversizedFileReusesTheExistingDocumentParse() async throws {
+        let cache = JavaDocumentParseCache()
+        let source = "class T { void m() { Lib.area(3, 4); } } /*"
+            + String(repeating: "x", count: JavaParseMemo.maximumEntryBytes) + "*/"
+        let start = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        let viewport = Viewport(x: 0, y: 0, width: 10, height: 10)
+        let document = Document(
+            url: scratch.appendingPathComponent("T.java"), displayName: "T.java",
+            contentSnapshot: TextSnapshot(version: 1, text: source), selection: Selection(range: TextRange(start: start, end: start)),
+            cursor: Cursor(position: start), viewport: viewport, languageIdentifier: "java"
+        )
+        _ = await cache.tree(for: document)
+        let result = try await hints(source, range: 0..<40, documentParseCache: cache)
+        let stats = await cache.statistics
+        XCTAssertEqual(result.map(\.label), ["width:", "height:"])
+        XCTAssertEqual(stats.fullParses, 1)
+        XCTAssertEqual(stats.hits, 1)
     }
 
     func testLabelsConstructorArguments() async throws {

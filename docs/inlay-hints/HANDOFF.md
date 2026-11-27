@@ -2,7 +2,7 @@
 
 Continue in `/Users/alex/Developer/Penumbra` on the existing working tree. Preserve the uncommitted changes and do not create Git commits. The baseline revision was `b391f59311efe45ffde4c1372ccfe64ab0037543`.
 
-Read the [original implementation plan](UMBRA_INLAY_HINTS_IMPLEMENTATION_PLAN.md), [verification report](FINAL_VERIFICATION.md), and [performance baseline](PERFORMANCE_BASELINE.md). The report predates the optimized benchmark results. Release gates remain open.
+Read the [original implementation plan](IMPLEMENTATION_PLAN.md), [verification report](FINAL_VERIFICATION.md), and [performance baseline](PERFORMANCE_BASELINE.md). The report predates the optimized benchmark results. Release gates remain open.
 
 ## 1. Re-establish test status
 

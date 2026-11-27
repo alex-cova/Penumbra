@@ -4693,6 +4693,10 @@ public final class IDEWorkspace {
             items.append(IDEClosureMenuItem(title: "Apply Inlay Hint") { [weak controller] in
                 controller?.acceptInlayHint(hint)
             })
+        } else if hint.mayResolveEdits {
+            items.append(IDEClosureMenuItem(title: "Resolve and Apply Inlay Hint") { [weak controller] in
+                Task { await controller?.resolveAndAcceptInlayHint(hint) }
+            })
         }
         if hint.tooltip != nil || hint.resolutionData != nil {
             items.append(IDEClosureMenuItem(title: "Show Inlay Hint Details") { [weak self, weak controller] in

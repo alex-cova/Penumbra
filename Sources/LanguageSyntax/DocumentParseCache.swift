@@ -152,13 +152,14 @@ public actor DocumentParseCache {
         edits: [TextEdit]
     ) -> SyntaxTree? {
         var source = entry.source
+        let editedTree = entry.tree.copy()
         for edit in edits {
             guard let step = ParseEdit.make(edit: edit, in: source) else { return nil }
-            entry.tree.apply(step.edit)
+            editedTree.apply(step.edit)
             source = step.newSource
         }
         guard source == text else { return nil }
-        guard let reparsed = entry.parser.parseIncremental(oldTree: entry.tree, source: source) else { return nil }
+        guard let reparsed = entry.parser.parseIncremental(oldTree: editedTree, source: source) else { return nil }
         entry.source = source
         entry.version = version
         entry.tree = reparsed

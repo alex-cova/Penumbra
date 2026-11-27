@@ -52,6 +52,57 @@ The source and commands are documented in [Performance baseline](PERFORMANCE_BAS
 | Integrated root milestone | `caffeinate -u -d -i -s swift test` | 5,728 XCTest cases, 26 skipped, 0 failures. Swift Testing reported 8 passes. |
 | Integrated Umbra milestone | `caffeinate -u -d -i -s swift test --package-path Umbra` | 3,585 XCTest cases, 100 skipped, 3 failures. Two ordering assertions in `IDELanguageModuleTests` and one adjacency assertion in `IDEMarkdownPreviewSettingsTests` caught the extra permanent sidebar item. Inlay Hints now opens as an Editor subpage and the test assertions are unchanged. |
 
+## Resume run, 2026-11-27 (tree at `42e05c45` plus uncommitted work, no commits)
+
+The handoff's "original plan" link is stale. The plan is `IMPLEMENTATION_PLAN.md` in this directory.
+
+Changes verified in this run: native Java reuses Umbra's existing document syntax cache (`DocumentParseCache`) for files over the memo cap, Java Code Vision batches candidate-file resolution, Metal reuses decoration geometry when lines move vertically, and LSP supports selector globs (`LSPDocumentGlob.swift`) and lazy edits on explicit acceptance.
+
+### Test results
+
+| Run | Command | Result |
+| --- | --- | --- |
+| Focused | `swift test --filter 'InlayHint\|CodeVision\|LSPFakeServer\|LSPPublishedDiagnostics\|JavaVersionDeclaration'` | 185 cases passed. |
+| Root, full | `caffeinate -u -d -i -s swift test` | 5,743 XCTest cases, 25 skipped, 1 failure: `JavaResolutionAuditTests.testRapidEditsWhileSourcesChange` (line 436). Passed 3 of 3 in isolation (`--filter 'JavaResolutionAuditTests/testRapidEditsWhileSourcesChange'`). Intermittent under full-suite load; cause not established. The test and `JavaInspectionService` are not in the diff. Swift Testing: 8 passed. |
+| Umbra, full | `caffeinate -u -d -i -s swift test --package-path Umbra` | 3,585 XCTest cases, 100 skipped, 1 failure: `IDEHeapObjectExplorerTests.testASecondTabFindsTheIndexAndDeleteForgetsIt` (10 s wait). Whole class passed in isolation (4 tests). Cause not established. Swift Testing: 42 passed. |
+| Umbra, TSan | `swift test --package-path Umbra --sanitize=thread --build-path Umbra/.build-tsan --filter 'IDEHostEditCostTests\|IDEStructureRefreshTests'` | 10 cases, 1 failure: `IDEStructureRefreshTests.testAnEditRebuildsTheTreeAfterThePause` ("new member never showed up", 9.9 s). `IDEStructureRefreshTests` alone under TSan passed 6 of 6. No ThreadSanitizer reports in either run. Timing-sensitive under instrumentation. |
+| ACP picker | isolated run (`acp.log`) | `testTodaysCursorAntigravityAndCopilotHandshakesFillThePicker` passed. |
+| Whitespace | `git diff --check` | Clean. |
+
+The three full-run failures are unexplained, not fixed. Each passed alone, and none of the three touched files is in the diff.
+
+### Performance gates (Release, Metal, quiet machine)
+
+Binaries: `.build/release/PerfHarness` (rebuilt, 343 s build) against `.build/release/PerfHarness-inlay-baseline`.
+
+Native Java, `java-inlay synthetic --lines 120000 --samples 30`:
+
+| Metric | Baseline | Rebuilt | Budget |
+| --- | --- | --- | --- |
+| Hints | 162 | 162 | |
+| Cold | 1.441 s | 1.364 s | |
+| Warm p95 | 1,432 ms | 29.2 ms | 20 ms. **Open**, 9 ms over. |
+| Parses over 31 requests | 31 | 0 in memo, 1 in document cache (30 hits) | |
+| Stub builds | 31 | 1 | |
+| Resident delta | 400 MB | 404 MB | |
+| Heap delta | 0.19 MB | 398 MB | Retained parse is now held by the document cache. Needs a decision on whether that is acceptable for a 9.25 MB file. |
+
+Enter, `enter-session synthetic --lines N --samples 40`, 2 rounds alternating hint-off and `PENUMBRA_INLAY_HINTS=180`, all 40 logs report `metal=true`. Values are `enter_fresh_middle` p95 in ms, mean of two rounds:
+
+| Lines | Baseline off / on / delta | Rebuilt off / on / delta | Decoration builds per Enter, on (baseline / rebuilt) |
+| --- | --- | --- | --- |
+| 1k | 2.623 / 3.971 / +1.349 | 2.753 / 2.942 / +0.189 | 20 / 2 |
+| 5k | 2.643 / 3.902 / +1.260 | 2.576 / 2.796 / +0.220 | 20 / 2 |
+| 20k | 2.707 / 3.694 / +0.987 | 2.691 / 2.980 / +0.289 | 16–20 / 2 |
+| 25k | 2.583 / 3.987 / +1.404 | 2.627 / 2.841 / +0.214 | 20 / 2 |
+| 120k | 2.710 / 3.762 / +1.052 | 2.676 / 2.952 / +0.276 | 16–20 / 2 |
+
+The 0.5 ms added-p95 budget is met at every size on the rebuilt binary. Only `enter_fresh_middle` was tabulated. The logs also hold the top-of-file metric.
+
+### Gates still open
+
+Native warm p95 (29 ms against 20 ms), the three unexplained intermittent failures, and every item the phase table lists as open: line-start and below-line placement with renderer parity, LSP Code Lens, non-UTF-16 LSP encodings and part-level actions, trusted JDK download and install, remaining Java hint categories and the hint-specific javac differential matrix, and end-to-end accessibility and performance checks.
+
 ## Files changed
 
 - `Sources/EditorIntelligence/Inlay` and `Languages` define hint metadata, routing and strict position conversion. `Sources/EditorIntelligenceLSP` owns the protocol translation and transport extension.

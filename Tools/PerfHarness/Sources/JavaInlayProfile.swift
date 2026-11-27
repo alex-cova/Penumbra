@@ -1,6 +1,6 @@
 import EditorIntelligence
 import Foundation
-import JavaIntelligence
+@_spi(Benchmarks) import JavaIntelligence
 
 enum JavaInlayProfile {
     static func run(lines: Int, samples: Int) {
@@ -37,10 +37,14 @@ enum JavaInlayProfile {
             let stubs = JavaSourceStubBuilder.build(tree: tree, url: URL(fileURLWithPath: "/tmp/Library.java")).classes
             await index.setOverlay(Dictionary(uniqueKeysWithValues: stubs.map { ($0.qualifiedName, $0) }))
         }
+        let parseCache = JavaDocumentParseCache()
         let provider = JavaInlayHintProvider(
-            index: index, indexPaths: JavaIndexPaths(root: FileManager.default.temporaryDirectory)
+            index: index, indexPaths: JavaIndexPaths(root: FileManager.default.temporaryDirectory), documentParseCache: parseCache
         )
         await provider.setOptions(JavaInlayHintOptions(parameterNames: true, variableTypes: true))
+        JavaParseMemoStatistics.reset()
+        let residentBefore = Measurement.residentMemoryBytes()
+        let heapBefore = Measurement.mallocBytesInUse()
         var times: [Double] = []
         var hintCount = 0
         for iteration in 0...max(1, samples) {
@@ -55,8 +59,15 @@ enum JavaInlayProfile {
             }
         }
         let p95 = Measurement.percentile(times, 0.95)
+        let memo = JavaParseMemoStatistics.snapshot()
+        let documentParses = await parseCache.statistics
+        let residentDelta = Int64(Measurement.residentMemoryBytes()) - Int64(residentBefore)
+        let heapDelta = Int64(Measurement.mallocBytesInUse()) - Int64(heapBefore)
         ResultLog.row("java_inlay_warm", file: "synthetic-\(actualLines)", sizeBytes: UInt64(source.utf8.count),
                       seconds: Measurement.percentile(times, 0.50),
                       extra: "samples=\(times.count) p95=\(String(format: "%.6f", p95)) hints=\(hintCount)")
+        print("detail java_inlay_memo parses=\(memo.parses) stub_builds=\(memo.stubBuilds) hits=\(memo.hits) "
+            + "source_bytes_cached=\(memo.bytes) resident_delta_bytes=\(residentDelta) heap_delta_bytes=\(heapDelta)")
+        print("detail java_inlay_document_cache parses=\(documentParses.fullParses) hits=\(documentParses.hits)")
     }
 }

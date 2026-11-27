@@ -267,7 +267,7 @@ final class IDEJavaSupport {
         bytecodeCallHierarchyProvider = JavaBytecodeCallHierarchyProvider(fallback: callHierarchyProvider, cacheRoot: paths.root)
         inspectionService = JavaInspectionService(index: javaIndex, parseCache: sharedParseCache, usageProvider: findUsagesProvider)
         semanticTokenProvider = JavaSemanticTokenProvider(index: javaIndex)
-        let inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths)
+        let inlayHintProvider = JavaInlayHintProvider(index: javaIndex, indexPaths: paths, documentParseCache: sharedParseCache)
         self.inlayHintProvider = inlayHintProvider
         Task { await inlayHintProvider.setOptionsSource { IDEPreferences.currentJavaInlayHintOptions() } }
         let codeVisionProvider = JavaCodeVisionProvider(index: javaIndex, indexPaths: paths, findUsages: findUsagesProvider)

@@ -1030,9 +1030,14 @@ final class LSPFakeServerTests: XCTestCase {
         let hint = try XCTUnwrap(converted.first)
         XCTAssertNil(hint.tooltip)
         XCTAssertNotNil(hint.resolutionData)
+        XCTAssertTrue(hint.mayResolveEdits)
+        XCTAssertTrue(hint.edits.isEmpty)
         XCTAssertFalse(fixture.peer.methods.contains("inlayHint/resolve"))
         let tooltip = await provider.resolveInlayTooltip(for: hint, in: document)
         XCTAssertEqual(tooltip, "Inferred integer type")
+        let edits = await provider.resolveInlayEdits(for: hint, in: document)
+        XCTAssertEqual(edits.map(\.replacement), [": Int"])
+        XCTAssertEqual(edits.map(\.range.start.utf16Offset), [9])
 
         let capabilities = fixture.peer.clientCapabilities
         let workspace = capabilities["workspace"] as? [String: Any]
@@ -1067,6 +1072,30 @@ final class LSPFakeServerTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertTrue(fixture.peer.methods.contains("$/cancelRequest"))
+    }
+
+    func testDynamicInlayRegistrationMatchesOnlyItsDocumentSelector() async throws {
+        let updates = ProgressLog()
+        let fixture = await makeIncrementalFixture(syncKind: 2, inlayMode: .dynamic) {
+            updates.append(["registration changed"])
+        }
+        defer { fixture.stop() }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while updates.snapshot.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(updates.snapshot.count, 1)
+
+        let paths: [(String, Bool)] = [
+            ("/tmp/A1.swift", true), ("/tmp/src/deeper/A2.txt", true), ("/tmp/A0.swift", false),
+            ("/tmp/src/A1.java", false), ("/another/A1.swift", false),
+        ]
+        for (path, matches) in paths {
+            let document = incrementalDocument(DocumentID(), "let value = 1", url: URL(fileURLWithPath: path))
+            let hints = try await fixture.client.requestInlayHints(for: document, in: document.selection.range)
+            XCTAssertEqual(hints.map(\.label), matches ? [": Int"] : [], path)
+        }
+        XCTAssertEqual(fixture.peer.methods.filter { $0 == "textDocument/inlayHint" }.count, 2)
     }
 
     private static func document() -> Document {
@@ -1135,10 +1164,12 @@ final class LSPFakeServerTests: XCTestCase {
         })
     }
 
-    private func incrementalDocument(_ id: DocumentID, _ text: String, version: Int = 0) -> Document {
+    private func incrementalDocument(
+        _ id: DocumentID, _ text: String, version: Int = 0, url: URL = URL(fileURLWithPath: "/tmp/A.swift")
+    ) -> Document {
         let origin = TextPosition(line: 0, column: 0, utf16Offset: 0)
         return Document(
-            id: id, url: URL(fileURLWithPath: "/tmp/A.swift"), displayName: "A.swift",
+            id: id, url: url, displayName: url.lastPathComponent,
             contentSnapshot: TextSnapshot(version: version, text: text),
             selection: Selection(range: TextRange(start: origin, end: origin)),
             cursor: Cursor(position: origin), viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
@@ -1286,6 +1317,7 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
         case disabled
         case enabled
         case withholdResponse
+        case dynamic
     }
     var inlayMode: InlayMode = .disabled
 
@@ -1405,6 +1437,10 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
             let body = #"{"jsonrpc":"2.0","id":9002,"method":"workspace/inlayHint/refresh"}"#
             try? output.write(contentsOf: Data("Content-Length: \(body.utf8.count)\r\n\r\n\(body)".utf8))
         }
+        if method == "initialized", inlayMode == .dynamic {
+            let body = #"{"jsonrpc":"2.0","id":9003,"method":"client/registerCapability","params":{"registrations":[{"id":"test-inlay","method":"textDocument/inlayHint","registerOptions":{"documentSelector":[{"language":"swift","scheme":"file","pattern":"/tmp/**/A[!0].{swift,txt}"}]}}]}}"#
+            try? output.write(contentsOf: Data("Content-Length: \(body.utf8.count)\r\n\r\n\(body)".utf8))
+        }
         if method == "textDocument/inlayHint", inlayMode == .withholdResponse { return }
         guard let id = object["id"], !(id is NSNull) else { return }
         if method == "workspace/executeCommand", appliesEditOnCommand {
@@ -1415,7 +1451,8 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
             return
         }
         let body = Self.response(
-            id: id, method: method, incompleteCompletion: incompleteCompletion, syncKind: syncKind, supportsInlay: inlayMode != .disabled
+            id: id, method: method, incompleteCompletion: incompleteCompletion, syncKind: syncKind,
+            supportsInlay: inlayMode == .enabled || inlayMode == .withholdResponse
         )
         var framed = Data("Content-Length: \(body.count)\r\n\r\n".utf8)
         framed.append(body)
@@ -1504,7 +1541,11 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
                 ["position": ["line": 0], "label": ""]
             ]
         case "inlayHint/resolve":
-            result = ["position": ["line": 0, "character": 9], "label": ": Int", "tooltip": "Inferred integer type"]
+            let position = ["line": 0, "character": 9]
+            result = [
+                "position": position, "label": ": Int", "tooltip": "Inferred integer type",
+                "textEdits": [["range": ["start": position, "end": position], "newText": ": Int"]],
+            ]
         case "textDocument/completion":
             let items = [["label": "Box", "insertText": "Box"]]
             result = incompleteCompletion ? ["isIncomplete": true, "items": items] as [String: Any] : items as Any

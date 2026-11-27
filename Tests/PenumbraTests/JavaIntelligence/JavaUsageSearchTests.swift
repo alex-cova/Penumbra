@@ -1,7 +1,37 @@
+import os
 import XCTest
 @testable import JavaIntelligence
 
 final class JavaUsageSearchTests: XCTestCase {
+    func testBatchResolvesTwoTargetsFromOneReadOfAnOpenFile() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Foo.java", "class Foo { void use() {} }")
+        try fixture.add("Caller.java", "class Caller {}")
+        let caller = fixture.url("Caller.java").standardizedFileURL
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        var environment = try await fixture.build()
+        environment.openBuffer = { file in
+            guard file == caller else { return nil }
+            reads.withLock { $0 += 1 }
+            return "class Caller { void invoke(Foo f) { f.use(); } }"
+        }
+        let type = JavaSymbolID.type(qualifiedName: "Foo")
+        let method = JavaSymbolID.method(declaringClass: "Foo", name: "use", parameterKeys: [])
+        let usages = await JavaUsageSearch.collect(
+            targets: [type, method], candidates: FixedUsageCandidate(file: caller),
+            roots: [fixture.root], environment: environment
+        )
+        XCTAssertEqual(usages[type]?.map(\.kind), [.typeReference])
+        XCTAssertEqual(usages[method]?.map(\.kind), [.call])
+        XCTAssertEqual(reads.withLock { $0 }, 1)
+    }
+
+    private struct FixedUsageCandidate: JavaUsageCandidateSource {
+        let file: URL
+
+        func candidateFiles(containing identifier: String, in roots: [URL]) async -> [URL] { [file] }
+    }
+
     func testSearchFindsUsagesAcrossFiles() async throws {
         let fixture = try JavaReferenceFixture()
         try fixture.add("p/Foo.java", "package p; public class €Foo { public void run() {} }")

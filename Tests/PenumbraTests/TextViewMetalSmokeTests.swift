@@ -1,4 +1,5 @@
 import AppKit
+import EditorIntelligence
 import PenumbraLanguages
 import SwiftUI
 import XCTest
@@ -248,6 +249,28 @@ final class TextViewMetalSmokeTests: XCTestCase {
             XCTAssertEqual(after.x, before.x)
             XCTAssertEqual(after.y - before.y, shift, accuracy: 0.001)
         }
+    }
+
+    func testReturnMovesInlayDecorationsWithoutRebuildingThem() throws {
+        try skipUnlessMetalActivatable()
+        let source = (0..<40).map { "let value\($0) = \($0);" }.joined(separator: "\n")
+        let textView = makeHighlightedMetalTextView(text: source)
+        let nsSource = source as NSString
+        textView.inlayHints = (0..<40).map { row in
+            InlayHint(utf16Offset: nsSource.range(of: "let value\(row) = ").upperBound, label: "count:", kind: .parameter)
+        }
+        textView.layoutIfNeeded()
+        pumpMainRunLoop(for: 0.1)
+        textView.layoutIfNeeded()
+
+        let edit = nsSource.range(of: "let value3 = 3;").upperBound
+        textView.selectedRange = NSRange(location: edit, length: 0)
+        let before = try XCTUnwrap(textView.metalPerformanceStats).decorationBuildCount
+        textView.insertText("\n")
+        textView.layoutIfNeeded()
+
+        let builds = try XCTUnwrap(textView.metalPerformanceStats).decorationBuildCount - before
+        XCTAssertLessThan(builds, 12, "lines with chips below the edit should reuse their decoration geometry")
     }
 
     /// Glyphs are culled to the canvas horizontally too. A long line that stays visible while

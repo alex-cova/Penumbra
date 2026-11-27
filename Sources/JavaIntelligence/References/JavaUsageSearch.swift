@@ -55,6 +55,44 @@ public enum JavaUsageSearch {
         }
     }
 
+    /// Collects non-local targets for Code Vision, reading and parsing each candidate file once.
+    static func collect(
+        targets: Set<JavaSymbolID>, candidates: any JavaUsageCandidateSource,
+        roots: [URL], environment: JavaReferenceEnvironment
+    ) async -> [JavaSymbolID: [JavaUsage]] {
+        var targetsByFile: [URL: Set<JavaSymbolID>] = [:]
+        for target in targets {
+            if Task.isCancelled { return [:] }
+            let scoped = await scopedRoots(for: target, roots: roots, environment: environment)
+            let files = await candidates.candidateFiles(containing: target.simpleName, roles: target.candidateRoles, in: scoped)
+            for file in files { targetsByFile[file.standardizedFileURL, default: []].insert(target) }
+        }
+
+        return await withTaskGroup(of: [JavaSymbolID: [JavaUsage]].self) { group in
+            var files = targetsByFile.makeIterator()
+            func submitNextFile() {
+                guard let (file, targets) = files.next() else { return }
+                group.addTask {
+                    guard !Task.isCancelled, let text = await readText(of: file, environment: environment) else { return [:] }
+                    return await JavaFileUsageResolver.usages(of: Array(targets), source: text, url: file, environment: environment)
+                }
+            }
+            for _ in 0..<4 { submitNextFile() }
+            var result: [JavaSymbolID: [JavaUsage]] = [:]
+            while let file = await group.next() {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    return [:]
+                }
+                for (target, usages) in file {
+                    result[target, default: []].append(contentsOf: usages.filter { $0.kind != .declaration })
+                }
+                submitNextFile()
+            }
+            return result
+        }
+    }
+
     /// The roots whose files can reference `id`: for a symbol declared in a project source set,
     /// the roots of every source set that sees that set; otherwise (JAR, JDK, no Gradle model)
     /// all of `roots`.

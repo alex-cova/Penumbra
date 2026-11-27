@@ -62,6 +62,13 @@ public enum JavaSymbolIdentity {
         at utf16Offset: Int, in source: String, url: URL?, environment: JavaReferenceEnvironment
     ) async -> [JavaResolvedID] {
         guard let tree = JavaSyntaxParser().parse(source) else { return [] }
+        return await symbolIDs(at: utf16Offset, in: source, tree: tree, stubs: nil, url: url, environment: environment)
+    }
+
+    static func symbolIDs(
+        at utf16Offset: Int, in source: String, tree: JavaSyntaxTree, stubs: JavaSourceFileStubs?,
+        url: URL?, environment: JavaReferenceEnvironment
+    ) async -> [JavaResolvedID] {
         let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: utf16Offset, in: source)
         let leaf = tree.node(atByteOffset: byteOffset)
         var token = leaf
@@ -72,7 +79,7 @@ public enum JavaSymbolIdentity {
             token = before
         }
         guard let reference = JavaReferenceClassifier.classify(token: token) else { return [] }
-        let file = JavaSourceStubBuilder.build(tree: tree, url: url ?? JavaNavigationSession.placeholderURL)
+        let file = stubs ?? JavaSourceStubBuilder.build(tree: tree, url: url ?? JavaNavigationSession.placeholderURL)
         let session = JavaNavigationSession(
             source: source, fileURL: url, tree: tree, byteOffset: token.startByte, fileStubs: file,
             index: environment.index, jdkHome: environment.jdkHome, cacheRoot: environment.cacheRoot,

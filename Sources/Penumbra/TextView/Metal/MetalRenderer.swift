@@ -39,13 +39,15 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         var alignedGlyphs: [GlyphInstance]?
         var colorSamples: [GlyphColorSample]
         var decorations: MetalDecorationGeometry
+        /// Keep the build-time coordinates so repeated vertical moves never accumulate rounding.
+        var builtDecorations = MetalDecorationGeometry()
+        var decorationOriginY: CGFloat = 0
         var decorationKey: DecorationBuildKey?
         var decorationNeedsRetry = false
     }
 
-    /// Keyed on the frame's size, not its position: a fragment without decorations (most of
-    /// them) that only moved has nothing to rebuild. Non-empty geometry is content-space, so it's
-    /// rebuilt when the frame moves.
+    /// A vertical move repositions the cached geometry. Horizontal moves rebuild because text
+    /// glyphs use the absolute X position to select an atlas subpixel bucket.
     private struct DecorationBuildKey: Equatable {
         var frameSize: CGSize
         var lineRevision: UInt64
@@ -544,17 +546,21 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             }
         }
         if fragment.decorationKey != decorationKey
-            || (frameChanged && !fragment.decorations.isEmpty)
+            || (previousFrame.minX != spec.frame.minX && !fragment.builtDecorations.isEmpty)
             || (fragment.decorationNeedsRetry && rasterBudget.hasRemaining) {
             decorationBuildCount += 1
-            fragment.decorations = MetalDecorationBuilder.build(
+            fragment.builtDecorations = MetalDecorationBuilder.build(
                 spec: spec,
                 atlas: atlas,
                 scale: scale,
                 budget: &rasterBudget
             )
+            fragment.decorations = fragment.builtDecorations
+            fragment.decorationOriginY = spec.frame.minY
             fragment.decorationKey = decorationKey
             fragment.decorationNeedsRetry = rasterBudget.remaining == 0
+        } else if previousFrame.minY != spec.frame.minY {
+            fragment.decorations = fragment.builtDecorations.shiftedVertically(by: spec.frame.minY - fragment.decorationOriginY)
         }
         let glyphsChanged = fragment.glyphs != previousGlyphs
         let decorationsChanged = fragment.decorations != previousDecorations

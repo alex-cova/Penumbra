@@ -26,6 +26,18 @@ struct MetalDecorationGeometry: Equatable {
         underlaySolids.isEmpty && underlayTriangles.isEmpty && symbolGlyphs.isEmpty
             && overlaySolids.isEmpty && overlayGlyphs.isEmpty
     }
+
+    func shiftedVertically(by offset: CGFloat) -> Self {
+        guard offset != 0, !isEmpty else { return self }
+        let dy = Float(offset)
+        var shifted = self
+        for index in shifted.underlaySolids.indices { shifted.underlaySolids[index].origin.y += dy }
+        for index in shifted.underlayTriangles.indices { shifted.underlayTriangles[index].position.y += dy }
+        for index in shifted.symbolGlyphs.indices { shifted.symbolGlyphs[index].origin.y += dy }
+        for index in shifted.overlaySolids.indices { shifted.overlaySolids[index].origin.y += dy }
+        for index in shifted.overlayGlyphs.indices { shifted.overlayGlyphs[index].origin.y += dy }
+        return shifted
+    }
 }
 
 enum MetalDecorationBuilder {

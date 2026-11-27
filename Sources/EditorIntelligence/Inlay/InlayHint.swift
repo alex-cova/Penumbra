@@ -32,6 +32,8 @@ public struct InlayHint: Sendable, Hashable {
     public let resolutionData: Data?
     /// An explicit acceptance action for the document revision that produced this hint.
     public let edits: [TextEdit]
+    /// The provider can check for text edits when the user explicitly accepts the hint.
+    public let mayResolveEdits: Bool
     public let paddingLeft: Bool
     public let paddingRight: Bool
     public let affinity: Affinity
@@ -39,7 +41,8 @@ public struct InlayHint: Sendable, Hashable {
     public init(
         utf16Offset: Int, label: String, kind: Kind = .parameter,
         providerID: String? = nil, symbol: String? = nil, tooltip: String? = nil, resolutionData: Data? = nil,
-        edits: [TextEdit] = [], affinity: Affinity = .beforeInsertion, paddingLeft: Bool = false, paddingRight: Bool = false
+        edits: [TextEdit] = [], mayResolveEdits: Bool = false,
+        affinity: Affinity = .beforeInsertion, paddingLeft: Bool = false, paddingRight: Bool = false
     ) {
         self.utf16Offset = utf16Offset
         self.label = label
@@ -49,6 +52,7 @@ public struct InlayHint: Sendable, Hashable {
         self.tooltip = tooltip
         self.resolutionData = resolutionData
         self.edits = edits
+        self.mayResolveEdits = mayResolveEdits
         self.affinity = affinity
         self.paddingLeft = paddingLeft
         self.paddingRight = paddingRight
@@ -58,7 +62,7 @@ public struct InlayHint: Sendable, Hashable {
         Self(
             utf16Offset: offset, label: label, kind: kind, providerID: providerID,
             symbol: symbol, tooltip: tooltip, resolutionData: resolutionData,
-            edits: edits, affinity: affinity, paddingLeft: paddingLeft, paddingRight: paddingRight
+            edits: edits, mayResolveEdits: mayResolveEdits, affinity: affinity, paddingLeft: paddingLeft, paddingRight: paddingRight
         )
     }
 }
@@ -69,10 +73,15 @@ public protocol InlayHintProviding: Sendable {
     /// should bound its work, since this runs whenever the visible text changes.
     func inlayHints(for document: Document, in range: TextRange) async -> [InlayHint]
     func resolveInlayTooltip(for hint: InlayHint, in document: Document) async -> String?
+    func resolveInlayEdits(for hint: InlayHint, in document: Document) async -> [TextEdit]
 }
 
 public extension InlayHintProviding {
     func resolveInlayTooltip(for hint: InlayHint, in document: Document) async -> String? {
         hint.tooltip
+    }
+
+    func resolveInlayEdits(for hint: InlayHint, in document: Document) async -> [TextEdit] {
+        hint.edits
     }
 }

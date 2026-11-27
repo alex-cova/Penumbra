@@ -99,15 +99,31 @@ final class InlayHintController {
 
 
     func accept(_ hint: InlayHint) -> Bool {
-        guard !hint.edits.isEmpty, let textView, textView.isEditable,
-              textView.inlayHints.contains(hint), publishedGeneration == textView.contentGeneration,
-              publishedBuffer == textView.stringViewObjectIdentifier,
-              hint.edits.allSatisfy({ edit in
+        apply(hint.edits, for: hint)
+    }
+
+    func resolveAndAccept(_ hint: InlayHint) async -> Bool {
+        if !hint.edits.isEmpty { return accept(hint) }
+        guard hint.mayResolveEdits, let provider, let textView, textView.isEditable, isCurrent(hint, in: textView),
+              let document = await makeDocument(), isCurrent(hint, in: textView), !Task.isCancelled else { return false }
+        let edits = await provider.resolveInlayEdits(for: hint, in: document)
+        guard !Task.isCancelled else { return false }
+        return apply(edits, for: hint)
+    }
+
+    private func isCurrent(_ hint: InlayHint, in textView: TextView) -> Bool {
+        publishedGeneration == textView.contentGeneration && publishedBuffer == textView.stringViewObjectIdentifier
+            && textView.inlayHints.contains(hint)
+    }
+
+    private func apply(_ edits: [TextEdit], for hint: InlayHint) -> Bool {
+        guard !edits.isEmpty, edits.count <= 8, let textView, textView.isEditable, isCurrent(hint, in: textView),
+              edits.allSatisfy({ edit in
                   edit.range.start.utf16Offset <= edit.range.end.utf16Offset
                       && textView.isCharacterBoundary(at: edit.range.start.utf16Offset)
                       && textView.isCharacterBoundary(at: edit.range.end.utf16Offset)
               }) else { return false }
-        let replacements = hint.edits.map { edit in
+        let replacements = edits.map { edit in
             (range: NSRange(
                 location: edit.range.start.utf16Offset,
                 length: edit.range.end.utf16Offset - edit.range.start.utf16Offset
@@ -122,9 +138,7 @@ final class InlayHintController {
 
     func tooltip(for hint: InlayHint) async -> String? {
         if let tooltip = hint.tooltip { return tooltip }
-        guard let provider, let textView, textView.inlayHints.contains(hint),
-              publishedGeneration == textView.contentGeneration,
-              publishedBuffer == textView.stringViewObjectIdentifier else { return nil }
+        guard let provider, let textView, isCurrent(hint, in: textView) else { return nil }
         let buffer = textView.stringViewObjectIdentifier
         let generation = textView.contentGeneration
         guard let document = await makeDocument() else { return nil }

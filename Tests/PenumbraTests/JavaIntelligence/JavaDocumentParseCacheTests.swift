@@ -43,6 +43,18 @@ final class JavaDocumentParseCacheTests: XCTestCase {
         XCTAssertEqual(secondName, "T")
     }
 
+    func testIncrementalEditLeavesThePublishedTreeUnchanged() async throws {
+        let cache = JavaDocumentParseCache()
+        let original = "class T { int x; }"
+        let firstTree = await cache.tree(for: document(original))
+        let first = try XCTUnwrap(firstTree)
+        let (updated, edit) = editReplacing(original, marker: "int", with: "long")
+        let updatedTree = await cache.tree(for: updated, edits: [edit])
+        let second = try XCTUnwrap(updatedTree)
+        XCTAssertEqual(first.rootNode.text, original)
+        XCTAssertEqual(second.rootNode.text, updated.text)
+    }
+
     func testFullParseAfterLargeChange() async {
         let cache = JavaDocumentParseCache()
         let original = "class T { }"

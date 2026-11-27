@@ -47,6 +47,7 @@ final class JavaParseMemo: @unchecked Sendable {
     private var totalBytes = 0
     private var pendingParses: [Key: PendingParse] = [:]
     private var parses = 0
+    private var stubBuilds = 0
     /// What the memo did, for judging its capacity (`@_spi(Benchmarks)`): lookups that hit, parses made, entries
     /// pushed out, and the parses that were of text an eviction had pushed out a moment ago (the avoidable ones).
     private var hits = 0
@@ -61,7 +62,7 @@ final class JavaParseMemo: @unchecked Sendable {
     private let maximumEntries: Int
     private let maximumBytes: Int
     /// A source past this size is parsed but not kept: one very large file would push out everything else.
-    private let maximumEntryBytes = 8 * 1024 * 1024
+    static let maximumEntryBytes = 8 * 1024 * 1024
 
     init(maximumEntries: Int = 12, maximumBytes: Int = 24 * 1024 * 1024) {
         self.maximumEntries = maximumEntries
@@ -80,9 +81,14 @@ final class JavaParseMemo: @unchecked Sendable {
         guard let entry = entry(for: source, key: Self.key(of: source)) else { return nil }
         let path = url?.standardizedFileURL.path ?? ""
         if let stubs = lock.withLock({ entry.stubsByPath[path] }) { return (entry.tree, stubs) }
-        let stubs = Self.stubs(of: entry.tree, url: url)
+        let stubs = buildStubs(of: entry.tree, url: url)
         lock.withLock { entry.stubsByPath[path] = stubs }
         return (entry.tree, stubs)
+    }
+
+    func buildStubs(of tree: JavaSyntaxTree, url: URL?) -> JavaSourceFileStubs {
+        lock.withLock { stubBuilds += 1 }
+        return JavaSourceStubBuilder.build(tree: tree, url: url ?? JavaNavigationSession.placeholderURL)
     }
 
     /// Parses made since the memo was created, for tests that hold a feature to one parse per text.
@@ -161,7 +167,7 @@ final class JavaParseMemo: @unchecked Sendable {
     }
 
     private func insert(_ entry: Entry) {
-        guard entry.bytes <= maximumEntryBytes else { return }
+        guard entry.bytes <= Self.maximumEntryBytes else { return }
         if entries.contains(where: { $0.key == entry.key }) { return }
         entries.append(entry)
         totalBytes += entry.bytes
@@ -180,6 +186,7 @@ final class JavaParseMemo: @unchecked Sendable {
 
     struct Statistics: Sendable {
         var hits = 0, parses = 0, evictions = 0, avoidableParses = 0
+        var stubBuilds = 0
         var parseSeconds = 0.0, avoidableSeconds = 0.0
         var entries = 0, bytes = 0, peakBytes = 0
         /// Different texts that had to be parsed (the working set of the workload, bounded at 4,096).
@@ -191,6 +198,7 @@ final class JavaParseMemo: @unchecked Sendable {
         lock.withLock {
             Statistics(
                 hits: hits, parses: parses, evictions: evictions, avoidableParses: avoidableMisses,
+                stubBuilds: stubBuilds,
                 parseSeconds: Double(parseNanoseconds) / 1e9, avoidableSeconds: Double(avoidableNanoseconds) / 1e9,
                 entries: entries.count, bytes: totalBytes, peakBytes: peakBytes, distinctTexts: seenKeys.count
             )
@@ -200,15 +208,12 @@ final class JavaParseMemo: @unchecked Sendable {
     func resetStatistics() {
         lock.withLock {
             hits = 0; parses = 0; evictions = 0; avoidableMisses = 0; parseNanoseconds = 0; avoidableNanoseconds = 0
+            stubBuilds = 0
             evictedKeys = []; evictedOrder = []; peakBytes = totalBytes; seenKeys = []
         }
     }
 
     // MARK: - Helpers
-
-    private static func stubs(of tree: JavaSyntaxTree, url: URL?) -> JavaSourceFileStubs {
-        JavaSourceStubBuilder.build(tree: tree, url: url ?? JavaNavigationSession.placeholderURL)
-    }
 
     private static func key(of source: String) -> Key {
         var source = source

@@ -8,12 +8,13 @@ import LanguageServerProtocol
 public actor LanguageServerClient: LSPClient {
     private let server: InitializingServer
     private let inlayTransport: LSPInlayTransport?
+    private nonisolated let inlayConnectionID = UUID()
     private let documentURI: @Sendable (Document) -> String
     private var uris: [DocumentID: String] = [:]
     /// Diagnostics the server pushed with `textDocument/publishDiagnostics`. An empty push clears the file.
     private var publishedDiagnostics = LSPPublishedDiagnostics()
     private var cachedCapabilities: ServerCapabilities?
-    private var inlayRegistrations: [String: InlayHintRegistrationOptions] = [:]
+    private var inlayRegistrations: [String: InlayRegistration] = [:]
     private let onInlayHintsChanged: (@Sendable () -> Void)?
     /// The one `initialize` in flight. Callers that arrive while it runs (the host's feature query and an editor
     /// request) wait for it; a second `initializeIfNeeded` beside it answered nothing, which left a ready server
@@ -35,6 +36,49 @@ public actor LanguageServerClient: LSPClient {
         /// request racing the debounce resends the whole text off the event stream; the next
         /// `.documentEdited` still carries pre-resend positions, so it must go full text too.
         var alignedWithEvents: Bool
+    }
+
+    private struct InlayRegistration {
+        struct Options: Decodable {
+            var documentSelector: DocumentSelector?
+            var resolveProvider: Bool?
+        }
+
+        struct Filter {
+            let language: String?
+            let scheme: String?
+            let glob: LSPDocumentGlob?
+        }
+
+        let filters: [Filter]?
+        let resolves: Bool
+
+        init(_ options: Options) {
+            resolves = options.resolveProvider == true
+            filters = options.documentSelector?.compactMap { filter in
+                let glob = filter.pattern.flatMap(LSPDocumentGlob.init)
+                if filter.pattern != nil, glob == nil { return nil }
+                guard filter.language != nil || filter.scheme != nil || glob != nil else { return nil }
+                return Filter(language: filter.language?.rawValue, scheme: filter.scheme, glob: glob)
+            }
+        }
+
+        func applies(to uri: URL?, language: String?) -> Bool {
+            guard let filters else { return true }
+            return filters.contains { filter in
+                if let expected = filter.language, expected != language { return false }
+                if let scheme = filter.scheme, scheme != uri?.scheme { return false }
+                if let glob = filter.glob {
+                    guard let path = uri?.path, glob.matches(path: path) else { return false }
+                }
+                return true
+            }
+        }
+    }
+
+    private struct InlayResolutionToken: Codable {
+        let connectionID: UUID
+        let hint: LanguageServerProtocol.InlayHint
     }
     private let onProgress: (@Sendable ([LSPWorkProgress]) -> Void)?
 
@@ -112,7 +156,7 @@ public actor LanguageServerClient: LSPClient {
                 )
             )
             var inlayHintCapabilities = InlayHintClientCapabilities(dynamicRegistration: true)
-            inlayHintCapabilities.resolveSupport = .init(properties: ["tooltip", "label.tooltip"])
+            inlayHintCapabilities.resolveSupport = .init(properties: ["tooltip", "label.tooltip", "textEdits"])
             textDocumentCapabilities.inlayHint = inlayHintCapabilities
             return InitializeParams(
                 processId: Int(ProcessInfo.processInfo.processIdentifier),
@@ -718,33 +762,35 @@ public actor LanguageServerClient: LSPClient {
         return hints.prefix(2048).map(LSPRenderedInlayHint.init)
     }
 
-    func supportsInlayResolution() async -> Bool {
-        await inlayTransport?.resolvesHints == true
+    func supportsInlayResolution(for document: Document, languageID: String) async -> Bool {
+        guard let inlayTransport else { return false }
+        if await inlayTransport.resolvesHints { return true }
+        return hasInlayRegistration(for: document, languageID: languageID, requiresResolve: true)
     }
 
-    func resolveInlayHint(_ token: Data) async throws -> LSPRenderedInlayHint? {
-        guard let inlayTransport, await inlayTransport.resolvesHints else { return nil }
-        let hint = try JSONDecoder().decode(LanguageServerProtocol.InlayHint.self, from: token)
+    nonisolated func inlayResolutionToken(for hint: LanguageServerProtocol.InlayHint) -> Data? {
+        let token = InlayResolutionToken(connectionID: inlayConnectionID, hint: hint)
+        guard let encoded = try? JSONEncoder().encode(token), encoded.count <= 4096 else { return nil }
+        return encoded
+    }
+
+    func resolveInlayHint(_ token: Data, for document: Document, languageID: String) async throws -> LSPRenderedInlayHint? {
+        guard token.count <= 4096, let inlayTransport else { return nil }
+        let decoded = try JSONDecoder().decode(InlayResolutionToken.self, from: token)
+        guard decoded.connectionID == inlayConnectionID,
+              await supportsInlayResolution(for: document, languageID: languageID) else { return nil }
+        let hint = decoded.hint
         let response = try await inlayTransport.request("inlayHint/resolve", params: hint)
         let resolved = try JSONDecoder().decode(LanguageServerProtocol.InlayHint.self, from: response)
-        guard resolved.position == hint.position else { return nil }
-        return LSPRenderedInlayHint(resolved)
+        let rendered = LSPRenderedInlayHint(resolved)
+        guard resolved.position == hint.position, rendered.label == LSPRenderedInlayHint(hint).label else { return nil }
+        return rendered
     }
 
-    private func hasInlayRegistration(for document: Document, languageID: String?) -> Bool {
+    private func hasInlayRegistration(for document: Document, languageID: String?, requiresResolve: Bool = false) -> Bool {
         let uri = URL(string: documentURI(document))
         return inlayRegistrations.values.contains { registration in
-            guard let filters = registration.documentSelector else { return true }
-            return filters.contains { filter in
-                if let language = filter.language, language.rawValue != (languageID ?? document.languageIdentifier) {
-                    return false
-                }
-                if let scheme = filter.scheme, scheme != uri?.scheme { return false }
-                if let pattern = filter.pattern {
-                    guard let path = uri?.path, fnmatch(pattern, path, 0) == 0 else { return false }
-                }
-                return true
-            }
+            (!requiresResolve || registration.resolves) && registration.applies(to: uri, language: languageID ?? document.languageIdentifier)
         }
     }
 
@@ -788,16 +834,16 @@ public actor LanguageServerClient: LSPClient {
         case .request(_, .clientRegisterCapability(let params, _)):
             var changed = false
             for registration in params.registrations where registration.method == "textDocument/inlayHint" {
-                let options: InlayHintRegistrationOptions
+                let options: InlayRegistration.Options
                 if let value = registration.registerOptions, value != .null {
                     guard let data = try? JSONEncoder().encode(value),
-                          let decoded = try? JSONDecoder().decode(InlayHintRegistrationOptions.self, from: data)
+                          let decoded = try? JSONDecoder().decode(InlayRegistration.Options.self, from: data)
                     else { continue }
                     options = decoded
                 } else {
-                    options = InlayHintRegistrationOptions()
+                    options = InlayRegistration.Options()
                 }
-                inlayRegistrations[registration.id] = options
+                inlayRegistrations[registration.id] = InlayRegistration(options)
                 changed = true
             }
             if changed { onInlayHintsChanged?() }

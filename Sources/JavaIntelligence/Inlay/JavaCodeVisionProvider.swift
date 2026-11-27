@@ -25,9 +25,8 @@ public struct JavaCodeVisionOptions: Sendable, Equatable {
 /// ``codeVisionAnchors(for:)`` is one pass over the syntax tree and reserves the room for every
 /// declaration. ``codeVision(for:anchors:)`` then searches for the anchors on screen. A search is the
 /// expensive part (it resolves the symbol and parses the files that mention its name), so results
-/// are cached by declaration and the index generation, at most ``maxSearches`` run per request and
-/// two run at a time. The usage counts therefore follow what the index knows (saved files), not
-/// unsaved edits, and refresh when the index does.
+/// are cached by declaration and index generation, with at most ``maxSearches`` per request.
+/// Usage searches share candidate file parsing, and implementation searches run two at a time.
 public actor JavaCodeVisionProvider: CodeVisionProviding {
     /// Most declarations given lenses in one file.
     static let maxAnchors = 400
@@ -88,7 +87,7 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
         guard document.languageIdentifier == "java", (optionsSource?() ?? options).isAnyEnabled else { return [] }
         let source = JavaNavigationText.fullText(of: document)
         guard !source.isEmpty, !Task.isCancelled, let tree = JavaParseMemo.shared.tree(for: source) else { return [] }
-        return JavaCodeVision.declarations(in: tree, source: source).prefix(Self.maxAnchors).map(\.utf16Offset)
+        return JavaCodeVision.declarations(in: tree, source: source, limit: Self.maxAnchors).map(\.utf16Offset)
     }
 
     public func codeVision(for document: Document, anchors: [Int]) async -> [CodeVisionLens] {
@@ -101,7 +100,8 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
             return anchors.map { CodeVisionLens(utf16Offset: $0, entries: []) }
         }
         let wanted = Set(anchors)
-        let declarations = JavaCodeVision.declarations(in: tree, source: source).filter { wanted.contains($0.utf16Offset) }
+        let declarations = JavaCodeVision.declarations(in: tree, source: source, limit: Self.maxAnchors)
+            .filter { wanted.contains($0.utf16Offset) }
         let generation = await index.generation
         let url = document.url
         let lookup = openBuffer
@@ -119,7 +119,14 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
                 pending.append((declaration, offset, key))
             }
         }
-        // Two searches at a time.
+        let usageCounts = if options.usages, !pending.isEmpty {
+            await findUsages.declarationUsageCounts(source: source, url: url, offsets: pending.map { $0.offset })
+        } else {
+            [Int: Int]()
+        }
+        guard !Task.isCancelled, await self.index.generation == generation else { return [] }
+
+        // Two implementation searches at a time.
         var index = 0
         while index < pending.count, !Task.isCancelled {
             let batch = pending[index ..< min(index + 2, pending.count)]
@@ -129,6 +136,7 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
                     group.addTask {
                         let entries = await self.entries(
                             for: item.declaration, offset: item.offset, source: source, url: url, options: options,
+                            usageCount: usageCounts[item.offset],
                             scope: scope, lookup: lookup
                         )
                         return (item.offset, item.key, entries)
@@ -153,12 +161,11 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
 
     private func entries(
         for declaration: JavaCodeVision.Declaration, offset: Int, source: String, url: URL?, options: JavaCodeVisionOptions,
-        scope: Set<String>?, lookup: (@Sendable (URL) async -> String?)?
+        usageCount: Int?, scope: Set<String>?, lookup: (@Sendable (URL) async -> String?)?
     ) async -> [CodeVisionEntry] {
         var entries: [CodeVisionEntry] = []
-        if options.usages,
-           let result = await findUsages.declarationUsages(source: source, url: url, utf16Offset: offset) {
-            entries.append(CodeVisionEntry(id: "usages", text: JavaCodeVision.label(count: result.usages.count, singular: "usage", plural: "usages")))
+        if let usageCount {
+            entries.append(CodeVisionEntry(id: "usages", text: JavaCodeVision.label(count: usageCount, singular: "usage", plural: "usages")))
         }
         if options.implementations, declaration.isAbstract {
             let count = await implementationCount(source: source, url: url, offset: offset, scope: scope, lookup: lookup)
@@ -211,13 +218,16 @@ enum JavaCodeVision {
         "class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "annotation_type_declaration"
     ]
 
-    static func declarations(in tree: JavaSyntaxTree, source: String) -> [Declaration] {
+    static func declarations(in tree: JavaSyntaxTree, source: String, limit: Int) -> [Declaration] {
         var result: [Declaration] = []
-        collect(tree.rootNode, enclosing: [], source: source, into: &result)
+        collect(tree.rootNode, enclosing: [], source: source, limit: limit, into: &result)
         return result
     }
 
-    private static func collect(_ node: SyntaxNode, enclosing: [String], source: String, into result: inout [Declaration]) {
+    private static func collect(
+        _ node: SyntaxNode, enclosing: [String], source: String, limit: Int, into result: inout [Declaration]
+    ) {
+        guard result.count < limit, !Task.isCancelled else { return }
         var path = enclosing
         if typeNodes.contains(node.type), let name = node.child(byFieldName: "name") {
             path.append(name.text)
@@ -237,7 +247,11 @@ enum JavaCodeVision {
                 isAbstract: hasModifier("abstract", in: node) || isInterfaceMethod
             ))
         }
-        for child in node.namedChildren { collect(child, enclosing: path, source: source, into: &result) }
+        node.walkNamedChildren(overlapping: node.byteRange) { child in
+            guard result.count < limit, !Task.isCancelled else { return false }
+            collect(child, enclosing: path, source: source, limit: limit, into: &result)
+            return true
+        }
     }
 
     private static func hasModifier(_ keyword: String, in declaration: SyntaxNode) -> Bool {

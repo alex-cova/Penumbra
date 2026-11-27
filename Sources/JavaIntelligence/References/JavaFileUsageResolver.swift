@@ -16,37 +16,55 @@ public enum JavaFileUsageResolver {
             guard JavaNavigationText.sameFile(file, url), let tree = JavaSyntaxParser().parse(source) else { return [] }
             return JavaLocalUsages.usages(ofDeclaration: range, file: url, source: source, tree: tree)
         }
-        let name = target.simpleName
-        guard !name.isEmpty, source.contains(name), let tree = JavaSyntaxParser().parse(source) else { return [] }
+        return await usages(of: [target], source: source, url: url, environment: environment)[target] ?? []
+    }
+
+    /// Resolves a batch of non-local targets against one file snapshot.
+    static func usages(
+        of targets: [JavaSymbolID], source: String, url: URL, environment: JavaReferenceEnvironment
+    ) async -> [JavaSymbolID: [JavaUsage]] {
+        let targets = targets.filter { !$0.simpleName.isEmpty && source.contains($0.simpleName) }
+        guard !targets.isEmpty, !Task.isCancelled, let tree = JavaSyntaxParser().parse(source) else { return [:] }
 
         let file = JavaSourceStubBuilder.build(tree: tree, url: url)
         let locator = JavaUsageLocator(url: url, text: source)
         let gate = JavaDecompileGate(policy: .denied)
-        let nodes = candidateNodes(named: name, target: target, in: tree)
+        let names = Set(targets.map(\.simpleName))
+        let includesConstructors = targets.contains { target in
+            if case .constructor = target { return true }
+            return false
+        }
+        let nodes = candidateNodes(named: names, includesConstructors: includesConstructors, in: tree)
         // F-08: one scope for the whole file. The scope depends only on `url`, so installing
         // it per candidate node was pure overhead; each node still gets its own session because
         // the resolution context (enclosing types, type parameters) is offset-specific.
-        let found = await environment.withScope(for: url) {
-            var found: [Range<Int>: JavaUsage] = [:]
-            for node in nodes {
-                if Task.isCancelled { break }
-                let session = JavaNavigationSession(
-                    source: source, fileURL: url, tree: tree, byteOffset: node.startByte, fileStubs: file,
-                    index: environment.index, jdkHome: environment.jdkHome, cacheRoot: environment.cacheRoot,
-                    openBuffer: environment.openBuffer, decompile: gate
-                )
-                if let usage = await resolve(node, target: target, name: name, session: session, locator: locator),
-                   found[usage.byteRange] == nil { found[usage.byteRange] = usage }
+        return await environment.withScope(for: url) {
+            var result: [JavaSymbolID: [JavaUsage]] = [:]
+            for target in targets {
+                let name = target.simpleName
+                var found: [Range<Int>: JavaUsage] = [:]
+                var candidates = nodes.byName[name] ?? []
+                if case .constructor = target { candidates.append(contentsOf: nodes.constructorKeywords) }
+                for node in candidates {
+                    if Task.isCancelled { return result }
+                    let session = JavaNavigationSession(
+                        source: source, fileURL: url, tree: tree, byteOffset: node.startByte, fileStubs: file,
+                        index: environment.index, jdkHome: environment.jdkHome, cacheRoot: environment.cacheRoot,
+                        openBuffer: environment.openBuffer, decompile: gate
+                    )
+                    if let usage = await resolve(node, target: target, session: session, locator: locator),
+                       found[usage.byteRange] == nil { found[usage.byteRange] = usage }
+                }
+                result[target] = found.values.sorted { $0.byteRange.lowerBound < $1.byteRange.lowerBound }
             }
-            return found
+            return result
         }
-        return found.values.sorted { $0.byteRange.lowerBound < $1.byteRange.lowerBound }
     }
 
     // MARK: - Per identifier
 
     private static func resolve(
-        _ node: SyntaxNode, target: JavaSymbolID, name: String, session: JavaNavigationSession, locator: JavaUsageLocator
+        _ node: SyntaxNode, target: JavaSymbolID, session: JavaNavigationSession, locator: JavaUsageLocator
     ) async -> JavaUsage? {
         // `Foo::bar`: the name after `::` is not something the classifier understands.
         if node.type == "identifier", let parent = node.parent, parent.type == "method_reference",
@@ -106,25 +124,27 @@ public enum JavaFileUsageResolver {
 
     /// Identifier nodes spelled `name` (plus `this`/`super` keywords when a constructor is the
     /// target), skipping package declarations.
-    private static func candidateNodes(named name: String, target: JavaSymbolID, in tree: JavaSyntaxTree) -> [SyntaxNode] {
-        var isConstructor = false
-        if case .constructor = target { isConstructor = true }
-        var result: [SyntaxNode] = []
+    private static func candidateNodes(
+        named names: Set<String>, includesConstructors: Bool, in tree: JavaSyntaxTree
+    ) -> (byName: [String: [SyntaxNode]], constructorKeywords: [SyntaxNode]) {
+        var byName: [String: [SyntaxNode]] = [:]
+        var constructorKeywords: [SyntaxNode] = []
         var stack = [tree.rootNode]
-        while let node = stack.popLast() {
+        while !Task.isCancelled, let node = stack.popLast() {
             if node.type == "package_declaration" { continue }
             switch node.type {
             case "identifier", "type_identifier":
-                if node.text == name { result.append(node) }
+                let name = node.text
+                if names.contains(name) { byName[name, default: []].append(node) }
             case "explicit_constructor_invocation":
-                if isConstructor, let keyword = node.children.first, keyword.type == "this" || keyword.type == "super" {
-                    result.append(keyword)
+                if includesConstructors, let keyword = node.children.first, keyword.type == "this" || keyword.type == "super" {
+                    constructorKeywords.append(keyword)
                 }
                 stack.append(contentsOf: node.children)
             default:
                 stack.append(contentsOf: node.children)
             }
         }
-        return result.sorted { $0.startByte < $1.startByte }
+        return (byName, constructorKeywords)
     }
 }

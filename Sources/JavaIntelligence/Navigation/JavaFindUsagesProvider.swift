@@ -65,11 +65,15 @@ public actor JavaFindUsagesProvider: NavigationProvider {
         public let familyCount: Int
     }
 
-    public func declarationUsages(source: String, url: URL?, utf16Offset: Int) async -> SymbolUsages? {
-        let environment = JavaReferenceEnvironment(
+    private var referenceEnvironment: JavaReferenceEnvironment {
+        JavaReferenceEnvironment(
             index: index, jdkHome: jdkHome, cacheRoot: indexPaths.root, openBuffer: openBuffer,
             gradleModel: classpathModel, indexPaths: classpathModel == nil ? nil : indexPaths
         )
+    }
+
+    public func declarationUsages(source: String, url: URL?, utf16Offset: Int) async -> SymbolUsages? {
+        let environment = referenceEnvironment
         guard let id = await JavaSymbolIdentity.symbolID(at: utf16Offset, in: source, url: url, environment: environment) else {
             return nil
         }
@@ -109,6 +113,55 @@ public actor JavaFindUsagesProvider: NavigationProvider {
             return $0.byteRange.lowerBound < $1.byteRange.lowerBound
         }
         return SymbolUsages(id: id, usages: usages, familyCount: familyCount)
+    }
+
+    /// Counts usages for the requested Code Vision anchors. An unresolved declaration has no count.
+    func declarationUsageCounts(source: String, url: URL?, offsets: [Int]) async -> [Int: Int] {
+        guard !Task.isCancelled, let parsed = JavaParseMemo.shared.parsed(source: source, url: url) else { return [:] }
+        let environment = referenceEnvironment
+        let searchRoots = roots.isEmpty ? (url.map { [$0] } ?? []) : roots
+        let scan = JavaTextScanCandidateSource(textProvider: environment.openBuffer, extraFiles: url.map { [$0] } ?? [])
+        let candidates = JavaIndexedOrScanningCandidates(nameIndex: nameIndex, roleIndex: roleIndex, scan: scan)
+        var counts: [Int: Int] = [:]
+        var targetsByOffset: [Int: [JavaSymbolID]] = [:]
+        var targets: Set<JavaSymbolID> = []
+        for offset in offsets {
+            if Task.isCancelled { return [:] }
+            let resolved = await JavaSymbolIdentity.symbolIDs(
+                at: offset, in: source, tree: parsed.tree, stubs: parsed.stubs, url: url, environment: environment
+            )
+            guard let id = resolved.first?.id else {
+                continue
+            }
+            if case .local = id {
+                counts[offset] = JavaLocalUsages.usages(of: id, in: source).filter { $0.kind != .declaration }.count
+            } else {
+                let family = if let url {
+                    await JavaIndex.$queryScope.withValue(environment.queryScope(for: url)) {
+                        await JavaMemberLookup.$sourceTextProvider.withValue(environment.openBuffer) {
+                            await self.familyIDs(of: id)
+                        }
+                    }
+                } else {
+                    [id]
+                }
+                targetsByOffset[offset] = family
+                targets.formUnion(family)
+            }
+        }
+
+        let usages = await JavaUsageSearch.collect(targets: targets, candidates: candidates, roots: searchRoots, environment: environment)
+        guard !Task.isCancelled else { return [:] }
+        for (offset, family) in targetsByOffset {
+            var locations: [URL: Set<Int>] = [:]
+            for target in family {
+                for usage in usages[target] ?? [] {
+                    locations[usage.url.standardizedFileURL, default: []].insert(usage.byteRange.lowerBound)
+                }
+            }
+            counts[offset] = locations.values.reduce(0) { $0 + $1.count }
+        }
+        return counts
     }
 
     /// The text of a project file as the editor sees it: an open buffer, else the file on disk.

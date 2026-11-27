@@ -6,6 +6,7 @@ import Foundation
 public enum JavaParseMemoStatistics {
     public struct Snapshot: Sendable {
         public let hits: Int, parses: Int, evictions: Int, avoidableParses: Int
+        public let stubBuilds: Int
         public let parseSeconds: Double, avoidableSeconds: Double
         public let entries: Int, bytes: Int, peakBytes: Int, distinctTexts: Int
         public var hitRate: Double { hits + parses == 0 ? 0 : Double(hits) / Double(hits + parses) }
@@ -15,6 +16,7 @@ public enum JavaParseMemoStatistics {
         let value = JavaParseMemo.shared.statistics
         return Snapshot(
             hits: value.hits, parses: value.parses, evictions: value.evictions, avoidableParses: value.avoidableParses,
+            stubBuilds: value.stubBuilds,
             parseSeconds: value.parseSeconds, avoidableSeconds: value.avoidableSeconds,
             entries: value.entries, bytes: value.bytes, peakBytes: value.peakBytes, distinctTexts: value.distinctTexts
         )

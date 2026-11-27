@@ -46,15 +46,19 @@ public actor JavaInlayHintProvider: InlayHintProviding {
 
     private let index: JavaIndex
     private let indexPaths: JavaIndexPaths
+    private let documentParseCache: JavaDocumentParseCache?
+    private weak var largeStubTree: JavaSyntaxTree?
+    private var largeFileStubs: JavaSourceFileStubs?
     private var classpathModel: JavaGradleProjectModel?
     private var classpathPaths: JavaIndexPaths?
     private var openBuffer: (@Sendable (URL) async -> String?)?
     private var options = JavaInlayHintOptions()
     private var optionsSource: (@Sendable () -> JavaInlayHintOptions)?
 
-    public init(index: JavaIndex, indexPaths: JavaIndexPaths) {
+    public init(index: JavaIndex, indexPaths: JavaIndexPaths, documentParseCache: JavaDocumentParseCache? = nil) {
         self.index = index
         self.indexPaths = indexPaths
+        self.documentParseCache = documentParseCache
     }
 
     public func setSourceSetClasspath(_ model: JavaGradleProjectModel?, indexPaths: JavaIndexPaths) {
@@ -81,6 +85,7 @@ public actor JavaInlayHintProvider: InlayHintProviding {
         guard document.languageIdentifier == "java" else { return [] }
         let options = optionsSource?() ?? self.options
         guard options.isAnyEnabled else { return [] }
+        let document = JavaNavigationText.materialized(document)
         let source = JavaNavigationText.fullText(of: document)
         guard !source.isEmpty, !Task.isCancelled, range.start.utf16Offset <= range.end.utf16Offset else { return [] }
         let lower = JavaNavigationText.utf8ByteOffset(forUTF16Offset: range.start.utf16Offset, in: source)
@@ -94,9 +99,11 @@ public actor JavaInlayHintProvider: InlayHintProviding {
             scope = classpathModel.visibleShardPaths(forFile: url, paths: classpathPaths)
         }
         let generation = await index.generation
+        guard !Task.isCancelled, let parsed = await parse(document, source: source) else { return [] }
         let work = { () async -> [InlayHint] in
             await JavaInlayHints.compute(
-                source: source, fileURL: url, bytes: lower..<max(upper, lower), options: options,
+                source: source, tree: parsed.tree, fileStubs: parsed.stubs,
+                fileURL: url, bytes: lower..<max(upper, lower), options: options,
                 index: index, cacheRoot: cacheRoot, openBuffer: lookup
             )
         }
@@ -106,16 +113,32 @@ public actor JavaInlayHintProvider: InlayHintProviding {
         guard !Task.isCancelled, await index.generation == generation else { return [] }
         return hints.filter { range.start.utf16Offset...range.end.utf16Offset ~= $0.utf16Offset }
     }
+
+    private func parse(_ document: Document, source: String) async -> (tree: JavaSyntaxTree, stubs: JavaSourceFileStubs)? {
+        // Overlay and inspections already use this cache. Large files that the text-keyed memo
+        // declines can share that tree. The provider keeps stubs for one tree without retaining it.
+        if source.utf8.count > JavaParseMemo.maximumEntryBytes, let documentParseCache, let url = document.url,
+           let tree = await documentParseCache.tree(for: document) {
+            guard !Task.isCancelled else { return nil }
+            if largeStubTree === tree, let largeFileStubs { return (tree, largeFileStubs) }
+            let stubs = JavaParseMemo.shared.buildStubs(of: tree, url: url)
+            largeStubTree = tree
+            largeFileStubs = stubs
+            return (tree, stubs)
+        }
+        guard !Task.isCancelled else { return nil }
+        return JavaParseMemo.shared.parsed(source: source, url: document.url)
+    }
 }
 
-/// The resolution work, kept out of the actor so the syntax tree never crosses an isolation boundary.
+/// Viewport-scoped resolution on a read-only syntax snapshot.
 enum JavaInlayHints {
     static func compute(
-        source: String, fileURL: URL?, bytes: Range<Int>, options: JavaInlayHintOptions = JavaInlayHintOptions(),
+        source: String, tree: JavaSyntaxTree, fileStubs: JavaSourceFileStubs,
+        fileURL: URL?, bytes: Range<Int>, options: JavaInlayHintOptions,
         index: JavaIndex, cacheRoot: URL, openBuffer: (@Sendable (URL) async -> String?)?
     ) async -> [InlayHint] {
-        guard !Task.isCancelled,
-              let (tree, fileStubs) = JavaParseMemo.shared.parsed(source: source, url: fileURL) else { return [] }
+        guard !Task.isCancelled else { return [] }
         var hints: [InlayHint] = []
         if options.parameterNames || options.methodChainTypes {
             var calls: [SyntaxNode] = []
