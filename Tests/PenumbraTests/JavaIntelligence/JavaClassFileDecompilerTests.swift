@@ -38,6 +38,14 @@ final class JavaClassFileDecompilerTests: XCTestCase {
         XCTAssertFalse(JavaAttachedSources.isExtractedSource(URL(fileURLWithPath: "/work/Foo.java")))
     }
 
+    func testAGitRevisionSnapshotIsACacheCopyAndIsNotAnalysed() {
+        // `Document.isDependencySource` is `isExtractedSource`, which is what every analysis skips.
+        let snapshot = URL(fileURLWithPath: "/cache/com.umbra.editor/git-revisions/ab12/\(String(repeating: "a", count: 40))/src/Foo.java")
+        XCTAssertTrue(JavaAttachedSources.isInCache(snapshot))
+        XCTAssertTrue(JavaAttachedSources.isExtractedSource(snapshot))
+        XCTAssertFalse(JavaAttachedSources.isExtractedSource(URL(fileURLWithPath: "/work/src/Foo.java")))
+    }
+
     func testAJarEntryIsCopiedOutAsAClassFile() throws {
         let cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent("cls-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: cacheRoot) }

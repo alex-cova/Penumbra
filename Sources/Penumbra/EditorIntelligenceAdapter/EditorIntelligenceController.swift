@@ -238,6 +238,7 @@ public final class EditorIntelligenceController {
     private var isMouseHoverVisible = false
     private var refactoringPreviewTask: Task<Void, Never>?
     private var diagnosticsTask: Task<Void, Never>?
+    private var transientDiagnostic: (diagnostic: Diagnostic, generation: UInt64, documentID: DocumentID)?
     private let forwardingDelegateBox: EditorIntelligenceForwardingDelegate
 
     /// Create a controller that connects EIP services to a text view.
@@ -1262,6 +1263,23 @@ public final class EditorIntelligenceController {
         }
     }
 
+    /// Show a host diagnostic tied to this exact buffer, such as a failed execution.
+    public func setTransientDiagnostic(_ diagnostic: Diagnostic?, for documentID: DocumentID? = nil) {
+        guard let textView else { return }
+        let previous = transientDiagnostic
+        if previous == nil, diagnostic == nil { return }
+        transientDiagnostic = diagnostic.flatMap { diagnostic in
+            (documentID ?? adapter.currentDocument?.id).map { (diagnostic, textView.contentGeneration, $0) }
+        }
+        var markers = textView.diagnostics
+        if let source = previous?.diagnostic.source { markers.removeAll { $0.source == source } }
+        if let transientDiagnostic { markers.append(TextViewDiagnostic(transientDiagnostic.diagnostic, in: textView)) }
+        if markers != textView.diagnostics { textView.diagnostics = markers }
+        if let target = transientDiagnostic?.documentID ?? previous?.documentID, adapter.currentDocument?.id == target {
+            refreshDiagnostics()
+        }
+    }
+
     /// Refresh diagnostics and apply squiggles to the text view.
     public func refreshDiagnostics() {
         guard let base = adapter.currentDocument, let textView else {
@@ -1293,11 +1311,20 @@ public final class EditorIntelligenceController {
             } else {
                 document = base
             }
-            let report = await diagnosticEngine.diagnostics(for: document)
+            var report = await diagnosticEngine.diagnostics(for: document)
             guard !Task.isCancelled, let self, let textView = self.textView else { return }
             // The text moved while the providers worked: drop the report and keep the
             // edit-shifted markers, which still cover their original text.
             guard textView.contentGeneration == generation else { return }
+            if let transient = transientDiagnostic {
+                if transient.generation == generation, transient.documentID == report.documentID {
+                    report = DiagnosticReport(documentID: report.documentID,
+                                              diagnostics: report.diagnostics + [transient.diagnostic],
+                                              staleSources: report.staleSources)
+                } else {
+                    transientDiagnostic = nil
+                }
+            }
             let merged = Self.mergedDiagnostics(report: report, current: textView.diagnostics, in: textView)
             self.latestDiagnostics = report.diagnostics
             self.scheduleIntentionBulb()
@@ -2716,7 +2743,8 @@ public final class EditorIntelligenceController {
             document: document,
             cursor: document.cursor,
             selection: document.selection,
-            trigger: .manual
+            trigger: .manual,
+            isPointerHover: true
         )
         guard let result = await hoverEngine.hover(context: context),
               !Task.isCancelled, mouseHoverTarget == expectedRange else { return }

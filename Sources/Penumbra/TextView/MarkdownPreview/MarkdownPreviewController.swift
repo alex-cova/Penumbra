@@ -1,19 +1,38 @@
 import func EditorIntelligence.runDetached
 @preconcurrency import AppKit
 
-/// Toggles and maintains a rendered markdown preview that covers a host ``TextView``.
+/// Toggles and maintains a rendered markdown preview for a host ``TextView``.
 ///
-/// Owned by the pane host (Umbra: ``IDEEditorPaneHost``). The preview is offered only when
-/// `textView.languageIdentifier == "markdown"`. When shown, the preview is layered directly on
-/// top of the editor (same frame, via constraints) rather than in a side-by-side split, so
-/// toggling it replaces the editor in place instead of splitting the pane.
+/// Owned by the pane host (Umbra: ``IDEEditorPaneHost``). The preview is offered when
+/// `textView.languageIdentifier` is previewable (see ``previewableLanguageIdentifiers``:
+/// markdown renders its prose, mermaid renders the whole file as one diagram). Cover mode
+/// layers the preview directly on top of the editor (same frame, via constraints) so toggling
+/// it replaces the editor in place; side-by-side mode (`isSideBySide`) puts the editor and
+/// the preview next to each other so the rendered page follows the buffer live while editing.
 @MainActor
 public final class MarkdownPreviewController: NSObject {
+    /// Language identifiers the preview renders. Markdown renders its prose; a mermaid file
+    /// renders its whole buffer as one diagram.
+    public static let previewableLanguageIdentifiers: Set<String> = ["markdown", "mermaid"]
+
+    /// Whether `identifier` has a preview.
+    public static func isPreviewableLanguage(_ identifier: String?) -> Bool {
+        guard let identifier else { return false }
+        return previewableLanguageIdentifiers.contains(identifier)
+    }
     public let previewView = MarkdownPreviewView()
     private weak var textView: TextView?
     private let containerStack = NSView()
     private var editorContainer: NSView?
     private var isPreviewVisible = false
+    /// Cover (`false`) layers the preview over the editor; side-by-side (`true`) shows them
+    /// next to each other so the page follows the buffer while it stays editable.
+    public private(set) var isSideBySide = false
+    /// Called when the layout mode changes, so the host can remember it (toolbar, View menu).
+    public var onSideBySideChange: ((Bool) -> Void)?
+    private var coverConstraints: [NSLayoutConstraint] = []
+    private var sideBySideConstraints: [NSLayoutConstraint] = []
+    private let dividerView = NSView()
     private var parseGeneration = 0
     private var parseTask: Task<Void, Never>?
     private var mermaidTask: Task<Void, Never>?
@@ -55,7 +74,7 @@ public final class MarkdownPreviewController: NSObject {
     /// dark look (``appearanceOverride``). Off by default: a host that embeds the preview inline
     /// has no use for it.
     public var showsAppearanceToggle = false {
-        didSet { updateAppearanceToggle() }
+        didSet { updateOverlayButtons() }
     }
 
     /// Called when the user flips the look with the toggle (not when ``appearanceOverride`` is set
@@ -65,6 +84,17 @@ public final class MarkdownPreviewController: NSObject {
     private let appearanceToggle = NSButton()
     /// Test-only hook (`@testable import` visibility).
     var debugAppearanceToggle: NSButton { appearanceToggle }
+
+    /// Shows an alongside/cover button left of the appearance toggle that flips the preview
+    /// between covering the editor and sitting next to it. Off by default, like the
+    /// appearance toggle.
+    public var showsSideBySideToggle = false {
+        didSet { updateOverlayButtons() }
+    }
+
+    private let sideBySideToggle = NSButton()
+    /// Test-only hook (`@testable import` visibility).
+    var debugSideBySideToggle: NSButton { sideBySideToggle }
 
     /// Debounce interval before re-parsing after a buffer edit. Tests may shorten this.
     var parseDebounceNanoseconds: UInt64 = 200_000_000
@@ -100,6 +130,7 @@ public final class MarkdownPreviewController: NSObject {
 
         previewDelegate = PreviewTextViewDelegate(controller: self)
         configureAppearanceToggle()
+        configureSideBySideToggle()
     }
 
     private func configureAppearanceToggle() {
@@ -114,6 +145,20 @@ public final class MarkdownPreviewController: NSObject {
         appearanceToggle.wantsLayer = true
         appearanceToggle.layer?.cornerRadius = 6
         appearanceToggle.isHidden = true
+    }
+
+    private func configureSideBySideToggle() {
+        sideBySideToggle.translatesAutoresizingMaskIntoConstraints = false
+        sideBySideToggle.isBordered = false
+        sideBySideToggle.bezelStyle = .regularSquare
+        sideBySideToggle.imagePosition = .imageOnly
+        sideBySideToggle.imageScaling = .scaleProportionallyDown
+        sideBySideToggle.focusRingType = .none
+        sideBySideToggle.target = self
+        sideBySideToggle.action = #selector(toggleSideBySideFromButton)
+        sideBySideToggle.wantsLayer = true
+        sideBySideToggle.layer?.cornerRadius = 6
+        sideBySideToggle.isHidden = true
     }
 
     /// The style the preview shows: the editor's, or the fixed look the host asked for.
@@ -157,7 +202,12 @@ public final class MarkdownPreviewController: NSObject {
         previewView.style.isDark(under: previewView.effectiveAppearance)
     }
 
-    /// Shows the button only while the preview is up, with the icon of the look a click switches to.
+    /// Shows the buttons only while the preview is up, with the icon of the look a click switches to.
+    private func updateOverlayButtons() {
+        updateAppearanceToggle()
+        updateSideBySideToggle()
+    }
+
     private func updateAppearanceToggle() {
         appearanceToggle.isHidden = !(showsAppearanceToggle && isPreviewVisible)
         let dark = isDisplayingDark
@@ -173,6 +223,29 @@ public final class MarkdownPreviewController: NSObject {
         appearanceToggle.layer?.backgroundColor = (dark
             ? NSColor.white.withAlphaComponent(0.1)
             : NSColor.black.withAlphaComponent(0.06)).cgColor
+    }
+
+    private func updateSideBySideToggle() {
+        sideBySideToggle.isHidden = !(showsSideBySideToggle && isPreviewVisible)
+        let label = isSideBySide ? "Show Preview Covering the Editor" : "Show Preview Alongside the Editor"
+        sideBySideToggle.image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: label)?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
+        sideBySideToggle.toolTip = label
+        sideBySideToggle.setAccessibilityLabel(label)
+        let dark = isDisplayingDark
+        sideBySideToggle.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        sideBySideToggle.contentTintColor = dark ? NSColor(white: 0.85, alpha: 1) : NSColor(white: 0.25, alpha: 1)
+        if isSideBySide {
+            sideBySideToggle.layer?.backgroundColor = NSColor.selectedContentBackgroundColor.cgColor
+        } else {
+            sideBySideToggle.layer?.backgroundColor = (dark
+                ? NSColor.white.withAlphaComponent(0.1)
+                : NSColor.black.withAlphaComponent(0.06)).cgColor
+        }
+    }
+
+    @objc private func toggleSideBySideFromButton() {
+        setSideBySide(!isSideBySide)
     }
 
     /// Chains preview text/Metal observation ahead of an existing delegate (e.g. EIP forwarding).
@@ -195,21 +268,23 @@ public final class MarkdownPreviewController: NSObject {
 
     /// Layers `editorView` (typically the pane host's outer container) and the preview into the
     /// same frame, with the preview on top so toggling it covers the editor in place.
+    /// Side-by-side mode (`isSideBySide`) reuses the same views with a split layout instead.
     public func embed(editorView: NSView) {
         guard editorContainer == nil else { return }
         editorContainer = editorView
         editorView.removeFromSuperview()
         editorView.translatesAutoresizingMaskIntoConstraints = false
         previewView.translatesAutoresizingMaskIntoConstraints = false
+        dividerView.translatesAutoresizingMaskIntoConstraints = false
+        dividerView.wantsLayer = true
+        dividerView.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        dividerView.isHidden = true
         containerStack.addSubview(editorView)
         containerStack.addSubview(previewView)
+        containerStack.addSubview(dividerView)
         containerStack.addSubview(appearanceToggle)
-        NSLayoutConstraint.activate([
-            // Clear of the overlay scroller on the right edge.
-            appearanceToggle.topAnchor.constraint(equalTo: containerStack.topAnchor, constant: 8),
-            appearanceToggle.trailingAnchor.constraint(equalTo: containerStack.trailingAnchor, constant: -18),
-            appearanceToggle.widthAnchor.constraint(equalToConstant: 28),
-            appearanceToggle.heightAnchor.constraint(equalToConstant: 28),
+        containerStack.addSubview(sideBySideToggle)
+        coverConstraints = [
             editorView.topAnchor.constraint(equalTo: containerStack.topAnchor),
             editorView.leadingAnchor.constraint(equalTo: containerStack.leadingAnchor),
             editorView.trailingAnchor.constraint(equalTo: containerStack.trailingAnchor),
@@ -217,23 +292,97 @@ public final class MarkdownPreviewController: NSObject {
             previewView.topAnchor.constraint(equalTo: containerStack.topAnchor),
             previewView.leadingAnchor.constraint(equalTo: containerStack.leadingAnchor),
             previewView.trailingAnchor.constraint(equalTo: containerStack.trailingAnchor),
-            previewView.bottomAnchor.constraint(equalTo: containerStack.bottomAnchor)
+            previewView.bottomAnchor.constraint(equalTo: containerStack.bottomAnchor),
+        ]
+        sideBySideConstraints = [
+            editorView.topAnchor.constraint(equalTo: containerStack.topAnchor),
+            editorView.leadingAnchor.constraint(equalTo: containerStack.leadingAnchor),
+            editorView.bottomAnchor.constraint(equalTo: containerStack.bottomAnchor),
+            editorView.widthAnchor.constraint(equalTo: containerStack.widthAnchor, multiplier: 0.5, constant: -0.5),
+            dividerView.topAnchor.constraint(equalTo: containerStack.topAnchor),
+            dividerView.bottomAnchor.constraint(equalTo: containerStack.bottomAnchor),
+            dividerView.leadingAnchor.constraint(equalTo: editorView.trailingAnchor),
+            dividerView.widthAnchor.constraint(equalToConstant: 1),
+            previewView.topAnchor.constraint(equalTo: containerStack.topAnchor),
+            previewView.leadingAnchor.constraint(equalTo: dividerView.trailingAnchor),
+            previewView.trailingAnchor.constraint(equalTo: containerStack.trailingAnchor),
+            previewView.bottomAnchor.constraint(equalTo: containerStack.bottomAnchor),
+        ]
+        NSLayoutConstraint.activate([
+            // Clear of the overlay scroller on the right edge.
+            appearanceToggle.topAnchor.constraint(equalTo: containerStack.topAnchor, constant: 8),
+            appearanceToggle.trailingAnchor.constraint(equalTo: containerStack.trailingAnchor, constant: -18),
+            appearanceToggle.widthAnchor.constraint(equalToConstant: 28),
+            appearanceToggle.heightAnchor.constraint(equalToConstant: 28),
+            // The alongside toggle sits left of the appearance toggle.
+            sideBySideToggle.centerYAnchor.constraint(equalTo: appearanceToggle.centerYAnchor),
+            sideBySideToggle.trailingAnchor.constraint(equalTo: appearanceToggle.leadingAnchor, constant: -8),
+            sideBySideToggle.widthAnchor.constraint(equalToConstant: 28),
+            sideBySideToggle.heightAnchor.constraint(equalToConstant: 28),
         ])
+        applyLayoutMode()
         previewView.isHidden = true
     }
 
     public var containerView: NSView { containerStack }
 
-    /// Toggles the preview. Returns `false` when the buffer is not markdown.
+    /// Toggles the preview, keeping the current layout mode (cover or side-by-side).
+    /// Returns `false` when the buffer has no preview (not markdown or mermaid).
     @discardableResult
     public func toggle() -> Bool {
-        guard textView?.languageIdentifier == "markdown" else { return false }
+        guard Self.isPreviewableLanguage(textView?.languageIdentifier) else { return false }
         if isPreviewVisible {
             hidePreview()
         } else {
             showPreview()
         }
         return true
+    }
+
+    /// Shows the preview alongside the editor, or hides it when it is already alongside.
+    /// A cover preview switches to alongside without hiding; an alongside preview hides.
+    /// Returns `false` when the buffer has no preview.
+    @discardableResult
+    public func toggleSideBySide() -> Bool {
+        guard Self.isPreviewableLanguage(textView?.languageIdentifier) else { return false }
+        if isPreviewVisible, isSideBySide {
+            hidePreview()
+        } else {
+            setSideBySide(true)
+            if !isPreviewVisible {
+                showPreview()
+            }
+        }
+        return true
+    }
+
+    /// Switches the layout mode. A visible preview reflows at once; a hidden one opens in
+    /// this mode next time. The editor stays editable alongside, but is locked under a cover
+    /// preview, so this also updates selectability while visible.
+    public func setSideBySide(_ sideBySide: Bool) {
+        guard sideBySide != isSideBySide else { return }
+        isSideBySide = sideBySide
+        applyLayoutMode()
+        updateOverlayButtons()
+        if isPreviewVisible, let textView {
+            textView.isSelectable = sideBySide ? editorWasSelectableBeforePreview : false
+            scheduleParse(immediate: true)
+        }
+        onSideBySideChange?(sideBySide)
+    }
+
+    private func applyLayoutMode() {
+        guard editorContainer != nil else { return }
+        // A hidden preview always yields the full frame back to the editor; the mode flag
+        // is kept so showing again restores the split.
+        if isSideBySide && isPreviewVisible {
+            NSLayoutConstraint.deactivate(coverConstraints)
+            NSLayoutConstraint.activate(sideBySideConstraints)
+        } else {
+            NSLayoutConstraint.deactivate(sideBySideConstraints)
+            NSLayoutConstraint.activate(coverConstraints)
+        }
+        dividerView.isHidden = !(isSideBySide && isPreviewVisible)
     }
 
     /// Renders the currently visible preview into PDF data, always in light mode: a white page with
@@ -262,8 +411,16 @@ public final class MarkdownPreviewController: NSObject {
         return previewView.renderedPDFData(document: exported, style: style, raster: raster)
     }
 
+    /// Hides the preview when the buffer moved to a language with no preview (markdown and
+    /// mermaid keep it). Kept under this name for existing hosts; prefer
+    /// ``closeIfNotPreviewable()`` in new code.
     public func closeIfNotMarkdown() {
-        guard textView?.languageIdentifier != "markdown" else { return }
+        closeIfNotPreviewable()
+    }
+
+    /// Hides the preview when the buffer's language has no preview.
+    public func closeIfNotPreviewable() {
+        guard !Self.isPreviewableLanguage(textView?.languageIdentifier) else { return }
         hidePreview()
     }
 
@@ -271,7 +428,7 @@ public final class MarkdownPreviewController: NSObject {
         guard let textView else { return }
         previewView.style = makeStyle(for: textView)
         previewView.usesMetalRendering = textView.isMetalRenderingActive
-        updateAppearanceToggle()
+        updateOverlayButtons()
         scheduleParse(immediate: true)
     }
 
@@ -286,9 +443,21 @@ public final class MarkdownPreviewController: NSObject {
 
     private func showPreview() {
         isPreviewVisible = true
-        // The preview is layered directly on top of the editor in the same frame, but the
-        // editor underneath stays live unless we explicitly disable it here — otherwise its
-        // (invisible) text remains selectable/focusable while the rendered preview covers it.
+        applyLayoutMode()
+        if isSideBySide {
+            // Alongside the editor the buffer stays editable: the preview only reads it.
+            // Remember selectability so hiding still restores it, but do not lock it.
+            if let textView {
+                editorWasSelectableBeforePreview = textView.isSelectable
+            }
+            previewView.isHidden = false
+            refreshStyle()
+            textView?.focusTextInput()
+            return
+        }
+        // The cover preview is layered directly on top of the editor in the same frame, but
+        // the editor underneath stays live unless we explicitly disable it here — otherwise
+        // its (invisible) text remains selectable/focusable while the rendered preview covers it.
         if let textView {
             editorWasSelectableBeforePreview = textView.isSelectable
             editorSelectionBeforePreview = textView.selectedRanges
@@ -308,15 +477,21 @@ public final class MarkdownPreviewController: NSObject {
         revealPending = false
         previewView.cancelReveal()
         previewView.isHidden = true
-        updateAppearanceToggle()
+        // Gives the editor its full frame back: an alongside preview leaves the split
+        // constraints active otherwise. The mode flag is kept for the next show.
+        applyLayoutMode()
+        updateOverlayButtons()
         parseTask?.cancel()
         cancelMermaidWork()
         // Called for every document load too; only a preview that was up changed the editor.
         guard wasVisible, let textView else { return }
-        textView.isSelectable = editorWasSelectableBeforePreview
-        // Hiding the editor dropped its focus and caret session: bring both back where they were.
-        textView.restoreSelectedRanges(editorSelectionBeforePreview)
-        editorSelectionBeforePreview = []
+        if !isSideBySide {
+            textView.isSelectable = editorWasSelectableBeforePreview
+            // Hiding the cover preview dropped the editor's focus and caret session: bring both
+            // back where they were. Alongside never took them, so there is nothing to restore.
+            textView.restoreSelectedRanges(editorSelectionBeforePreview)
+            editorSelectionBeforePreview = []
+        }
         textView.focusTextInput()
     }
 
@@ -326,10 +501,22 @@ public final class MarkdownPreviewController: NSObject {
     }
 
     fileprivate func languageDidChange() {
-        closeIfNotMarkdown()
+        closeIfNotPreviewable()
         if isPreviewVisible {
-            scheduleParse()
+            scheduleParse(immediate: true)
         }
+    }
+
+    /// The preview document for a buffer: markdown parses its prose; a mermaid file is one
+    /// diagram holding the whole buffer, so the play button renders `.mmd`/`.mermaid` files.
+    nonisolated static func documentForPreview(source: String, languageIdentifier: String?, cache: MarkdownPreviewParseCache?) -> MarkdownPreviewDocument {
+        guard languageIdentifier == "mermaid" else {
+            return MarkdownPreviewDocument.parse(source, cache: cache)
+        }
+        guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return MarkdownPreviewDocument(blocks: [])
+        }
+        return MarkdownPreviewDocument(blocks: [MarkdownPreviewBlock(kind: .mermaid(source: source))])
     }
 
     private static func sleepForDebounce(_ nanoseconds: UInt64) async throws {
@@ -354,12 +541,13 @@ public final class MarkdownPreviewController: NSObject {
             }
             guard !Task.isCancelled, let self, self.parseGeneration == generation, let textView = self.textView else { return }
             let source = textView.text
+            let languageIdentifier = textView.languageIdentifier
             let style = self.makeStyle(for: textView)
             let inputs = self.rasterInputs(style: style)
             let cache = self.rasterCache
             let parseCache = self.parseCache
             let parsed = await runDetached(priority: .userInitiated) {
-                let document = MarkdownPreviewDocument.parse(source, cache: parseCache)
+                let document = Self.documentForPreview(source: source, languageIdentifier: languageIdentifier, cache: parseCache)
                 let pass = MarkdownPreviewRasterWorker.resolve(document: document, inputs: inputs, cache: cache)
                 return ParsedPreview(document: document, pass: pass)
             }

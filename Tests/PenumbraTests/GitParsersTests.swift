@@ -71,6 +71,74 @@ final class GitParsersTests: XCTestCase {
         XCTAssertTrue(lines[2].isUncommitted)
     }
 
+    func testBlameReadsMailCommitterOriginalLinePreviousAndBoundary() {
+        let h = String(repeating: "a", count: 40)
+        let p = String(repeating: "b", count: 40)
+        let out = """
+        \(h) 7 1 2
+        author Ann
+        author-mail <ann@example.com>
+        author-time 1700000000
+        author-tz +0000
+        committer Bob
+        committer-mail <bob@example.com>
+        committer-time 1700000100
+        committer-tz +0000
+        summary Rework
+        previous \(p) old name.txt
+        filename new name.txt
+        \tline one
+        \(h) 8 2
+        \tline two
+        \(p) 1 3 1
+        author Cy
+        author-mail <cy@example.com>
+        author-time 1600000000
+        committer Cy
+        committer-time 1600000000
+        summary Start
+        boundary
+        filename old name.txt
+        \tline three
+        \(h) 1 4 1
+        filename new name.txt
+        \tline four
+
+        """
+        let lines = GitBlameParser.parse(out)
+        XCTAssertEqual(lines.count, 4)
+        XCTAssertEqual(lines[0].authorEmail, "ann@example.com")
+        XCTAssertEqual(lines[0].committer, "Bob")
+        XCTAssertEqual(lines[0].committerDate, Date(timeIntervalSince1970: 1_700_000_100))
+        XCTAssertEqual(lines[0].date, Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertEqual(lines[0].originalLine, 7)
+        XCTAssertEqual(lines[0].originalPath, "new name.txt")
+        XCTAssertEqual(lines[0].previous, GitBlamePrevious(hash: p, path: "old name.txt"))
+        XCTAssertFalse(lines[0].isBoundary)
+        // The second line of a group has no filename of its own: it keeps the group's.
+        XCTAssertEqual(lines[1].originalLine, 8)
+        XCTAssertEqual(lines[1].originalPath, "new name.txt")
+        XCTAssertEqual(lines[1].previous, lines[0].previous)
+        XCTAssertTrue(lines[2].isBoundary)
+        XCTAssertNil(lines[2].previous)
+        XCTAssertEqual(lines[2].originalPath, "old name.txt")
+        // A later group of a commit seen before reuses its cached details and reads its own path.
+        XCTAssertEqual(lines[3].author, "Ann")
+        XCTAssertEqual(lines[3].originalLine, 1)
+        XCTAssertEqual(lines[3].originalPath, "new name.txt")
+        XCTAssertEqual(lines[3].previous, lines[0].previous)
+    }
+
+    func testBlameOptionsBecomeFlagsAndRefuseNonHexRevisions() {
+        XCTAssertEqual(GitBlameOptions.default.arguments(), [])
+        let hash = String(repeating: "c", count: 40)
+        let options = GitBlameOptions(ignoreWhitespace: true, detectMovesWithinFile: true,
+                                      detectMovesAcrossFiles: true, ignoredRevisions: [hash, hash, "abcd1234"])
+        XCTAssertEqual(options.arguments(), ["-w", "-M", "-C", "--ignore-rev", hash, "--ignore-rev", "abcd1234"])
+        XCTAssertNil(GitBlameOptions(ignoredRevisions: ["--contents"]).arguments())
+        XCTAssertNil(GitBlameOptions(ignoredRevisions: ["HEAD"]).arguments())
+    }
+
     // MARK: - Progress
 
     func testProgressLineWithAPercentage() {

@@ -121,7 +121,8 @@ struct IDESourceControlPanel: View {
         HStack(spacing: IDEAppearance.Spacing.sm) {
             Image(systemName: "text.line.first.and.arrowtriangle.forward")
                 .foregroundStyle(IDEAppearance.ColorToken.muted)
-            Text("History of lines \(history.startLine)–\(history.endLine) of \((history.path as NSString).lastPathComponent)")
+            Text(history.title.map { "History of \($0) in \((history.path as NSString).lastPathComponent)" }
+                 ?? "History of lines \(history.startLine)–\(history.endLine) of \((history.path as NSString).lastPathComponent)")
                 .lineLimit(1)
                 .truncationMode(.middle)
             Button {

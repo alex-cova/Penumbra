@@ -8,11 +8,13 @@ public struct GradleCommandResult: Sendable {
     public let exitCode: Int32
     public let stdout: String
     public let stderr: String
+    public let streamedDiagnostics: GradleProblemMatcher.StreamedDiagnostics?
 
-    public init(exitCode: Int32, stdout: String, stderr: String) {
+    public init(exitCode: Int32, stdout: String, stderr: String, streamedDiagnostics: GradleProblemMatcher.StreamedDiagnostics? = nil) {
         self.exitCode = exitCode
         self.stdout = stdout
         self.stderr = stderr
+        self.streamedDiagnostics = streamedDiagnostics
     }
 }
 
@@ -58,11 +60,16 @@ public struct GradleCommand: Sendable {
     public let currentDirectory: URL
     public let environment: [String: String]
 
-    public init(executable: URL, arguments: [String], currentDirectory: URL, environment: [String: String]) {
+    public let log: GradleSessionLog?
+    public let capturesModelDiagnostics: Bool
+
+    public init(executable: URL, arguments: [String], currentDirectory: URL, environment: [String: String], log: GradleSessionLog? = nil, capturesModelDiagnostics: Bool = false) {
         self.executable = executable
         self.arguments = arguments
         self.currentDirectory = currentDirectory
         self.environment = environment
+        self.log = log
+        self.capturesModelDiagnostics = capturesModelDiagnostics
     }
 }
 
@@ -143,28 +150,67 @@ public actor GradleCommandRunner {
         arguments: [String] = [],
         javaHome: URL?,
         timeout: Duration = .seconds(120),
-        output: GradleOutputHandler? = nil
+        output: GradleOutputHandler? = nil,
+        log: GradleSessionLog? = nil,
+        capturesModelDiagnostics: Bool = false,
+        environmentOverrides: [String: String] = [:],
+        instrumentationArguments: [String] = [],
+        snapshotDirectory: URL? = nil,
+        canReplay: Bool = true,
+        replay: GradleLaunchSnapshot? = nil,
+        workingDirectory: URL? = nil,
+        beforeLaunch: [JavaRunConfiguration.BeforeLaunchTask] = [],
+        instrumentation: JavaRunInstrumentation = .none
     ) async throws -> GradleCommandResult {
         guard trustStore.isTrusted(projectDirectory) else {
             throw GradleCommandError.untrusted(projectDirectory)
         }
-        guard let (executable, leadingArguments) = resolver.resolve(projectDirectory: projectDirectory) else {
+        try replay?.validate(root: projectDirectory)
+        let resolved = replay.map { ($0.executable, $0.leadingArguments) } ?? resolver.resolve(projectDirectory: projectDirectory)
+        guard let (executable, leadingArguments) = resolved else {
             throw GradleCommandError.executableNotFound
         }
 
-        var environment = ProcessInfo.processInfo.environment
+        var environment = replay?.environment ?? ProcessInfo.processInfo.environment.merging(environmentOverrides) { _, override in override }
+        let javaHome = replay?.javaHome ?? javaHome
         if let javaHome {
             environment["JAVA_HOME"] = javaHome.path
+        }
+
+        let directory = replay?.workingDirectory ?? workingDirectory ?? projectDirectory
+        func saveLaunch(in folder: URL) {
+            do {
+                try GradleLaunchSnapshot(
+                    executable: executable, leadingArguments: leadingArguments, root: projectDirectory, tasks: tasks,
+                    arguments: arguments, environment: environment, javaHome: javaHome, canReplay: canReplay,
+                    workingDirectory: directory, beforeLaunch: beforeLaunch, instrumentation: instrumentation
+                ).save(to: folder)
+            } catch {
+                try? Data(error.localizedDescription.utf8).write(
+                    to: folder.appendingPathComponent("replay-unavailable.txt"), options: .atomic)
+            }
+        }
+        if let snapshotDirectory { saveLaunch(in: snapshotDirectory) }
+        defer {
+            if let snapshotDirectory,
+               !FileManager.default.fileExists(atPath: snapshotDirectory.appendingPathComponent("launch.sealed").path),
+               !Task.isCancelled {
+                // The first invocation can provision the distribution before the client exits.
+                saveLaunch(in: snapshotDirectory)
+            }
         }
 
         // Tasks before the arguments: task options (`--tests`, `--debug-jvm`, `--args`) apply to
         // the task named just before them, and Gradle rejects them ahead of every task name.
         let command = GradleCommand(
             executable: executable,
-            arguments: leadingArguments + ["--console=plain"] + tasks + arguments,
-            currentDirectory: projectDirectory,
-            environment: environment
+            arguments: leadingArguments + ["--console=plain"] + instrumentationArguments + tasks + arguments,
+            currentDirectory: directory,
+            environment: environment,
+            log: log,
+            capturesModelDiagnostics: capturesModelDiagnostics
         )
+        try Task.checkCancellation()
         return try await launcher.launch(command, timeout: timeout, output: output)
     }
 }
@@ -198,23 +244,42 @@ public struct SystemGradleProcessLauncher: GradleProcessLaunching {
         request.timeout = timeout
         request.terminationGrace = .seconds(5)
 
-        let splitter = GradleOutputLineSplitter(handler: output)
+        let diagnostics = command.log.map { _ in GradleProblemMatcher.StreamingMatcher() }
+        let handler: GradleOutputHandler? = if let diagnostics {
+            { line in
+                diagnostics.append(line)
+                output?(line)
+            }
+        } else { output }
+        let splitter = GradleOutputLineSplitter(handler: handler)
         let result: SubprocessResult
         do {
-            // Gradle's output can easily exceed a pipe's kernel buffer; SubprocessKit drains both
-            // pipes continuously, and hands each chunk to the line splitter as it arrives.
-            result = try await SubprocessRunner.run(request) { data, source in
-                splitter.append(data, stream: source == .stdout ? .stdout : .stderr)
+            if let log = command.log {
+                let capture: OutputCapture = command.capturesModelDiagnostics ? .bounded(head: 64 * 1024, tail: 64 * 1024) : .discard
+                result = try await SubprocessRunner.runStreaming(request, capture: capture) { data, source in
+                    let stream: GradleOutputLine.Stream = source == .stdout ? .stdout : .stderr
+                    try log.append(data, stream: stream)
+                    splitter.append(data, stream: stream)
+                }
+            } else {
+                result = try await SubprocessRunner.run(request) { data, source in
+                    splitter.append(data, stream: source == .stdout ? .stdout : .stderr)
+                }
             }
+        } catch let error as GradleSessionLog.WriteFailure {
+            throw error
         } catch {
             throw GradleCommandError.executableNotFound
         }
         splitter.flush()
 
+        let collected = diagnostics?.finish()
         let partial = GradleCommandResult(
             exitCode: result.exit.status,
-            stdout: String(data: result.stdout.data, encoding: .utf8) ?? "",
-            stderr: String(data: result.stderr.data, encoding: .utf8) ?? "")
+            stdout: command.capturesModelDiagnostics ? result.stdout.text
+                : collected?.coverageLines ?? String(decoding: result.stdout.data, as: UTF8.self),
+            stderr: command.capturesModelDiagnostics ? result.stderr.text : String(decoding: result.stderr.data, as: UTF8.self),
+            streamedDiagnostics: collected)
         if result.timedOut { throw GradleCommandError.timedOut(partial: partial) }
         if result.cancelled { throw GradleCommandError.cancelled(partial: partial) }
         return partial
@@ -275,12 +340,27 @@ final class GradleOutputLineSplitter: @unchecked Sendable {
     /// line in place for the next call. Must be called with `lock` held.
     private static func extractLines(from buffer: inout Data) -> [String] {
         var lines: [String] = []
-        while let newlineIndex = buffer.firstIndex(of: 0x0A) {
-            var lineData = buffer[buffer.startIndex..<newlineIndex]
-            if lineData.last == 0x0D { lineData = lineData.dropLast() }
-            lines.append(String(decoding: lineData, as: UTF8.self))
-            buffer.removeSubrange(buffer.startIndex...newlineIndex)
+        let limit = 16 * 1024
+        var start = buffer.startIndex
+        while start < buffer.endIndex {
+            let end = min(start + limit, buffer.endIndex)
+            if let boundary = buffer[start..<end].firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
+                // Keep a final CR until the next chunk so a split CRLF is emitted once.
+                if buffer[boundary] == 0x0D, boundary + 1 == buffer.endIndex { break }
+                lines.append(String(decoding: buffer[start..<boundary], as: UTF8.self))
+                start = boundary + 1
+                if buffer[boundary] == 0x0D, start < buffer.endIndex, buffer[start] == 0x0A { start += 1 }
+            } else if end < buffer.endIndex {
+                var split = end
+                while split > start, buffer[split] & 0xC0 == 0x80 { split -= 1 }
+                if split == start { split = end }
+                lines.append(String(decoding: buffer[start..<split], as: UTF8.self))
+                start = split
+            } else {
+                break
+            }
         }
+        if start > buffer.startIndex { buffer.removeSubrange(buffer.startIndex..<start) }
         return lines
     }
 

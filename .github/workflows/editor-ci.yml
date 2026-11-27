@@ -57,6 +57,10 @@ jobs:
       - name: Test user-state guard
         run: Scripts/tests/ci-user-state-guard-test.sh
 
+      # Tests that need the database containers must never run here.
+      - name: Check live database tests stay off CI
+        run: Scripts/tests/refuse-live-database-test.sh
+
       - name: Check for legacy iOS carryover
         run: bash Scripts/check-ios-carryover.sh
 

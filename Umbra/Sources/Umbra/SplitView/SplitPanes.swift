@@ -43,11 +43,13 @@ struct SplitPanes<Primary: View, Secondary: View, Divider: SplitDivider>: View {
     /// divider in the same place. Hosts that persist sizes in points (Umbra's `IDESessionStore`)
     /// save from here instead of using `storageKey`. Mid-drag positions are not reported.
     var onResize: ((_ primary: CGFloat, _ secondary: CGFloat) -> Void)?
-    /// Collapses `.primary` or `.secondary` to zero width/height without unmounting either pane
-    /// — unlike conditionally omitting `SplitPanes` itself at the call site (or swapping one
-    /// pane's content for `EmptyView()`), which changes the generic view-tree shape and tears
-    /// down *both* panes, including anything stateful like a hosted `NSViewRepresentable`. `nil`
-    /// shows both.
+    /// Collapses `.primary` or `.secondary` to zero width/height while the split itself stays: unlike
+    /// conditionally omitting `SplitPanes` at the call site (or swapping one pane's content for
+    /// `EmptyView()`), which changes the generic view-tree shape and tears down *both* panes,
+    /// including anything stateful like a hosted `NSViewRepresentable`, the other side keeps its
+    /// view. The hidden side's own view is not in the tree while it is hidden (`Split` leaves it
+    /// out), so what it holds is rebuilt when it shows again, and it gets a removal transition
+    /// when it hides. `nil` shows both. With `animatesFraction` the change is animated.
     var hiddenSide: SplitSide?
     /// Animate changes to the divider fraction not made by dragging (a split opening,
     /// closing or re-spreading). Dragging itself is never animated: `Split` only
@@ -107,11 +109,14 @@ struct SplitPanes<Primary: View, Secondary: View, Divider: SplitDivider>: View {
         self.primary = primary
         self.secondary = secondary
         self.divider = divider
+        let holder: FractionHolder
         if let storageKey {
-            _fraction = State(initialValue: .usingUserDefaults(defaultFraction, key: storageKey))
+            holder = .usingUserDefaults(defaultFraction, key: storageKey)
         } else {
-            _fraction = State(initialValue: FractionHolder(defaultFraction))
+            holder = FractionHolder(defaultFraction)
         }
+        holder.animatesChanges = animatesFraction
+        _fraction = State(initialValue: holder)
         _hideHolder = State(initialValue: SideHolder(hiddenSide))
     }
 
@@ -119,31 +124,31 @@ struct SplitPanes<Primary: View, Secondary: View, Divider: SplitDivider>: View {
         GeometryReader { geo in
             let length = axis == .horizontal ? geo.size.width : geo.size.height
             let bounds = fractions(in: length)
-            Group {
-                switch axis {
-                case .horizontal:
-                    HSplit(left: primary, right: secondary)
-                        .splitter { resettableDivider }
-                        .fraction(fraction)
-                        .constraints(minPFraction: bounds.primary, minSFraction: bounds.secondary, priority: priority)
-                        .hide(hideHolder)
-                case .vertical:
-                    VSplit(top: primary, bottom: secondary)
-                        .splitter { resettableDivider }
-                        .fraction(fraction)
-                        .constraints(minPFraction: bounds.primary, minSFraction: bounds.secondary, priority: priority)
-                        .hide(hideHolder)
-                }
-            }
-            .ideAnimation(animatesFraction ? IDEAppearance.Motion.pane : nil, value: fraction.value)
-            .frame(width: geo.size.width, height: geo.size.height)
-            // Umbra: synchronous, so the opening width is resolved before the first frame is
-            // drawn instead of flashing the panes at `defaultFraction` (upstream used `task`).
-            .onChange(of: length, initial: true) { _, length in applyBounds(in: length) }
-            .onChange(of: fraction.value) { _, value in reportResize(fraction: value, length: length) }
+            // One `Split` for both axes, its direction a holder rebuilt with each body like
+            // `HSplit`/`VSplit` do: an axis that changes (a one-pane chain split downward instead
+            // of to the right) keeps the panes mounted instead of swapping one view type for the
+            // other and rebuilding both.
+            Split(primary: primary, secondary: secondary)
+                .layout(LayoutHolder(axis))
+                .splitter { resettableDivider }
+                .fraction(fraction)
+                .constraints(minPFraction: bounds.primary, minSFraction: bounds.secondary, priority: priority)
+                .hide(hideHolder)
+                .ideAnimation(animatesFraction ? IDEAppearance.Motion.pane : nil, value: fraction.value)
+                .frame(width: geo.size.width, height: geo.size.height)
+                // Umbra: synchronous, so the opening width is resolved before the first frame is
+                // drawn instead of flashing the panes at `defaultFraction` (upstream used `task`).
+                .onChange(of: length, initial: true) { _, length in applyBounds(in: length) }
+                .onChange(of: fraction.value) { _, value in reportResize(fraction: value, length: length) }
         }
         .onChange(of: hiddenSide) { _, newValue in
-            hideHolder.side = newValue
+            // Showing or hiding a side is a change of layout like the fraction's: animated when
+            // the caller animates its divider, so a pane that opens beside a lone one grows in.
+            if animatesFraction {
+                IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { hideHolder.side = newValue }
+            } else {
+                hideHolder.side = newValue
+            }
         }
         .onChange(of: defaultFraction) { _, newValue in
             // A split positioned only by `defaultFraction` follows it, so a caller can

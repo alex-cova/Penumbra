@@ -136,6 +136,24 @@ final class IDEOpenDocumentDiskSync {
         states[path] = nil
     }
 
+    /// A restored tab whose file was already gone before Umbra opened it: no watcher event will
+    /// ever arrive for it, and its baseline reads as missing too, so ``judge(_:)`` stays silent.
+    /// Raises the same deleted-on-disk banner (or the notification under `never`) as a file
+    /// deleted while open. Dirty and clean tabs both qualify; the banner's actions fit either.
+    func noteRestoredMissing(path: String) {
+        if entries[path] == nil {
+            entries[path] = Entry()
+            refreshBaseline(path)
+        }
+        guard states[path] != .deletedOnDisk else { return }
+        if policy() == .never {
+            notify(path, true)
+            entries[path]?.baseline = nil
+        } else {
+            states[path] = .deletedOnDisk
+        }
+    }
+
     // MARK: Changes
 
     /// A batch of paths the watcher reported. Only open files are looked at.

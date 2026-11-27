@@ -153,6 +153,48 @@ final class ExternalFileChangesTests: XCTestCase {
         XCTAssertEqual(state(document), .none)
     }
 
+    // MARK: restored missing files
+
+    /// A file-backed placeholder restores with empty text; when its file is gone, the tab shows
+    /// the deleted-on-disk banner instead of a silent empty editor.
+    private func restorePlaceholder(missing name: String, dirty: Bool) -> WorkbenchDocument {
+        let url = directory.appendingPathComponent(name)
+        let document = WorkbenchDocument(url: url, displayName: name, text: "", isDirty: dirty)
+        document.isFileBacked = true
+        workspace.workbench.openDocument(document)
+        return document
+    }
+
+    func testARestoredCleanFileMissingOnDiskGetsTheBanner() {
+        let document = restorePlaceholder(missing: "gone-clean.txt", dirty: false)
+        workspace.refreshPresentation()
+        workspace.markRestoredMissingFiles()
+
+        XCTAssertEqual(state(document), .deletedOnDisk)
+        XCTAssertTrue(workspace.workbench.allDocuments().contains { $0 === document })
+    }
+
+    func testARestoredDirtyFileMissingOnDiskGetsTheBanner() {
+        let document = restorePlaceholder(missing: "gone-dirty.txt", dirty: true)
+        workspace.refreshPresentation()
+        workspace.markRestoredMissingFiles()
+
+        XCTAssertEqual(state(document), .deletedOnDisk)
+        XCTAssertTrue(document.isDirty)
+        XCTAssertTrue(workspace.workbench.allDocuments().contains { $0 === document })
+    }
+
+    func testARestoredFileThatStillExistsGetsNoBanner() throws {
+        let url = try write("stays.txt", "here\n")
+        let document = WorkbenchDocument(url: url, displayName: "stays.txt", text: "")
+        document.isFileBacked = true
+        workspace.workbench.openDocument(document)
+        workspace.refreshPresentation()
+        workspace.markRestoredMissingFiles()
+
+        XCTAssertEqual(state(document), .none)
+    }
+
     // MARK: prompt and never
 
     func testPromptAsksEvenForACleanTab() async throws {

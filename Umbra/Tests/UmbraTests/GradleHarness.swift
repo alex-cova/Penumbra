@@ -32,6 +32,7 @@ final class GradleHarness {
         let tasks: [String]
         let root: URL
         let exitCode: Int32
+        let session: UUID?
     }
 
     private let gradle: IDEGradleProjectSystem
@@ -98,7 +99,7 @@ final class GradleHarness {
             }
         }]
         gradle.environment.tasksFinished = { [weak self] report in
-            self?.finishedTasks.append(FinishedTasks(tasks: report.tasks, root: report.root, exitCode: report.exitCode))
+            self?.finishedTasks.append(FinishedTasks(tasks: report.tasks, root: report.root, exitCode: report.exitCode, session: report.testSessionID))
         }
     }
 
@@ -133,9 +134,11 @@ final class GradleHarness {
         gradle.dismissConfigurationChanges()
     }
 
-    func runTasks(_ tasks: [String]) async -> RunOutcome {
+    func runTasks(
+        _ tasks: [String], arguments: [String] = [], test: IDEGradleProjectSystem.TestExecution? = nil
+    ) async -> RunOutcome {
         await withCheckedContinuation { continuation in
-            gradle.runGradleTasks(tasks) { outcome in
+            gradle.runGradleTasks(tasks, extraArguments: arguments, test: test) { outcome in
                 switch outcome {
                 case .finished(let result): continuation.resume(returning: .finished(exitCode: result.exitCode))
                 case .timedOut: continuation.resume(returning: .timedOut)
@@ -175,7 +178,18 @@ final class GradleHarness {
     var modelModuleCount: Int? { gradle.model?.subprojects.count }
     var sourceRootPaths: Set<String> { gradle.sourceRootPaths }
     var moduleGraphComponentCount: Int? { gradle.moduleDependencyGraph?.components.count }
-    var consoleText: String { gradle.console.lines.map(\.text).joined(separator: "\n") }
+    var consoleText: String {
+        let console = gradle.console
+        var lines = console.lines.map(\.text)
+        if let log = console.sessionLog {
+            let end = log.snapshot.bytes
+            let start = end > 256 * 1024 ? end - 256 * 1024 : 0
+            if let chunks = try? log.read(start..<end) {
+                lines += chunks.map { String(decoding: $0.1, as: UTF8.self) }
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
     /// The window's background status line; the loading toast shows while this is non-nil.
     var statusMessage: String? { status.message }
 }

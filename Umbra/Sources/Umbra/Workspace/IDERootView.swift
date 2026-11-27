@@ -114,9 +114,10 @@ public struct IDERootView: View {
                             // A folder alone is not a document. The workbench always has an empty
                             // pane, so showing it here paints a text editor with no tab and no text.
                             if workspace.hasOpenDocuments {
-                                IDEEditorLayoutNode(layout: workspace.editorLayout)
-                                    .id(workspace.layoutEpoch)
+                                IDEEditorLayoutNode(layout: workspace.editorLayout, epoch: workspace.layoutEpoch, isRoot: true)
                                     .coordinateSpace(name: IDEEditorTabsBar.panesSpace)
+                                    // The tab being dragged, over the panes it can be dropped on.
+                                    .overlay(alignment: .topLeading) { IDETabDragGhostLayer() }
                             } else {
                                 // The welcome page, or in a project the quieter empty editor.
                                 IDENoDocumentView()
@@ -361,18 +362,7 @@ public struct IDERootView: View {
                 .environment(workspace)
                 .preferredColorScheme(IDEAppearance.preferredColorScheme)
         }
-        .sheet(item: Binding(
-            get: { workspace.databaseSupport.editor },
-            set: { workspace.databaseSupport.editor = $0 }
-        )) { editor in
-            IDEDatabaseConnectionSheet(
-                editor: editor,
-                support: workspace.databaseSupport,
-                onCancel: { workspace.databaseSupport.editor = nil }
-            )
-            .environment(workspace)
-            .preferredColorScheme(IDEAppearance.preferredColorScheme)
-        }
+        .modifier(IDEDatabaseWindowSheets(workspace: workspace))
         .environment(\.colorScheme, IDEAppearance.preferredColorScheme)
         .preferredColorScheme(IDEAppearance.preferredColorScheme)
         .onReceive(NotificationCenter.default.publisher(for: IDEAppearance.didChangeNotification)) { _ in
@@ -858,6 +848,10 @@ final class IDEWindowCloseGuard: NSObject, NSWindowDelegate {
     private var hasConfirmedClose = false
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if let workspace, let message = workspace.databaseSupport.closeBlocker {
+            workspace.notifyDatabaseCloseBlocker(message)
+            return false
+        }
         if !hasConfirmedClose, let workspace, workspace.hasUnsavedDocuments {
             // Saving is asynchronous: refuse now, and close again when the editors are on disk.
             Task { @MainActor [weak self, weak sender] in

@@ -116,7 +116,7 @@ enum IDEGradleTree {
             IDEGradleTreeNode(
                 id: "group::\(subproject.path)/\(group.name)",
                 kind: .taskGroup,
-                title: group.name,
+                title: group.displayName,
                 detail: "\(group.tasks.count)",
                 children: group.tasks.map { task in
                     IDEGradleTreeNode(
@@ -150,7 +150,7 @@ enum IDEGradleTree {
                         title: item,
                         help: item
                     )
-                }
+                }.sorted(by: titlePrecedes)
             ))
         }
 
@@ -180,7 +180,7 @@ enum IDEGradleTree {
                 kind: .configuration(sourceSet: sourceSet.name),
                 title: configurationName(for: sourceSet.name),
                 detail: "\(items.count)",
-                children: items
+                children: items.sorted(by: titlePrecedes)
             ))
         }
 
@@ -189,8 +189,12 @@ enum IDEGradleTree {
             id: "deps::\(subproject.path)",
             kind: .dependencies,
             title: "Dependencies",
-            children: children
+            children: children.sorted(by: titlePrecedes)
         )
+    }
+
+    private static func titlePrecedes(_ lhs: IDEGradleTreeNode, _ rhs: IDEGradleTreeNode) -> Bool {
+        lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
 
     private static func sourceSetsNode(for subproject: JavaGradleProjectModel.Subproject) -> IDEGradleTreeNode? {

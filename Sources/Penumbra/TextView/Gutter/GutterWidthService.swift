@@ -108,14 +108,17 @@ final class GutterWidthService {
             }
         }
     }
-    /// Width of the digits, limited so the whole gutter stays within ``maximumGutterWidth``.
+    /// Width of the digits, limited so the gutter, not counting the annotation column, stays within
+    /// ``maximumGutterWidth``. The annotation column is the host's text (blame: a date and an author)
+    /// and sits beside the line numbers rather than competing with them: counting it left no room
+    /// for any digit once it was wider than the cap.
     var lineNumberWidth: CGFloat {
         guard showLineNumbers else { return measuredLineNumberWidth }
         let others = otherColumnsWidth + gutterLeadingPadding + gutterTrailingPadding
         return min(measuredLineNumberWidth, max(0, Self.maximumGutterWidth - others))
     }
     private var otherColumnsWidth: CGFloat {
-        var width: CGFloat = annotationColumnWidth + changeStripeWidth + lineMarkerColumnWidth
+        var width: CGFloat = changeStripeWidth + lineMarkerColumnWidth
         if showGutterDecorations { width += gutterDecorationColumnWidth }
         if showFoldingRibbon { width += foldingRibbonWidth }
         return width
@@ -136,8 +139,8 @@ final class GutterWidthService {
             return lineNumberWidth
         }
     }
-    /// Upper bound for the whole gutter. The line-number column gives way to the other columns
-    /// (decorations, annotations, change stripe, markers, ribbon), so digits that do not fit are clipped.
+    /// Upper bound for the gutter without its annotation column. The line-number column gives way to
+    /// the other columns (decorations, change stripe, markers, ribbon), so digits that do not fit are clipped.
     static let maximumGutterWidth: CGFloat = 70
     let didUpdateGutterWidth = PassthroughSubject<Void, Never>()
 

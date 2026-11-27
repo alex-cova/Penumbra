@@ -198,6 +198,8 @@ struct IDEGitLineHistory: Equatable {
     var selectedHash: String?
     /// False until this range's log has applied, including an empty result.
     var hasLoaded = false
+    /// What the range is, when it is a declaration ("method put(String, int)"), for the panel's heading.
+    var title: String?
 }
 
 struct IDEGitStashRequest: Identifiable {

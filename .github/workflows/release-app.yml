@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -25,6 +26,7 @@ jobs:
 
       # Xcode 27's default metal is a stub; MLX's shaders need the separate Metal toolchain (see editor-ci.yml).
       - name: Install Metal toolchain
+        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           xcodebuild -downloadComponent MetalToolchain
@@ -40,6 +42,7 @@ jobs:
       # Hand-made tags once shipped Umbra-1.6.8-macOS.zip as 1.6.9/1.6.10, which generate_appcast then
       # treated as a duplicate version. A release tag must match VERSION.
       - name: Verify VERSION matches tag
+        if: github.event_name == 'push'
         run: |
           VERSION="$(tr -d '[:space:]' < VERSION)"
           if [[ "$VERSION" != "$GITHUB_REF_NAME" ]]; then
@@ -48,6 +51,7 @@ jobs:
           fi
 
       - name: Import code signing certificate
+        if: github.event_name == 'push'
         env:
           APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -65,6 +69,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
       - name: Build, sign, and notarize
+        if: github.event_name == 'push'
         env:
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -75,6 +80,7 @@ jobs:
           ./Scripts/build-app.sh
 
       - name: Create GitHub Release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -85,6 +91,16 @@ jobs:
             --notes "macOS editor release. Download \`Umbra-${VERSION}-macOS.zip\`, unzip, and open Umbra.app." \
             "dist/Umbra-${VERSION}-macOS.zip"
 
+      - name: Download the published release for appcast recovery
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          gh release download "$VERSION" --pattern "Umbra-${VERSION}-macOS.zip" --dir dist
+          swift package --package-path Umbra --force-resolved-versions resolve
+
       - name: Update Sparkle appcast
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -92,48 +108,61 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(tr -d '[:space:]' < VERSION)"
-          TAG="${GITHUB_REF_NAME}"
-          SCRATCH="$RUNNER_TEMP/umbra-updates"
-          mkdir -p "$SCRATCH" website/updates
+          SCRATCH="$(mktemp -d "$RUNNER_TEMP/umbra-updates.XXXXXX")"
+          trap 'rm -rf "$SCRATCH"' EXIT
+          UPDATES="$SCRATCH/updates"
+          mkdir "$UPDATES"
 
           # Sparkle only needs the latest release. generate_appcast applies --download-url-prefix to every
           # item it sees, so carrying older zips or the old appcast would rewrite their URLs to this tag.
-          cp "dist/Umbra-${VERSION}-macOS.zip" "$SCRATCH/"
+          cp "dist/Umbra-${VERSION}-macOS.zip" "$UPDATES/"
 
-          GENERATE_APPCAST="$(find Umbra/.build/artifacts/sparkle/Sparkle/bin -name generate_appcast -print -quit)"
-          if [[ -z "$GENERATE_APPCAST" ]]; then
-            echo "error: generate_appcast not found after build" >&2
+          GENERATE_APPCAST="Umbra/.build/artifacts/sparkle/Sparkle/bin/generate_appcast"
+          if [[ ! -x "$GENERATE_APPCAST" ]]; then
+            echo "error: Sparkle's generate_appcast is unavailable at $GENERATE_APPCAST" >&2
             exit 1
           fi
           if [[ -z "${SPARKLE_ED_PRIVATE_KEY:-}" ]]; then
             echo "error: SPARKLE_ED_PRIVATE_KEY secret is not configured" >&2
             exit 1
           fi
-          ED_KEY="$RUNNER_TEMP/sparkle-ed.key"
+          ED_KEY="$SCRATCH/sparkle-ed.key"
           printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$ED_KEY"
           chmod 600 "$ED_KEY"
 
           "$GENERATE_APPCAST" \
             --ed-key-file "$ED_KEY" \
-            --download-url-prefix "https://github.com/alex-cova/Penumbra/releases/download/${TAG}/" \
+            --download-url-prefix "https://github.com/alex-cova/Penumbra/releases/download/${VERSION}/" \
             --link "https://alex-cova.github.io/Penumbra/appcast.xml" \
-            "$SCRATCH"
-
-          git fetch origin main
-          git checkout main
-          git pull --ff-only origin main
-
-          cp "$SCRATCH/appcast.xml" website/appcast.xml
+            "$UPDATES"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add website/appcast.xml website/updates/
-          if git diff --staged --quiet; then
-            echo "No appcast changes to commit."
-            exit 0
-          fi
-          git commit -m "Update Sparkle appcast for ${TAG}."
-          git push origin main
+          for attempt in 1 2 3 4; do
+            git fetch origin main
+            git checkout --detach FETCH_HEAD
+
+            CURRENT_VERSION="$(xmllint --xpath 'string(/rss/channel/item[1]/*[local-name()="version"])' website/appcast.xml)"
+            if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
+              echo "Appcast already contains $VERSION."
+              break
+            fi
+            if [[ "$(printf '%s\n' "$CURRENT_VERSION" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]]; then
+              echo "Appcast already contains a newer release ($CURRENT_VERSION)."
+              exit 0
+            fi
+
+            cp "$UPDATES/appcast.xml" website/appcast.xml
+            git add website/appcast.xml
+            git commit -m "Update Sparkle appcast for ${VERSION}."
+            if git push origin HEAD:refs/heads/main; then
+              break
+            fi
+            if [[ "$attempt" == 4 ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 15))"
+          done
 
           # Pushes made with GITHUB_TOKEN do not trigger other workflows, so deploy Pages explicitly;
           # otherwise the published appcast never changes and Sparkle reports "newest version".

@@ -26,6 +26,46 @@ public enum SubprocessRunner {
         }
     }
 
+    /// Sends bytes directly to a synchronous sink on the pipe queue. A sink failure terminates
+    /// the child and is returned after the termination and pipe drain have completed.
+    public static func runStreaming(
+        _ request: SubprocessRequest,
+        capture: OutputCapture = .discard,
+        consume: @escaping @Sendable (Data, SubprocessOutputSource) throws -> Void
+    ) async throws -> SubprocessResult {
+        let box = CancellableJob()
+        let failure = StreamFailure()
+        var request = request
+        request.stdoutCapture = capture
+        request.stderrCapture = capture
+        let streamingRequest = request
+        let result: SubprocessResult = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                do {
+                    let job = try SubprocessJob.launch(streamingRequest, onOutput: { data, stream in
+                        guard failure.error == nil else { return }
+                        do {
+                            try consume(data, stream)
+                        } catch {
+                            failure.record(error)
+                            box.cancel()
+                        }
+                    }) { result in
+                        box.complete()
+                        continuation.resume(returning: result)
+                    }
+                    box.set(job)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        } onCancel: {
+            box.cancel()
+        }
+        if let error = failure.error { throw error }
+        return result
+    }
+
     /// Starts `request` and returns at once with a handle to write to it, stop it, and wait for its
     /// result. Use it with `standardInput: .interactive`; otherwise it is `run` without the wait.
     ///
@@ -61,13 +101,21 @@ private final class CancellableJob: @unchecked Sendable {
     private let lock = NSLock()
     private var job: SubprocessJob?
     private var cancelled = false
+    private var completed = false
 
     func set(_ job: SubprocessJob) {
         lock.lock()
-        self.job = job
+        if !completed { self.job = job }
         let cancelNow = cancelled
         lock.unlock()
         if cancelNow { job.cancel() }
+    }
+
+    func complete() {
+        lock.withLock {
+            completed = true
+            job = nil
+        }
     }
 
     func cancel() {
@@ -76,6 +124,17 @@ private final class CancellableJob: @unchecked Sendable {
         let job = job
         lock.unlock()
         job?.cancel()
+    }
+}
+
+private final class StreamFailure: @unchecked Sendable {
+    private let lock = NSLock()
+    private var failure: (any Error)?
+
+    var error: (any Error)? { lock.withLock { failure } }
+
+    func record(_ error: any Error) {
+        lock.withLock { failure = error }
     }
 }
 

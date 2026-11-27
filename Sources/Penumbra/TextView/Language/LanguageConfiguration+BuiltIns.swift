@@ -111,6 +111,21 @@ public extension LanguageConfiguration {
         "repeat_while_statement", "catch_block"
     ]))
 
+    /// Markdown. Behaves like ``generic`` except that the `#`, `##` and `###` sections pin their
+    /// heading line while the section scrolls by (sticky lines). Deeper ATX levels are not pinned,
+    /// and neither are setext headings: tree-sitter-markdown nests `section` nodes only for ATX
+    /// headings, a setext heading opens a flat section that holds every later one as a sibling, so
+    /// the tree carries no extent or level for them. Node names follow tree-sitter-markdown.
+    static let markdown = LanguageConfiguration(
+        declarations: LanguageConfiguration.generic.declarations,
+        stickyNodeTypes: [],
+        stickySection: StickySectionRule(
+            sectionNodeType: "section",
+            headingNodeTypes: ["atx_heading"],
+            markerNodeTypes: ["atx_h1_marker", "atx_h2_marker", "atx_h3_marker"]
+        )
+    )
+
     /// Substring-matched fallback for languages without a dedicated table (Python, GraphQL,
     /// Markdown, …). Mirrors the heuristic already used by `TreeSitterLineFoldProvider.isFoldable`.
     static let generic = LanguageConfiguration(declarations: [

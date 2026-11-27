@@ -536,6 +536,24 @@ final class LayoutManager {
         gutterAnnotationsDidChange()
     }
 
+    /// A click on an annotated row of the annotation column; return `true` when handled.
+    var gutterAnnotationClickHandler: ((GutterAnnotationClick) -> Bool)? {
+        get { gutterAnnotationView.onClick }
+        set { gutterAnnotationView.onClick = newValue }
+    }
+
+    /// The pointer moved onto another annotation, or off the column (`nil`).
+    var gutterAnnotationHoverHandler: ((GutterAnnotationClick?) -> Void)? {
+        get { gutterAnnotationView.onHover }
+        set { gutterAnnotationView.onHover = newValue }
+    }
+
+    /// The annotation id whose rows are drawn highlighted; repaints only.
+    var highlightedGutterAnnotationID: Int? {
+        get { gutterAnnotationView.highlightedID }
+        set { gutterAnnotationView.highlightedID = newValue }
+    }
+
     /// Test hook: the annotation shown for a 0-based row.
     func gutterAnnotation(atRow row: Int) -> GutterAnnotation? {
         gutterAnnotationView.store.annotation(atRow: row)
@@ -555,6 +573,8 @@ final class LayoutManager {
     }
 
     private func gutterAnnotationsDidChange() {
+        // Rows changed under a hover the host may be showing a popover for.
+        gutterAnnotationView.endHover()
         gutterAnnotationView.needsDisplay = true
         gutterAnnotationView.isHidden = !hasGutterAnnotations
         updateGutterAnnotationColumnWidth()

@@ -1,0 +1,9 @@
+# Gradle log storage
+
+`SubprocessKit` services both process pipes on its private queue in reads of at most 64 KiB, with four successful reads per regular turn. Streaming clients can discard subprocess capture or request bounded excerpts. The synchronous sink provides disk backpressure. Sink failure cancels the child and propagates after drain. Umbra identifies the failed stream in the error and keeps committed output readable.
+
+`console.raw` contains the merged bytes in the order Umbra drained them. `console.index` holds one 17-byte record per drained chunk. The record is a little-endian start and exclusive end offset, each 64 bits, and a stream tag. Commit advances after both writes succeed. Readers search the on-disk index and use an 8 MiB raw page cache. Incomplete index records after interruption are excluded. Export uses a staging file and bounded reads. Search scans file bytes with overlap and checks cancellation between chunks. stdout and stderr keep their byte order individually. Interleaving reflects pipe availability.
+
+The native read-only console renders a 16 KiB byte viewport with previous and next controls, auto-follow, search and export. It retains UTF-8 and ANSI parsing state within a rendered window. It recognizes CRLF and carriage-return updates and breaks long displayed lines into bounded segments. Continuous scrolling, exact cross-page selection and persisted decoder checkpoints are separate remaining work. Raw export preserves ANSI and carriage returns.
+
+Test output is written once per published output event in a separate file and addressed by range. Persisted test sessions use owner-only directories under Application Support. Summaries and report rows remain readable separately from encrypted launch snapshots. Ordinary Gradle task and model logs use temporary session directories. History defaults to 30 days and 10 GiB and retains active writers and history readers within the app process.

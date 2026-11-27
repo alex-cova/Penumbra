@@ -24,7 +24,7 @@ final class PipeReader: @unchecked Sendable {
         self.onData = onData
         setNonBlocking(fd)
         source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-        source.setEventHandler { [self] in pump() }
+        source.setEventHandler { [self] in pump(limit: 4) }
         // The descriptor may only be closed once the source is done with it.
         source.setCancelHandler { close(fd) }
         source.resume()
@@ -33,10 +33,12 @@ final class PipeReader: @unchecked Sendable {
     deinit { buffer.deallocate() }
 
     /// Reads what is there, until the pipe would block or ends.
-    private func pump() {
-        while !finished {
+    private func pump(limit: Int) {
+        var remaining = limit
+        while !finished, remaining > 0 {
             let count = read(fd, buffer, Self.bufferSize)
             if count > 0 {
+                remaining -= 1
                 onData(Data(bytes: buffer, count: count))
             } else if count == 0 {
                 stop()  // every writer closed its end
@@ -52,7 +54,7 @@ final class PipeReader: @unchecked Sendable {
     /// The child is gone: take what it left in the pipe and stop, even if a grandchild still holds
     /// the write end open. Must run on the reader's queue.
     func finish() {
-        pump()
+        pump(limit: 64)
         stop()
     }
 

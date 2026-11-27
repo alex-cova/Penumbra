@@ -86,6 +86,19 @@ final class IDEModuleContributionTests: XCTestCase {
         XCTAssertEqual(button("markdown.preview", in: workspace.toolbarItems())?.isActive, true)
     }
 
+    func testAMermaidFileGetsAMermaidPreviewButton() {
+        let workspace = IDEWorkspace()
+        defer { workspace.teardown() }
+        workspace.statusLanguage = "mermaid"
+        XCTAssertEqual(ids(workspace.toolbarItems()), ["java.runConfigurations", "markdown.preview"])
+        XCTAssertEqual(button("markdown.preview", in: workspace.toolbarItems())?.help, "Toggle Mermaid Preview")
+        XCTAssertEqual(button("markdown.preview", in: workspace.toolbarItems())?.isActive, false)
+
+        workspace.isMarkdownPreviewVisible = true
+        XCTAssertEqual(ids(workspace.toolbarItems()), ["java.runConfigurations", "markdown.exportPDF", "markdown.preview"])
+        XCTAssertEqual(button("markdown.exportPDF", in: workspace.toolbarItems())?.help, "Export Mermaid Preview to PDF")
+    }
+
     func testJSONAndCSVEachGetTheirOwnToggle() {
         let workspace = IDEWorkspace()
         defer { workspace.teardown() }
@@ -180,7 +193,9 @@ final class IDEModuleContributionTests: XCTestCase {
         workspace.statusLanguage = "java"
         XCTAssertEqual(workspace.viewMenuContributions().map(\.id), ["markdown.runWithAgent"])
         workspace.statusLanguage = "markdown"
-        XCTAssertEqual(workspace.viewMenuContributions().map(\.id), ["markdown.runWithAgent", "markdown.preview"])
+        XCTAssertEqual(workspace.viewMenuContributions().map(\.id), ["markdown.runWithAgent", "markdown.preview", "markdown.previewSideBySide"])
+        workspace.statusLanguage = "mermaid"
+        XCTAssertEqual(workspace.viewMenuContributions().map(\.id), ["markdown.runWithAgent", "markdown.preview", "markdown.previewSideBySide"])
         workspace.statusLanguage = "json"
         XCTAssertEqual(workspace.viewMenuContributions().map(\.id), ["markdown.runWithAgent", "json.diagram"])
         workspace.statusLanguage = "tsv"

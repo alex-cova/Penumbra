@@ -579,7 +579,11 @@ public final class IDEWorkspace {
     let httpSupport = IDEHTTPSupport()
     /// Connections, schema and query results for this window. The connection list is shared.
     let databaseSupport: IDEDatabaseSupport
+    var databaseParameterPrompt: IDEDatabaseParameterPrompt?
+    var databaseSchemaDraft: IDEDatabaseSchemaDraft?
     var isMarkdownPreviewVisible = false
+    /// The visible preview is showing alongside the editor rather than covering it.
+    var isMarkdownPreviewSideBySide = false
     /// The SwiftUI canvas is docked beside the editor (`IDEWorkspace+SwiftUIPreview.swift`).
     var isSwiftUIPreviewVisible = false
     var swiftUIPreview: IDESwiftUIPreviewSession?
@@ -593,18 +597,15 @@ public final class IDEWorkspace {
         set { if position.selectionLength != newValue { position.selectionLength = newValue } }
     }
     var tabsByPane: [UUID: [IDETabRow]] = [:]
-    /// The pane a tab being dragged would move to if dropped now.
-    var tabDropPaneID: UUID?
+    /// The editor tab being dragged, where it would land if dropped now, and the floating copy that
+    /// follows the pointer. Its own object, so the pointer moving does not invalidate the workspace;
+    /// the logic is in `IDEWorkspace+TabDrag.swift`.
+    let tabDrag = IDETabDragSession()
     /// Pane frames in the editor panes' coordinate space, for tab drags.
     @ObservationIgnored var editorPaneFrames: [UUID: CGRect] = [:]
+    /// Each pane's tab bar as laid out, for tab drags to find the slot under the pointer.
+    @ObservationIgnored var tabBarGeometry: [UUID: IDETabBarGeometry] = [:]
 
-    /// The pane at a point in the editor panes' space, for a dragged tab.
-    /// Frames of panes that have since closed are ignored.
-    func editorPane(at point: CGPoint) -> UUID? {
-        editorPaneFrames.first {
-            workbench.layout.findPane(id: $0.key) != nil && $0.value.contains(point)
-        }?.key
-    }
     /// Editor area size reported by the root view, for the split guard.
     @ObservationIgnored var editorAreaSize: CGSize = .zero
     /// Derived from `tabsByPane` so the toolbar's close group does not re-evaluate on every tab
@@ -670,7 +671,7 @@ public final class IDEWorkspace {
         return true
     }
     var showsUsagesTab: Bool { usages.hasContent }
-    var showsTestResultsTab: Bool { testResults.hasContent }
+    var showsTestResultsTab: Bool { testResults.hasContent || gradle.isActive }
     /// True when a terminal tab (rather than one of the read-only tabs) is showing.
     var isTerminalTabSelected: Bool { bottomPanel.isShellSelected }
 
@@ -842,6 +843,7 @@ public final class IDEWorkspace {
         // The blame column and the profiler's line hints share the annotation column; a file with
         // hints is theirs until the user turns them off.
         blame.yieldsAnnotations = { [weak self] url in self?.profileHintsOwnAnnotations(of: url) ?? false }
+        configureBlame()
         inspections.onChange = { [weak self] in self?.javaInspectionPreferencesChanged() }
         gitStatus.codeAnalysisProvider = { [weak self] files in await self?.analyzeForCommit(files) }
         applyLaunchConfiguration()
@@ -855,6 +857,14 @@ public final class IDEWorkspace {
             await MainActor.run { self?.agentFileSuggestions(query: query, limit: limit) ?? [] }
         }
         databaseSupport.sqlCompletionProvider = intelligenceServices.sqlCompletion
+        databaseSupport.onSQLCatalogChange = { [weak self] connectionID in
+            guard let self else { return }
+            for pane in workbench.panes {
+                guard let document = pane.selectedDocument,
+                      databaseSupport.consoles[document.id]?.connectionID == connectionID else { continue }
+                host(for: pane.id).intelligenceController?.refreshDiagnostics()
+            }
+        }
         let httpGlobals = httpSupport.globals
         intelligenceServices.httpCompletion.setGlobals { httpGlobals.snapshot() }
         intelligenceServices.httpCompletion.setSchemaStore(httpSupport.graphQLSchemas)
@@ -1320,6 +1330,7 @@ public final class IDEWorkspace {
         if pane.id == workbench.activePaneID {
             statusLanguage = identifier
             isMarkdownPreviewVisible = host.markdownPreviewController.isVisible
+            isMarkdownPreviewSideBySide = host.markdownPreviewController.isVisible && host.markdownPreviewController.isSideBySide
             isJSONDiagramVisible = host.isJSONDiagramVisible
             isCSVTableVisible = host.isCSVTableVisible
         }
@@ -2291,8 +2302,14 @@ public final class IDEWorkspace {
         blame.isEnabled(for: workbench.activePane.selectedDocument?.url)
     }
 
-    /// Shows or hides the blame column for the active file (Git ▸ Show Git Blame).
+    /// Shows or hides the blame column for the active file (Git ▸ Annotate with Git Blame).
     func toggleGitBlame() {
+        // A revision snapshot lives in the cache, outside the repository folder, but blames fine.
+        if let snapshot = workbench.activePane.selectedDocument?.url, IDEGitRevisionFiles.isSnapshot(snapshot) {
+            blame.toggle(for: snapshot)
+            refreshBlame(in: workbench.activePane, force: true)
+            return
+        }
         guard let url = activeFileInRepository() else {
             showGitNotice("No Git Blame", "The active file is not in a git repository.")
             return
@@ -2639,6 +2656,9 @@ public final class IDEWorkspace {
         case .package(let name):
             showLibraryPackage(name)
             return true
+        case .databaseRelation(let name, let column):
+            openDatabaseDeclaration(name: name, column: column, documentID: location.documentID)
+            return true
         }
         let current = host(for: workbench.activePaneID)
         current.textView.recordNavigationCheckpoint()
@@ -2845,10 +2865,6 @@ public final class IDEWorkspace {
         splitDown()
     }
 
-    /// Splits the active pane, opening its currently selected document into the new pane too —
-    /// two views on the same file, like Sublime Text/VS Code. The two panes reconcile on focus
-    /// switch (`activatePane`'s outgoing sync + `showDocument`'s same-document refresh) rather
-    /// than mirroring edits live.
     /// Whether the active pane can be divided along `edge`'s axis with every
     /// pane keeping its minimum length (Silica's `canSplit`). Before the root
     /// view has reported a size there is nothing to go by, so splitting is allowed.
@@ -2866,6 +2882,11 @@ public final class IDEWorkspace {
         return paneCount * minimum + terminal <= Double(editorAreaSize.height)
     }
 
+    /// Splits the active pane, opening its currently selected document into the new pane too —
+    /// two views on the same file, like Sublime Text/VS Code. Edits made in either pane are replayed
+    /// in the other as they happen (`mirrorEdits`); the focus switch (`activatePane`'s outgoing sync
+    /// + `showDocument`'s same-document refresh) is the fallback for an edit that has no single
+    /// range, and for the document's saved state.
     private func split(edge: EditorSplitEdge) {
         guard canSplitActivePane(along: edge) else {
             NSSound.beep()
@@ -2879,13 +2900,14 @@ public final class IDEWorkspace {
             // starts at the same spot, not wherever it was last explicitly synced.
             syncTextViewToDocument(sourceHost.textView, document: document, from: sourceHost)
         }
-        let newPane = IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) {
-            workbench.splitActivePane(edge: edge)
-        }
+        let placesBefore = IDEEditorLayoutPaths.paths(of: workbench.layout)
+        let newPane = workbench.splitActivePane(edge: edge)
         if let document {
             workbench.openDocument(document, in: newPane)
         }
-        rebuildLayoutHosts()
+        rebuildLayoutHosts(
+            animated: IDEEditorLayoutPaths.keepsPlaces(from: placesBefore, to: IDEEditorLayoutPaths.paths(of: workbench.layout))
+        )
         activatePane(workbench.activePaneID)
         Task { await workspaceBridge.syncWorkbench(workbench) }
     }
@@ -2901,21 +2923,21 @@ public final class IDEWorkspace {
         refreshPresentation()
     }
 
-    /// Moves a tab from one pane to the end of another's bar (dragging it onto
-    /// that pane) and shows it there. No close prompt: nothing is closed. A
+    /// Moves a tab from one pane to another's bar (dragging it onto that pane), at `index` among the
+    /// tabs there or at the end, and shows it there. No close prompt: nothing is closed. A
     /// source pane left without tabs closes, as when its last tab is closed.
-    func moveTab(_ documentID: UUID, from sourceID: UUID, toPane targetID: UUID) {
+    func moveTab(_ documentID: UUID, from sourceID: UUID, toPane targetID: UUID, at index: Int? = nil) {
         guard sourceID != targetID,
               let source = workbench.layout.findPane(id: sourceID),
               let target = workbench.layout.findPane(id: targetID),
-              let index = source.documents.firstIndex(where: { $0.id == documentID }) else { return }
+              let sourceIndex = source.documents.firstIndex(where: { $0.id == documentID }) else { return }
         // Flush the source pane's live state into the document first.
         if let document = source.selectedDocument {
             syncTextViewToDocument(host(for: source.id).textView, document: document, from: host(for: source.id))
         }
-        let document = source.documents[index]
+        let document = source.documents[sourceIndex]
         let wasTemporary = source.temporaryDocumentID == documentID
-        source.documents.remove(at: index)
+        source.documents.remove(at: sourceIndex)
         if source.temporaryDocumentID == documentID { source.temporaryDocumentID = nil }
         if source.selectedDocumentID == documentID {
             source.selectedDocumentID = source.documents.last?.id
@@ -2924,14 +2946,65 @@ public final class IDEWorkspace {
         if let existing = target.documents.firstIndex(where: { $0.id == documentID }) {
             target.documents.remove(at: existing)
         }
-        target.documents.append(document)
+        target.documents.insert(document, at: min(max(index ?? target.documents.count, 0), target.documents.count))
         if wasTemporary { target.temporaryDocumentID = documentID }
         target.selectDocument(documentID)
         if source.documents.isEmpty {
-            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { closePane(sourceID) }
+            // Rebuilds the layout itself, animated when the other panes stay in place.
+            closePane(sourceID)
+        } else {
+            rebuildLayoutHosts()
         }
-        rebuildLayoutHosts()
         activatePane(targetID)
+        focusActiveEditor()
+        refreshPresentation()
+        Task { await workspaceBridge.syncWorkbench(workbench) }
+    }
+
+    /// Moves a tab into a new pane split off `edge` of the pane `targetID` (dropping it on that edge).
+    /// The target may be the pane the tab comes from, when that leaves a tab in it. A source pane left
+    /// without tabs closes, as when its last tab is closed. No close prompt: nothing is closed.
+    func moveTab(_ documentID: UUID, from sourceID: UUID, toNewPaneAt edge: EditorSplitEdge, of targetID: UUID) {
+        guard let source = workbench.layout.findPane(id: sourceID),
+              workbench.layout.findPane(id: targetID) != nil,
+              let index = source.documents.firstIndex(where: { $0.id == documentID }) else { return }
+        if sourceID == targetID, source.documents.count < 2 { return }
+        guard canSplitActivePane(along: edge) else {
+            NSSound.beep()
+            return
+        }
+        let document = source.documents[index]
+        let sourceHost = host(for: source.id)
+        if document.contentKind == .text, sourceHost.loadedDocumentID == document.id {
+            // The new pane's editor starts from the live buffer, caret and scroll, not from what
+            // the model last saw (a file-backed document keeps no text of its own).
+            syncTextViewToDocument(sourceHost.textView, document: document, from: sourceHost)
+            document.pendingState = sourceHost.textView.makeCapturedState()
+        }
+        let placesBefore = IDEEditorLayoutPaths.paths(of: workbench.layout)
+        let newPane = EditorPane()
+        workbench.layout.splitPane(targetID, edge: edge, newPane: newPane)
+
+        let wasTemporary = source.temporaryDocumentID == documentID
+        source.documents.remove(at: index)
+        if source.temporaryDocumentID == documentID { source.temporaryDocumentID = nil }
+        if source.selectedDocumentID == documentID {
+            source.selectedDocumentID = source.documents.last?.id
+        }
+        source.tabHistory.remove(documentID: documentID)
+        newPane.documents.append(document)
+        if wasTemporary { newPane.temporaryDocumentID = documentID }
+        newPane.selectDocument(documentID)
+        if source.documents.isEmpty {
+            workbench.closePane(sourceID)
+            hostCache.remove(sourceID)
+            hostedPaneIDs.remove(sourceID)
+        }
+        workbench.activatePane(newPane.id)
+        rebuildLayoutHosts(
+            animated: IDEEditorLayoutPaths.keepsPlaces(from: placesBefore, to: IDEEditorLayoutPaths.paths(of: workbench.layout))
+        )
+        activatePane(newPane.id)
         focusActiveEditor()
         refreshPresentation()
         Task { await workspaceBridge.syncWorkbench(workbench) }
@@ -3135,7 +3208,27 @@ public final class IDEWorkspace {
             return
         }
         showExplorer()
-        project.revealAndSelect(url: url, centered: false)
+        revealForExplorer(url: url, centered: false)
+    }
+
+    /// `revealAndSelect` with the Explorer's current flattening (the same source roots the
+    /// sidebar flattens with), so an opened file expands the rows the tree actually shows:
+    /// with Flatten Packages, sibling packages stay closed.
+    private func revealForExplorer(url: URL, centered: Bool) {
+        project.revealAndSelect(
+            url: url, centered: centered,
+            flattenPackages: preferences.flattenJavaPackages,
+            sourceRootPaths: gradle.sourceRootPaths
+        )
+    }
+
+    /// `reveal` with the Explorer's current flattening (see `revealForExplorer`).
+    private func expandForExplorer(url: URL) {
+        project.reveal(
+            url: url,
+            flattenPackages: preferences.flattenJavaPackages,
+            sourceRootPaths: gradle.sourceRootPaths
+        )
     }
 
     public func toggleMarkdownPreview() {
@@ -3144,7 +3237,28 @@ public final class IDEWorkspace {
             toggleSwiftUIPreview()
             return
         }
+        // A hidden preview opens in the Settings ▸ Markdown layout, so the play button
+        // follows the "show alongside" choice without a second step.
+        if let host = hostCache.peek(workbench.activePaneID), !host.markdownPreviewController.isVisible {
+            host.markdownPreviewController.setSideBySide(preferences.markdownPreview.sideBySide)
+        }
         adapter.textView?.perform(.toggleMarkdownPreview)
+    }
+
+    /// Shows the preview alongside the editor (switching a cover preview over without hiding),
+    /// or switches an alongside preview back to covering. The play button hides either way.
+    public func toggleMarkdownPreviewSideBySide() {
+        guard MarkdownPreviewController.isPreviewableLanguage(statusLanguage.isEmpty ? nil : statusLanguage) else { return }
+        guard let host = hostCache.peek(workbench.activePaneID) else { return }
+        let controller = host.markdownPreviewController
+        if controller.isVisible {
+            // Staying visible keeps the caret and focus where they are; only the layout flips.
+            preferences.markdownPreview.sideBySide = !controller.isSideBySide
+        } else {
+            preferences.markdownPreview.sideBySide = true
+            controller.setSideBySide(true)
+            adapter.textView?.perform(.toggleMarkdownPreview)
+        }
     }
 
     /// The play button changed on `host`. Updates the titlebar and moves the keyboard to the
@@ -3152,6 +3266,7 @@ public final class IDEWorkspace {
     private func notePreviewVisibility(of host: IDEEditorPaneHost) {
         guard hostCache.peek(workbench.activePaneID) === host else { return }
         isMarkdownPreviewVisible = host.markdownPreviewController.isVisible
+        isMarkdownPreviewSideBySide = host.markdownPreviewController.isVisible && host.markdownPreviewController.isSideBySide
         isJSONDiagramVisible = host.isJSONDiagramVisible
         isCSVTableVisible = host.isCSVTableVisible
         if host.isJSONDiagramVisible {
@@ -3341,6 +3456,7 @@ public final class IDEWorkspace {
                 preferences.apply(to: controller)
             }
             host.markdownPreviewController.options = preferences.markdownPreview.options
+            host.markdownPreviewController.setSideBySide(preferences.markdownPreview.sideBySide)
         }
         applyCodeInsightPreferences()
         if let textView = adapter?.textView {
@@ -3393,6 +3509,8 @@ public final class IDEWorkspace {
             host.textView.backgroundColor = IDEAppearance.NSToken.editor
             host.layer?.backgroundColor = IDEAppearance.NSToken.editor.cgColor
         }
+        // Blame tints are fixed colours chosen for the scheme.
+        blame.representAll()
     }
 
     func openDroppedURLs(_ urls: [URL]) {
@@ -3475,13 +3593,16 @@ public final class IDEWorkspace {
     func unsplit(from paneID: UUID) {
         let otherPaneIDs = workbench.panes.map(\.id).filter { $0 != paneID }
         guard !otherPaneIDs.isEmpty else { return }
+        let placesBefore = IDEEditorLayoutPaths.paths(of: workbench.layout)
         for otherPaneID in otherPaneIDs {
-            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { workbench.closePane(otherPaneID) }
+            workbench.closePane(otherPaneID)
             hostCache.remove(otherPaneID)
             hostedPaneIDs.remove(otherPaneID)
         }
         workbench.activatePane(paneID)
-        rebuildLayoutHosts()
+        rebuildLayoutHosts(
+            animated: IDEEditorLayoutPaths.keepsPlaces(from: placesBefore, to: IDEEditorLayoutPaths.paths(of: workbench.layout))
+        )
         activatePane(workbench.activePaneID)
         showsWelcome = !hasOpenDocuments
         Task { await workspaceBridge.syncWorkbench(workbench) }
@@ -3571,6 +3692,8 @@ public final class IDEWorkspace {
         return IDEWindowSession(
             windowID: windowID,
             restoration: hasOpenDocuments && !hasOnlyUntouchedEmptyFile ? workbench.makeRestorationState() : nil,
+            databaseConsoles: databaseSupport.consolesByDocumentID.isEmpty ? nil : databaseSupport.consolesByDocumentID,
+            databaseExplorer: databaseSupport.explorerState,
             projectRootBookmark: project.makeBookmarkData(),
             sidebarWidth: sidebarWidth ?? self.sidebarWidth,
             isSidebarVisible: isSidebarVisible,
@@ -3687,6 +3810,7 @@ public final class IDEWorkspace {
     }
 
     private func loadSession(_ session: IDEWindowSession) {
+        databaseSupport.explorerState = session.databaseExplorer ?? .init()
         isSidebarVisible = false
         selectedSidebarTab = session.sidebarTab ?? .explorer
         closedSidebarTabs = Set(session.closedSidebarTabs ?? []).subtracting([.explorer])
@@ -3739,6 +3863,9 @@ public final class IDEWorkspace {
             // Restored files were not opened through `openDocument`, so give each its starting point too.
             for document in workbench.allDocuments() where document.contentKind == .text {
                 if let url = document.url { localHistory.recordBaseline(url) }
+                if let binding = session.databaseConsoles?[document.documentID.uuid] {
+                    databaseSupport.bindConsole(workbenchID: document.id, documentID: document.documentID, binding: binding)
+                }
             }
             Task {
                 try? await workbench.reloadFileBackedDocuments(
@@ -3747,6 +3874,9 @@ public final class IDEWorkspace {
                 )
                 rebuildLayoutHosts()
                 refreshPresentation()
+                // Tabs whose files vanished while Umbra was closed reload to empty buffers with
+                // no watcher event; mark them so the tab shows the deleted-on-disk banner.
+                markRestoredMissingFiles()
                 showsWelcome = !hasOpenDocuments
             }
         }
@@ -3827,8 +3957,20 @@ public final class IDEWorkspace {
             self.notePreviewVisibility(of: host)
         }
         host.markdownPreviewController.showsAppearanceToggle = true
+        host.markdownPreviewController.showsSideBySideToggle = true
         host.markdownPreviewController.appearanceOverride = IDEMarkdownPreviewAppearance.stored
         host.markdownPreviewController.options = preferences.markdownPreview.options
+        host.markdownPreviewController.setSideBySide(preferences.markdownPreview.sideBySide)
+        host.markdownPreviewController.onSideBySideChange = { [weak self, weak host] sideBySide in
+            guard let self, let host else { return }
+            // The preview's own alongside button flips the mode; remember it so the play
+            // button, the View menu and new panes follow. Writing back the same value is
+            // a no-op downstream: the controllers already show it.
+            if self.preferences.markdownPreview.sideBySide != sideBySide {
+                self.preferences.markdownPreview.sideBySide = sideBySide
+            }
+            self.notePreviewVisibility(of: host)
+        }
         host.markdownPreviewController.onAppearanceOverrideChange = { [weak self] appearance in
             IDEMarkdownPreviewAppearance.stored = appearance
             // Settings ▸ Markdown ▸ Appearance shows the same choice.
@@ -4053,6 +4195,14 @@ public final class IDEWorkspace {
         // Open as Hex Editor on its row (or Reopen as Hex) reaches the bytes.
         if !asHex, IDEWorkspace.isJavaArchive(url) {
             openArchive(url)
+            return
+        }
+        // A SQLite database is browsed and queried, not read as bytes. Its header decides, not its
+        // extension. Open as Hex Editor (and `asHex`) reach the bytes, and so does listing the
+        // extension under Settings ▸ Hex.
+        if !asHex, IDEWorkspace.isSQLiteDatabase(url) {
+            recordRecentFile(url)
+            addSQLiteFiles([url])
             return
         }
         // Already open and loaded: focus the live buffer (keeping unsaved edits) instead of
@@ -4648,6 +4798,10 @@ public final class IDEWorkspace {
     }
 
     func closeDocument(_ documentID: UUID, in pane: EditorPane) {
+        guard !databaseSupport.refuseDiscardingEdits(consoleID: documentID) else {
+            notifyDatabaseCloseBlocker(databaseSupport.banner ?? "Review the staged database edits first.")
+            return
+        }
         closeDiffSession(documentID, in: pane)
         closeDiagramSession(documentID, in: pane)
         closeProfileSession(documentID, in: pane)
@@ -4657,6 +4811,7 @@ public final class IDEWorkspace {
         pane.closeDocument(documentID)
         let stillOpen = workbench.panes.contains { $0.documents.contains { $0.id == documentID } }
         if !stillOpen {
+            project.forgetAutoRevealed(documentID: documentID)
             if let closingDocument {
                 databaseSupport.closeConsole(workbenchID: documentID, documentID: closingDocument.documentID)
             }
@@ -4695,10 +4850,13 @@ public final class IDEWorkspace {
     }
 
     private func closePane(_ paneID: UUID) {
-        IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { workbench.closePane(paneID) }
+        let placesBefore = IDEEditorLayoutPaths.paths(of: workbench.layout)
+        workbench.closePane(paneID)
         hostCache.remove(paneID)
         hostedPaneIDs.remove(paneID)
-        rebuildLayoutHosts()
+        rebuildLayoutHosts(
+            animated: IDEEditorLayoutPaths.keepsPlaces(from: placesBefore, to: IDEEditorLayoutPaths.paths(of: workbench.layout))
+        )
         activatePane(workbench.activePaneID)
         showsWelcome = !hasOpenDocuments
         Task { await workspaceBridge.syncWorkbench(workbench) }
@@ -4761,20 +4919,32 @@ public final class IDEWorkspace {
         Task { await javaSupport.buildDiagnostics.clearAll() }
     }
 
-    private func rebuildLayoutHosts() {
+    /// Brings the hosts and the views in line with `workbench.layout`. `animated` runs the change of
+    /// layout through the pane animation: panes opening, closing and re-spreading. Pass it only when
+    /// `IDEEditorLayoutPaths.keepsPlaces` holds, or a pane that moves would play its own removal.
+    private func rebuildLayoutHosts(animated: Bool = false) {
         let panes = workbench.layout.flattenedPanes()
         let live = Set(panes.map(\.id))
         for id in hostedPaneIDs.subtracting(live) {
             hostCache.remove(id)
         }
         hostedPaneIDs = live
+        // A pane's view reports its frame as it lays out, but its replacement (the tree is rebuilt
+        // with a new identity on every layout change) reports before the old view disappears, so
+        // clearing on disappear dropped the frame of a pane that survived a split.
+        editorPaneFrames = editorPaneFrames.filter { live.contains($0.key) }
+        tabBarGeometry = tabBarGeometry.filter { live.contains($0.key) }
         for pane in panes {
             let host = host(for: pane.id)
             if pane.selectedDocument != nil {
                 showDocument(in: pane, host: host)
             }
         }
-        layoutEpoch += 1
+        if animated {
+            IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { layoutEpoch += 1 }
+        } else {
+            layoutEpoch += 1
+        }
         refreshPresentation()
     }
 
@@ -5120,8 +5290,12 @@ public final class IDEWorkspace {
                           action: { [weak self] in self?.showEvaluateExpression() }),
             EditorCommand(id: "app.debug.quickEvaluate", title: "Run: Quick Evaluate Expression", group: "Run",
                           action: { [weak self] in self?.quickEvaluate() }),
-            EditorCommand(id: "app.git.blame", title: "Git: Toggle Blame (Annotate)", group: "Git",
+            EditorCommand(id: "app.git.blame", title: "Git: Annotate with Git Blame (Toggle)", group: "Git",
                           action: { [weak self] in self?.toggleGitBlame() }),
+            EditorCommand(id: "app.git.historyMethod", title: "Git: Show History for Method", group: "Git",
+                          action: { [weak self] in self?.showDeclarationHistory(.method) }),
+            EditorCommand(id: "app.git.historyClass", title: "Git: Show History for Class", group: "Git",
+                          action: { [weak self] in self?.showDeclarationHistory(.type) }),
             EditorCommand(id: "app.git.revert", title: "Git: Discard Changes in File…", group: "Git",
                           action: { [weak self] in self?.revertActiveFile() }),
             EditorCommand(id: "app.git.stage", title: "Git: Stage", group: "Git",
@@ -5255,6 +5429,7 @@ public final class IDEWorkspace {
         syncTerminalWorkingDirectory()
         // The project systems first: a language reads what they decided (Java skips its whole-tree
         // index when Gradle starts from a cached model). Both are synchronous, so what follows sees them.
+        testResults.gradle.clear()
         projectSystems.projectDidChange(root: url)
         languages.projectDidChange(root: url)
         languageServerHost.projectDidChange(root: url, connections: intelligenceServices.languageServerConnections)
@@ -5327,6 +5502,7 @@ public final class IDEWorkspace {
         autoRevealActiveDocumentIfNeeded()
         let activeHost = hostCache.peek(workbench.activePaneID)
         isMarkdownPreviewVisible = activeHost?.markdownPreviewController.isVisible ?? false
+        isMarkdownPreviewSideBySide = (activeHost?.markdownPreviewController.isVisible ?? false) && (activeHost?.markdownPreviewController.isSideBySide ?? false)
         isJSONDiagramVisible = activeHost?.isJSONDiagramVisible ?? false
         isCSVTableVisible = activeHost?.isCSVTableVisible ?? false
         if let document = workbench.activePane.selectedDocument, document.contentKind == .text {
@@ -5424,6 +5600,16 @@ public final class IDEWorkspace {
         case .symbol(let range):
             jumpToSymbol(range)
         }
+    }
+
+    /// The outline provider of the active language and the editor's document for it: what the
+    /// Structure tab asks, for features that need the same declarations (Show History for Method).
+    func structureOutlineSource() -> (provider: any StructureProviding, document: EditorIntelligence.Document?) {
+        let provider: any StructureProviding = languages.structure(for: statusLanguage)
+            ?? SymbolStructureProvider(
+                index: intelligenceServices.symbolIndex, parser: intelligenceServices.workbenchParser
+            )
+        return (provider, adapter.currentDocument)
     }
 
     /// The type a breadcrumb symbol names (or the type enclosing it) with all its members, the symbol
@@ -5586,12 +5772,12 @@ public final class IDEWorkspace {
             let url = isDirectory
                 ? try operations.createDirectory(in: directory, name: name)
                 : try operations.createFile(in: directory, name: name)
-            project.reveal(url: directory)
+            expandForExplorer(url: directory)
             Task {
                 await project.refresh(directories: [directory.path])
                 project.pendingCreationPath = url.path
                 project.renamingPath = url.path
-                project.revealAndSelect(url: url, centered: false)
+                revealForExplorer(url: url, centered: false)
                 gitStatus.refresh()
             }
         } catch {
@@ -5632,7 +5818,7 @@ public final class IDEWorkspace {
         let parent = url.deletingLastPathComponent().path
         Task {
             await project.refresh(directories: [parent])
-            project.revealAndSelect(url: result, centered: false)
+            revealForExplorer(url: result, centered: false)
             gitStatus.refresh()
             refreshPresentation()
             if isPlaceholder {
@@ -5664,7 +5850,7 @@ public final class IDEWorkspace {
             let copy = try operations.duplicate(url)
             Task {
                 await project.refresh(directories: [url.deletingLastPathComponent().path])
-                project.revealAndSelect(url: copy, centered: false)
+                revealForExplorer(url: copy, centered: false)
                 gitStatus.refresh()
             }
         } catch {
@@ -5753,7 +5939,7 @@ public final class IDEWorkspace {
             return
         }
         showExplorer()
-        project.revealAndSelect(url: url, centered: true)
+        revealForExplorer(url: url, centered: true)
         requestSidebarFocus()
     }
 
@@ -5762,20 +5948,24 @@ public final class IDEWorkspace {
         guard document?.id != lastAutoRevealedDocumentID else { return }
         lastAutoRevealedDocumentID = document?.id
         guard IDEPreferences.shared.explorerAutoReveal, project.renamingPath == nil,
-              let url = document?.url, project.rootURL != nil else { return }
-        project.revealAndSelect(url: url, centered: false)
+              let document, let url = document.url, project.rootURL != nil else { return }
+        // Reselecting an already-open tab must not reopen its collapsed package unless asked.
+        guard project.shouldAutoReveal(
+            documentID: document.id, revealReselected: preferences.explorerRevealReselectedFiles
+        ) else { return }
+        revealForExplorer(url: url, centered: false)
     }
 
     /// Go to Package lands here: the Explorer selects the directory, including a flattened package row.
     private func revealPackage(_ url: URL) {
         showExplorer()
-        project.revealAndSelect(url: url, centered: true)
+        revealForExplorer(url: url, centered: true)
     }
 
     private func revealInSidebar(_ url: URL) {
         if project.rootURL != nil {
             showExplorer()
-            project.reveal(url: url)
+            expandForExplorer(url: url)
         } else {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }

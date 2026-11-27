@@ -28,6 +28,7 @@ final class IDETestResultsStore {
         case duration = "Duration"
     }
 
+    let gradle = IDEGradleTestPresentation()
     private(set) var cases: [IDETestCaseResult] = []
     private(set) var passedCount = 0
     private(set) var failedCount = 0
@@ -96,6 +97,7 @@ final class IDETestResultsStore {
     }
 
     func clear() {
+        gradle.clear()
         cases = []
         passedCount = 0
         failedCount = 0
@@ -250,6 +252,14 @@ struct IDETestResultsPanel: View {
 
     var body: some View {
         let store = workspace.testResults
+        if workspace.gradle.isActive {
+            IDEGradleTestResultsPanel(store: store.gradle)
+        } else {
+            legacyPanel(store)
+        }
+    }
+
+    private func legacyPanel(_ store: IDETestResultsStore) -> some View {
         VStack(spacing: 0) {
             toolbar(store)
             Divider()

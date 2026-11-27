@@ -155,7 +155,7 @@ CI releases use `.github/workflows/release-app.yml` with the secrets documented 
 
 ### Automatic updates (Sparkle)
 
-Release CI also regenerates `website/appcast.xml` and delta patches under `website/updates/`, then pushes them to `main` so GitHub Pages serves the feed.
+Release CI regenerates `website/appcast.xml` from the published ZIP, pushes it to `main`, and starts the GitHub Pages deployment. If the ZIP is already published and the appcast update failed, run **Release Umbra** manually on `main` while `VERSION` still matches the release. The manual run downloads the existing ZIP and resumes appcast publishing.
 
 One-time signing key setup (run after `swift build --product Umbra` in this folder so Sparkle tools are available):
 

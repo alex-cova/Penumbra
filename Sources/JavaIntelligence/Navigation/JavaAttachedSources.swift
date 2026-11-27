@@ -9,9 +9,13 @@ public enum JavaAttachedSources {
         isInCache(url) || JavaClassFileDecompiler.isClassFile(url)
     }
 
-    /// Whether `url` is a copy Umbra made under the index cache, as opposed to a file of the user's.
+    /// Whether `url` is a copy Umbra made under its cache, as opposed to a file of the user's: a
+    /// dependency's source or class (`attached-sources`), or a file as it was in a past commit that
+    /// the host wrote for reading (`git-revisions`, Annotate Revision). Both are shown read-only
+    /// and never analysed.
     public static func isInCache(_ url: URL) -> Bool {
-        url.standardizedFileURL.pathComponents.contains("attached-sources")
+        let components = url.standardizedFileURL.pathComponents
+        return components.contains("attached-sources") || components.contains("git-revisions")
     }
 
     /// `jdkHome` is the JDK whose `lib/src.zip` matches a `.jdkModule` origin. `jar` is the binary

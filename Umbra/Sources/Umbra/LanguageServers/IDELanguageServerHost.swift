@@ -303,13 +303,14 @@ final class IDELanguageServerHost {
     }
 
     /// The status-bar text: one entry per server, `·` between them. A ready server shows its first piece
-    /// of work (and how many more run beside it) instead of just its name.
+    /// of work (and how many more run beside it) instead of just its name. A missing server stays out:
+    /// its binary is not installed, so the editor banner on a matching file carries it instead.
     static func summary(statuses: [ServerStatus], work: [String: [LSPWorkProgress]]) -> String? {
         let text = statuses.map { status -> String in
             switch status.phase {
             case .stopped: return ""
+            case .missing: return ""
             case .untrusted: return "\(status.name): not trusted"
-            case .missing: return "\(status.name): not found"
             case .unprepared: return "\(status.name): project not indexed"
             case .starting: return "\(status.name): starting"
             case .restarting: return "\(status.name): restarting"

@@ -62,6 +62,10 @@ final class FractionHolder {
     }
     @ObservationIgnored var getter: (() -> CGFloat)?
     @ObservationIgnored var setter: ((CGFloat) -> Void)?
+    /// Umbra: whether a change of `value` that was not a drag moves the divider with the pane
+    /// animation. `Split` copies the value into its own state from an `onChange`, which runs
+    /// outside the transaction that set it, so the animation has to be started there.
+    @ObservationIgnored var animatesChanges = false
 
     init(_ fraction: CGFloat? = nil, getter: (() -> CGFloat)? = nil, setter: ((CGFloat) -> Void)? = nil) {
         value = getter?() ?? fraction ?? 0.5

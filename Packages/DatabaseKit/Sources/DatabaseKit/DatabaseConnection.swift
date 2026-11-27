@@ -1,34 +1,19 @@
+@_exported import DatabaseCore
+@_exported import SQLIntelligence
 import Foundation
 import MySQLKit
 import PostgresKit
 
-/// A database Umbra can open. MySQL and PostgreSQL share one session; MongoDB has its own.
-public enum DatabaseEngine: String, Codable, CaseIterable, Sendable, Identifiable {
-    case mysql
-    case postgres
-    case mongo
-
-    public var id: String { rawValue }
-
-    public var displayName: String {
-        switch self {
-        case .mysql: "MySQL"
-        case .postgres: "PostgreSQL"
-        case .mongo: "MongoDB"
-        }
-    }
-
+extension DatabaseEngine {
+    /// The port a server of this engine listens on by default. Lives here, not in
+    /// `DatabaseCore`, because the constants come from the drivers.
     public var defaultPort: Int {
         switch self {
         case .mysql: MySQLConfiguration.ianaPortNumber
         case .postgres: SQLPostgresConfiguration.ianaPortNumber
+        case .sqlite: 0  // a file has no port
         case .mongo: 27017
         }
-    }
-
-    /// The editor language of a console bound to this engine.
-    public var consoleLanguage: String {
-        self == .mongo ? "json" : "sql"
     }
 }
 
@@ -43,6 +28,10 @@ public struct DatabaseConnection: Codable, Equatable, Sendable, Identifiable {
     /// SQL database, or the Mongo database a new console opens.
     public var database: String
     public var useTLS: Bool
+    /// Make TLS mandatory with certificate verification (PostgreSQL; MySQL already requires it
+    /// when `useTLS` is set). `nil` in files saved before this existed: those keep `useTLS`
+    /// semantics unchanged.
+    public var tlsRequired: Bool?
     public var readOnly: Bool
     public var authSource: String
     public var useSRV: Bool
@@ -51,6 +40,9 @@ public struct DatabaseConnection: Codable, Equatable, Sendable, Identifiable {
     /// The last statement run against this data source, so it can be reopened.
     public var lastStatement: String
     public var sortIndex: Int
+    public var isProduction: Bool?
+    public var group: String?
+    public var sqliteBusyTimeoutMilliseconds: Int?
 
     public init(
         id: UUID = UUID(),
@@ -61,13 +53,17 @@ public struct DatabaseConnection: Codable, Equatable, Sendable, Identifiable {
         username: String = "",
         database: String = "",
         useTLS: Bool = false,
+        tlsRequired: Bool? = nil,
         readOnly: Bool = false,
         authSource: String = "admin",
         useSRV: Bool = false,
         replicaSet: String = "",
         directConnection: Bool = true,
         lastStatement: String = "",
-        sortIndex: Int = 0
+        sortIndex: Int = 0,
+        isProduction: Bool? = nil,
+        group: String? = nil,
+        sqliteBusyTimeoutMilliseconds: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -77,6 +73,7 @@ public struct DatabaseConnection: Codable, Equatable, Sendable, Identifiable {
         self.username = username
         self.database = database
         self.useTLS = useTLS
+        self.tlsRequired = tlsRequired
         self.readOnly = readOnly
         self.authSource = authSource
         self.useSRV = useSRV
@@ -84,6 +81,9 @@ public struct DatabaseConnection: Codable, Equatable, Sendable, Identifiable {
         self.directConnection = directConnection
         self.lastStatement = lastStatement
         self.sortIndex = sortIndex
+        self.isProduction = isProduction
+        self.group = group
+        self.sqliteBusyTimeoutMilliseconds = sqliteBusyTimeoutMilliseconds
     }
 
     public func mongoLogin(password: String) -> MongoLogin {

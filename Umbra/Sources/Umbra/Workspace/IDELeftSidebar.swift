@@ -127,17 +127,6 @@ private struct IDESidebarTabItem: View {
                         .padding(.horizontal, IDEAppearance.Spacing.xs)
                         .background(IDEAppearance.ColorToken.controlHover, in: Capsule())
                 }
-                if isHovering, tab.isClosable {
-                    Image(systemName: "xmark")
-                        .font(.system(size: IDEAppearance.IconSize.microGlyph, weight: .semibold))
-                        .foregroundStyle(IDEAppearance.ColorToken.muted)
-                        .frame(width: 14, height: 14)
-                        .contentShape(Rectangle())
-                        .onTapGesture { onClose() }
-                        .help("Close Tab")
-                        .accessibilityLabel("Close \(tab.title) Tab")
-                        .accessibilityAddTraits(.isButton)
-                }
             }
             .padding(.horizontal, isSelected ? IDEAppearance.Spacing.sm : 6)
             .frame(minHeight: IDEAppearance.Spacing.iconButton - 2)

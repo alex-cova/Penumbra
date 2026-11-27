@@ -104,7 +104,7 @@ extension IDEWorkspace {
         // the gutter for non-Java files.
         if let document, databaseSupport.consoles[document.id] != nil {
             httpGutterStamp = nil
-            refreshDatabaseGutter(from: textView)
+            await refreshDatabaseGutter(from: textView)
         } else if document?.languageIdentifier == "http" {
             databaseGutterStamp = nil
             if let content {
@@ -133,8 +133,9 @@ extension IDEWorkspace {
         guard !Task.isCancelled else { return }
         let wantsBreakpoints = isJava || language == "swift" || language == "javascript" || language == "typescript"
         guard wantsBreakpoints, let fileURL else {
-            runEligibility.javaFileCanTest = false
-            runEligibility.activeJavaTestClass = nil
+            let kotlinTests = if language == "kotlin", let fileURL { await javaSupport.tests(for: fileURL) } else { nil as JavaTestClass? }
+            runEligibility.javaFileCanTest = !(kotlinTests?.methods.isEmpty ?? true)
+            runEligibility.activeJavaTestClass = kotlinTests
             guard let fileURL, !locations.isEmpty else {
                 textView.setGutterDecorations([])
                 textView.gutterDecorationHandler = nil

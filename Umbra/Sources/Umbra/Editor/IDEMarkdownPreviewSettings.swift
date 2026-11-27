@@ -53,6 +53,9 @@ struct IDEMarkdownPreviewSettings: Codable, Equatable {
     var tableDensity: TableDensity = .padded
     var opensDiagramsOnClick = true
     var animatesAppearance = true
+    /// Shows the preview next to the editor instead of over it, so the rendered page follows
+    /// the buffer live while it stays editable.
+    var sideBySide = false
 
     static let fontSizeRange = Int(MarkdownPreviewOptions.fontSizeRange.lowerBound)...Int(MarkdownPreviewOptions.fontSizeRange.upperBound)
     static let lineLengthRange = MarkdownPreviewOptions.lineLengthRange
@@ -78,6 +81,7 @@ struct IDEMarkdownPreviewSettings: Codable, Equatable {
         tableDensity = (try? container.decodeIfPresent(TableDensity.self, forKey: .tableDensity)) ?? defaults.tableDensity
         opensDiagramsOnClick = (try? container.decodeIfPresent(Bool.self, forKey: .opensDiagramsOnClick)) ?? defaults.opensDiagramsOnClick
         animatesAppearance = (try? container.decodeIfPresent(Bool.self, forKey: .animatesAppearance)) ?? defaults.animatesAppearance
+        sideBySide = (try? container.decodeIfPresent(Bool.self, forKey: .sideBySide)) ?? defaults.sideBySide
     }
 
     /// What the preview engine takes.

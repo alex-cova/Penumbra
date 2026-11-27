@@ -53,6 +53,8 @@ final class IDEProjectModel {
     @ObservationIgnored var refreshHookForTesting: (@MainActor (Int) async -> Void)?
     /// The Explorer row highlighted as current (last clicked, or the revealed file).
     var selectedPath: String?
+    /// Document IDs the Explorer already revealed on activation (`shouldAutoReveal`).
+    @ObservationIgnored private var autoRevealedDocumentIDs = Set<UUID>()
     private(set) var revealRequest: RevealRequest?
     /// Row currently showing the inline rename field.
     var renamingPath: String?
@@ -108,6 +110,7 @@ final class IDEProjectModel {
         generation += 1
         appliedListingSequence = [:]
         appliedRebuildSequence = 0
+        autoRevealedDocumentIDs = []
         isRootMissing = false
         if let url {
             // The root level always paints synchronously (one directory read); deeper levels
@@ -213,7 +216,12 @@ final class IDEProjectModel {
 
     /// Expands every ancestor from the project root down to `url` so the Explorer shows that
     /// folder. No-op when no project is open or `url` sits outside the root.
-    func reveal(url: URL) {
+    ///
+    /// With Flatten Packages the packages below a source root are sibling rows, so expanding
+    /// the whole filesystem chain would also open ancestor packages (revealing a file in
+    /// `com.balatro.api` would expand `com.balatro`). In that mode only the chain down to the
+    /// source root plus the target's own folder are expanded.
+    func reveal(url: URL, flattenPackages: Bool = false, sourceRootPaths: Set<String> = []) {
         guard let rootURL else { return }
         let root = rootURL.standardizedFileURL
         let target = url.standardizedFileURL
@@ -228,12 +236,57 @@ final class IDEProjectModel {
             current.appendPathComponent(String(component))
             ancestors.append(current.path)
         }
+        var visible = ancestors
+        if flattenPackages {
+            // The tree lookup can miss when the tree is stale (or spells a symlinked
+            // path differently); the disk stat then decides whether the target is a folder.
+            let targetIsDirectory: Bool
+            if let node = node(at: targetPath) {
+                targetIsDirectory = node.isDirectory
+            } else {
+                targetIsDirectory = (try? target.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            }
+            if let flattened = Self.flattenedRevealPaths(
+                ancestors: ancestors,
+                targetIsDirectory: targetIsDirectory,
+                sourceRootPaths: sourceRootPaths
+            ) {
+                visible = flattened
+            }
+        }
         // Every write notifies observers (and re-renders the Explorer), even when nothing changes.
         // Revealing an already-visible file is the common case, so only write when a path is new.
-        let missing = ancestors.filter { !expandedPaths.contains($0) }
+        let missing = visible.filter { !expandedPaths.contains($0) }
         if !missing.isEmpty {
             expandedPaths.formUnion(missing)
         }
+    }
+
+    /// The ancestors `reveal` must expand when packages are flattened: the chain from the
+    /// project root through the outermost source root (the only one that flattens, since
+    /// everything below it becomes sibling package rows), plus the target's own folder —
+    /// a file's parent directory, a directory itself. Directories between the source root
+    /// and that folder are sibling package rows, not visual ancestors, so they stay as
+    /// they are. `nil` when no ancestor is a source root and the full chain applies.
+    private static func flattenedRevealPaths(
+        ancestors: [String],
+        targetIsDirectory: Bool,
+        sourceRootPaths: Set<String>
+    ) -> [String]? {
+        guard let sourceIndex = ancestors.firstIndex(where: {
+            IDEFlattenedPackages.isSourceRoot(URL(fileURLWithPath: $0), sourceRootPaths: sourceRootPaths)
+        }) else { return nil }
+        var visible = Array(ancestors[...sourceIndex])
+        if ancestors.count >= 2, !targetIsDirectory {
+            let parent = ancestors[ancestors.count - 2]
+            if parent != visible.last {
+                visible.append(parent)
+            }
+        }
+        if let last = ancestors.last, visible.last != last {
+            visible.append(last)
+        }
+        return visible
     }
 
     // MARK: - Live refresh
@@ -462,13 +515,28 @@ final class IDEProjectModel {
 
     /// Expands the ancestors of `url`, selects its row, and asks the tree to scroll to it.
     /// `centered` is for an explicit user request; automatic follow scrolls minimally.
-    func revealAndSelect(url: URL, centered: Bool) {
-        reveal(url: url)
+    func revealAndSelect(url: URL, centered: Bool, flattenPackages: Bool = false, sourceRootPaths: Set<String> = []) {
+        reveal(url: url, flattenPackages: flattenPackages, sourceRootPaths: sourceRootPaths)
         guard let rootURL else { return }
         let path = url.standardizedFileURL.path
         guard path.hasPrefix(rootURL.path + "/") else { return }
         selectedPath = path
         revealRequest = RevealRequest(path: path, centered: centered)
+    }
+
+    /// Whether activating `documentID` auto-reveals it in the Explorer. The first activation
+    /// (a fresh open) always reveals; later ones (reselecting an already-open tab) reveal
+    /// only when `revealReselected` is set, so a collapsed package stays collapsed by
+    /// default. Closing a document forgets it (`forgetAutoRevealed`), so reopening reveals.
+    func shouldAutoReveal(documentID: UUID, revealReselected: Bool) -> Bool {
+        if autoRevealedDocumentIDs.contains(documentID) { return revealReselected }
+        autoRevealedDocumentIDs.insert(documentID)
+        return true
+    }
+
+    /// A closed document reveals again when reopened.
+    func forgetAutoRevealed(documentID: UUID) {
+        autoRevealedDocumentIDs.remove(documentID)
     }
 
     /// Scrolls `path` into view without changing expansion or selection (keyboard navigation).

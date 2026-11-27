@@ -783,6 +783,10 @@ final class TextInputView: EditorView {
                 if let oldSelectedRange = selection {
                     selection = safeSelectionRange(from: oldSelectedRange)
                 }
+                // Same wholesale replacement as `setState`: the old occurrence ranges
+                // no longer describe this text, and no selection change fires when the
+                // caret is unchanged.
+                occurrenceHighlightController.documentDidChange(selectedRange: selection, isMultiCaret: isMultiCursorActive)
                 // `rebuild()` recycles `DocumentLineNodeID`s (they restart at 1), and this setter
                 // mutates `stringView` / `lineManager` in place rather than swapping in fresh
                 // objects the way `setState` does — so the identity-triggered didSets that would
@@ -1599,6 +1603,10 @@ final class TextInputView: EditorView {
         if let oldSelectedRange = selection {
             selection = safeSelectionRange(from: oldSelectedRange)
         }
+        // The text was replaced wholesale: drop the previous document's occurrence
+        // highlights and recompute. No selection change fires when the caret is unchanged,
+        // so without this the old ranges would stay painted over the new document.
+        occurrenceHighlightController.documentDidChange(selectedRange: selection, isMultiCaret: isMultiCursorActive)
         if window != nil {
             performFullLayout()
         } else {
@@ -1979,6 +1987,21 @@ final class TextInputView: EditorView {
         layoutManager.clearGutterAnnotations()
     }
 
+    var gutterAnnotationClickHandler: ((GutterAnnotationClick) -> Bool)? {
+        get { layoutManager.gutterAnnotationClickHandler }
+        set { layoutManager.gutterAnnotationClickHandler = newValue }
+    }
+
+    var gutterAnnotationHoverHandler: ((GutterAnnotationClick?) -> Void)? {
+        get { layoutManager.gutterAnnotationHoverHandler }
+        set { layoutManager.gutterAnnotationHoverHandler = newValue }
+    }
+
+    var highlightedGutterAnnotationID: Int? {
+        get { layoutManager.highlightedGutterAnnotationID }
+        set { layoutManager.highlightedGutterAnnotationID = newValue }
+    }
+
     var showsGutterChangeStripe: Bool {
         get { layoutManager.showsGutterChangeStripe }
         set { layoutManager.showsGutterChangeStripe = newValue }
@@ -1998,6 +2021,10 @@ final class TextInputView: EditorView {
 
     func gutterAnnotation(atRow row: Int) -> GutterAnnotation? {
         layoutManager.gutterAnnotation(atRow: row)
+    }
+
+    var lineNumberColumnWidthForTesting: CGFloat {
+        layoutManager.lineNumberColumnWidth
     }
 
     override func didMoveToWindow() {
@@ -2499,7 +2526,22 @@ extension TextInputView {
                                                                    byteRange: byteRange,
                                                                    hasOnlyDefaultAttributes: true))
         }
+        normalizeFontSizes(of: attributed)
         return attributed
+    }
+
+    /// Gives every run the editor font's size, keeping its traits (bold, italic). A pinned row has
+    /// the height of one editor line, so a theme's scaled Markdown headings (`markup.heading.1`
+    /// at 1.6x) would spill out of it.
+    private func normalizeFontSizes(of attributed: NSMutableAttributedString) {
+        let size = theme.font.pointSize
+        let full = NSRange(location: 0, length: attributed.length)
+        attributed.enumerateAttribute(.font, in: full) { value, range, _ in
+            guard let font = value as? NSFont, font.pointSize != size else {
+                return
+            }
+            attributed.addAttribute(.font, value: NSFont(descriptor: font.fontDescriptor, size: size) ?? font, range: range)
+        }
     }
 
     /// Highlighted lines for the scrollbar preview. Reads each row through ``lineInfo(atRow:)`` and
@@ -2541,6 +2583,7 @@ extension TextInputView {
                     hasOnlyDefaultAttributes: true
                 ))
             }
+            normalizeFontSizes(of: attributed)
             if capped < info.length {
                 attributed.append(NSAttributedString(string: "…", attributes: [
                     .font: theme.font,

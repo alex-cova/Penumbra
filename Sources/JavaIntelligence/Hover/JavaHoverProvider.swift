@@ -42,6 +42,7 @@ public actor JavaHoverProvider: HoverProvider {
         let lookup = openBuffer
         let home = jdkHome
         let cacheRoot = indexPaths.root
+        let isAmbient = context.trigger == .idle || context.isPointerHover
         let resolve = { () async -> JavaHoverContent? in
             await JavaHover.resolve(
                 source: source,
@@ -50,7 +51,8 @@ public actor JavaHoverProvider: HoverProvider {
                 index: self.index,
                 jdkHome: home,
                 cacheRoot: cacheRoot,
-                openBuffer: lookup
+                openBuffer: lookup,
+                isAmbient: isAmbient
             )
         }
         let content: JavaHoverContent?

@@ -17,7 +17,7 @@ public actor JavaTestIndex {
         testSourceRootPaths = model.map(Self.testSourceRootPaths(from:)) ?? []
     }
 
-    /// Scans every `.java` file under `directories`.
+    /// Scans Java and Kotlin test declarations under `directories`.
     public func reindexAll(in directories: [URL]) {
         var next: [URL: JavaTestClass] = [:]
         for directory in directories {
@@ -44,21 +44,7 @@ public actor JavaTestIndex {
             classesByFile[key] = nil
             return
         }
-        let discovered = JavaTestDiscovery.discover(source: source, url: key)
-        let methods = discovered.values.flatMap { $0 }.sorted { $0.line < $1.line }
-        guard !methods.isEmpty else {
-            classesByFile[key] = nil
-            return
-        }
-        let className = methods.map(\.className).sorted().last ?? methods[0].className
-        let context = gradleContext(for: key)
-        classesByFile[key] = JavaTestClass(
-            qualifiedName: className,
-            sourceFile: key,
-            methods: methods,
-            gradleProjectPath: context.projectPath,
-            gradleTaskPath: context.taskPath
-        )
+        classesByFile[key] = discover(file: key, source: source)
     }
 
     public func testClass(for file: URL) -> JavaTestClass? {
@@ -91,21 +77,30 @@ public actor JavaTestIndex {
             options: [.skipsHiddenFiles]
         ) else { return }
         for case let url as URL in enumerator {
-            guard url.pathExtension == "java" else { continue }
-            guard let source = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            let discovered = JavaTestDiscovery.discover(source: source, url: url.standardizedFileURL)
-            let allMethods = discovered.values.flatMap { $0 }.sorted { $0.line < $1.line }
-            guard !allMethods.isEmpty else { continue }
-            let className = allMethods.first!.className
-            let context = gradleContext(for: url)
-            result[url.standardizedFileURL] = JavaTestClass(
-                qualifiedName: className,
-                sourceFile: url.standardizedFileURL,
-                methods: allMethods,
-                gradleProjectPath: context.projectPath,
-                gradleTaskPath: context.taskPath
-            )
+            guard ["java", "kt"].contains(url.pathExtension),
+                  let source = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let key = url.standardizedFileURL
+            result[key] = discover(file: key, source: source)
         }
+    }
+
+    private func discover(file: URL, source: String) -> JavaTestClass? {
+        let discovered: [String: [JavaTestMethod]]
+        switch file.pathExtension {
+        case "java":
+            discovered = JavaTestDiscovery.discover(source: source, url: file)
+        case "kt":
+            guard let model = gradleModel, let match = model.sourceSet(containing: file),
+                  match.sourceSet.name == "test" || match.subproject.testTasks.contains(where: { $0.sourceSetName == match.sourceSet.name }) else { return nil }
+            discovered = KotlinJVMTestDiscovery.discover(source: source, url: file)
+        default:
+            return nil
+        }
+        let methods = discovered.values.flatMap { $0 }.sorted { $0.line < $1.line }
+        guard let first = methods.first else { return nil }
+        let context = gradleContext(for: file)
+        return JavaTestClass(qualifiedName: first.className, sourceFile: file, methods: methods,
+                             gradleProjectPath: context.projectPath, gradleTaskPath: context.taskPath)
     }
 
     private static func testSourceRootPaths(from model: JavaGradleProjectModel) -> Set<String> {

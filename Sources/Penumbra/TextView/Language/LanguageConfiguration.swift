@@ -77,6 +77,25 @@ public struct DeclarationRule: Sendable, Hashable {
     }
 }
 
+/// Which heading sections pin their heading line (sticky lines) in a document language.
+///
+/// A section is a node of ``sectionNodeType`` whose first child is one of ``headingNodeTypes``
+/// holding one of ``markerNodeTypes``: Markdown's `section` starts at an `atx_heading` and runs to
+/// the next heading of the same or a higher level, so nesting follows the heading levels. Leaving
+/// a level's marker out of ``markerNodeTypes`` keeps those sections from being pinned (their
+/// parent sections still are).
+public struct StickySectionRule: Sendable, Hashable {
+    public var sectionNodeType: String
+    public var headingNodeTypes: [String]
+    public var markerNodeTypes: Set<String>
+
+    public init(sectionNodeType: String, headingNodeTypes: [String], markerNodeTypes: Set<String>) {
+        self.sectionNodeType = sectionNodeType
+        self.headingNodeTypes = headingNodeTypes
+        self.markerNodeTypes = markerNodeTypes
+    }
+}
+
 /// Per-language behaviour for features that vary by language: method separators, breadcrumbs, and
 /// occurrence highlighting.
 ///
@@ -99,6 +118,9 @@ public struct LanguageConfiguration: Sendable, Hashable {
     /// line stays pinned to the top of the editor while their body scrolls by (sticky lines):
     /// `if`, loops, `switch`, `try`.
     public var stickyNodeTypes: Set<String>
+    /// For document languages whose structure is headings rather than braces (Markdown): which
+    /// sections pin their heading line. `nil` pins no sections.
+    public var stickySection: StickySectionRule?
 
     /// Statement nodes most grammars name alike (tree-sitter-java, -swift, -javascript, -python…).
     public static let commonStickyNodeTypes: Set<String> = [
@@ -112,9 +134,11 @@ public struct LanguageConfiguration: Sendable, Hashable {
         showsBreadcrumbs: Bool = true,
         highlightsOccurrences: Bool = true,
         minimumOccurrenceLength: Int = 2,
-        stickyNodeTypes: Set<String> = LanguageConfiguration.commonStickyNodeTypes
+        stickyNodeTypes: Set<String> = LanguageConfiguration.commonStickyNodeTypes,
+        stickySection: StickySectionRule? = nil
     ) {
         self.stickyNodeTypes = stickyNodeTypes
+        self.stickySection = stickySection
         self.declarations = declarations
         self.showsMethodSeparators = showsMethodSeparators
         self.showsBreadcrumbs = showsBreadcrumbs

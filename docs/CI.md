@@ -71,6 +71,7 @@ separate jobs or by hand, with the display on (`caffeinate -u -d -i -s`).
 | Java completion quality | `JAVA_QUALITY=1` (`JAVA_QUALITY_SET`, `JAVA_QUALITY_GRADLE_MODELS`) | network, a JDK | ~4 min; report |
 | Receiver-type audit, differential report | `JAVA_AUDIT=1`, `JAVA_DIFFERENTIAL_REPORT=1` | network, a JDK | ~2 min each; report |
 | Swift parity / SourceKit ceiling | `SWIFT_PARITY=1` | SourceKit-LSP | report |
+| Live databases (`UMBRA_DB_INTEGRATION=1` with `UMBRA_TEST_PG_URL`, `_MYSQL_URL`, `_MONGO_URL`) | `Scripts/db-test-env.sh up` | Docker: PostgreSQL+PostGIS, MySQL 8.4, MongoDB | never on CI: refused by `refuse-paid-test-variables.sh`, each suite also skips under `GITHUB_ACTIONS`, checked by `Scripts/tests/refuse-live-database-test.sh` |
 | Live ACP agents | `UMBRA_LIVE_ACP=1` (`UMBRA_LIVE_ACP_CODEX`, `_CLAUDE`, `_PREFIX`; `UMBRA_LIVE_ACP_INSTALL=1`) | paid accounts | refused in CI by `refuse-paid-test-variables.sh` |
 | Local agent models | `UMBRA_AGENT_OLLAMA_MODEL`, `UMBRA_AGENT_MLX_MODEL` | a local model | nondeterministic |
 | Packaged app layout | `UMBRA_PACKAGED_APP=…/Umbra.app` | a built app | seconds |

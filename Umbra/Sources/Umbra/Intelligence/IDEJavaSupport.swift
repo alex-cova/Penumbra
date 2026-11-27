@@ -336,6 +336,11 @@ final class IDEJavaSupport {
         await testIndex.testClass(for: file)
     }
 
+    func kotlinTests(for file: URL, source: String) async -> JavaTestClass? {
+        await testIndex.rescan(file: file, source: source)
+        return await testIndex.testClass(for: file)
+    }
+
     func allTestClasses() async -> [JavaTestClass] {
         await testIndex.allTestClasses()
     }

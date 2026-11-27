@@ -65,6 +65,42 @@ final class JavaHoverProviderTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(result).contents.contains("Adds `item` to the list."))
     }
 
+    func testAmbientHoverOnTheNameOfTheClassBeingReadStaysQuiet() async throws {
+        let things = try write("Things.java", list)
+        let marked = list.replacingOccurrences(of: "class Things", with: "class €Things")
+        // A caret that rests on the name, and the pointer over it, only repeat the Javadoc just above.
+        let idle = try await hover(marked, url: things.url, indexing: [things], trigger: .idle)
+        XCTAssertNil(idle)
+        let pointer = try await hover(marked, url: things.url, indexing: [things], pointer: true)
+        XCTAssertNil(pointer)
+        // Quick Documentation asked for it, so it shows.
+        let manual = try await hover(marked, url: things.url, indexing: [things])
+        XCTAssertTrue(try XCTUnwrap(manual).contents.contains("A list of things."))
+    }
+
+    func testAmbientHoverOnOtherMentionsOfTheClassBeingReadStaysQuiet() async throws {
+        let things = try write("Things.java", list)
+        let body = list.replacingOccurrences(of: "public void undocumented() {}", with: """
+        public Things<T> copy() { return new Things<T>(); }
+        public void self() { Things<T> same = this; this.count = 1; }
+        """)
+        for (from, to) in [("new Things", "new €Things"), ("{ Things<T> same", "{ €Things<T> same"), ("this.count", "€this.count")] {
+            let marked = body.replacingOccurrences(of: from, with: to)
+            let idle = try await hover(marked, url: things.url, indexing: [things], trigger: .idle)
+            XCTAssertNil(idle, from)
+            let pointer = try await hover(marked, url: things.url, indexing: [things], pointer: true)
+            XCTAssertNil(pointer, from)
+            let manual = try await hover(marked, url: things.url, indexing: [things])
+            XCTAssertNotNil(manual, from)
+        }
+    }
+
+    func testPointerHoverOnAReferenceToTheClassStillShowsItsDocs() async throws {
+        let things = try write("Things.java", list)
+        let result = try await hover("class T { €Things<String> t; }", indexing: [things], pointer: true)
+        XCTAssertTrue(try XCTUnwrap(result).contents.contains("A list of things."))
+    }
+
     func testHoverRangeCoversTheIdentifier() async throws {
         let things = try write("Things.java", list)
         let source = "class T { boolean m(Things<String> t) { return t.add(\"x\"); } }"
@@ -188,15 +224,17 @@ final class JavaHoverProviderTests: XCTestCase {
     }
 
     private func hover(
-        _ marked: String, url: URL? = nil, indexing files: [Fixture], language: String = "java", trigger: RequestTrigger = .manual
+        _ marked: String, url: URL? = nil, indexing files: [Fixture], language: String = "java", trigger: RequestTrigger = .manual,
+        pointer: Bool = false
     ) async throws -> HoverResult? {
         let stubs = files.flatMap { JavaSourceStubBuilder.build(source: $0.source, url: $0.url).classes }
         let provider = try await makeProvider(stubs: stubs)
-        return try await hover(marked, url: url, provider: provider, language: language, trigger: trigger)
+        return try await hover(marked, url: url, provider: provider, language: language, trigger: trigger, pointer: pointer)
     }
 
     private func hover(
-        _ marked: String, url: URL? = nil, provider: JavaHoverProvider, language: String = "java", trigger: RequestTrigger
+        _ marked: String, url: URL? = nil, provider: JavaHoverProvider, language: String = "java", trigger: RequestTrigger,
+        pointer: Bool = false
     ) async throws -> HoverResult? {
         let marker = try XCTUnwrap(marked.range(of: "€"))
         let source = marked.replacingOccurrences(of: "€", with: "")
@@ -212,7 +250,8 @@ final class JavaHoverProviderTests: XCTestCase {
             languageIdentifier: language
         )
         return await provider.provide(context: HoverContext(
-            document: document, cursor: document.cursor, selection: document.selection, trigger: trigger
+            document: document, cursor: document.cursor, selection: document.selection, trigger: trigger,
+            isPointerHover: pointer
         ))
     }
 }

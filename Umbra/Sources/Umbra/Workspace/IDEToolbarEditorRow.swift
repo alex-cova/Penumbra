@@ -24,6 +24,8 @@ struct IDEToolbarEditorRow: View {
             IDETitlebarProjectTitle(
                 title: workspace.project.rootURL?.lastPathComponent ?? "Umbra",
                 branch: workspace.gitStatus.currentBranch,
+                ahead: workspace.gitStatus.sync?.ahead ?? 0,
+                behind: workspace.gitStatus.sync?.behind ?? 0,
                 operation: workspace.gitStatus.operationPresentation?.badge,
                 showSourceControl: workspace.showSourceControl
             )

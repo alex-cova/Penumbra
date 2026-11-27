@@ -13,7 +13,7 @@ import JavaIntelligence
 @MainActor
 final class IDEJavaRunProvider: IDERunProvider {
     let id = "java"
-    let languageIdentifiers: Set<String> = ["java"]
+    let languageIdentifiers: Set<String> = ["java", "kotlin"]
 
     let java: IDEJavaSupport
     var gradle: IDEGradleProjectSystem { java.gradle }
@@ -24,9 +24,11 @@ final class IDEJavaRunProvider: IDERunProvider {
     /// Bumped by Stop. A launch that is still building (a run, a debug) notices and gives up.
     private(set) var launchEpoch = 0
     /// When set, the finished Gradle run's XML reports are parsed into test results.
+    var gradleTestLaunchPending = false
     var pendingTestRunRequest: JavaTestRunRequest?
     /// The coverage or profile plan of the Gradle task run that is going; consumed when it ends.
     var pendingInstrumentation: (plan: InstrumentationPlan, tasks: [String])?
+    var instrumentationTestSessionID: UUID?
 
     init(host: any IDEJavaRunHost, java: IDEJavaSupport) {
         self.host = host
@@ -79,6 +81,11 @@ final class IDEJavaRunProvider: IDERunProvider {
 
     /// Every `main` and, in a test source, every test method and the test class.
     func runnableLocations(in document: IDERunDocument) async -> [IDERunnableLocation] {
+        if document.languageIdentifier == "kotlin", gradle.isActive, let url = document.url,
+           let found = await java.kotlinTests(for: url, source: document.text) {
+            let classLine = await Self.classDeclarationLine(of: found, in: document.text)
+            return Self.locations(fromMains: [], testClass: found, classLine: classLine)
+        }
         guard document.languageIdentifier == "java", let url = document.url else { return [] }
         let text = document.text
         let fileName = url.lastPathComponent
@@ -491,6 +498,15 @@ final class IDEJavaRunProvider: IDERunProvider {
     }
 
     private func resolveContext(_ document: IDERunDocument) async -> ContextTarget? {
+        if document.languageIdentifier == "kotlin", gradle.isActive, let url = document.url,
+           let test = await java.kotlinTests(for: url, source: document.text) {
+            let end = max(0, document.caretUTF16Offset)
+            let line = document.text.utf16.prefix(end).reduce(1) { $0 + ($1 == 0x0A ? 1 : 0) }
+            if let method = test.methods.first(where: { $0.line == line }) {
+                return .testMethod(method, taskPath: test.gradleTaskPath)
+            }
+            return .testClass(test)
+        }
         guard document.languageIdentifier == "java", let url = document.url else { return nil }
         let text = document.text
         guard let context = await java.structureProvider.caretContext(

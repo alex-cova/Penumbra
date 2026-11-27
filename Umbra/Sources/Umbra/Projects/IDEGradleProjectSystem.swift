@@ -36,15 +36,6 @@ extension IDEBottomPanelTab {
     static let gradle = IDEBottomPanelTab("gradle")
 }
 
-extension IDEProjectConsoleLog {
-    mutating func appendProcessLine(_ line: GradleOutputLine) {
-        appendProcessLine(IDEProjectOutputLine(
-            stream: line.stream == .stderr ? .stderr : .stdout,
-            text: line.text
-        ))
-    }
-}
-
 /// Gradle as a project system: detects a Gradle folder, syncs its module and dependency model through
 /// `GradleCommandRunner` (after the trust prompt), keeps the Gradle console, runs tasks, watches the
 /// build files and shows the Gradle tool window. Split out of `IDEJavaSupport`, which indexes the
@@ -84,6 +75,8 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     var changedConfigurationFilePaths: [String] { changedBuildFiles.sorted() }
     /// True while a user-triggered Gradle task (from the sidebar or elsewhere) is running.
     private(set) var isRunningTasks = false
+    private var isDrainingTask = false
+    @ObservationIgnored private var taskCancelledAt: Date?
     private(set) var runningTasks: [String] = []
     /// The cached model is being applied instead of the whole-tree index: the project is trusted and
     /// auto-sync is on, so the sources come from its modules.
@@ -167,7 +160,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         return projectRootURL != nil
     }
 
-    var isBusy: Bool { syncState.isSyncing || isRunningTasks }
+    var isBusy: Bool { syncState.isSyncing || isRunningTasks || isDrainingTask }
 
     /// The windows's Gradle project root, for callers that build a request against it.
     var rootURL: URL? { projectRootURL }
@@ -286,9 +279,6 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         syncTask?.cancel()
         syncTask = nil
         runTask?.cancel()
-        runTask = nil
-        isRunningTasks = false
-        runningTasks = []
         syncInFlight = false
         stopBuildFileWatcher()
         rememberedGradleHome = nil
@@ -309,7 +299,8 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     /// Re-runs Gradle extraction for the current project root -- backs "Java: Reload Gradle
     /// Project". Re-asks for trust even if the user previously declined.
     func reload() {
-        guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
+        guard !isRunningTasks, !isDrainingTask,
+              let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else { return }
         dependencyGraphCache.removeAll()
         modelCache.invalidate(projectRoot: url)
         syncGradleProject(
@@ -343,7 +334,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     func jdkSelectionChanged() async {
         let generation = projectGeneration
         guard let url = projectRootURL, isActive, IDEPreferences.shared.javaGradleAutoSync,
-              trustStore.isTrusted(url), !syncState.isSyncing, !isRunningTasks else { return }
+              trustStore.isTrusted(url), !isBusy else { return }
         let gradleHome = await gradleJavaHome()?.resolvingSymlinksInPath().path
         guard isCurrent(generation), gradleHome != javaHomePath else { return }
         syncGradleProject(
@@ -480,6 +471,8 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                 // version`). Timeouts and cancellations are not this error and never retry.
                 var retryCandidates: [JDKInstallation]?
                 var usedFallback = false
+                let log = try Self.makeTemporaryLog()
+                console.sessionLog = log
                 var extracted: (model: JavaGradleProjectModel, result: GradleCommandResult)?
                 while extracted == nil {
                     do {
@@ -487,12 +480,7 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                             projectDirectory: url,
                             javaHome: javaHome,
                             timeout: timeout,
-                            output: { line in
-                                Task { @MainActor in
-                                    guard generation == self.projectGeneration else { return }
-                                    self.console.appendProcessLine(line)
-                                }
-                            }
+                            log: log
                         )
                     } catch let GradleProjectModelExtractionError.syncFailed(failed)
                         where launch.isAutomatic
@@ -596,6 +584,8 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
 
     private static func summarizeTaskRun(_ error: Error) -> String {
         switch error {
+        case let error as GradleSessionLog.WriteFailure:
+            error.localizedDescription
         case GradleCommandError.timedOut:
             "Gradle task timed out"
         case GradleCommandError.cancelled:
@@ -672,11 +662,26 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
     ///
     /// `completion` is called exactly once, whichever way the call ends, so a caller can await it
     /// (the agent does): refused to start, not trusted, finished, timed out, cancelled or failed.
+    struct TestExecution {
+        let session: GradleTestSession
+        let environment: [String: String]
+        let javaHome: URL?
+        let workingDirectory: URL?
+        let beforeLaunch: [JavaRunConfiguration.BeforeLaunchTask]
+        let instrumentation: JavaRunInstrumentation
+        let canReplay: Bool
+        let replay: GradleLaunchSnapshot?
+        let willLaunch: @MainActor () async -> Void
+        let update: @MainActor (GradleTestSession.Update) -> Void
+        let settle: @MainActor (IDEGradleRunOutcome, GradleTestSession.Update) async -> Void
+    }
+
     func runGradleTasks(
         _ taskPaths: [String],
         extraArguments: [String] = [],
         runsApplication: Bool = false,
         timeout customTimeout: Duration? = nil,
+        test: TestExecution? = nil,
         completion: (@MainActor (IDEGradleRunOutcome) -> Void)? = nil
     ) {
         guard let url = projectRootURL, GradleProjectModelExtractor.isGradleProject(url) else {
@@ -687,105 +692,148 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
             completion?(.notStarted("No Gradle task was given."))
             return
         }
-        guard !syncState.isSyncing, !isRunningTasks else {
+        guard !isBusy else {
             completion?(.notStarted("Gradle is already busy with a sync or another task in this window. Try again when it finishes."))
             return
         }
 
-        runTask?.cancel()
+        isRunningTasks = true
+        taskCancelledAt = nil
+        runningTasks = taskPaths
+        let generation = projectGeneration
         let arguments = extraArguments.isEmpty ? ["--no-configuration-cache"] : extraArguments
         runTask = Task { [runner] in
-            isRunningTasks = true
-            runningTasks = taskPaths
-            await environment.prepareToRun()
-            console.reset()
-            console.appendNote("Project: \(url.path)")
-            console.appendNote("Tasks: \(taskPaths.joined(separator: " "))")
-
-            let javaHome = await gradleJavaHome()
-            if let javaHome {
-                console.appendNote("JAVA_HOME: \(javaHome.path)")
-            }
-
-            defer {
-                isRunningTasks = false
-                runningTasks = []
-            }
-
-            // Build scripts run arbitrary code, so an untrusted project is asked first, as a sync
-            // would. On a "no" nothing runs, and it is asked again next time.
-            if !trustStore.isTrusted(url) {
-                let gate = IDEProjectTrustGate(store: trustStore, prompt: environment.requestTrust)
-                guard await gate.confirmTrust(for: url) else {
-                    console.appendNote("Not run: the project is not trusted")
-                    console.markFinished()
-                    completion?(.notStarted("The project is not trusted, so its Gradle build scripts were not run."))
-                    return
-                }
-            }
-
-            do {
-                let timeout = customTimeout ?? (runsApplication
-                    ? Self.applicationRunTimeout
-                    : Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds)))
-                let startedAt = Date()
-                let result = try await runner.run(
-                    projectDirectory: url,
-                    tasks: taskPaths,
-                    arguments: arguments,
-                    javaHome: javaHome,
-                    timeout: timeout,
-                    output: { line in
-                        Task { @MainActor in
-                            guard !Task.isCancelled else { return }
-                            self.console.appendProcessLine(line)
-                        }
-                    }
-                )
-                let elapsed = Date().timeIntervalSince(startedAt)
-                console.appendNote(String(format: "Gradle exited %d in %.1fs", result.exitCode, elapsed))
-                console.markFinished()
-                if result.exitCode == 0 { consumer?.buildSucceeded() }
-                tasksFinished(taskPaths, url, result)
-                completion?(.finished(result))
-            } catch is CancellationError {
-                console.appendNote("Task run cancelled")
-                console.markFinished()
-                completion?(.cancelled(partial: nil))
-            } catch {
-                console.appendNote(Self.summarizeTaskRun(error))
-                console.markFinished()
-                switch error {
-                case GradleCommandError.timedOut(let partial):
-                    tasksFinished(taskPaths, url, partial)
-                    completion?(.timedOut(partial: partial))
-                case GradleCommandError.cancelled(let partial):
-                    tasksFinished(taskPaths, url, partial)
-                    completion?(.cancelled(partial: partial))
-                default:
-                    completion?(.failed(Self.summarizeTaskRun(error)))
-                }
-                if case GradleCommandError.untrusted = error {
-                    syncState = .untrusted
-                }
-            }
+            let outcome = await executeGradleTasks(
+                taskPaths, arguments: arguments, runsApplication: runsApplication,
+                timeout: customTimeout, root: url, generation: generation, runner: runner, test: test
+            )
+            runTask = nil
+            isDrainingTask = false
+            isRunningTasks = false
+            runningTasks = []
+            completion?(outcome)
         }
     }
 
-    private func tasksFinished(_ tasks: [String], _ root: URL, _ result: GradleCommandResult) {
-        environment.tasksFinished(IDEProjectTaskReport(
-            tasks: tasks, root: root, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr
-        ))
+    private func executeGradleTasks(
+        _ tasks: [String], arguments: [String], runsApplication: Bool, timeout: Duration?,
+        root: URL, generation: Int, runner: GradleCommandRunner, test: TestExecution?
+    ) async -> IDEGradleRunOutcome {
+        await environment.prepareToRun()
+        var poller: Task<Void, Never>?
+        let outcome: IDEGradleRunOutcome
+        do {
+            try Task.checkCancellation()
+            guard generation == projectGeneration else { throw CancellationError() }
+            console.reset()
+            console.appendNote("Project: \(root.path)")
+            console.appendNote("Tasks: \(tasks.joined(separator: " "))")
+            if !trustStore.isTrusted(root) {
+                let gate = IDEProjectTrustGate(store: trustStore, prompt: environment.requestTrust)
+                guard await gate.confirmTrust(for: root) else {
+                    if generation == projectGeneration {
+                        console.appendNote("Not run: the project is not trusted")
+                        console.markFinished()
+                    }
+                    let refused = IDEGradleRunOutcome.notStarted("The project is not trusted, so its Gradle build scripts were not run.")
+                    if let test { await test.settle(refused, test.session.seal(unfinished: .unknown)) }
+                    return refused
+                }
+            }
+            let javaHome: URL?
+            if let replay = test?.replay { javaHome = replay.javaHome }
+            else if let configured = test?.javaHome { javaHome = configured }
+            else { javaHome = await gradleJavaHome() }
+            try Task.checkCancellation()
+            guard generation == projectGeneration else { throw CancellationError() }
+            if let javaHome { console.appendNote("JAVA_HOME: \(javaHome.path)") }
+
+            let log = try test.map { try GradleSessionLog(directory: $0.session.directory) } ?? Self.makeTemporaryLog()
+            console.sessionLog = log
+            var listenerArguments: [String] = []
+            if let test {
+                if !GradleTestSidecar.configurationCacheEnabled(arguments: arguments) {
+                    listenerArguments = try GradleTestSidecar.arguments(for: test.session)
+                }
+                await test.willLaunch()
+                poller = Task {
+                    while !Task.isCancelled {
+                        let update = await test.session.poll()
+                        guard !Task.isCancelled, generation == self.projectGeneration else { return }
+                        test.update(update)
+                        try? await Task.sleep(for: .milliseconds(60))
+                    }
+                }
+            }
+            let limit = timeout ?? (runsApplication
+                ? Self.applicationRunTimeout
+                : Duration.seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds)))
+            let result = try await runner.run(
+                projectDirectory: root, tasks: tasks, arguments: arguments, javaHome: javaHome,
+                timeout: limit, log: log, environmentOverrides: test?.environment ?? [:],
+                instrumentationArguments: listenerArguments, snapshotDirectory: test?.session.directory,
+                canReplay: test?.canReplay ?? false, replay: test?.replay, workingDirectory: test?.workingDirectory,
+                beforeLaunch: test?.beforeLaunch ?? [], instrumentation: test?.instrumentation ?? .none
+            )
+            outcome = .finished(result)
+        } catch is CancellationError {
+            outcome = .cancelled(partial: nil)
+        } catch {
+            switch error {
+            case GradleCommandError.timedOut(let partial): outcome = .timedOut(partial: partial)
+            case GradleCommandError.cancelled(let partial): outcome = .cancelled(partial: partial)
+            default: outcome = .failed(Self.summarizeTaskRun(error))
+            }
+        }
+
+        poller?.cancel()
+        await poller?.value
+        if let test {
+            let unfinished: GradleTestEvent.Outcome
+            if case .cancelled = outcome { unfinished = .cancelled } else { unfinished = .unknown }
+            let final = await test.session.seal(unfinished: unfinished, cancelledAt: taskCancelledAt)
+            await test.settle(outcome, final)
+        }
+
+        guard generation == projectGeneration else { return .cancelled(partial: nil) }
+        let command: GradleCommandResult?
+        switch outcome {
+        case .finished(let result):
+            console.appendNote("Gradle exited \(result.exitCode)")
+            if result.exitCode == 0 { consumer?.buildSucceeded() }
+            command = result
+        case .cancelled(let partial):
+            console.appendNote("Task run cancelled")
+            command = partial
+        case .timedOut(let partial):
+            console.appendNote("Gradle task timed out")
+            command = partial
+        case .notStarted(let reason), .failed(let reason):
+            console.appendNote(reason)
+            command = nil
+        }
+        console.markFinished()
+        if let command {
+            environment.tasksFinished(IDEProjectTaskReport(
+                tasks: tasks, root: root, exitCode: command.exitCode, stdout: command.stdout, stderr: command.stderr,
+                streamedDiagnostics: command.streamedDiagnostics, testSessionID: test?.session.id
+            ))
+        }
+        return outcome
+    }
+
+    private static func makeTemporaryLog() throws -> GradleSessionLog {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("umbra-gradle-\(UUID())", isDirectory: true)
+        return try GradleSessionLog(directory: directory, removeOnClose: true)
     }
 
     func cancelTasks() {
-        guard isRunningTasks else { return }
-        runTask?.cancel()
-        runTask = nil
+        guard isRunningTasks, let runTask else { return }
+        isDrainingTask = true
+        taskCancelledAt = Date()
         isRunningTasks = false
         runningTasks = []
-        console.appendNote("Task run cancelled")
-        console.markFinished()
+        runTask.cancel()
     }
 
     // MARK: - Dependency diagrams
@@ -832,18 +880,15 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
         console.appendNote("Dependency diagram: \(projectPath) (\(configuration))")
         let javaHome = await gradleJavaHome()
         do {
+            let log = try Self.makeTemporaryLog()
+            console.sessionLog = log
             let graph = try await GradleDependencyGraphExtractor(runner: runner).extract(
                 projectDirectory: url,
                 projectPath: projectPath,
                 configuration: configuration,
                 javaHome: javaHome,
                 timeout: .seconds(max(30, IDEPreferences.shared.javaGradleSyncTimeoutSeconds)),
-                output: { line in
-                    Task { @MainActor in
-                        guard !Task.isCancelled else { return }
-                        self.console.appendProcessLine(line)
-                    }
-                }
+                log: log
             )
             console.markFinished()
             dependencyGraphCache[cacheKey] = (fingerprint, graph)
@@ -977,11 +1022,13 @@ final class IDEGradleProjectSystem: IDEProjectSystem {
                 ))
             },
             content: { workspace in
-                AnyView(IDEProjectConsoleView(
-                    log: workspace.gradle.console,
-                    fontName: workspace.preferences.fontName,
-                    fontSize: workspace.preferences.fontSize
-                ))
+                let console = workspace.gradle.console
+                let fontName = workspace.preferences.fontName
+                let fontSize = workspace.preferences.fontSize
+                if let log = console.sessionLog {
+                    return AnyView(IDEGradleLogView(log: log, notes: console.lines.map(\.text), fontName: fontName, fontSize: fontSize))
+                }
+                return AnyView(IDEProjectConsoleView(log: console, fontName: fontName, fontSize: fontSize))
             },
             controls: { workspace in AnyView(IDEProjectConsoleControls(system: workspace.gradle)) },
             staysWhenLastShellCloses: true

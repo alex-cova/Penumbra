@@ -131,4 +131,75 @@ final class OccurrenceHighlightControllerTests: XCTestCase {
         let emphases = textView.emphasisManager.getEmphases(for: EmphasisGroup.occurrences)
         XCTAssertEqual(emphases.count, 3)
     }
+
+    func testDocumentDidChangeDropsStaleOccurrences() {
+        let text = "foo foo foo"
+        let (controller, manager) = makeController(text: text)
+        controller.selectionDidChange(selectedRange: (text as NSString).range(of: "foo"), isMultiCaret: false)
+        pump()
+        XCTAssertEqual(occurrences(manager).count, 3)
+
+        // Switching files points the controller at a new buffer while the caret is
+        // restored to the same range. The old highlights must go; "not" occurs once.
+        let next = "nothing repeats itself here"
+        controller.stringView = StringView(string: next)
+        controller.documentDidChange(selectedRange: NSRange(location: 0, length: 3), isMultiCaret: false)
+        pump()
+        XCTAssertTrue(occurrences(manager).isEmpty)
+    }
+
+    func testDocumentDidChangeCancelsPendingSearchFromPreviousDocument() {
+        let text = "foo foo foo"
+        let (controller, manager) = makeController(text: text)
+        controller.selectionDidChange(selectedRange: (text as NSString).range(of: "foo"), isMultiCaret: false)
+        // Switch before the debounce fires: the "foo" search must never land.
+        let next = "bar bar bar"
+        controller.stringView = StringView(string: next)
+        controller.documentDidChange(selectedRange: NSRange(location: 0, length: 3), isMultiCaret: false)
+        pump()
+        let found = occurrences(manager)
+        XCTAssertEqual(found.count, 3)
+        XCTAssertTrue(found.allSatisfy { (next as NSString).substring(with: $0.range) == "bar" })
+    }
+
+    /// Tabbing to another file restores the same caret, so no selection change fires.
+    /// The switch itself must drop the old highlights synchronously — before the fix they
+    /// lingered until the debounced recompute landed (seconds on large files).
+    func testSwitchingDocumentsViaSetStateDropsStaleOccurrences() {
+        let textView = makeFocusedTextView(text: "foo foo foo")
+        textView.languageConfigurationOverride = .javaScript
+        textView.highlightsOccurrencesOfSelection = true
+        textView.selectedRange = (textView.text as NSString).range(of: "foo")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(textView.emphasisManager.getEmphases(for: EmphasisGroup.occurrences).count, 3)
+
+        // New file, caret restored to the identical range: no selection change fires.
+        // "aaa" occurs once, so a correct recompute leaves nothing highlighted.
+        textView.setState(TextViewState(text: "aaa bbb ccc", theme: textView.theme))
+        textView.selectedRange = NSRange(location: 0, length: 3)
+        XCTAssertTrue(
+            textView.emphasisManager.getEmphases(for: EmphasisGroup.occurrences).isEmpty,
+            "switching files must clear the previous file's highlights synchronously"
+        )
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(textView.emphasisManager.getEmphases(for: EmphasisGroup.occurrences).isEmpty)
+    }
+
+    func testReplacingTextDropsStaleOccurrences() {
+        let textView = makeFocusedTextView(text: "foo foo foo")
+        textView.languageConfigurationOverride = .javaScript
+        textView.highlightsOccurrencesOfSelection = true
+        textView.selectedRange = (textView.text as NSString).range(of: "foo")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(textView.emphasisManager.getEmphases(for: EmphasisGroup.occurrences).count, 3)
+
+        textView.text = "aaa bbb ccc"
+        textView.selectedRange = NSRange(location: 0, length: 3)
+        XCTAssertTrue(
+            textView.emphasisManager.getEmphases(for: EmphasisGroup.occurrences).isEmpty,
+            "replacing the text must clear the previous highlights synchronously"
+        )
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(textView.emphasisManager.getEmphases(for: EmphasisGroup.occurrences).isEmpty)
+    }
 }

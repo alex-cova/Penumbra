@@ -40,7 +40,41 @@ struct IDECSVTable: Sendable, Equatable {
     /// RFC 4180: quoted fields may hold the delimiter, line breaks and `""`; `\n`, `\r\n` and a
     /// lone `\r` end a record; blank lines are skipped; short records are padded to the widest.
     static func parse(_ text: String, delimiter: Character) -> IDECSVTable {
-        guard let delimiterByte = delimiter.asciiValue else { return .empty }
+        let parsed = scan(text, delimiter: delimiter, recordLimit: maximumRows + 1)
+        let records = parsed.records
+        guard let header = records.first else { return .empty }
+        let width = records.reduce(0) { max($0, $1.count) }
+        var rows = Array(records.dropFirst())
+        for row in rows.indices where rows[row].count < width {
+            rows[row].append(contentsOf: repeatElement("", count: width - rows[row].count))
+        }
+        var paddedHeader = header
+        if paddedHeader.count < width {
+            paddedHeader.append(contentsOf: repeatElement("", count: width - paddedHeader.count))
+        }
+        return IDECSVTable(
+            header: paddedHeader,
+            rows: rows,
+            sourceLines: Array(parsed.lines.dropFirst()),
+            columnCount: width,
+            isTruncated: parsed.truncated,
+            delimiter: delimiter
+        )
+    }
+
+    /// Headerless clipboard input. Preserve blank records and reject ragged or damaged input.
+    static func clipboardRecords(_ text: String, delimiter: Character, cellLimit: Int) -> [[String]]? {
+        guard !text.isEmpty else { return nil }
+        let parsed = scan(text, delimiter: delimiter, recordLimit: cellLimit, fieldLimit: cellLimit)
+        guard !parsed.truncated, !parsed.invalidQuotes, let first = parsed.records.first,
+              parsed.records.allSatisfy({ $0.count == first.count }) else { return nil }
+        return parsed.records
+    }
+
+    private static func scan(
+        _ text: String, delimiter: Character, recordLimit: Int, fieldLimit: Int? = nil
+    ) -> (records: [[String]], lines: [Int], truncated: Bool, invalidQuotes: Bool) {
+        guard let delimiterByte = delimiter.asciiValue else { return ([], [], false, true) }
         let quote: UInt8 = 0x22
         let lineFeed: UInt8 = 0x0A
         let carriageReturn: UInt8 = 0x0D
@@ -56,11 +90,16 @@ struct IDECSVTable: Sendable, Equatable {
         var atFieldStart = true
         var sawQuote = false
         var truncated = false
+        var invalidQuotes = false
+        var quoteClosed = false
+        var fieldCount = 0
 
         func endField() {
             record.append(String(decoding: field, as: UTF8.self))
             field.removeAll(keepingCapacity: true)
             atFieldStart = true
+            quoteClosed = false
+            fieldCount += 1
         }
 
         /// Returns false once the row cap is exceeded.
@@ -70,10 +109,10 @@ struct IDECSVTable: Sendable, Equatable {
                 record.removeAll(keepingCapacity: true)
                 sawQuote = false
             }
-            if record.count == 1, record[0].isEmpty, !sawQuote { return true }
+            if fieldLimit == nil, record.count == 1, record[0].isEmpty, !sawQuote { return true }
             records.append(record)
             lines.append(recordLine)
-            return records.count <= maximumRows + 1
+            return records.count <= recordLimit
         }
 
         var index = 0
@@ -87,6 +126,7 @@ struct IDECSVTable: Sendable, Equatable {
                         index += 1
                     } else {
                         inQuotes = false
+                        quoteClosed = true
                     }
                 } else {
                     if byte == lineFeed { line += 1 }
@@ -109,9 +149,11 @@ struct IDECSVTable: Sendable, Equatable {
                 line += 1
                 recordLine = line
             } else {
+                if quoteClosed { invalidQuotes = true }
                 field.append(byte)
                 atFieldStart = false
             }
+            if let fieldLimit, fieldCount > fieldLimit { return ([], [], true, invalidQuotes) }
             index += 1
         }
         if !truncated, !field.isEmpty || !record.isEmpty || sawQuote {
@@ -122,23 +164,6 @@ struct IDECSVTable: Sendable, Equatable {
             }
         }
 
-        guard let header = records.first else { return .empty }
-        let width = records.reduce(0) { max($0, $1.count) }
-        var rows = Array(records.dropFirst())
-        for row in rows.indices where rows[row].count < width {
-            rows[row].append(contentsOf: repeatElement("", count: width - rows[row].count))
-        }
-        var paddedHeader = header
-        if paddedHeader.count < width {
-            paddedHeader.append(contentsOf: repeatElement("", count: width - paddedHeader.count))
-        }
-        return IDECSVTable(
-            header: paddedHeader,
-            rows: rows,
-            sourceLines: Array(lines.dropFirst()),
-            columnCount: width,
-            isTruncated: truncated,
-            delimiter: delimiter
-        )
+        return (records, lines, truncated || fieldLimit.map { fieldCount > $0 } == true, invalidQuotes || inQuotes)
     }
 }

@@ -191,6 +191,7 @@ let package = Package(
                 "LanguageSyntax",
                 "TreeSitter",
                 "TreeSitterJava",
+                "TreeSitterKotlin",
                 .product(name: "FernflowerKit", package: "sunflower"),
                 "SubprocessKit"
             ],

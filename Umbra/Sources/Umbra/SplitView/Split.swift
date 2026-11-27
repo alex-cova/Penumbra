@@ -101,7 +101,15 @@ struct Split<P: View, D: SplitDivider, S: View>: View {
             }
             .clipped()  // Can cause problems in some List styles if not clipped
             .environment(layout)
-            .onChange(of: fraction.value) { _, new in constrainedFraction = new }
+            .onChange(of: fraction.value) { _, new in
+                // Umbra: a drag has already moved `constrainedFraction` here, so only a change made
+                // from outside (a pane opening, closing or re-spreading) moves anything.
+                if fraction.animatesChanges {
+                    IDEAppearance.Motion.animate(IDEAppearance.Motion.pane) { constrainedFraction = new }
+                } else {
+                    constrainedFraction = new
+                }
+            }
         }
     }
 

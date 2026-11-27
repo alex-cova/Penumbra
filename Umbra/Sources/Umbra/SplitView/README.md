@@ -132,4 +132,11 @@ rather than fighting each other.
     `task(id:)`, so the first frame isn't drawn at `defaultFraction`.
   - A split positioned only by `defaultFraction` (no ideal size, no `storageKey`) follows changes
     to it, which is how the editor pane chain re-spreads panes evenly.
+  - One `Split` serves both axes (`.layout(LayoutHolder(axis))`, as `HSplit`/`VSplit` do), not a switch between
+    `HSplit` and `VSplit`: a split whose axis changes keeps its panes mounted.
+  - `animatesFraction` also animates `hiddenSide`, and the divider fraction as `Split` copies it into its own
+    state (`FractionHolder.animatesChanges`; the copy happens in an `onChange`, outside the transaction that
+    set the fraction). `IDEEditorSplitChain` leans on both: every pane is the first side of a link, the
+    last link with `hiddenSide: .secondary`, so a pane that opens beside another one grows in and the
+    first one's share animates. The hidden side's view is not in the tree while it is hidden.
 - **Not copied:** `SplitModifiers.swift` (`.hSplit`/`.vSplit` view modifiers; unused).

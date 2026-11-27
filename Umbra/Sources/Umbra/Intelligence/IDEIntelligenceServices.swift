@@ -138,7 +138,15 @@ final class IDEIntelligenceServices {
             ),
             BasicLanguageService(
                 name: "umbra.sql", languageIdentifiers: ["sql"],
-                providers: LanguageProviders(completion: [sqlCompletion])
+                providers: LanguageProviders(
+                    completion: [sqlCompletion],
+                    hover: [SQLHoverProvider(store: sqlCompletion.store)],
+                    diagnostics: [SQLDiagnosticProvider(store: sqlCompletion.store)],
+                    navigation: [SQLNavigationProvider(store: sqlCompletion.store)],
+                    formatting: SQLFormattingProvider(store: sqlCompletion.store, indentUnit: { await IDEPreferences.currentIndentUnit() }),
+                    signatureHelp: SQLSignatureHelpProvider(store: sqlCompletion.store),
+                    codeActions: SQLCodeActionProvider(store: sqlCompletion.store)
+                )
             ),
             BasicLanguageService(
                 name: "umbra.http", languageIdentifiers: ["http"],

@@ -2,624 +2,313 @@ import DatabaseKit
 import EditorIntelligence
 import Foundation
 
-/// One connected schema for one console. A keystroke reads this snapshot, already in memory;
-/// it never queries the database.
+/// What one console knows about its database: the dialect and a catalog snapshot, both in memory,
+/// so a keystroke reads this and never the database.
 public struct SQLCompletionSnapshot: Sendable, Equatable {
     public var engine: DatabaseEngine
-    public var tables: [String]
-    public var columnsByTable: [String: [SQLColumn]]
+    public var catalog: SQLCatalog
 
-    public init(engine: DatabaseEngine, tables: [String], columnsByTable: [String: [SQLColumn]] = [:]) {
+    public init(engine: DatabaseEngine, catalog: SQLCatalog) {
         self.engine = engine
-        self.tables = tables
-        self.columnsByTable = columnsByTable
+        self.catalog = catalog
     }
+
+    var dialect: SQLDialect? { SQLDialect(engine: engine) }
 }
 
-/// Completion for MySQL and PostgreSQL consoles: keywords, tables, columns and a short
-/// function list, read from a per-console `SQLCompletionSnapshot`.
-///
-/// Primary only at those sites, and only for `sql` documents that are consoles (which is what
-/// having a snapshot means), so `.sql` files and MongoDB consoles keep ordinary completion.
-final class SQLCompletionProvider: CompletionProvider, @unchecked Sendable {
-    let name = "SQL"
-
+/// The snapshots of every console, by document. One store serves completion, diagnostics and
+/// hover, so they always agree about the schema.
+final class SQLSnapshotStore: @unchecked Sendable {
+    // Justification: one lock guards the one dictionary; every method takes it for a dictionary
+    // read or write and nothing else, so there is no state to race on.
     private let lock = NSLock()
     private var snapshots: [UUID: SQLCompletionSnapshot] = [:]
 
-    func setSnapshot(_ snapshot: SQLCompletionSnapshot?, for documentID: DocumentID) {
+    func set(_ snapshot: SQLCompletionSnapshot?, for documentID: DocumentID) {
         lock.withLock {
-            if let snapshot {
-                snapshots[documentID.uuid] = snapshot
-            } else {
-                snapshots.removeValue(forKey: documentID.uuid)
-            }
+            if let snapshot { snapshots[documentID.uuid] = snapshot } else { snapshots.removeValue(forKey: documentID.uuid) }
         }
     }
 
-    func removeSnapshot(for documentID: DocumentID) {
-        setSnapshot(nil, for: documentID)
+    func snapshot(for documentID: DocumentID) -> SQLCompletionSnapshot? {
+        lock.withLock { snapshots[documentID.uuid] }
+    }
+}
+
+/// How much text around the caret the engine reads: enough for any realistic statement, bounded so
+/// a very large script cannot make a keystroke slow. The window is cut at line boundaries.
+enum SQLWindow {
+    static let radius = 24_000
+
+    static func around(_ offset: Int, in document: Document) -> (text: String, start: Int) {
+        let total = document.contentSnapshot.utf16Length
+        var start = max(0, offset - radius)
+        var end = min(total, offset + radius)
+        if start > 0 {
+            // Begin at the next line, so the window never starts inside a string or a comment.
+            let probe = document.substring(utf16Offset: start, length: min(512, total - start))
+            if let newline = probe.utf16.firstIndex(of: 10) {
+                start += probe.utf16.distance(from: probe.utf16.startIndex, to: newline) + 1
+            }
+        }
+        if end < total {
+            let probe = document.substring(utf16Offset: max(start, end - 512), length: min(512, total - max(start, end - 512)))
+            if let newline = probe.utf16.lastIndex(of: 10) {
+                end = max(start, end - 512) + probe.utf16.distance(from: probe.utf16.startIndex, to: newline)
+            }
+        }
+        let text = document.substring(utf16Offset: start, length: max(0, end - start))
+        return (text, start)
+    }
+}
+
+/// Semantic completion for SQL consoles: aliases, CTEs, derived tables, subqueries, INSERT targets,
+/// join conditions from declared foreign keys, dialect-specific functions and types.
+///
+/// Primary only for `sql` documents that are consoles (which is what having a snapshot means), so
+/// plain `.sql` files and MongoDB consoles keep ordinary completion.
+final class SQLCompletionProvider: CompletionProvider, @unchecked Sendable {
+    let name = "SQL"
+    let store = SQLSnapshotStore()
+
+    func setSnapshot(_ snapshot: SQLCompletionSnapshot?, for documentID: DocumentID) {
+        store.set(snapshot, for: documentID)
     }
 
-    private func snapshot(for documentID: DocumentID) -> SQLCompletionSnapshot? {
-        lock.withLock { snapshots[documentID.uuid] }
+    func removeSnapshot(for documentID: DocumentID) {
+        store.set(nil, for: documentID)
     }
 
     func isPrimary(for context: CompletionContext) -> Bool {
         guard context.document.languageIdentifier == "sql",
-              snapshot(for: context.document.id) != nil
-        else { return false }
-        return site(in: context) != nil
+              let snapshot = store.snapshot(for: context.document.id), snapshot.dialect != nil else { return false }
+        return true
     }
 
     func provide(context: CompletionContext) async -> [CompletionItem] {
         guard context.document.languageIdentifier == "sql",
-              let snapshot = snapshot(for: context.document.id),
-              let site = site(in: context)
-        else { return [] }
-        switch site {
-        case .keywords:
-            return keywordItems(engine: snapshot.engine, context: context)
-        case .tables:
-            return tableItems(snapshot: snapshot, context: context)
-        case .columns(let tables):
-            return columnItems(tables: tables, snapshot: snapshot, context: context)
-                + functionItems(context: context)
-        case .singleTableColumns(let table):
-            return columnItems(tables: [table], snapshot: snapshot, context: context)
+              let snapshot = store.snapshot(for: context.document.id) else { return [] }
+        let result = complete(context, snapshot: snapshot)
+        guard !result.items.isEmpty else { return [] }
+        let caret = context.cursor.position
+        let caretOffset = caret.utf16Offset
+        let replaceStart = result.replacement.location
+        // The replaced word is on the caret's line, so its column is the caret's minus its length.
+        let startColumn = max(0, caret.column - (caretOffset - replaceStart))
+        let range = TextRange(
+            start: TextPosition(line: caret.line, column: startColumn, utf16Offset: replaceStart),
+            end: caret
+        )
+        let needsSpace = nextCharacterIsNotWhitespace(context)
+        let count = Double(result.items.count)
+        return result.items.enumerated().map { index, item in
+            let isKeyword = item.kind == .keyword && item.label != "*"
+            let insert = isKeyword && needsSpace ? item.insertText + " " : item.insertText
+            return CompletionItem(
+                label: item.label,
+                insertText: insert,
+                kind: Self.kind(item.kind),
+                range: range,
+                source: name,
+                sortText: String(format: "%05d", index),
+                filterText: item.label,
+                detail: item.detail,
+                priority: count - Double(index),
+                caretOffset: item.caretOffsetFromEnd.map { (insert as NSString).length - $0 }
+            )
         }
     }
 
-    private func site(in context: CompletionContext) -> SQLCompletion.Site? {
+    private func complete(_ context: CompletionContext, snapshot: SQLCompletionSnapshot) -> SQLCompletionResult {
+        guard let dialect = snapshot.dialect else {
+            return SQLCompletionResult(replacement: NSRange(location: 0, length: 0), items: [], context: "no-dialect")
+        }
         let caret = context.cursor.position.utf16Offset
-        let start = max(0, caret - SQLCompletion.maximumBackwardLength)
-        let slice = context.document.substring(utf16Offset: start, length: max(0, caret - start))
-        return SQLCompletion.site(in: slice, caretUTF16: (slice as NSString).length)
+        let (text, start) = SQLWindow.around(caret, in: context.document)
+        var result = SQLCompletionEngine.complete(text: text, caret: caret - start, dialect: dialect, catalog: snapshot.catalog)
+        result.replacement.location += start
+        return result
     }
 
-    private func keywordItems(engine: DatabaseEngine, context: CompletionContext) -> [CompletionItem] {
-        var keywords = ["SELECT", "WITH", "INSERT", "UPDATE", "DELETE", "EXPLAIN"]
-        if engine == .mysql {
-            keywords.append("SHOW")
-        }
-        let suffix = needsTrailingSpace(context: context) ? " " : ""
-        return keywords.map {
-            CompletionItem(
-                label: $0,
-                insertText: $0 + suffix,
-                kind: .keyword,
-                range: context.range,
-                source: name,
-                filterText: $0,
-                priority: 1
-            )
-        }
-    }
-
-    private func tableItems(snapshot: SQLCompletionSnapshot, context: CompletionContext) -> [CompletionItem] {
-        snapshot.tables.map { table in
-            CompletionItem(
-                label: table,
-                insertText: SQLIdentifiers.insertName(table, engine: snapshot.engine),
-                kind: .class,
-                range: context.range,
-                source: name,
-                filterText: table,
-                priority: 1
-            )
-        }
-    }
-
-    private func columnItems(
-        tables: [String], snapshot: SQLCompletionSnapshot, context: CompletionContext
-    ) -> [CompletionItem] {
-        let scopes = tables.isEmpty ? snapshot.tables : tables
-        var seen = Set<String>()
-        var items: [CompletionItem] = []
-        for table in scopes {
-            for column in columns(of: table, in: snapshot) {
-                guard seen.insert(column.name).inserted else { continue }
-                items.append(CompletionItem(
-                    label: column.name,
-                    insertText: SQLIdentifiers.insertName(column.name, engine: snapshot.engine),
-                    kind: .field,
-                    range: context.range,
-                    source: name,
-                    filterText: column.name,
-                    detail: column.declaredType.isEmpty ? nil : column.declaredType,
-                    labelDetail: column.isPrimaryKey ? "PK" : nil,
-                    priority: 1
-                ))
-            }
-        }
-        return items
-    }
-
-    private func columns(of table: String, in snapshot: SQLCompletionSnapshot) -> [SQLColumn] {
-        if let exact = snapshot.columnsByTable[table] {
-            return exact
-        }
-        let lower = table.lowercased()
-        for (name, columns) in snapshot.columnsByTable where name.lowercased() == lower {
-            return columns
-        }
-        return []
-    }
-
-    private func functionItems(context: CompletionContext) -> [CompletionItem] {
-        let addsParens = !nextStartsWithParen(context: context)
-        return SQLCompletion.functions.map { function in
-            CompletionItem(
-                label: function,
-                insertText: addsParens ? "\(function)()" : function,
-                kind: .function,
-                range: context.range,
-                source: name,
-                filterText: function,
-                caretOffset: addsParens ? function.count + 1 : nil
-            )
-        }
-    }
-
-    private func needsTrailingSpace(context: CompletionContext) -> Bool {
-        let caret = context.cursor.position.utf16Offset
-        let next = context.document.substring(utf16Offset: caret, length: 1)
+    private func nextCharacterIsNotWhitespace(_ context: CompletionContext) -> Bool {
+        let next = context.document.substring(utf16Offset: context.cursor.position.utf16Offset, length: 1)
         guard let scalar = next.unicodeScalars.first else { return true }
         return !CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 
-    private func nextStartsWithParen(context: CompletionContext) -> Bool {
+    private static func kind(_ kind: SQLCompletionItem.Kind) -> CompletionItemKind {
+        switch kind {
+        case .keyword: .keyword
+        case .table, .view, .cte: .class
+        case .column: .field
+        case .function: .function
+        case .alias: .variable
+        case .schema: .module
+        case .type: .type
+        case .joinCondition: .text
+        }
+    }
+}
+
+/// Problems in a console, read from the same snapshot as completion. Silent while the schema is
+/// still loading (an unloaded object is not an unknown one), and for documents with no console.
+final class SQLDiagnosticProvider: DiagnosticProvider, @unchecked Sendable {
+    let name = "SQL"
+    private let store: SQLSnapshotStore
+
+    init(store: SQLSnapshotStore) { self.store = store }
+
+    /// Past this size the whole-document check is skipped rather than made slow.
+    static let maximumLength = 400_000
+
+    func diagnostics(for document: Document) async -> [Diagnostic] {
+        guard document.languageIdentifier == "sql", let snapshot = store.snapshot(for: document.id),
+              let dialect = snapshot.dialect, document.contentSnapshot.utf16Length <= Self.maximumLength else { return [] }
+        let text = document.text
+        let lineStarts = Self.lineStarts(text)
+        return SQLDiagnosticsEngine.diagnose(text: text, dialect: dialect, catalog: snapshot.catalog).map { finding in
+            let end = finding.range.location + finding.range.length
+            return Diagnostic(
+                severity: finding.severity == .error ? .error : (finding.severity == .warning ? .warning : .information),
+                message: finding.message,
+                range: TextRange(start: Self.position(finding.range.location, lineStarts), end: Self.position(end, lineStarts)),
+                source: name,
+                code: finding.code
+            )
+        }
+    }
+
+    static func lineStarts(_ text: String) -> [Int] {
+        var starts = [0]
+        var offset = 0
+        for unit in text.utf16 {
+            offset += 1
+            if unit == 10 { starts.append(offset) }
+        }
+        return starts
+    }
+
+    static func position(_ offset: Int, _ starts: [Int]) -> TextPosition {
+        var low = 0, high = starts.count
+        while low < high {
+            let middle = (low + high) / 2
+            if starts[middle] <= offset { low = middle + 1 } else { high = middle }
+        }
+        let line = max(0, low - 1)
+        return TextPosition(line: line, column: offset - starts[line], utf16Offset: offset)
+    }
+}
+
+/// Quick documentation: a column's type and keys, a table's columns, a function's signature.
+final class SQLHoverProvider: HoverProvider, @unchecked Sendable {
+    let name = "SQL"
+    private let store: SQLSnapshotStore
+
+    init(store: SQLSnapshotStore) { self.store = store }
+
+    func provide(context: HoverContext) async -> HoverResult? {
+        guard context.document.languageIdentifier == "sql", let snapshot = store.snapshot(for: context.document.id),
+              let dialect = snapshot.dialect else { return nil }
         let caret = context.cursor.position.utf16Offset
-        return context.document.substring(utf16Offset: caret, length: 1) == "("
+        let (text, start) = SQLWindow.around(caret, in: context.document)
+        guard let hover = SQLAssist.hover(text: text, caret: caret - start, dialect: dialect, catalog: snapshot.catalog) else { return nil }
+        let startOffset = hover.range.location + start
+        let endOffset = startOffset + hover.range.length
+        let position = context.cursor.position
+        return HoverResult(
+            contents: hover.markdown,
+            range: TextRange(
+                start: TextPosition(line: position.line, column: max(0, position.column - (caret - startOffset)), utf16Offset: startOffset),
+                end: TextPosition(line: position.line, column: position.column + (endOffset - caret), utf16Offset: endOffset)
+            ),
+            source: name
+        )
     }
 }
 
-/// Where the caret sits in its statement. A pure function of at most 8 KB before the caret:
-/// no tree-sitter walk on the keystroke. `nil` means inside a string or a comment, where the
-/// provider steps aside so ordinary word completion still works.
-enum SQLCompletion {
-    enum Site: Equatable {
-        case keywords
-        case tables
-        case columns(tables: [String])
-        case singleTableColumns(table: String)
-    }
+struct SQLSignatureHelpProvider: SignatureHelpProviding {
+    let store: SQLSnapshotStore
 
-    /// Farthest the scan reads back from the caret, in UTF-16 units.
-    static let maximumBackwardLength = 8_192
-
-    static let functions = ["COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE"]
-
-    static func site(in text: String, caretUTF16: Int) -> Site? {
-        let ns = text as NSString
-        let caret = min(max(caretUTF16, 0), ns.length)
-        let windowStart = max(0, caret - maximumBackwardLength)
-        let slice = ns.substring(with: NSRange(location: windowStart, length: caret - windowStart)) as NSString
-        guard let tokens = tokenize(slice, end: slice.length, strict: true) else { return nil }
-        let lastSemi = tokens.lastIndex { $0.kind == .symbol && $0.text == ";" }
-        let statementStart = lastSemi.map { tokens[$0].end } ?? 0
-        let statement = tokens.filter { $0.start >= statementStart }
-        let statementText = slice.substring(from: statementStart) as NSString
-        let aliases = aliasMap(in: statement)
-        if let raw = memberTarget(in: statementText) {
-            return .singleTableColumns(table: aliases[raw.lowercased()] ?? raw)
-        }
-        var work = statement
-        if let last = work.last, last.kind == .word, last.end - statementStart == statementText.length {
-            work.removeLast()
-        }
-        var index = work.count - 1
-        while index >= 0 {
-            let token = work[index]
-            if token.kind == .word {
-                if tableKeywords.contains(token.upper) {
-                    if token.upper == "INTO" {
-                        return intoSite(work, at: index)
-                    }
-                    return .tables
-                }
-                if columnKeywords.contains(token.upper) {
-                    return .columns(tables: referencedTables(in: work))
-                }
-                if token.upper == "EXPLAIN" || token.upper == "SHOW" {
-                    return .keywords
-                }
-            }
-            index -= 1
-        }
-        return .keywords
-    }
-
-    private static let tableKeywords: Set<String> = ["FROM", "JOIN", "UPDATE", "INTO", "TABLE", "INSERT", "DELETE"]
-    private static let columnKeywords: Set<String> = [
-        "SELECT", "WHERE", "AND", "OR", "ON", "SET", "HAVING", "GROUP", "ORDER", "BY", "WITH",
-    ]
-    private static let tableIntroducing: Set<String> = ["FROM", "JOIN", "INTO", "TABLE", "UPDATE"]
-    private static let clauseKeywords: Set<String> = [
-        "SELECT", "FROM", "WHERE", "JOIN", "ON", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS",
-        "GROUP", "ORDER", "BY", "HAVING", "LIMIT", "OFFSET", "UNION", "ALL", "UPDATE", "SET",
-        "INTO", "VALUES", "TABLE", "INSERT", "DELETE", "WITH", "AS", "AND", "OR", "NOT", "NULL",
-        "IS", "IN", "EXISTS", "BETWEEN", "LIKE", "CASE", "WHEN", "THEN", "ELSE", "ASC", "DESC",
-        "USING", "EXPLAIN", "SHOW",
-    ]
-
-    /// `INSERT INTO users (…)` completes that table's columns; `… VALUES (…)` is literal values,
-    /// where the provider steps aside.
-    private static func intoSite(_ tokens: [SQLToken], at index: Int) -> Site? {
-        guard index + 1 < tokens.count, tokens[index + 1].kind == .word else { return .tables }
-        let table = tokens[index + 1].text
-        var sawValues = false
-        var sawParen = false
-        for token in tokens[(index + 2)...] {
-            if token.kind == .word, token.upper == "VALUES" {
-                sawValues = true
-            } else if token.kind == .symbol, token.text == "(" {
-                sawParen = true
-            }
-        }
-        if sawValues {
-            return nil
-        }
-        return sawParen ? .columns(tables: [table]) : .tables
-    }
-
-    private static func referencedTables(in tokens: [SQLToken]) -> [String] {
-        var tables: [String] = []
-        var index = 0
-        while index + 1 < tokens.count {
-            let token = tokens[index]
-            if token.kind == .word, tableIntroducing.contains(token.upper), tokens[index + 1].kind == .word {
-                let table = tokens[index + 1].text
-                if !tables.contains(table) {
-                    tables.append(table)
-                }
-            }
-            index += 1
-        }
-        return tables
-    }
-
-    private static func aliasMap(in tokens: [SQLToken]) -> [String: String] {
-        var aliases: [String: String] = [:]
-        var index = 0
-        while index < tokens.count {
-            let token = tokens[index]
-            guard token.kind == .word, token.upper == "FROM" || token.upper == "JOIN" else {
-                index += 1
-                continue
-            }
-            guard index + 1 < tokens.count, tokens[index + 1].kind == .word else {
-                index += 1
-                continue
-            }
-            let table = tokens[index + 1].text
-            var aliasIndex = index + 2
-            if aliasIndex < tokens.count, tokens[aliasIndex].kind == .word, tokens[aliasIndex].upper == "AS" {
-                aliasIndex += 1
-            }
-            if aliasIndex < tokens.count, tokens[aliasIndex].kind == .word,
-               !clauseKeywords.contains(tokens[aliasIndex].upper)
-            {
-                aliases[tokens[aliasIndex].text.lowercased()] = table
-            }
-            index += 1
-        }
-        return aliases
-    }
-
-    /// The table of `users.` or an alias (`u.`) just before the caret, or nil. A `1.5` number is
-    /// not member access: its table part starts with a digit.
-    private static func memberTarget(in statement: NSString) -> String? {
-        var cursor = statement.length
-        while cursor > 0, isWordUnit(statement.character(at: cursor - 1)) {
-            cursor -= 1
-        }
-        var dot = cursor
-        while dot > 0, isSpaceUnit(statement.character(at: dot - 1)) {
-            dot -= 1
-        }
-        guard dot > 0, statement.character(at: dot - 1) == 46 else { return nil }
-        var tableEnd = dot - 1
-        while tableEnd > 0, isSpaceUnit(statement.character(at: tableEnd - 1)) {
-            tableEnd -= 1
-        }
-        guard tableEnd > 0 else { return nil }
-        let closing = statement.character(at: tableEnd - 1)
-        if closing == 34 || closing == 96 || closing == 93 {
-            return quotedNameBackwards(in: statement, closingAt: tableEnd - 1)
-        }
-        var tableStart = tableEnd
-        while tableStart > 0, isWordUnit(statement.character(at: tableStart - 1)) {
-            tableStart -= 1
-        }
-        guard tableStart < tableEnd, isIdentifierStart(statement.character(at: tableStart)) else { return nil }
-        return statement.substring(with: NSRange(location: tableStart, length: tableEnd - tableStart))
-    }
-
-    private static func quotedNameBackwards(in statement: NSString, closingAt: Int) -> String? {
-        let closing = statement.character(at: closingAt)
-        let opening: UInt16 = closing == 93 ? 91 : closing
-        var index = closingAt - 1
-        while index >= 0 {
-            if statement.character(at: index) == opening {
-                let inner = statement.substring(with: NSRange(location: index + 1, length: closingAt - index - 1))
-                return unescapeQuoted(inner, quote: opening)
-            }
-            index -= 1
-        }
-        return nil
-    }
-
-    private static func unescapeQuoted(_ text: String, quote: UInt16) -> String {
-        if quote == 91 {
-            return text
-        }
-        let single = quoteCharacter(quote)
-        return text.replacing(single + single, with: single)
-    }
-
-    private static func quoteCharacter(_ quote: UInt16) -> String {
-        UnicodeScalar(quote).map { String(Character($0)) } ?? ""
-    }
-
-    /// One `;`-separated statement: its first and last 1-based lines and its text.
-    struct SQLStatement: Equatable {
-        var startLine: Int
-        var endLine: Int
-        var text: String
-    }
-
-    /// Every non-blank statement in the console, for the gutter's execute buttons. Forgiving:
-    /// an unterminated string or comment runs to the end instead of failing the scan.
-    static func statements(in text: String) -> [SQLStatement] {
-        let ns = text as NSString
-        guard let tokens = tokenize(ns, end: ns.length, strict: false) else { return [] }
-        var lineStarts = [0]
-        for index in 0..<ns.length where ns.character(at: index) == 10 {
-            lineStarts.append(index + 1)
-        }
-        func line(of offset: Int) -> Int {
-            var number = 0
-            for start in lineStarts {
-                guard start <= offset else { break }
-                number += 1
-            }
-            return max(number, 1)
-        }
-        var statements: [SQLStatement] = []
-        var segmentStart = 0
-        var segmentTokens: [SQLToken] = []
-        func flush(through segmentEnd: Int) {
-            defer {
-                segmentStart = segmentEnd
-                segmentTokens = []
-            }
-            // A comment-only segment is not a statement; `{}` still is, for JSON consoles.
-            guard segmentTokens.contains(where: {
-                $0.kind == .word || ($0.kind == .symbol && ($0.text == "{" || $0.text == "}"))
-            }) else { return }
-            var start = segmentStart
-            var end = segmentEnd
-            while start < end, isSpaceUnit(ns.character(at: start)) {
-                start += 1
-            }
-            while end > start,
-                  isSpaceUnit(ns.character(at: end - 1)) || ns.character(at: end - 1) == 59
-            {
-                end -= 1
-            }
-            guard start < end else { return }
-            statements.append(SQLStatement(
-                startLine: line(of: start), endLine: line(of: end - 1),
-                text: ns.substring(with: NSRange(location: start, length: end - start))
-            ))
-        }
-        for token in tokens {
-            if token.kind == .symbol && token.text == ";" {
-                flush(through: token.end)
-            } else {
-                segmentTokens.append(token)
-            }
-        }
-        flush(through: ns.length)
-        return statements
-    }
-
-    /// The statement enclosing a 1-based line, re-parsed at click time like the HTTP gutter.
-    static func statement(atLine line: Int, in text: String) -> String? {
-        statements(in: text).first { $0.startLine <= line && line <= $0.endLine }?.text
-    }
-
-    /// Words and `; ( ) , .` symbols before `end`, skipping strings and comments. Strict mode
-    /// returns nil when the caret is inside a string or a comment.
-    fileprivate static func tokenize(_ text: NSString, end: Int, strict: Bool) -> [SQLToken]? {
-        var tokens: [SQLToken] = []
-        var index = 0
-        while index < end {
-            let unit = text.character(at: index)
-            switch unit {
-            case 32, 9, 10, 13, 12, 11:
-                index += 1
-            case 45 where index + 1 < end && text.character(at: index + 1) == 45:
-                var cursor = index + 2
-                while cursor < end, text.character(at: cursor) != 10 {
-                    cursor += 1
-                }
-                if cursor >= end, strict {
-                    return nil
-                }
-                index = cursor
-            case 35:
-                var cursor = index + 1
-                while cursor < end, text.character(at: cursor) != 10 {
-                    cursor += 1
-                }
-                if cursor >= end, strict {
-                    return nil
-                }
-                index = cursor
-            case 47 where index + 1 < end && text.character(at: index + 1) == 42:
-                var cursor = index + 2
-                var closed = false
-                while cursor < end {
-                    if text.character(at: cursor) == 42, cursor + 1 < end, text.character(at: cursor + 1) == 47 {
-                        cursor += 2
-                        closed = true
-                        break
-                    }
-                    cursor += 1
-                }
-                if !closed, strict {
-                    return nil
-                }
-                index = cursor
-            case 39:
-                if let after = skipString(in: text, from: index + 1, end: end, quote: 39) {
-                    index = after
-                } else if strict {
-                    return nil
-                } else {
-                    index = end
-                }
-            case 34, 96:
-                if let after = skipQuotedIdentifier(in: text, from: index + 1, end: end, quote: unit) {
-                    let inner = text.substring(with: NSRange(location: index + 1, length: after - index - 2))
-                    tokens.append(SQLToken(
-                        kind: .word, text: unescapeQuoted(inner, quote: unit),
-                        upper: inner.uppercased(), start: index, end: after
-                    ))
-                    index = after
-                } else {
-                    let inner = text.substring(from: index + 1)
-                    tokens.append(SQLToken(
-                        kind: .word, text: unescapeQuoted(inner, quote: unit),
-                        upper: inner.uppercased(), start: index, end: end
-                    ))
-                    index = end
-                }
-            case 91:
-                if let close = firstUnescaped(in: text, from: index + 1, end: end, quote: 93) {
-                    let inner = text.substring(with: NSRange(location: index + 1, length: close - index - 1))
-                    tokens.append(SQLToken(
-                        kind: .word, text: inner, upper: inner.uppercased(),
-                        start: index, end: close + 1
-                    ))
-                    index = close + 1
-                } else {
-                    let inner = text.substring(from: index + 1)
-                    tokens.append(SQLToken(
-                        kind: .word, text: inner, upper: inner.uppercased(), start: index, end: end
-                    ))
-                    index = end
-                }
-            case 59, 40, 41, 44, 46, 123, 125:
-                tokens.append(SQLToken(
-                    kind: .symbol, text: quoteCharacter(unit),
-                    upper: "", start: index, end: index + 1
-                ))
-                index += 1
-            default:
-                if isWordUnit(unit) {
-                    var cursor = index + 1
-                    while cursor < end, isWordUnit(text.character(at: cursor)) {
-                        cursor += 1
-                    }
-                    let word = text.substring(with: NSRange(location: index, length: cursor - index))
-                    tokens.append(SQLToken(
-                        kind: .word, text: word, upper: word.uppercased(), start: index, end: cursor
-                    ))
-                    index = cursor
-                } else {
-                    index += 1
-                }
-            }
-        }
-        return tokens
-    }
-
-    /// Offset after the closing quote, or nil when the caret sits inside the string.
-    private static func skipString(in text: NSString, from start: Int, end: Int, quote: UInt16) -> Int? {
-        var index = start
-        while index < end {
-            let unit = text.character(at: index)
-            if unit == 92 {
-                index += 2
-                continue
-            }
-            if unit == quote {
-                if index + 1 < end, text.character(at: index + 1) == quote {
-                    index += 2
-                    continue
-                }
-                return index + 1
-            }
-            index += 1
-        }
-        return nil
-    }
-
-    private static func skipQuotedIdentifier(in text: NSString, from start: Int, end: Int, quote: UInt16) -> Int? {
-        firstDoubled(in: text, from: start, end: end, quote: quote)
-    }
-
-    private static func firstDoubled(in text: NSString, from start: Int, end: Int, quote: UInt16) -> Int? {
-        var index = start
-        while index < end {
-            if text.character(at: index) == quote {
-                if index + 1 < end, text.character(at: index + 1) == quote {
-                    index += 2
-                    continue
-                }
-                return index + 1
-            }
-            index += 1
-        }
-        return nil
-    }
-
-    private static func firstUnescaped(in text: NSString, from start: Int, end: Int, quote: UInt16) -> Int? {
-        var index = start
-        while index < end {
-            if text.character(at: index) == quote {
-                return index
-            }
-            index += 1
-        }
-        return nil
+    func signatureHelp(for document: Document, at position: TextPosition) async -> ParameterHintsModel? {
+        guard document.languageIdentifier == "sql", let dialect = store.snapshot(for: document.id)?.dialect else { return nil }
+        let caret = position.utf16Offset
+        let (text, start) = SQLWindow.around(caret, in: document)
+        guard let hint = SQLAssist.signatureHelp(text: text, caret: caret - start, dialect: dialect) else { return nil }
+        return ParameterHintsModel(signatures: [hint.signature], activeParameter: hint.activeParameter)
     }
 }
 
-private struct SQLToken: Equatable {
-    enum Kind: Equatable {
-        case word
-        case symbol
+struct SQLCodeActionProvider: CodeActionProviding {
+    let store: SQLSnapshotStore
+
+    func codeActions(for document: Document, at position: TextPosition, diagnostics: [Diagnostic]) async -> [CodeAction] {
+        guard document.languageIdentifier == "sql", let snapshot = store.snapshot(for: document.id),
+              let dialect = snapshot.dialect else { return [] }
+        let caret = position.utf16Offset
+        let (text, start) = SQLWindow.around(caret, in: document)
+        let localCaret = caret - start
+        let lineStarts = SQLDiagnosticProvider.lineStarts(text)
+        let localPosition = SQLDiagnosticProvider.position(localCaret, lineStarts)
+        func edit(_ range: NSRange, replacement: String) -> TextEdit {
+            func at(_ offset: Int) -> TextPosition {
+                let local = SQLDiagnosticProvider.position(offset, lineStarts)
+                return TextPosition(line: position.line + local.line - localPosition.line,
+                                    column: local.column, utf16Offset: start + offset)
+            }
+            return TextEdit(range: TextRange(start: at(range.location), end: at(NSMaxRange(range))), replacement: replacement)
+        }
+        var actions: [CodeAction] = []
+        if let expansion = SQLAssist.expandStar(text: text, caret: localCaret, dialect: dialect, catalog: snapshot.catalog) {
+            actions.append(CodeAction(title: expansion.title, kind: "refactor.rewrite",
+                                      edits: [edit(expansion.range, replacement: expansion.newText)]))
+        }
+        guard diagnostics.contains(where: { $0.source == "SQL" && $0.range.start.line == position.line }) else {
+            return actions
+        }
+        for finding in SQLDiagnosticsEngine.diagnose(text: text, dialect: dialect, catalog: snapshot.catalog) {
+            guard SQLDiagnosticProvider.position(finding.range.location, lineStarts).line == localPosition.line else { continue }
+            for fix in finding.fixes {
+                actions.append(CodeAction(title: fix.title, kind: "quickfix",
+                                          edits: [edit(fix.range, replacement: fix.replacement)]))
+            }
+        }
+        return actions
+    }
+}
+
+struct SQLNavigationProvider: NavigationProvider {
+    let name = "SQL"
+    let store: SQLSnapshotStore
+
+    func isPrimary(for context: NavigationContext) -> Bool {
+        context.kind == .definition && context.document.languageIdentifier == "sql"
+            && store.snapshot(for: context.document.id) != nil
     }
 
-    var kind: Kind
-    var text: String
-    var upper: String
-    var start: Int
-    var end: Int
-}
-
-private func isWordUnit(_ unit: UInt16) -> Bool {
-    switch unit {
-    case 48...57, 65...90, 95, 97...122, 36:
-        return true
-    default:
-        return unit >= 128
-    }
-}
-
-private func isSpaceUnit(_ unit: UInt16) -> Bool {
-    unit == 32 || unit == 9 || unit == 10 || unit == 13 || unit == 12 || unit == 11
-}
-
-private func isIdentifierStart(_ unit: UInt16) -> Bool {
-    switch unit {
-    case 65...90, 95, 97...122:
-        return true
-    default:
-        return unit >= 128
+    func provide(context: NavigationContext) async -> NavigationResult? {
+        let document = context.document
+        guard isPrimary(for: context), let snapshot = store.snapshot(for: document.id),
+              let dialect = snapshot.dialect else { return nil }
+        let caret = context.cursor.position.utf16Offset
+        let (text, start) = SQLWindow.around(caret, in: document)
+        guard let target = SQLAssist.declaration(text: text, caret: caret - start, dialect: dialect, catalog: snapshot.catalog)
+        else { return nil }
+        switch target {
+        case .local(let range):
+            // The navigation controller already materializes the buffer off the main actor.
+            let starts = SQLDiagnosticProvider.lineStarts(document.text)
+            let lower = SQLDiagnosticProvider.position(start + range.location, starts)
+            let upper = SQLDiagnosticProvider.position(start + NSMaxRange(range), starts)
+            return .single(Location(documentID: document.id, url: document.url,
+                                    range: TextRange(start: lower, end: upper),
+                                    displayName: (text as NSString).substring(with: range)))
+        case .relation(let name), .column(let name, _):
+            let column: String?
+            if case .column(_, let field) = target { column = field } else { column = nil }
+            let position = context.cursor.position
+            return .single(Location(documentID: document.id, range: TextRange(start: position, end: position),
+                                    displayName: column.map { "\(name).\($0)" } ?? name,
+                                    target: .databaseRelation(name: name, column: column)))
+        }
     }
 }

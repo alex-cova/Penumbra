@@ -39,76 +39,75 @@ struct IDETabBarLayout: Equatable {
         }
         return nil
     }
-}
 
-/// A tab being dragged to another place in its bar. Ported from Silica's `TabDrag`.
-struct IDETabDrag: Equatable {
-    let tab: UUID
-    /// Horizontal distance the pointer has moved since the drag began.
-    var translation: CGFloat
-    /// The pointer's horizontal position in the tab bar.
-    var location: CGFloat
-    /// How far the row was scrolled when the drag began.
-    let startScrollOffset: CGFloat
-
-    /// Where the dragged tab would land if dropped now, and how far each tab sits
-    /// from its place in the row meanwhile: the dragged one follows the pointer,
-    /// and the tabs it has passed step aside by its width. The order itself
-    /// changes on drop.
-    func reorder(in bar: IDETabBarLayout) -> (destination: Int, offsets: [UUID: CGFloat])? {
-        let tabs = bar.tabs
-        guard let source = tabs.firstIndex(of: tab) else { return nil }
-        let widths = tabs.map { bar.widths[$0] ?? 0 }
-        let strides = widths.map { $0 + bar.spacing }
-        let before = strides[..<source].reduce(0, +)
-        let after = strides[(source + 1)...].reduce(0, +)
-
-        var offset = translation + bar.scrollOffset - startScrollOffset
-        if bar.barWidth > 0 {
-            let leading = bar.scrollOffset - (bar.inset + before)
-            offset = max(min(offset, leading + bar.barWidth - widths[source]), leading)
+    /// Where a tab starts in the bar, scroll included.
+    func minX(of tab: UUID) -> CGFloat? {
+        var leading = inset - scrollOffset
+        for other in tabs {
+            if other == tab { return leading }
+            leading += (widths[other] ?? 0) + spacing
         }
-        offset = min(max(offset, -before), after)
-
-        // A neighbor is passed once the dragged tab's edge crosses its middle.
-        let neighbors = offset > 0 ? Array((source + 1)..<tabs.count) : Array((0..<source).reversed())
-        var destination = source
-        var passed: CGFloat = 0
-        for index in neighbors {
-            guard abs(offset) > passed + bar.spacing + widths[index] / 2 else { break }
-            passed += strides[index]
-            destination = index
-        }
-
-        var offsets = [tab: offset]
-        let slot = destination > source ? -strides[source] : strides[source]
-        for index in min(source, destination)...max(source, destination) where index != source {
-            offsets[tabs[index]] = slot
-        }
-        return (destination, offsets)
+        return nil
     }
 
-    /// Where the row should be scrolled to after `elapsed` seconds of the tab
-    /// being held near an end of the bar; `nil` when the row needn't move.
-    func autoscrollOffset(in bar: IDETabBarLayout, elapsed: TimeInterval) -> CGFloat? {
-        guard bar.barWidth > 0 else { return nil }
+    /// Where a dragged tab whose centre is at `x` would sit among the other tabs: how many of them
+    /// have their middle before it. Worked out on the row without the dragged tab and without any
+    /// gap, so it does not move with the tabs it makes room by.
+    func insertionIndex(forCenterX x: CGFloat, excluding dragged: UUID?) -> Int {
+        var leading = inset - scrollOffset
+        var index = 0
+        for tab in tabs where tab != dragged {
+            let width = widths[tab] ?? 0
+            guard x > leading + width / 2 else { break }
+            index += 1
+            leading += width + spacing
+        }
+        return index
+    }
+
+    /// How far each tab sits from its place in the row while a tab is being dragged: the row
+    /// closes over `dragged` (when it belongs to this bar) and opens a gap `gapWidth` wide before
+    /// the tab at `index` among the others (none when `index` is nil, or past the last tab).
+    /// One rule for the three cases: the gap moving in the bar the tab came from, closing when the
+    /// tab leaves it, and opening in a bar it is over. Tabs that stay put have no entry.
+    func gapOffsets(excluding dragged: UUID?, insertingAt index: Int?, gapWidth: CGFloat) -> [UUID: CGFloat] {
+        guard dragged != nil || index != nil else { return [:] }
+        let gap = gapWidth + spacing
+        var current = inset - scrollOffset
+        var shifted = current
+        var slot = 0
+        var offsets: [UUID: CGFloat] = [:]
+        for tab in tabs {
+            let width = widths[tab] ?? 0
+            if tab != dragged {
+                if slot == index { shifted += gap }
+                let delta = shifted - current
+                if delta != 0 { offsets[tab] = delta }
+                shifted += width + spacing
+                slot += 1
+            }
+            current += width + spacing
+        }
+        return offsets
+    }
+
+    /// Where the row should be scrolled to after `elapsed` seconds of a dragged tab being held at
+    /// `x` (in the bar) near one of its ends; `nil` when the row needn't move.
+    func autoscrollOffset(pointerX x: CGFloat, elapsed: TimeInterval) -> CGFloat? {
+        guard barWidth > 0 else { return nil }
         let zone: CGFloat = 40
         let rate: CGFloat = 10
-        var depth: CGFloat = 0
-        if translation > 0 {
-            depth = max(location - (bar.barWidth - zone), 0)
-        } else if translation < 0 {
-            depth = min(location - zone, 0)
-        }
+        let depth = x > barWidth / 2 ? max(x - (barWidth - zone), 0) : min(x - zone, 0)
         let speed = min(max(depth, -2 * zone), 2 * zone) * rate
-        let rowWidth = bar.tabs.reduce(2 * bar.inset - bar.spacing) { $0 + (bar.widths[$1] ?? 0) + bar.spacing }
-        let target = min(max(bar.scrollOffset + speed * CGFloat(elapsed), 0), max(rowWidth - bar.barWidth, 0))
-        return target == bar.scrollOffset ? nil : target
+        let rowWidth = tabs.reduce(2 * inset - spacing) { $0 + (widths[$1] ?? 0) + spacing }
+        let target = min(max(scrollOffset + speed * CGFloat(elapsed), 0), max(rowWidth - barWidth, 0))
+        return target == scrollOffset ? nil : target
     }
 }
 
-enum IDETabDragEvent {
-    case moved(translation: CGFloat, location: CGFloat)
-    case dropped(translation: CGFloat)
-    case cancelled
+/// A tab bar's layout and where its row starts in the editor panes' space, which is where a drag's
+/// pointer is measured.
+struct IDETabBarGeometry: Equatable {
+    var layout: IDETabBarLayout
+    var origin: CGPoint
 }

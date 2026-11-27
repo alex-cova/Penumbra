@@ -63,6 +63,34 @@ public enum JavacOutputParser {
         return messages
     }
 
+    struct Stream {
+        private var header: Header?
+        private var block: [String] = []
+        private(set) var messages: [JavacMessage] = []
+
+        mutating func append(_ line: String) {
+            let next = line.contains(".java:") || line.hasPrefix("error: ") || line.hasPrefix("warning: ")
+                ? JavacOutputParser.parseHeader(line) : nil
+            if let next {
+                finish()
+                header = next
+            } else if header != nil {
+                if JavacOutputParser.isSummaryOrNote(line) || line.hasPrefix("> Task ") {
+                    finish()
+                } else if block.count < 12 {
+                    block.append(line)
+                }
+            }
+        }
+
+        mutating func finish() {
+            guard let header else { return }
+            messages.append(JavacOutputParser.build(header, block: block))
+            self.header = nil
+            block.removeAll(keepingCapacity: true)
+        }
+    }
+
     private struct Header {
         let file: String?
         let line: Int

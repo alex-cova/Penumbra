@@ -115,6 +115,21 @@ extension IDEWorkspace {
         }
     }
 
+    /// Marks every restored text tab whose file is already gone with the deleted-on-disk banner.
+    /// Session restore recreates tabs without watcher events, and a missing file baselines as
+    /// missing, so the sync's judge never fires for them. Runs after `refreshPresentation()` has
+    /// registered the open paths. Clean and dirty tabs both qualify: a dirty file-backed tab's
+    /// unsaved edits never reached the session snapshot, so its buffer is as empty as a clean one.
+    func markRestoredMissingFiles() {
+        for document in workbench.allDocuments() {
+            guard document.contentKind == .text,
+                  let path = document.url?.standardizedFileURL.path,
+                  !FileManager.default.fileExists(atPath: path)
+            else { continue }
+            diskSync.noteRestoredMissing(path: path)
+        }
+    }
+
     /// The file on disk on the left, the buffer (with its unsaved edits) on the right.
     func compareWithDisk(_ document: WorkbenchDocument) {
         guard let url = document.url else { return }

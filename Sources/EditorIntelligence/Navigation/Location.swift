@@ -21,6 +21,8 @@ public struct Location: Sendable, Hashable, Identifiable, CustomStringConvertibl
         /// A package with no folder in the project, such as `java.util`. The host decides how to
         /// show it; `range` is empty and `url` is nil.
         case package(String)
+        /// A SQL object whose declaration is supplied by the host database connection.
+        case databaseRelation(name: String, column: String?)
     }
 
     /// How a usage reads in a list: what kind of use it is, how sure the resolver is, and the

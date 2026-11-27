@@ -18,8 +18,24 @@ struct IDEDatabaseModule: IDELanguageModule {
                 action: { [weak workspace] in workspace?.openDatabaseQueryConsole() }
             ),
             EditorCommand(
-                id: "app.database.execute", title: "Database: Execute", group: "Database",
+                id: "app.database.execute", title: "Database: Execute Statement or Selection", group: "Database",
                 action: { [weak workspace] in workspace?.executeDatabaseConsole() }
+            ),
+            EditorCommand(
+                id: "app.database.executeAll", title: "Database: Execute All", group: "Database",
+                action: { [weak workspace] in workspace?.executeDatabaseConsole(all: true) }
+            ),
+            EditorCommand(
+                id: "app.database.cancel", title: "Database: Cancel Statement", group: "Database",
+                action: { [weak workspace] in workspace?.cancelDatabaseStatement() }
+            ),
+            EditorCommand(
+                id: "app.database.openSQLite", title: "Database: Open SQLite File…", group: "Database",
+                action: { [weak workspace] in workspace?.openSQLiteFile() }
+            ),
+            EditorCommand(
+                id: "app.database.newSQLite", title: "Database: New SQLite Database…", group: "Database",
+                action: { [weak workspace] in workspace?.newSQLiteDatabase() }
             )
         ]
     }
@@ -45,7 +61,12 @@ struct IDEDatabaseModule: IDELanguageModule {
                 ))
             },
             content: { workspace in
-                AnyView(IDEDatabaseResultView(support: workspace.databaseSupport))
+                AnyView(IDEDatabaseResultView(
+                    support: workspace.databaseSupport,
+                    consoleID: workspace.isDatabaseConsoleActive ? workspace.workbench.activePane.selectedDocument?.id : nil,
+                    runChartQuery: { [weak workspace] sql, binding in workspace?.runDatabaseChartQuery(sql, binding: binding) },
+                    runResultQuery: { [weak workspace] query in workspace?.openDatabaseResultQuery(query) }
+                ))
             }
         )]
     }
@@ -72,10 +93,18 @@ struct IDEDatabaseModule: IDELanguageModule {
     }
 
     func toolbarItems(for workspace: IDEWorkspace) -> [IDEToolbarItem] {
+        // While a statement runs, the play button becomes a stop button for that statement.
+        if workspace.databaseSupport.isRunning {
+            return [.button(
+                id: "database.cancel", order: IDEToolbarItem.Order.send + 1, systemImage: "stop.fill",
+                help: "Cancel Statement", tint: IDEAppearance.ColorToken.error,
+                action: { [weak workspace] in workspace?.cancelDatabaseStatement() }
+            )]
+        }
         guard workspace.isDatabaseConsoleActive else { return [] }
         return [.button(
             id: "database.execute", order: IDEToolbarItem.Order.send + 1, systemImage: "play.fill",
-            help: "Execute", tint: IDEAppearance.ColorToken.run,
+            help: "Execute Statement or Selection", tint: IDEAppearance.ColorToken.run,
             action: { [weak workspace] in workspace?.executeDatabaseConsole() }
         )]
     }
@@ -95,11 +124,22 @@ private struct IDEDatabaseCommands: View {
 
     private var workspace: IDEWorkspace? { ref.workspace }
 
+    private var preset: KeymapPreset { IDEPreferences.shared.keymapPreset }
+
     var body: some View {
         Button("New Data Source…", action: { workspace?.showNewDatabaseConnection() })
+        Button("Open SQLite File…", action: { workspace?.openSQLiteFile() })
+        Button("New SQLite Database…", action: { workspace?.newSQLiteDatabase() })
         Button("New Query Console", action: { workspace?.openDatabaseQueryConsole() })
-        Button("Execute", action: { workspace?.executeDatabaseConsole() })
-            .disabled(!(workspace?.isDatabaseConsoleActive ?? false))
+        Button("Execute Statement or Selection", action: { workspace?.executeDatabaseConsole() })
+            .menuShortcut(.executeDatabaseStatement, in: preset)
+            .disabled(!(workspace?.isDatabaseConsoleActive ?? false) || (workspace?.databaseSupport.isRunning ?? false))
+        Button("Execute All", action: { workspace?.executeDatabaseConsole(all: true) })
+            .menuShortcut(.executeAllDatabaseStatements, in: preset)
+            .disabled(!(workspace?.isDatabaseConsoleActive ?? false) || (workspace?.databaseSupport.isRunning ?? false))
+        Button("Cancel Statement", action: { workspace?.cancelDatabaseStatement() })
+            .menuShortcut(.cancelDatabaseStatement, in: preset)
+            .disabled(!(workspace?.databaseSupport.isRunning ?? false))
         Button("Show Query Results", action: { workspace?.showDatabaseResults() })
     }
 }

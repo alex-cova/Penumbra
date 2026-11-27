@@ -19,7 +19,7 @@ struct IDEGradleTaskPickerSheet: View {
     @FocusState private var isFilterFocused: Bool
     @FocusState private var isListFocused: Bool
 
-    /// Filtered by name, description or group; `application` first since that is where run tasks live.
+    /// Alphabetical groups and tasks, filtered by name, description or group.
     private var groups: [JavaGradleProjectModel.TaskGroup] {
         IDEGradleTaskPickerOrder.groups(tasks: prompt.tasks, query: query)
     }
@@ -60,7 +60,7 @@ struct IDEGradleTaskPickerSheet: View {
 
             List(selection: $selection) {
                 ForEach(groups, id: \.name) { group in
-                    Section(group.name.isEmpty ? "other" : group.name) {
+                    Section(group.displayName) {
                         ForEach(group.tasks, id: \.name) { task in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(task.name)
@@ -114,7 +114,7 @@ struct IDEGradleTaskPickerSheet: View {
     }
 }
 
-/// Painted Gradle-task order: `application` first, then Gradle's group order, names in path order.
+/// The displayed Gradle task order, shared with keyboard navigation.
 enum IDEGradleTaskPickerOrder {
     static func groups(tasks: [JavaGradleProjectModel.GradleTask], query: String) -> [JavaGradleProjectModel.TaskGroup] {
         let needle = query.trimmingCharacters(in: .whitespaces)
@@ -123,8 +123,7 @@ enum IDEGradleTaskPickerOrder {
                 || $0.description.localizedCaseInsensitiveContains(needle)
                 || $0.group.localizedCaseInsensitiveContains(needle)
         }
-        let grouped = JavaGradleProjectModel.groupTasks(filtered)
-        return grouped.filter { $0.name == "application" } + grouped.filter { $0.name != "application" }
+        return JavaGradleProjectModel.groupTasks(filtered)
     }
 
     static func keyboardIDs(_ groups: [JavaGradleProjectModel.TaskGroup]) -> [String] {

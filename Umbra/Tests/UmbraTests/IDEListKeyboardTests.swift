@@ -260,29 +260,30 @@ final class IDEListKeyboardTests: XCTestCase {
         XCTAssertNil(IDEStreamTraceKeyboard.move(nil, stageCounts: [0, 0], dStage: 0, dIndex: 1))
     }
 
-    func testGradleTaskPickerPutsApplicationFirstThenFilters() {
+    func testGradleTaskPickerSortsGroupsAndTasksAndPreservesOrderWhenFiltering() {
         typealias Task = JavaGradleProjectModel.GradleTask
         let tasks = [
             Task(path: ":build", name: "build", group: "build"),
             Task(path: ":test", name: "test", group: "verification"),
             Task(path: ":bootRun", name: "bootRun", group: "application"),
             Task(path: ":app:run", name: "run", group: "application"),
+            Task(path: ":assemble", name: "assemble", group: "alpha"),
         ]
         XCTAssertEqual(
             IDEGradleTaskPickerOrder.keyboardIDs(IDEGradleTaskPickerOrder.groups(tasks: tasks, query: "")),
-            ["run", "bootRun", "build", "test"]
+            ["assemble", "bootRun", "run", "build", "test"]
         )
         XCTAssertEqual(
             IDEGradleTaskPickerOrder.keyboardIDs(IDEGradleTaskPickerOrder.groups(tasks: tasks, query: "run")),
-            ["run", "bootRun"]
+            ["bootRun", "run"]
         )
         XCTAssertEqual(
             IDEGradleTaskPickerOrder.keyboardIDs(IDEGradleTaskPickerOrder.groups(tasks: tasks, query: "verif")),
             ["test"]
         )
         let ids = IDEGradleTaskPickerOrder.keyboardIDs(IDEGradleTaskPickerOrder.groups(tasks: tasks, query: ""))
-        XCTAssertEqual(IDEListNeighbor.move(nil, in: ids, by: 1), "run")
-        XCTAssertEqual(IDEListNeighbor.move("run", in: ids, by: 1), "bootRun")
+        XCTAssertEqual(IDEListNeighbor.move(nil, in: ids, by: 1), "assemble")
+        XCTAssertEqual(IDEListNeighbor.move("bootRun", in: ids, by: 1), "run")
         XCTAssertEqual(IDEListNeighbor.move("test", in: ids, by: 1), "test")
     }
 

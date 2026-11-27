@@ -42,6 +42,7 @@ public struct NavigationChoicesModel: Equatable {
             let symbol: String
             switch location.target {
             case .directory, .package: symbol = "folder.fill"
+            case .databaseRelation: symbol = "tablecells"
             case .source: symbol = location.displayName.contains("(") ? "m.square.fill" : "c.square.fill"
             }
             return Row(title: location.displayName, subtitle: subtitle, line: line, symbolName: symbol)

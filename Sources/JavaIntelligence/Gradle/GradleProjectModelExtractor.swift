@@ -39,7 +39,8 @@ public struct GradleProjectModelExtractor: Sendable {
         projectDirectory: URL,
         javaHome: URL?,
         timeout: Duration = .seconds(120),
-        output: GradleOutputHandler? = nil
+        output: GradleOutputHandler? = nil,
+        log: GradleSessionLog? = nil
     ) async throws -> (model: JavaGradleProjectModel, result: GradleCommandResult) {
         let workDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("umbra-gradle-model-\(UUID().uuidString)", isDirectory: true)
@@ -60,7 +61,9 @@ public struct GradleProjectModelExtractor: Sendable {
             ],
             javaHome: javaHome,
             timeout: timeout,
-            output: output
+            output: output,
+            log: log,
+            capturesModelDiagnostics: log != nil
         )
 
         guard result.exitCode == 0 else {

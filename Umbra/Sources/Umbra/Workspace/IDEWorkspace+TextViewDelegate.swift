@@ -19,6 +19,7 @@ extension IDEWorkspace: TextViewDelegate {
         languageSettle.schedule(for: textView, delay: settleDelay, settle: documentSettle, languages: languages)
         mirrorEdits(from: textView)
         if let pane = workbench.panes.first(where: { hostCache.peek($0.id)?.textView === textView }) {
+            hostCache.peek(pane.id)?.intelligenceController?.setTransientDiagnostic(nil)
             hostCache.peek(pane.id)?.noteJSONDiagramEdited()
             hostCache.peek(pane.id)?.noteCSVTableEdited()
         }
