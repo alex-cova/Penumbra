@@ -83,6 +83,78 @@ final class JavaCodeVisionProviderTests: XCTestCase {
         XCTAssertEqual(result["area"]?.count, 2, "usages first, then implementations")
     }
 
+    func testClassesWithSubclassesAndMethodsWithOverridesAreCounted() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Base.java", """
+        public class Base {
+            public void run() {}
+            public void leaf() {}
+            public final void sealedMethod() {}
+            public static void helper() {}
+            private void hidden() {}
+        }
+        """)
+        try fixture.add("Left.java", "public class Left extends Base { @Override public void run() {} }")
+        try fixture.add("Right.java", "public class Right extends Base { @Override public void run() {} }")
+        let provider = try await makeProvider(fixture)
+        let document = try document(fixture, "Base.java")
+        let anchors = await provider.codeVisionAnchors(for: document)
+        let lenses = await provider.codeVision(for: document, anchors: anchors)
+        let result = labels(lenses, in: try XCTUnwrap(fixture.sources["Base.java"]))
+
+        XCTAssertEqual(result["Base"]?.last, "2 subclasses")
+        XCTAssertEqual(result["run"]?.last, "2 overrides")
+        XCTAssertEqual(result["leaf"], ["no usages"], "nothing overrides it, so no label")
+        XCTAssertEqual(result["sealedMethod"], ["no usages"], "a final method cannot be overridden")
+        XCTAssertEqual(result["helper"], ["no usages"], "a static method is not overridden")
+        XCTAssertEqual(result["hidden"], ["no usages"], "a private method is not overridden")
+
+        let leftDocument = try self.document(fixture, "Left.java")
+        let leftAnchors = await provider.codeVisionAnchors(for: leftDocument)
+        let left = labels(await provider.codeVision(for: leftDocument, anchors: leftAnchors), in: try XCTUnwrap(fixture.sources["Left.java"]))
+        XCTAssertEqual(left["Left"], ["no usages"], "a class with no subclasses carries no subclass label")
+    }
+
+    func testFinalClassesEnumsRecordsAndTheirMethodsGetNoInheritanceLabels() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Sealed.java", "public final class Sealed { public void run() {} }")
+        try fixture.add("Kind.java", "public enum Kind { A; public void run() {} }")
+        try fixture.add("Point.java", "public record Point(int x) { public void run() {} }")
+        let provider = try await makeProvider(fixture)
+        for name in ["Sealed.java", "Kind.java", "Point.java"] {
+            let file = try document(fixture, name)
+            let anchors = await provider.codeVisionAnchors(for: file)
+            let lenses = await provider.codeVision(for: file, anchors: anchors)
+            let entries = lenses.flatMap(\.entries).map(\.id)
+            XCTAssertEqual(Set(entries), ["usages"], "\(name): \(entries)")
+        }
+    }
+
+    func testAnOverriddenInterfaceDefaultMethodIsCounted() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Greeter.java", "public interface Greeter { default String hello() { return \"hi\"; } }")
+        try fixture.add("Polite.java", "public class Polite implements Greeter { public String hello() { return \"good day\"; } }")
+        let provider = try await makeProvider(fixture)
+        let document = try document(fixture, "Greeter.java")
+        let anchors = await provider.codeVisionAnchors(for: document)
+        let lenses = await provider.codeVision(for: document, anchors: anchors)
+        let result = labels(lenses, in: try XCTUnwrap(fixture.sources["Greeter.java"]))
+        XCTAssertEqual(result["Greeter"]?.last, "1 implementation")
+        XCTAssertEqual(result["hello"]?.last, "1 override")
+    }
+
+    func testImplementationOptionAlsoControlsSubclassAndOverrideLabels() async throws {
+        let fixture = try JavaReferenceFixture()
+        try fixture.add("Base.java", "public class Base { public void run() {} }")
+        try fixture.add("Left.java", "public class Left extends Base { @Override public void run() {} }")
+        let provider = try await makeProvider(fixture, options: JavaCodeVisionOptions(usages: true, implementations: false))
+        let document = try document(fixture, "Base.java")
+        let anchors = await provider.codeVisionAnchors(for: document)
+        let result = labels(await provider.codeVision(for: document, anchors: anchors), in: try XCTUnwrap(fixture.sources["Base.java"]))
+        XCTAssertEqual(result["Base"]?.count, 1)
+        XCTAssertEqual(result["run"]?.count, 1)
+    }
+
     func testOptionsSelectTheLabels() async throws {
         let fixture = try JavaReferenceFixture()
         try fixture.add("Shape.java", "public interface Shape { double area(); }")

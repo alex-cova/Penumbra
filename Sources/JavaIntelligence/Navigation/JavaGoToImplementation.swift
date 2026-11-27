@@ -11,9 +11,11 @@ enum JavaGoToImplementation {
         index: JavaIndex,
         jdkHome: URL?,
         cacheRoot: URL,
-        openBuffer: (@Sendable (URL) async -> String?)?
+        openBuffer: (@Sendable (URL) async -> String?)?,
+        tree knownTree: JavaSyntaxTree? = nil
     ) async -> [JavaDefinitionHit] {
-        guard let tree = JavaSyntaxParser().parse(source) else { return [] }
+        // A caller resolving many declarations of one file passes the tree it already has.
+        guard let tree = knownTree ?? JavaSyntaxParser().parse(source) else { return [] }
         let byteOffset = JavaNavigationText.utf8ByteOffset(forUTF16Offset: utf16Offset, in: source)
         guard let reference = JavaReferenceClassifier.classify(in: tree, atByteOffset: byteOffset) else { return [] }
         // Implementations are project sources, so there is never a reason to decompile.

@@ -5,7 +5,9 @@ import Foundation
 public struct JavaCodeVisionOptions: Sendable, Equatable {
     /// `3 usages` above classes, methods and constructors.
     public var usages: Bool
-    /// `2 implementations` above interfaces, abstract classes and abstract or interface methods.
+    /// `2 implementations` above interfaces, abstract classes and abstract or interface methods,
+    /// `2 subclasses` above other classes that have some, and `2 overrides` above methods that
+    /// subclasses override.
     public var implementations: Bool
 
     public init(usages: Bool = true, implementations: Bool = true) {
@@ -135,7 +137,7 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
                 for item in batch {
                     group.addTask {
                         let entries = await self.entries(
-                            for: item.declaration, offset: item.offset, source: source, url: url, options: options,
+                            for: item.declaration, offset: item.offset, source: source, tree: tree, url: url, options: options,
                             usageCount: usageCounts[item.offset],
                             scope: scope, lookup: lookup
                         )
@@ -160,32 +162,52 @@ public actor JavaCodeVisionProvider: CodeVisionProviding {
     // MARK: - Counting
 
     private func entries(
-        for declaration: JavaCodeVision.Declaration, offset: Int, source: String, url: URL?, options: JavaCodeVisionOptions,
-        usageCount: Int?, scope: Set<String>?, lookup: (@Sendable (URL) async -> String?)?
+        for declaration: JavaCodeVision.Declaration, offset: Int, source: String, tree: JavaSyntaxTree, url: URL?,
+        options: JavaCodeVisionOptions, usageCount: Int?, scope: Set<String>?, lookup: (@Sendable (URL) async -> String?)?
     ) async -> [CodeVisionEntry] {
         var entries: [CodeVisionEntry] = []
         if let usageCount {
             entries.append(CodeVisionEntry(id: "usages", text: JavaCodeVision.label(count: usageCount, singular: "usage", plural: "usages")))
         }
-        if options.implementations, declaration.isAbstract {
-            let count = await implementationCount(source: source, url: url, offset: offset, scope: scope, lookup: lookup)
+        guard options.implementations, declaration.inheritance != .none else { return entries }
+        let count = await implementationCount(source: source, tree: tree, url: url, offset: offset, scope: scope, lookup: lookup)
+        switch declaration.inheritance {
+        case .abstract:
+            // Only meaningful through its implementations, so "no implementations" is information.
             entries.append(CodeVisionEntry(
                 id: "implementations",
                 text: JavaCodeVision.label(count: count, singular: "implementation", plural: "implementations")
             ))
+        case .subclassable:
+            // Most classes have none: a label on every one would be noise.
+            if count > 0 {
+                entries.append(CodeVisionEntry(
+                    id: "subclasses", text: JavaCodeVision.label(count: count, singular: "subclass", plural: "subclasses")
+                ))
+            }
+        case .overridable:
+            if count > 0 {
+                entries.append(CodeVisionEntry(
+                    id: "overrides", text: JavaCodeVision.label(count: count, singular: "override", plural: "overrides")
+                ))
+            }
+        case .none:
+            break
         }
         return entries
     }
 
     private func implementationCount(
-        source: String, url: URL?, offset: Int, scope: Set<String>?, lookup: (@Sendable (URL) async -> String?)?
+        source: String, tree: JavaSyntaxTree, url: URL?, offset: Int, scope: Set<String>?,
+        lookup: (@Sendable (URL) async -> String?)?
     ) async -> Int {
         let index = self.index
         let home = jdkHome
         let cacheRoot = indexPaths.root
         let work = { () async -> Int in
             await JavaGoToImplementation.resolve(
-                source: source, fileURL: url, utf16Offset: offset, index: index, jdkHome: home, cacheRoot: cacheRoot, openBuffer: lookup
+                source: source, fileURL: url, utf16Offset: offset, index: index, jdkHome: home, cacheRoot: cacheRoot,
+                openBuffer: lookup, tree: tree
             ).count
         }
         return await JavaMemberLookup.$sourceTextProvider.withValue(lookup) {
@@ -209,9 +231,21 @@ enum JavaCodeVision {
         let utf16Offset: Int
         /// Identifies the declaration across edits: `kind|Outer.Inner|name|parameters`.
         let signature: String
+        /// What the declaration has below it: see ``Inheritance``.
+        let inheritance: Inheritance
+    }
+
+    /// How a declaration is used by the types below it.
+    enum Inheritance: Sendable, Equatable {
+        /// Nothing can extend or override it: a constructor, an enum, a record, a `final` or `static` member.
+        case none
         /// An interface, an abstract class, an abstract method or an interface method: one that is
         /// used through its implementations.
-        let isAbstract: Bool
+        case abstract
+        /// A class that can be extended.
+        case subclassable
+        /// A method that subclasses can override.
+        case overridable
     }
 
     private static let typeNodes: Set<String> = [
@@ -234,17 +268,15 @@ enum JavaCodeVision {
             result.append(Declaration(
                 utf16Offset: JavaNavigationText.utf16Offset(forByte: name.startByte, in: source),
                 signature: "type|\(path.joined(separator: "."))",
-                isAbstract: node.type == "interface_declaration" || (node.type == "class_declaration" && hasModifier("abstract", in: node))
+                inheritance: typeInheritance(node)
             ))
         } else if node.type == "method_declaration" || node.type == "constructor_declaration",
                   let name = node.child(byFieldName: "name") {
             let parameters = node.child(byFieldName: "parameters")?.text.filter { !$0.isWhitespace } ?? ""
-            let isInterfaceMethod = node.parent?.type == "interface_body"
-                && !hasModifier("static", in: node) && !hasModifier("private", in: node) && !hasModifier("default", in: node)
             result.append(Declaration(
                 utf16Offset: JavaNavigationText.utf16Offset(forByte: name.startByte, in: source),
                 signature: "\(node.type)|\(path.joined(separator: "."))|\(name.text)|\(parameters)",
-                isAbstract: hasModifier("abstract", in: node) || isInterfaceMethod
+                inheritance: node.type == "method_declaration" ? methodInheritance(node) : .none
             ))
         }
         node.walkNamedChildren(overlapping: node.byteRange) { child in
@@ -252,6 +284,32 @@ enum JavaCodeVision {
             collect(child, enclosing: path, source: source, limit: limit, into: &result)
             return true
         }
+    }
+
+    private static func typeInheritance(_ node: SyntaxNode) -> Inheritance {
+        switch node.type {
+        case "interface_declaration":
+            return .abstract
+        case "class_declaration":
+            if hasModifier("abstract", in: node) { return .abstract }
+            return hasModifier("final", in: node) ? .none : .subclassable
+        default:
+            return .none
+        }
+    }
+
+    private static func methodInheritance(_ node: SyntaxNode) -> Inheritance {
+        if hasModifier("abstract", in: node) { return .abstract }
+        let isInterfaceMember = node.parent?.type == "interface_body"
+        if isInterfaceMember {
+            if hasModifier("static", in: node) || hasModifier("private", in: node) { return .none }
+            // `default` has a body that implementations may replace; any other is abstract.
+            return hasModifier("default", in: node) ? .overridable : .abstract
+        }
+        guard !hasModifier("static", in: node), !hasModifier("private", in: node), !hasModifier("final", in: node),
+              let body = node.parent, body.type == "class_body",
+              let owner = body.parent, owner.type == "class_declaration", !hasModifier("final", in: owner) else { return .none }
+        return .overridable
     }
 
     private static func hasModifier(_ keyword: String, in declaration: SyntaxNode) -> Bool {

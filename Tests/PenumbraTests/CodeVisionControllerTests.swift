@@ -111,4 +111,22 @@ final class CodeVisionControllerTests: XCTestCase {
         XCTAssertEqual(other.first?.0, "custom")
         XCTAssertEqual(other.first?.1, 42)
     }
+
+    func testSubclassAndOverrideLabelsAreBuiltInClicksNotHostClicks() async throws {
+        let provider = FakeProvider(anchors: [offset(ofRow: 1) + 5])
+        let (controller, textView, window) = makeController(provider: provider)
+        defer { window.orderOut(nil) }
+        controller.codeVisionEnabled = true
+        controller.refreshCodeVision(delay: 0)
+        try await wait { textView.codeVisionLenses.contains { !$0.entries.isEmpty } }
+
+        var forwarded: [String] = []
+        controller.onCodeVisionClick = { entry, _ in forwarded.append(entry.id) }
+        for id in ["implementations", "subclasses", "overrides", "usages"] {
+            textView.codeVisionHandler?(CodeVisionEntry(id: id, text: id), 42)
+        }
+        XCTAssertEqual(forwarded, [], "these ids open Find Usages or Go to Implementation, not the host")
+        textView.codeVisionHandler?(CodeVisionEntry(id: "custom", text: "x"), 42)
+        XCTAssertEqual(forwarded, ["custom"])
+    }
 }

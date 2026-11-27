@@ -120,7 +120,8 @@ final class CodeVisionRefreshController {
         switch entry.id {
         case "usages":
             _ = navigate(.references, declarationOffset)
-        case "implementations":
+        case "implementations", "subclasses", "overrides":
+            // Subclasses and overrides are what Go to Implementation lists for a class and a method.
             _ = navigate(.implementation, declarationOffset)
         default:
             onUnknownClick?(entry, declarationOffset)

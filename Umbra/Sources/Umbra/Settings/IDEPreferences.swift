@@ -813,7 +813,8 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(javaCodeVisionUsages, forKey: Keys.javaCodeVisionUsages) }
     }
 
-    /// `2 implementations` above interfaces, abstract classes and abstract methods.
+    /// `2 implementations` above interfaces, abstract classes and abstract methods, `2 subclasses` above
+    /// classes that have some and `2 overrides` above methods that subclasses override.
     var javaCodeVisionImplementations: Bool {
         didSet { UserDefaults.standard.set(javaCodeVisionImplementations, forKey: Keys.javaCodeVisionImplementations) }
     }
