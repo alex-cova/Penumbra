@@ -162,4 +162,9 @@ struct RoutedCodeVision: CodeVisionProviding {
         guard let provider = registry.owner(of: document.languageIdentifier, feature: .codeVision, \.codeVision) else { return [] }
         return await provider.codeVision(for: document, anchors: anchors)
     }
+
+    func activateCodeVisionEntry(_ entry: CodeVisionEntry, atAnchor anchor: Int, in document: Document) async -> CodeVisionActivation {
+        guard let provider = registry.owner(of: document.languageIdentifier, feature: .codeVision, \.codeVision) else { return .unhandled }
+        return await provider.activateCodeVisionEntry(entry, atAnchor: anchor, in: document)
+    }
 }

@@ -20,6 +20,7 @@ public enum LSPServerCapabilities {
         if capabilities.diagnosticProvider != nil { features.insert(.diagnostics) }
         if capabilities.semanticTokensProvider != nil { features.insert(.semanticTokens) }
         if enabled(capabilities.inlayHintProvider) { features.insert(.inlayHints) }
+        if capabilities.codeLensProvider != nil { features.insert(.codeVision) }
         if enabled(capabilities.documentSymbolProvider) { features.insert(.structure) }
         if enabled(capabilities.callHierarchyProvider) { features.insert(.callHierarchy) }
         if enabled(capabilities.typeHierarchyProvider) { features.insert(.typeHierarchy) }
@@ -28,6 +29,17 @@ public enum LSPServerCapabilities {
 
     public static func resolvesCompletionItems(_ capabilities: ServerCapabilities) -> Bool {
         capabilities.completionProvider?.resolveProvider == true
+    }
+
+    /// Whether the server resolves a lens that came without its command (`codeLens/resolve`).
+    public static func resolvesCodeLenses(_ capabilities: ServerCapabilities) -> Bool {
+        capabilities.codeLensProvider?.resolveProvider == true
+    }
+
+    /// Whether the server declared `command` in `executeCommandProvider`: a command it runs itself,
+    /// as opposed to one only its own editor extension defines.
+    public static func executes(_ command: String, _ capabilities: ServerCapabilities) -> Bool {
+        capabilities.executeCommandProvider?.commands.contains(command) == true
     }
 
     public static func supportsWorkspaceSymbols(_ capabilities: ServerCapabilities) -> Bool {

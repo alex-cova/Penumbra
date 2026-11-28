@@ -95,6 +95,7 @@ public final class IDEPreferences {
         static let inlayHintsWorkspaceOverrides = "com.umbra.editor.inlayHintsWorkspaceOverrides"
         static let inlayHintsEnabled = "com.umbra.editor.inlayHintsEnabled"
         static let lspInlayHintsEnabled = "com.umbra.editor.lspInlayHintsEnabled"
+        static let lspCodeLensEnabled = "com.umbra.editor.lspCodeLensEnabled"
         static let jdkConfigurationHintsEnabled = "com.umbra.editor.jdkConfigurationHintsEnabled"
         static let javaInlayChainTypes = "com.umbra.editor.javaInlayChainTypes"
         static let javaInlayExclusions = "com.umbra.editor.javaInlayExclusions"
@@ -854,6 +855,12 @@ public final class IDEPreferences {
         didSet { UserDefaults.standard.set(lspInlayHintsEnabled, forKey: Keys.lspInlayHintsEnabled) }
     }
 
+    /// The code lenses a language server supplies (reference counts, run and debug links), above declarations.
+    /// Off by default: each lens reserves a row above its line.
+    var lspCodeLensEnabled: Bool {
+        didSet { UserDefaults.standard.set(lspCodeLensEnabled, forKey: Keys.lspCodeLensEnabled) }
+    }
+
     var jdkConfigurationHintsEnabled: Bool {
         didSet { UserDefaults.standard.set(jdkConfigurationHintsEnabled, forKey: Keys.jdkConfigurationHintsEnabled) }
     }
@@ -869,6 +876,7 @@ public final class IDEPreferences {
     func restoreInlayHintDefaults() {
         inlayHintsEnabled = true
         lspInlayHintsEnabled = true
+        lspCodeLensEnabled = false
         jdkConfigurationHintsEnabled = true
         javaInlayHints = true
         javaInlayVariableTypes = true
@@ -1345,6 +1353,7 @@ public final class IDEPreferences {
         inlayHintsWorkspaceOverrides = defaults.dictionary(forKey: Keys.inlayHintsWorkspaceOverrides) as? [String: Bool] ?? [:]
         inlayHintsEnabled = defaults.object(forKey: Keys.inlayHintsEnabled) as? Bool ?? true
         lspInlayHintsEnabled = defaults.object(forKey: Keys.lspInlayHintsEnabled) as? Bool ?? true
+        lspCodeLensEnabled = defaults.bool(forKey: Keys.lspCodeLensEnabled)
         jdkConfigurationHintsEnabled = defaults.object(forKey: Keys.jdkConfigurationHintsEnabled) as? Bool ?? true
         javaInlayChainTypes = defaults.bool(forKey: Keys.javaInlayChainTypes)
         javaInlayExclusions = defaults.string(forKey: Keys.javaInlayExclusions) ?? ""
@@ -1530,7 +1539,7 @@ public final class IDEPreferences {
     func apply(to controller: EditorIntelligenceController) {
         controller.showsDocumentationOnMouseHover = showsDocumentationOnHover
         controller.tooltipDelay = TimeInterval(tooltipDelayMilliseconds) / 1000
-        controller.codeVisionConfiguration = "\(javaCodeVisionUsages)|\(javaCodeVisionImplementations)"
+        controller.codeVisionConfiguration = "\(javaCodeVisionUsages)|\(javaCodeVisionImplementations)|\(lspCodeLensEnabled)"
         controller.appliesRefactoringsInPlace = inPlaceRefactoring
         controller.confirmsInlineVariable = confirmsInlineVariable
         controller.postfixExpansionSettings = javaPostfix.expansionSettings

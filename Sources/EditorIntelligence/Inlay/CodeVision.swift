@@ -29,6 +29,18 @@ public struct CodeVisionLens: Sendable, Hashable {
     }
 }
 
+/// What a click on a lens entry that the editor has no built-in action for turned out to mean.
+public enum CodeVisionActivation: Sendable, Equatable {
+    /// The provider does not own the entry. The editor hands the click to the host.
+    case unhandled
+    /// The provider did what the entry asks (a server command, say). Nothing more to do.
+    case handled
+    /// Show the references of the symbol at this UTF-16 offset.
+    case showReferences(offset: Int)
+    /// Show the implementations of the symbol at this UTF-16 offset.
+    case showImplementations(offset: Int)
+}
+
 /// Supplies the lenses for a document in two steps, so the room above declarations can be kept
 /// from the start and the numbers can follow for what is on screen.
 public protocol CodeVisionProviding: Sendable {
@@ -40,4 +52,14 @@ public protocol CodeVisionProviding: Sendable {
     /// ``codeVisionAnchors(for:)`` returned). A provider should bound its work, since this runs
     /// whenever the visible text changes.
     func codeVision(for document: Document, anchors: [Int]) async -> [CodeVisionLens]
+
+    /// A click on `entry`, one of the entries this provider returned for the lens at `anchor`, that
+    /// the editor has no built-in action for. Runs only for an explicit click.
+    func activateCodeVisionEntry(_ entry: CodeVisionEntry, atAnchor anchor: Int, in document: Document) async -> CodeVisionActivation
+}
+
+public extension CodeVisionProviding {
+    func activateCodeVisionEntry(_ entry: CodeVisionEntry, atAnchor anchor: Int, in document: Document) async -> CodeVisionActivation {
+        .unhandled
+    }
 }

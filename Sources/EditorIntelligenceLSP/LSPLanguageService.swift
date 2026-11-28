@@ -105,6 +105,7 @@ public final class LSPLanguageService: LanguageService, @unchecked Sendable {
         var rename: (any RenameProviding)?
         var semanticTokens: (any SemanticTokenProviding)?
         var inlayHints: (any InlayHintProviding)?
+        var codeVision: (any CodeVisionProviding)?
         var typeHierarchy: (any TypeHierarchyProviding)?
         var callHierarchy: (any CallHierarchyProviding)?
         var structure: (any StructureProviding)?
@@ -142,6 +143,9 @@ public final class LSPLanguageService: LanguageService, @unchecked Sendable {
         if features.contains(.inlayHints) {
             inlayHints = LSPReadyInlayHints(languages: languages, connections: connections, languageID: configuration.lspLanguageID)
         }
+        if features.contains(.codeVision) {
+            codeVision = LSPReadyCodeVision(languages: languages, connections: connections)
+        }
         if features.contains(.typeHierarchy) {
             typeHierarchy = LSPReadyTypeHierarchy(languages: languages, connections: connections)
         }
@@ -154,7 +158,7 @@ public final class LSPLanguageService: LanguageService, @unchecked Sendable {
         providers = LanguageProviders(
             completion: completion, hover: hover, diagnostics: diagnostics, navigation: navigation,
             formatting: formatting, signatureHelp: signatureHelp, codeActions: codeActions, rename: rename,
-            inlayHints: inlayHints, semanticTokens: semanticTokens, structure: structure,
+            inlayHints: inlayHints, codeVision: codeVision, semanticTokens: semanticTokens, structure: structure,
             typeHierarchy: typeHierarchy, callHierarchy: callHierarchy
         )
     }

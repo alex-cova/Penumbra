@@ -4672,8 +4672,14 @@ public final class IDEWorkspace {
         controller.inlayHintsEnabled = visible && supported
             && (language == "java" ? preferences.areInlayHintsEnabled : preferences.lspInlayHintsEnabled)
         let configuration = IDEJDKConfigurationCodeVision.supports(document?.url, in: javaSupport.jdk.projectRoot)
+        // Lenses from a language server, for any language but Java (whose own labels are native).
+        let lensesSupported = languages.services(for: language).contains {
+            $0.providers.codeVision != nil && !$0.unavailableFeatures.contains(.codeVision)
+        }
         controller.codeVisionEnabled = visible && (
-            configuration ? preferences.jdkConfigurationHintsEnabled : language == "java" && preferences.areCodeVisionLensesEnabled
+            configuration
+                ? preferences.jdkConfigurationHintsEnabled
+                : language == "java" ? preferences.areCodeVisionLensesEnabled : lensesSupported && preferences.lspCodeLensEnabled
         )
     }
 

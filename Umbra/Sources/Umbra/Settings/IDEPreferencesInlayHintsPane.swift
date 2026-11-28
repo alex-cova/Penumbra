@@ -13,6 +13,7 @@ struct IDEPreferencesInlayHintsPane: View {
         IDESettingsSection("Visibility") {
             IDESettingsToggle("Show Inlay Hints", isOn: $preferences.inlayHintsEnabled)
             IDESettingsToggle("Language Server Hints", isOn: $preferences.lspInlayHintsEnabled)
+            IDESettingsToggle("Language Server Code Lenses", isOn: $preferences.lspCodeLensEnabled)
             IDESettingsToggle("Project JDK Hints", isOn: $preferences.jdkConfigurationHintsEnabled)
             if let root = workspace.project.rootURL {
                 IDESettingsPicker("This Workspace", selection: workspaceVisibility(root)) {

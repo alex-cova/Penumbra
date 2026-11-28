@@ -246,7 +246,7 @@ final class IDELanguageServerHost {
                 connection.setSupportedFeatures(features)
                 self.setStatus(definition, .ready)
                 self.sessions[definition.id]?.beginSync()
-                if features.contains(.inlayHints) {
+                if features.contains(.inlayHints) || features.contains(.codeVision) {
                     self.onInlayHintsChanged?(definition.configuration.languageIdentifiers)
                 }
             }

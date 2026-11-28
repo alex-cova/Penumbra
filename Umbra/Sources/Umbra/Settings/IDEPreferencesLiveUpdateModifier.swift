@@ -79,6 +79,7 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
         view
             .onChange(of: preferences.inlayHintsEnabled) { applyLivePreferences() }
             .onChange(of: preferences.lspInlayHintsEnabled) { applyLivePreferences() }
+            .onChange(of: preferences.lspCodeLensEnabled) { applyLivePreferences() }
             .onChange(of: preferences.jdkConfigurationHintsEnabled) { applyLivePreferences() }
             .onChange(of: preferences.javaInlayHints) { applyLivePreferences() }
             .onChange(of: preferences.javaInlayVariableTypes) { applyLivePreferences() }

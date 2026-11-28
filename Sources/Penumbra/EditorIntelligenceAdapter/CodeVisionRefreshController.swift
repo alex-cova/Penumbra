@@ -123,8 +123,36 @@ final class CodeVisionRefreshController {
         case "implementations", "subclasses", "overrides":
             // Subclasses and overrides are what Go to Implementation lists for a class and a method.
             _ = navigate(.implementation, declarationOffset)
+        case let id where id.hasPrefix("lsp:"):
+            activateProviderEntry(entry, declarationOffset: declarationOffset)
         default:
             onUnknownClick?(entry, declarationOffset)
+        }
+    }
+
+    /// A lens label a language server supplied: its provider decides what the click means (the editor's
+    /// own references, or a server command). One it does not own goes to the host like any other.
+    private func activateProviderEntry(_ entry: CodeVisionEntry, declarationOffset: Int) {
+        guard let provider else {
+            onUnknownClick?(entry, declarationOffset)
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            var activation = CodeVisionActivation.unhandled
+            if let document = await self.makeDocument() {
+                activation = await provider.activateCodeVisionEntry(entry, atAnchor: declarationOffset, in: document)
+            }
+            switch activation {
+            case .showReferences(let offset):
+                _ = self.navigate(.references, offset)
+            case .showImplementations(let offset):
+                _ = self.navigate(.implementation, offset)
+            case .handled:
+                break
+            case .unhandled:
+                self.onUnknownClick?(entry, declarationOffset)
+            }
         }
     }
 

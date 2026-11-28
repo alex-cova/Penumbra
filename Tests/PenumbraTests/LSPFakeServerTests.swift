@@ -1051,6 +1051,94 @@ final class LSPFakeServerTests: XCTestCase {
         XCTAssertTrue(fixture.peer.methods.contains("response:9002"))
     }
 
+    // MARK: - Code lens
+
+    private func codeLensService(_ fixture: IncrementalFixture) async -> LSPLanguageService {
+        let box = LSPConnectionBox(client: fixture.client)
+        box.setSupportedFeatures(await fixture.client.advertisedFeatures())
+        return LSPLanguageService(
+            configuration: LSPLanguageConfiguration(
+                name: "fake", languageIdentifiers: ["swift"], enabledFeatures: [.codeVision], diagnosticSource: .sourceKitLSP
+            ),
+            connections: box
+        )
+    }
+
+    private let lensText = "class A {}\nfunc run() {}\nlet v = 1"
+
+    func testCodeLensesBecomeCodeVisionAndAnUnresolvedOneIsResolvedWhenShown() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2, codeLens: true)
+        defer { fixture.stop() }
+        let document = incrementalDocument(DocumentID(), lensText)
+        let service = await codeLensService(fixture)
+        let provider = try XCTUnwrap(service.providers.codeVision)
+
+        let anchors = await provider.codeVisionAnchors(for: document)
+        XCTAssertEqual(anchors, [0, 11, 25], "one anchor per line the lenses sit above")
+        XCTAssertFalse(fixture.peer.methods.contains("codeLens/resolve"), "anchors alone resolve nothing")
+
+        let lenses = await provider.codeVision(for: document, anchors: anchors)
+        XCTAssertEqual(lenses.map(\.utf16Offset), [0, 11, 25])
+        XCTAssertEqual(lenses[0].entries.map(\.text), ["2 references", "Run"])
+        XCTAssertEqual(lenses[1].entries.map(\.text), ["Debug"], "resolved on demand")
+        XCTAssertEqual(lenses[2].entries.map(\.text), ["Multi"], "first line, trimmed; an empty title makes no entry")
+        XCTAssertTrue(lenses.flatMap(\.entries).allSatisfy { $0.id.hasPrefix("lsp:") })
+        XCTAssertEqual(Set(lenses.flatMap(\.entries).map(\.id)).count, 4)
+        XCTAssertEqual(fixture.peer.methods.filter { $0 == "codeLens/resolve" }.count, 1)
+        XCTAssertNotNil((fixture.peer.clientCapabilities["textDocument"] as? [String: Any])?["codeLens"])
+    }
+
+    func testAShowReferencesLensAsksForTheEditorsReferencesAtTheSymbol() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2, codeLens: true)
+        defer { fixture.stop() }
+        let document = incrementalDocument(DocumentID(), lensText)
+        let service = await codeLensService(fixture)
+        let provider = try XCTUnwrap(service.providers.codeVision)
+        let lenses = await provider.codeVision(for: document, anchors: await provider.codeVisionAnchors(for: document))
+        let references = try XCTUnwrap(lenses.first?.entries.first)
+        let activation = await provider.activateCodeVisionEntry(references, atAnchor: 0, in: document)
+        XCTAssertEqual(activation, .showReferences(offset: 6), "the symbol position the command carries")
+        XCTAssertFalse(fixture.peer.methods.contains("workspace/executeCommand"), "the editor shows references itself")
+
+        let edited = incrementalDocument(DocumentID(), "// new line\n" + lensText, version: 1)
+        let afterEdit = await provider.activateCodeVisionEntry(references, atAnchor: 12, in: edited)
+        XCTAssertEqual(afterEdit, .showReferences(offset: 12), "positions from before the edit are not trusted")
+    }
+
+    func testOnlyACommandTheServerDeclaredIsRunAndOnlyOnAClick() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2, codeLens: true)
+        defer { fixture.stop() }
+        let document = incrementalDocument(DocumentID(), lensText)
+        let service = await codeLensService(fixture)
+        let provider = try XCTUnwrap(service.providers.codeVision)
+        let lenses = await provider.codeVision(for: document, anchors: await provider.codeVisionAnchors(for: document))
+        XCTAssertFalse(fixture.peer.methods.contains("workspace/executeCommand"), "showing a lens runs nothing")
+
+        let run = try XCTUnwrap(lenses[0].entries.first { $0.text == "Run" })
+        let runResult = await provider.activateCodeVisionEntry(run, atAnchor: 0, in: document)
+        XCTAssertEqual(runResult, .handled)
+        XCTAssertEqual(fixture.peer.methods.filter { $0 == "workspace/executeCommand" }.count, 1)
+
+        let debug = try XCTUnwrap(lenses[1].entries.first)
+        let debugResult = await provider.activateCodeVisionEntry(debug, atAnchor: 11, in: document)
+        XCTAssertEqual(debugResult, .unhandled, "an extension-defined command is not sent to the server")
+        XCTAssertEqual(fixture.peer.methods.filter { $0 == "workspace/executeCommand" }.count, 1)
+
+        let unknown = await provider.activateCodeVisionEntry(CodeVisionEntry(id: "lsp:999999", text: "x"), atAnchor: 0, in: document)
+        XCTAssertEqual(unknown, .unhandled)
+    }
+
+    func testAServerWithoutCodeLensGivesNoCodeVisionProvider() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2, codeLens: false)
+        defer { fixture.stop() }
+        let features = await fixture.client.advertisedFeatures()
+        XCTAssertFalse(features.contains(.codeVision))
+        let document = incrementalDocument(DocumentID(), lensText)
+        let lenses = try await fixture.client.requestCodeLenses(for: document)
+        XCTAssertEqual(lenses.count, 0)
+        XCTAssertFalse(fixture.peer.methods.contains("textDocument/codeLens"))
+    }
+
     func testCancellingInlayRequestSendsProtocolCancellationAndUnblocksCaller() async throws {
         let fixture = await makeIncrementalFixture(syncKind: 2, inlayMode: .withholdResponse)
         defer { fixture.stop() }
@@ -1121,7 +1209,7 @@ final class LSPFakeServerTests: XCTestCase {
     }
 
     private func makeIncrementalFixture(
-        syncKind: Int, inlayMode: ScriptedLSPPeer.InlayMode = .disabled,
+        syncKind: Int, inlayMode: ScriptedLSPPeer.InlayMode = .disabled, codeLens: Bool = false,
         onInlayHintsChanged: (@Sendable () -> Void)? = nil
     ) async -> IncrementalFixture {
         let toServer = Pipe()
@@ -1129,6 +1217,7 @@ final class LSPFakeServerTests: XCTestCase {
         let peer = ScriptedLSPPeer()
         peer.syncKind = syncKind
         peer.inlayMode = inlayMode
+        peer.supportsCodeLens = codeLens
         let server = Task.detached {
             peer.serve(reading: toServer.fileHandleForReading, writing: fromServer.fileHandleForWriting)
         }
@@ -1320,6 +1409,9 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
         case dynamic
     }
     var inlayMode: InlayMode = .disabled
+    /// Advertise `codeLensProvider` (with resolve) and `executeCommandProvider` (only `server.run`), and answer
+    /// `textDocument/codeLens` and `codeLens/resolve`.
+    var supportsCodeLens = false
 
     /// After `initialized`, ask the client to create a progress token and report on it.
     var scriptsProgress = false
@@ -1452,7 +1544,7 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
         }
         let body = Self.response(
             id: id, method: method, incompleteCompletion: incompleteCompletion, syncKind: syncKind,
-            supportsInlay: inlayMode == .enabled || inlayMode == .withholdResponse
+            supportsInlay: inlayMode == .enabled || inlayMode == .withholdResponse, supportsCodeLens: supportsCodeLens
         )
         var framed = Data("Content-Length: \(body.count)\r\n\r\n".utf8)
         framed.append(body)
@@ -1516,7 +1608,8 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
     }
 
     private static func response(
-        id: Any, method: String, incompleteCompletion: Bool = false, syncKind: Int? = nil, supportsInlay: Bool = false
+        id: Any, method: String, incompleteCompletion: Bool = false, syncKind: Int? = nil, supportsInlay: Bool = false,
+        supportsCodeLens: Bool = false
     ) -> Data {
         let result: Any
         switch method {
@@ -1533,7 +1626,31 @@ private final class ScriptedLSPPeer: @unchecked Sendable {
                 capabilities["textDocumentSync"] = syncKind
             }
             if supportsInlay { capabilities["inlayHintProvider"] = ["resolveProvider": true] }
+            if supportsCodeLens {
+                capabilities["codeLensProvider"] = ["resolveProvider": true]
+                capabilities["executeCommandProvider"] = ["commands": ["server.run"]]
+            }
             result = ["capabilities": capabilities] as [String: Any]
+        case "textDocument/codeLens":
+            func range(_ line: Int) -> [String: Any] {
+                ["start": ["line": line, "character": 0], "end": ["line": line, "character": 5]]
+            }
+            result = [
+                ["range": range(0), "command": [
+                    "title": "2 references", "command": "editor.action.showReferences",
+                    "arguments": ["file:///tmp/A.swift", ["line": 0, "character": 6], [Any]()],
+                ] as [String: Any]],
+                ["range": range(0), "command": ["title": "Run", "command": "server.run", "arguments": [Any]()] as [String: Any]],
+                // Comes without its command: resolved when it is shown.
+                ["range": range(1), "data": ["id": 3]],
+                ["range": range(2), "command": ["title": "  Multi\nline  ", "command": "client.only"]],
+                ["range": range(2), "command": ["title": "", "command": "client.only"]],
+            ] as [Any]
+        case "codeLens/resolve":
+            result = [
+                "range": ["start": ["line": 1, "character": 0], "end": ["line": 1, "character": 5]],
+                "command": ["title": "Debug", "command": "client.only"],
+            ] as [String: Any]
         case "textDocument/inlayHint":
             result = [
                 ["position": ["line": 0, "character": 9], "label": [["value": ": "], ["value": "Int"]],

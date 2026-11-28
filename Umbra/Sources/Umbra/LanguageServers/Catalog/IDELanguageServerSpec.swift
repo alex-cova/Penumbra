@@ -57,7 +57,7 @@ struct IDELanguageServerSpec: Sendable, Identifiable {
     /// off for the reason `IDEPythonServer.features` records.
     static let standardFeatures: Set<LanguageFeature> = [
         .completion, .hover, .signatureHelp, .definition, .implementation, .typeDefinition, .references,
-        .rename, .codeActions, .formatting, .diagnostics, .structure, .inlayHints, .callHierarchy, .typeHierarchy,
+        .rename, .codeActions, .formatting, .diagnostics, .structure, .inlayHints, .codeVision, .callHierarchy, .typeHierarchy,
     ]
 
     var pathDefaultsKey: String { "umbra.languageServers.\(id).path" }

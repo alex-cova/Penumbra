@@ -16,7 +16,7 @@ enum IDETypeScriptServer {
     /// Not `.structure`: the LSP outline would take over from `TypeScriptStructureProvider`'s while connected.
     static let features: Set<LanguageFeature> = [
         .completion, .hover, .signatureHelp, .definition, .implementation, .typeDefinition, .references,
-        .rename, .codeActions, .formatting, .diagnostics, .inlayHints,
+        .rename, .codeActions, .formatting, .diagnostics, .inlayHints, .codeVision,
         .callHierarchy
     ]
 

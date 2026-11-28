@@ -158,6 +158,7 @@ public actor LanguageServerClient: LSPClient {
             var inlayHintCapabilities = InlayHintClientCapabilities(dynamicRegistration: true)
             inlayHintCapabilities.resolveSupport = .init(properties: ["tooltip", "label.tooltip", "textEdits"])
             textDocumentCapabilities.inlayHint = inlayHintCapabilities
+            textDocumentCapabilities.codeLens = CodeLensClientCapabilities(dynamicRegistration: false)
             return InitializeParams(
                 processId: Int(ProcessInfo.processInfo.processIdentifier),
                 clientInfo: InitializeParams.ClientInfo(name: "Umbra"),
@@ -760,6 +761,43 @@ public actor LanguageServerClient: LSPClient {
         }
         try Task.checkCancellation()
         return hints.prefix(2048).map(LSPRenderedInlayHint.init)
+    }
+
+    // MARK: - Code lens
+
+    /// Most lenses read from one response.
+    static let maximumCodeLenses = 400
+
+    /// The server's lenses for `document`. A lens may come without its command when the server
+    /// resolves lazily (see ``resolveCodeLens(_:)``).
+    public func requestCodeLenses(for document: Document) async throws -> [LanguageServerProtocol.CodeLens] {
+        guard await allows(.codeVision), !Task.isCancelled else { return [] }
+        await ensureSynced(document)
+        try Task.checkCancellation()
+        let lenses = try await server.codeLens(CodeLensParams(textDocument: textDocument(for: document))) ?? []
+        try Task.checkCancellation()
+        return Array(lenses.prefix(Self.maximumCodeLenses))
+    }
+
+    /// The lens with its command filled in, or nil when the server does not resolve lenses or answers
+    /// for a different place.
+    public func resolveCodeLens(_ lens: LanguageServerProtocol.CodeLens) async throws -> LanguageServerProtocol.CodeLens? {
+        guard let capabilities = await capabilities(), LSPServerCapabilities.resolvesCodeLenses(capabilities) else { return nil }
+        let resolved = try await server.codeLensResolve(lens)
+        return resolved.range == lens.range ? resolved : nil
+    }
+
+    /// Runs a lens's command on the server, for an explicit click. Only a command the server declared
+    /// in `executeCommandProvider` runs: any other is one its editor extension implements, and sending
+    /// it would only draw an error. A `workspace/applyEdit` the command asks for is not applied.
+    public func executeCodeLensCommand(_ command: Command) async -> Bool {
+        guard let capabilities = await capabilities(), LSPServerCapabilities.executes(command.command, capabilities) else { return false }
+        do {
+            _ = try await server.executeCommand(ExecuteCommandParams(command: command.command, arguments: command.arguments))
+            return true
+        } catch {
+            return false
+        }
     }
 
     func supportsInlayResolution(for document: Document, languageID: String) async -> Bool {

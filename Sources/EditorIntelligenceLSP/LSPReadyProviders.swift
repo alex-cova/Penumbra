@@ -262,7 +262,7 @@ private func isIdentifierUnit(_ unit: unichar) -> Bool {
     return CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "$"
 }
 
-private func documentText(_ document: Document) -> String {
+func documentText(_ document: Document) -> String {
     let snapshot = document.contentSnapshot
     return snapshot.substring(utf16Offset: 0, length: snapshot.utf16Length)
 }
