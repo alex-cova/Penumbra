@@ -347,6 +347,18 @@ final class IDEEditorPaneHost: NSView {
         }
     }
 
+    /// Routes the Toggle Inlay Hints action to the workspace, which owns the setting.
+    func wireInlayHintToggle(_ toggle: @escaping () -> Void) {
+        let previousHandler = textView.editorActionHandler
+        textView.editorActionHandler = { action in
+            if action == .toggleInlayHints {
+                toggle()
+                return true
+            }
+            return previousHandler?(action) ?? false
+        }
+    }
+
     /// Routes Select In… (⌥F1) to the workspace, which owns the Explorer, Finder and terminals.
     func wireSelectIn(_ show: @escaping () -> Void) {
         let previousHandler = textView.editorActionHandler

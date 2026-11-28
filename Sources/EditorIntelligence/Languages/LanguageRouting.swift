@@ -148,6 +148,11 @@ struct RoutedInlayHints: InlayHintProviding {
         guard let provider = registry.owner(of: document.languageIdentifier, feature: .inlayHints, \.inlayHints) else { return [] }
         return await provider.resolveInlayEdits(for: hint, in: document)
     }
+
+    func activateInlayHintPart(_ part: InlayHintLabelPart, of hint: InlayHint, in document: Document) async -> InlayHintActivation {
+        guard let provider = registry.owner(of: document.languageIdentifier, feature: .inlayHints, \.inlayHints) else { return .unhandled }
+        return await provider.activateInlayHintPart(part, of: hint, in: document)
+    }
 }
 
 struct RoutedCodeVision: CodeVisionProviding {

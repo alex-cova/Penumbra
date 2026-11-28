@@ -115,6 +115,33 @@ public actor JavaInlayHintProvider: InlayHintProviding {
         return hints.filter { range.start.utf16Offset...range.end.utf16Offset ~= $0.utf16Offset }
     }
 
+    /// ⌘-click on the class name of a type hint: the declaration, when the class is one of the project's own.
+    /// A class from the JDK or a library has no source to open, so the click does nothing.
+    public func activateInlayHintPart(_ part: InlayHintLabelPart, of hint: InlayHint, in document: Document) async -> InlayHintActivation {
+        guard hint.providerID == "java", case .token(let token) = part.target,
+              let text = String(data: token, encoding: .utf8), text.hasPrefix(JavaInlayHints.typeLinkPrefix) else { return .unhandled }
+        let name = String(text.dropFirst(JavaInlayHints.typeLinkPrefix.count))
+        guard let stub = await index.classStub(qualifiedName: name), case .source(let url, let nameRange) = stub.origin else { return .unhandled }
+        let source: String
+        if let open = await openBuffer?(url) {
+            source = open
+        } else if let contents = try? String(contentsOf: url, encoding: .utf8) {
+            source = contents
+        } else {
+            return .unhandled
+        }
+        guard nameRange.lowerBound <= nameRange.upperBound, nameRange.upperBound <= source.utf8.count else { return .unhandled }
+        let start = JavaNavigationText.position(utf16Offset: JavaNavigationText.utf16Offset(forByte: nameRange.lowerBound, in: source), in: source)
+        let end = JavaNavigationText.position(utf16Offset: JavaNavigationText.utf16Offset(forByte: nameRange.upperBound, in: source), in: source)
+        return .open(
+            uri: url.absoluteString,
+            range: LSPRange(
+                start: LSPPosition(line: start.line, character: start.column),
+                end: LSPPosition(line: end.line, character: end.column)
+            )
+        )
+    }
+
     private func parse(_ document: Document, source: String) async -> (tree: JavaSyntaxTree, stubs: JavaSourceFileStubs)? {
         // Overlay and inspections already use this cache. Large files that the text-keyed memo
         // declines can share that tree. The provider keeps stubs for one tree without retaining it.
@@ -339,8 +366,22 @@ enum JavaInlayHints {
     private static func typeHint(_ type: JavaTypeRef, offset: Int) -> InlayHint {
         let full = ": " + JavaSignatureText.text(of: type)
         let label = full.count > 64 ? String(full.prefix(63)) + "…" : full
-        return InlayHint(utf16Offset: offset, label: label, kind: .type, providerID: "java", tooltip: full)
+        // The class name at the head of the type leads to its declaration (resolved on the click).
+        var parts: [InlayHintLabelPart] = []
+        if case .classType(let qualifiedName, _, _) = type {
+            let head = type.simpleDisplayName
+            if !head.isEmpty, label.hasPrefix(": " + head) {
+                parts.append(InlayHintLabelPart(
+                    range: NSRange(location: 2, length: (head as NSString).length),
+                    target: .token(Data((typeLinkPrefix + qualifiedName).utf8))
+                ))
+            }
+        }
+        return InlayHint(utf16Offset: offset, label: label, kind: .type, providerID: "java", tooltip: full, parts: parts)
     }
+
+    static let typeLinkPrefix = "java.type:"
+
 
     // MARK: - Type hints
 

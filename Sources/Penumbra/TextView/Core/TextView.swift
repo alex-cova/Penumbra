@@ -718,6 +718,19 @@ public struct DocumentTextExport: Sendable {
         }
     }
 
+    /// Points added to the inlay hint font's size, so a user can make chips a little smaller or larger than
+    /// the default (the editor's size less one or two points).
+    public var inlayHintsSizeAdjustment: CGFloat {
+        get { textInputView.inlayHintsSizeAdjustment }
+        set { textInputView.inlayHintsSizeAdjustment = newValue }
+    }
+
+    /// A multiplier of the inlay chip background's opacity: 0 draws no background, 1 is the theme's.
+    public var inlayHintsBackgroundOpacity: CGFloat {
+        get { textInputView.inlayHintsBackgroundOpacity }
+        set { textInputView.inlayHintsBackgroundOpacity = newValue }
+    }
+
     /// Hints from a second source, shown together with ``inlayHints`` (hints at one offset are
     /// joined): a host can show, say, a debugger's variable values at line ends without replacing
     /// the parameter-name hints. They follow edits and are cleared with the document, like
@@ -1862,6 +1875,25 @@ public struct DocumentTextExport: Sendable {
 
     var inlayHintAppearanceForTesting: InlayHintAppearance { textInputView.inlayHintAppearanceForTesting }
     var layoutManagerForTesting: LayoutManager { textInputView.layoutManagerForTesting }
+
+    /// The inlay hint whose chip is under a window location (a mouse event's `locationInWindow`), if any.
+    func inlayHint(atWindowLocation location: NSPoint) -> InlayHint? {
+        textInputView.inlayHint(at: textInputView.convert(location, from: nil))
+    }
+
+    /// Called for a ⌘-click on a linked part of an inlay hint's label; return true to take the click.
+    var inlayHintPartClickHandler: ((InlayHint, InlayHintLabelPart) -> Bool)? {
+        get { textInputView.inlayHintPartClickHandler }
+        set { textInputView.inlayHintPartClickHandler = newValue }
+    }
+
+    /// The label part under `point` (in the coordinates of ``caretRectInViewport(at:)``), for tests and hover.
+    func inlayHintPart(at point: CGPoint) -> (hint: InlayHint, part: InlayHintLabelPart)? {
+        textInputView.inlayHintPart(at: point)
+    }
+
+    /// Whether `location` is the start of an empty line (see ``TextInputView/isEmptyLine(atLocation:)``).
+    func isEmptyLine(atLocation location: Int) -> Bool { textInputView.isEmptyLine(atLocation: location) }
 
     /// Where the pinned lines go: under the find bar, left of the minimap.
     var stickyLinesAvailableFrame: CGRect {

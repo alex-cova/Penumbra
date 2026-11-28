@@ -42,22 +42,44 @@ private struct CatcherRepresentable: NSViewRepresentable {
             self.view = view
             self.onZoom = onZoom
             monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self, let view = self.view, let window = view.window else { return event }
-                guard event.window == window, event.modifierFlags.contains(.command) else {
-                    return event
+                guard let self, let view = self.view else { return event }
+                // Local monitors fire on the main thread, so touching the view under an
+                // assumed MainActor is sound. The box is unchecked Sendable for exactly
+                // that reason: everything in it stays on the main thread here.
+                struct Unchecked: @unchecked Sendable { var view: NSView; var event: NSEvent }
+                let box = Unchecked(view: view, event: event)
+                // The outcome crosses back as a Sendable value because the monitor
+                // closure itself is nonisolated.
+                enum Outcome: Sendable {
+                    case pass
+                    case zoom(factor: CGFloat, point: CGPoint)
                 }
-                let local = view.convert(event.locationInWindow, from: nil)
-                guard local.x >= 0, local.y >= 0,
-                      local.x <= view.bounds.width, local.y <= view.bounds.height else {
-                    return event
+                let outcome: Outcome = MainActor.assumeIsolated {
+                    let view = box.view
+                    let event = box.event
+                    guard let window = view.window else { return .pass }
+                    guard event.window == window, event.modifierFlags.contains(.command) else {
+                        return .pass
+                    }
+                    let local = view.convert(event.locationInWindow, from: nil)
+                    guard local.x >= 0, local.y >= 0,
+                          local.x <= view.bounds.width, local.y <= view.bounds.height else {
+                        return .pass
+                    }
+                    // `scrollingDeltaY` already accounts for the natural-scroll preference.
+                    let delta = event.scrollingDeltaY
+                    let factor: CGFloat = delta > 0 ? 1.12 : (delta < 0 ? 1 / 1.12 : 1)
+                    guard factor != 1 else { return .pass }
+                    // NSView is bottom-left origin; the SwiftUI canvas is top-left.
+                    return .zoom(factor: factor, point: CGPoint(x: local.x, y: view.bounds.height - local.y))
                 }
-                // `scrollingDeltaY` already accounts for the natural-scroll preference.
-                let delta = event.scrollingDeltaY
-                let factor: CGFloat = delta > 0 ? 1.12 : (delta < 0 ? 1 / 1.12 : 1)
-                guard factor != 1 else { return event }
-                // NSView is bottom-left origin; the SwiftUI canvas is top-left.
-                self.onZoom?(factor, CGPoint(x: local.x, y: view.bounds.height - local.y))
-                return nil
+                switch outcome {
+                case .pass:
+                    return event
+                case let .zoom(factor, point):
+                    self.onZoom?(factor, point)
+                    return nil
+                }
             }
         }
 

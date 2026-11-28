@@ -136,6 +136,13 @@ final class InlayHintController {
         return true
     }
 
+    /// A ⌘-click on a label part that carries a token: the provider that made the hint says what it means.
+    func activate(_ part: InlayHintLabelPart, of hint: InlayHint) async -> InlayHintActivation {
+        guard let provider, let textView, isCurrent(hint, in: textView),
+              let document = await makeDocument(), isCurrent(hint, in: textView), !Task.isCancelled else { return .unhandled }
+        return await provider.activateInlayHintPart(part, of: hint, in: document)
+    }
+
     func tooltip(for hint: InlayHint) async -> String? {
         if let tooltip = hint.tooltip { return tooltip }
         guard let provider, let textView, isCurrent(hint, in: textView) else { return nil }

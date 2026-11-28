@@ -43,6 +43,20 @@ struct IDEPreferencesInlayHintsPane: View {
 
         IDESettingsSection("Appearance") {
             IDESettingsToggle("Use Editor Font", isOn: $preferences.inlayHintsUseEditorFont)
+            IDESettingsPicker("Size", selection: $preferences.inlayHintsSizeAdjustment) {
+                Text("Smallest").tag(-2)
+                Text("Smaller").tag(-1)
+                Text("Default").tag(0)
+                Text("Larger").tag(1)
+                Text("Larger Still").tag(2)
+                Text("Largest").tag(3)
+            }
+            IDESettingsPicker("Background", selection: $preferences.inlayHintsBackgroundOpacity) {
+                Text("None").tag(0.0)
+                Text("Faint").tag(0.5)
+                Text("Default").tag(1.0)
+                Text("Strong").tag(2.0)
+            }
             HStack(spacing: 2) {
                 Text("resize(")
                 if preferences.inlayHintsEnabled && preferences.javaInlayHints {

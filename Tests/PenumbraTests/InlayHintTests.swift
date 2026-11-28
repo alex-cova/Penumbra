@@ -109,6 +109,35 @@ final class InlayHintTests: XCTestCase {
         XCTAssertEqual(textView.caretRectInViewport(at: 5).minX, midBefore.minX, accuracy: 0.5, "clearing the hint takes the room back")
     }
 
+    func testGhostTextAtTheLineStartPushesTheTextRightAndSitsBetweenTheChipAndTheText() throws {
+        let textView = makeTextView("call(1, 2);")
+        let appearance = textView.inlayHintAppearanceForTesting
+        let before = textView.caretRectInViewport(at: 3).minX
+        textView.inlineCompletion = InlineCompletionPresentation(utf16Offset: 0, text: "extra")
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.caretRectInViewport(at: 3).minX - before, appearance.inlineTextWidth(of: "extra"), accuracy: 0.5,
+                       "the suggestion makes room like it does in the middle of a line")
+        XCTAssertEqual(textView.text, "call(1, 2);")
+
+        // With a chip too the order is chip, ghost, text, and the caret at the start sits behind the chip.
+        let beforeChip = textView.caretRectInViewport(at: 3).minX
+        textView.inlayHints = [hint(0, "name:")]
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.caretRectInViewport(at: 3).minX - beforeChip, appearance.width(of: "name:"), accuracy: 0.5)
+        textView.inlineCompletion = nil
+        textView.inlayHints = []
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.caretRectInViewport(at: 3).minX, before, accuracy: 0.5, "both gone, the room is taken back")
+    }
+
+    func testAnEmptyLineIsRecognizedByATreeLookup() {
+        let textView = makeTextView("a\n\nb\n")
+        XCTAssertFalse(textView.isEmptyLine(atLocation: 0))
+        XCTAssertTrue(textView.isEmptyLine(atLocation: 2))
+        XCTAssertFalse(textView.isEmptyLine(atLocation: 3), "a line with text")
+        XCTAssertTrue(textView.isEmptyLine(atLocation: 5), "the empty last line")
+    }
+
     func testAClickOnALineStartChipPutsTheCaretAtTheLineStart() throws {
         let textView = makeTextView("call(1, 2);")
         let appearance = textView.inlayHintAppearanceForTesting
@@ -241,6 +270,34 @@ final class InlayHintTests: XCTestCase {
         let editor = textView.inlayHintAppearanceForTesting
         XCTAssertEqual(editor.font.pointSize, max(editorSize - 1, 8), accuracy: 0.01)
         XCTAssertEqual(editor.font.familyName, textView.theme.font.familyName)
+    }
+
+    func testSizeAdjustmentAndBackgroundOpacityShapeTheChips() {
+        let theme = DefaultTheme()
+        let base = InlayHintAppearance.make(theme: theme, useEditorFont: false)
+        let larger = InlayHintAppearance.make(theme: theme, useEditorFont: false, sizeAdjustment: 2)
+        let smaller = InlayHintAppearance.make(theme: theme, useEditorFont: true, sizeAdjustment: -2)
+        XCTAssertEqual(larger.font.pointSize, base.font.pointSize + 2, accuracy: 0.01)
+        XCTAssertEqual(smaller.font.pointSize, InlayHintAppearance.make(theme: theme, useEditorFont: true).font.pointSize - 2, accuracy: 0.01)
+        XCTAssertGreaterThan(larger.width(of: "count:"), base.width(of: "count:"))
+        let extreme = InlayHintAppearance.make(theme: theme, useEditorFont: false, sizeAdjustment: -50)
+        XCTAssertEqual(extreme.font.pointSize, 7, "the chip font cannot shrink out of sight")
+        XCTAssertEqual(InlayHintAppearance.make(theme: theme, useEditorFont: false, backgroundOpacity: 0).backgroundColor.alphaComponent, 0)
+        let strong = InlayHintAppearance.make(theme: theme, useEditorFont: false, backgroundOpacity: 2).backgroundColor.alphaComponent
+        XCTAssertEqual(strong, min(base.backgroundColor.alphaComponent * 2, 1), accuracy: 0.001)
+
+        let textView = makeTextView("call(1, 2);")
+        textView.inlayHints = [hint(5, "count:")]
+        textView.layoutIfNeeded()
+        let before = textView.caretRectInViewport(at: 8).minX
+        textView.inlayHintsSizeAdjustment = 3
+        textView.layoutIfNeeded()
+        XCTAssertGreaterThan(textView.caretRectInViewport(at: 8).minX, before, "larger chips take more room")
+        textView.inlayHintsSizeAdjustment = 0
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.caretRectInViewport(at: 8).minX, before, accuracy: 0.5)
+        textView.inlayHintsBackgroundOpacity = 0
+        XCTAssertEqual(textView.inlayHintAppearanceForTesting.backgroundColor.alphaComponent, 0)
     }
 
     func testChangingTheFontRetypesetsLinesWithHints() {

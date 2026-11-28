@@ -95,6 +95,8 @@ struct IDEPreferencesLiveUpdateModifier: ViewModifier {
             .onChange(of: preferences.highlightsCurrentScope) { applyLivePreferences() }
             .onChange(of: preferences.showStickyLines) { applyLivePreferences() }
             .onChange(of: preferences.inlayHintsUseEditorFont) { applyLivePreferences() }
+            .onChange(of: preferences.inlayHintsSizeAdjustment) { applyLivePreferences() }
+            .onChange(of: preferences.inlayHintsBackgroundOpacity) { applyLivePreferences() }
             .onChange(of: preferences.javaCodeVisionUsages) { applyLivePreferences() }
             .onChange(of: preferences.javaCodeVisionImplementations) { applyLivePreferences() }
             .onChange(of: preferences.maximumStickyLines) { applyLivePreferences() }

@@ -20,17 +20,38 @@ struct LineInlayHint: Equatable {
     /// X of the hint's room in the coordinates of the text (the first character's leading edge is 0).
     /// A line-start chip sits wholly left of the text, in the fragment's leading inset.
     func leadingX(in line: CTLine) -> CGFloat {
-        guard localOffset > 0 else { return kind == .inlineCompletion ? 0 : -width }
+        // At the line's first character everything sits left of the text: a chip, then ghost text.
+        guard localOffset > 0 else { return -(width + followingWidth) }
         return InlayChipGeometry.chipEnd(forLocalOffset: localOffset, in: line) - width - followingWidth
     }
     /// How the hint is painted. Part of the hint, so a theme or font change repaints (and re-typesets)
     /// the lines that have hints and nothing else.
     let appearance: InlayHintAppearance
 
-    /// Room the first fragment of a line reserves in front of its text for a chip at the line's first
-    /// character, or 0. Ghost text at the line start takes no room (it never moves the caret).
+    /// The UTF-16 offset into ``label`` of the character drawn at `x` (0 is the left edge of the label's
+    /// text, inside the chip's padding), or nil when `x` is outside the text.
+    func labelOffset(atTextX x: CGFloat) -> Int? {
+        let text = label as NSString
+        guard x >= 0, text.length > 0, x < appearance.textWidth(of: label) else { return nil }
+        // The first offset whose character ends past `x`: widths only grow with the prefix.
+        var low = 0
+        var high = text.length - 1
+        while low < high {
+            let middle = (low + high) / 2
+            if appearance.textWidth(of: text.substring(to: middle + 1)) > x { high = middle } else { low = middle + 1 }
+        }
+        return low
+    }
+
+    /// Room the first fragment of a line reserves in front of its text for what sits at the line's first
+    /// character: a chip and then ghost text, as in the middle of a line, or 0.
     static func leadingInset(of hints: [LineInlayHint]) -> CGFloat {
-        hints.first { $0.localOffset == 0 && $0.kind != .inlineCompletion }?.width ?? 0
+        hints.reduce(0) { $0 + ($1.localOffset == 0 ? $1.width : 0) }
+    }
+
+    /// The part of that room a semantic chip fills. The caret sits behind it and in front of ghost text.
+    static func leadingChipWidth(of hints: [LineInlayHint]) -> CGFloat {
+        hints.reduce(0) { $0 + ($1.localOffset == 0 && $1.kind != .inlineCompletion ? $1.width : 0) }
     }
 }
 
@@ -61,18 +82,28 @@ struct InlayHintAppearance: Equatable {
     /// Sized from the editor font so hints follow its zoom: the editor font one point smaller, or the
     /// system UI font two points smaller (about what 13 pt code gets today). Colors are the theme's
     /// ``Theme/inlayHintTextColor`` / ``Theme/inlayHintBackgroundColor``, else shades of its text color.
-    static func make(theme: Theme, useEditorFont: Bool) -> InlayHintAppearance {
+    ///
+    /// `sizeAdjustment` (points, clamped to the hint font staying between 7 and 24) and `backgroundOpacity`
+    /// (a multiplier of the chip background's alpha: 0 draws none, 1 is the theme's) are the user's.
+    static func make(
+        theme: Theme, useEditorFont: Bool, sizeAdjustment: CGFloat = 0, backgroundOpacity: CGFloat = 1
+    ) -> InlayHintAppearance {
         let editorFont = theme.font
         let font: NSFont
         if useEditorFont {
-            font = NSFont(descriptor: editorFont.fontDescriptor, size: max(editorFont.pointSize - 1, 8)) ?? editorFont
+            let size = min(max(editorFont.pointSize - 1 + sizeAdjustment, 7), 24)
+            font = NSFont(descriptor: editorFont.fontDescriptor, size: size) ?? editorFont
         } else {
-            font = .systemFont(ofSize: max(editorFont.pointSize - 2, 9))
+            font = .systemFont(ofSize: min(max(editorFont.pointSize - 2 + sizeAdjustment, 7), 24))
+        }
+        var background = theme.inlayHintBackgroundColor ?? theme.textColor.withAlphaComponent(0.09)
+        if backgroundOpacity != 1 {
+            background = background.withAlphaComponent(min(max(background.alphaComponent * max(backgroundOpacity, 0), 0), 1))
         }
         return InlayHintAppearance(
             font: font,
             textColor: theme.inlayHintTextColor ?? theme.textColor.withAlphaComponent(0.55),
-            backgroundColor: theme.inlayHintBackgroundColor ?? theme.textColor.withAlphaComponent(0.09),
+            backgroundColor: background,
             editorFont: editorFont,
             inlineTextColor: theme.inlineCompletionTextColor
                 ?? theme.textColor(for: "comment")
@@ -174,11 +205,12 @@ enum InlayHintIndex {
             if hints[mid].utf16Offset <= location { low = mid + 1 } else { high = mid }
         }
         var result: [LineInlayHint] = []
-        // Hints at the very start of the line have no character before them to widen. A chip gets
-        // the first fragment's leading inset; ghost text is drawn at the line start with no kern.
+        // Hints at the very start of the line have no character before them to widen, so the first
+        // fragment reserves their room in front of the text: a chip first, then ghost text.
         var firstAtStart = low
         while firstAtStart > 0, hints[firstAtStart - 1].utf16Offset == location { firstAtStart -= 1 }
-        for hint in hints[firstAtStart..<low] {
+        let atStart = hints[firstAtStart..<low]
+        for hint in atStart.filter({ $0.kind != .inlineCompletion }) + atStart.filter({ $0.kind == .inlineCompletion }) {
             result.append(LineInlayHint(
                 localOffset: 0, label: hint.label, kind: hint.kind,
                 width: measure?(hint) ?? appearance.width(of: hint),

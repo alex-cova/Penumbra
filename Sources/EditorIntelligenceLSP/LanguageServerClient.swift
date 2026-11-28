@@ -787,7 +787,7 @@ public actor LanguageServerClient: LSPClient {
         return resolved.range == lens.range ? resolved : nil
     }
 
-    /// Runs a lens's command on the server, for an explicit click. Only a command the server declared
+    /// Runs a command the user clicked (a code lens, or a part of an inlay hint's label) on the server. Only a command the server declared
     /// in `executeCommandProvider` runs: any other is one its editor extension implements, and sending
     /// it would only draw an error. A `workspace/applyEdit` the command asks for is not applied.
     public func executeCodeLensCommand(_ command: Command) async -> Bool {
@@ -798,6 +798,13 @@ public actor LanguageServerClient: LSPClient {
         } catch {
             return false
         }
+    }
+
+    /// Runs the command an inlay hint's label part carried (see ``LSPRenderedInlayHint/linkedParts()``), with the
+    /// same rule as a code lens: only a command the server declared.
+    public func executeCommand(token: Data) async -> Bool {
+        guard token.count <= 4096, let command = try? JSONDecoder().decode(Command.self, from: token) else { return false }
+        return await executeCodeLensCommand(command)
     }
 
     func supportsInlayResolution(for document: Document, languageID: String) async -> Bool {

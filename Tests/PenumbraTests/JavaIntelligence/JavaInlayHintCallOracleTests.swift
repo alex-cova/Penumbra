@@ -46,6 +46,12 @@ final class JavaInlayHintCallOracleTests: XCTestCase {
         void pair(String label, int number) {}
         Api(String only) {}
         Api(double ratio) {}
+        static <T> void pick(T value, int slot) {}
+        static void pick(String key, Object content) {}
+        static void many2(String head, long tail) {}
+        static void many2(String head, int... rest) {}
+        static void listy(java.util.List<String> asList) {}
+        static void listy(java.util.Set<String> asSet) {}
     }
     """
 
@@ -74,6 +80,12 @@ final class JavaInlayHintCallOracleTests: XCTestCase {
         Declaration(params: ["label", "number"]),
         Declaration(params: ["only"]),
         Declaration(params: ["ratio"]),
+        Declaration(params: ["value", "slot"]),
+        Declaration(params: ["key", "content"]),
+        Declaration(params: ["head", "tail"]),
+        Declaration(params: ["head", "rest"], isVarargs: true),
+        Declaration(params: ["asList"]),
+        Declaration(params: ["asSet"]),
     ]
 
     /// Each call is one line ending in `// call`, in the order javac emits the invocations.
@@ -104,6 +116,14 @@ final class JavaInlayHintCallOracleTests: XCTestCase {
         api.pair("a", 1); // call
         Api other = new Api("x"); // call
         Api third = new Api(1.5); // call
+        Api.pick(1, 2); // call
+        Api.pick("k", 2); // call
+        Api.pick("k", "v"); // call
+        Api.many2("h", 1); // call
+        Api.many2("h", 1, 2); // call
+        Api.listy(new java.util.ArrayList<String>()); // call
+        Api.listy(new java.util.HashSet<String>()); // call
+        Api.listy(java.util.Collections.emptyList()); // call
     """
 
     /// Calls the provider may leave without hints, by the text of the call's line. Anything else that
@@ -111,6 +131,9 @@ final class JavaInlayHintCallOracleTests: XCTestCase {
     private static let knownGaps: Set<String> = [
         // `null` has no type of its own, so the provider cannot rank the overloads and shows nothing.
         "Api.nullable(null); // call",
+        // A generic method call as an argument is a poly expression: its type depends on the overload chosen, so the
+        // provider does not type it and shows nothing.
+        "Api.listy(java.util.Collections.emptyList()); // call",
     ]
 
     func testParameterNameHintsFollowTheOverloadJavacChooses() async throws {

@@ -38,6 +38,8 @@ enum EnterSessionProfile {
         }
         let lineCount = textView.lineHandleStatistics.lineCount
         let hintCount = Int(ProcessInfo.processInfo.environment["PENUMBRA_INLAY_HINTS"] ?? "") ?? 0
+        // The column the hints sit at: 8 by default (after the previous glyph), 0 for chips at the line start.
+        let hintColumn = Int(ProcessInfo.processInfo.environment["PENUMBRA_INLAY_COLUMN"] ?? "") ?? 8
         func updateHints(around row: Int) {
             guard hintCount > 0 else { return }
             let half = min(hintCount, 512) / 2
@@ -45,7 +47,7 @@ enum EnterSessionProfile {
             let upper = min(lineCount, row + half)
             guard lower < upper else { return }
             textView.inlayHints = (lower..<upper).compactMap { line in
-                guard let offset = textView.location(at: TextLocation(lineNumber: line, column: 8)) else { return nil }
+                guard let offset = textView.location(at: TextLocation(lineNumber: line, column: hintColumn)) else { return nil }
                 return InlayHint(utf16Offset: offset, label: "count:")
             }
         }

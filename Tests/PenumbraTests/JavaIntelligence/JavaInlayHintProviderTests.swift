@@ -91,6 +91,50 @@ final class JavaInlayHintProviderTests: XCTestCase {
     record Pair<A, B>(A left, B right) {}
     """
 
+    func testATypeHintLinksTheClassNameToItsDeclarationWhenTheClassIsTheProjects() async throws {
+        let libURL = scratch.appendingPathComponent("Lib.java")
+        try lib.write(to: libURL, atomically: true, encoding: .utf8)
+        let shard = scratch.appendingPathComponent("\(UUID().uuidString).idx")
+        try JavaIndexShardWriter().write(
+            JavaSourceStubBuilder.build(source: lib, url: libURL).classes, stamp: JavaStamp(size: 0, modificationDate: 0), to: shard
+        )
+        let index = JavaIndex()
+        await index.setSources([.init(precedence: 1, reader: try JavaIndexShardReader(url: shard))])
+        let provider = JavaInlayHintProvider(index: index, indexPaths: JavaIndexPaths(root: scratch.appendingPathComponent("cache")))
+        await provider.setOptions(JavaInlayHintOptions(parameterNames: false, variableTypes: true))
+        let source = "class T { void m() { var made = Lib.make(); } }"
+        let start = JavaNavigationText.position(utf16Offset: 0, in: source)
+        let end = JavaNavigationText.position(utf16Offset: (source as NSString).length, in: source)
+        let document = Document(
+            url: scratch.appendingPathComponent("T.java"), displayName: "T.java",
+            contentSnapshot: TextSnapshot(version: 0, text: source),
+            selection: Selection(range: EditorIntelligence.TextRange(start: start, end: start)), cursor: Cursor(position: start),
+            viewport: Viewport(x: 0, y: 0, width: 10, height: 10), languageIdentifier: "java"
+        )
+        let hints = await provider.inlayHints(for: document, in: EditorIntelligence.TextRange(start: start, end: end))
+        let hint = try XCTUnwrap(hints.first)
+        XCTAssertEqual(hint.label, ": Lib")
+        let part = try XCTUnwrap(hint.parts.first)
+        XCTAssertEqual(part.range, NSRange(location: 2, length: 3), "the class name, after the colon")
+
+        // Nothing is read or resolved until the click.
+        let activation = await provider.activateInlayHintPart(part, of: hint, in: document)
+        XCTAssertEqual(activation, .open(
+            uri: libURL.absoluteString,
+            range: LSPRange(start: LSPPosition(line: 0, character: 6), end: LSPPosition(line: 0, character: 9))
+        ), "the name in `class Lib {`")
+
+        // A class the project has no source for, an unknown token and another provider's hint do nothing.
+        let jdk = InlayHintLabelPart(range: part.range, target: .token(Data("java.type:java.lang.String".utf8)))
+        let missing = await provider.activateInlayHintPart(jdk, of: hint, in: document)
+        XCTAssertEqual(missing, .unhandled)
+        let foreign = await provider.activateInlayHintPart(InlayHintLabelPart(range: part.range, target: .token(Data("x".utf8))), of: hint, in: document)
+        XCTAssertEqual(foreign, .unhandled)
+        let other = InlayHint(utf16Offset: 0, label: ": Lib", providerID: "lsp", parts: [part])
+        let notOurs = await provider.activateInlayHintPart(part, of: other, in: document)
+        XCTAssertEqual(notOurs, .unhandled)
+    }
+
     func testVarComponentsOfARecordPatternTakeTheComponentTypes() async throws {
         let source = "class T { boolean m(Object o) { return o instanceof Order(var first, var notes); } }"
         let result = try await hints(

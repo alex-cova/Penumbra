@@ -100,6 +100,11 @@ public final class EditorIntelligenceController {
     private weak var textView: TextView?
     private var eventTask: Task<Void, Never>?
     private var hoverTask: Task<Void, Never>?
+    /// The chip the pointer rests on, and the popup for it. A chip's tooltip is the hint's own text, which a
+    /// provider may resolve lazily, so it has its own path next to the text hover.
+    private var inlayHoverAnchor: Int?
+    private var inlayHoverTask: Task<Void, Never>?
+    private var isInlayHoverVisible = false
     /// Shows the selected completion item's documentation next to the popup, resolved through
     /// the hover engine after a short pause on the selection. The popup never waits for it.
     public var showsCompletionDocumentation = true
@@ -165,6 +170,8 @@ public final class EditorIntelligenceController {
     private var completionDocumentationKey: String?
     private let inlineChipView = InlineCompletionChipView()
     private let inlineLinesView = InlineCompletionLinesView()
+    /// The first line of a suggestion on an empty line: that line has no text fragment to draw it in.
+    private let inlineFirstLineView = InlineCompletionLinesView()
     private var inlineChipTask: Task<Void, Never>?
     /// Full-line inline completion, owned here and driven from typing/key events.
     /// Assigned at the end of `init`, once `self` can be captured by its host closures.
@@ -398,6 +405,7 @@ public final class EditorIntelligenceController {
             return previousActionHandler?(action) ?? false
         }
         forwarding.attach(controller: self)
+        textView.inlayHintPartClickHandler = { [weak self] hint, part in self?.followInlayHintPart(part, of: hint) ?? false }
         startObservingEvents()
         if let navigationEngine {
             let jump = JumpToDefinitionController(textView: textView, adapter: self.adapter, navigationEngine: navigationEngine)
@@ -957,6 +965,14 @@ public final class EditorIntelligenceController {
             guard inlineController.isVisible else { return false }
             inlineController.dismiss(recordSuppression: true)
             return true
+        case .applyInlayHint:
+            // The hint the caret is at (in front of or behind its chip: both are its offset).
+            guard let hint = hintAtCaret(), !hint.edits.isEmpty || hint.mayResolveEdits else { return false }
+            Task { [weak self] in await self?.resolveAndAcceptInlayHint(hint) }
+            return true
+        case .followInlayHintLink:
+            guard let hint = hintAtCaret(), let part = hint.parts.first else { return false }
+            return followInlayHintPart(part, of: hint)
         case .triggerCompletion:
             triggerCompletion()
             return true
@@ -1695,6 +1711,46 @@ public final class EditorIntelligenceController {
         await inlayHints.resolveAndAccept(hint)
     }
 
+    /// The inlay hint at the caret's offset, when the selection is a caret.
+    private func hintAtCaret() -> InlayHint? {
+        guard let textView, textView.selectedRange.length == 0 else { return nil }
+        let location = textView.selectedRange.location
+        return textView.inlayHints.first { $0.utf16Offset == location && $0.kind != .inlineCompletion }
+    }
+
+    /// ⌘-click on a linked part of an inlay hint's label: go to its location, or let the provider that made
+    /// the hint say what its token means. Returns whether the click was taken.
+    func followInlayHintPart(_ part: InlayHintLabelPart, of hint: InlayHint) -> Bool {
+        switch part.target {
+        case .location(let uri, let range):
+            openInlayHintLocation(uri: uri, range: range)
+            return true
+        case .token:
+            Task { [weak self] in
+                guard let self else { return }
+                if case .open(let uri, let range) = await self.inlayHints.activate(part, of: hint) {
+                    self.openInlayHintLocation(uri: uri, range: range)
+                }
+            }
+            return true
+        }
+    }
+
+    private func openInlayHintLocation(uri: String, range: LSPRange) {
+        guard let textView else { return }
+        let url = URL(string: uri)
+        let location = Location(
+            documentID: DocumentID(), url: url, range: textRange(from: range),
+            displayName: url?.lastPathComponent ?? uri
+        )
+        // The same path a go-to-definition result takes: this document is selected, another is the host's to open.
+        if url == nil || url == textView.documentURL {
+            focus(location)
+        } else if onOpenLocationInOtherDocument?(location) != true {
+            focus(location)
+        }
+    }
+
     public func inlayTooltip(for hint: InlayHint) async -> String? {
         await inlayHints.tooltip(for: hint)
     }
@@ -1850,7 +1906,7 @@ public final class EditorIntelligenceController {
         overlayContainer.isHidden = true
         textView.addFixedOverlaySubview(overlayContainer)
 
-        for view in [completionPanelView, hoverWindowView, completionDocumentationView, inlineChipView, inlineLinesView, parameterHintsView, codeActionView, navigationChoicesView, workspaceSearchPanelView] {
+        for view in [completionPanelView, hoverWindowView, completionDocumentationView, inlineChipView, inlineLinesView, inlineFirstLineView, parameterHintsView, codeActionView, navigationChoicesView, workspaceSearchPanelView] {
             view.translatesAutoresizingMaskIntoConstraints = true
             view.isHidden = true
             overlayContainer.addSubview(view)
@@ -2655,6 +2711,11 @@ public final class EditorIntelligenceController {
             return
         }
         updateInlineHover(at: textView.convert(event.locationInWindow, from: nil), in: textView)
+        // On a chip with something to say, the chip's tooltip is the hover; the text under it is not.
+        if updateInlayHover(atWindowLocation: event.locationInWindow, in: textView) {
+            cancelMouseHover()
+            return
+        }
         guard showsDiagnosticTooltips || showsDocumentationOnMouseHover else {
             return
         }
@@ -2683,6 +2744,41 @@ public final class EditorIntelligenceController {
             try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
             guard !Task.isCancelled else { return }
             await self?.showMouseHover(for: target, expectedRange: range)
+        }
+    }
+
+    /// Starts, keeps or ends the tooltip for the chip under the pointer. Returns whether the pointer is on a chip
+    /// that has (or can resolve) a tooltip.
+    private func updateInlayHover(atWindowLocation location: NSPoint, in textView: TextView) -> Bool {
+        guard showsDocumentationOnMouseHover,
+              let hint = textView.inlayHint(atWindowLocation: location),
+              hint.tooltip != nil || hint.resolutionData != nil else {
+            cancelInlayHover()
+            return false
+        }
+        guard hint.utf16Offset != inlayHoverAnchor else { return true }
+        cancelInlayHover()
+        inlayHoverAnchor = hint.utf16Offset
+        inlayHoverTask = Task { [weak self] in
+            let delay = await MainActor.run { [weak self] in self?.tooltipDelay ?? 0.5 }
+            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            guard let tooltip = await self.inlayHints.tooltip(for: hint), !tooltip.isEmpty, !Task.isCancelled,
+                  self.inlayHoverAnchor == hint.utf16Offset else { return }
+            let position = TextPosition(line: 0, column: 0, utf16Offset: hint.utf16Offset)
+            self.presentHover(markdown: tooltip, anchorRange: EditorIntelligence.TextRange(start: position, end: position))
+            self.isInlayHoverVisible = true
+        }
+        return true
+    }
+
+    private func cancelInlayHover() {
+        inlayHoverTask?.cancel()
+        inlayHoverTask = nil
+        inlayHoverAnchor = nil
+        if isInlayHoverVisible {
+            isInlayHoverVisible = false
+            hideHover()
         }
     }
 
@@ -2921,8 +3017,32 @@ public final class EditorIntelligenceController {
     /// under the caret line. Called when the suggestion changes, and on scroll through
     /// `repositionAnchoredPanels`.
     private func updateInlineLinesView() {
-        guard let current = inlineController.current, let textView,
-              current.suggestion.lines.count > 1 else {
+        guard let current = inlineController.current, let textView else {
+            hideInlineLinesViews()
+            return
+        }
+        let font = textView.theme.font
+        let color = textView.theme.inlineCompletionTextColor
+            ?? textView.theme.textColor(for: "comment")
+            ?? NSColor.secondaryLabelColor
+        // On an empty line the suggestion's first line has no text fragment to be drawn in: draw it here.
+        let firstLineIsOverlay = !(current.suggestion.lines.first ?? "").isEmpty && textView.isEmptyLine(atLocation: current.anchor)
+        if firstLineIsOverlay {
+            inlineFirstLineView.update(lines: [current.suggestion.lines[0]], font: font, textColor: color)
+            overlayContainer.frame = textView.bounds
+            raiseOverlayContainer(in: textView)
+            let caret = overlayContainer.convert(textView.caretRectInViewport(at: current.anchor), from: textView)
+            let size = InlineCompletionLinesView.size(of: [current.suggestion.lines[0]], font: font)
+            inlineFirstLineView.frame = CGRect(
+                x: caret.minX, y: caret.minY + max(0, (caret.height - size.height) / 2), width: size.width, height: size.height
+            )
+            inlineFirstLineView.isHidden = false
+            overlayContainer.isHidden = false
+        } else if !inlineFirstLineView.isHidden {
+            inlineFirstLineView.isHidden = true
+            updateOverlayVisibility()
+        }
+        guard current.suggestion.lines.count > 1 else {
             if !inlineLinesView.isHidden {
                 inlineLinesView.isHidden = true
                 updateOverlayVisibility()
@@ -2930,10 +3050,6 @@ public final class EditorIntelligenceController {
             return
         }
         let extra = Array(current.suggestion.lines.dropFirst())
-        let font = textView.theme.font
-        let color = textView.theme.inlineCompletionTextColor
-            ?? textView.theme.textColor(for: "comment")
-            ?? NSColor.secondaryLabelColor
         inlineLinesView.update(lines: extra, font: font, textColor: color)
         // The extra lines start at the caret line's first character, just below it.
         let ns = textView.text as NSString
@@ -2947,6 +3063,15 @@ public final class EditorIntelligenceController {
         inlineLinesView.frame = CGRect(x: start.minX, y: caret.maxY, width: size.width, height: size.height)
         inlineLinesView.isHidden = false
         overlayContainer.isHidden = false
+    }
+
+    private func hideInlineLinesViews() {
+        var changed = false
+        for view in [inlineLinesView, inlineFirstLineView] where !view.isHidden {
+            view.isHidden = true
+            changed = true
+        }
+        if changed { updateOverlayVisibility() }
     }
 
     /// Shows the accept-keys chip when the pointer rests on the ghost text.
@@ -3575,6 +3700,7 @@ public final class EditorIntelligenceController {
             || !completionDocumentationView.isHidden
             || !inlineChipView.isHidden
             || !inlineLinesView.isHidden
+            || !inlineFirstLineView.isHidden
             || !parameterHintsView.isHidden
             || !codeActionView.isHidden
             || !navigationChoicesView.isHidden

@@ -123,6 +123,8 @@ public final class IDEPreferences {
         static let javaProfileWaitThreshold = "com.umbra.editor.javaProfileWaitThreshold"
         static let javaCodeVisionImplementations = "com.umbra.editor.javaCodeVisionImplementations"
         static let inlayHintsUseEditorFont = "com.umbra.editor.inlayHintsUseEditorFont"
+        static let inlayHintsSizeAdjustment = "com.umbra.editor.inlayHintsSizeAdjustment"
+        static let inlayHintsBackgroundOpacity = "com.umbra.editor.inlayHintsBackgroundOpacity"
         static let javaDisabledGutterIcons = "com.umbra.editor.javaDisabledGutterIcons"
         static let disabledMarkerDescriptors = "com.umbra.editor.disabledMarkerDescriptors"
         static let javaDisabledIntentions = "com.umbra.editor.javaDisabledIntentions"
@@ -886,6 +888,8 @@ public final class IDEPreferences {
         javaCodeVisionUsages = false
         javaCodeVisionImplementations = false
         inlayHintsUseEditorFont = false
+        inlayHintsSizeAdjustment = 0
+        inlayHintsBackgroundOpacity = 1
     }
 
     /// Whether any kind of inlay hint is on, which is when the editor asks for hints at all.
@@ -931,6 +935,24 @@ public final class IDEPreferences {
     /// Draws inlay hints in the editor font instead of the system UI font.
     var inlayHintsUseEditorFont: Bool {
         didSet { UserDefaults.standard.set(inlayHintsUseEditorFont, forKey: Keys.inlayHintsUseEditorFont) }
+    }
+
+    /// Points added to the inlay hint font size, -2 through +3.
+    var inlayHintsSizeAdjustment: Int {
+        didSet {
+            let clamped = min(max(inlayHintsSizeAdjustment, -2), 3)
+            if clamped != inlayHintsSizeAdjustment { inlayHintsSizeAdjustment = clamped; return }
+            UserDefaults.standard.set(inlayHintsSizeAdjustment, forKey: Keys.inlayHintsSizeAdjustment)
+        }
+    }
+
+    /// How strong the chip background is: 0 none, 1 the theme's, up to 2.
+    var inlayHintsBackgroundOpacity: Double {
+        didSet {
+            let clamped = min(max(inlayHintsBackgroundOpacity, 0), 2)
+            if clamped != inlayHintsBackgroundOpacity { inlayHintsBackgroundOpacity = clamped; return }
+            UserDefaults.standard.set(inlayHintsBackgroundOpacity, forKey: Keys.inlayHintsBackgroundOpacity)
+        }
     }
 
     var javaCompilerDiagnostics: Bool {
@@ -1381,6 +1403,8 @@ public final class IDEPreferences {
         javaProfileWaitThreshold = defaults.object(forKey: Keys.javaProfileWaitThreshold) as? Int ?? 0
         javaCodeVisionImplementations = defaults.bool(forKey: Keys.javaCodeVisionImplementations)
         inlayHintsUseEditorFont = defaults.bool(forKey: Keys.inlayHintsUseEditorFont)
+        inlayHintsSizeAdjustment = min(max(defaults.integer(forKey: Keys.inlayHintsSizeAdjustment), -2), 3)
+        inlayHintsBackgroundOpacity = defaults.object(forKey: Keys.inlayHintsBackgroundOpacity) as? Double ?? 1
         javaDisabledGutterIcons = Set((defaults.stringArray(forKey: Keys.javaDisabledGutterIcons) ?? []).compactMap(JavaLineMarkerKind.init(rawValue:)))
         disabledMarkerDescriptors = Set(defaults.stringArray(forKey: Keys.disabledMarkerDescriptors) ?? [])
         javaDisabledIntentions = Set(defaults.stringArray(forKey: Keys.javaDisabledIntentions) ?? [])
@@ -1463,6 +1487,8 @@ public final class IDEPreferences {
         textView.theme = IDEEditorTheme.shared.current
         textView.tooltipDelay = TimeInterval(tooltipDelayMilliseconds) / 1000
         textView.inlayHintsUseEditorFont = inlayHintsUseEditorFont
+        textView.inlayHintsSizeAdjustment = CGFloat(inlayHintsSizeAdjustment)
+        textView.inlayHintsBackgroundOpacity = CGFloat(inlayHintsBackgroundOpacity)
         textView.caretShape = caretShape
         textView.caretBlinkingEnabled = caretBlinks
         textView.caretBlinkInterval = TimeInterval(caretBlinkIntervalMilliseconds) / 1000

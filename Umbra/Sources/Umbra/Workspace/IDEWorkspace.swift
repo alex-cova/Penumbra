@@ -4033,6 +4033,9 @@ public final class IDEWorkspace {
         host.wireSelectIn { [weak self] in
             self?.showSelectIn()
         }
+        host.wireInlayHintToggle { [weak self] in
+            self?.toggleInlayHints()
+        }
         // Find in Files (⌘⇧F) gets Umbra's own bottom panel rather than the built-in palette
         // mode; Go to Line needs no host wiring at all — `CommandPaletteController` handles
         // `.goToLine` natively.

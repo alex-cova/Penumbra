@@ -92,6 +92,12 @@ public extension EditorActionID {
     static let acceptInlineProposalLine = EditorActionID("acceptInlineProposalLine")
     /// Dismisses the inline suggestion.
     static let dismissInlineProposal = EditorActionID("dismissInlineProposal")
+    /// Applies the inlay hint at the caret as text (a hint that offers an edit, such as an inferred type). Unbound by default.
+    static let applyInlayHint = EditorActionID("applyInlayHint")
+    /// Follows the link in the inlay hint at the caret (a type name leading to its declaration). Unbound by default.
+    static let followInlayHintLink = EditorActionID("followInlayHintLink")
+    /// Shows or hides inlay hints. The host owns the setting, so it handles this. Unbound by default.
+    static let toggleInlayHints = EditorActionID("toggleInlayHints")
     static let sortLinesAscending = EditorActionID("sortLinesAscending")
     static let sortLinesDescending = EditorActionID("sortLinesDescending")
     /// Cycles selected text (or the word at each caret) lower → UPPER → Title. Bound to ⌘⇧U.
@@ -265,6 +271,9 @@ public extension EditorActionID {
         .acceptInlineProposalWord: "Insert Inline Proposal Word",
         .acceptInlineProposalLine: "Insert Inline Proposal Line",
         .dismissInlineProposal: "Dismiss Inline Proposal",
+        .applyInlayHint: "Apply Inlay Hint at Caret",
+        .followInlayHintLink: "Follow Inlay Hint Link",
+        .toggleInlayHints: "Toggle Inlay Hints",
         .sortLinesAscending: "Sort Lines Ascending",
         .sortLinesDescending: "Sort Lines Descending",
         .toggleCase: "Toggle Case",

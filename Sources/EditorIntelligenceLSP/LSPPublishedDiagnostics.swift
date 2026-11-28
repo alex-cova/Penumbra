@@ -154,6 +154,29 @@ public struct LSPRenderedInlayHint: Sendable, Equatable {
         lhs.line == rhs.line && lhs.character == rhs.character && lhs.label == rhs.label && lhs.kind == rhs.kind
     }
 
+    /// The parts of a multipart label that lead somewhere: a location the server gave, or a command (kept as an
+    /// opaque token the editor hands back on a click). Offsets are UTF-16 into the flattened ``label``.
+    public func linkedParts() -> [EditorIntelligence.InlayHintLabelPart] {
+        guard case .optionB(let parts)? = protocolHint?.label else { return [] }
+        var result: [EditorIntelligence.InlayHintLabelPart] = []
+        var start = 0
+        for part in parts {
+            let length = (part.value as NSString).length
+            defer { start += length }
+            guard length > 0, result.count < 16 else { continue }
+            let range = NSRange(location: start, length: length)
+            let tooltip = Self.text(part.tooltip).map { String($0.prefix(4096)) }
+            if let target = part.location {
+                result.append(EditorIntelligence.InlayHintLabelPart(
+                    range: range, target: .location(uri: target.uri, range: eipRange(from: target.range)), tooltip: tooltip
+                ))
+            } else if let command = part.command, let token = try? JSONEncoder().encode(command), token.count <= 4096 {
+                result.append(EditorIntelligence.InlayHintLabelPart(range: range, target: .token(token), tooltip: tooltip))
+            }
+        }
+        return result
+    }
+
     func acceptanceEdits(in map: SourceTextMap) -> [EditorIntelligence.TextEdit] {
         guard let edits = protocolHint?.textEdits, !edits.isEmpty, edits.count <= 8 else { return [] }
         var result: [EditorIntelligence.TextEdit] = []

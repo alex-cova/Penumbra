@@ -1,3 +1,4 @@
+import AppKit
 import EditorIntelligence
 import Foundation
 import JavaIntelligence
@@ -9,6 +10,10 @@ final class IDEJDKConfigurationCodeVision: CodeVisionProviding {
     private let native: any CodeVisionProviding
     private let jdk: IDEJDKSelection
     private var lastScan: ContinuousClock.Instant?
+    private var isInstalling = false
+    /// The installer a click on "Install Temurin" runs, and how it asks first: replaceable in tests.
+    var makeInstaller: () -> IDEJDKInstaller = { IDEJDKInstaller() }
+    var confirmInstall: @MainActor (_ featureVersion: Int, _ window: NSWindow?) -> Bool = IDEJDKConfigurationCodeVision.askBeforeInstalling
 
     init(native: any CodeVisionProviding, jdk: IDEJDKSelection) {
         self.native = native
@@ -46,7 +51,7 @@ final class IDEJDKConfigurationCodeVision: CodeVisionProviding {
 
         let all = declarations + siblings
         return declarations.filter { anchors.contains($0.utf16Offset) }.map { declaration in
-            CodeVisionLens(utf16Offset: declaration.utf16Offset, entries: [entry(for: declaration, alongside: all)])
+            CodeVisionLens(utf16Offset: declaration.utf16Offset, entries: entries(for: declaration, alongside: all))
         }
     }
 
@@ -68,6 +73,16 @@ final class IDEJDKConfigurationCodeVision: CodeVisionProviding {
                   let source = String(data: data, encoding: .utf8) else { return [] }
             return JavaVersionDeclaration.parse(fileName: fileName, source: source)
         }
+    }
+
+    /// The lens: what the declaration says about the JDK, and, when none that matches is installed, an offer to
+    /// install one. Only Temurin is offered, and only when the declaration does not name another vendor (a
+    /// Temurin would not satisfy it).
+    private func entries(for declaration: JavaVersionDeclaration, alongside all: [JavaVersionDeclaration]) -> [CodeVisionEntry] {
+        let main = entry(for: declaration, alongside: all)
+        guard main.id == "jdk.choose", let requirement = declaration.requirement,
+              requirement.vendor == nil || requirement.vendor == "temurin" else { return [main] }
+        return [main, CodeVisionEntry(id: "jdk.install", text: "Install Temurin \(requirement.featureVersion)…")]
     }
 
     private func entry(for declaration: JavaVersionDeclaration, alongside all: [JavaVersionDeclaration]) -> CodeVisionEntry {
@@ -135,6 +150,10 @@ final class IDEJDKConfigurationCodeVision: CodeVisionProviding {
                     }
                 }
             }
+        case "jdk.install":
+            guard let requirement = declaration.requirement, !isInstalling,
+                  confirmInstall(requirement.featureVersion, workspace.window) else { return }
+            install(requirement, in: workspace, root: root)
         case "jdk.active":
             workspace.notifications.post("Project JDK", detail: "The editor is using \(declaration.value).")
         case "jdk.invalid":
@@ -144,6 +163,50 @@ final class IDEJDKConfigurationCodeVision: CodeVisionProviding {
         default:
             break
         }
+    }
+
+    /// Downloads and installs the Temurin the declaration asks for, then selects it for the project. Failures are
+    /// reported, never swallowed, and leave nothing half installed (see ``IDEJDKInstaller``).
+    private func install(_ requirement: JavaVersionDeclaration.Requirement, in workspace: IDEWorkspace, root: URL) {
+        isInstalling = true
+        workspace.notifications.post("Installing Temurin \(requirement.featureVersion)", detail: "Downloading from Eclipse Adoptium. This can take a minute.")
+        let installer = makeInstaller()
+        Task { [weak workspace] in
+            defer { isInstalling = false }
+            do {
+                let bundle = try await installer.install(featureVersion: requirement.featureVersion)
+                await jdk.refreshDetected()
+                guard let workspace else { return }
+                if jdk.projectRoot == root, let installation = matchingInstallation(requirement) {
+                    jdk.chooseForProject(installation)
+                    await jdk.refreshCurrent()
+                    workspace.notifications.post("Temurin \(requirement.featureVersion) installed", detail: "\(bundle.lastPathComponent) is now this project's JDK.")
+                } else {
+                    workspace.notifications.post("Temurin \(requirement.featureVersion) installed", detail: "Installed as \(bundle.lastPathComponent).")
+                }
+                workspace.refreshJDKConfigurationHints()
+            } catch let error as IDEJDKInstallError {
+                if case .alreadyInstalled = error {
+                    await jdk.refreshDetected()
+                    workspace?.refreshJDKConfigurationHints()
+                }
+                workspace?.notifications.post("JDK not installed", detail: error.localizedDescription, severity: .error)
+            } catch {
+                workspace?.notifications.post("JDK not installed", detail: error.localizedDescription, severity: .error)
+            }
+        }
+    }
+
+    /// Nothing is downloaded until the user says yes here.
+    static func askBeforeInstalling(featureVersion: Int, window: NSWindow?) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Install Eclipse Temurin \(featureVersion)?"
+        alert.informativeText = "Umbra will download roughly 200 MB from Eclipse Adoptium (api.adoptium.net and its GitHub releases), "
+            + "check it against the SHA-256 Adoptium publishes, and install it into ~/Library/Java/JavaVirtualMachines. "
+            + "It is not installed for other users and needs no administrator password."
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func matchingInstallation(_ requirement: JavaVersionDeclaration.Requirement) -> JDKInstallation? {

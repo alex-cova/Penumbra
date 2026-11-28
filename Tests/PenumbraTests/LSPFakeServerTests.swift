@@ -1128,6 +1128,59 @@ final class LSPFakeServerTests: XCTestCase {
         XCTAssertEqual(unknown, .unhandled)
     }
 
+    // MARK: - Inlay hint label parts
+
+    private func linkedHint() -> LanguageServerProtocol.InlayHint {
+        let place = LanguageServerProtocol.Location(
+            uri: "file:///tmp/List.swift",
+            range: LanguageServerProtocol.LSPRange(
+                start: LanguageServerProtocol.Position(line: 3, character: 7),
+                end: LanguageServerProtocol.Position(line: 3, character: 11)
+            )
+        )
+        return LanguageServerProtocol.InlayHint(
+            position: LanguageServerProtocol.Position(line: 0, character: 9),
+            label: .optionB([
+                InlayHintLabelPart(value: ": "),
+                InlayHintLabelPart(value: "List", location: place),
+                InlayHintLabelPart(value: "<"),
+                InlayHintLabelPart(value: "String", command: Command(title: "Run", command: "server.run", arguments: [])),
+                InlayHintLabelPart(value: ">", location: place),
+            ])
+        )
+    }
+
+    func testMultipartLabelsKeepTheirLocationsAndCommandsAsLinkedParts() throws {
+        let rendered = LSPRenderedInlayHint(linkedHint())
+        XCTAssertEqual(rendered.label, ": List<String>")
+        let parts = rendered.linkedParts()
+        XCTAssertEqual(parts.map(\.range), [NSRange(location: 2, length: 4), NSRange(location: 7, length: 6), NSRange(location: 13, length: 1)])
+        guard case .location(let uri, let range) = parts[0].target else { return XCTFail("a location part") }
+        XCTAssertEqual(uri, "file:///tmp/List.swift")
+        XCTAssertEqual(range.start.line, 3)
+        XCTAssertEqual(range.start.character, 7)
+        guard case .token(let token) = parts[1].target else { return XCTFail("a command part") }
+        XCTAssertEqual(try JSONDecoder().decode(Command.self, from: token).command, "server.run")
+        XCTAssertTrue(LSPRenderedInlayHint(LanguageServerProtocol.InlayHint(
+            position: LanguageServerProtocol.Position(line: 0, character: 0), label: .optionA("plain")
+        )).linkedParts().isEmpty)
+    }
+
+    func testAPartCommandRunsOnlyWhenTheServerDeclaredIt() async throws {
+        let fixture = await makeIncrementalFixture(syncKind: 2, codeLens: true)
+        defer { fixture.stop() }
+        let declared = try JSONEncoder().encode(Command(title: "Run", command: "server.run", arguments: []))
+        let undeclared = try JSONEncoder().encode(Command(title: "Show", command: "client.only", arguments: []))
+        let ran = await fixture.client.executeCommand(token: declared)
+        XCTAssertTrue(ran)
+        XCTAssertEqual(fixture.peer.methods.filter { $0 == "workspace/executeCommand" }.count, 1)
+        let notSent = await fixture.client.executeCommand(token: undeclared)
+        XCTAssertFalse(notSent, "a command only the server's editor extension defines is never sent")
+        let garbage = await fixture.client.executeCommand(token: Data("not json".utf8))
+        XCTAssertFalse(garbage)
+        XCTAssertEqual(fixture.peer.methods.filter { $0 == "workspace/executeCommand" }.count, 1)
+    }
+
     func testAServerWithoutCodeLensGivesNoCodeVisionProvider() async throws {
         let fixture = await makeIncrementalFixture(syncKind: 2, codeLens: false)
         defer { fixture.stop() }

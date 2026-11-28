@@ -168,7 +168,9 @@ public enum SQLCompletionEngine {
         switch clause.name {
         case "SELECT":
             return finish("select-list", expressionCandidates(model, position, sources, dialect, catalog, selectList: true))
-        case "FROM", "JOIN", "USING" where clause.name != "USING" || segment.kind == .select:
+        case "FROM", "JOIN":
+            fallthrough
+        case "USING" where segment.kind == .select:
             let expectingSource = previous == clause.keyword || model.isSymbol(previous, ",") || ["LATERAL", "ONLY"].contains(model.word(previous) ?? "")
             if clause.name == "FROM", segment.kind == .delete, previous == clause.keyword || expectingSource {
                 return finish("table", tableCandidates(model, blockID, catalog, dialect))

@@ -326,9 +326,9 @@ final class LayoutManager {
         textInputView?.setNeedsLayout()
     }
 
-    /// The room of the inlay hint in front of the character at `location`, or 0. A hint at the first
-    /// character of a line sits in the line's leading inset, not in the text, so the caret has no
-    /// extra stop there and it has no width here.
+    /// The room of the inlay hint in front of the character at `location`, or 0. At the first
+    /// character of a line the chip sits in the line's leading inset instead of after the previous
+    /// glyph, but the caret still stops in front of it and then behind it, so it counts here too.
     func inlayHintWidth(atLocation location: Int) -> CGFloat {
         var low = 0
         var high = inlayHints.count
@@ -336,11 +336,7 @@ final class LayoutManager {
             let mid = (low + high) / 2
             if inlayHints[mid].utf16Offset < location { low = mid + 1 } else { high = mid }
         }
-        guard low < inlayHints.count, inlayHints[low].utf16Offset == location,
-              let row = lineManager.row(containingCharacterAt: location),
-              lineManager.location(ofRow: row) != location else {
-            return 0
-        }
+        guard low < inlayHints.count, inlayHints[low].utf16Offset == location else { return 0 }
         // Ghost text takes no caret room: any caret move dismisses it, so ←/→ never step over it.
         if inlayHints[low].kind == .inlineCompletion { return 0 }
         return measuredWidth(for: inlayHints[low])
@@ -1149,6 +1145,14 @@ extension LayoutManager {
         return typesetLineController(for: line).inlayHintAnchor(at: local)
     }
 
+    /// The chip under `point` and the offset in its label the point is over (see ``LineController/inlayLabelHit(at:)``).
+    func inlayLabelHit(at point: CGPoint) -> (anchor: Int, labelOffset: Int)? {
+        let y = point.y - textContainerInset.top
+        guard let line = lineManager.line(containingYOffset: y) else { return nil }
+        let local = CGPoint(x: point.x - leadingLineSpacing, y: y - line.yPosition)
+        return typesetLineController(for: line).inlayLabelHit(at: local)
+    }
+
     func foldPlaceholderHitTest(at point: CGPoint) -> (CGRect, FoldRegion)? {
         guard let foldingModel, foldingModel.isEnabled else {
             return nil
@@ -1628,7 +1632,7 @@ extension LayoutManager {
                     : nil
                 lineFragmentController.inlayHints = lineController.inlayHints.filter { hint in
                     hint.localOffset > lineFragment.range.location && hint.localOffset <= lineFragment.range.upperBound
-                        || hint.localOffset == 0 && lineFragment.index == 0 && hint.kind != .inlineCompletion
+                        || hint.localOffset == 0 && lineFragment.index == 0
                 }
                 layoutLineFragmentView(
                     for: lineFragmentController,

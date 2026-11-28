@@ -916,8 +916,9 @@ extension LineController {
     /// in front of it with `beforeInlayHint`; elsewhere it is where Core Text puts it.
     func caretX(in fragment: LineFragment, atLocalOffset offset: Int, beforeInlayHint: Bool) -> CGFloat {
         let inset = fragment.leadingInset
-        // A line-start chip fills the inset: the caret is in front of it, or behind it at the text.
-        if inset > 0, offset == 0 { return beforeInlayHint ? 0 : inset }
+        // A line-start chip fills the start of the inset: the caret is in front of it, or behind it and in
+        // front of any ghost text, which sits between the chip and the text.
+        if inset > 0, offset == 0 { return beforeInlayHint ? 0 : LineInlayHint.leadingChipWidth(of: inlayHints) }
         guard !inlayHints.isEmpty,
               let hint = inlayHints.first(where: { $0.localOffset == offset }),
               offset > fragment.range.location, offset <= fragment.range.upperBound else {
@@ -929,10 +930,30 @@ extension LineController {
         return beforeInlayHint ? start : start + hint.width
     }
 
+    /// The chip under `point` (line-local) and the UTF-16 offset in its label the point is over, for a
+    /// click on a part of the label. Ghost text has no parts.
+    func inlayLabelHit(at point: CGPoint) -> (anchor: Int, labelOffset: Int)? {
+        guard let fragment = lineFragment(closestTo: point),
+              point.y >= fragment.yPosition, point.y < fragment.yPosition + fragment.scaledSize.height else { return nil }
+        for hint in inlayHints where hint.kind != .inlineCompletion && !hint.label.isEmpty {
+            let isHere = hint.localOffset == 0
+                ? fragment.index == 0
+                : hint.localOffset > fragment.range.location && hint.localOffset <= fragment.range.upperBound
+            guard isHere else { continue }
+            let pillStart = hint.leadingX(in: fragment.line) + fragment.leadingInset + hint.leadingPadding
+            let textStart = pillStart + InlayHintAppearance.horizontalPadding
+            let textWidth = hint.appearance.textWidth(of: hint.label)
+            guard point.x >= pillStart, point.x < textStart + textWidth + InlayHintAppearance.horizontalPadding else { continue }
+            guard let offset = hint.labelOffset(atTextX: point.x - textStart) else { return nil }
+            return (line.location + hint.localOffset, offset)
+        }
+        return nil
+    }
+
     func inlayHintAnchor(at point: CGPoint) -> Int? {
         guard let fragment = lineFragment(closestTo: point),
               point.y >= fragment.yPosition, point.y < fragment.yPosition + fragment.scaledSize.height else { return nil }
-        if fragment.leadingInset > 0, point.x >= 0, point.x < fragment.leadingInset { return line.location }
+        if fragment.leadingInset > 0, point.x >= 0, point.x < LineInlayHint.leadingChipWidth(of: inlayHints) { return line.location }
         for hint in inlayHints where hint.kind != .inlineCompletion
             && hint.localOffset > fragment.range.location && hint.localOffset <= fragment.range.upperBound {
             let start = hint.leadingX(in: fragment.line) + fragment.leadingInset

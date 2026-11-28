@@ -266,6 +266,17 @@ final class TextInputView: EditorView {
         layoutManager.inlayHintWidth(atLocation: location)
     }
 
+    /// Called for a ⌘-click on a part of an inlay hint's label that leads somewhere. Returns whether it took the click.
+    var inlayHintPartClickHandler: ((InlayHint, InlayHintLabelPart) -> Bool)?
+
+    /// The label part under `point`, if the point is on a chip and over a part that carries a target.
+    func inlayHintPart(at point: CGPoint) -> (hint: InlayHint, part: InlayHintLabelPart)? {
+        guard !inlayHints.isEmpty, let hit = layoutManager.inlayLabelHit(at: point),
+              let hint = inlayHint(atAnchor: hit.anchor),
+              let part = hint.parts.first(where: { NSLocationInRange(hit.labelOffset, $0.range) }) else { return nil }
+        return (hint, part)
+    }
+
     /// Redraws the caret after ``caretIsBeforeInlayHint`` changed without the selection moving.
     func inlayCaretAffinityDidChange() {
         selectionOverlayController.selectionDidChange()
@@ -280,11 +291,38 @@ final class TextInputView: EditorView {
         }
     }
 
+    /// Finds hints for the VoiceOver rotor (see `TextInputView+InlayAccessibility`).
+    lazy var inlayRotorDelegate = InlayHintRotorDelegate(input: self)
+
+    /// Points added to the hint font's size (the user's setting).
+    var inlayHintsSizeAdjustment: CGFloat = 0 {
+        didSet {
+            if inlayHintsSizeAdjustment != oldValue { updateInlayHintAppearance() }
+        }
+    }
+
+    /// A multiplier of the chip background's alpha: 0 draws no background.
+    var inlayHintsBackgroundOpacity: CGFloat = 1 {
+        didSet {
+            if inlayHintsBackgroundOpacity != oldValue { updateInlayHintAppearance() }
+        }
+    }
+
     var inlayHintAppearanceForTesting: InlayHintAppearance { layoutManager.inlayHintAppearance }
     var layoutManagerForTesting: LayoutManager { layoutManager }
 
+    /// Whether `location` is the start of a line that has no characters besides its line break. A tree
+    /// lookup, not a read of the text.
+    func isEmptyLine(atLocation location: Int) -> Bool {
+        guard let line = lineManager.line(containingCharacterAt: location) else { return false }
+        return line.location == location && line.data.length == 0
+    }
+
     private func updateInlayHintAppearance() {
-        layoutManager.inlayHintAppearance = InlayHintAppearance.make(theme: theme, useEditorFont: inlayHintsUseEditorFont)
+        layoutManager.inlayHintAppearance = InlayHintAppearance.make(
+            theme: theme, useEditorFont: inlayHintsUseEditorFont,
+            sizeAdjustment: inlayHintsSizeAdjustment, backgroundOpacity: inlayHintsBackgroundOpacity
+        )
     }
 
     private func inlayHintsDidChange(editedLines: Set<DocumentLineNode>? = nil) {

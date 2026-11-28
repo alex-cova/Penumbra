@@ -15,6 +15,11 @@ extension TextInputView {
         if window?.firstResponder !== self {
             window?.makeFirstResponder(self)
         }
+        // ⌘-click on a linked part of an inlay hint follows the link instead of placing the caret.
+        if event.modifierFlags.contains(.command), event.clickCount == 1,
+           let (hint, part) = inlayHintPart(at: point), inlayHintPartClickHandler?(hint, part) == true {
+            return
+        }
         delegate?.textInputViewDidReceiveCaretRepositioningClick(self)
         if !(delegate?.textInputViewIsEditable(self) ?? true) {
             delegate?.textInputView(self, didRequestSelectionInteraction: true)
@@ -659,6 +664,8 @@ extension TextInputView {
         guard caretIsBeforeInlayHint != beforeHint else { return }
         caretIsBeforeInlayHint = beforeHint
         inlayCaretAffinityDidChange()
+        // The chip is not text, so VoiceOver would never say it: say it when the caret stops in front of it.
+        if beforeHint, let location = selection?.location { announceInlayHint(atCaret: location) }
     }
 
     private func moveSelectionForArrowKey(direction: EditorTextLayoutDirection, flags: NSEvent.ModifierFlags) {

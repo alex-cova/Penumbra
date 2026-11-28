@@ -117,7 +117,8 @@ struct LSPReadyInlayHints: InlayHintProviding {
                 edits: hint.acceptanceEdits(in: map),
                 mayResolveEdits: token != nil && mayResolveEdits,
                 paddingLeft: hint.protocolHint?.paddingLeft == true,
-                paddingRight: hint.protocolHint?.paddingRight == true
+                paddingRight: hint.protocolHint?.paddingRight == true,
+                parts: hint.linkedParts()
             )
         }
     }
@@ -131,6 +132,16 @@ struct LSPReadyInlayHints: InlayHintProviding {
         if !hint.edits.isEmpty { return hint.edits }
         guard hint.mayResolveEdits, let resolved = await resolve(hint, in: document), !Task.isCancelled else { return [] }
         return resolved.acceptanceEdits(in: SourceTextMap(documentText(document)))
+    }
+
+    /// A ⌘-click on a part that carries a server command. It runs only when the server declared the command.
+    func activateInlayHintPart(
+        _ part: EditorIntelligence.InlayHintLabelPart, of hint: EditorIntelligence.InlayHint, in document: Document
+    ) async -> EditorIntelligence.InlayHintActivation {
+        guard hint.providerID == "lsp", case .token(let token) = part.target,
+              let client = lspClient(connections, feature: .inlayHints, languages: languages, documentLanguage: document.languageIdentifier) as? LanguageServerClient
+        else { return .unhandled }
+        return await client.executeCommand(token: token) ? .handled : .unhandled
     }
 
     private func resolve(_ hint: EditorIntelligence.InlayHint, in document: Document) async -> LSPRenderedInlayHint? {
