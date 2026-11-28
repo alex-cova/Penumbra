@@ -184,11 +184,20 @@ final class JavaInlayHintProviderTests: XCTestCase {
         XCTAssertEqual(rendered(source, result), "class T { void m() { Lib.many(first: \"a\", 1, 2, 3); } }")
     }
 
-    func testAmbiguousOverloadsGetNoHints() async throws {
+    func testOverloadsOfOneArityAreChosenByTheArgumentTypes() async throws {
         let source = "class T { void m() { Lib.over(1, 2); Lib.over(\"s\", 2); } }"
-        // `over(int, int)` and `over(String, int)` share an arity, so neither call is labeled by a guess.
+        // `over(int, int)` and `over(String, int)` share an arity; the argument types pick one, as javac does
+        // (`JavaInlayHintCallOracleTests` checks this against javac).
         let result = try await hints(source)
-        XCTAssertTrue(result.isEmpty)
+        XCTAssertEqual(rendered(source, result), "class T { void m() { Lib.over(a: 1, b: 2); Lib.over(s: \"s\", b: 2); } }")
+    }
+
+    func testOverloadsStayUnlabeledWhenTheArgumentsCannotChooseOne() async throws {
+        // An argument that does not type, a `null` and a lambda say nothing about which overload binds, so no
+        // call is labeled by a guess.
+        let source = "class T { void m() { Lib.over(missing, 2); Lib.over(null, 2); Lib.over(() -> 1, 2); } }"
+        let result = try await hints(source)
+        XCTAssertTrue(result.isEmpty, "\(result.map(\.label))")
     }
 
     func testUnresolvedCallsAndStubsWithoutNamesGetNoHints() async throws {

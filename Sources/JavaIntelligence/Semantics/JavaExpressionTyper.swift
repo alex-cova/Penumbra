@@ -1600,6 +1600,23 @@ public enum JavaExpressionTyper {
         context: JavaResolutionContext, index: JavaIndex
     ) async -> [JavaMethodStub] {
         guard candidates.count > 1 else { return candidates }
+        if let resolved = await applicableOverloads(
+            candidates, argumentTypes: argumentTypes, shapes: shapes, context: context, index: index
+        ) {
+            return resolved
+        }
+        return bestOverloads(candidates, argumentTypes: argumentTypes)
+    }
+
+    /// The three phases and the most specific of the first that has an applicable candidate, as
+    /// ``resolveOverloads(_:argumentTypes:shapes:context:index:)`` runs them, but `nil` when no candidate
+    /// is applicable in any phase instead of a best guess. A caller that must not guess (a hint that
+    /// names a parameter) uses this one.
+    static func applicableOverloads(
+        _ candidates: [JavaMethodStub], argumentTypes: [JavaTypeRef?], shapes: [FunctionalShape?] = [],
+        context: JavaResolutionContext, index: JavaIndex
+    ) async -> [JavaMethodStub]? {
+        guard candidates.count > 1 else { return candidates }
         let assignability = JavaAssignability(index: index, context: context)
         var resolvedArguments: [JavaTypeRef?] = []
         for argument in argumentTypes {
@@ -1628,7 +1645,7 @@ public enum JavaExpressionTyper {
             }
             return mostSpecific.isEmpty ? applicable.map(\.method) : mostSpecific
         }
-        return bestOverloads(candidates, argumentTypes: argumentTypes)
+        return nil
     }
 
     private enum OverloadPhase {

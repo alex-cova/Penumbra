@@ -210,22 +210,55 @@ enum JavaInlayHints {
             index: index, jdkHome: nil, cacheRoot: cacheRoot, openBuffer: openBuffer,
             decompile: JavaDecompileGate(policy: .denied)
         )
-        let method: JavaMethodStub
-        let owner: String
+        var candidates: [(method: JavaMethodStub, owner: String)]
         if let typeNode {
             let symbols = await session.resolveSymbols(.constructor(type: typeNode, argumentCount: argumentNodes.count))
-            guard symbols.count == 1, case .method(let stub, let declaringClass) = symbols[0] else { return [] }
-            method = stub
-            owner = declaringClass
+            candidates = symbols.compactMap { symbol in
+                if case .method(let stub, let declaringClass) = symbol { return (stub, declaringClass) }
+                return nil
+            }
+            // A symbol that is not a constructor (a type with no declared constructor) is not a binding.
+            guard candidates.count == symbols.count else { return [] }
         } else {
-            let targets = await session.methodCallTargets(call)
-            guard targets.count == 1 else { return [] }
-            method = targets[0].method
-            owner = targets[0].declaringClass
+            candidates = await session.methodCallTargets(call).map { ($0.method, $0.declaringClass) }
         }
+        if candidates.count > 1 {
+            // Several declarations of that name and arity: the arguments' types choose, as javac does.
+            guard let chosen = await overloadChosenByArguments(
+                candidates.map(\.method), arguments: argumentNodes, call: call, tree: tree, session: session, index: index
+            ), let match = candidates.first(where: { $0.method == chosen }) else { return [] }
+            candidates = [match]
+        }
+        guard candidates.count == 1 else { return [] }
+        let method = candidates[0].method
+        let owner = candidates[0].owner
         let symbol = owner + "." + method.name
         guard !exclusions.contains(where: { matchesExclusion($0, symbol: symbol) }) else { return [] }
         return hints(arguments: argumentNodes, method: method, source: source, symbol: symbol)
+    }
+
+    /// The one overload javac would bind the call to, or nil when that cannot be said for certain:
+    /// an argument that is a lambda or method reference (its type depends on the choice), one that
+    /// does not type, no overload applicable, or several equally specific.
+    private static func overloadChosenByArguments(
+        _ candidates: [JavaMethodStub], arguments: [SyntaxNode], call: SyntaxNode, tree: JavaSyntaxTree,
+        session: JavaNavigationSession, index: JavaIndex
+    ) async -> JavaMethodStub? {
+        guard !arguments.contains(where: { $0.type == "lambda_expression" || $0.type == "method_reference" }) else { return nil }
+        let locals = await JavaExpressionTyper.resolvingVarLocals(
+            tree.visibleLocals(atByteOffset: call.startByte), context: session.context, index: index
+        )
+        var types: [JavaTypeRef?] = []
+        for argument in arguments {
+            guard let typed = await JavaExpressionTyper.typed(argument, locals: locals, context: session.context, index: index) else {
+                return nil
+            }
+            types.append(typed.type)
+        }
+        guard let applicable = await JavaExpressionTyper.applicableOverloads(
+            candidates, argumentTypes: types, context: session.context, index: index
+        ), applicable.count == 1 else { return nil }
+        return applicable[0]
     }
 
     /// The hints for `arguments` bound to `method`'s parameters. Varargs, unnamed parameters and

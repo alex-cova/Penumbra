@@ -468,9 +468,17 @@ actor JavaAssignability {
         case (.primitive(let from), .primitive(let to)):
             return from == to || Self.widens(from, to)
         case (.primitive, .classType(let name, _, _)):
-            return JavaExpressionTyper.boxed(type).erasedQualifiedName == name || name == "java.lang.Object"
+            // Boxing, then widening reference conversion (JLS 5.3): `double` fits `Double`, `Number`,
+            // `Comparable` and `Object`.
+            guard let box = JavaExpressionTyper.boxed(type).erasedQualifiedName else { return false }
+            if box == name || name == "java.lang.Object" { return true }
+            return await closure(of: box).contains(name)
         case (.classType(let name, _, _), .primitive(let to)):
-            return JavaExpressionTyper.boxed(.primitive(to)).erasedQualifiedName == name
+            // Unboxing, then widening primitive conversion: an `Integer` fits `int` and `long`.
+            for candidate in JavaPrimitive.allCases where JavaExpressionTyper.boxed(.primitive(candidate)).erasedQualifiedName == name {
+                return candidate == to || Self.widens(candidate, to)
+            }
+            return false
         case (.classType(let name, _, _), .classType(let expectedName, _, _)):
             if name == expectedName || expectedName == "java.lang.Object" { return true }
             return await closure(of: name).contains(expectedName)

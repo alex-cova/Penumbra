@@ -306,6 +306,39 @@ final class JavaTypeSystemTests: XCTestCase {
         XCTAssertEqual(lub, classType("java.lang.Exception"))
     }
 
+    /// Loose invocation (JLS 5.3) is boxing then widening reference conversion, or unboxing then widening
+    /// primitive conversion: a `double` fits a `Number` parameter and an `Integer` fits `long`.
+    func testBoxingAndUnboxingAreFollowedByWideningConversions() async throws {
+        let index = try await makeIndex(withStubs: [
+            stub("java.lang.Number"),
+            stub("java.lang.Comparable", kind: .interfaceKind),
+            stub("java.lang.Double", superclass: "java.lang.Number", interfaces: ["java.lang.Comparable"]),
+            stub("java.lang.Integer", superclass: "java.lang.Number", interfaces: ["java.lang.Comparable"]),
+            stub("java.lang.String"),
+        ])
+        let assignability = JavaAssignability(index: index, context: JavaResolutionContext(packageName: "", imports: []))
+        let doubleToNumber = await assignability.isAssignable(.primitive(.double), to: classType("java.lang.Number"))
+        let intToNumber = await assignability.isAssignable(.primitive(.int), to: classType("java.lang.Number"))
+        let intToComparable = await assignability.isAssignable(.primitive(.int), to: classType("java.lang.Comparable"))
+        let intToObject = await assignability.isAssignable(.primitive(.int), to: classType("java.lang.Object"))
+        let intToDouble = await assignability.isAssignable(.primitive(.int), to: classType("java.lang.Double"))
+        let intToString = await assignability.isAssignable(.primitive(.int), to: classType("java.lang.String"))
+        let integerToInt = await assignability.isAssignable(classType("java.lang.Integer"), to: .primitive(.int))
+        let integerToLong = await assignability.isAssignable(classType("java.lang.Integer"), to: .primitive(.long))
+        let integerToShort = await assignability.isAssignable(classType("java.lang.Integer"), to: .primitive(.short))
+        let doubleToInt = await assignability.isAssignable(classType("java.lang.Double"), to: .primitive(.int))
+        XCTAssertTrue(doubleToNumber)
+        XCTAssertTrue(intToNumber)
+        XCTAssertTrue(intToComparable)
+        XCTAssertTrue(intToObject)
+        XCTAssertFalse(intToDouble, "boxing keeps the primitive's own class")
+        XCTAssertFalse(intToString)
+        XCTAssertTrue(integerToInt)
+        XCTAssertTrue(integerToLong)
+        XCTAssertFalse(integerToShort, "unboxing then narrowing is not allowed")
+        XCTAssertFalse(doubleToInt)
+    }
+
     func testWildcardApplicabilityRejectsClosedBoundsAndKeepsRawTypes() async throws {
         let index = JavaIndex()
         let assignability = JavaAssignability(index: index, context: JavaResolutionContext(packageName: "", imports: []))
